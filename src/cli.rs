@@ -70,4 +70,55 @@ pub enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    /// Create a new note
+    Note {
+        #[command(subcommand)]
+        action: NoteAction,
+    },
+    /// Session management
+    Session {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
+    /// Manage tickets
+    Ticket {
+        #[command(subcommand)]
+        action: TicketAction,
+    },
+    /// Manage milestones
+    Milestone {
+        #[command(subcommand)]
+        action: MilestoneAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum NoteAction {
+    /// Create a new note from template
+    Create {
+        #[arg(value_name = "TYPE")]
+        note_type: String,
+        title: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        stdin: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SessionAction {
+    /// Create or update today's session note
+    Save {
+        title: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// List recent sessions
+    List {
+        #[arg(long)]
+        project: Option<String>,
+    },
 }

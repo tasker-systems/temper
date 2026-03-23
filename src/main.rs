@@ -1,7 +1,7 @@
 mod cli;
 
 use clap::Parser;
-use cli::{Cli, Commands};
+use cli::{Cli, Commands, NoteAction, SessionAction};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -64,6 +64,44 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 depth,
                 limit,
             )
+        }
+        Commands::Note { action } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            match action {
+                NoteAction::Create { note_type, title, project, stdin } => {
+                    temper_cli::commands::note::create(
+                        &config,
+                        &note_type,
+                        &title,
+                        project.as_deref(),
+                        stdin,
+                    )
+                }
+            }
+        }
+        Commands::Session { action } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            match action {
+                SessionAction::Save { title, project, stdin } => {
+                    let stdin_content = if stdin {
+                        use std::io::Read;
+                        let mut buf = String::new();
+                        std::io::stdin().read_to_string(&mut buf).ok();
+                        Some(buf)
+                    } else {
+                        None
+                    };
+                    temper_cli::commands::session::save(
+                        &config,
+                        title.as_deref(),
+                        project.as_deref(),
+                        stdin_content.as_deref(),
+                    )
+                }
+                SessionAction::List { project } => {
+                    temper_cli::commands::session::list(&config, project.as_deref())
+                }
+            }
         }
     }
 }
