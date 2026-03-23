@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+echo "==> Running pre-commit checks..."
+
+echo "  Checking formatting..."
+cargo fmt --all -- --check
+echo "  ✓ Formatting OK"
+
+echo "  Running Clippy..."
+cargo clippy --all-targets -- -D warnings
+echo "  ✓ Clippy OK"
+
+echo "==> All pre-commit checks passed."
