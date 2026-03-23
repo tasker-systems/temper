@@ -212,7 +212,14 @@ pub fn move_ticket(
     let ticket = find_ticket(config, slug_or_suffix)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
 
-    let valid_stages = ["backlog", "design", "plan", "implement", "done"];
+    let valid_stages = [
+        "backlog",
+        "brainstorm",
+        "design",
+        "plan",
+        "implement",
+        "done",
+    ];
     if let Some(s) = stage {
         if !valid_stages.contains(&s) {
             return Err(TemperError::Vault(format!(
@@ -361,7 +368,14 @@ pub fn list(config: &Config, project: Option<&str>, milestone_slug: Option<&str>
 pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> Result<()> {
     let milestones = milestone::load_milestones(config, Some(project))?;
     let tickets = load_tickets(config, Some(project), None)?;
-    let stages = ["backlog", "design", "plan", "implement", "done"];
+    let stages = [
+        "backlog",
+        "brainstorm",
+        "design",
+        "plan",
+        "implement",
+        "done",
+    ];
 
     let project_title = project.chars().next().unwrap().to_uppercase().to_string() + &project[1..];
 
@@ -381,11 +395,12 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
             continue;
         }
         println!(
-            " {:<16}│ {:<16}│ {:<8}│ {:<16}│ Done",
-            "Backlog", "Design", "Plan", "Implement"
+            " {:<16}│ {:<16}│ {:<16}│ {:<8}│ {:<16}│ Done",
+            "Backlog", "Brainstorm", "Design", "Plan", "Implement"
         );
         println!(
-            "{}┼{}┼{}┼{}┼{}",
+            "{}┼{}┼{}┼{}┼{}┼{}",
+            "─".repeat(17),
             "─".repeat(17),
             "─".repeat(17),
             "─".repeat(9),
@@ -416,9 +431,9 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
                 .enumerate()
                 .map(|(i, stage_tickets)| {
                     let width = match i {
-                        2 => 8,
-                        4 => 9,
-                        _ => 16,
+                        3 => 8,  // Plan (was index 2)
+                        5 => 9,  // Done (was index 4)
+                        _ => 16, // Backlog, Brainstorm, Design, Implement
                     };
                     if let Some(t) = stage_tickets.get(row) {
                         let name = if t.title.len() > width {
@@ -433,13 +448,14 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
                 })
                 .collect();
             println!(
-                "{}│{}│{}│{}│{}",
-                cells[0], cells[1], cells[2], cells[3], cells[4]
+                "{}│{}│{}│{}│{}│{}",
+                cells[0], cells[1], cells[2], cells[3], cells[4], cells[5]
             );
         }
 
         println!(
-            "{}┴{}┴{}┴{}┴{}",
+            "{}┴{}┴{}┴{}┴{}┴{}",
+            "─".repeat(17),
             "─".repeat(17),
             "─".repeat(17),
             "─".repeat(9),
@@ -467,8 +483,8 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
     for ms in &filtered_milestones {
         let ms_tickets: Vec<_> = tickets.iter().filter(|t| t.milestone == ms.slug).collect();
         md.push_str(&format!("\n## {}\n\n", ms.title));
-        md.push_str("| Backlog | Design | Plan | Implement | Done |\n");
-        md.push_str("|---------|--------|------|-----------|------|\n");
+        md.push_str("| Backlog | Brainstorm | Design | Plan | Implement | Done |\n");
+        md.push_str("|---------|------------|--------|------|-----------|------|\n");
 
         let by_stage: Vec<Vec<&TicketInfo>> = stages
             .iter()

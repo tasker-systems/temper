@@ -38,6 +38,25 @@ fn test_milestone_create_and_ticket_create() {
 }
 
 #[test]
+fn test_ticket_move_to_brainstorm() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), false)
+            .unwrap();
+
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("brainstorm"), None).unwrap();
+
+    let content =
+        std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
+            .unwrap();
+    assert!(content.contains("stage: brainstorm"));
+}
+
+#[test]
 fn test_ticket_move_and_done() {
     let dir = TempDir::new().unwrap();
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();

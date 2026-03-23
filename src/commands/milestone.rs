@@ -202,7 +202,14 @@ pub fn list(config: &Config, project: &str) -> Result<()> {
     for ms in &ordered {
         let ms_counts = ticket_counts.get(&ms.slug);
         let mut stage_parts: Vec<String> = Vec::new();
-        for stage in &["backlog", "design", "plan", "implement", "done"] {
+        for stage in &[
+            "backlog",
+            "brainstorm",
+            "design",
+            "plan",
+            "implement",
+            "done",
+        ] {
             let count = ms_counts.and_then(|c| c.get(*stage)).copied().unwrap_or(0);
             if count > 0 {
                 stage_parts.push(format!("{count} {stage}"));
