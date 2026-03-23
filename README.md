@@ -64,6 +64,8 @@ temper skill install
 | `temper milestone list` | Roadmap view |
 | `temper project add --name <n> --path <p>` | Add project to config |
 | `temper project list` | List configured projects |
+| `temper events` | Show recent vault events |
+| `temper warmup` | Context primer for new sessions |
 | `temper skill generate` | Preview generated Claude Code skill |
 | `temper skill install` | Install skill file |
 | `temper skill check` | Verify skill is current |
@@ -117,6 +119,29 @@ temper skill install --project ~/projects/myapp  # Project-scoped
 ```
 
 The generated skill integrates with the [superpowers](https://github.com/anthropics/claude-code-plugins) workflow: brainstorm, design, plan, implement, finish.
+
+### Session Pre-Warming
+
+To automatically prime new Claude Code sessions with recent context, add a `SessionStart` hook to your project's `.claude/settings.local.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "startup",
+      "hooks": [{
+        "type": "command",
+        "command": "temper warmup --project <your-project>"
+      }]
+    }]
+  }
+}
+```
+
+This runs `temper warmup` on every new session, injecting:
+- Last 3 session summaries
+- Full content of the most recent session note
+- Last 15 project events (ticket/milestone activity)
 
 ## Semantic Search
 
