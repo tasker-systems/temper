@@ -85,10 +85,10 @@ fn test_preprocess_normalizes_whitespace() {
     );
 }
 
-// --- Model tests (require large download, always skipped in CI) ---
+// --- Model tests (require large download, gated behind `test-embedder` feature) ---
 
+#[cfg(feature = "test-embedder")]
 #[test]
-#[ignore]
 fn test_embedder_creates_and_loads_model() {
     use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
@@ -107,8 +107,8 @@ fn test_embedder_creates_and_loads_model() {
     assert_eq!(embedder.dimensions(), 384, "all-MiniLM-L6-v2 has 384 dimensions");
 }
 
+#[cfg(feature = "test-embedder")]
 #[test]
-#[ignore]
 fn test_embed_single_text() {
     use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
@@ -135,8 +135,8 @@ fn test_embed_single_text() {
     );
 }
 
+#[cfg(feature = "test-embedder")]
 #[test]
-#[ignore]
 fn test_embed_batch() {
     use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
@@ -161,8 +161,8 @@ fn test_embed_batch() {
     }
 }
 
+#[cfg(feature = "test-embedder")]
 #[test]
-#[ignore]
 fn test_similar_texts_have_higher_cosine() {
     use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
@@ -199,6 +199,7 @@ fn test_similar_texts_have_higher_cosine() {
     );
 }
 
+#[cfg(feature = "test-embedder")]
 fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
     let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();

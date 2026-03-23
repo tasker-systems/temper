@@ -32,5 +32,8 @@ bincode = "1"
 glob = "0.3"
 regex-lite = "0.1"
 
+[features]
+test-embedder = []
+
 [dev-dependencies]
 tempfile = "3"
