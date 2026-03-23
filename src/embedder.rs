@@ -19,6 +19,7 @@ struct LoadedModel {
 
 pub struct Embedder {
     model: Option<LoadedModel>,
+    #[allow(dead_code)]
     cache_dir: PathBuf,
 }
 

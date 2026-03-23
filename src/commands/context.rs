@@ -80,9 +80,11 @@ impl fmt::Display for ContextOutput {
 }
 
 /// Resolve a topic to an index entry vector.
+///
 /// Resolution order:
 /// 1. Exact file path match in vault
 /// 2. Exact title match among indexed notes
+///
 /// Returns (path_hint, embedding_vector)
 fn resolve_topic(
     config: &Config,

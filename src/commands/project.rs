@@ -79,7 +79,7 @@ pub fn list(config: &Config) -> Result<()> {
     let mut names: Vec<&String> = config.projects.keys().collect();
     names.sort();
 
-    println!("{:<20} {:<40} {}", "NAME", "PATH", "REPO");
+    println!("{:<20} {:<40} REPO", "NAME", "PATH");
     println!("{}", "-".repeat(80));
     for name in names {
         let p = &config.projects[name];

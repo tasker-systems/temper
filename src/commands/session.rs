@@ -149,7 +149,7 @@ pub fn list(config: &Config, project: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    println!("{:<12} {:<20} {}", "Date", "Project", "Title");
+    println!("{:<12} {:<20} Title", "Date", "Project");
     println!("{}", "-".repeat(60));
     for entry in &entries {
         println!("{:<12} {:<20} {}", entry.date, entry.project, entry.title);
