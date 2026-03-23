@@ -15,8 +15,8 @@ skipped=0
 for f in "$MS_DIR"/*.md; do
     [ -f "$f" ] || continue
 
-    # Extract project from frontmatter
-    project=$(awk '/^---$/{n++; next} n==1 && /^project:/{print $2; exit}' "$f")
+    # Extract project from frontmatter (strip quotes if present)
+    project=$(awk '/^---$/{n++; next} n==1 && /^project:/{gsub(/["\047]/, "", $2); print $2; exit}' "$f")
 
     if [ -z "$project" ]; then
         echo "SKIP (no project): $(basename "$f")"
