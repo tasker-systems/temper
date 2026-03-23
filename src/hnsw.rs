@@ -228,6 +228,12 @@ impl SearchIndex {
             .len()
     }
 
+    /// Find the first indexed entry whose title (case-insensitive) matches `title`.
+    pub fn find_by_title(&self, title: &str) -> Option<&IndexEntry> {
+        let lower = title.to_lowercase();
+        self.data.entries.iter().find(|e| e.metadata.title.to_lowercase() == lower)
+    }
+
     /// Returns a `chunk_id → vector` map for use in incremental re-indexing.
     pub fn cached_vectors(&self) -> HashMap<String, Vec<f32>> {
         self.data

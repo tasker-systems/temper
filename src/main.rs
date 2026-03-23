@@ -35,5 +35,35 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             temper_cli::commands::status::run(&config, verbose)
         }
+        Commands::Index { force, paths, sources } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::commands::index::run(
+                &config,
+                force,
+                paths.as_deref(),
+                sources.as_deref(),
+            )
+        }
+        Commands::Search { query, format, note_type, project, limit } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::commands::search::run(
+                &config,
+                &query,
+                &format,
+                note_type.as_deref(),
+                project.as_deref(),
+                limit,
+            )
+        }
+        Commands::Context { topic, format, depth, limit } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::commands::context::run(
+                &config,
+                &topic,
+                &format,
+                depth,
+                limit,
+            )
+        }
     }
 }
