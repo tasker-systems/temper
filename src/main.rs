@@ -27,9 +27,13 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
             temper_cli::commands::init::run(&vault_path, no_interactive)
         }
-        Commands::Check { .. } => {
-            eprintln!("temper check: not yet implemented");
-            Ok(())
+        Commands::Check { quiet } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::commands::check::run(&config, quiet)
+        }
+        Commands::Status { verbose } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::commands::status::run(&config, verbose)
         }
     }
 }

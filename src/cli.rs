@@ -26,4 +26,9 @@ pub enum Commands {
         #[arg(long)]
         quiet: bool,
     },
+    /// Show vault status overview
+    Status {
+        #[arg(long)]
+        verbose: bool,
+    },
 }
