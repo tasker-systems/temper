@@ -155,6 +155,11 @@ pub struct GlobalConfig {
 }
 
 pub fn global_config_path() -> PathBuf {
+    if let Ok(p) = std::env::var("TEMPER_GLOBAL_CONFIG") {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
     expand_tilde("~/.config/temper/config.toml")
 }
 

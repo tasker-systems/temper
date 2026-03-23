@@ -3,7 +3,7 @@ use tempfile::TempDir;
 #[test]
 fn test_project_add_and_remove() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
 
     temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
         .unwrap();
@@ -20,7 +20,7 @@ fn test_project_add_and_remove() {
 #[test]
 fn test_project_list_empty() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
 
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
     temper_cli::commands::project::list(&config).unwrap();
@@ -29,7 +29,7 @@ fn test_project_list_empty() {
 #[test]
 fn test_project_add_multiple_and_remove_one() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
 
     temper_cli::commands::project::add(dir.path(), "alpha", "/tmp/alpha", Some("org/alpha"))
         .unwrap();

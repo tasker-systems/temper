@@ -3,7 +3,7 @@ use tempfile::TempDir;
 #[test]
 fn test_session_save_creates_note() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     let result = temper_cli::commands::session::save(
@@ -20,7 +20,7 @@ fn test_session_save_creates_note() {
 #[test]
 fn test_session_save_idempotent_without_stdin() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     temper_cli::commands::session::save(&config, Some("Test"), Some("myapp"), None).unwrap();
@@ -38,7 +38,7 @@ fn test_session_save_idempotent_without_stdin() {
 #[test]
 fn test_session_save_replaces_body_with_stdin() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     temper_cli::commands::session::save(&config, Some("My Session"), Some("proj"), None).unwrap();
@@ -64,7 +64,7 @@ fn test_session_save_replaces_body_with_stdin() {
 #[test]
 fn test_session_list_returns_ok() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     temper_cli::commands::session::save(&config, Some("Alpha"), Some("proj"), None).unwrap();

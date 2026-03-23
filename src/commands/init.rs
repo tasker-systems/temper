@@ -28,8 +28,12 @@ const EMBEDDED_SESSION: &str = include_str!("../templates/session.md");
 const EMBEDDED_TICKET: &str = include_str!("../templates/ticket.md");
 const EMBEDDED_MILESTONE: &str = include_str!("../templates/milestone.md");
 
-/// Run temper init. If no_interactive is true, skip prompts.
-pub fn run(path: &Path, no_interactive: bool) -> Result<()> {
+/// Run temper init.
+///
+/// - `no_interactive`: skip interactive prompts
+/// - `register_global`: write default_vault to `~/.config/temper/config.toml`.
+///   Pass `false` from tests to avoid clobbering the user's real global config.
+pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<()> {
     // 1. Create vault directory
     eprintln!("temper: creating vault at {}", path.display());
     std::fs::create_dir_all(path)?;
@@ -53,11 +57,14 @@ pub fn run(path: &Path, no_interactive: bool) -> Result<()> {
     // 4. Write embedded templates
     let templates_dir = path.join("templates");
     write_template_if_missing(&templates_dir.join("session.md"), EMBEDDED_SESSION)?;
+
     write_template_if_missing(&templates_dir.join("ticket.md"), EMBEDDED_TICKET)?;
     write_template_if_missing(&templates_dir.join("milestone.md"), EMBEDDED_MILESTONE)?;
 
     // 5. Register as default vault in ~/.config/temper/config.toml if none exists
-    register_default_vault(path)?;
+    if register_global {
+        register_default_vault(path)?;
+    }
 
     // 6. Interactive guidance
     if !no_interactive {

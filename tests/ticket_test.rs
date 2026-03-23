@@ -3,7 +3,7 @@ use tempfile::TempDir;
 #[test]
 fn test_milestone_create_and_ticket_create() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
@@ -20,7 +20,7 @@ fn test_milestone_create_and_ticket_create() {
 #[test]
 fn test_ticket_move_and_done() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
