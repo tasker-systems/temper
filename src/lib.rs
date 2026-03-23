@@ -1,6 +1,10 @@
+pub mod chunker;
 pub mod config;
 pub mod discovery;
+pub mod embedder;
 pub mod error;
 pub mod format;
+pub mod hnsw;
 pub mod project;
+pub mod registry;
 pub mod vault;
