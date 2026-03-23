@@ -1,7 +1,7 @@
 mod cli;
 
 use clap::Parser;
-use cli::{Cli, Commands, MilestoneAction, NoteAction, ProjectAction, SessionAction, TicketAction};
+use cli::{Cli, Commands, MilestoneAction, NoteAction, ProjectAction, SessionAction, SkillAction, TicketAction};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -220,6 +220,31 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 }
                 MilestoneAction::Update { slug, status } => {
                     temper_cli::commands::milestone::update(&config, &slug, &status)
+                }
+            }
+        }
+        Commands::Skill { action } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            match action {
+                SkillAction::Generate => {
+                    let content = temper_cli::commands::skill::generate(&config)?;
+                    print!("{}", content);
+                    Ok(())
+                }
+                SkillAction::Install { global: _, project, path } => {
+                    let output_path = if let Some(p) = path {
+                        std::path::PathBuf::from(p)
+                    } else if let Some(proj) = project {
+                        temper_cli::config::expand_tilde(&format!("{}/.claude/commands/temper.md", proj))
+                    } else {
+                        config.skill_output.clone()
+                    };
+                    temper_cli::commands::skill::install(&config, &output_path)?;
+                    println!("Skill installed: {}", output_path.display());
+                    Ok(())
+                }
+                SkillAction::Check => {
+                    temper_cli::commands::skill::check(&config)
                 }
             }
         }
