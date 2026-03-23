@@ -69,22 +69,20 @@ pub fn run(config: &Config, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-fn count_md_files(dir: &std::path::Path) -> usize {
+pub fn count_md_files(dir: &std::path::Path) -> usize {
     if !dir.exists() {
         return 0;
     }
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    e.path()
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|ext| ext == "md")
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0)
+    let mut count = 0;
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                count += count_md_files(&path);
+            } else if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                count += 1;
+            }
+        }
+    }
+    count
 }
