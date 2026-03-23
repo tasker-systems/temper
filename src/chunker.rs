@@ -69,15 +69,14 @@ fn split_frontmatter(content: &str) -> (Option<String>, &str) {
 
 /// Extract ChunkMeta and formatted string from YAML frontmatter.
 fn parse_frontmatter_meta(yaml_str: &str) -> (ChunkMeta, String) {
-    let value: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap_or(serde_yaml::Value::Null);
+    let value: serde_yaml::Value =
+        serde_yaml::from_str(yaml_str).unwrap_or(serde_yaml::Value::Null);
     let map = match &value {
         serde_yaml::Value::Mapping(m) => Some(m),
         _ => None,
     };
 
-    let get_str = |key: &str| -> Option<String> {
-        map?.get(key)?.as_str().map(String::from)
-    };
+    let get_str = |key: &str| -> Option<String> { map?.get(key)?.as_str().map(String::from) };
 
     let note_type = get_str("type").unwrap_or_else(|| "unknown".to_string());
     let title = get_str("title").unwrap_or_default();
@@ -333,7 +332,8 @@ fn merge_small_chunks(chunks: Vec<(String, String)>) -> Vec<(String, String)> {
     for (path, content) in chunks {
         let should_merge = if let Some(last) = result.last() {
             // Don't merge frontmatter chunk (first chunk with empty path and type: marker)
-            let last_is_frontmatter = result.len() == 1 && last.0.is_empty() && last.1.contains("type:");
+            let last_is_frontmatter =
+                result.len() == 1 && last.0.is_empty() && last.1.contains("type:");
             !last_is_frontmatter && last.1.len() < MIN_CHUNK_SIZE && last.0 == path
         } else {
             false

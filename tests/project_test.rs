@@ -14,20 +14,14 @@ fn test_resolve_from_cwd_exact_match() {
             path: PathBuf::from("/tmp/projects/myapp"),
         },
     );
-    let result = project::resolve_from_cwd(
-        &PathBuf::from("/tmp/projects/myapp/src"),
-        &projects,
-    );
+    let result = project::resolve_from_cwd(&PathBuf::from("/tmp/projects/myapp/src"), &projects);
     assert_eq!(result.unwrap().name, "myapp");
 }
 
 #[test]
 fn test_resolve_from_cwd_no_match() {
     let projects = HashMap::new();
-    let result = project::resolve_from_cwd(
-        &PathBuf::from("/tmp/unrelated"),
-        &projects,
-    );
+    let result = project::resolve_from_cwd(&PathBuf::from("/tmp/unrelated"), &projects);
     assert!(result.is_none());
 }
 
@@ -50,9 +44,6 @@ fn test_resolve_most_specific_match() {
             path: PathBuf::from("/tmp/projects/child"),
         },
     );
-    let result = project::resolve_from_cwd(
-        &PathBuf::from("/tmp/projects/child/src"),
-        &projects,
-    );
+    let result = project::resolve_from_cwd(&PathBuf::from("/tmp/projects/child/src"), &projects);
     assert_eq!(result.unwrap().name, "child");
 }

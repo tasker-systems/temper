@@ -116,9 +116,8 @@ impl SearchIndex {
     /// Load from `<state_dir>/index.bin` and rebuild the HNSW graph.
     pub fn load(state_dir: &Path) -> Result<Self> {
         let path = state_dir.join("index.bin");
-        let bytes = std::fs::read(&path).map_err(|e| {
-            TemperError::Index(format!("could not read {}: {e}", path.display()))
-        })?;
+        let bytes = std::fs::read(&path)
+            .map_err(|e| TemperError::Index(format!("could not read {}: {e}", path.display())))?;
 
         let data: IndexData = bincode::deserialize(&bytes)
             .map_err(|e| TemperError::Index(format!("deserialise failed: {e}")))?;
@@ -126,8 +125,11 @@ impl SearchIndex {
         let hnsw = if data.entries.is_empty() {
             None
         } else {
-            let points: Vec<EmbeddingPoint> =
-                data.vectors.iter().map(|v| EmbeddingPoint(v.clone())).collect();
+            let points: Vec<EmbeddingPoint> = data
+                .vectors
+                .iter()
+                .map(|v| EmbeddingPoint(v.clone()))
+                .collect();
             let values: Vec<usize> = (0..data.entries.len()).collect();
             Some(Builder::default().build(points, values))
         };
@@ -196,7 +198,9 @@ impl SearchIndex {
                     })
                     .collect();
 
-                all.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+                all.sort_unstable_by(|a, b| {
+                    b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                });
 
                 // Rebuild hits from the full brute-force pass
                 hits = all
@@ -231,7 +235,10 @@ impl SearchIndex {
     /// Find the first indexed entry whose title (case-insensitive) matches `title`.
     pub fn find_by_title(&self, title: &str) -> Option<&IndexEntry> {
         let lower = title.to_lowercase();
-        self.data.entries.iter().find(|e| e.metadata.title.to_lowercase() == lower)
+        self.data
+            .entries
+            .iter()
+            .find(|e| e.metadata.title.to_lowercase() == lower)
     }
 
     /// Returns a `chunk_id → vector` map for use in incremental re-indexing.

@@ -1,7 +1,10 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "temper", about = "Developer workflow tool for agent-assisted development")]
+#[command(
+    name = "temper",
+    about = "Developer workflow tool for agent-assisted development"
+)]
 pub struct Cli {
     /// Path to vault (overrides TEMPER_VAULT and auto-detection)
     #[arg(long, global = true)]

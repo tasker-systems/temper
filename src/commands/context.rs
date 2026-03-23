@@ -1,11 +1,11 @@
-use serde::Serialize;
-use std::collections::HashMap;
-use std::fmt;
 use crate::config::Config;
 use crate::embedder::{self, Embedder};
 use crate::error::{Result, TemperError};
 use crate::format::OutputFormat;
 use crate::hnsw::SearchIndex;
+use serde::Serialize;
+use std::collections::HashMap;
+use std::fmt;
 
 #[derive(Debug, Serialize)]
 struct ChunkResult {
@@ -59,7 +59,11 @@ impl fmt::Display for ContextOutput {
             writeln!(f)?;
             for group in &self.related_chunks {
                 let best_score = group.chunks.first().map(|c| c.score).unwrap_or(0.0);
-                writeln!(f, "{} ({}) [{:.2}]", group.file_path, group.note_type, best_score)?;
+                writeln!(
+                    f,
+                    "{} ({}) [{:.2}]",
+                    group.file_path, group.note_type, best_score
+                )?;
                 for chunk in &group.chunks {
                     let header_display = if chunk.header_path.is_empty() {
                         String::new()
@@ -95,9 +99,7 @@ fn resolve_topic(
     // Step 1: exact file path match in vault
     let candidate = config.vault_root.join(topic);
     if candidate.exists() {
-        let content = std::fs::read_to_string(&candidate).map_err(|e| {
-            TemperError::Io(e)
-        })?;
+        let content = std::fs::read_to_string(&candidate).map_err(TemperError::Io)?;
         let preprocessed = embedder::preprocess_chunk(&content, "");
         let vec = embedder.embed(&preprocessed)?;
         let rel = candidate
@@ -131,12 +133,14 @@ fn group_hits(
         if exclude_paths.contains(&hit.entry.file_path) {
             continue;
         }
-        let group = groups.entry(hit.entry.file_path.clone()).or_insert_with(|| GroupedResult {
-            file_path: hit.entry.file_path.clone(),
-            note_type: hit.entry.metadata.note_type.clone(),
-            title: hit.entry.metadata.note_type.clone(), // title not stored separately
-            chunks: Vec::new(),
-        });
+        let group = groups
+            .entry(hit.entry.file_path.clone())
+            .or_insert_with(|| GroupedResult {
+                file_path: hit.entry.file_path.clone(),
+                note_type: hit.entry.metadata.note_type.clone(),
+                title: hit.entry.metadata.note_type.clone(), // title not stored separately
+                chunks: Vec::new(),
+            });
         group.chunks.push(ChunkResult {
             score: hit.score,
             header_path: hit.entry.header_path.clone(),
@@ -148,7 +152,9 @@ fn group_hits(
     related.sort_by(|a, b| {
         let a_score = a.chunks.first().map(|c| c.score).unwrap_or(0.0);
         let b_score = b.chunks.first().map(|c| c.score).unwrap_or(0.0);
-        b_score.partial_cmp(&a_score).unwrap_or(std::cmp::Ordering::Equal)
+        b_score
+            .partial_cmp(&a_score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     related.truncate(limit);
     related
@@ -177,12 +183,14 @@ pub fn run(config: &Config, topic: &str, format: &str, depth: usize, limit: usiz
         let full = config.vault_root.join(rel);
         std::fs::read_to_string(&full).ok().map(|content| {
             let fm = crate::vault::parse_frontmatter(&content);
-            let title = fm.as_ref()
+            let title = fm
+                .as_ref()
                 .and_then(|v| v.get("title"))
                 .and_then(|v| v.as_str())
                 .unwrap_or(topic)
                 .to_string();
-            let tags: Vec<String> = fm.as_ref()
+            let tags: Vec<String> = fm
+                .as_ref()
                 .and_then(|v| v.get("tags"))
                 .and_then(|v| v.as_sequence())
                 .map(|seq| {

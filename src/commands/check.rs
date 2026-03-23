@@ -48,11 +48,17 @@ pub fn run(config: &Config, quiet: bool) -> Result<()> {
 
 fn check_vault(config: &Config) -> std::result::Result<(), String> {
     if !config.vault_root.exists() {
-        return Err(format!("vault root does not exist: {}", config.vault_root.display()));
+        return Err(format!(
+            "vault root does not exist: {}",
+            config.vault_root.display()
+        ));
     }
     let toml_path = config.vault_root.join("temper.toml");
     if !toml_path.exists() {
-        return Err(format!("temper.toml not found in {}", config.vault_root.display()));
+        return Err(format!(
+            "temper.toml not found in {}",
+            config.vault_root.display()
+        ));
     }
     Ok(())
 }

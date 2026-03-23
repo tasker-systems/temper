@@ -77,11 +77,7 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
         .unwrap_or(&config.templates_dir)
         .to_str()
         .unwrap_or("templates");
-    let vars = vec![
-        ("slug", slug.as_str()),
-        ("project", project),
-        ("seq", "0"),
-    ];
+    let vars = vec![("slug", slug.as_str()), ("project", project), ("seq", "0")];
     let content = vault::render_template_with_vars(
         &config.vault_root,
         templates_dir,
@@ -89,8 +85,7 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
         "Maintenance",
         &vars,
     )?;
-    fs::create_dir_all(&config.milestones_dir)
-        .map_err(|e| TemperError::Vault(e.to_string()))?;
+    fs::create_dir_all(&config.milestones_dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
     let event = discovery::Event::MilestoneCreate {
         ts: Local::now().to_rfc3339(),
@@ -105,19 +100,16 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
 }
 
 /// Create a new milestone.
-pub fn create(
-    config: &Config,
-    project: &str,
-    title: &str,
-    slug: Option<&str>,
-) -> Result<String> {
+pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -> Result<String> {
     let slug = match slug {
         Some(s) => s.to_string(),
         None => vault::slugify(title),
     };
     let path = config.milestones_dir.join(format!("{slug}.md"));
     if path.exists() {
-        return Err(TemperError::Vault(format!("milestone already exists: {slug}")));
+        return Err(TemperError::Vault(format!(
+            "milestone already exists: {slug}"
+        )));
     }
     let seq = next_seq(config, project)?;
     let seq_str = seq.to_string();
@@ -139,8 +131,7 @@ pub fn create(
         title,
         &vars,
     )?;
-    fs::create_dir_all(&config.milestones_dir)
-        .map_err(|e| TemperError::Vault(e.to_string()))?;
+    fs::create_dir_all(&config.milestones_dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
     let event = discovery::Event::MilestoneCreate {
         ts: Local::now().to_rfc3339(),
@@ -161,10 +152,8 @@ fn count_tickets_by_stage(
     project: &str,
 ) -> Result<std::collections::HashMap<String, std::collections::HashMap<String, usize>>> {
     let dir = config.tickets_dir.join(project);
-    let mut counts: std::collections::HashMap<
-        String,
-        std::collections::HashMap<String, usize>,
-    > = std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>> =
+        std::collections::HashMap::new();
     if !dir.is_dir() {
         return Ok(counts);
     }
@@ -204,8 +193,7 @@ pub fn list(config: &Config, project: &str) -> Result<()> {
         return Ok(());
     }
     let ticket_counts = count_tickets_by_stage(config, project)?;
-    let project_title = project.chars().next().unwrap().to_uppercase().to_string()
-        + &project[1..];
+    let project_title = project.chars().next().unwrap().to_uppercase().to_string() + &project[1..];
     println!("{project_title} Roadmap");
     println!("{}", "─".repeat(14));
     // Partition: non-zero seq first (sorted by seq), then zero-seq (maintenance) pinned to bottom
@@ -215,10 +203,7 @@ pub fn list(config: &Config, project: &str) -> Result<()> {
         let ms_counts = ticket_counts.get(&ms.slug);
         let mut stage_parts: Vec<String> = Vec::new();
         for stage in &["backlog", "design", "plan", "implement", "done"] {
-            let count = ms_counts
-                .and_then(|c| c.get(*stage))
-                .copied()
-                .unwrap_or(0);
+            let count = ms_counts.and_then(|c| c.get(*stage)).copied().unwrap_or(0);
             if count > 0 {
                 stage_parts.push(format!("{count} {stage}"));
             }

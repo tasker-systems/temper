@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::config::{GlobalConfig, global_config_path};
+use crate::config::{global_config_path, GlobalConfig};
 use crate::error::Result;
 
 const TEMPER_TOML: &str = r#"[vault]
@@ -88,7 +88,10 @@ fn write_template_if_missing(path: &Path, content: &str) -> Result<()> {
         return Ok(());
     }
     std::fs::write(path, content)?;
-    eprintln!("temper: wrote {}", path.file_name().unwrap_or_default().to_string_lossy());
+    eprintln!(
+        "temper: wrote {}",
+        path.file_name().unwrap_or_default().to_string_lossy()
+    );
     Ok(())
 }
 

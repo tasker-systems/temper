@@ -29,7 +29,10 @@ fn test_preprocess_chunk_empty_header_path() {
 fn test_preprocess_frontmatter() {
     let input = "type: concept\ntitle: Dialogue Systems\ntags:\n  - narrative";
     let result = preprocess_frontmatter(input);
-    assert_eq!(result, input, "preprocess_frontmatter should be a pass-through");
+    assert_eq!(
+        result, input,
+        "preprocess_frontmatter should be a pass-through"
+    );
 }
 
 #[test]
@@ -90,8 +93,8 @@ fn test_preprocess_normalizes_whitespace() {
 #[cfg(feature = "test-embedder")]
 #[test]
 fn test_embedder_creates_and_loads_model() {
-    use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
+    use temper_cli::embedder::Embedder;
 
     let cache_dir = PathBuf::from(std::env::var("TEMPER_MODEL_CACHE").unwrap_or_else(|_| {
         dirs::cache_dir()
@@ -104,14 +107,18 @@ fn test_embedder_creates_and_loads_model() {
 
     let mut embedder = Embedder::new(cache_dir);
     embedder.ensure_model().expect("model should load");
-    assert_eq!(embedder.dimensions(), 384, "all-MiniLM-L6-v2 has 384 dimensions");
+    assert_eq!(
+        embedder.dimensions(),
+        384,
+        "all-MiniLM-L6-v2 has 384 dimensions"
+    );
 }
 
 #[cfg(feature = "test-embedder")]
 #[test]
 fn test_embed_single_text() {
-    use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
+    use temper_cli::embedder::Embedder;
 
     let cache_dir = PathBuf::from(
         dirs::cache_dir()
@@ -138,8 +145,8 @@ fn test_embed_single_text() {
 #[cfg(feature = "test-embedder")]
 #[test]
 fn test_embed_batch() {
-    use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
+    use temper_cli::embedder::Embedder;
 
     let cache_dir = PathBuf::from(
         dirs::cache_dir()
@@ -164,8 +171,8 @@ fn test_embed_batch() {
 #[cfg(feature = "test-embedder")]
 #[test]
 fn test_similar_texts_have_higher_cosine() {
-    use temper_cli::embedder::Embedder;
     use std::path::PathBuf;
+    use temper_cli::embedder::Embedder;
 
     let cache_dir = PathBuf::from(
         dirs::cache_dir()

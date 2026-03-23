@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use chrono::Local;
 use crate::error::{Result, TemperError};
+use chrono::Local;
+use std::path::{Path, PathBuf};
 
 const EMBEDDED_SESSION: &str = include_str!("templates/session.md");
 const EMBEDDED_TICKET: &str = include_str!("templates/ticket.md");
@@ -94,7 +94,9 @@ pub fn render_template(
     title: &str,
 ) -> Result<String> {
     let today = Local::now().format("%Y-%m-%d").to_string();
-    let template_path = vault_root.join(templates_dir).join(format!("{note_type}.md"));
+    let template_path = vault_root
+        .join(templates_dir)
+        .join(format!("{note_type}.md"));
 
     let content = if template_path.exists() {
         std::fs::read_to_string(&template_path).map_err(|e| {

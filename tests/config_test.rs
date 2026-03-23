@@ -6,7 +6,8 @@ fn test_parse_minimal_config() {
     let dir = TempDir::new().unwrap();
     let toml_content = "[vault]\n";
     fs::write(dir.path().join("temper.toml"), toml_content).unwrap();
-    let config = temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
+    let config =
+        temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
     assert_eq!(config.vault.sessions, "sessions");
     assert_eq!(config.vault.tickets, "tickets");
     assert_eq!(config.vault.milestones, "milestones");
@@ -38,7 +39,8 @@ path = "/tmp/myapp"
 framework = "superpowers"
 "#;
     fs::write(dir.path().join("temper.toml"), toml_content).unwrap();
-    let config = temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
+    let config =
+        temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
     assert_eq!(config.vault.sessions, "journal");
     assert_eq!(config.vault.state_dir, ".data");
     assert_eq!(config.index.include, vec!["docs"]);
@@ -69,9 +71,8 @@ fn test_safe_write_validates_toml() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("temper.toml");
     fs::write(&path, "[vault]\nsessions = \"sessions\"\n").unwrap();
-    let result = temper_cli::config::safe_write(&path, |content| {
-        content.replace("sessions", "journal")
-    });
+    let result =
+        temper_cli::config::safe_write(&path, |content| content.replace("sessions", "journal"));
     assert!(result.is_ok());
     let content = fs::read_to_string(&path).unwrap();
     assert!(content.contains("journal"));

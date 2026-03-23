@@ -23,12 +23,7 @@ pub fn create(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "templates".to_string());
 
-    let mut content = vault::render_template(
-        &config.vault_root,
-        &templates_rel,
-        note_type,
-        title,
-    )?;
+    let mut content = vault::render_template(&config.vault_root, &templates_rel, note_type, title)?;
 
     // Determine output path: <vault_root>/<note_type>s/<title>.md
     let slug = vault::slugify(title);
