@@ -252,6 +252,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 }
             }
         }
+        Commands::Warmup { project, format } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
+            let project = project
+                .as_deref()
+                .or_else(|| resolved.map(|r| r.name.as_str()));
+            temper_cli::commands::warmup::run(&config, project, &format)
+        }
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             match action {

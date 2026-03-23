@@ -107,6 +107,13 @@ pub enum Commands {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    /// Context primer for new sessions
+    Warmup {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
     /// Manage Claude Code skill
     Skill {
         #[command(subcommand)]
