@@ -1,0 +1,34 @@
+name: Rust Tests
+
+# =============================================================================
+# Test tier notes:
+#   cargo test --locked                          -> Default tests only
+#   cargo test --locked --features test-embedder -> + HF model embedding tests
+#
+# The test-embedder tier downloads the all-MiniLM-L6-v2 model from HuggingFace
+# and runs embedding/indexing tests. Excluded from CI due to download cost.
+# =============================================================================
+
+on:
+  workflow_call:
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: test
+
+      - name: Run tests
+        run: cargo test --locked
