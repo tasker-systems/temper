@@ -1,0 +1,11 @@
+name: CI Success
+
+on:
+  workflow_call:
+
+jobs:
+  success:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CI Pipeline Success
+        run: echo "All CI checks passed."
