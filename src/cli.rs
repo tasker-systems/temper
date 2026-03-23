@@ -107,6 +107,77 @@ pub enum NoteAction {
 }
 
 #[derive(Subcommand)]
+pub enum TicketAction {
+    /// Create a new ticket
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        milestone: Option<String>,
+        #[arg(long)]
+        stdin: bool,
+    },
+    /// Move a ticket to a new stage or milestone
+    Move {
+        slug: String,
+        #[arg(long)]
+        stage: Option<String>,
+        #[arg(long)]
+        milestone: Option<String>,
+    },
+    /// Mark a ticket as done
+    Done {
+        slug: String,
+        #[arg(long)]
+        branch: Option<String>,
+        #[arg(long)]
+        pr: Option<String>,
+    },
+    /// List tickets
+    List {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        milestone: Option<String>,
+    },
+    /// Show a ticket's content
+    Show { slug: String },
+    /// Show project board
+    Board {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        milestone: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum MilestoneAction {
+    /// Create a new milestone
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        slug: Option<String>,
+    },
+    /// List milestones for a project
+    List {
+        #[arg(long)]
+        project: Option<String>,
+    },
+    /// Update milestone status
+    Update {
+        slug: String,
+        #[arg(long)]
+        status: String,
+    },
+}
+
+#[derive(Subcommand)]
 pub enum SessionAction {
     /// Create or update today's session note
     Save {

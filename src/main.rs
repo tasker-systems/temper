@@ -1,7 +1,7 @@
 mod cli;
 
 use clap::Parser;
-use cli::{Cli, Commands, NoteAction, SessionAction};
+use cli::{Cli, Commands, MilestoneAction, NoteAction, SessionAction, TicketAction};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -100,6 +100,105 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 }
                 SessionAction::List { project } => {
                     temper_cli::commands::session::list(&config, project.as_deref())
+                }
+            }
+        }
+        Commands::Ticket { action } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
+            match action {
+                TicketAction::Create { title, project, milestone, stdin } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()))
+                        .ok_or_else(|| temper_cli::error::TemperError::Project(
+                            "no project specified and could not infer from CWD".into()
+                        ))?;
+                    temper_cli::commands::ticket::create(
+                        &config,
+                        project,
+                        &title,
+                        milestone.as_deref(),
+                        stdin,
+                    )?;
+                    Ok(())
+                }
+                TicketAction::Move { slug, stage, milestone } => {
+                    temper_cli::commands::ticket::move_ticket(
+                        &config,
+                        &slug,
+                        stage.as_deref(),
+                        milestone.as_deref(),
+                    )
+                }
+                TicketAction::Done { slug, branch, pr } => {
+                    temper_cli::commands::ticket::done(
+                        &config,
+                        &slug,
+                        branch.as_deref(),
+                        pr.as_deref(),
+                    )
+                }
+                TicketAction::List { project, milestone } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    temper_cli::commands::ticket::list(
+                        &config,
+                        project,
+                        milestone.as_deref(),
+                    )
+                }
+                TicketAction::Show { slug } => {
+                    temper_cli::commands::ticket::show(&config, &slug)
+                }
+                TicketAction::Board { project, milestone } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()))
+                        .ok_or_else(|| temper_cli::error::TemperError::Project(
+                            "no project specified and could not infer from CWD".into()
+                        ))?;
+                    temper_cli::commands::ticket::board(
+                        &config,
+                        project,
+                        milestone.as_deref(),
+                    )
+                }
+            }
+        }
+        Commands::Milestone { action } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
+            match action {
+                MilestoneAction::Create { title, project, slug } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()))
+                        .ok_or_else(|| temper_cli::error::TemperError::Project(
+                            "no project specified and could not infer from CWD".into()
+                        ))?;
+                    temper_cli::commands::milestone::create(
+                        &config,
+                        project,
+                        &title,
+                        slug.as_deref(),
+                    )?;
+                    Ok(())
+                }
+                MilestoneAction::List { project } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()))
+                        .ok_or_else(|| temper_cli::error::TemperError::Project(
+                            "no project specified and could not infer from CWD".into()
+                        ))?;
+                    temper_cli::commands::milestone::list(&config, project)
+                }
+                MilestoneAction::Update { slug, status } => {
+                    temper_cli::commands::milestone::update(&config, &slug, &status)
                 }
             }
         }
