@@ -23,7 +23,11 @@ pub fn run(
     // --- 1. Collect vault files from essential dirs ---
     let mut vault_files: Vec<std::path::PathBuf> = Vec::new();
 
-    for dir in &[&config.sessions_dir, &config.tickets_dir, &config.milestones_dir] {
+    for dir in &[
+        &config.sessions_dir,
+        &config.tickets_dir,
+        &config.milestones_dir,
+    ] {
         if dir.exists() {
             vault::collect_md_files_recursive(dir, &mut vault_files)?;
         }
@@ -63,8 +67,7 @@ pub fn run(
         .collect();
 
     // --- 3. Apply --paths filter if provided ---
-    let paths_filter_list: Option<Vec<&str>> =
-        paths_filter.map(|p| p.split(',').collect());
+    let paths_filter_list: Option<Vec<&str>> = paths_filter.map(|p| p.split(',').collect());
     let all_files: Vec<std::path::PathBuf> = if let Some(ref filter) = paths_filter_list {
         all_files
             .into_iter()

@@ -1,5 +1,5 @@
-use temper_cli::registry::{compute_file_hash, FileRecord, FileSource, Registry};
 use std::collections::HashMap;
+use temper_cli::registry::{compute_file_hash, FileRecord, FileSource, Registry};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------
@@ -38,7 +38,10 @@ fn test_save_and_load_round_trip() {
 
     assert_eq!(loaded.version, 1);
     assert_eq!(loaded.files.len(), 1);
-    let rec = loaded.files.get("concepts/test.md").expect("record should exist");
+    let rec = loaded
+        .files
+        .get("concepts/test.md")
+        .expect("record should exist");
     assert_eq!(rec.content_hash, "abc123");
     assert_eq!(rec.chunk_ids, vec!["chunk-0", "chunk-1"]);
     matches!(rec.source, FileSource::Vault);
@@ -197,7 +200,10 @@ fn test_external_source_tracking() {
     // When the referencing vault note exists — not an orphan
     let vault_files = vec!["concepts/parent.md".to_string()];
     let orphans = reg.find_orphaned_externals(&vault_files);
-    assert!(orphans.is_empty(), "referencing note exists — should not be orphan");
+    assert!(
+        orphans.is_empty(),
+        "referencing note exists — should not be orphan"
+    );
 
     // When the referencing vault note is gone — is an orphan
     let vault_files_empty: Vec<String> = vec![];

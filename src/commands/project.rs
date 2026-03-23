@@ -33,7 +33,10 @@ pub fn add(vault_root: &Path, name: &str, path: &str, repo: Option<&str>) -> Res
 
     safe_write(&toml_path, |content| format!("{}{}", content, block))?;
 
-    eprintln!("temper: added project '{}' (path={}, repo={})", name, path, resolved_repo);
+    eprintln!(
+        "temper: added project '{}' (path={}, repo={})",
+        name, path, resolved_repo
+    );
     Ok(())
 }
 

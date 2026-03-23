@@ -6,9 +6,8 @@ fn test_session_save_creates_note() {
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
-    let result = temper_cli::commands::session::save(
-        &config, Some("Test Session"), Some("myapp"), None,
-    );
+    let result =
+        temper_cli::commands::session::save(&config, Some("Test Session"), Some("myapp"), None);
     assert!(result.is_ok());
 
     let session_dir = dir.path().join("sessions/myapp");

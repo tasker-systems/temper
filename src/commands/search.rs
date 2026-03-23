@@ -1,10 +1,10 @@
-use serde::Serialize;
-use std::fmt;
 use crate::config::Config;
 use crate::embedder::{self, Embedder};
 use crate::error::Result;
 use crate::format::OutputFormat;
 use crate::hnsw::{SearchFilter, SearchIndex};
+use serde::Serialize;
+use std::fmt;
 
 #[derive(Debug, Serialize)]
 struct SearchHitOutput {
@@ -25,7 +25,11 @@ struct SearchOutput {
 
 impl fmt::Display for SearchHitOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "[{:.2}] {} #chunk:{}", self.score, self.file_path, self.chunk_index)?;
+        writeln!(
+            f,
+            "[{:.2}] {} #chunk:{}",
+            self.score, self.file_path, self.chunk_index
+        )?;
 
         let mut meta = Vec::new();
         meta.push(format!("type: {}", self.note_type));

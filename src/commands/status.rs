@@ -33,7 +33,11 @@ pub fn run(config: &Config, verbose: bool) -> Result<()> {
                     Some(r.last_indexed)
                 }
             });
-            print!("  Chunks:     {} from {} files", idx.entry_count(), idx.file_count());
+            print!(
+                "  Chunks:     {} from {} files",
+                idx.entry_count(),
+                idx.file_count()
+            );
             if let Some(ref last_str) = last {
                 print!(" (last: {last_str})");
             }

@@ -4,7 +4,8 @@ use tempfile::TempDir;
 fn test_skill_generate_produces_valid_content() {
     let dir = TempDir::new().unwrap();
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp")).unwrap();
+    temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
+        .unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     let content = temper_cli::commands::skill::generate(&config).unwrap();

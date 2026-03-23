@@ -1,0 +1,25 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ==========================================================================
+  # Stage 1: Parallel quality + test jobs
+  # ==========================================================================
+  code-quality:
+    uses: ./.github/workflows/code-quality.yml
+
+  test-rust:
+    uses: ./.github/workflows/test-rust.yml
+
+  # ==========================================================================
+  # Stage 2: CI Success Gate
+  # All jobs must pass for CI to succeed (used as branch protection rule)
+  # ==========================================================================
+  ci-success:
+    needs: [code-quality, test-rust]
+    uses: ./.github/workflows/ci-success.yml

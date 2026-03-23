@@ -8,9 +8,8 @@ use crate::error::{Result, TemperError};
 /// Generate the skill file content as a string.
 pub fn generate(config: &Config) -> Result<String> {
     let toml_path = config.vault_root.join("temper.toml");
-    let toml_content = std::fs::read_to_string(&toml_path).map_err(|e| {
-        TemperError::Config(format!("cannot read temper.toml: {}", e))
-    })?;
+    let toml_content = std::fs::read_to_string(&toml_path)
+        .map_err(|e| TemperError::Config(format!("cannot read temper.toml: {}", e)))?;
     let hash = format!("{:x}", Sha256::digest(toml_content.as_bytes()));
 
     let vault_path = config.vault_root.display().to_string();
@@ -126,17 +125,15 @@ pub fn check(config: &Config) -> Result<()> {
     println!("Skill file:  OK ({})", skill_path.display());
 
     // Check for staleness by comparing hashes
-    let existing = std::fs::read_to_string(skill_path).map_err(|e| {
-        TemperError::Config(format!("cannot read skill file: {}", e))
-    })?;
+    let existing = std::fs::read_to_string(skill_path)
+        .map_err(|e| TemperError::Config(format!("cannot read skill file: {}", e)))?;
 
     let embedded_hash = extract_config_hash(&existing);
 
     // Compute current hash
     let toml_path = config.vault_root.join("temper.toml");
-    let toml_content = std::fs::read_to_string(&toml_path).map_err(|e| {
-        TemperError::Config(format!("cannot read temper.toml: {}", e))
-    })?;
+    let toml_content = std::fs::read_to_string(&toml_path)
+        .map_err(|e| TemperError::Config(format!("cannot read temper.toml: {}", e)))?;
     let current_hash = format!("{:x}", Sha256::digest(toml_content.as_bytes()));
 
     match embedded_hash {

@@ -134,11 +134,7 @@ impl TemperConfig {
     /// Parse a temper.toml from the given file path.
     pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = std::fs::read_to_string(path.as_ref()).map_err(|e| {
-            TemperError::Config(format!(
-                "cannot read {}: {}",
-                path.as_ref().display(),
-                e
-            ))
+            TemperError::Config(format!("cannot read {}: {}", path.as_ref().display(), e))
         })?;
         let cfg: TemperConfig = toml::from_str(&content)?;
         Ok(cfg)
@@ -314,9 +310,8 @@ pub fn safe_write<F>(path: &Path, transform: F) -> Result<()>
 where
     F: FnOnce(String) -> String,
 {
-    let original = std::fs::read_to_string(path).map_err(|e| {
-        TemperError::Config(format!("safe_write read error: {}", e))
-    })?;
+    let original = std::fs::read_to_string(path)
+        .map_err(|e| TemperError::Config(format!("safe_write read error: {}", e)))?;
 
     // Validate original parses as TOML
     toml::from_str::<toml::Value>(&original)?;
@@ -328,12 +323,10 @@ where
 
     // Atomic write: write to tmp, then rename
     let tmp_path = path.with_extension("toml.tmp");
-    std::fs::write(&tmp_path, &transformed).map_err(|e| {
-        TemperError::Config(format!("safe_write tmp write error: {}", e))
-    })?;
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        TemperError::Config(format!("safe_write rename error: {}", e))
-    })?;
+    std::fs::write(&tmp_path, &transformed)
+        .map_err(|e| TemperError::Config(format!("safe_write tmp write error: {}", e)))?;
+    std::fs::rename(&tmp_path, path)
+        .map_err(|e| TemperError::Config(format!("safe_write rename error: {}", e)))?;
 
     Ok(())
 }

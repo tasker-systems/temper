@@ -33,8 +33,7 @@ fn test_project_add_multiple_and_remove_one() {
 
     temper_cli::commands::project::add(dir.path(), "alpha", "/tmp/alpha", Some("org/alpha"))
         .unwrap();
-    temper_cli::commands::project::add(dir.path(), "beta", "/tmp/beta", Some("org/beta"))
-        .unwrap();
+    temper_cli::commands::project::add(dir.path(), "beta", "/tmp/beta", Some("org/beta")).unwrap();
 
     let content = std::fs::read_to_string(dir.path().join("temper.toml")).unwrap();
     assert!(content.contains("[projects.alpha]"));

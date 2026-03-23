@@ -37,7 +37,11 @@ pub fn load_tickets(
     let mut tickets = Vec::new();
     let dirs: Vec<_> = if let Some(p) = project {
         let d = base.join(p);
-        if d.is_dir() { vec![d] } else { vec![] }
+        if d.is_dir() {
+            vec![d]
+        } else {
+            vec![]
+        }
     } else {
         fs::read_dir(base)
             .map_err(|e| TemperError::Vault(e.to_string()))?
@@ -90,13 +94,20 @@ pub fn find_ticket(config: &Config, slug_or_suffix: &str) -> Result<Option<Ticke
         return Ok(Some(t.clone()));
     }
     // Suffix match
-    let matches: Vec<_> = all.iter().filter(|t| t.slug.ends_with(slug_or_suffix)).collect();
+    let matches: Vec<_> = all
+        .iter()
+        .filter(|t| t.slug.ends_with(slug_or_suffix))
+        .collect();
     match matches.len() {
         0 => Ok(None),
         1 => Ok(Some(matches[0].clone())),
         _ => Err(TemperError::Vault(format!(
             "ambiguous slug suffix '{slug_or_suffix}', matches: {}",
-            matches.iter().map(|t| t.slug.as_str()).collect::<Vec<_>>().join(", ")
+            matches
+                .iter()
+                .map(|t| t.slug.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         ))),
     }
 }
@@ -133,7 +144,9 @@ pub fn create(
             )));
         }
     } else if milestone_slug.is_some() {
-        return Err(TemperError::Vault(format!("milestone not found: {ms_slug}")));
+        return Err(TemperError::Vault(format!(
+            "milestone not found: {ms_slug}"
+        )));
     }
 
     let date = Local::now().format("%Y-%m-%d").to_string();
@@ -213,8 +226,7 @@ pub fn move_ticket(
         .tickets_dir
         .join(&ticket.project)
         .join(format!("{}.md", ticket.slug));
-    let mut content = fs::read_to_string(&path)
-        .map_err(|e| TemperError::Vault(e.to_string()))?;
+    let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     let from_stage = ticket.stage.clone();
     let to_stage = stage.unwrap_or(&from_stage);
@@ -277,8 +289,7 @@ pub fn done(
         .tickets_dir
         .join(&ticket.project)
         .join(format!("{}.md", ticket.slug));
-    let mut content = fs::read_to_string(&path)
-        .map_err(|e| TemperError::Vault(e.to_string()))?;
+    let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     let datetime = Local::now().to_rfc3339();
     content = vault::set_frontmatter_field(&content, "stage", "done");
@@ -313,18 +324,13 @@ pub fn show(config: &Config, slug_or_suffix: &str) -> Result<()> {
         .tickets_dir
         .join(&ticket.project)
         .join(format!("{}.md", ticket.slug));
-    let content = fs::read_to_string(&path)
-        .map_err(|e| TemperError::Vault(e.to_string()))?;
+    let content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     print!("{content}");
     Ok(())
 }
 
 /// List tickets grouped by milestone.
-pub fn list(
-    config: &Config,
-    project: Option<&str>,
-    milestone_slug: Option<&str>,
-) -> Result<()> {
+pub fn list(config: &Config, project: Option<&str>, milestone_slug: Option<&str>) -> Result<()> {
     let tickets = load_tickets(config, project, milestone_slug)?;
     if tickets.is_empty() {
         println!("No tickets found.");
@@ -357,8 +363,7 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
     let tickets = load_tickets(config, Some(project), None)?;
     let stages = ["backlog", "design", "plan", "implement", "done"];
 
-    let project_title = project.chars().next().unwrap().to_uppercase().to_string()
-        + &project[1..];
+    let project_title = project.chars().next().unwrap().to_uppercase().to_string() + &project[1..];
 
     // Terminal output
     println!("{project_title} Board");
@@ -379,7 +384,14 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
             " {:<16}│ {:<16}│ {:<8}│ {:<16}│ Done",
             "Backlog", "Design", "Plan", "Implement"
         );
-        println!("{}┼{}┼{}┼{}┼{}", "─".repeat(17), "─".repeat(17), "─".repeat(9), "─".repeat(17), "─".repeat(9));
+        println!(
+            "{}┼{}┼{}┼{}┼{}",
+            "─".repeat(17),
+            "─".repeat(17),
+            "─".repeat(9),
+            "─".repeat(17),
+            "─".repeat(9)
+        );
 
         let max_rows = stages
             .iter()
@@ -389,7 +401,13 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
 
         let by_stage: Vec<Vec<&TicketInfo>> = stages
             .iter()
-            .map(|s| ms_tickets.iter().filter(|t| t.stage == *s).copied().collect())
+            .map(|s| {
+                ms_tickets
+                    .iter()
+                    .filter(|t| t.stage == *s)
+                    .copied()
+                    .collect()
+            })
             .collect();
 
         for row in 0..max_rows.max(1) {
@@ -414,10 +432,20 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
                     }
                 })
                 .collect();
-            println!("{}│{}│{}│{}│{}", cells[0], cells[1], cells[2], cells[3], cells[4]);
+            println!(
+                "{}│{}│{}│{}│{}",
+                cells[0], cells[1], cells[2], cells[3], cells[4]
+            );
         }
 
-        println!("{}┴{}┴{}┴{}┴{}", "─".repeat(17), "─".repeat(17), "─".repeat(9), "─".repeat(17), "─".repeat(9));
+        println!(
+            "{}┴{}┴{}┴{}┴{}",
+            "─".repeat(17),
+            "─".repeat(17),
+            "─".repeat(9),
+            "─".repeat(17),
+            "─".repeat(9)
+        );
         let mut stage_counts: Vec<String> = Vec::new();
         for stage in &stages {
             let count = ms_tickets.iter().filter(|t| t.stage == *stage).count();
@@ -444,7 +472,13 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
 
         let by_stage: Vec<Vec<&TicketInfo>> = stages
             .iter()
-            .map(|s| ms_tickets.iter().filter(|t| t.stage == *s).copied().collect())
+            .map(|s| {
+                ms_tickets
+                    .iter()
+                    .filter(|t| t.stage == *s)
+                    .copied()
+                    .collect()
+            })
             .collect();
         let max_rows = by_stage.iter().map(|s| s.len()).max().unwrap_or(0);
 

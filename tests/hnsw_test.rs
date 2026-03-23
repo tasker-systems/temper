@@ -1,6 +1,6 @@
+use std::collections::HashMap;
 use temper_cli::chunker::ChunkMeta;
 use temper_cli::hnsw::{IndexEntry, SearchFilter, SearchIndex};
-use std::collections::HashMap;
 use tempfile::TempDir;
 
 const DIMS: usize = 384;
@@ -11,7 +11,9 @@ fn seeded_unit_vector(seed: u64) -> Vec<f32> {
     let mut state = seed ^ 0x123456789abcdef;
     let mut raw: Vec<f32> = (0..DIMS)
         .map(|_| {
-            state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             // map to [-1.0, 1.0]
             (state as i64 as f32) / (i64::MAX as f32)
         })
@@ -215,5 +217,8 @@ fn test_cached_vectors() {
 
     let retrieved = &cache["vec-chunk-0"];
     let cosine: f32 = retrieved.iter().zip(v0.iter()).map(|(a, b)| a * b).sum();
-    assert!(cosine > 0.999, "cached vector should match original (cosine={cosine})");
+    assert!(
+        cosine > 0.999,
+        "cached vector should match original (cosine={cosine})"
+    );
 }
