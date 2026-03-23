@@ -9,7 +9,7 @@ fn test_milestone_create_and_ticket_create() {
     let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
     assert!(dir
         .path()
-        .join("milestones")
+        .join("milestones/myapp")
         .join(format!("{ms_slug}.md"))
         .exists());
 
@@ -81,4 +81,30 @@ fn test_ticket_move_and_done() {
             .unwrap();
     assert!(content.contains("stage: done"));
     assert!(content.contains("feat/test"));
+}
+
+#[test]
+fn test_milestone_creates_in_project_subdir() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.2", None).unwrap();
+
+    let expected_path = dir
+        .path()
+        .join("milestones/myapp")
+        .join(format!("{ms_slug}.md"));
+    assert!(
+        expected_path.exists(),
+        "milestone should be in project subdir: {}",
+        expected_path.display()
+    );
+
+    let flat_path = dir.path().join("milestones").join(format!("{ms_slug}.md"));
+    assert!(
+        !flat_path.exists(),
+        "milestone should NOT be at flat path: {}",
+        flat_path.display()
+    );
 }
