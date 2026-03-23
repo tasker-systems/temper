@@ -55,6 +55,7 @@ working inside the temper source repo.
 - `temper ticket create --title <t> --project <p> [--stdin]` — Create ticket (pipe body via stdin)
 - `temper ticket list` — List tickets
 - `temper ticket board` — Board view
+- `temper ticket start <slug> --project <p>` — Move to brainstorm, show content, then invoke brainstorming skill
 - `temper milestone list` — Roadmap view
 - `temper note create <type> <title> [--stdin]` — Create note from template (pipe body via stdin)
 - `temper events [--project <p>] [--limit <n>]` — Show recent vault events
