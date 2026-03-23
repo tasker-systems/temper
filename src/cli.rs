@@ -90,6 +90,16 @@ pub enum Commands {
         #[command(subcommand)]
         action: MilestoneAction,
     },
+    /// Manage projects
+    Project {
+        #[command(subcommand)]
+        action: ProjectAction,
+    },
+    /// Manage Claude Code skill
+    Skill {
+        #[command(subcommand)]
+        action: SkillAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -178,6 +188,23 @@ pub enum MilestoneAction {
 }
 
 #[derive(Subcommand)]
+pub enum ProjectAction {
+    /// Add a project to temper.toml
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        path: String,
+        #[arg(long)]
+        repo: Option<String>,
+    },
+    /// Remove a project from temper.toml
+    Remove { name: String },
+    /// List configured projects
+    List,
+}
+
+#[derive(Subcommand)]
 pub enum SessionAction {
     /// Create or update today's session note
     Save {
@@ -192,4 +219,21 @@ pub enum SessionAction {
         #[arg(long)]
         project: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum SkillAction {
+    /// Generate skill content (preview to stdout)
+    Generate,
+    /// Install skill file
+    Install {
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// Check skill status
+    Check,
 }

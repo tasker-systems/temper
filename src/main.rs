@@ -1,7 +1,7 @@
 mod cli;
 
 use clap::Parser;
-use cli::{Cli, Commands, MilestoneAction, NoteAction, SessionAction, TicketAction};
+use cli::{Cli, Commands, MilestoneAction, NoteAction, ProjectAction, SessionAction, TicketAction};
 
 fn main() {
     tracing_subscriber::fmt()
@@ -165,6 +165,27 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         project,
                         milestone.as_deref(),
                     )
+                }
+            }
+        }
+        Commands::Project { action } => {
+            match action {
+                ProjectAction::Add { name, path, repo } => {
+                    let vault_root = temper_cli::config::resolve_vault(cli.vault.as_deref())?;
+                    temper_cli::commands::project::add(
+                        &vault_root,
+                        &name,
+                        &path,
+                        repo.as_deref(),
+                    )
+                }
+                ProjectAction::Remove { name } => {
+                    let vault_root = temper_cli::config::resolve_vault(cli.vault.as_deref())?;
+                    temper_cli::commands::project::remove(&vault_root, &name)
+                }
+                ProjectAction::List => {
+                    let config = temper_cli::config::load(cli.vault.as_deref())?;
+                    temper_cli::commands::project::list(&config)
                 }
             }
         }
