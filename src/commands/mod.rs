@@ -1,5 +1,6 @@
 pub mod check;
 pub mod context;
+pub mod events;
 pub mod index;
 pub mod init;
 pub mod milestone;
@@ -10,3 +11,4 @@ pub mod session;
 pub mod skill;
 pub mod status;
 pub mod ticket;
+pub mod warmup;

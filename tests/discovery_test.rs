@@ -20,3 +20,48 @@ fn test_append_and_read_event() {
     assert!(content.contains("session"));
     assert!(content.contains("myapp"));
 }
+
+#[test]
+fn test_events_list_returns_recent_events() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
+        .unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
+    temper_cli::commands::ticket::create(&config, "myapp", "Test ticket", Some(&ms_slug), false)
+        .unwrap();
+
+    let events = temper_cli::commands::events::load_events(&config, None, 20).unwrap();
+    assert!(
+        events.len() >= 2,
+        "should have at least 2 events (milestone create + ticket create)"
+    );
+}
+
+#[test]
+fn test_events_filter_by_project() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
+        .unwrap();
+    temper_cli::commands::project::add(dir.path(), "other", "/tmp/other", Some("org/other"))
+        .unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms1 = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
+    let ms2 = temper_cli::commands::milestone::create(&config, "other", "v0.2", None).unwrap();
+    temper_cli::commands::ticket::create(&config, "myapp", "Ticket A", Some(&ms1), false).unwrap();
+    temper_cli::commands::ticket::create(&config, "other", "Ticket B", Some(&ms2), false).unwrap();
+
+    let myapp_events =
+        temper_cli::commands::events::load_events(&config, Some("myapp"), 20).unwrap();
+    for event in &myapp_events {
+        let project = temper_cli::commands::events::event_project(event);
+        assert_eq!(
+            project, "myapp",
+            "filtered events should only be from myapp"
+        );
+    }
+}

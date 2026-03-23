@@ -19,33 +19,45 @@ pub struct MilestoneInfo {
 
 /// Load all milestones, optionally filtered by project, sorted by seq.
 pub fn load_milestones(config: &Config, project: Option<&str>) -> Result<Vec<MilestoneInfo>> {
-    let dir = &config.milestones_dir;
-    if !dir.is_dir() {
+    let base = &config.milestones_dir;
+    if !base.is_dir() {
         return Ok(vec![]);
     }
     let mut milestones = Vec::new();
-    for entry in fs::read_dir(dir).map_err(|e| TemperError::Vault(e.to_string()))? {
-        let entry = entry.map_err(|e| TemperError::Vault(e.to_string()))?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
+    let dirs: Vec<_> = if let Some(p) = project {
+        let d = base.join(p);
+        if d.is_dir() {
+            vec![d]
+        } else {
+            vec![]
         }
-        let content = fs::read_to_string(&path)
-            .map_err(|e| TemperError::Vault(format!("reading {}: {e}", path.display())))?;
-        let fm = match vault::parse_frontmatter(&content) {
-            Some(fm) => fm,
-            None => continue,
-        };
-        let info: MilestoneInfo = match serde_yaml::from_value(fm) {
-            Ok(i) => i,
-            Err(_) => continue,
-        };
-        if let Some(p) = project {
-            if info.project != p {
+    } else {
+        fs::read_dir(base)
+            .map_err(|e| TemperError::Vault(e.to_string()))?
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.is_dir())
+            .collect()
+    };
+    for dir in dirs {
+        for entry in fs::read_dir(&dir).map_err(|e| TemperError::Vault(e.to_string()))? {
+            let entry = entry.map_err(|e| TemperError::Vault(e.to_string()))?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("md") {
                 continue;
             }
+            let content = fs::read_to_string(&path)
+                .map_err(|e| TemperError::Vault(format!("reading {}: {e}", path.display())))?;
+            let fm = match vault::parse_frontmatter(&content) {
+                Some(fm) => fm,
+                None => continue,
+            };
+            let info: MilestoneInfo = match serde_yaml::from_value(fm) {
+                Ok(i) => i,
+                Err(_) => continue,
+            };
+            milestones.push(info);
         }
-        milestones.push(info);
     }
     milestones.sort_by_key(|m| m.seq);
     Ok(milestones)
@@ -67,7 +79,8 @@ pub fn find_milestone(config: &Config, slug: &str) -> Result<Option<MilestoneInf
 /// Ensure the maintenance milestone exists for a project, creating it if missing.
 pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
     let slug = format!("{project}-maintenance");
-    let path = config.milestones_dir.join(format!("{slug}.md"));
+    let dir = config.milestones_dir.join(project);
+    let path = dir.join(format!("{slug}.md"));
     if path.exists() {
         return Ok(slug);
     }
@@ -85,7 +98,7 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
         "Maintenance",
         &vars,
     )?;
-    fs::create_dir_all(&config.milestones_dir).map_err(|e| TemperError::Vault(e.to_string()))?;
+    fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
     let event = discovery::Event::MilestoneCreate {
         ts: Local::now().to_rfc3339(),
@@ -105,7 +118,8 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
         Some(s) => s.to_string(),
         None => vault::slugify(title),
     };
-    let path = config.milestones_dir.join(format!("{slug}.md"));
+    let dir = config.milestones_dir.join(project);
+    let path = dir.join(format!("{slug}.md"));
     if path.exists() {
         return Err(TemperError::Vault(format!(
             "milestone already exists: {slug}"
@@ -131,7 +145,7 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
         title,
         &vars,
     )?;
-    fs::create_dir_all(&config.milestones_dir).map_err(|e| TemperError::Vault(e.to_string()))?;
+    fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
     let event = discovery::Event::MilestoneCreate {
         ts: Local::now().to_rfc3339(),
@@ -202,7 +216,14 @@ pub fn list(config: &Config, project: &str) -> Result<()> {
     for ms in &ordered {
         let ms_counts = ticket_counts.get(&ms.slug);
         let mut stage_parts: Vec<String> = Vec::new();
-        for stage in &["backlog", "design", "plan", "implement", "done"] {
+        for stage in &[
+            "backlog",
+            "brainstorm",
+            "design",
+            "plan",
+            "implement",
+            "done",
+        ] {
             let count = ms_counts.and_then(|c| c.get(*stage)).copied().unwrap_or(0);
             if count > 0 {
                 stage_parts.push(format!("{count} {stage}"));
@@ -235,16 +256,18 @@ pub fn update(config: &Config, slug: &str, status: &str) -> Result<()> {
             valid_statuses.join(", ")
         )));
     }
-    let path = config.milestones_dir.join(format!("{slug}.md"));
+    let info = find_milestone(config, slug)?
+        .ok_or_else(|| TemperError::Vault(format!("milestone not found: {slug}")))?;
+    let path = config
+        .milestones_dir
+        .join(&info.project)
+        .join(format!("{slug}.md"));
     if !path.exists() {
         return Err(TemperError::Vault(format!("milestone not found: {slug}")));
     }
     let content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     let updated = vault::set_frontmatter_field(&content, "status", status);
     fs::write(&path, updated).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let fm = vault::parse_frontmatter(&content)
-        .ok_or_else(|| TemperError::Vault("no frontmatter".into()))?;
-    let info: MilestoneInfo = serde_yaml::from_value(fm)?;
     let event = discovery::Event::MilestoneUpdate {
         ts: Local::now().to_rfc3339(),
         project: info.project,

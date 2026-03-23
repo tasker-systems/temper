@@ -34,6 +34,15 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
+    /// Show recent vault events
+    Events {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "20")]
+        limit: usize,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
     /// Build semantic search index
     Index {
         /// Force reindex all files
@@ -97,6 +106,13 @@ pub enum Commands {
     Project {
         #[command(subcommand)]
         action: ProjectAction,
+    },
+    /// Context primer for new sessions
+    Warmup {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Manage Claude Code skill
     Skill {

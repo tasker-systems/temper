@@ -25,3 +25,36 @@ fn test_skill_install_writes_file() {
     temper_cli::commands::skill::install(&config, &output_path).unwrap();
     assert!(output_path.exists());
 }
+
+#[test]
+fn test_skill_generate_includes_invocation_section() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let content = temper_cli::commands::skill::generate(&config).unwrap();
+    assert!(content.contains("## Invocation"));
+    assert!(content.contains("installed binary"));
+    assert!(content.contains("Never use `cargo run`"));
+}
+
+#[test]
+fn test_skill_generate_documents_stdin_flag() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let content = temper_cli::commands::skill::generate(&config).unwrap();
+    assert!(content.contains("--stdin"));
+}
+
+#[test]
+fn test_skill_generate_includes_ticket_start() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let content = temper_cli::commands::skill::generate(&config).unwrap();
+    assert!(content.contains("ticket start"));
+    assert!(content.contains("brainstorming skill"));
+}
