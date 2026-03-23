@@ -157,13 +157,13 @@ Default output is markdown. `--project` defaults to current directory inference;
 
 If the most recent session note exceeds ~500 lines, truncate with a note pointing to the full file path.
 
-**Hook documentation:** The README (or a setup/configuration section) documents how to wire warmup as a Claude Code `UserPromptSubmit` hook (runs on first prompt in a session):
+**Hook documentation:** The README (or a setup/configuration section) documents how to wire warmup as a Claude Code `SessionStart` hook. Using the `startup` matcher ensures it only fires on new sessions (not resumes, which already have context):
 
 ```json
 {
   "hooks": {
-    "UserPromptSubmit": [{
-      "matcher": "",
+    "SessionStart": [{
+      "matcher": "startup",
       "hooks": [{
         "type": "command",
         "command": "temper warmup --project <p>"
