@@ -1,5 +1,6 @@
 pub mod check;
 pub mod context;
+pub mod events;
 pub mod index;
 pub mod init;
 pub mod milestone;

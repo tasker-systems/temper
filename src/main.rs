@@ -40,6 +40,19 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             temper_cli::commands::status::run(&config, verbose)
         }
+        Commands::Events {
+            project,
+            limit,
+            format,
+        } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            let cwd = std::env::current_dir().unwrap_or_default();
+            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
+            let project = project
+                .as_deref()
+                .or_else(|| resolved.map(|r| r.name.as_str()));
+            temper_cli::commands::events::run(&config, project, limit, &format)
+        }
         Commands::Index {
             force,
             paths,
