@@ -37,6 +37,12 @@ description: Knowledge vault operations — context lookup, session notes, ticke
 
 Vault: {vault_path}
 
+## Invocation
+
+`temper` is an installed binary in `$PATH`. Always run it directly as `temper <subcommand>`.
+Never use `cargo run`, `python`, full binary paths, or any other indirect method — even when
+working inside the temper source repo.
+
 ## Projects
 {project_list}
 
@@ -44,13 +50,15 @@ Vault: {vault_path}
 
 - `temper search <query>` — Semantic search across indexed content
 - `temper context <topic>` — Show topic with related context
-- `temper session save [<title>]` — Create/update session note
+- `temper session save [<title>] [--stdin]` — Create/update session note (pipe body via stdin)
 - `temper session list` — List recent sessions
-- `temper ticket create --title <t> --project <p>` — Create ticket
+- `temper ticket create --title <t> --project <p> [--stdin]` — Create ticket (pipe body via stdin)
 - `temper ticket list` — List tickets
 - `temper ticket board` — Board view
 - `temper milestone list` — Roadmap view
-- `temper note create <type> <title>` — Create note from template
+- `temper note create <type> <title> [--stdin]` — Create note from template (pipe body via stdin)
+- `temper events [--project <p>] [--limit <n>]` — Show recent vault events
+- `temper warmup [--project <p>]` — Context primer for new sessions
 - `temper index` — Rebuild search index
 - `temper status` — Vault overview
 
@@ -62,6 +70,11 @@ When starting a session:
 
 When ending a session:
 - Suggest: `temper session save`
+
+When the user says `/temper ticket start <slug>`:
+1. Run `temper ticket move <slug> --stage brainstorm --project <p>`
+2. Run `temper ticket show <slug>`
+3. Invoke the brainstorming skill with the ticket content as context
 
 This tool uses the superpowers workflow: brainstorm → design → plan → implement → finish.
 "#,
