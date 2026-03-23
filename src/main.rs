@@ -1,5 +1,4 @@
 mod cli;
-mod error;
 
 use clap::Parser;
 use cli::{Cli, Commands};
@@ -20,11 +19,13 @@ fn main() {
     }
 }
 
-fn run(cli: Cli) -> error::Result<()> {
+fn run(cli: Cli) -> temper_cli::error::Result<()> {
     match cli.command {
-        Commands::Init { .. } => {
-            eprintln!("temper init: not yet implemented");
-            Ok(())
+        Commands::Init { path, no_interactive } => {
+            let vault_path = path
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
+            temper_cli::commands::init::run(&vault_path, no_interactive)
         }
         Commands::Check { .. } => {
             eprintln!("temper check: not yet implemented");

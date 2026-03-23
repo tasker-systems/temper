@@ -1,4 +1,5 @@
 pub mod chunker;
+pub mod commands;
 pub mod config;
 pub mod discovery;
 pub mod embedder;
