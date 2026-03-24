@@ -110,19 +110,41 @@ fn test_normalize_moves_misplaced_files() {
 }
 
 #[test]
-fn test_normalize_reports_unscoped_tickets() {
+fn test_normalize_backfills_missing_scope() {
     let dir = TempDir::new().unwrap();
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::ticket::create(&config, "myapp", "Unscoped", Some(&ms_slug), None)
-        .unwrap();
+    let slug = temper_cli::commands::ticket::create(
+        &config,
+        "myapp",
+        "Legacy Ticket",
+        Some(&ms_slug),
+        None,
+    )
+    .unwrap();
 
-    let summary = temper_cli::commands::normalize::run(&config, None, true, false).unwrap();
+    // Strip the scope field to simulate a pre-scope ticket
+    let path = dir.path().join("tickets/myapp").join(format!("{slug}.md"));
+    let content = std::fs::read_to_string(&path).unwrap();
+    let stripped = content
+        .lines()
+        .filter(|l| !l.starts_with("scope:"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(&path, format!("{stripped}\n")).unwrap();
+
+    let summary = temper_cli::commands::normalize::run(&config, None, false, false).unwrap();
     assert!(
         summary.unscoped_tickets > 0,
-        "should report unscoped tickets"
+        "should count unscoped tickets"
+    );
+
+    let updated = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        updated.contains("scope: null"),
+        "should have backfilled scope: null"
     );
 }

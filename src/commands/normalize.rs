@@ -248,12 +248,26 @@ fn process_file(
         }
     }
 
-    // --- Check for missing scope on tickets (informational only) ---
+    // --- Backfill missing scope field on tickets ---
     if base_dir.ends_with("tickets") {
         if let Some(ref v) = fm {
-            let has_scope = v.get("scope").and_then(|s| s.as_str()).is_some();
-            if !has_scope {
+            // Check if scope key exists at all (null counts as existing)
+            let has_scope_key = v.get("scope").is_some();
+            if !has_scope_key {
+                // Insert scope: null after the stage: line so set_frontmatter_field works later
+                let mut new_lines = Vec::new();
+                let mut in_fm = false;
+                for line in modified.lines() {
+                    new_lines.push(line.to_string());
+                    if line.trim() == "---" {
+                        in_fm = !in_fm;
+                    } else if in_fm && line.starts_with("stage:") {
+                        new_lines.push("scope: null".to_string());
+                    }
+                }
+                modified = new_lines.join("\n") + "\n";
                 summary.unscoped_tickets += 1;
+                changed = true;
             }
         }
     }
