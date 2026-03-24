@@ -31,6 +31,18 @@ fn run_text(config: &Config, project: &str) -> Result<()> {
     }
     println!();
 
+    // Section: In-progress tickets
+    let in_progress = collect_in_progress_tickets(config, project);
+    if !in_progress.is_empty() {
+        println!("## In-Progress Tickets");
+        println!();
+        for (title, slug, scope) in &in_progress {
+            let scope_label = scope.as_deref().unwrap_or("unscoped");
+            println!("- [{scope_label}] {title} ({slug})");
+        }
+        println!();
+    }
+
     // Section 2: Last session content
     if let Some((_date, _title, path)) = sessions.first() {
         println!("## Last Session");
@@ -71,6 +83,17 @@ fn run_text(config: &Config, project: &str) -> Result<()> {
 fn run_json(config: &Config, project: &str) -> Result<()> {
     let sessions = collect_recent_sessions(config, project, 3);
     let recent_events = events::load_events(config, Some(project), 15)?;
+    let in_progress = collect_in_progress_tickets(config, project);
+    let in_progress_json: Vec<_> = in_progress
+        .iter()
+        .map(|(title, slug, scope)| {
+            serde_json::json!({
+                "title": title,
+                "slug": slug,
+                "scope": scope,
+            })
+        })
+        .collect();
 
     let last_session_content = sessions.first().and_then(|(_, _, path)| {
         std::fs::read_to_string(path).ok().map(|content| {
@@ -92,6 +115,7 @@ fn run_json(config: &Config, project: &str) -> Result<()> {
         "recent_events": recent_events.iter().map(|e| {
             serde_json::to_value(e).unwrap_or_default()
         }).collect::<Vec<_>>(),
+        "in_progress_tickets": in_progress_json,
     });
 
     println!(
@@ -147,6 +171,23 @@ fn collect_recent_sessions(
     entries.sort_by(|a, b| b.0.cmp(&a.0));
     entries.truncate(limit);
     entries
+}
+
+/// Collect in-progress tickets for a project.
+/// Returns (title, slug, scope) tuples.
+fn collect_in_progress_tickets(
+    config: &Config,
+    project: &str,
+) -> Vec<(String, String, Option<String>)> {
+    let tickets = match crate::commands::ticket::load_tickets(config, Some(project), None) {
+        Ok(t) => t,
+        Err(_) => return vec![],
+    };
+    tickets
+        .into_iter()
+        .filter(|t| t.stage == "in-progress")
+        .map(|t| (t.title, t.slug, t.scope))
+        .collect()
 }
 
 /// Brief event formatting for warmup output.
