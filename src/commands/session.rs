@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use chrono::Local;
+use serde::Serialize;
 
 use crate::config::Config;
 use crate::discovery::{self, Event};
@@ -22,6 +23,7 @@ pub fn save(
     title: Option<&str>,
     project: Option<&str>,
     stdin_content: Option<&str>,
+    format: &str,
 ) -> Result<()> {
     let today = Local::now().format("%Y-%m-%d").to_string();
 
@@ -82,9 +84,28 @@ pub fn save(
         .strip_prefix(&config.vault_root)
         .unwrap_or(&note_path);
     let relative_str = relative.to_string_lossy();
-    output::success(format!("Created: {relative_str}"));
 
     let ts = Local::now().to_rfc3339();
+
+    if format == "json" {
+        #[derive(Serialize)]
+        struct SessionCreated<'a> {
+            title: &'a str,
+            project: &'a str,
+            path: &'a str,
+            date: &'a str,
+        }
+        let info = SessionCreated {
+            title: note_title,
+            project: &project_name,
+            path: &relative_str,
+            date: &today,
+        };
+        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+        println!("{json}");
+    } else {
+        output::success(format!("Created: {relative_str}"));
+    }
     let event = Event::NoteCreate {
         ts,
         note_type: "session".to_string(),
@@ -103,7 +124,7 @@ pub fn save(
 ///
 /// Scans `sessions_dir`, parses frontmatter for date, sorts by date descending,
 /// displays up to 20 entries.
-pub fn list(config: &Config, project: Option<&str>) -> Result<()> {
+pub fn list(config: &Config, project: Option<&str>, format: &str) -> Result<()> {
     let sessions_root = &config.sessions_dir;
 
     if !sessions_root.exists() {
@@ -146,6 +167,12 @@ pub fn list(config: &Config, project: Option<&str>) -> Result<()> {
     entries.sort_by(|a, b| b.date.cmp(&a.date));
     entries.truncate(20);
 
+    if format == "json" {
+        let json = serde_json::to_string_pretty(&entries).unwrap_or_default();
+        println!("{json}");
+        return Ok(());
+    }
+
     if entries.is_empty() {
         output::hint("No sessions found.");
         return Ok(());
@@ -163,6 +190,7 @@ pub fn list(config: &Config, project: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+#[derive(Serialize)]
 struct SessionEntry {
     date: String,
     project: String,

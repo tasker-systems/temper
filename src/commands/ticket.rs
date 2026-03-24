@@ -1,7 +1,7 @@
 use std::fs;
 
 use chrono::Local;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::commands::milestone;
 use crate::config::Config;
@@ -10,7 +10,7 @@ use crate::error::{Result, TemperError};
 use crate::output;
 use crate::vault;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TicketInfo {
     pub title: String,
     pub slug: String,
@@ -321,9 +321,20 @@ pub fn done(
 }
 
 /// Show a single ticket's raw markdown content.
-pub fn show(config: &Config, slug_or_suffix: &str, project: Option<&str>) -> Result<()> {
+pub fn show(
+    config: &Config,
+    slug_or_suffix: &str,
+    project: Option<&str>,
+    format: &str,
+) -> Result<()> {
     let ticket = find_ticket(config, slug_or_suffix, project)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
+    if format == "json" {
+        let json = serde_json::to_string_pretty(&ticket)
+            .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?;
+        println!("{json}");
+        return Ok(());
+    }
     let path = config
         .tickets_dir
         .join(&ticket.project)
@@ -334,8 +345,19 @@ pub fn show(config: &Config, slug_or_suffix: &str, project: Option<&str>) -> Res
 }
 
 /// List tickets grouped by milestone.
-pub fn list(config: &Config, project: Option<&str>, milestone_slug: Option<&str>) -> Result<()> {
+pub fn list(
+    config: &Config,
+    project: Option<&str>,
+    milestone_slug: Option<&str>,
+    format: &str,
+) -> Result<()> {
     let tickets = load_tickets(config, project, milestone_slug)?;
+    if format == "json" {
+        let json = serde_json::to_string_pretty(&tickets)
+            .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?;
+        println!("{json}");
+        return Ok(());
+    }
     if tickets.is_empty() {
         output::hint("No tickets found.");
         return Ok(());
@@ -363,10 +385,46 @@ pub fn list(config: &Config, project: Option<&str>, milestone_slug: Option<&str>
 }
 
 /// Generate board view: terminal output + markdown file.
-pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> Result<()> {
+pub fn board(
+    config: &Config,
+    project: &str,
+    milestone_filter: Option<&str>,
+    format: &str,
+) -> Result<()> {
     let milestones = milestone::load_milestones(config, Some(project))?;
     let tickets = load_tickets(config, Some(project), None)?;
     let stages = ["backlog", "in-progress", "done", "cancelled"];
+
+    let filtered_milestones_for_json: Vec<_> = if let Some(ms) = milestone_filter {
+        milestones.iter().filter(|m| m.slug == ms).collect()
+    } else {
+        milestones.iter().filter(|m| m.status == "active").collect()
+    };
+
+    if format == "json" {
+        #[derive(Serialize)]
+        struct BoardMilestone<'a> {
+            milestone: &'a str,
+            title: &'a str,
+            tickets: Vec<&'a TicketInfo>,
+        }
+        let board_data: Vec<BoardMilestone> = filtered_milestones_for_json
+            .iter()
+            .map(|ms| {
+                let ms_tickets: Vec<&TicketInfo> =
+                    tickets.iter().filter(|t| t.milestone == ms.slug).collect();
+                BoardMilestone {
+                    milestone: &ms.slug,
+                    title: &ms.title,
+                    tickets: ms_tickets,
+                }
+            })
+            .collect();
+        let json = serde_json::to_string_pretty(&board_data)
+            .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?;
+        println!("{json}");
+        return Ok(());
+    }
 
     let project_title = project.chars().next().unwrap().to_uppercase().to_string() + &project[1..];
 
@@ -374,13 +432,7 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
     output::header(format!("{project_title} Board"));
     output::plain("═".repeat(68));
 
-    let filtered_milestones: Vec<_> = if let Some(ms) = milestone_filter {
-        milestones.iter().filter(|m| m.slug == ms).collect()
-    } else {
-        milestones.iter().filter(|m| m.status == "active").collect()
-    };
-
-    for ms in &filtered_milestones {
+    for ms in &filtered_milestones_for_json {
         let ms_tickets: Vec<_> = tickets.iter().filter(|t| t.milestone == ms.slug).collect();
         if ms_tickets.is_empty() && milestone_filter.is_none() {
             continue;
@@ -463,7 +515,7 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
         Local::now().to_rfc3339()
     );
 
-    for ms in &filtered_milestones {
+    for ms in &filtered_milestones_for_json {
         let ms_tickets: Vec<_> = tickets.iter().filter(|t| t.milestone == ms.slug).collect();
         md.push_str(&format!("\n## {}\n\n", ms.title));
         md.push_str("| Backlog | In Progress | Done | Cancelled |\n");

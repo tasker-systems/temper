@@ -1,3 +1,5 @@
+use serde::Serialize;
+
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::{Result, TemperError};
@@ -10,7 +12,13 @@ use chrono::Local;
 /// - `note_type`: any template name in the templates dir (e.g. "session", "concept")
 /// - `title`: note title (used in filename and template substitution)
 /// - `project`: optional project tag written into frontmatter
-pub fn create(config: &Config, note_type: &str, title: &str, project: Option<&str>) -> Result<()> {
+pub fn create(
+    config: &Config,
+    note_type: &str,
+    title: &str,
+    project: Option<&str>,
+    format: &str,
+) -> Result<()> {
     let templates_rel = config
         .templates_dir
         .strip_prefix(&config.vault_root)
@@ -47,7 +55,26 @@ pub fn create(config: &Config, note_type: &str, title: &str, project: Option<&st
         .strip_prefix(&config.vault_root)
         .unwrap_or(&note_path);
     let relative_str = relative.to_string_lossy();
-    output::success(format!("Created: {relative_str}"));
+
+    if format == "json" {
+        #[derive(Serialize)]
+        struct NoteCreated<'a> {
+            note_type: &'a str,
+            title: &'a str,
+            path: &'a str,
+            project: Option<&'a str>,
+        }
+        let info = NoteCreated {
+            note_type,
+            title,
+            path: &relative_str,
+            project,
+        };
+        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+        println!("{json}");
+    } else {
+        output::success(format!("Created: {relative_str}"));
+    }
 
     let ts = Local::now().to_rfc3339();
     let event = Event::NoteCreate {

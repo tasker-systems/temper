@@ -136,6 +136,8 @@ pub enum NoteAction {
         /// Print the raw template and exit
         #[arg(long)]
         show_template: bool,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
 
@@ -181,12 +183,16 @@ pub enum TicketAction {
         project: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Show a ticket's content
     Show {
         slug: String,
         #[arg(long)]
         project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Show project board
     Board {
@@ -194,6 +200,8 @@ pub enum TicketAction {
         project: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
 
@@ -207,11 +215,15 @@ pub enum MilestoneAction {
         project: Option<String>,
         #[arg(long)]
         slug: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// List milestones for a project
     List {
         #[arg(long)]
         project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Update milestone status
     Update {
@@ -252,11 +264,15 @@ pub enum SessionAction {
         /// Print the raw template and exit
         #[arg(long)]
         show_template: bool,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// List recent sessions
     List {
         #[arg(long)]
         project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
 

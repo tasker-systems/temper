@@ -96,6 +96,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     project,
                     stdin: _,
                     show_template,
+                    format,
                 } => {
                     if show_template {
                         let content = temper_cli::vault::get_template(&note_type)?;
@@ -107,6 +108,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         &note_type,
                         &title,
                         project.as_deref(),
+                        &format,
                     )
                 }
             }
@@ -119,6 +121,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     project,
                     stdin: _,
                     show_template,
+                    format,
                 } => {
                     if show_template {
                         let content = temper_cli::vault::get_template("session")?;
@@ -131,10 +134,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         title.as_deref(),
                         project.as_deref(),
                         stdin_content.as_deref(),
+                        &format,
                     )
                 }
-                SessionAction::List { project } => {
-                    temper_cli::commands::session::list(&config, project.as_deref())
+                SessionAction::List { project, format } => {
+                    temper_cli::commands::session::list(&config, project.as_deref(), &format)
                 }
             }
         }
@@ -205,19 +209,36 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         project,
                     )
                 }
-                TicketAction::List { project, milestone } => {
+                TicketAction::List {
+                    project,
+                    milestone,
+                    format,
+                } => {
                     let project = project
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
-                    temper_cli::commands::ticket::list(&config, project, milestone.as_deref())
+                    temper_cli::commands::ticket::list(
+                        &config,
+                        project,
+                        milestone.as_deref(),
+                        &format,
+                    )
                 }
-                TicketAction::Show { slug, project } => {
+                TicketAction::Show {
+                    slug,
+                    project,
+                    format,
+                } => {
                     let project = project
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
-                    temper_cli::commands::ticket::show(&config, &slug, project)
+                    temper_cli::commands::ticket::show(&config, &slug, project, &format)
                 }
-                TicketAction::Board { project, milestone } => {
+                TicketAction::Board {
+                    project,
+                    milestone,
+                    format,
+                } => {
                     let project = project
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()))
@@ -226,7 +247,12 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                                 "no project specified and could not infer from CWD".into(),
                             )
                         })?;
-                    temper_cli::commands::ticket::board(&config, project, milestone.as_deref())
+                    temper_cli::commands::ticket::board(
+                        &config,
+                        project,
+                        milestone.as_deref(),
+                        &format,
+                    )
                 }
             }
         }
@@ -253,6 +279,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     title,
                     project,
                     slug,
+                    format,
                 } => {
                     let project = project
                         .as_deref()
@@ -267,10 +294,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         project,
                         &title,
                         slug.as_deref(),
+                        &format,
                     )?;
                     Ok(())
                 }
-                MilestoneAction::List { project } => {
+                MilestoneAction::List { project, format } => {
                     let project = project
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()))
@@ -279,7 +307,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                                 "no project specified and could not infer from CWD".into(),
                             )
                         })?;
-                    temper_cli::commands::milestone::list(&config, project)
+                    temper_cli::commands::milestone::list(&config, project, &format)
                 }
                 MilestoneAction::Update {
                     slug,
