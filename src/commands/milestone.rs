@@ -71,9 +71,13 @@ pub fn next_seq(config: &Config, project: &str) -> Result<u32> {
     Ok(max_seq + 10)
 }
 
-/// Find a milestone by slug.
-pub fn find_milestone(config: &Config, slug: &str) -> Result<Option<MilestoneInfo>> {
-    let milestones = load_milestones(config, None)?;
+/// Find a milestone by slug, optionally scoped to a project.
+pub fn find_milestone(
+    config: &Config,
+    slug: &str,
+    project: Option<&str>,
+) -> Result<Option<MilestoneInfo>> {
+    let milestones = load_milestones(config, project)?;
     Ok(milestones.into_iter().find(|m| m.slug == slug))
 }
 
@@ -257,7 +261,7 @@ pub fn list(config: &Config, project: &str) -> Result<()> {
 }
 
 /// Update a milestone's status.
-pub fn update(config: &Config, slug: &str, status: &str) -> Result<()> {
+pub fn update(config: &Config, slug: &str, status: &str, project: Option<&str>) -> Result<()> {
     let valid_statuses = ["active", "completed", "paused", "cancelled"];
     if !valid_statuses.contains(&status) {
         return Err(TemperError::Vault(format!(
@@ -265,7 +269,7 @@ pub fn update(config: &Config, slug: &str, status: &str) -> Result<()> {
             valid_statuses.join(", ")
         )));
     }
-    let info = find_milestone(config, slug)?
+    let info = find_milestone(config, slug, project)?
         .ok_or_else(|| TemperError::Vault(format!("milestone not found: {slug}")))?;
     let path = config
         .milestones_dir

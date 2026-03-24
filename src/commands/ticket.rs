@@ -87,8 +87,12 @@ pub fn next_seq(config: &Config, project: &str, milestone_slug: &str) -> Result<
 }
 
 /// Find a ticket by exact slug or unambiguous suffix match.
-pub fn find_ticket(config: &Config, slug_or_suffix: &str) -> Result<Option<TicketInfo>> {
-    let all = load_tickets(config, None, None)?;
+pub fn find_ticket(
+    config: &Config,
+    slug_or_suffix: &str,
+    project: Option<&str>,
+) -> Result<Option<TicketInfo>> {
+    let all = load_tickets(config, project, None)?;
     // Exact match first
     if let Some(t) = all.iter().find(|t| t.slug == slug_or_suffix) {
         return Ok(Some(t.clone()));
@@ -135,7 +139,7 @@ pub fn create(
         None => milestone::ensure_maintenance(config, project)?,
     };
     // Verify milestone exists and project matches
-    if let Some(ms) = milestone::find_milestone(config, &ms_slug)? {
+    if let Some(ms) = milestone::find_milestone(config, &ms_slug, None)? {
         if ms.project != project {
             return Err(TemperError::Vault(format!(
                 "milestone '{}' belongs to project '{}', not '{project}'",
@@ -203,8 +207,9 @@ pub fn move_ticket(
     slug_or_suffix: &str,
     stage: Option<&str>,
     new_milestone: Option<&str>,
+    project: Option<&str>,
 ) -> Result<()> {
-    let ticket = find_ticket(config, slug_or_suffix)?
+    let ticket = find_ticket(config, slug_or_suffix, project)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
 
     let valid_stages = ["backlog", "in-progress", "done", "cancelled"];
@@ -234,7 +239,7 @@ pub fn move_ticket(
     let mut to_ms: Option<String> = None;
     if let Some(ms) = new_milestone {
         // Validate milestone exists and project matches
-        let ms_info = milestone::find_milestone(config, ms)?
+        let ms_info = milestone::find_milestone(config, ms, None)?
             .ok_or_else(|| TemperError::Vault(format!("milestone not found: {ms}")))?;
         if ms_info.project != ticket.project {
             return Err(TemperError::Vault(format!(
@@ -279,8 +284,9 @@ pub fn done(
     slug_or_suffix: &str,
     branch: Option<&str>,
     pr: Option<&str>,
+    project: Option<&str>,
 ) -> Result<()> {
-    let ticket = find_ticket(config, slug_or_suffix)?
+    let ticket = find_ticket(config, slug_or_suffix, project)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
 
     let path = config
@@ -315,8 +321,8 @@ pub fn done(
 }
 
 /// Show a single ticket's raw markdown content.
-pub fn show(config: &Config, slug_or_suffix: &str) -> Result<()> {
-    let ticket = find_ticket(config, slug_or_suffix)?
+pub fn show(config: &Config, slug_or_suffix: &str, project: Option<&str>) -> Result<()> {
+    let ticket = find_ticket(config, slug_or_suffix, project)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
     let path = config
         .tickets_dir

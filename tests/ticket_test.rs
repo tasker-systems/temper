@@ -61,7 +61,8 @@ fn test_ticket_move_to_in_progress() {
     let slug =
         temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug)).unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None).unwrap();
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None, None)
+        .unwrap();
 
     let content =
         std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
@@ -80,7 +81,7 @@ fn test_ticket_move_rejects_old_stages() {
         temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug)).unwrap();
 
     let result =
-        temper_cli::commands::ticket::move_ticket(&config, &slug, Some("brainstorm"), None);
+        temper_cli::commands::ticket::move_ticket(&config, &slug, Some("brainstorm"), None, None);
     assert!(result.is_err(), "moving to 'brainstorm' should be rejected");
 }
 
@@ -94,7 +95,8 @@ fn test_ticket_move_to_cancelled() {
     let slug =
         temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug)).unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("cancelled"), None).unwrap();
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("cancelled"), None, None)
+        .unwrap();
 
     let content =
         std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
@@ -112,12 +114,14 @@ fn test_ticket_move_and_done() {
     let slug =
         temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug)).unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None).unwrap();
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None, None)
+        .unwrap();
     temper_cli::commands::ticket::done(
         &config,
         &slug,
         Some("feat/test"),
         Some("https://github.com/pr/1"),
+        None,
     )
     .unwrap();
 

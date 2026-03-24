@@ -175,25 +175,48 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     slug,
                     stage,
                     milestone,
-                } => temper_cli::commands::ticket::move_ticket(
-                    &config,
-                    &slug,
-                    stage.as_deref(),
-                    milestone.as_deref(),
-                ),
-                TicketAction::Done { slug, branch, pr } => temper_cli::commands::ticket::done(
-                    &config,
-                    &slug,
-                    branch.as_deref(),
-                    pr.as_deref(),
-                ),
+                    project,
+                } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    temper_cli::commands::ticket::move_ticket(
+                        &config,
+                        &slug,
+                        stage.as_deref(),
+                        milestone.as_deref(),
+                        project,
+                    )
+                }
+                TicketAction::Done {
+                    slug,
+                    branch,
+                    pr,
+                    project,
+                } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    temper_cli::commands::ticket::done(
+                        &config,
+                        &slug,
+                        branch.as_deref(),
+                        pr.as_deref(),
+                        project,
+                    )
+                }
                 TicketAction::List { project, milestone } => {
                     let project = project
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
                     temper_cli::commands::ticket::list(&config, project, milestone.as_deref())
                 }
-                TicketAction::Show { slug } => temper_cli::commands::ticket::show(&config, &slug),
+                TicketAction::Show { slug, project } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    temper_cli::commands::ticket::show(&config, &slug, project)
+                }
                 TicketAction::Board { project, milestone } => {
                     let project = project
                         .as_deref()
@@ -258,8 +281,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         })?;
                     temper_cli::commands::milestone::list(&config, project)
                 }
-                MilestoneAction::Update { slug, status } => {
-                    temper_cli::commands::milestone::update(&config, &slug, &status)
+                MilestoneAction::Update {
+                    slug,
+                    status,
+                    project,
+                } => {
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    temper_cli::commands::milestone::update(&config, &slug, &status, project)
                 }
             }
         }

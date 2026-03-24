@@ -162,6 +162,8 @@ pub enum TicketAction {
         stage: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Mark a ticket as done
     Done {
@@ -170,6 +172,8 @@ pub enum TicketAction {
         branch: Option<String>,
         #[arg(long)]
         pr: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
     },
     /// List tickets
     List {
@@ -179,7 +183,11 @@ pub enum TicketAction {
         milestone: Option<String>,
     },
     /// Show a ticket's content
-    Show { slug: String },
+    Show {
+        slug: String,
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Show project board
     Board {
         #[arg(long)]
@@ -210,6 +218,8 @@ pub enum MilestoneAction {
         slug: String,
         #[arg(long)]
         status: String,
+        #[arg(long)]
+        project: Option<String>,
     },
 }
 
