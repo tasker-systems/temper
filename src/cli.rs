@@ -166,6 +166,8 @@ pub enum TicketAction {
         project: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
         #[arg(long, hide = true)]
         stdin: bool,
         /// Print the raw template and exit
@@ -181,6 +183,8 @@ pub enum TicketAction {
         milestone: Option<String>,
         #[arg(long)]
         project: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
     },
     /// Mark a ticket as done
     Done {

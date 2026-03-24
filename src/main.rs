@@ -159,6 +159,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     title,
                     project,
                     milestone,
+                    scope,
                     stdin: _,
                     show_template,
                 } => {
@@ -181,7 +182,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         project,
                         &title,
                         milestone.as_deref(),
-                        None,
+                        scope.as_deref(),
                     )?;
                     Ok(())
                 }
@@ -190,6 +191,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     stage,
                     milestone,
                     project,
+                    scope,
                 } => {
                     let project = project
                         .as_deref()
@@ -200,7 +202,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         stage.as_deref(),
                         milestone.as_deref(),
                         project,
-                        None,
+                        scope.as_deref(),
                     )
                 }
                 TicketAction::Done {
