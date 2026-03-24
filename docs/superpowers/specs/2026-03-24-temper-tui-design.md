@@ -2,7 +2,7 @@
 
 ## Overview
 
-Replace the static `temper board` command with an interactive terminal UI (`temper tui`) built on ratatui and crossterm. The TUI provides navigable swimlanes for tickets by project and milestone, semantic search and context graph exploration, a unified document viewer for all vault content, and inline mutation of ticket/milestone metadata. Text editing defers to `$EDITOR`.
+Replace the static `temper ticket board` command with an interactive terminal UI (`temper tui`) built on ratatui and crossterm. The TUI provides navigable swimlanes for tickets by project and milestone, semantic search and context graph exploration, a unified document viewer for all vault content, and inline mutation of ticket/milestone metadata. Text editing defers to `$EDITOR`.
 
 ## Architecture
 
@@ -19,7 +19,7 @@ src/
 
 **`src/actions/`** — One module per domain: `ticket.rs`, `search.rs`, `context.rs`, `milestone.rs`, `normalize.rs`, `index.rs`, `session.rs`, etc. Each function takes `&Config` (plus domain-specific arguments) and returns typed results (`Vec<TicketInfo>`, `SearchResults`, etc.). No printing, no formatting. Types mostly exist already in `vault.rs` and command modules — they need to be lifted out.
 
-**`src/commands/`** — Thin CLI wrappers. Each command parses clap args, calls the corresponding action, formats the result as text or JSON using the existing `output::*` helpers. The `board` subcommand is removed.
+**`src/commands/`** — Thin CLI wrappers. Each command parses clap args, calls the corresponding action, formats the result as text or JSON using the existing `output::*` helpers. The `ticket board` subcommand is removed.
 
 **`src/tui/`** — Ratatui application. Owns the terminal event loop, screen state, and rendering. Calls actions to load and mutate data, holds results in app state, renders via ratatui widgets.
 
@@ -42,16 +42,18 @@ TUI thread  ──QueryRequest──→  Query Actor  ──QueryResult──→
 
 **TUI thread** owns the terminal via crossterm, renders frames, handles keyboard input. On search/context keystrokes, sends a `QueryRequest` down a tokio mpsc channel.
 
-**Query actor** is a tokio task that owns the embedder and HNSW index. Receives requests, debounces (drops stale requests if a new one arrives), runs the query, sends results back via a second mpsc channel.
+**Query actor** runs on a dedicated `std::thread` (not a tokio task) because the embedder runs synchronous Candle inference on CPU and the HNSW index is a blocking data structure. The actor owns a `tokio::sync::mpsc::Receiver<QueryRequest>`, receives requests, debounces (drops stale requests if a new one arrives), runs the query, and sends results back via a `tokio::sync::mpsc::Sender<QueryResult>`. Using a dedicated thread rather than `spawn_blocking` ensures the embedder and index stay on a single thread without repeated task spawning.
 
 **Main event loop** uses `tokio::select!` to poll both crossterm events and the results channel. The UI never blocks on a query.
+
+The `tui` subcommand path initializes a tokio runtime (`#[tokio::main]` or `Runtime::new()`). Other CLI subcommands remain synchronous — no global async migration required.
 
 ```rust
 enum QueryRequest {
     Search { query: String },
-    Context { topic: String, depth: usize },
-    Index,
-    Normalize { dry_run: bool },
+    Context { topic: String, depth: usize, limit: usize },
+    Index { force: bool },
+    Normalize { project: Option<String>, dry_run: bool, fix_slugs: bool },
 }
 
 enum QueryResult {
@@ -98,7 +100,7 @@ enum Screen {
 
 - `Enter` pushes a new screen (drill into milestone, view ticket, view search result)
 - `Esc` pops back to the previous screen
-- Tab switches (`1`-`4` or `:board`/`:search`/`:context`/`:maintain`) replace the stack with a fresh root
+- Tab switches (`1`-`4` or `:board`/`:search`/`:context`/`:maintain`) replace the entire stack with a fresh root for that tab. Previous tab state is discarded — this keeps the mental model simple and avoids stale views
 
 ### Board Tab
 
@@ -106,7 +108,7 @@ enum Screen {
 
 **Level 1: Milestones** — the default landing view. Lists milestones for the selected project with summary counts (N backlog, N in-progress, N done). Includes an "(unassigned)" group for tickets without a milestone. `h`/`l` cycles between projects at this level.
 
-**Level 2: Swimlanes** — three-column kanban view (backlog, in-progress, done) for the selected milestone. `h`/`l` moves between columns, `j`/`k` moves within a column. Tickets show scope label and truncated title.
+**Level 2: Swimlanes** — three-column kanban view (backlog, in-progress, done) for the selected milestone. `h`/`l` moves between columns, `j`/`k` moves within a column. Tickets show scope label and truncated title. Cancelled tickets are excluded from swimlanes — they are a terminal state with low browse value. They remain accessible via search.
 
 ### Search Tab
 
@@ -154,7 +156,7 @@ Only two mutation operations, both via inline popups:
 
 **Stage picker** (`s` on a ticket): Small popup listing stages (backlog, in-progress, done, cancelled). `j`/`k` to select, `Enter` to confirm, `Esc` to cancel. Calls `actions::ticket::move_ticket()` and refreshes the board.
 
-**Scope picker** (`S` on a ticket): Small popup listing scopes (patch, feature, epic) with one-line descriptions. Same interaction pattern. Calls `actions::ticket::move_ticket()` with the new scope.
+**Scope picker** (`S` on a ticket): Small popup listing scopes (patch, feature, epic) with one-line descriptions. Same interaction pattern. Calls `actions::ticket::move_ticket()` with only the scope parameter set (stage and milestone as `None`).
 
 Both pickers work from the swimlane view (on the selected ticket) and from the Viewer (on the current document).
 
@@ -171,7 +173,7 @@ Both pickers work from the swimlane view (on the selected ticket) and from the V
 | `h`/`l` or `←`/`→` | Move between columns / cycle projects | Board |
 | `Enter` | Open / drill into selected | Global |
 | `Esc` | Pop back / cancel | Global |
-| `e` | Open in $EDITOR | Viewer, lists |
+| `e` | Open in $EDITOR | Viewer, or selected item in lists |
 | `s` | Stage picker | Tickets |
 | `S` | Scope picker | Tickets |
 | `c` | Pivot to Context centered on item | Search, Context, Viewer |
@@ -208,7 +210,7 @@ Existing dependencies that remain relevant: `clap` (CLI parsing, unchanged), `an
 ## CLI Changes
 
 - **Add**: `temper tui` subcommand — launches the interactive TUI
-- **Remove**: `temper board` subcommand — replaced by the Board tab in the TUI
+- **Remove**: `temper ticket board` subcommand — replaced by the Board tab in the TUI
 - All other subcommands remain unchanged
 
 ## Testing Strategy
