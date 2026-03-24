@@ -251,6 +251,15 @@ temper normalize [--project p] [--dry-run] [--fix-slugs]
 - `--fix-slugs` — enables file renaming for slug mismatches (off by default to avoid surprises)
 - `--project` — scopes to one project; without it, normalizes entire vault
 
+### Events
+
+Records a `Normalize` event capturing the run summary:
+- Number and type of repairs applied (IDs backfilled, files moved, stages migrated, slugs fixed)
+- Whether `--dry-run` was used
+- Project scope (if `--project` was specified)
+
+Skipped in `--dry-run` mode (no changes were made, so no event to record).
+
 ### Output
 
 Prints a summary of changes grouped by repair type:
