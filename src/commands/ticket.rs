@@ -221,6 +221,7 @@ pub fn move_ticket(
     stage: Option<&str>,
     new_milestone: Option<&str>,
     project: Option<&str>,
+    scope: Option<&str>,
 ) -> Result<()> {
     let ticket = find_ticket(config, slug_or_suffix, project)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
@@ -231,6 +232,16 @@ pub fn move_ticket(
             return Err(TemperError::Vault(format!(
                 "invalid stage: {s}. Must be one of: {}",
                 valid_stages.join(", ")
+            )));
+        }
+    }
+
+    let valid_scopes = ["patch", "feature", "epic"];
+    if let Some(sc) = scope {
+        if !valid_scopes.contains(&sc) {
+            return Err(TemperError::Vault(format!(
+                "invalid scope: {sc}. Must be one of: {}",
+                valid_scopes.join(", ")
             )));
         }
     }
@@ -266,6 +277,10 @@ pub fn move_ticket(
         // Assign new seq at end of target milestone
         let new_seq = next_seq(config, &ticket.project, ms)?;
         content = vault::set_frontmatter_field(&content, "seq", &new_seq.to_string());
+    }
+
+    if let Some(sc) = scope {
+        content = vault::set_frontmatter_field(&content, "scope", sc);
     }
 
     let datetime = Local::now().to_rfc3339();

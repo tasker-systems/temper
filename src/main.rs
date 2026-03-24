@@ -200,6 +200,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         stage.as_deref(),
                         milestone.as_deref(),
                         project,
+                        None,
                     )
                 }
                 TicketAction::Done {

@@ -70,8 +70,15 @@ fn test_ticket_move_to_in_progress() {
     let slug = temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), None)
         .unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None, None)
-        .unwrap();
+    temper_cli::commands::ticket::move_ticket(
+        &config,
+        &slug,
+        Some("in-progress"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let content =
         std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
@@ -90,8 +97,14 @@ fn test_ticket_move_rejects_old_stages() {
     let slug = temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), None)
         .unwrap();
 
-    let result =
-        temper_cli::commands::ticket::move_ticket(&config, &slug, Some("brainstorm"), None, None);
+    let result = temper_cli::commands::ticket::move_ticket(
+        &config,
+        &slug,
+        Some("brainstorm"),
+        None,
+        None,
+        None,
+    );
     assert!(result.is_err(), "moving to 'brainstorm' should be rejected");
 }
 
@@ -106,7 +119,7 @@ fn test_ticket_move_to_cancelled() {
     let slug = temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), None)
         .unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("cancelled"), None, None)
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("cancelled"), None, None, None)
         .unwrap();
 
     let content =
@@ -126,8 +139,15 @@ fn test_ticket_move_and_done() {
     let slug = temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), None)
         .unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None, None)
-        .unwrap();
+    temper_cli::commands::ticket::move_ticket(
+        &config,
+        &slug,
+        Some("in-progress"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     temper_cli::commands::ticket::done(
         &config,
         &slug,
@@ -257,4 +277,74 @@ fn test_ticket_create_rejects_invalid_scope() {
         result.is_err(),
         "invalid scope on create should be rejected"
     );
+}
+
+#[test]
+fn test_ticket_move_with_scope() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug =
+        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Scope Move", Some(&ms_slug), None)
+            .unwrap();
+
+    temper_cli::commands::ticket::move_ticket(&config, &slug, None, None, None, Some("epic"))
+        .unwrap();
+
+    let content =
+        std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
+            .unwrap();
+    assert!(
+        content.contains("scope: epic"),
+        "scope should be updated to epic"
+    );
+}
+
+#[test]
+fn test_ticket_move_with_stage_and_scope() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug =
+        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Both Move", Some(&ms_slug), None)
+            .unwrap();
+
+    temper_cli::commands::ticket::move_ticket(
+        &config,
+        &slug,
+        Some("in-progress"),
+        None,
+        None,
+        Some("feature"),
+    )
+    .unwrap();
+
+    let content =
+        std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
+            .unwrap();
+    assert!(content.contains("stage: in-progress"));
+    assert!(content.contains("scope: feature"));
+}
+
+#[test]
+fn test_ticket_move_rejects_invalid_scope() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug =
+        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Bad Scope", Some(&ms_slug), None)
+            .unwrap();
+
+    let result =
+        temper_cli::commands::ticket::move_ticket(&config, &slug, None, None, None, Some("huge"));
+    assert!(result.is_err(), "invalid scope should be rejected");
 }
