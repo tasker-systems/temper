@@ -104,6 +104,20 @@ fn test_ticket_create_without_scope() {
             .unwrap();
     assert!(content.contains("scope: null"), "should contain scope: null");
 }
+
+#[test]
+fn test_ticket_create_rejects_invalid_scope() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug =
+        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let result = temper_cli::commands::ticket::create(
+        &config, "myapp", "Bad Scope", Some(&ms_slug), Some("huge"),
+    );
+    assert!(result.is_err(), "invalid scope on create should be rejected");
+}
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -146,7 +160,22 @@ pub fn create(
 ) -> Result<String> {
 ```
 
-In the vars vec, add scope:
+Validate scope upfront, then add to template vars:
+
+```rust
+    // Validate scope if provided
+    let valid_scopes = ["patch", "feature", "epic"];
+    if let Some(sc) = scope {
+        if !valid_scopes.contains(&sc) {
+            return Err(TemperError::Vault(format!(
+                "invalid scope: {sc}. Must be one of: {}",
+                valid_scopes.join(", ")
+            )));
+        }
+    }
+```
+
+In the vars vec, add scope (the literal string "null" renders as YAML null in frontmatter):
 
 ```rust
     let scope_str = scope.unwrap_or("null");
@@ -175,7 +204,25 @@ temper_cli::commands::ticket::create(
 )?;
 ```
 
-Update all existing tests in `tests/ticket_test.rs` that call `create()` to add `None` as the fifth argument.
+Update all existing callers of `create()` to add `None` as the fifth argument. Complete list:
+
+**tests/ticket_test.rs** (7 calls):
+- `test_ticket_create_includes_uuid_id` (line 12)
+- `test_milestone_create_and_ticket_create` (line 38)
+- `test_ticket_move_to_in_progress` (line 65)
+- `test_ticket_move_rejects_old_stages` (line 85)
+- `test_ticket_move_to_cancelled` (line 101)
+- `test_ticket_move_and_done` (line 121)
+- `test_ticket_list_json_format` (line 176)
+
+**tests/warmup_test.rs** (1 call):
+- `test_warmup_produces_output` (line 13)
+
+**tests/normalize_test.rs** (4 calls):
+- `test_normalize_backfills_missing_ids` (line 12)
+- `test_normalize_migrates_old_stages` (line 42)
+- `test_normalize_dry_run_makes_no_changes` (line 66)
+- `test_normalize_moves_misplaced_files` (line 92)
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -333,7 +380,13 @@ temper_cli::commands::ticket::move_ticket(
 )
 ```
 
-Update all existing tests in `tests/ticket_test.rs` that call `move_ticket()` to add `None` as the sixth argument.
+Update all existing callers of `move_ticket()` to add `None` as the sixth argument. Complete list:
+
+**tests/ticket_test.rs** (4 calls):
+- `test_ticket_move_to_in_progress` (line 67)
+- `test_ticket_move_rejects_old_stages` (line 88)
+- `test_ticket_move_to_cancelled` (line 103)
+- `test_ticket_move_and_done` (line 123)
 
 - [ ] **Step 5: Run tests to verify they pass**
 
@@ -598,6 +651,19 @@ fn test_warmup_shows_in_progress_tickets_with_scope() {
 
     // Capture stdout by checking the function succeeds
     // (full output capture would need test infrastructure changes)
+    let result = temper_cli::commands::warmup::run(&config, Some("myapp"), "text");
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_warmup_no_in_progress_tickets() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
+        .unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    // No tickets at all — warmup should still succeed
     let result = temper_cli::commands::warmup::run(&config, Some("myapp"), "text");
     assert!(result.is_ok());
 }
