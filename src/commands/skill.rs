@@ -53,10 +53,10 @@ working inside the temper source repo.
 - `temper context <topic> [--depth N]` — Traverse nearest neighbors for related content
 - `temper session save [<title>] [--ticket <slug>] [--state <state>]` — Create/update session note, optionally link to ticket
 - `temper session list` — List recent sessions
-- `temper ticket create --title <t> [--project <p>]` — Create ticket (stdin auto-detected)
+- `temper ticket create --title <t> [--project <p>] [--scope patch|feature|epic]` — Create ticket (stdin auto-detected)
 - `temper ticket list [--project <p>] [--format json|text]` — List tickets
 - `temper ticket board [--project <p>]` — Board view
-- `temper ticket move <slug> --stage <s> [--project <p>]` — Move ticket between stages
+- `temper ticket move <slug> --stage <s> [--project <p>] [--scope patch|feature|epic]` — Move ticket between stages or update scope
 - `temper ticket done <slug> [--project <p>]` — Mark ticket done
 - `temper ticket show <slug> [--project <p>] [--format json|text]` — Show ticket content
 - `temper ticket start <slug> [--project <p>]` — Move to in-progress, show content, invoke brainstorming skill
@@ -83,7 +83,15 @@ Templates are available via `--show-template` on create/save commands.
 
 Tickets use four stages: `backlog`, `in-progress`, `done`, `cancelled`.
 
-Superpowers workflow phases (brainstorm, design, plan, implement) are session-local context — not persisted on tickets.
+## Scope
+
+Tickets have an optional `scope` field: `patch`, `feature`, or `epic`. Scope controls the workflow:
+
+| Scope | Nature | Ceremony | Output |
+|-------|--------|----------|--------|
+| `patch` | Tactical | None — just do it | Delivered code |
+| `feature` | Deliberate | Full Superpowers pipeline | Delivered code with design artifact |
+| `epic` | Strategic | Deep discovery + roadmapping | Living milestone roadmap + first actionable ticket |
 
 ## Workflow Integration
 
@@ -98,7 +106,57 @@ When ending a session:
 When the user says `/temper ticket start <slug>`:
 1. Run `temper ticket move <slug> --stage in-progress --project <p>`
 2. Run `temper ticket show <slug>`
-3. Invoke the brainstorming skill with the ticket content as context
+3. Check the `scope` field and route accordingly:
+
+### Scope Routing
+
+**If scope is set**, announce the workflow:
+- **patch**: "Scoped as patch — implementing directly with tests, no spec or plan." Skip brainstorming.
+- **feature**: "Scoped as feature — full superpowers pipeline." Invoke brainstorming skill.
+- **epic**: "Scoped as epic — mapping the problem space to produce a milestone roadmap." Invoke brainstorming skill framed as strategic planning.
+
+**If scope is missing**, ask briefly: "Does this feel like a patch, feature, or epic?" Then set it via `temper ticket move <slug> --scope <confirmed>`.
+
+### Patch Workflow
+1. Read ticket content
+2. Implement directly with tests
+3. `cargo test` / `cargo clippy`
+4. Commit
+5. `temper session save "<summary>" --ticket <slug> --state done`
+
+### Feature Workflow
+1. Read ticket content
+2. `temper search` / `temper context` for discovery
+3. Invoke superpowers:brainstorming (design the implementation)
+4. Produce design spec, then invoke superpowers:writing-plans
+5. Implement via plan execution
+6. Full verification (tests, clippy, fmt)
+7. `temper session save "<summary>" --ticket <slug> --state done`
+
+### Epic Workflow
+1. Read ticket content
+2. Deep discovery — `temper search`, `temper context`, codebase exploration
+3. Invoke superpowers:brainstorming (map the problem space, NOT design an implementation)
+4. Produce a milestone roadmap via `temper milestone create`:
+   - Throughline summary, sequenced deliverable chunks, validation gates, open questions
+5. Create the FIRST actionable ticket under that milestone
+6. `temper session save "<summary>" --ticket <slug>`
+7. Code only if the user actively pushes for it
+
+Epic philosophy: the roadmap guides session work, not ticket-spread. Each session: work the current ticket, learn, evolve the roadmap, create the next ticket.
+
+### Mid-Session Drift Detection
+
+Watch for scope mismatch:
+- **Patch drifting up**: needing design decisions, touching 3+ files, considering multiple approaches → suggest feature
+- **Feature drifting up**: needs decomposition into multiple deliverables, spans multiple sessions → suggest epic
+- **Epic drifting down**: first ticket is obvious, roadmap has only 1-2 items → suggest feature or start work
+
+On confirmation: `temper ticket move <slug> --scope <new>`
+
+### Scope at Create Time
+
+When creating a ticket without `--scope`, ask briefly: "Does this feel like a patch, feature, or epic?" Don't over-analyze — the user usually knows.
 
 Stdin is auto-detected — pipe content directly without flags.
 "#,

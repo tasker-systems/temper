@@ -16,6 +16,7 @@ pub struct NormalizeSummary {
     pub stages_migrated: u32,
     pub slugs_fixed: u32,
     pub frontmatter_fixed: u32,
+    pub unscoped_tickets: u32,
 }
 
 /// Old stage names that should be migrated to "in-progress".
@@ -38,6 +39,7 @@ pub fn run(
         stages_migrated: 0,
         slugs_fixed: 0,
         frontmatter_fixed: 0,
+        unscoped_tickets: 0,
     };
 
     let opts = NormalizeOptions { dry_run, fix_slugs };
@@ -75,6 +77,12 @@ pub fn run(
         "  {} frontmatter fields fixed",
         summary.frontmatter_fixed
     ));
+    if summary.unscoped_tickets > 0 {
+        output::plain(format!(
+            "  {} tickets without scope",
+            summary.unscoped_tickets
+        ));
+    }
 
     // Record event (skip in dry-run)
     if !dry_run
@@ -236,6 +244,30 @@ fn process_file(
                     // Note: we count it but don't rename the file automatically
                     // (renaming would break references)
                 }
+            }
+        }
+    }
+
+    // --- Backfill missing scope field on tickets ---
+    if base_dir.ends_with("tickets") {
+        if let Some(ref v) = fm {
+            // Check if scope key exists at all (null counts as existing)
+            let has_scope_key = v.get("scope").is_some();
+            if !has_scope_key {
+                // Insert scope: null after the stage: line so set_frontmatter_field works later
+                let mut new_lines = Vec::new();
+                let mut in_fm = false;
+                for line in modified.lines() {
+                    new_lines.push(line.to_string());
+                    if line.trim() == "---" {
+                        in_fm = !in_fm;
+                    } else if in_fm && line.starts_with("stage:") {
+                        new_lines.push("scope: null".to_string());
+                    }
+                }
+                modified = new_lines.join("\n") + "\n";
+                summary.unscoped_tickets += 1;
+                changed = true;
             }
         }
     }

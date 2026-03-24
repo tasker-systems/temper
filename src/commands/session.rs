@@ -82,6 +82,13 @@ pub fn save(
     // Set project field in frontmatter
     let content = vault::set_frontmatter_field(&content, "project", &project_name);
 
+    // If stdin content was piped, replace the template body
+    let content = if let Some(body) = stdin_content {
+        replace_body(&content, body)
+    } else {
+        content
+    };
+
     vault::write_note(&note_path, &content)?;
 
     let relative = note_path

@@ -17,10 +17,9 @@ pub struct TicketInfo {
     pub project: String,
     pub milestone: String,
     pub stage: String,
+    pub scope: Option<String>,
     pub seq: u32,
-    #[allow(dead_code)]
     pub branch: Option<String>,
-    #[allow(dead_code)]
     pub pr: Option<String>,
 }
 
@@ -132,6 +131,7 @@ pub fn create(
     project: &str,
     title: &str,
     milestone_slug: Option<&str>,
+    scope: Option<&str>,
 ) -> Result<String> {
     // Ensure maintenance milestone exists if needed
     let ms_slug = match milestone_slug {
@@ -152,6 +152,17 @@ pub fn create(
         )));
     }
 
+    // Validate scope if provided
+    let valid_scopes = ["patch", "feature", "epic"];
+    if let Some(sc) = scope {
+        if !valid_scopes.contains(&sc) {
+            return Err(TemperError::Vault(format!(
+                "invalid scope: {sc}. Must be one of: {}",
+                valid_scopes.join(", ")
+            )));
+        }
+    }
+
     let date = Local::now().format("%Y-%m-%d").to_string();
     let slug_title = vault::slugify(title);
     let slug = format!("{date}-{slug_title}");
@@ -161,6 +172,7 @@ pub fn create(
     let id = crate::ids::generate_id();
 
     let templates_dir = templates_dir_str(config);
+    let scope_str = scope.unwrap_or("null");
     let vars = vec![
         ("slug", slug.as_str()),
         ("project", project),
@@ -168,6 +180,7 @@ pub fn create(
         ("seq", seq_str.as_str()),
         ("datetime", datetime.as_str()),
         ("id", id.as_str()),
+        ("scope", scope_str),
     ];
     let mut content = vault::render_template_with_vars(
         &config.vault_root,
@@ -193,6 +206,7 @@ pub fn create(
         ticket: slug.clone(),
         milestone: ms_slug,
         title: title.to_string(),
+        scope: scope.map(String::from),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -208,6 +222,7 @@ pub fn move_ticket(
     stage: Option<&str>,
     new_milestone: Option<&str>,
     project: Option<&str>,
+    scope: Option<&str>,
 ) -> Result<()> {
     let ticket = find_ticket(config, slug_or_suffix, project)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
@@ -222,6 +237,16 @@ pub fn move_ticket(
         }
     }
 
+    let valid_scopes = ["patch", "feature", "epic"];
+    if let Some(sc) = scope {
+        if !valid_scopes.contains(&sc) {
+            return Err(TemperError::Vault(format!(
+                "invalid scope: {sc}. Must be one of: {}",
+                valid_scopes.join(", ")
+            )));
+        }
+    }
+
     let path = config
         .tickets_dir
         .join(&ticket.project)
@@ -230,6 +255,7 @@ pub fn move_ticket(
 
     let from_stage = ticket.stage.clone();
     let to_stage = stage.unwrap_or(&from_stage);
+    let from_scope = ticket.scope.clone();
 
     if let Some(s) = stage {
         content = vault::set_frontmatter_field(&content, "stage", s);
@@ -255,9 +281,16 @@ pub fn move_ticket(
         content = vault::set_frontmatter_field(&content, "seq", &new_seq.to_string());
     }
 
+    if let Some(sc) = scope {
+        content = vault::set_frontmatter_field(&content, "scope", sc);
+    }
+
     let datetime = Local::now().to_rfc3339();
     content = vault::set_frontmatter_field(&content, "updated", &datetime);
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
+
+    let to_scope = scope.map(String::from);
+    let from_scope_for_event = if scope.is_some() { from_scope } else { None };
 
     let event = discovery::Event::TicketMove {
         ts: datetime,
@@ -267,6 +300,8 @@ pub fn move_ticket(
         to_stage: to_stage.to_string(),
         from_milestone: from_ms,
         to_milestone: to_ms,
+        from_scope: from_scope_for_event,
+        to_scope,
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");

@@ -1,0 +1,319 @@
+# Adaptive Workflow — Design Specification
+
+**Ticket:** `2026-03-24-adaptive-workflow`
+**Date:** 2026-03-24
+**Scope:** feature
+
+## Overview
+
+Add a `scope` field to ticket frontmatter that controls how much process ceremony the agent applies during development. The skill template becomes a decision tree that routes work through different workflow intensities based on scope.
+
+The goal: make the investment in process proportional to the complexity of the work.
+
+## Problem
+
+Temper's current skill template assumes the full superpowers pipeline (brainstorm → design → plan → implement → finish) for all work. In practice:
+
+- **Small fixes** (1-3 files, no design decisions) get wrapped in spec and plan, multiplying the development cycle with no quality gain.
+- **Medium features** (clear pattern, moderate scope) benefit from the full pipeline but are self-contained — one session, one deliverable.
+- **Large efforts** (cross-cutting, architectural) need strategic planning, not just bigger implementation sessions. The deliverable is a roadmap, not code.
+
+There is no mechanism for the agent to know which workflow to use. The decision is either implicit (the agent guesses) or requires user intervention after overhead has accumulated.
+
+## 1. Scope Field
+
+### Values
+
+| Scope | Nature | Ceremony | Output |
+|-------|--------|----------|--------|
+| `patch` | Tactical | None — just do it | Delivered code |
+| `feature` | Deliberate | Full superpowers pipeline | Delivered code with design artifact |
+| `epic` | Strategic | Deep discovery + roadmapping | Living milestone roadmap + first actionable ticket |
+
+### Schema
+
+```yaml
+---
+id: "019e1a2b-3c4d-7000-8000-abcdef123456"
+type: ticket
+title: "Add JSON output to list commands"
+slug: "2026-03-24-add-json-output-to-list-commands"
+project: "temper"
+milestone: "temper-v0.2"
+stage: in-progress
+scope: feature
+seq: 42
+created: 2026-03-24T10:30:00-04:00
+updated: 2026-03-24T12:32:30-04:00
+branch: null
+pr: null
+---
+```
+
+### Rules
+
+- `scope` is optional. Legacy tickets without it are treated as unscoped — the skill prompts the user to assign one at `ticket start` time.
+- No default. Scope is always a deliberate choice, either at creation or at start.
+- Scope is mutable via `temper ticket move <slug> --scope <new>`.
+- Scope cannot be cleared once set — it can only be changed between the three valid values.
+- YAML `null` in frontmatter maps to Rust `None` for `scope: Option<String>`. This is load-bearing: tickets created without `--scope` render `scope: null`, which deserializes as `None`.
+
+## 2. Workflow Definitions
+
+### Patch Workflow
+
+Direct implementation. No spec, no plan, no brainstorming skill.
+
+```
+1. ticket move <slug> --stage in-progress
+2. Read ticket content
+3. Implement the fix with tests
+4. cargo test / cargo clippy
+5. Commit
+6. temper session save "<summary>" --ticket <slug> --state done
+```
+
+### Feature Workflow
+
+Full superpowers pipeline. This is where brainstorm → design → plan → implement → finish lives.
+
+```
+1. ticket move <slug> --stage in-progress
+2. Read ticket content
+3. temper search / temper context for discovery
+4. Invoke superpowers:brainstorming (design the solution)
+5. Produce design spec
+6. Invoke superpowers:writing-plans (create implementation plan)
+7. Implement via plan execution
+8. Full verification (tests, clippy, fmt)
+9. temper session save "<summary>" --ticket <slug> --state done
+```
+
+### Epic Workflow
+
+Strategic planning. The output is a milestone roadmap, not delivered code.
+
+```
+1. ticket move <slug> --stage in-progress
+2. Read ticket content
+3. Deep discovery — temper search, temper context, codebase exploration
+4. Invoke superpowers:brainstorming (map the problem space, not design an implementation)
+5. Produce a milestone roadmap via temper milestone create:
+   - Throughline summary — what is this epic trying to achieve
+   - Sequenced deliverable chunks — each a feature or patch scoped unit
+   - Validation gates — how you know each chunk is done
+   - Open questions and risks
+   - Current state — evolves session over session
+6. Create the FIRST actionable ticket under that milestone (feature or patch scoped)
+7. temper session save "<summary>" --ticket <slug>
+8. Code only if the user actively pushes for it
+```
+
+**Epic philosophy:** Long elaborated sets of tickets go stale in their assumptions by the time you reach them. Instead, the roadmap guides session work — not ticket-spread. Each subsequent session: work the current ticket, learn, compare against the roadmap, evolve the roadmap, create the next ticket. This is the virtuous-and-grounded cycle.
+
+For single-developer throughput, it is more overhead to reconcile ticket spread over time than to create one actionable ticket, take learnings, evolve the roadmap, and establish the next ticket with that context.
+
+## 3. Skill Template — Decision Tree
+
+The skill template generated by `temper skill generate` replaces its linear workflow section with scope-based routing.
+
+### On `ticket start`
+
+1. Read the ticket, check for `scope` field
+2. If scope is set: announce the workflow path
+   - "This ticket is scoped as **patch** — I'll implement directly with tests, no spec or plan."
+   - "This ticket is scoped as **feature** — full superpowers pipeline: brainstorm → design → plan → implement."
+   - "This ticket is scoped as **epic** — I'll focus on mapping the problem space and producing a milestone roadmap."
+3. If scope is missing: briefly ask the user what scope feels right. Don't over-analyze — the user usually knows.
+4. Set scope via `temper ticket move <slug> --scope <confirmed>`
+5. Follow the corresponding workflow path
+
+### `ticket start` routing
+
+| Scope | Invokes brainstorming? | Brainstorming framing |
+|-------|----------------------|----------------------|
+| `patch` | No | — |
+| `feature` | Yes | "Design the implementation" |
+| `epic` | Yes | "Map the problem space, produce a roadmap" |
+
+This is the single biggest behavioral change — `ticket start` currently always invokes brainstorming regardless.
+
+### Mid-Session Drift Detection
+
+The agent monitors for scope mismatch using these concrete signals:
+
+**Patch drifting up:**
+- You find yourself needing to make a design decision → drift signal
+- You're touching more than 3 files → pause and check
+- You're considering multiple approaches → that's feature territory
+
+**Feature drifting up:**
+- The feature needs decomposition into multiple independent deliverables → epic territory
+- You're designing systems that will take multiple sessions to implement → suggest epic
+
+**Epic drifting down:**
+- The first actionable ticket is obvious and small → suggest starting it in-session
+- The "roadmap" has only one or two items → this was probably a feature all along
+
+On confirmation, run `temper ticket move <slug> --scope <new>` and adjust workflow.
+
+### Scope Inference at Create Time
+
+When the user creates a ticket without specifying `--scope`, ask briefly: "Does this feel like a patch, feature, or epic?" Don't perform elaborate analysis — the user usually knows the scope of their own work.
+
+## 4. CLI Changes
+
+### `ticket create`
+
+Add `--scope patch|feature|epic` flag (optional). When omitted, template renders `scope: null`.
+
+```
+temper ticket create --title "Fix typo in error message" --scope patch
+temper ticket create --title "Add JSON output" --scope feature
+temper ticket create --title "Adaptive workflow" --scope epic
+```
+
+### `ticket move`
+
+Add `--scope patch|feature|epic` flag (optional). Can be provided alone or with `--stage`.
+
+```
+temper ticket move <slug> --scope epic
+temper ticket move <slug> --stage in-progress --scope feature
+```
+
+### `ticket show`
+
+No code changes needed. `scope` appears in frontmatter output automatically. JSON serialization via serde includes `Option<String>` as `null` or the value.
+
+### Template Update
+
+`src/templates/ticket.md` — add `scope: {{scope}}` after `stage`:
+
+```yaml
+---
+id: "{{id}}"
+type: ticket
+title: "{{title}}"
+slug: "{{slug}}"
+project: "{{project}}"
+milestone: "{{milestone}}"
+stage: backlog
+scope: {{scope}}
+seq: {{seq}}
+created: {{datetime}}
+updated: {{datetime}}
+branch: null
+pr: null
+---
+```
+
+When `--scope` is not provided, `{{scope}}` renders as `null`.
+
+### Validation
+
+Scope validates against `["patch", "feature", "epic"]`. Invalid values produce an error. Use `#[derive(clap::ValueEnum)]` on a `Scope` enum — this provides `FromStr`, `Display`, and CLI tab-completion automatically.
+
+### Implementation Detail: `create()` Data Flow
+
+The `create()` function gains a `scope: Option<&str>` parameter. The complete flow:
+
+1. Accept `scope` parameter from CLI routing
+2. Add scope to template variables: `("scope", scope.unwrap_or("null"))` — when scope is `None`, pass the literal string `"null"` so the template renders `scope: null` as valid YAML
+3. Include scope in the `TicketCreate` discovery event
+
+### Implementation Detail: `move_ticket()` Data Flow
+
+The `move_ticket()` function gains a `scope: Option<&str>` parameter:
+
+1. Validate scope and stage upfront before any file modifications (fail-fast on invalid input)
+2. If scope is `Some`, call `vault::set_frontmatter_field(&content, "scope", s)` to update the field
+3. Include `from_scope`/`to_scope` in the `TicketMove` discovery event (read old value from `TicketInfo` before update)
+
+### Implementation Detail: `ticket done` and Scope
+
+The `done()` function does not modify scope. Scope is preserved as informational metadata on completed tickets.
+
+### Implementation Detail: `ticket start` Is Skill-Level, Not CLI
+
+`ticket start` is a workflow alias defined in the skill template text. It is not a Rust subcommand. The decision tree routing in Section 3 is guidance embedded in the generated skill template string, not code in the CLI binary. The CLI provides the primitives (`ticket move --scope`, `ticket show`); the skill template orchestrates them.
+
+### Backward Compatibility: Discovery Events
+
+Adding `Option<String>` fields to event variants is backward-compatible with existing `events.jsonl` entries. Serde deserializes missing optional fields as `None`. The event schema does not use `#[serde(deny_unknown_fields)]`.
+
+### Note: Fix `#[allow(dead_code)]` in TicketInfo
+
+While adding the `scope` field to `TicketInfo`, replace the existing `#[allow(dead_code)]` attributes on `branch` and `pr` fields with `#[expect(dead_code, reason = "...")]` per project convention in CLAUDE.md.
+
+## 5. Warmup Enhancement
+
+The `warmup` command should surface in-progress tickets with their scope. Currently warmup shows recent sessions and events but not active work items.
+
+Add a section between "Recent Sessions" and "Last Session":
+
+```
+## In-Progress Tickets
+
+- [feature] Add JSON output to list commands (2026-03-24-add-json-output)
+- [patch] Fix typo in error message (2026-03-24-fix-typo)
+```
+
+This tells the agent at session start what workflow to resume without needing to `ticket show` each one individually.
+
+Implementation: call `load_tickets()` for the project, filter to `stage == "in-progress"`, display title with scope prefix (or `[unscoped]` if scope is None).
+
+For JSON output (`run_json`), add an `in_progress_tickets` array field to the JSON object with `slug`, `title`, and `scope` for each matching ticket.
+
+## 6. Discovery Events
+
+Add scope to relevant events:
+
+- `TicketCreate`: add `scope: Option<String>` field
+- `TicketMove`: add `from_scope: Option<String>` and `to_scope: Option<String>` fields (only populated when scope actually changes)
+
+## 7. Normalize
+
+Report tickets with `scope: null` informationally: "12 tickets without scope assigned."
+
+No auto-backfill, no repair — scope is a human judgment call. No validation beyond noting the count.
+
+## 8. Implementation Scope
+
+### Files Affected
+
+| File | Change |
+|------|--------|
+| `src/templates/ticket.md` | Add `scope: {{scope}}` after stage |
+| `src/commands/ticket.rs` | `TicketInfo.scope: Option<String>`, create/move params, validation |
+| `src/cli.rs` | `--scope` flag on Create and Move actions |
+| `src/main.rs` | Route scope through to create/move calls |
+| `src/discovery.rs` | Scope fields on TicketCreate and TicketMove events |
+| `src/commands/normalize.rs` | Informational report of unscoped tickets |
+| `src/commands/warmup.rs` | In-progress tickets section with scope display |
+| `src/commands/skill.rs` | Replace linear workflow with scope-based decision tree |
+| `tests/ticket_test.rs` | Scope in create, validation, move, show |
+
+### Test Plan
+
+**Ticket scope (ticket_test.rs):**
+- Create ticket with `--scope feature` → verify frontmatter contains `scope: feature`
+- Create ticket without `--scope` → verify frontmatter contains `scope: null`
+- Create ticket with `--scope invalid` → verify error
+- Move ticket with `--scope epic` → verify frontmatter updated
+- Move ticket with `--stage` and `--scope` together → verify both update
+- Show ticket with scope → verify JSON output includes scope field
+
+**Warmup (warmup_test.rs or integration test):**
+- Warmup with in-progress tickets → verify "In-Progress Tickets" section appears with scope labels
+- Warmup with no in-progress tickets → verify section is absent or shows "None"
+
+**Normalize (normalize_test.rs):**
+- Normalize with unscoped tickets → verify informational count message
+
+### What's Not In Scope
+
+- Board display changes — board is being superseded by the upcoming TUI work
+- Scope-based filtering on list/board commands — can add later if useful
+- Automatic scope inference by the CLI tool — scope inference lives in the skill template guidance, not in Rust code
+- `ticket list` display changes — scope is visible via `ticket show`; list display can be enhanced later if needed
