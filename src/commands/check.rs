@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::error::Result;
+use crate::output;
 
 pub fn run(config: &Config, quiet: bool) -> Result<()> {
     let vault_ok = check_vault(config);
@@ -9,38 +10,40 @@ pub fn run(config: &Config, quiet: bool) -> Result<()> {
 
     if quiet {
         if let Err(ref msg) = vault_ok {
-            eprintln!("temper: {msg}");
+            output::error(msg);
         }
         if let Err(ref msg) = dirs_ok {
-            eprintln!("temper: {msg}");
+            output::error(msg);
         }
         if let Err(ref msg) = model_status {
-            eprintln!("temper: embedding model: {msg}");
+            output::error(format!("Embedding: {msg}"));
         }
         if let Err(ref msg) = state_ok {
-            eprintln!("temper: state: {msg}");
+            output::error(format!("State: {msg}"));
         }
         return Ok(());
     }
 
     match &vault_ok {
-        Ok(()) => eprintln!("Vault:     OK ({})", config.vault_root.display()),
-        Err(msg) => eprintln!("Vault:     FAIL ({msg})"),
+        Ok(()) => output::status_icon(true, format!("Vault: {}", config.vault_root.display())),
+        Err(msg) => output::status_icon(false, format!("Vault: {msg}")),
     }
 
     match &dirs_ok {
-        Ok(()) => eprintln!("Dirs:      OK (sessions, tickets, milestones, templates)"),
-        Err(msg) => eprintln!("Dirs:      WARN ({msg})"),
+        Ok(()) => output::status_icon(true, "Dirs: sessions, tickets, milestones, templates"),
+        Err(msg) => output::warning(format!("Dirs: {msg}")),
     }
 
     match &model_status {
-        Ok(size_mb) => eprintln!("Embedding: OK (model cached, {size_mb:.1}MB)"),
-        Err(msg) => eprintln!("Embedding: {msg}"),
+        Ok(size_mb) => {
+            output::status_icon(true, format!("Embedding: model cached, {size_mb:.1}MB"))
+        }
+        Err(msg) => output::status_icon(false, format!("Embedding: {msg}")),
     }
 
     match &state_ok {
-        Ok(()) => eprintln!("State:     OK ({})", config.state_dir.display()),
-        Err(msg) => eprintln!("State:     {msg}"),
+        Ok(()) => output::status_icon(true, format!("State: {}", config.state_dir.display())),
+        Err(msg) => output::status_icon(false, format!("State: {msg}")),
     }
 
     Ok(())
