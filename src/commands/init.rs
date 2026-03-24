@@ -2,6 +2,7 @@ use std::path::Path;
 
 use crate::config::{global_config_path, GlobalConfig};
 use crate::error::Result;
+use crate::output;
 
 const TEMPER_TOML: &str = r#"[vault]
 # sessions = "sessions"
@@ -35,23 +36,23 @@ const EMBEDDED_MILESTONE: &str = include_str!("../templates/milestone.md");
 ///   Pass `false` from tests to avoid clobbering the user's real global config.
 pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<()> {
     // 1. Create vault directory
-    eprintln!("temper: creating vault at {}", path.display());
+    output::dim(format!("Creating vault at {}", path.display()));
     std::fs::create_dir_all(path)?;
 
     // 2. Write temper.toml
     let toml_path = path.join("temper.toml");
     if toml_path.exists() {
-        eprintln!("temper: temper.toml already exists, skipping");
+        output::dim("temper.toml already exists, skipping");
     } else {
         std::fs::write(&toml_path, TEMPER_TOML)?;
-        eprintln!("temper: wrote temper.toml");
+        output::success("Wrote temper.toml");
     }
 
     // 3. Create essential directories
     for dir in &["sessions", "tickets", "milestones", "templates"] {
         let dir_path = path.join(dir);
         std::fs::create_dir_all(&dir_path)?;
-        eprintln!("temper: created {dir}/");
+        output::item(format!("Created {dir}/"));
     }
 
     // 4. Write embedded templates
@@ -68,16 +69,16 @@ pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<(
 
     // 6. Interactive guidance
     if !no_interactive {
-        eprintln!();
-        eprintln!("temper: vault initialized successfully.");
-        eprintln!();
-        eprintln!("Next steps:");
-        eprintln!("  temper check          — verify vault and tool health");
-        eprintln!("  temper note create session \"My First Session\"");
-        eprintln!("  temper ticket create --title \"First Ticket\" --project myproject");
-        eprintln!();
-        eprintln!("To generate a Claude skill for this vault:");
-        eprintln!("  temper skill generate  (coming soon)");
+        output::blank();
+        output::success("Vault initialized successfully");
+        output::blank();
+        output::header("Next steps");
+        output::hint("  temper check          — verify vault and tool health");
+        output::hint("  temper note create session \"My First Session\"");
+        output::hint("  temper ticket create --title \"First Ticket\" --project myproject");
+        output::blank();
+        output::hint("To generate a Claude skill for this vault:");
+        output::hint("  temper skill generate  (coming soon)");
     }
 
     Ok(())
@@ -88,10 +89,10 @@ fn write_template_if_missing(path: &Path, content: &str) -> Result<()> {
         return Ok(());
     }
     std::fs::write(path, content)?;
-    eprintln!(
-        "temper: wrote {}",
+    output::item(format!(
+        "Wrote {}",
         path.file_name().unwrap_or_default().to_string_lossy()
-    );
+    ));
     Ok(())
 }
 
@@ -103,7 +104,7 @@ fn register_default_vault(vault_path: &Path) -> Result<()> {
         let content = std::fs::read_to_string(&config_path).unwrap_or_default();
         let existing: GlobalConfig = toml::from_str(&content).unwrap_or_default();
         if existing.default_vault.is_some() {
-            eprintln!("temper: global config already has default_vault set, skipping");
+            output::dim("Global config already has default_vault set, skipping");
             return Ok(());
         }
     }
@@ -126,11 +127,11 @@ fn register_default_vault(vault_path: &Path) -> Result<()> {
     })?;
 
     std::fs::write(&config_path, toml_content)?;
-    eprintln!(
-        "temper: registered {} as default vault in {}",
+    output::dim(format!(
+        "Registered {} as default vault in {}",
         canonical.display(),
         config_path.display()
-    );
+    ));
 
     Ok(())
 }
