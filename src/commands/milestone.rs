@@ -91,7 +91,13 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
         .unwrap_or(&config.templates_dir)
         .to_str()
         .unwrap_or("templates");
-    let vars = vec![("slug", slug.as_str()), ("project", project), ("seq", "0")];
+    let id = crate::ids::generate_id();
+    let vars = vec![
+        ("slug", slug.as_str()),
+        ("project", project),
+        ("seq", "0"),
+        ("id", id.as_str()),
+    ];
     let content = vault::render_template_with_vars(
         &config.vault_root,
         templates_dir,
@@ -128,6 +134,7 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
     }
     let seq = next_seq(config, project)?;
     let seq_str = seq.to_string();
+    let id = crate::ids::generate_id();
     let templates_dir = config
         .templates_dir
         .strip_prefix(&config.vault_root)
@@ -138,6 +145,7 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
         ("slug", slug.as_str()),
         ("project", project),
         ("seq", seq_str.as_str()),
+        ("id", id.as_str()),
     ];
     let content = vault::render_template_with_vars(
         &config.vault_root,

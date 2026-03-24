@@ -156,6 +156,7 @@ pub fn create(
     let datetime = Local::now().to_rfc3339();
     let seq = next_seq(config, project, &ms_slug)?;
     let seq_str = seq.to_string();
+    let id = crate::ids::generate_id();
 
     let templates_dir = templates_dir_str(config);
     let vars = vec![
@@ -164,6 +165,7 @@ pub fn create(
         ("milestone", ms_slug.as_str()),
         ("seq", seq_str.as_str()),
         ("datetime", datetime.as_str()),
+        ("id", id.as_str()),
     ];
     let mut content = vault::render_template_with_vars(
         &config.vault_root,

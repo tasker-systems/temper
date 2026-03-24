@@ -64,12 +64,13 @@ pub fn save(
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "templates".to_string());
 
+    let id = crate::ids::generate_id();
     let content = vault::render_template_with_vars(
         &config.vault_root,
         &templates_rel,
         "session",
         note_title,
-        &[("project", &project_name)],
+        &[("project", &project_name), ("id", &id)],
     )?;
 
     // Set project field in frontmatter
