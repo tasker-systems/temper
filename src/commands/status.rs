@@ -1,12 +1,13 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::hnsw::SearchIndex;
+use crate::output;
 use crate::registry::Registry;
 
 pub fn run(config: &Config, verbose: bool) -> Result<()> {
-    println!("Temper Vault");
-    println!("  Root:       {}", config.vault_root.display());
-    println!();
+    output::header("Temper Vault");
+    output::label("Root", config.vault_root.display());
+    output::blank();
 
     // File counts per essential directory
     let sessions = count_md_files(&config.sessions_dir);
@@ -14,15 +15,15 @@ pub fn run(config: &Config, verbose: bool) -> Result<()> {
     let milestones = count_md_files(&config.milestones_dir);
     let templates = count_md_files(&config.templates_dir);
 
-    println!("Files");
-    println!("  Sessions:   {}", sessions);
-    println!("  Tickets:    {}", tickets);
-    println!("  Milestones: {}", milestones);
-    println!("  Templates:  {}", templates);
-    println!();
+    output::header("Files");
+    output::label("Sessions", sessions);
+    output::label("Tickets", tickets);
+    output::label("Milestones", milestones);
+    output::label("Templates", templates);
+    output::blank();
 
     // Index stats
-    println!("Index");
+    output::header("Index");
     match SearchIndex::load(&config.state_dir) {
         Ok(idx) => {
             let reg = Registry::load(&config.state_dir).ok();
@@ -33,35 +34,42 @@ pub fn run(config: &Config, verbose: bool) -> Result<()> {
                     Some(r.last_indexed)
                 }
             });
-            print!(
-                "  Chunks:     {} from {} files",
-                idx.entry_count(),
-                idx.file_count()
-            );
-            if let Some(ref last_str) = last {
-                print!(" (last: {last_str})");
-            }
-            println!();
+            let chunks_str = if let Some(ref last_str) = last {
+                format!(
+                    "{} from {} files (last: {})",
+                    idx.entry_count(),
+                    idx.file_count(),
+                    last_str
+                )
+            } else {
+                format!("{} from {} files", idx.entry_count(), idx.file_count())
+            };
+            output::label("Chunks", chunks_str);
         }
         Err(_) => {
-            println!("  not built — run 'temper index embed'");
+            output::hint("  not built — run 'temper index embed'");
         }
     }
-    println!();
+    output::blank();
 
     // Projects
-    println!("Projects");
+    output::header("Projects");
     if config.projects.is_empty() {
-        println!("  (none configured)");
+        output::hint("  (none configured)");
     } else {
         let mut names: Vec<&str> = config.projects.keys().map(|s| s.as_str()).collect();
         names.sort();
         for name in &names {
             let proj = &config.projects[*name];
             if verbose {
-                println!("  {} — {} ({})", name, proj.repo, proj.path.display());
+                output::plain(format!(
+                    "  {} — {} ({})",
+                    name,
+                    proj.repo,
+                    proj.path.display()
+                ));
             } else {
-                println!("  {}", name);
+                output::plain(format!("  {}", name));
             }
         }
     }
