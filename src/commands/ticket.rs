@@ -206,6 +206,7 @@ pub fn create(
         ticket: slug.clone(),
         milestone: ms_slug,
         title: title.to_string(),
+        scope: scope.map(String::from),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -254,6 +255,7 @@ pub fn move_ticket(
 
     let from_stage = ticket.stage.clone();
     let to_stage = stage.unwrap_or(&from_stage);
+    let from_scope = ticket.scope.clone();
 
     if let Some(s) = stage {
         content = vault::set_frontmatter_field(&content, "stage", s);
@@ -287,6 +289,9 @@ pub fn move_ticket(
     content = vault::set_frontmatter_field(&content, "updated", &datetime);
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
 
+    let to_scope = scope.map(String::from);
+    let from_scope_for_event = if scope.is_some() { from_scope } else { None };
+
     let event = discovery::Event::TicketMove {
         ts: datetime,
         project: ticket.project,
@@ -295,6 +300,8 @@ pub fn move_ticket(
         to_stage: to_stage.to_string(),
         from_milestone: from_ms,
         to_milestone: to_ms,
+        from_scope: from_scope_for_event,
+        to_scope,
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");

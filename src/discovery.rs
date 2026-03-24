@@ -20,6 +20,8 @@ pub enum Event {
         ticket: String,
         milestone: String,
         title: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
     },
     #[serde(rename = "ticket_move")]
     TicketMove {
@@ -32,6 +34,10 @@ pub enum Event {
         from_milestone: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         to_milestone: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from_scope: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        to_scope: Option<String>,
     },
     #[serde(rename = "ticket_done")]
     TicketDone {
