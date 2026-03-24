@@ -55,6 +55,8 @@ pr: null
 - `scope` is optional. Legacy tickets without it are treated as unscoped — the skill prompts the user to assign one at `ticket start` time.
 - No default. Scope is always a deliberate choice, either at creation or at start.
 - Scope is mutable via `temper ticket move <slug> --scope <new>`.
+- Scope cannot be cleared once set — it can only be changed between the three valid values.
+- YAML `null` in frontmatter maps to Rust `None` for `scope: Option<String>`. This is load-bearing: tickets created without `--scope` render `scope: null`, which deserializes as `None`.
 
 ## 2. Workflow Definitions
 
@@ -210,7 +212,7 @@ When `--scope` is not provided, `{{scope}}` renders as `null`.
 
 ### Validation
 
-Scope validates against `["patch", "feature", "epic"]`. Invalid values produce an error. An enum with `FromStr`/`Display` and clap `#[arg(value_enum)]` is the preferred approach (stronger than the string-matching pattern used for stages).
+Scope validates against `["patch", "feature", "epic"]`. Invalid values produce an error. Use `#[derive(clap::ValueEnum)]` on a `Scope` enum — this provides `FromStr`, `Display`, and CLI tab-completion automatically.
 
 ### Implementation Detail: `create()` Data Flow
 
@@ -224,8 +226,8 @@ The `create()` function gains a `scope: Option<&str>` parameter. The complete fl
 
 The `move_ticket()` function gains a `scope: Option<&str>` parameter:
 
-1. If scope is `Some`, validate against the allowed values
-2. Call `vault::set_frontmatter_field(&content, "scope", s)` to update the field
+1. Validate scope and stage upfront before any file modifications (fail-fast on invalid input)
+2. If scope is `Some`, call `vault::set_frontmatter_field(&content, "scope", s)` to update the field
 3. Include `from_scope`/`to_scope` in the `TicketMove` discovery event (read old value from `TicketInfo` before update)
 
 ### Implementation Detail: `ticket done` and Scope
