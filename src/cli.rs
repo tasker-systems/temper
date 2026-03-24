@@ -140,9 +140,10 @@ pub enum Commands {
 pub enum NoteAction {
     /// Create a new note from template
     Create {
-        #[arg(value_name = "TYPE")]
-        note_type: String,
-        title: String,
+        #[arg(value_name = "TYPE", required_unless_present = "show_template")]
+        note_type: Option<String>,
+        #[arg(required_unless_present = "show_template")]
+        title: Option<String>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long, hide = true)]
@@ -159,8 +160,8 @@ pub enum NoteAction {
 pub enum TicketAction {
     /// Create a new ticket
     Create {
-        #[arg(long)]
-        title: String,
+        #[arg(long, required_unless_present = "show_template")]
+        title: Option<String>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
@@ -298,7 +299,8 @@ pub enum SessionAction {
 pub enum ResearchAction {
     /// Create or update a research note
     Save {
-        title: String,
+        #[arg(required_unless_present = "show_template")]
+        title: Option<String>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long, default_value = "text")]

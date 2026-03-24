@@ -99,10 +99,14 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     format,
                 } => {
                     if show_template {
-                        let content = temper_cli::vault::get_template(&note_type)?;
+                        let nt = note_type.as_deref().unwrap_or("session");
+                        let content = temper_cli::vault::get_template(nt)?;
                         print!("{content}");
                         return Ok(());
                     }
+                    let note_type =
+                        note_type.expect("note_type required when not using --show-template");
+                    let title = title.expect("title required when not using --show-template");
                     temper_cli::commands::note::create(
                         &config,
                         &note_type,
@@ -171,6 +175,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                                 "no project specified and could not infer from CWD".into(),
                             )
                         })?;
+                    let title = title.expect("title required when not using --show-template");
                     temper_cli::commands::ticket::create(
                         &config,
                         project,
@@ -363,6 +368,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     let project = project
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let title = title.expect("title required when not using --show-template");
                     let stdin_content = temper_cli::vault::read_stdin_if_piped();
                     temper_cli::commands::research::save(
                         &config,
