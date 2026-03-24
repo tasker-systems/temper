@@ -348,3 +348,26 @@ fn test_ticket_move_rejects_invalid_scope() {
         temper_cli::commands::ticket::move_ticket(&config, &slug, None, None, None, Some("huge"));
     assert!(result.is_err(), "invalid scope should be rejected");
 }
+
+#[test]
+fn test_ticket_show_json_includes_scope() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug =
+        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let slug = temper_cli::commands::ticket::create(
+        &config,
+        "myapp",
+        "JSON Scope",
+        Some(&ms_slug),
+        Some("patch"),
+    )
+    .unwrap();
+
+    let ticket = temper_cli::commands::ticket::find_ticket(&config, &slug, None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(ticket.scope, Some("patch".to_string()));
+}
