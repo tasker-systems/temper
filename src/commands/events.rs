@@ -12,6 +12,7 @@ pub fn event_project(event: &Event) -> &str {
         | Event::TicketDone { project, .. }
         | Event::MilestoneCreate { project, .. }
         | Event::MilestoneUpdate { project, .. } => project,
+        Event::Normalize { project, .. } => project.as_deref().unwrap_or("general"),
     }
 }
 
@@ -88,6 +89,18 @@ fn format_event(event: &Event) -> String {
             milestone,
             status,
         } => format!("{ts}  {project:<12}  ms_update       {milestone} → {status}"),
+        Event::Normalize {
+            ts,
+            project,
+            ids_backfilled,
+            files_moved,
+            stages_migrated,
+            slugs_fixed,
+            frontmatter_fixed,
+        } => {
+            let proj = project.as_deref().unwrap_or("general");
+            format!("{ts}  {proj:<12}  normalize       ids:{ids_backfilled} moved:{files_moved} stages:{stages_migrated} slugs:{slugs_fixed} fm:{frontmatter_fixed}")
+        }
     }
 }
 

@@ -49,20 +49,41 @@ working inside the temper source repo.
 
 ## Commands
 
-- `temper search <query>` — Semantic search across indexed content
-- `temper context <topic>` — Show topic with related context
-- `temper session save [<title>] [--stdin]` — Create/update session note (pipe body via stdin)
+- `temper search <query>` — Semantic search across indexed content (reach for this before grep/find)
+- `temper context <topic> [--depth N]` — Traverse nearest neighbors for related content
+- `temper session save [<title>] [--ticket <slug>] [--state <state>]` — Create/update session note, optionally link to ticket
 - `temper session list` — List recent sessions
-- `temper ticket create --title <t> --project <p> [--stdin]` — Create ticket (pipe body via stdin)
-- `temper ticket list` — List tickets
-- `temper ticket board` — Board view
-- `temper ticket start <slug> --project <p>` — Move to brainstorm, show content, then invoke brainstorming skill
-- `temper milestone list` — Roadmap view
-- `temper note create <type> <title> [--stdin]` — Create note from template (pipe body via stdin)
+- `temper ticket create --title <t> [--project <p>]` — Create ticket (stdin auto-detected)
+- `temper ticket list [--project <p>] [--format json|text]` — List tickets
+- `temper ticket board [--project <p>]` — Board view
+- `temper ticket move <slug> --stage <s> [--project <p>]` — Move ticket between stages
+- `temper ticket done <slug> [--project <p>]` — Mark ticket done
+- `temper ticket show <slug> [--project <p>] [--format json|text]` — Show ticket content
+- `temper ticket start <slug> [--project <p>]` — Move to in-progress, show content, invoke brainstorming skill
+- `temper milestone list [--project <p>]` — Roadmap view
+- `temper note create <type> <title> [--project <p>]` — Create note from template (stdin auto-detected)
+- `temper research save <title> [--project <p>]` — Create high-fidelity research note (stdin auto-detected)
+- `temper normalize [--project <p>] [--dry-run]` — Repair vault structure drift
 - `temper events [--project <p>] [--limit <n>]` — Show recent vault events
 - `temper warmup [--project <p>]` — Context primer for new sessions
 - `temper index` — Rebuild search index
 - `temper status` — Vault overview
+
+## Discovery
+
+Before launching subagents to grep or find across the vault, use temper's semantic tools:
+
+- `temper search "<query>"` uses embeddings to find conceptually related content — not just keyword matches
+- `temper context <topic> --depth 2` traverses nearest neighbors in the HNSW index to surface related entities
+- Workflow: search → context → targeted file reads. This is what the index is for.
+
+Templates are available via `--show-template` on create/save commands.
+
+## Stages
+
+Tickets use four stages: `backlog`, `in-progress`, `done`, `cancelled`.
+
+Superpowers workflow phases (brainstorm, design, plan, implement) are session-local context — not persisted on tickets.
 
 ## Workflow Integration
 
@@ -71,14 +92,15 @@ When starting a session:
 - Search for relevant context: `temper search "<topic>"`
 
 When ending a session:
-- Suggest: `temper session save`
+- Suggest: `temper session save --ticket <slug> --state done` (if working on a ticket)
+- Or just: `temper session save`
 
 When the user says `/temper ticket start <slug>`:
-1. Run `temper ticket move <slug> --stage brainstorm --project <p>`
+1. Run `temper ticket move <slug> --stage in-progress --project <p>`
 2. Run `temper ticket show <slug>`
 3. Invoke the brainstorming skill with the ticket content as context
 
-This tool uses the superpowers workflow: brainstorm → design → plan → implement → finish.
+Stdin is auto-detected — pipe content directly without flags.
 "#,
         hash = hash,
         vault_path = vault_path,

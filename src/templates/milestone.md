@@ -1,4 +1,5 @@
 ---
+id: "{{id}}"
 type: milestone
 title: "{{title}}"
 slug: "{{slug}}"

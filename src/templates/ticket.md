@@ -1,4 +1,5 @@
 ---
+id: "{{id}}"
 type: ticket
 title: "{{title}}"
 slug: "{{slug}}"

@@ -108,6 +108,15 @@ pub enum Commands {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    /// Normalize vault structure and repair drift
+    Normalize {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        fix_slugs: bool,
+    },
     /// Context primer for new sessions
     Warmup {
         #[arg(long)]
@@ -120,19 +129,30 @@ pub enum Commands {
         #[command(subcommand)]
         action: SkillAction,
     },
+    /// Research notes
+    Research {
+        #[command(subcommand)]
+        action: ResearchAction,
+    },
 }
 
 #[derive(Subcommand)]
 pub enum NoteAction {
     /// Create a new note from template
     Create {
-        #[arg(value_name = "TYPE")]
-        note_type: String,
-        title: String,
+        #[arg(value_name = "TYPE", required_unless_present = "show_template")]
+        note_type: Option<String>,
+        #[arg(required_unless_present = "show_template")]
+        title: Option<String>,
         #[arg(long)]
         project: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         stdin: bool,
+        /// Print the raw template and exit
+        #[arg(long)]
+        show_template: bool,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
 
@@ -140,14 +160,17 @@ pub enum NoteAction {
 pub enum TicketAction {
     /// Create a new ticket
     Create {
-        #[arg(long)]
-        title: String,
+        #[arg(long, required_unless_present = "show_template")]
+        title: Option<String>,
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         stdin: bool,
+        /// Print the raw template and exit
+        #[arg(long)]
+        show_template: bool,
     },
     /// Move a ticket to a new stage or milestone
     Move {
@@ -156,6 +179,8 @@ pub enum TicketAction {
         stage: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
     },
     /// Mark a ticket as done
     Done {
@@ -164,6 +189,8 @@ pub enum TicketAction {
         branch: Option<String>,
         #[arg(long)]
         pr: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
     },
     /// List tickets
     List {
@@ -171,15 +198,25 @@ pub enum TicketAction {
         project: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Show a ticket's content
-    Show { slug: String },
+    Show {
+        slug: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
     /// Show project board
     Board {
         #[arg(long)]
         project: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
 }
 
@@ -193,17 +230,23 @@ pub enum MilestoneAction {
         project: Option<String>,
         #[arg(long)]
         slug: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// List milestones for a project
     List {
         #[arg(long)]
         project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Update milestone status
     Update {
         slug: String,
         #[arg(long)]
         status: String,
+        #[arg(long)]
+        project: Option<String>,
     },
 }
 
@@ -231,13 +274,41 @@ pub enum SessionAction {
         title: Option<String>,
         #[arg(long)]
         project: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         stdin: bool,
+        /// Print the raw template and exit
+        #[arg(long)]
+        show_template: bool,
+        #[arg(long)]
+        ticket: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// List recent sessions
     List {
         #[arg(long)]
         project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ResearchAction {
+    /// Create or update a research note
+    Save {
+        #[arg(required_unless_present = "show_template")]
+        title: Option<String>,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+        #[arg(long)]
+        show_template: bool,
+        #[arg(long, hide = true)]
+        stdin: bool,
     },
 }
 

@@ -1,7 +1,7 @@
 use std::fs;
 
 use chrono::Local;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::Config;
 use crate::discovery;
@@ -9,7 +9,7 @@ use crate::error::{Result, TemperError};
 use crate::output;
 use crate::vault;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct MilestoneInfo {
     pub title: String,
     pub slug: String,
@@ -71,9 +71,13 @@ pub fn next_seq(config: &Config, project: &str) -> Result<u32> {
     Ok(max_seq + 10)
 }
 
-/// Find a milestone by slug.
-pub fn find_milestone(config: &Config, slug: &str) -> Result<Option<MilestoneInfo>> {
-    let milestones = load_milestones(config, None)?;
+/// Find a milestone by slug, optionally scoped to a project.
+pub fn find_milestone(
+    config: &Config,
+    slug: &str,
+    project: Option<&str>,
+) -> Result<Option<MilestoneInfo>> {
+    let milestones = load_milestones(config, project)?;
     Ok(milestones.into_iter().find(|m| m.slug == slug))
 }
 
@@ -91,7 +95,13 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
         .unwrap_or(&config.templates_dir)
         .to_str()
         .unwrap_or("templates");
-    let vars = vec![("slug", slug.as_str()), ("project", project), ("seq", "0")];
+    let id = crate::ids::generate_id();
+    let vars = vec![
+        ("slug", slug.as_str()),
+        ("project", project),
+        ("seq", "0"),
+        ("id", id.as_str()),
+    ];
     let content = vault::render_template_with_vars(
         &config.vault_root,
         templates_dir,
@@ -114,7 +124,13 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
 }
 
 /// Create a new milestone.
-pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -> Result<String> {
+pub fn create(
+    config: &Config,
+    project: &str,
+    title: &str,
+    slug: Option<&str>,
+    format: &str,
+) -> Result<String> {
     let slug = match slug {
         Some(s) => s.to_string(),
         None => vault::slugify(title),
@@ -128,6 +144,7 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
     }
     let seq = next_seq(config, project)?;
     let seq_str = seq.to_string();
+    let id = crate::ids::generate_id();
     let templates_dir = config
         .templates_dir
         .strip_prefix(&config.vault_root)
@@ -138,6 +155,7 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
         ("slug", slug.as_str()),
         ("project", project),
         ("seq", seq_str.as_str()),
+        ("id", id.as_str()),
     ];
     let content = vault::render_template_with_vars(
         &config.vault_root,
@@ -157,7 +175,20 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    output::success(format!("Created milestone: {slug}"));
+    if format == "json" {
+        let info = MilestoneInfo {
+            title: title.to_string(),
+            slug: slug.clone(),
+            project: project.to_string(),
+            seq,
+            status: "active".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&info)
+            .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?;
+        println!("{json}");
+    } else {
+        output::success(format!("Created milestone: {slug}"));
+    }
     Ok(slug)
 }
 
@@ -201,8 +232,14 @@ fn count_tickets_by_stage(
 }
 
 /// List milestones for a project with ticket counts (roadmap view).
-pub fn list(config: &Config, project: &str) -> Result<()> {
+pub fn list(config: &Config, project: &str, format: &str) -> Result<()> {
     let milestones = load_milestones(config, Some(project))?;
+    if format == "json" {
+        let json = serde_json::to_string_pretty(&milestones)
+            .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?;
+        println!("{json}");
+        return Ok(());
+    }
     if milestones.is_empty() {
         output::hint(format!("No milestones for project: {project}"));
         return Ok(());
@@ -249,7 +286,7 @@ pub fn list(config: &Config, project: &str) -> Result<()> {
 }
 
 /// Update a milestone's status.
-pub fn update(config: &Config, slug: &str, status: &str) -> Result<()> {
+pub fn update(config: &Config, slug: &str, status: &str, project: Option<&str>) -> Result<()> {
     let valid_statuses = ["active", "completed", "paused", "cancelled"];
     if !valid_statuses.contains(&status) {
         return Err(TemperError::Vault(format!(
@@ -257,7 +294,7 @@ pub fn update(config: &Config, slug: &str, status: &str) -> Result<()> {
             valid_statuses.join(", ")
         )));
     }
-    let info = find_milestone(config, slug)?
+    let info = find_milestone(config, slug, project)?
         .ok_or_else(|| TemperError::Vault(format!("milestone not found: {slug}")))?;
     let path = config
         .milestones_dir

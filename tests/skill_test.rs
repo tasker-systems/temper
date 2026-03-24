@@ -11,7 +11,7 @@ fn test_skill_generate_produces_valid_content() {
     let content = temper_cli::commands::skill::generate(&config).unwrap();
     assert!(content.contains("temper"));
     assert!(content.contains("myapp"));
-    assert!(content.contains("superpowers"));
+    assert!(content.contains("Superpowers"));
     assert!(content.contains("config-hash:"));
 }
 
@@ -45,7 +45,7 @@ fn test_skill_generate_documents_stdin_flag() {
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("--stdin"));
+    assert!(content.contains("stdin auto-detected"));
 }
 
 #[test]

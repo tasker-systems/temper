@@ -1,4 +1,5 @@
 ---
+id: "{{id}}"
 type: session
 date: {{date}}
 project: ""
