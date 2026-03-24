@@ -210,7 +210,39 @@ When `--scope` is not provided, `{{scope}}` renders as `null`.
 
 ### Validation
 
-Scope validates against `["patch", "feature", "epic"]`. Invalid values produce an error. Same pattern as stage validation.
+Scope validates against `["patch", "feature", "epic"]`. Invalid values produce an error. An enum with `FromStr`/`Display` and clap `#[arg(value_enum)]` is the preferred approach (stronger than the string-matching pattern used for stages).
+
+### Implementation Detail: `create()` Data Flow
+
+The `create()` function gains a `scope: Option<&str>` parameter. The complete flow:
+
+1. Accept `scope` parameter from CLI routing
+2. Add scope to template variables: `("scope", scope.unwrap_or("null"))` — when scope is `None`, pass the literal string `"null"` so the template renders `scope: null` as valid YAML
+3. Include scope in the `TicketCreate` discovery event
+
+### Implementation Detail: `move_ticket()` Data Flow
+
+The `move_ticket()` function gains a `scope: Option<&str>` parameter:
+
+1. If scope is `Some`, validate against the allowed values
+2. Call `vault::set_frontmatter_field(&content, "scope", s)` to update the field
+3. Include `from_scope`/`to_scope` in the `TicketMove` discovery event (read old value from `TicketInfo` before update)
+
+### Implementation Detail: `ticket done` and Scope
+
+The `done()` function does not modify scope. Scope is preserved as informational metadata on completed tickets.
+
+### Implementation Detail: `ticket start` Is Skill-Level, Not CLI
+
+`ticket start` is a workflow alias defined in the skill template text. It is not a Rust subcommand. The decision tree routing in Section 3 is guidance embedded in the generated skill template string, not code in the CLI binary. The CLI provides the primitives (`ticket move --scope`, `ticket show`); the skill template orchestrates them.
+
+### Backward Compatibility: Discovery Events
+
+Adding `Option<String>` fields to event variants is backward-compatible with existing `events.jsonl` entries. Serde deserializes missing optional fields as `None`. The event schema does not use `#[serde(deny_unknown_fields)]`.
+
+### Note: Fix `#[allow(dead_code)]` in TicketInfo
+
+While adding the `scope` field to `TicketInfo`, replace the existing `#[allow(dead_code)]` attributes on `branch` and `pr` fields with `#[expect(dead_code, reason = "...")]` per project convention in CLAUDE.md.
 
 ## 5. Warmup Enhancement
 
@@ -227,7 +259,9 @@ Add a section between "Recent Sessions" and "Last Session":
 
 This tells the agent at session start what workflow to resume without needing to `ticket show` each one individually.
 
-Implementation: query tickets with `stage: in-progress` for the current project, display title with scope prefix (or `[unscoped]` if null).
+Implementation: call `load_tickets()` for the project, filter to `stage == "in-progress"`, display title with scope prefix (or `[unscoped]` if scope is None).
+
+For JSON output (`run_json`), add an `in_progress_tickets` array field to the JSON object with `slug`, `title`, and `scope` for each matching ticket.
 
 ## 6. Discovery Events
 
@@ -260,6 +294,7 @@ No auto-backfill, no repair — scope is a human judgment call. No validation be
 
 ### Test Plan
 
+**Ticket scope (ticket_test.rs):**
 - Create ticket with `--scope feature` → verify frontmatter contains `scope: feature`
 - Create ticket without `--scope` → verify frontmatter contains `scope: null`
 - Create ticket with `--scope invalid` → verify error
@@ -267,8 +302,16 @@ No auto-backfill, no repair — scope is a human judgment call. No validation be
 - Move ticket with `--stage` and `--scope` together → verify both update
 - Show ticket with scope → verify JSON output includes scope field
 
+**Warmup (warmup_test.rs or integration test):**
+- Warmup with in-progress tickets → verify "In-Progress Tickets" section appears with scope labels
+- Warmup with no in-progress tickets → verify section is absent or shows "None"
+
+**Normalize (normalize_test.rs):**
+- Normalize with unscoped tickets → verify informational count message
+
 ### What's Not In Scope
 
 - Board display changes — board is being superseded by the upcoming TUI work
 - Scope-based filtering on list/board commands — can add later if useful
 - Automatic scope inference by the CLI tool — scope inference lives in the skill template guidance, not in Rust code
+- `ticket list` display changes — scope is visible via `ticket show`; list display can be enhanced later if needed
