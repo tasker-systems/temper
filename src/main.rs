@@ -94,14 +94,21 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     note_type,
                     title,
                     project,
-                    stdin,
-                } => temper_cli::commands::note::create(
-                    &config,
-                    &note_type,
-                    &title,
-                    project.as_deref(),
-                    stdin,
-                ),
+                    stdin: _,
+                    show_template,
+                } => {
+                    if show_template {
+                        let content = temper_cli::vault::get_template(&note_type)?;
+                        print!("{content}");
+                        return Ok(());
+                    }
+                    temper_cli::commands::note::create(
+                        &config,
+                        &note_type,
+                        &title,
+                        project.as_deref(),
+                    )
+                }
             }
         }
         Commands::Session { action } => {
@@ -110,16 +117,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 SessionAction::Save {
                     title,
                     project,
-                    stdin,
+                    stdin: _,
+                    show_template,
                 } => {
-                    let stdin_content = if stdin {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        std::io::stdin().read_to_string(&mut buf).ok();
-                        Some(buf)
-                    } else {
-                        None
-                    };
+                    if show_template {
+                        let content = temper_cli::vault::get_template("session")?;
+                        print!("{content}");
+                        return Ok(());
+                    }
+                    let stdin_content = temper_cli::vault::read_stdin_if_piped();
                     temper_cli::commands::session::save(
                         &config,
                         title.as_deref(),
@@ -141,8 +147,14 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     title,
                     project,
                     milestone,
-                    stdin,
+                    stdin: _,
+                    show_template,
                 } => {
+                    if show_template {
+                        let content = temper_cli::vault::get_template("ticket")?;
+                        print!("{content}");
+                        return Ok(());
+                    }
                     let project = project
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()))
@@ -156,7 +168,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         project,
                         &title,
                         milestone.as_deref(),
-                        stdin,
                     )?;
                     Ok(())
                 }

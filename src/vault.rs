@@ -17,6 +17,13 @@ fn embedded_template(note_type: &str) -> Option<&'static str> {
     }
 }
 
+/// Return the raw template content for a note type.
+pub fn get_template(note_type: &str) -> Result<String> {
+    embedded_template(note_type)
+        .map(String::from)
+        .ok_or_else(|| TemperError::Vault(format!("No template found for '{note_type}'")))
+}
+
 /// Parse YAML frontmatter from markdown content
 pub fn parse_frontmatter(content: &str) -> Option<serde_yaml::Value> {
     let content = content.trim_start();
@@ -134,6 +141,22 @@ pub fn render_template_with_vars(
         content = content.replace(&format!("{{{{{key}}}}}"), value);
     }
     Ok(content)
+}
+
+/// Read stdin content if stdin is not a terminal (piped input).
+/// Returns None if stdin is a terminal or if reading fails.
+pub fn read_stdin_if_piped() -> Option<String> {
+    use std::io::{IsTerminal, Read};
+    if std::io::stdin().is_terminal() {
+        return None;
+    }
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).ok()?;
+    if buf.is_empty() {
+        None
+    } else {
+        Some(buf)
+    }
 }
 
 /// Recursively collect all .md files under a directory

@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Read as IoRead;
 
 use chrono::Local;
 use serde::Deserialize;
@@ -129,7 +128,6 @@ pub fn create(
     project: &str,
     title: &str,
     milestone_slug: Option<&str>,
-    stdin: bool,
 ) -> Result<String> {
     // Ensure maintenance milestone exists if needed
     let ms_slug = match milestone_slug {
@@ -175,15 +173,9 @@ pub fn create(
         &vars,
     )?;
 
-    if stdin {
-        let mut stdin_content = String::new();
-        std::io::stdin()
-            .read_to_string(&mut stdin_content)
-            .map_err(|e| TemperError::Vault(format!("reading stdin: {e}")))?;
-        if !stdin_content.is_empty() {
-            content.push_str(&stdin_content);
-            content.push('\n');
-        }
+    if let Some(stdin_content) = vault::read_stdin_if_piped() {
+        content.push_str(&stdin_content);
+        content.push('\n');
     }
 
     let dir = config.tickets_dir.join(project);

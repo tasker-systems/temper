@@ -131,8 +131,11 @@ pub enum NoteAction {
         title: String,
         #[arg(long)]
         project: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         stdin: bool,
+        /// Print the raw template and exit
+        #[arg(long)]
+        show_template: bool,
     },
 }
 
@@ -146,8 +149,11 @@ pub enum TicketAction {
         project: Option<String>,
         #[arg(long)]
         milestone: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         stdin: bool,
+        /// Print the raw template and exit
+        #[arg(long)]
+        show_template: bool,
     },
     /// Move a ticket to a new stage or milestone
     Move {
@@ -231,8 +237,11 @@ pub enum SessionAction {
         title: Option<String>,
         #[arg(long)]
         project: Option<String>,
-        #[arg(long)]
+        #[arg(long, hide = true)]
         stdin: bool,
+        /// Print the raw template and exit
+        #[arg(long)]
+        show_template: bool,
     },
     /// List recent sessions
     List {

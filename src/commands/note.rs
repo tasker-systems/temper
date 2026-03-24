@@ -10,14 +10,7 @@ use chrono::Local;
 /// - `note_type`: any template name in the templates dir (e.g. "session", "concept")
 /// - `title`: note title (used in filename and template substitution)
 /// - `project`: optional project tag written into frontmatter
-/// - `from_stdin`: if true, read body content from stdin and merge with template
-pub fn create(
-    config: &Config,
-    note_type: &str,
-    title: &str,
-    project: Option<&str>,
-    from_stdin: bool,
-) -> Result<()> {
+pub fn create(config: &Config, note_type: &str, title: &str, project: Option<&str>) -> Result<()> {
     let templates_rel = config
         .templates_dir
         .strip_prefix(&config.vault_root)
@@ -43,12 +36,9 @@ pub fn create(
         content = vault::set_frontmatter_field(&content, "project", proj);
     }
 
-    // If --stdin, read body from stdin and merge (keep frontmatter, replace body)
-    if from_stdin {
-        let stdin_content = read_stdin()?;
-        if !stdin_content.is_empty() {
-            content = merge_stdin_with_template(&content, &stdin_content);
-        }
+    // If stdin is piped, read body from stdin and merge (keep frontmatter, replace body)
+    if let Some(stdin_content) = vault::read_stdin_if_piped() {
+        content = merge_stdin_with_template(&content, &stdin_content);
     }
 
     vault::write_note(&note_path, &content)?;
@@ -72,13 +62,6 @@ pub fn create(
     }
 
     Ok(())
-}
-
-fn read_stdin() -> Result<String> {
-    use std::io::Read;
-    let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf)?;
-    Ok(buf)
 }
 
 fn merge_stdin_with_template(template: &str, stdin_content: &str) -> String {
