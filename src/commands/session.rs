@@ -5,6 +5,7 @@ use chrono::Local;
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::Result;
+use crate::output;
 use crate::project;
 use crate::vault;
 
@@ -51,7 +52,7 @@ pub fn save(
             let relative = note_path
                 .strip_prefix(&config.vault_root)
                 .unwrap_or(&note_path);
-            println!("Updated: {}", relative.display());
+            output::success(format!("Updated: {}", relative.display()));
         }
         return Ok(());
     }
@@ -80,7 +81,7 @@ pub fn save(
         .strip_prefix(&config.vault_root)
         .unwrap_or(&note_path);
     let relative_str = relative.to_string_lossy();
-    println!("Created: {relative_str}");
+    output::success(format!("Created: {relative_str}"));
 
     let ts = Local::now().to_rfc3339();
     let event = Event::NoteCreate {
@@ -105,7 +106,7 @@ pub fn list(config: &Config, project: Option<&str>) -> Result<()> {
     let sessions_root = &config.sessions_dir;
 
     if !sessions_root.exists() {
-        println!("No sessions directory found.");
+        output::warning("No sessions directory found.");
         return Ok(());
     }
 
@@ -145,14 +146,17 @@ pub fn list(config: &Config, project: Option<&str>) -> Result<()> {
     entries.truncate(20);
 
     if entries.is_empty() {
-        println!("No sessions found.");
+        output::hint("No sessions found.");
         return Ok(());
     }
 
-    println!("{:<12} {:<20} Title", "Date", "Project");
-    println!("{}", "-".repeat(60));
+    output::plain(format!("{:<12} {:<20} Title", "Date", "Project"));
+    output::dim("-".repeat(60));
     for entry in &entries {
-        println!("{:<12} {:<20} {}", entry.date, entry.project, entry.title);
+        output::plain(format!(
+            "{:<12} {:<20} {}",
+            entry.date, entry.project, entry.title
+        ));
     }
 
     Ok(())

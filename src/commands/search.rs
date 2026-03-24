@@ -3,6 +3,7 @@ use crate::embedder::{self, Embedder};
 use crate::error::Result;
 use crate::format::OutputFormat;
 use crate::hnsw::{SearchFilter, SearchIndex};
+use crate::output;
 use serde::Serialize;
 use std::fmt;
 
@@ -84,13 +85,13 @@ pub fn run(
     let index = match SearchIndex::load(state_dir) {
         Ok(idx) => idx,
         Err(_) => {
-            println!("No search index found. Run 'temper index' to build it.");
+            output::warning("No search index found. Run 'temper index' to build it.");
             return Ok(());
         }
     };
 
     if index.entry_count() == 0 {
-        println!("Index is empty. Run 'temper index' to populate it.");
+        output::warning("Index is empty. Run 'temper index' to populate it.");
         return Ok(());
     }
 

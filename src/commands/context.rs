@@ -3,6 +3,7 @@ use crate::embedder::{self, Embedder};
 use crate::error::{Result, TemperError};
 use crate::format::OutputFormat;
 use crate::hnsw::SearchIndex;
+use crate::output;
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
@@ -168,7 +169,7 @@ pub fn run(config: &Config, topic: &str, format: &str, depth: usize, limit: usiz
     let index = match SearchIndex::load(state_dir) {
         Ok(idx) => idx,
         Err(_) => {
-            println!("No search index found. Run 'temper index' to build it.");
+            output::warning("No search index found. Run 'temper index' to build it.");
             return Ok(());
         }
     };
