@@ -8,6 +8,7 @@ use crate::commands::milestone;
 use crate::config::Config;
 use crate::discovery;
 use crate::error::{Result, TemperError};
+use crate::output;
 use crate::vault;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -198,7 +199,7 @@ pub fn create(
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    eprintln!("Created ticket: {slug}");
+    output::success(format!("Created ticket: {slug}"));
     Ok(slug)
 }
 
@@ -278,7 +279,10 @@ pub fn move_ticket(
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    eprintln!("Moved ticket {}: {from_stage} → {to_stage}", ticket.slug);
+    output::success(format!(
+        "Moved ticket {}: {from_stage} → {to_stage}",
+        ticket.slug
+    ));
     Ok(())
 }
 
@@ -319,7 +323,7 @@ pub fn done(
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    eprintln!("Completed ticket: {}", ticket.slug);
+    output::success(format!("Completed ticket: {}", ticket.slug));
     Ok(())
 }
 
@@ -340,7 +344,7 @@ pub fn show(config: &Config, slug_or_suffix: &str) -> Result<()> {
 pub fn list(config: &Config, project: Option<&str>, milestone_slug: Option<&str>) -> Result<()> {
     let tickets = load_tickets(config, project, milestone_slug)?;
     if tickets.is_empty() {
-        println!("No tickets found.");
+        output::hint("No tickets found.");
         return Ok(());
     }
     // Group by milestone
@@ -353,12 +357,13 @@ pub fn list(config: &Config, project: Option<&str>, milestone_slug: Option<&str>
             .push(ticket);
     }
     for (ms, tix) in &by_milestone {
-        println!("\n## {ms}");
+        output::blank();
+        output::header(format!("## {ms}"));
         for t in tix {
-            println!(
+            output::plain(format!(
                 "  {:>3}  [{:<10}]  {} ({})",
                 t.seq, t.stage, t.title, t.project
-            );
+            ));
         }
     }
     Ok(())
@@ -380,8 +385,8 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
     let project_title = project.chars().next().unwrap().to_uppercase().to_string() + &project[1..];
 
     // Terminal output
-    println!("{project_title} Board");
-    println!("{}", "═".repeat(68));
+    output::header(format!("{project_title} Board"));
+    output::plain("═".repeat(68));
 
     let filtered_milestones: Vec<_> = if let Some(ms) = milestone_filter {
         milestones.iter().filter(|m| m.slug == ms).collect()
@@ -394,11 +399,11 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
         if ms_tickets.is_empty() && milestone_filter.is_none() {
             continue;
         }
-        println!(
+        output::plain(format!(
             " {:<16}│ {:<16}│ {:<16}│ {:<8}│ {:<16}│ Done",
             "Backlog", "Brainstorm", "Design", "Plan", "Implement"
-        );
-        println!(
+        ));
+        output::plain(format!(
             "{}┼{}┼{}┼{}┼{}┼{}",
             "─".repeat(17),
             "─".repeat(17),
@@ -406,7 +411,7 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
             "─".repeat(9),
             "─".repeat(17),
             "─".repeat(9)
-        );
+        ));
 
         let max_rows = stages
             .iter()
@@ -447,13 +452,13 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
                     }
                 })
                 .collect();
-            println!(
+            output::plain(format!(
                 "{}│{}│{}│{}│{}│{}",
                 cells[0], cells[1], cells[2], cells[3], cells[4], cells[5]
-            );
+            ));
         }
 
-        println!(
+        output::plain(format!(
             "{}┴{}┴{}┴{}┴{}┴{}",
             "─".repeat(17),
             "─".repeat(17),
@@ -461,7 +466,7 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
             "─".repeat(9),
             "─".repeat(17),
             "─".repeat(9)
-        );
+        ));
         let mut stage_counts: Vec<String> = Vec::new();
         for stage in &stages {
             let count = ms_tickets.iter().filter(|t| t.stage == *stage).count();
@@ -470,8 +475,8 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
             }
         }
         let counts_str = stage_counts.join(" · ");
-        println!(" Milestone: {} ({counts_str})", ms.title);
-        println!();
+        output::plain(format!(" Milestone: {} ({counts_str})", ms.title));
+        output::blank();
     }
 
     // Generate markdown board
@@ -517,6 +522,6 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
     fs::create_dir_all(&board_dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     let board_path = board_dir.join(format!("{project}.md"));
     fs::write(&board_path, &md).map_err(|e| TemperError::Vault(e.to_string()))?;
-    eprintln!("Board written to boards/{project}.md");
+    output::dim(format!("Board written to boards/{project}.md"));
     Ok(())
 }
