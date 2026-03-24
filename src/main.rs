@@ -285,7 +285,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         config.skill_output.clone()
                     };
                     temper_cli::commands::skill::install(&config, &output_path)?;
-                    println!("Skill installed: {}", output_path.display());
+                    temper_cli::output::success(format!(
+                        "Skill installed: {}",
+                        output_path.display()
+                    ));
                     Ok(())
                 }
                 SkillAction::Check => temper_cli::commands::skill::check(&config),

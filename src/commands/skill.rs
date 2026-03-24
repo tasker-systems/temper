@@ -4,6 +4,7 @@ use sha2::{Digest, Sha256};
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
+use crate::output;
 
 /// Generate the skill file content as a string.
 pub fn generate(config: &Config) -> Result<String> {
@@ -123,20 +124,26 @@ pub fn check(config: &Config) -> Result<()> {
         .join(".claude/plugins/cache/claude-plugins-official/superpowers");
 
     if superpowers_path.exists() {
-        println!("Superpowers: OK ({})", superpowers_path.display());
+        output::status_icon(true, format!("Superpowers: {}", superpowers_path.display()));
     } else {
-        println!("Superpowers: NOT FOUND ({})", superpowers_path.display());
+        output::status_icon(
+            false,
+            format!("Superpowers: NOT FOUND ({})", superpowers_path.display()),
+        );
     }
 
     // Check skill file
     let skill_path = &config.skill_output;
     if !skill_path.exists() {
-        println!("Skill file:  NOT FOUND ({})", skill_path.display());
-        println!("  Run: temper skill install");
+        output::status_icon(
+            false,
+            format!("Skill file: NOT FOUND ({})", skill_path.display()),
+        );
+        output::hint("  Run: temper skill install");
         return Ok(());
     }
 
-    println!("Skill file:  OK ({})", skill_path.display());
+    output::status_icon(true, format!("Skill file: {}", skill_path.display()));
 
     // Check for staleness by comparing hashes
     let existing = std::fs::read_to_string(skill_path)
@@ -152,16 +159,16 @@ pub fn check(config: &Config) -> Result<()> {
 
     match embedded_hash {
         Some(h) if h == current_hash => {
-            println!("Hash:        OK (up to date)");
+            output::status_icon(true, "Hash: up to date");
         }
         Some(h) => {
-            println!("Hash:        STALE");
-            println!("  Embedded: {}", h);
-            println!("  Current:  {}", current_hash);
-            println!("  Run: temper skill install");
+            output::status_icon(false, "Hash: STALE");
+            output::plain(format!("  Embedded: {}", h));
+            output::plain(format!("  Current:  {}", current_hash));
+            output::hint("  Run: temper skill install");
         }
         None => {
-            println!("Hash:        UNKNOWN (no config-hash comment found)");
+            output::warning("Hash: UNKNOWN (no config-hash comment found)");
         }
     }
 
