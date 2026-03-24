@@ -58,7 +58,7 @@ fn test_milestone_create_and_ticket_create() {
 }
 
 #[test]
-fn test_ticket_move_to_brainstorm() {
+fn test_ticket_move_to_in_progress() {
     let dir = TempDir::new().unwrap();
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
@@ -68,12 +68,47 @@ fn test_ticket_move_to_brainstorm() {
         temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), false)
             .unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("brainstorm"), None).unwrap();
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None).unwrap();
 
     let content =
         std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
             .unwrap();
-    assert!(content.contains("stage: brainstorm"));
+    assert!(content.contains("stage: in-progress"));
+}
+
+#[test]
+fn test_ticket_move_rejects_old_stages() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), false)
+            .unwrap();
+
+    let result =
+        temper_cli::commands::ticket::move_ticket(&config, &slug, Some("brainstorm"), None);
+    assert!(result.is_err(), "moving to 'brainstorm' should be rejected");
+}
+
+#[test]
+fn test_ticket_move_to_cancelled() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug = temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None).unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), false)
+            .unwrap();
+
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("cancelled"), None).unwrap();
+
+    let content =
+        std::fs::read_to_string(dir.path().join("tickets/myapp").join(format!("{slug}.md")))
+            .unwrap();
+    assert!(content.contains("stage: cancelled"));
 }
 
 #[test]
@@ -87,7 +122,7 @@ fn test_ticket_move_and_done() {
         temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), false)
             .unwrap();
 
-    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("implement"), None).unwrap();
+    temper_cli::commands::ticket::move_ticket(&config, &slug, Some("in-progress"), None).unwrap();
     temper_cli::commands::ticket::done(
         &config,
         &slug,

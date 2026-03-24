@@ -215,14 +215,7 @@ pub fn move_ticket(
     let ticket = find_ticket(config, slug_or_suffix)?
         .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
 
-    let valid_stages = [
-        "backlog",
-        "brainstorm",
-        "design",
-        "plan",
-        "implement",
-        "done",
-    ];
+    let valid_stages = ["backlog", "in-progress", "done", "cancelled"];
     if let Some(s) = stage {
         if !valid_stages.contains(&s) {
             return Err(TemperError::Vault(format!(
@@ -375,14 +368,7 @@ pub fn list(config: &Config, project: Option<&str>, milestone_slug: Option<&str>
 pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> Result<()> {
     let milestones = milestone::load_milestones(config, Some(project))?;
     let tickets = load_tickets(config, Some(project), None)?;
-    let stages = [
-        "backlog",
-        "brainstorm",
-        "design",
-        "plan",
-        "implement",
-        "done",
-    ];
+    let stages = ["backlog", "in-progress", "done", "cancelled"];
 
     let project_title = project.chars().next().unwrap().to_uppercase().to_string() + &project[1..];
 
@@ -402,17 +388,15 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
             continue;
         }
         output::plain(format!(
-            " {:<16}│ {:<16}│ {:<16}│ {:<8}│ {:<16}│ Done",
-            "Backlog", "Brainstorm", "Design", "Plan", "Implement"
+            " {:<20}│ {:<20}│ {:<20}│ Cancelled",
+            "Backlog", "In Progress", "Done"
         ));
         output::plain(format!(
-            "{}┼{}┼{}┼{}┼{}┼{}",
-            "─".repeat(17),
-            "─".repeat(17),
-            "─".repeat(17),
-            "─".repeat(9),
-            "─".repeat(17),
-            "─".repeat(9)
+            "{}┼{}┼{}┼{}",
+            "─".repeat(21),
+            "─".repeat(21),
+            "─".repeat(21),
+            "─".repeat(17)
         ));
 
         let max_rows = stages
@@ -437,11 +421,7 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
                 .iter()
                 .enumerate()
                 .map(|(i, stage_tickets)| {
-                    let width = match i {
-                        3 => 8,  // Plan (was index 2)
-                        5 => 9,  // Done (was index 4)
-                        _ => 16, // Backlog, Brainstorm, Design, Implement
-                    };
+                    let width = if i == 3 { 16 } else { 20 };
                     if let Some(t) = stage_tickets.get(row) {
                         let name = if t.title.len() > width {
                             format!("{}…", &t.title[..width - 1])
@@ -455,19 +435,17 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
                 })
                 .collect();
             output::plain(format!(
-                "{}│{}│{}│{}│{}│{}",
-                cells[0], cells[1], cells[2], cells[3], cells[4], cells[5]
+                "{}│{}│{}│{}",
+                cells[0], cells[1], cells[2], cells[3]
             ));
         }
 
         output::plain(format!(
-            "{}┴{}┴{}┴{}┴{}┴{}",
-            "─".repeat(17),
-            "─".repeat(17),
-            "─".repeat(17),
-            "─".repeat(9),
-            "─".repeat(17),
-            "─".repeat(9)
+            "{}┴{}┴{}┴{}",
+            "─".repeat(21),
+            "─".repeat(21),
+            "─".repeat(21),
+            "─".repeat(17)
         ));
         let mut stage_counts: Vec<String> = Vec::new();
         for stage in &stages {
@@ -490,8 +468,8 @@ pub fn board(config: &Config, project: &str, milestone_filter: Option<&str>) -> 
     for ms in &filtered_milestones {
         let ms_tickets: Vec<_> = tickets.iter().filter(|t| t.milestone == ms.slug).collect();
         md.push_str(&format!("\n## {}\n\n", ms.title));
-        md.push_str("| Backlog | Brainstorm | Design | Plan | Implement | Done |\n");
-        md.push_str("|---------|------------|--------|------|-----------|------|\n");
+        md.push_str("| Backlog | In Progress | Done | Cancelled |\n");
+        md.push_str("|---------|-------------|------|----------|\n");
 
         let by_stage: Vec<Vec<&TicketInfo>> = stages
             .iter()
