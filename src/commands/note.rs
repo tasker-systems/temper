@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::{Result, TemperError};
+use crate::output;
 use crate::vault;
 use chrono::Local;
 
@@ -56,7 +57,7 @@ pub fn create(
         .strip_prefix(&config.vault_root)
         .unwrap_or(&note_path);
     let relative_str = relative.to_string_lossy();
-    println!("Created: {relative_str}");
+    output::success(format!("Created: {relative_str}"));
 
     let ts = Local::now().to_rfc3339();
     let event = Event::NoteCreate {

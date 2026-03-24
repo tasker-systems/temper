@@ -3,6 +3,7 @@ use std::process::Command;
 
 use crate::config::{safe_write, Config};
 use crate::error::{Result, TemperError};
+use crate::output;
 
 /// Add a project to temper.toml.
 /// If `repo` is None, infer from `git -C <path> remote get-url origin`.
@@ -33,10 +34,10 @@ pub fn add(vault_root: &Path, name: &str, path: &str, repo: Option<&str>) -> Res
 
     safe_write(&toml_path, |content| format!("{}{}", content, block))?;
 
-    eprintln!(
-        "temper: added project '{}' (path={}, repo={})",
+    output::success(format!(
+        "Added project '{}' (path={}, repo={})",
         name, path, resolved_repo
-    );
+    ));
     Ok(())
 }
 
@@ -68,25 +69,25 @@ pub fn remove(vault_root: &Path, name: &str) -> Result<()> {
         result
     })?;
 
-    eprintln!("temper: removed project '{}'", name);
+    output::success(format!("Removed project '{}'", name));
     Ok(())
 }
 
 /// List configured projects.
 pub fn list(config: &Config) -> Result<()> {
     if config.projects.is_empty() {
-        println!("No projects configured.");
+        output::hint("No projects configured.");
         return Ok(());
     }
 
     let mut names: Vec<&String> = config.projects.keys().collect();
     names.sort();
 
-    println!("{:<20} {:<40} REPO", "NAME", "PATH");
-    println!("{}", "-".repeat(80));
+    output::plain(format!("{:<20} {:<40} REPO", "NAME", "PATH"));
+    output::dim("-".repeat(80));
     for name in names {
         let p = &config.projects[name];
-        println!("{:<20} {:<40} {}", name, p.path.display(), p.repo);
+        output::plain(format!("{:<20} {:<40} {}", name, p.path.display(), p.repo));
     }
 
     Ok(())

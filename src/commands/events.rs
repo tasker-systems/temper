@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::discovery::Event;
 use crate::error::{Result, TemperError};
+use crate::output;
 
 /// Extract the project field from any Event variant.
 pub fn event_project(event: &Event) -> &str {
@@ -95,7 +96,7 @@ pub fn run(config: &Config, project: Option<&str>, limit: usize, format: &str) -
     let events = load_events(config, project, limit)?;
 
     if events.is_empty() {
-        println!("No events found.");
+        output::hint("No events found.");
         return Ok(());
     }
 
@@ -107,7 +108,7 @@ pub fn run(config: &Config, project: Option<&str>, limit: usize, format: &str) -
         }
         _ => {
             for event in &events {
-                println!("{}", format_event(event));
+                output::plain(format_event(event));
             }
         }
     }
