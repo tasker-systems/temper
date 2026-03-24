@@ -8,8 +8,8 @@ fn test_normalize_backfills_missing_ids() {
 
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug)).unwrap();
+    let slug = temper_cli::commands::ticket::create(&config, "myapp", "Test", Some(&ms_slug), None)
+        .unwrap();
 
     // Strip the id field to simulate a pre-UUIDv7 ticket
     let path = dir.path().join("tickets/myapp").join(format!("{slug}.md"));
@@ -39,8 +39,9 @@ fn test_normalize_migrates_old_stages() {
 
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug = temper_cli::commands::ticket::create(&config, "myapp", "Old Stage", Some(&ms_slug))
-        .unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Old Stage", Some(&ms_slug), None)
+            .unwrap();
 
     let path = dir.path().join("tickets/myapp").join(format!("{slug}.md"));
     let content = std::fs::read_to_string(&path).unwrap();
@@ -63,7 +64,8 @@ fn test_normalize_dry_run_makes_no_changes() {
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
     let slug =
-        temper_cli::commands::ticket::create(&config, "myapp", "Dry run", Some(&ms_slug)).unwrap();
+        temper_cli::commands::ticket::create(&config, "myapp", "Dry run", Some(&ms_slug), None)
+            .unwrap();
 
     let path = dir.path().join("tickets/myapp").join(format!("{slug}.md"));
     let content = std::fs::read_to_string(&path).unwrap();
@@ -89,8 +91,9 @@ fn test_normalize_moves_misplaced_files() {
 
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug = temper_cli::commands::ticket::create(&config, "myapp", "Misplaced", Some(&ms_slug))
-        .unwrap();
+    let slug =
+        temper_cli::commands::ticket::create(&config, "myapp", "Misplaced", Some(&ms_slug), None)
+            .unwrap();
 
     let correct_path = dir.path().join("tickets/myapp").join(format!("{slug}.md"));
     let wrong_dir = dir.path().join("tickets/wrong");

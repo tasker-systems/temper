@@ -181,6 +181,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         project,
                         &title,
                         milestone.as_deref(),
+                        None,
                     )?;
                     Ok(())
                 }

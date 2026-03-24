@@ -17,10 +17,9 @@ pub struct TicketInfo {
     pub project: String,
     pub milestone: String,
     pub stage: String,
+    pub scope: Option<String>,
     pub seq: u32,
-    #[allow(dead_code)]
     pub branch: Option<String>,
-    #[allow(dead_code)]
     pub pr: Option<String>,
 }
 
@@ -132,6 +131,7 @@ pub fn create(
     project: &str,
     title: &str,
     milestone_slug: Option<&str>,
+    scope: Option<&str>,
 ) -> Result<String> {
     // Ensure maintenance milestone exists if needed
     let ms_slug = match milestone_slug {
@@ -152,6 +152,17 @@ pub fn create(
         )));
     }
 
+    // Validate scope if provided
+    let valid_scopes = ["patch", "feature", "epic"];
+    if let Some(sc) = scope {
+        if !valid_scopes.contains(&sc) {
+            return Err(TemperError::Vault(format!(
+                "invalid scope: {sc}. Must be one of: {}",
+                valid_scopes.join(", ")
+            )));
+        }
+    }
+
     let date = Local::now().format("%Y-%m-%d").to_string();
     let slug_title = vault::slugify(title);
     let slug = format!("{date}-{slug_title}");
@@ -161,6 +172,7 @@ pub fn create(
     let id = crate::ids::generate_id();
 
     let templates_dir = templates_dir_str(config);
+    let scope_str = scope.unwrap_or("null");
     let vars = vec![
         ("slug", slug.as_str()),
         ("project", project),
@@ -168,6 +180,7 @@ pub fn create(
         ("seq", seq_str.as_str()),
         ("datetime", datetime.as_str()),
         ("id", id.as_str()),
+        ("scope", scope_str),
     ];
     let mut content = vault::render_template_with_vars(
         &config.vault_root,

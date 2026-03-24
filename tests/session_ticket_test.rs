@@ -8,9 +8,14 @@ fn test_session_save_with_ticket_links_entities() {
 
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let ticket_slug =
-        temper_cli::commands::ticket::create(&config, "myapp", "Linked ticket", Some(&ms_slug))
-            .unwrap();
+    let ticket_slug = temper_cli::commands::ticket::create(
+        &config,
+        "myapp",
+        "Linked ticket",
+        Some(&ms_slug),
+        None,
+    )
+    .unwrap();
 
     temper_cli::commands::session::save(
         &config,
@@ -45,7 +50,7 @@ fn test_session_save_with_ticket_and_state_moves_ticket() {
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
     let ticket_slug =
-        temper_cli::commands::ticket::create(&config, "myapp", "Done ticket", Some(&ms_slug))
+        temper_cli::commands::ticket::create(&config, "myapp", "Done ticket", Some(&ms_slug), None)
             .unwrap();
 
     temper_cli::commands::session::save(

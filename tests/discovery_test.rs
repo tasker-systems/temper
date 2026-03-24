@@ -31,7 +31,8 @@ fn test_events_list_returns_recent_events() {
 
     let ms_slug =
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::ticket::create(&config, "myapp", "Test ticket", Some(&ms_slug)).unwrap();
+    temper_cli::commands::ticket::create(&config, "myapp", "Test ticket", Some(&ms_slug), None)
+        .unwrap();
 
     let events = temper_cli::commands::events::load_events(&config, None, 20).unwrap();
     assert!(
@@ -54,8 +55,8 @@ fn test_events_filter_by_project() {
         temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
     let ms2 =
         temper_cli::commands::milestone::create(&config, "other", "v0.2", None, "text").unwrap();
-    temper_cli::commands::ticket::create(&config, "myapp", "Ticket A", Some(&ms1)).unwrap();
-    temper_cli::commands::ticket::create(&config, "other", "Ticket B", Some(&ms2)).unwrap();
+    temper_cli::commands::ticket::create(&config, "myapp", "Ticket A", Some(&ms1), None).unwrap();
+    temper_cli::commands::ticket::create(&config, "other", "Ticket B", Some(&ms2), None).unwrap();
 
     let myapp_events =
         temper_cli::commands::events::load_events(&config, Some("myapp"), 20).unwrap();
