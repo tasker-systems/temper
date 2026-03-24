@@ -108,6 +108,15 @@ pub enum Commands {
         #[command(subcommand)]
         action: ProjectAction,
     },
+    /// Normalize vault structure and repair drift
+    Normalize {
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        fix_slugs: bool,
+    },
     /// Context primer for new sessions
     Warmup {
         #[arg(long)]
@@ -119,6 +128,11 @@ pub enum Commands {
     Skill {
         #[command(subcommand)]
         action: SkillAction,
+    },
+    /// Research notes
+    Research {
+        #[command(subcommand)]
+        action: ResearchAction,
     },
 }
 
@@ -277,6 +291,22 @@ pub enum SessionAction {
         project: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ResearchAction {
+    /// Create or update a research note
+    Save {
+        title: String,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+        #[arg(long)]
+        show_template: bool,
+        #[arg(long, hide = true)]
+        stdin: bool,
     },
 }
 

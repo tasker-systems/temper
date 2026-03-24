@@ -2,8 +2,8 @@ mod cli;
 
 use clap::Parser;
 use cli::{
-    Cli, Commands, MilestoneAction, NoteAction, ProjectAction, SessionAction, SkillAction,
-    TicketAction,
+    Cli, Commands, MilestoneAction, NoteAction, ProjectAction, ResearchAction, SessionAction,
+    SkillAction, TicketAction,
 };
 
 fn main() {
@@ -325,6 +325,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 }
             }
         }
+        Commands::Normalize {
+            project,
+            dry_run,
+            fix_slugs,
+        } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::commands::normalize::run(&config, project.as_deref(), dry_run, fix_slugs)?;
+            Ok(())
+        }
         Commands::Warmup { project, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let cwd = std::env::current_dir().unwrap_or_default();
@@ -333,6 +342,37 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 .as_deref()
                 .or_else(|| resolved.map(|r| r.name.as_str()));
             temper_cli::commands::warmup::run(&config, project, &format)
+        }
+        Commands::Research { action } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            match action {
+                ResearchAction::Save {
+                    title,
+                    project,
+                    format,
+                    show_template,
+                    stdin: _,
+                } => {
+                    if show_template {
+                        let content = temper_cli::vault::get_template("research")?;
+                        print!("{content}");
+                        return Ok(());
+                    }
+                    let cwd = std::env::current_dir().unwrap_or_default();
+                    let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
+                    let project = project
+                        .as_deref()
+                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let stdin_content = temper_cli::vault::read_stdin_if_piped();
+                    temper_cli::commands::research::save(
+                        &config,
+                        &title,
+                        project,
+                        stdin_content.as_deref(),
+                        &format,
+                    )
+                }
+            }
         }
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;

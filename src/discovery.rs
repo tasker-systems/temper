@@ -57,6 +57,17 @@ pub enum Event {
         milestone: String,
         status: String,
     },
+    #[serde(rename = "normalize")]
+    Normalize {
+        ts: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        project: Option<String>,
+        ids_backfilled: u32,
+        files_moved: u32,
+        stages_migrated: u32,
+        slugs_fixed: u32,
+        frontmatter_fixed: u32,
+    },
 }
 
 pub fn append_event(state_dir: &Path, event: &Event) -> Result<()> {
