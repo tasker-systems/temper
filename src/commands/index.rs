@@ -6,7 +6,7 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::hnsw::{IndexEntry, SearchIndex};
 use crate::registry::{FileRecord, FileSource, Registry};
-use crate::{chunker, embedder, registry, vault};
+use crate::{chunker, embedder, output, registry, vault};
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -96,7 +96,7 @@ pub fn run(
             .collect()
     };
 
-    eprintln!("Collecting files: {} total", all_files.len());
+    output::dim(format!("Collecting files: {} total", all_files.len()));
 
     // --- 4. Compute hashes and build (path, hash) pairs ---
     let mut file_hashes: Vec<(String, String)> = Vec::new();
@@ -107,7 +107,7 @@ pub fn run(
             .unwrap_or_else(|_| file.to_string_lossy().to_string());
         match registry::compute_file_hash(file) {
             Ok(hash) => file_hashes.push((rel, hash)),
-            Err(e) => eprintln!("  Warning: could not hash {}: {e}", file.display()),
+            Err(e) => output::warning(format!("Could not hash {}: {e}", file.display())),
         }
     }
 
@@ -140,11 +140,11 @@ pub fn run(
             (to_embed, diff.unchanged_files)
         };
 
-    eprintln!(
+    output::dim(format!(
         "Files to embed: {} new/changed, {} unchanged",
         files_to_embed.len(),
         unchanged_paths.len()
-    );
+    ));
 
     // --- 7. Load cached vectors for unchanged files ---
     let cached_vectors: HashMap<String, Vec<f32>> = if unchanged_paths.is_empty() {
@@ -153,7 +153,7 @@ pub fn run(
         match SearchIndex::load(state_dir) {
             Ok(existing_index) => existing_index.cached_vectors(),
             Err(_) => {
-                eprintln!("  Note: no existing index found; all files will be re-embedded");
+                output::dim("  No existing index found; all files will be re-embedded");
                 HashMap::new()
             }
         }
@@ -198,7 +198,7 @@ pub fn run(
                         files_reused += 1;
                     }
                     Err(e) => {
-                        eprintln!("  Warning: could not read {rel_path}: {e}");
+                        output::warning(format!("Could not read {rel_path}: {e}"));
                     }
                 }
             }
@@ -228,7 +228,7 @@ pub fn run(
         // Size check
         if let Ok(meta) = std::fs::metadata(&full_path) {
             if meta.len() > 1_000_000 {
-                eprintln!("  Note: large file ({}): {}", meta.len(), rel_path);
+                output::dim(format!("  Large file ({}): {}", meta.len(), rel_path));
             }
         }
 
@@ -236,12 +236,12 @@ pub fn run(
         let content = match std::fs::read_to_string(&full_path) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("  Warning: skipping {rel_path} (read error: {e})");
+                output::warning(format!("Skipping {rel_path} (read error: {e})"));
                 continue;
             }
         };
 
-        eprint!("  [{}/{}] {} ", i + 1, total_to_embed, rel_path);
+        output::progress(format!("  [{}/{}] {} ", i + 1, total_to_embed, rel_path));
 
         let chunks = chunker::chunk_document(rel_path, &content);
         if chunks.is_empty() {
@@ -297,12 +297,12 @@ pub fn run(
 
     // --- 10. Build fresh HNSW index from ALL entries (cached + new) ---
     eprintln!();
-    eprintln!(
+    output::dim(format!(
         "Building HNSW index: {} total chunks ({} reused, {} new)…",
         all_entries.len(),
         chunks_reused,
         chunks_embedded
-    );
+    ));
     let index = SearchIndex::build(all_entries, all_vectors)?;
     index.save(state_dir)?;
 
@@ -340,21 +340,27 @@ pub fn run(
     reg.save(state_dir)?;
 
     // --- 12. Print summary ---
-    println!();
-    println!(
+    output::blank();
+    output::success(format!(
         "Index complete: {} files processed ({} embedded, {} reused from cache), {} chunks total.",
         files_embedded + files_reused,
         files_embedded,
         files_reused,
         chunks_embedded + chunks_reused
-    );
-    println!("Index saved to: {}", state_dir.join("index.bin").display());
-    println!(
+    ));
+    output::plain(format!(
+        "Index saved to: {}",
+        state_dir.join("index.bin").display()
+    ));
+    output::plain(format!(
         "Registry saved to: {}",
         state_dir.join("registry.json").display()
-    );
+    ));
     if !orphaned.is_empty() {
-        println!("Cleaned {} orphaned external entries.", orphaned.len());
+        output::dim(format!(
+            "Cleaned {} orphaned external entries.",
+            orphaned.len()
+        ));
     }
 
     Ok(())
