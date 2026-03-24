@@ -264,6 +264,10 @@ pub enum SessionAction {
         /// Print the raw template and exit
         #[arg(long)]
         show_template: bool,
+        #[arg(long)]
+        ticket: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },

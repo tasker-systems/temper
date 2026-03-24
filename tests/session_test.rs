@@ -11,6 +11,8 @@ fn test_session_save_creates_note() {
         Some("Test Session"),
         Some("myapp"),
         None,
+        None,
+        None,
         "text",
     );
     assert!(result.is_ok());
@@ -27,16 +29,32 @@ fn test_session_save_idempotent_without_stdin() {
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
-    temper_cli::commands::session::save(&config, Some("Test"), Some("myapp"), None, "text")
-        .unwrap();
+    temper_cli::commands::session::save(
+        &config,
+        Some("Test"),
+        Some("myapp"),
+        None,
+        None,
+        None,
+        "text",
+    )
+    .unwrap();
 
     let session_dir = dir.path().join("sessions/myapp");
     let entries: Vec<_> = std::fs::read_dir(&session_dir).unwrap().collect();
     let path = entries[0].as_ref().unwrap().path();
     let before = std::fs::read_to_string(&path).unwrap();
 
-    temper_cli::commands::session::save(&config, Some("Test"), Some("myapp"), None, "text")
-        .unwrap();
+    temper_cli::commands::session::save(
+        &config,
+        Some("Test"),
+        Some("myapp"),
+        None,
+        None,
+        None,
+        "text",
+    )
+    .unwrap();
     let after = std::fs::read_to_string(&path).unwrap();
     assert_eq!(before, after);
 }
@@ -47,8 +65,16 @@ fn test_session_save_replaces_body_with_stdin() {
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
-    temper_cli::commands::session::save(&config, Some("My Session"), Some("proj"), None, "text")
-        .unwrap();
+    temper_cli::commands::session::save(
+        &config,
+        Some("My Session"),
+        Some("proj"),
+        None,
+        None,
+        None,
+        "text",
+    )
+    .unwrap();
 
     let session_dir = dir.path().join("sessions/proj");
     let entries: Vec<_> = std::fs::read_dir(&session_dir).unwrap().collect();
@@ -59,6 +85,8 @@ fn test_session_save_replaces_body_with_stdin() {
         Some("My Session"),
         Some("proj"),
         Some("New body content here."),
+        None,
+        None,
         "text",
     )
     .unwrap();
@@ -75,10 +103,26 @@ fn test_session_list_returns_ok() {
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
-    temper_cli::commands::session::save(&config, Some("Alpha"), Some("proj"), None, "text")
-        .unwrap();
-    temper_cli::commands::session::save(&config, Some("Beta"), Some("other"), None, "text")
-        .unwrap();
+    temper_cli::commands::session::save(
+        &config,
+        Some("Alpha"),
+        Some("proj"),
+        None,
+        None,
+        None,
+        "text",
+    )
+    .unwrap();
+    temper_cli::commands::session::save(
+        &config,
+        Some("Beta"),
+        Some("other"),
+        None,
+        None,
+        None,
+        "text",
+    )
+    .unwrap();
 
     // list all
     let result = temper_cli::commands::session::list(&config, None, "text");

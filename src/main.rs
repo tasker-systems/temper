@@ -121,6 +121,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     project,
                     stdin: _,
                     show_template,
+                    ticket,
+                    state,
                     format,
                 } => {
                     if show_template {
@@ -134,6 +136,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         title.as_deref(),
                         project.as_deref(),
                         stdin_content.as_deref(),
+                        ticket.as_deref(),
+                        state.as_deref(),
                         &format,
                     )
                 }
