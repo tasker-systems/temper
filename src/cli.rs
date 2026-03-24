@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand};
 #[derive(Parser)]
 #[command(
     name = "temper",
-    about = "Developer workflow tool for agent-assisted development"
+    about = "Developer workflow tool for agent-assisted development",
+    styles = temper_cli::output::clap_styles()
 )]
 pub struct Cli {
     /// Path to vault (overrides TEMPER_VAULT and auto-detection)

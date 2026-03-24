@@ -16,7 +16,7 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
-        eprintln!("temper: {e}");
+        temper_cli::output::error(format!("temper: {e}"));
         std::process::exit(1);
     }
 }
