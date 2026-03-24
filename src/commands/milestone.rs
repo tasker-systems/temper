@@ -6,6 +6,7 @@ use serde::Deserialize;
 use crate::config::Config;
 use crate::discovery;
 use crate::error::{Result, TemperError};
+use crate::output;
 use crate::vault;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -156,7 +157,7 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    eprintln!("Created milestone: {slug}");
+    output::success(format!("Created milestone: {slug}"));
     Ok(slug)
 }
 
@@ -203,13 +204,13 @@ fn count_tickets_by_stage(
 pub fn list(config: &Config, project: &str) -> Result<()> {
     let milestones = load_milestones(config, Some(project))?;
     if milestones.is_empty() {
-        println!("No milestones for project: {project}");
+        output::hint(format!("No milestones for project: {project}"));
         return Ok(());
     }
     let ticket_counts = count_tickets_by_stage(config, project)?;
     let project_title = project.chars().next().unwrap().to_uppercase().to_string() + &project[1..];
-    println!("{project_title} Roadmap");
-    println!("{}", "─".repeat(14));
+    output::header(format!("{project_title} Roadmap"));
+    output::plain("─".repeat(14));
     // Partition: non-zero seq first (sorted by seq), then zero-seq (maintenance) pinned to bottom
     let (maintenance, regular): (Vec<_>, Vec<_>) = milestones.iter().partition(|m| m.seq == 0);
     let ordered: Vec<_> = regular.into_iter().chain(maintenance).collect();
@@ -239,10 +240,10 @@ pub fn list(config: &Config, project: &str) -> Result<()> {
         } else {
             format!("{:>3}", ms.seq)
         };
-        println!(
+        output::plain(format!(
             " {seq_display}  {:<24} [{:<9}]   {counts_str}",
             ms.title, ms.status
-        );
+        ));
     }
     Ok(())
 }
@@ -277,6 +278,6 @@ pub fn update(config: &Config, slug: &str, status: &str) -> Result<()> {
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    eprintln!("Updated milestone {slug} → {status}");
+    output::success(format!("Updated milestone: {slug} → {status}"));
     Ok(())
 }
