@@ -108,3 +108,21 @@ fn test_normalize_moves_misplaced_files() {
         "file should be moved back to correct project dir"
     );
 }
+
+#[test]
+fn test_normalize_reports_unscoped_tickets() {
+    let dir = TempDir::new().unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+
+    let ms_slug =
+        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    temper_cli::commands::ticket::create(&config, "myapp", "Unscoped", Some(&ms_slug), None)
+        .unwrap();
+
+    let summary = temper_cli::commands::normalize::run(&config, None, true, false).unwrap();
+    assert!(
+        summary.unscoped_tickets > 0,
+        "should report unscoped tickets"
+    );
+}
