@@ -41,7 +41,7 @@ impl BreadcrumbBar {
             }
 
             let style = segment_style(i, last_idx);
-            spans.push(Span::styled(segment.clone(), style));
+            spans.push(Span::styled(format!(" {} ", segment), style));
         }
 
         Line::from(spans)
@@ -55,19 +55,26 @@ impl BreadcrumbBar {
 fn segment_style(idx: usize, last_idx: usize) -> Style {
     // Single segment — always root style
     if last_idx == 0 {
-        return Style::default().fg(Color::DarkGray);
+        return Style::default()
+            .fg(Color::DarkGray)
+            .bg(Color::Rgb(30, 32, 64));
     }
 
     // Last segment of a multi-segment bar — always active (Yellow+Bold)
     if idx == last_idx {
-        return Style::default().fg(Color::Yellow).bold();
+        return Style::default()
+            .fg(Color::Yellow)
+            .bg(Color::Rgb(42, 42, 106))
+            .bold();
     }
 
     // Intermediate segments: depth 0 → DarkGray, depth 1+ → Gray
     if idx == 0 {
-        Style::default().fg(Color::DarkGray)
+        Style::default()
+            .fg(Color::DarkGray)
+            .bg(Color::Rgb(30, 32, 64))
     } else {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(Color::Gray).bg(Color::Rgb(37, 37, 80))
     }
 }
 
@@ -87,7 +94,7 @@ mod tests {
             "expected exactly 1 span for single segment"
         );
         let span = &line.spans[0];
-        assert_eq!(span.content, "All");
+        assert_eq!(span.content, " All ");
         assert_eq!(
             span.style.fg,
             Some(Color::DarkGray),
@@ -116,9 +123,9 @@ mod tests {
             "span[3] should be a › chevron"
         );
         // Verify segment label positions
-        assert_eq!(line.spans[0].content, "All");
-        assert_eq!(line.spans[2].content, "temper");
-        assert_eq!(line.spans[4].content, "viz");
+        assert_eq!(line.spans[0].content, " All ");
+        assert_eq!(line.spans[2].content, " temper ");
+        assert_eq!(line.spans[4].content, " viz ");
     }
 
     #[test]
@@ -136,5 +143,21 @@ mod tests {
             last_span.style.add_modifier.contains(Modifier::BOLD),
             "last segment should have BOLD modifier"
         );
+    }
+
+    #[test]
+    fn segments_have_depth_based_backgrounds() {
+        let bar = BreadcrumbBar::new(&["All", "temper", "viz"]);
+        let line = bar.to_line();
+        assert_eq!(line.spans[0].style.bg, Some(Color::Rgb(30, 32, 64)));
+        assert_eq!(line.spans[2].style.bg, Some(Color::Rgb(37, 37, 80)));
+        assert_eq!(line.spans[4].style.bg, Some(Color::Rgb(42, 42, 106)));
+    }
+
+    #[test]
+    fn single_segment_has_root_background() {
+        let bar = BreadcrumbBar::new(&["All"]);
+        let line = bar.to_line();
+        assert_eq!(line.spans[0].style.bg, Some(Color::Rgb(30, 32, 64)));
     }
 }

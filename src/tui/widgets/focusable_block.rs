@@ -21,12 +21,12 @@ pub enum FocusStyle {
 ///
 /// # Border colors
 ///
-/// | State                  | Border Color |
-/// |------------------------|-------------|
-/// | Focused + Input        | Yellow      |
-/// | Focused + Content      | Cyan        |
-/// | DisplayOnly (any)      | DarkGray    |
-/// | Unfocused (any)        | DarkGray    |
+/// | State                  | Border Color        |
+/// |------------------------|---------------------|
+/// | Focused + Input        | Yellow              |
+/// | Focused + Content      | Cyan                |
+/// | DisplayOnly (any)      | DarkGray            |
+/// | Unfocused interactive  | Rgb(60, 60, 80)     |
 #[derive(Debug, Clone)]
 pub struct FocusableBlock {
     style: FocusStyle,
@@ -61,7 +61,9 @@ impl FocusableBlock {
         let border_color = match (&self.style, self.focused) {
             (FocusStyle::Input, true) => Color::Yellow,
             (FocusStyle::Content, true) => Color::Cyan,
-            _ => Color::DarkGray,
+            (FocusStyle::DisplayOnly, _) => Color::DarkGray,
+            // Unfocused interactive — visible but dim
+            (_, false) => Color::Rgb(60, 60, 80),
         };
 
         let block = Block::default()
@@ -108,14 +110,14 @@ mod tests {
     }
 
     #[test]
-    fn unfocused_interactive_has_dark_gray_border() {
+    fn unfocused_interactive_has_dim_border() {
         let fb = FocusableBlock::new(FocusStyle::Content).focused(false);
         let block = fb.to_block();
         let buf = render_block(block);
         assert_eq!(
             border_fg_at(&buf, 0, 0),
-            Color::DarkGray,
-            "unfocused Content block should have DarkGray border"
+            Color::Rgb(60, 60, 80),
+            "unfocused Content block should have subtle indigo border"
         );
     }
 
@@ -179,6 +181,16 @@ mod tests {
             Color::DarkGray,
             "DisplayOnly focused block should still have DarkGray border"
         );
+    }
+
+    #[test]
+    fn unfocused_input_has_visible_border() {
+        let fb = FocusableBlock::new(FocusStyle::Input).focused(false);
+        let block = fb.to_block();
+        let buf = render_block(block);
+        let fg = border_fg_at(&buf, 0, 0);
+        assert_ne!(fg, Color::DarkGray);
+        assert_eq!(fg, Color::Rgb(60, 60, 80));
     }
 
     #[test]
