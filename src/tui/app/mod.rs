@@ -821,9 +821,10 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
     let counts =
         crate::actions::milestone::count_tickets_by_stage(config, project).unwrap_or_default();
 
-    // "All Tickets" synthetic entry — every ticket across the entire vault
+    // "All Tickets" synthetic entry — all tickets within this project
     let all_tickets = {
-        let all = crate::actions::ticket::load_tickets(config, None, None).unwrap_or_default();
+        let all =
+            crate::actions::ticket::load_tickets(config, Some(project), None).unwrap_or_default();
         let mut backlog = 0usize;
         let mut in_progress = 0usize;
         let mut done = 0usize;
@@ -838,7 +839,7 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
             info: MilestoneInfo {
                 title: "(All Tickets)".into(),
                 slug: "__all__".into(),
-                project: "__all__".into(),
+                project: project.to_string(),
                 seq: 0,
                 status: "active".into(),
             },
