@@ -247,26 +247,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         .or_else(|| resolved.map(|r| r.name.as_str()));
                     temper_cli::commands::ticket::show(&config, &slug, project, &format)
                 }
-                TicketAction::Board {
-                    project,
-                    milestone,
-                    format,
-                } => {
-                    let project = project
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()))
-                        .ok_or_else(|| {
-                            temper_cli::error::TemperError::Project(
-                                "no project specified and could not infer from CWD".into(),
-                            )
-                        })?;
-                    temper_cli::commands::ticket::board(
-                        &config,
-                        project,
-                        milestone.as_deref(),
-                        &format,
-                    )
-                }
             }
         }
         Commands::Project { action } => match action {
@@ -383,6 +363,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     )
                 }
             }
+        }
+        Commands::Tui => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::tui::run(&config)?;
+            Ok(())
         }
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
