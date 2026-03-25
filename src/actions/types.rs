@@ -84,12 +84,12 @@ pub struct ContextResults {
     pub hops: Vec<ContextHop>,
 }
 
-/// Statistics about the vault index.
+/// Statistics about a completed index run.
 #[derive(Debug, Clone, Serialize)]
 pub struct IndexStats {
-    pub total_documents: usize,
-    pub total_chunks: usize,
-    pub indexed_documents: usize,
+    pub documents: usize,
+    pub chunks: usize,
+    pub duration_secs: f64,
 }
 
 /// Summary of a normalize run.
