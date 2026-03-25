@@ -5,7 +5,7 @@ use crate::tui::app::Screen;
 
 pub fn render_keyhints(frame: &mut Frame, area: Rect, screen: &Screen) {
     let hints = match screen {
-        Screen::Board(_) => {
+        Screen::Projects(_) => {
             "j/k move · h/l columns · Enter open · e edit · s stage · S scope · : cmd"
         }
         Screen::Search(state) => {

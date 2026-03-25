@@ -1,3 +1,6 @@
+pub mod state;
+pub use state::*;
+
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tokio::sync::mpsc;
@@ -11,172 +14,8 @@ use super::views::popup::{render_popup, scope_options, stage_options};
 use super::views::viewer;
 use super::widgets::command_line::render_command_line;
 use super::widgets::keyhints::render_keyhints;
-use crate::actions::types::{
-    IndexStats, MilestoneInfo, NormalizeSummary, SearchHit, TicketInfo, VaultDocument,
-};
+use crate::actions::types::{MilestoneInfo, VaultDocument};
 use crate::config::Config;
-
-// ---------------------------------------------------------------------------
-// Enums & structs
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Board,
-    Search,
-    Context,
-    Maintain,
-}
-
-#[derive(Debug, Clone)]
-pub enum BoardLevel {
-    Projects {
-        selected: usize,
-        projects: Vec<String>,
-    },
-    Milestones {
-        project: String,
-        selected: usize,
-        milestones: Vec<MilestoneWithCounts>,
-    },
-    Swimlanes {
-        project: String,
-        milestone: String,
-        /// Slugs used for matching query actor responses (may differ from display names)
-        load_project: String,
-        load_milestone: String,
-        column: usize,
-        row: usize,
-        columns: [Vec<TicketInfo>; 3],
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct MilestoneWithCounts {
-    pub info: MilestoneInfo,
-    pub backlog: usize,
-    pub in_progress: usize,
-    pub done: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct BoardState {
-    pub level: BoardLevel,
-}
-
-#[derive(Debug, Clone)]
-pub struct SearchState {
-    pub query: String,
-    pub cursor_pos: usize,
-    pub results: Vec<SearchHit>,
-    pub selected: usize,
-    pub input_focused: bool,
-    pub loading: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContextNeighbor {
-    pub label: String,
-    pub file_path: String,
-    pub note_type: String,
-    pub score: f32,
-    pub depth: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContextState {
-    pub center_stack: Vec<String>,
-    pub current_center: String,
-    pub depth: usize,
-    pub neighbors: Vec<ContextNeighbor>,
-    pub selected: usize,
-    pub loading: bool,
-    pub input_active: bool,
-    pub input_text: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct MaintainState {
-    pub index_stats: Option<IndexStats>,
-    pub last_normalize: Option<NormalizeSummary>,
-    pub progress_message: Option<String>,
-    pub running: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ViewerState {
-    pub document: VaultDocument,
-    pub scroll_offset: usize,
-    pub source_label: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum Screen {
-    Board(BoardState),
-    Search(SearchState),
-    Context(ContextState),
-    Maintain(MaintainState),
-    Viewer(ViewerState),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PopupState {
-    None,
-    StagePicker {
-        slug: String,
-        project: String,
-        selected: usize,
-    },
-    ScopePicker {
-        slug: String,
-        project: String,
-        selected: usize,
-    },
-}
-
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppAction {
-    Quit,
-    SwitchTab(Tab),
-    Enter,
-    Escape,
-    MoveUp,
-    MoveDown,
-    MoveLeft,
-    MoveRight,
-    EnterCommandMode,
-    SubmitCommand(String),
-    CommandInput(char),
-    CommandBackspace,
-    ToggleHelp,
-    // Search-specific
-    SearchInput(char),
-    SearchBackspace,
-    SearchFocusResults,
-    SearchRefocusInput,
-    // Context-specific
-    ContextActivateInput,
-    ContextInput(char),
-    ContextBackspace,
-    ContextSubmitInput,
-    ContextRecenter,
-    ContextDepthUp,
-    ContextDepthDown,
-    // Search-to-context
-    OpenContextForSelected,
-    // Viewer
-    OpenEditor,
-    // Ticket mutation popups
-    OpenStagePicker,
-    OpenScopePicker,
-    // Maintain actions
-    IndexRebuild,
-    NormalizeRun,
-}
 
 // ---------------------------------------------------------------------------
 // App
@@ -237,7 +76,7 @@ impl App {
             },
         };
         Self {
-            stack: vec![Screen::Board(board)],
+            stack: vec![Screen::Projects(board)],
             command_mode: false,
             command_input: String::new(),
             should_quit: false,
@@ -282,7 +121,7 @@ impl App {
         let root_screen = if let Some(proj) = project {
             // Load milestones synchronously for the resolved project
             let milestones = load_milestones_with_counts(config, &proj.name);
-            Screen::Board(BoardState {
+            Screen::Projects(BoardState {
                 level: BoardLevel::Milestones {
                     project: proj.name.clone(),
                     selected: 0,
@@ -290,7 +129,7 @@ impl App {
                 },
             })
         } else {
-            Screen::Board(BoardState {
+            Screen::Projects(BoardState {
                 level: BoardLevel::Projects {
                     selected: 0,
                     projects: project_names.clone(),
@@ -317,11 +156,11 @@ impl App {
 
     pub fn active_tab(&self) -> Tab {
         match &self.stack[0] {
-            Screen::Board(_) => Tab::Board,
+            Screen::Projects(_) => Tab::Projects,
             Screen::Search(_) => Tab::Search,
             Screen::Context(_) => Tab::Context,
             Screen::Maintain(_) => Tab::Maintain,
-            Screen::Viewer(_) => Tab::Board, // viewer is always pushed atop something
+            Screen::Viewer(_) => Tab::Projects, // viewer is always pushed atop something
         }
     }
 
@@ -775,7 +614,7 @@ impl App {
         // Tab bar — custom Line with Spans for active/inactive styling
         let active_tab = self.active_tab();
         let tab_defs: &[(&str, Tab)] = &[
-            ("Board", Tab::Board),
+            ("Projects", Tab::Projects),
             ("Search", Tab::Search),
             ("Context", Tab::Context),
             ("Maintain", Tab::Maintain),
@@ -804,7 +643,7 @@ impl App {
 
         // Content area
         match self.current_screen() {
-            Screen::Board(board_state) => {
+            Screen::Projects(board_state) => {
                 board::render_board(frame, chunks[1], board_state);
             }
             Screen::Search(search_state) => {
@@ -932,7 +771,7 @@ impl App {
         done: Vec<crate::actions::types::TicketInfo>,
     ) {
         for screen in &mut self.stack {
-            if let Screen::Board(board) = screen {
+            if let Screen::Projects(board) = screen {
                 if let BoardLevel::Swimlanes {
                     load_project: ref lp,
                     load_milestone: ref lm,
@@ -961,7 +800,7 @@ impl App {
     /// Works for both Swimlanes and Viewer screens.
     fn selected_ticket_identity(&self) -> Option<(String, String)> {
         match self.current_screen() {
-            Screen::Board(board) => {
+            Screen::Projects(board) => {
                 if let BoardLevel::Swimlanes {
                     project,
                     columns,
@@ -983,7 +822,7 @@ impl App {
     /// Return the milestone slug for the current swimlane view, if any.
     fn current_swimlane_milestone(&self) -> Option<(String, String)> {
         match self.current_screen() {
-            Screen::Board(board) => {
+            Screen::Projects(board) => {
                 if let BoardLevel::Swimlanes {
                     project, milestone, ..
                 } = &board.level
@@ -1072,7 +911,7 @@ impl App {
     fn handle_enter(&mut self) {
         let screen = self.current_screen().clone();
         match screen {
-            Screen::Board(ref board) => match &board.level {
+            Screen::Projects(ref board) => match &board.level {
                 BoardLevel::Projects { selected, projects } => {
                     if let Some(proj) = projects.get(*selected) {
                         let milestones = self
@@ -1080,7 +919,7 @@ impl App {
                             .as_ref()
                             .map(|c| load_milestones_with_counts(c, proj))
                             .unwrap_or_default();
-                        let next = Screen::Board(BoardState {
+                        let next = Screen::Projects(BoardState {
                             level: BoardLevel::Milestones {
                                 project: proj.clone(),
                                 selected: 0,
@@ -1106,7 +945,7 @@ impl App {
                         } else {
                             project.clone()
                         };
-                        let next = Screen::Board(BoardState {
+                        let next = Screen::Projects(BoardState {
                             level: BoardLevel::Swimlanes {
                                 project: display_project,
                                 milestone: ms_title,
@@ -1199,7 +1038,7 @@ impl App {
 
     fn move_selection(&mut self, dir: Direction) {
         match self.current_screen_mut() {
-            Screen::Board(board) => match &mut board.level {
+            Screen::Projects(board) => match &mut board.level {
                 BoardLevel::Projects { selected, projects } => match dir {
                     Direction::Up => *selected = selected.saturating_sub(1),
                     Direction::Down => {
@@ -1276,11 +1115,11 @@ impl App {
 
     fn make_root_screen(&self, tab: Tab) -> Screen {
         match tab {
-            Tab::Board => {
+            Tab::Projects => {
                 // If we have an inferred project, load its milestones
                 if let (Some(proj), Some(config)) = (&self.inferred_project, &self.config) {
                     let milestones = load_milestones_with_counts(config, proj);
-                    Screen::Board(BoardState {
+                    Screen::Projects(BoardState {
                         level: BoardLevel::Milestones {
                             project: proj.clone(),
                             selected: 0,
@@ -1288,7 +1127,7 @@ impl App {
                         },
                     })
                 } else {
-                    Screen::Board(BoardState {
+                    Screen::Projects(BoardState {
                         level: BoardLevel::Projects {
                             selected: 0,
                             projects: self.project_names.clone(),

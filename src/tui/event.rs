@@ -101,7 +101,7 @@ fn map_search_results(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('c') => Some(AppAction::OpenContextForSelected),
         KeyCode::Char('q') => Some(AppAction::Quit),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
-        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Board)),
+        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
         KeyCode::Char('2') => Some(AppAction::SwitchTab(Tab::Search)),
         KeyCode::Char('3') => Some(AppAction::SwitchTab(Tab::Context)),
         KeyCode::Char('4') => Some(AppAction::SwitchTab(Tab::Maintain)),
@@ -132,7 +132,7 @@ fn map_context_results(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('-') => Some(AppAction::ContextDepthDown),
         KeyCode::Char('q') => Some(AppAction::Quit),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
-        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Board)),
+        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
         KeyCode::Char('2') => Some(AppAction::SwitchTab(Tab::Search)),
         KeyCode::Char('3') => Some(AppAction::SwitchTab(Tab::Context)),
         KeyCode::Char('4') => Some(AppAction::SwitchTab(Tab::Maintain)),
@@ -172,7 +172,7 @@ fn map_normal(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('/') => Some(AppAction::SwitchTab(Tab::Search)),
 
         // Tab shortcuts (1-based)
-        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Board)),
+        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
         KeyCode::Char('2') => Some(AppAction::SwitchTab(Tab::Search)),
         KeyCode::Char('3') => Some(AppAction::SwitchTab(Tab::Context)),
         KeyCode::Char('4') => Some(AppAction::SwitchTab(Tab::Maintain)),
@@ -199,7 +199,7 @@ pub fn parse_command(input: &str) -> Option<AppAction> {
     let trimmed = input.trim();
     match trimmed {
         "q" | "quit" => Some(AppAction::Quit),
-        "b" | "board" => Some(AppAction::SwitchTab(Tab::Board)),
+        "p" | "projects" | "b" | "board" => Some(AppAction::SwitchTab(Tab::Projects)),
         "s" | "search" => Some(AppAction::SwitchTab(Tab::Search)),
         "c" | "context" => Some(AppAction::SwitchTab(Tab::Context)),
         "m" | "maintain" => Some(AppAction::SwitchTab(Tab::Maintain)),

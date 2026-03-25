@@ -4,7 +4,7 @@ use temper_cli::tui::event::parse_command;
 #[test]
 fn test_tab_switch_replaces_stack() {
     let mut app = App::new_for_test();
-    assert_eq!(app.active_tab(), Tab::Board);
+    assert_eq!(app.active_tab(), Tab::Projects);
     assert_eq!(app.stack_depth(), 1);
 
     app.dispatch(AppAction::SwitchTab(Tab::Search));
@@ -19,8 +19,8 @@ fn test_tab_switch_replaces_stack() {
     assert_eq!(app.active_tab(), Tab::Maintain);
     assert_eq!(app.stack_depth(), 1);
 
-    app.dispatch(AppAction::SwitchTab(Tab::Board));
-    assert_eq!(app.active_tab(), Tab::Board);
+    app.dispatch(AppAction::SwitchTab(Tab::Projects));
+    assert_eq!(app.active_tab(), Tab::Projects);
     assert_eq!(app.stack_depth(), 1);
 }
 
@@ -52,7 +52,10 @@ fn test_esc_on_root_does_nothing() {
 fn test_command_mode_parsing() {
     // Single-letter abbreviations
     assert_eq!(parse_command("q"), Some(AppAction::Quit));
-    assert_eq!(parse_command("b"), Some(AppAction::SwitchTab(Tab::Board)));
+    assert_eq!(
+        parse_command("b"),
+        Some(AppAction::SwitchTab(Tab::Projects))
+    );
     assert_eq!(parse_command("s"), Some(AppAction::SwitchTab(Tab::Search)));
     assert_eq!(parse_command("c"), Some(AppAction::SwitchTab(Tab::Context)));
     assert_eq!(
@@ -60,11 +63,21 @@ fn test_command_mode_parsing() {
         Some(AppAction::SwitchTab(Tab::Maintain))
     );
 
+    // Projects aliases
+    assert_eq!(
+        parse_command("p"),
+        Some(AppAction::SwitchTab(Tab::Projects))
+    );
+    assert_eq!(
+        parse_command("projects"),
+        Some(AppAction::SwitchTab(Tab::Projects))
+    );
+
     // Full words
     assert_eq!(parse_command("quit"), Some(AppAction::Quit));
     assert_eq!(
         parse_command("board"),
-        Some(AppAction::SwitchTab(Tab::Board))
+        Some(AppAction::SwitchTab(Tab::Projects))
     );
     assert_eq!(
         parse_command("search"),
