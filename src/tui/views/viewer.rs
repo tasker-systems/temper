@@ -1,8 +1,12 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::tui::app::ViewerState;
+use crate::tui::app::{FocusRegion, ViewerState};
+use crate::tui::widgets::breadcrumb_bar::BreadcrumbBar;
+use crate::tui::widgets::focusable_block::{FocusStyle, FocusableBlock};
 use crate::tui::widgets::frontmatter::render_frontmatter;
+use crate::tui::widgets::markdown_renderer::render_markdown;
+use crate::tui::widgets::section_separator::SectionSeparator;
 
 /// Compute the height (in rows) the frontmatter block should occupy.
 /// Counts non-null, non-empty fields plus 2 for the border.
@@ -27,53 +31,50 @@ fn frontmatter_height(fm: &serde_yaml::Value) -> u16 {
 }
 
 /// Render the full-screen document viewer.
-pub fn render_viewer(frame: &mut Frame, area: Rect, state: &ViewerState) {
+pub fn render_viewer(frame: &mut Frame, area: Rect, state: &ViewerState, focus: FocusRegion) {
     let fm_height = frontmatter_height(&state.document.frontmatter);
 
-    // Layout: breadcrumb (1 line) | frontmatter | body (fills rest)
+    // Layout: breadcrumb (1 line) | frontmatter | separator (1 line) | body (fills rest)
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),         // breadcrumb
             Constraint::Length(fm_height), // frontmatter
+            Constraint::Length(1),         // separator
             Constraint::Min(1),            // body
         ])
         .split(area);
 
-    // Breadcrumb
-    let crumb = Paragraph::new(Line::from(vec![
-        Span::styled(
-            "← ",
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        ),
-        Span::styled(
-            state.source_label.as_str(),
-            Style::default()
-                .fg(Color::DarkGray)
-                .add_modifier(Modifier::DIM),
-        ),
-        Span::raw("  "),
-        Span::styled(
-            state.document.title.as_str(),
-            Style::default().fg(Color::White),
-        ),
-    ]));
-    frame.render_widget(crumb, chunks[0]);
+    // Breadcrumb bar
+    let segs: Vec<&str> = state
+        .breadcrumb_segments
+        .iter()
+        .map(|s| s.as_str())
+        .collect();
+    let crumb_line = BreadcrumbBar::new(&segs).to_line();
+    frame.render_widget(Paragraph::new(crumb_line), chunks[0]);
 
-    // Frontmatter
+    // Frontmatter — DisplayOnly aesthetic (dim DarkGray border, not a focus target).
+    // render_frontmatter draws its own bordered Block internally with DarkGray styling,
+    // which matches the DisplayOnly convention, so we render it directly.
     render_frontmatter(frame, chunks[1], &state.document.frontmatter);
 
-    // Body — scrollable paragraph
-    let body_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+    // Section separator
+    let sep = SectionSeparator::new(area.width);
+    let sep_line = sep.to_line();
+    frame.render_widget(Paragraph::new(sep_line), chunks[2]);
 
-    let body = Paragraph::new(state.document.body.as_str())
+    // Body — scrollable paragraph with markdown rendering
+    let body_focusable =
+        FocusableBlock::new(FocusStyle::Content).focused(focus == FocusRegion::Primary);
+    let body_block = body_focusable.to_block();
+
+    let md_lines = render_markdown(&state.document.body);
+    let body = Paragraph::new(md_lines)
         .block(body_block)
         .wrap(Wrap { trim: false })
+        .style(Style::default().bg(Color::Rgb(22, 22, 42)))
         .scroll((state.scroll_offset as u16, 0));
 
-    frame.render_widget(body, chunks[2]);
+    frame.render_widget(body, chunks[3]);
 }

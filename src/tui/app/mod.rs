@@ -9,9 +9,9 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tokio::sync::mpsc;
 
 use super::query_actor::{QueryRequest, QueryResult};
-use super::tabs::board;
 use super::tabs::context;
 use super::tabs::maintain;
+use super::tabs::projects;
 use super::tabs::search;
 use super::views::popup::{render_popup, scope_options, stage_options};
 use super::views::viewer;
@@ -656,7 +656,7 @@ impl App {
         // Content area
         match self.current_screen() {
             Screen::Projects(board_state) => {
-                board::render_board(frame, chunks[1], board_state);
+                projects::render_projects_tab(frame, chunks[1], board_state, self.focus);
             }
             Screen::Search(search_state) => {
                 search::render_search(frame, chunks[1], search_state, self.focus);
@@ -665,7 +665,7 @@ impl App {
                 context::render_context(frame, chunks[1], context_state, self.focus);
             }
             Screen::Viewer(viewer_state) => {
-                viewer::render_viewer(frame, chunks[1], viewer_state);
+                viewer::render_viewer(frame, chunks[1], viewer_state, self.focus);
             }
             Screen::Maintain(s) => {
                 maintain::render_maintain(frame, chunks[1], s, self.focus);

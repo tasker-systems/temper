@@ -66,6 +66,7 @@ impl App {
                     column,
                     row,
                     project,
+                    milestone,
                     ..
                 } => {
                     if let Some(tickets) = columns.get(*column) {
@@ -79,12 +80,18 @@ impl App {
                                 if let Ok(doc) = crate::actions::vault::read_document(&ticket_path)
                                 {
                                     self.stack.push(Screen::Viewer(ViewerState {
-                                        document: doc,
+                                        document: doc.clone(),
                                         scroll_offset: 0,
                                         source_label: format!(
                                             "Board > {} > {}",
                                             project, ticket.title
                                         ),
+                                        breadcrumb_segments: vec![
+                                            "All".into(),
+                                            project.clone(),
+                                            milestone.clone(),
+                                            doc.title.clone(),
+                                        ],
                                     }));
                                 }
                             }
@@ -103,9 +110,10 @@ impl App {
                             body: hit.content.clone(),
                         };
                         self.stack.push(Screen::Viewer(ViewerState {
-                            document: doc,
+                            document: doc.clone(),
                             scroll_offset: 0,
                             source_label: "Search".into(),
+                            breadcrumb_segments: vec!["Search".into(), doc.title.clone()],
                         }));
                     }
                 }
@@ -120,10 +128,16 @@ impl App {
                             frontmatter: serde_yaml::Value::Null,
                             body: String::new(),
                         };
+                        let center_topic = s.current_center.clone();
                         self.stack.push(Screen::Viewer(ViewerState {
-                            document: doc,
+                            document: doc.clone(),
                             scroll_offset: 0,
                             source_label: "Context".into(),
+                            breadcrumb_segments: vec![
+                                "Context".into(),
+                                center_topic,
+                                doc.title.clone(),
+                            ],
                         }));
                     }
                 }

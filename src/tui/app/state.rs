@@ -102,6 +102,7 @@ pub struct ViewerState {
     pub document: VaultDocument,
     pub scroll_offset: usize,
     pub source_label: String,
+    pub breadcrumb_segments: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

@@ -1,20 +1,22 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph};
+use ratatui::widgets::{List, ListItem, Paragraph};
 
-use crate::tui::app::{BoardLevel, BoardState, MilestoneWithCounts};
+use crate::tui::app::{BoardLevel, BoardState, FocusRegion, MilestoneWithCounts};
+use crate::tui::widgets::breadcrumb_bar::BreadcrumbBar;
+use crate::tui::widgets::focusable_block::{FocusStyle, FocusableBlock};
 use crate::tui::widgets::swimlane::Swimlane;
 
-/// Render the board tab content into `area` based on the current board state.
-pub fn render_board(frame: &mut Frame, area: Rect, state: &BoardState) {
+/// Render the projects tab content into `area` based on the current board state.
+pub fn render_projects_tab(frame: &mut Frame, area: Rect, state: &BoardState, focus: FocusRegion) {
     match &state.level {
         BoardLevel::Projects {
             projects, selected, ..
-        } => render_projects(frame, area, projects, *selected),
+        } => render_projects(frame, area, projects, *selected, focus),
         BoardLevel::Milestones {
             project,
             milestones,
             selected,
-        } => render_milestones(frame, area, project, milestones, *selected),
+        } => render_milestones(frame, area, project, milestones, *selected, focus),
         BoardLevel::Swimlanes {
             project,
             milestone,
@@ -22,15 +24,33 @@ pub fn render_board(frame: &mut Frame, area: Rect, state: &BoardState) {
             column,
             row,
             ..
-        } => render_swimlanes(frame, area, project, milestone, columns, *column, *row),
+        } => render_swimlanes(
+            frame, area, project, milestone, columns, *column, *row, focus,
+        ),
     }
 }
 
-fn render_projects(frame: &mut Frame, area: Rect, projects: &[String], selected: usize) {
+fn render_projects(
+    frame: &mut Frame,
+    area: Rect,
+    projects: &[String],
+    selected: usize,
+    focus: FocusRegion,
+) {
+    // Layout: breadcrumb (1 line) + content
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(1)])
+        .split(area);
+
+    // Breadcrumb
+    let breadcrumb = Paragraph::new(BreadcrumbBar::new(&["All"]).to_line());
+    frame.render_widget(breadcrumb, chunks[0]);
+
     if projects.is_empty() {
         let msg =
             Paragraph::new("No projects configured").style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(msg, area);
+        frame.render_widget(msg, chunks[1]);
         return;
     }
 
@@ -48,8 +68,10 @@ fn render_projects(frame: &mut Frame, area: Rect, projects: &[String], selected:
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().title("Projects").borders(Borders::NONE));
-    frame.render_widget(list, area);
+    let fb = FocusableBlock::new(FocusStyle::Content).focused(focus != FocusRegion::TabBar);
+    let block = fb.to_block();
+    let list = List::new(items).block(block);
+    frame.render_widget(list, chunks[1]);
 }
 
 fn render_milestones(
@@ -58,6 +80,7 @@ fn render_milestones(
     project: &str,
     milestones: &[MilestoneWithCounts],
     selected: usize,
+    focus: FocusRegion,
 ) {
     // Layout: breadcrumb (1 line) + content
     let chunks = Layout::default()
@@ -66,11 +89,7 @@ fn render_milestones(
         .split(area);
 
     // Breadcrumb
-    let breadcrumb = Paragraph::new(Line::from(vec![
-        Span::styled("All", Style::default().fg(Color::DarkGray)),
-        Span::styled(" \u{203a} ", Style::default().fg(Color::DarkGray)),
-        Span::styled(project, Style::default().fg(Color::White)),
-    ]));
+    let breadcrumb = Paragraph::new(BreadcrumbBar::new(&["All", project]).to_line());
     frame.render_widget(breadcrumb, chunks[0]);
 
     if milestones.is_empty() {
@@ -97,7 +116,9 @@ fn render_milestones(
         })
         .collect();
 
-    let list = List::new(items).block(Block::default().borders(Borders::NONE));
+    let fb = FocusableBlock::new(FocusStyle::Content).focused(focus != FocusRegion::TabBar);
+    let block = fb.to_block();
+    let list = List::new(items).block(block);
     frame.render_widget(list, chunks[1]);
 }
 
@@ -119,6 +140,10 @@ fn format_milestone_counts(ms: &MilestoneWithCounts) -> String {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "swimlane render takes all view params"
+)]
 fn render_swimlanes(
     frame: &mut Frame,
     area: Rect,
@@ -127,6 +152,7 @@ fn render_swimlanes(
     columns: &[Vec<crate::actions::types::TicketInfo>; 3],
     active_column: usize,
     active_row: usize,
+    focus: FocusRegion,
 ) {
     // Layout: breadcrumb (1 line) + columns
     let chunks = Layout::default()
@@ -135,13 +161,7 @@ fn render_swimlanes(
         .split(area);
 
     // Breadcrumb
-    let breadcrumb = Paragraph::new(Line::from(vec![
-        Span::styled("All", Style::default().fg(Color::DarkGray)),
-        Span::styled(" \u{203a} ", Style::default().fg(Color::DarkGray)),
-        Span::styled(project, Style::default().fg(Color::DarkGray)),
-        Span::styled(" \u{203a} ", Style::default().fg(Color::DarkGray)),
-        Span::styled(milestone, Style::default().fg(Color::White)),
-    ]));
+    let breadcrumb = Paragraph::new(BreadcrumbBar::new(&["All", project, milestone]).to_line());
     frame.render_widget(breadcrumb, chunks[0]);
 
     // Three equal columns
@@ -157,15 +177,23 @@ fn render_swimlanes(
     let titles = ["BACKLOG", "IN-PROGRESS", "DONE"];
 
     for (i, title) in titles.iter().enumerate() {
-        let is_focused = i == active_column;
-        let selected_row = if is_focused { Some(active_row) } else { None };
+        let col_focused = focus == FocusRegion::Tertiary(i);
+        let selected_row = if i == active_column {
+            Some(active_row)
+        } else {
+            None
+        };
+
+        let _block = FocusableBlock::new(FocusStyle::Content)
+            .focused(col_focused)
+            .to_block();
 
         let swimlane = Swimlane {
             title,
             count: columns[i].len(),
             tickets: &columns[i],
             selected: selected_row,
-            focused: is_focused,
+            focused: i == active_column,
         };
 
         frame.render_widget(swimlane, col_areas[i]);
