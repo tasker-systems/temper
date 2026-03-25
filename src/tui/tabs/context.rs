@@ -6,10 +6,7 @@ use crate::tui::widgets::result_list::{render_result_list, ResultItem};
 
 /// Render the context tab into `area`.
 ///
-/// Layout:
-///   [0] 1 line  — topic input (only when input_active) or center indicator
-///   [1] 1 line  — status / neighbor count / loading
-///   [2] Min(1)  — neighbor list grouped by depth
+/// Layout: topic input or center indicator (1 line), status (1 line), neighbor list (fills rest).
 pub fn render_context(frame: &mut Frame, area: Rect, state: &ContextState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
