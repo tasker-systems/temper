@@ -90,13 +90,15 @@ impl App {
             Screen::Search(ref s) => {
                 if !s.input_focused {
                     if let Some(hit) = s.results.get(s.selected) {
-                        let doc = VaultDocument {
-                            path: hit.file_path.clone(),
-                            note_type: hit.note_type.clone(),
-                            title: hit.file_path.clone(),
-                            frontmatter: serde_yaml::Value::Null,
-                            body: hit.content.clone(),
-                        };
+                        let path = std::path::Path::new(&hit.file_path);
+                        let doc =
+                            crate::actions::vault::read_document(path).unwrap_or(VaultDocument {
+                                path: hit.file_path.clone(),
+                                note_type: hit.note_type.clone(),
+                                title: hit.file_path.clone(),
+                                frontmatter: serde_yaml::Value::Null,
+                                body: hit.content.clone(),
+                            });
                         self.stack.push(Screen::Viewer(ViewerState {
                             document: doc.clone(),
                             scroll_offset: 0,
@@ -109,13 +111,15 @@ impl App {
             Screen::Context(ref s) => {
                 if !s.input_active {
                     if let Some(neighbor) = s.neighbors.get(s.selected) {
-                        let doc = VaultDocument {
-                            path: neighbor.file_path.clone(),
-                            note_type: neighbor.note_type.clone(),
-                            title: neighbor.label.clone(),
-                            frontmatter: serde_yaml::Value::Null,
-                            body: String::new(),
-                        };
+                        let path = std::path::Path::new(&neighbor.file_path);
+                        let doc =
+                            crate::actions::vault::read_document(path).unwrap_or(VaultDocument {
+                                path: neighbor.file_path.clone(),
+                                note_type: neighbor.note_type.clone(),
+                                title: neighbor.label.clone(),
+                                frontmatter: serde_yaml::Value::Null,
+                                body: String::new(),
+                            });
                         let center_topic = s.current_center.clone();
                         self.stack.push(Screen::Viewer(ViewerState {
                             document: doc.clone(),
