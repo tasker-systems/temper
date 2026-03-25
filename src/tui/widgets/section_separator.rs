@@ -7,7 +7,6 @@ pub struct SectionSeparator {
     label: Option<String>,
 }
 
-#[allow(dead_code)]
 impl SectionSeparator {
     pub fn new(width: u16) -> Self {
         Self { width, label: None }

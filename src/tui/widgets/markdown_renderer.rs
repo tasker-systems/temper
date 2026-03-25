@@ -3,7 +3,6 @@ use ratatui::prelude::*;
 use std::mem;
 
 /// Parse markdown input and produce styled ratatui `Line`s for display.
-#[allow(dead_code)]
 pub fn render_markdown(input: &str) -> Vec<Line<'static>> {
     if input.is_empty() {
         return Vec::new();

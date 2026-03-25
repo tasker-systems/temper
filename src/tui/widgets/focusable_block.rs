@@ -5,13 +5,13 @@ use ratatui::{
 
 /// Determines visual style and focus behavior for a `FocusableBlock`.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 pub enum FocusStyle {
     /// Yellow border when focused — used for interactive input fields.
     Input,
     /// Cyan border when focused — used for content regions like result lists.
     Content,
     /// Always dim DarkGray border — read-only display, not a tab-stop.
+    #[allow(dead_code)]
     DisplayOnly,
 }
 
@@ -34,7 +34,6 @@ pub struct FocusableBlock {
     title: Option<String>,
 }
 
-#[allow(dead_code)]
 impl FocusableBlock {
     /// Create a new `FocusableBlock` with the given focus style.
     pub fn new(style: FocusStyle) -> Self {

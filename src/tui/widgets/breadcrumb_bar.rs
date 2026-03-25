@@ -13,7 +13,6 @@ pub struct BreadcrumbBar {
     segments: Vec<String>,
 }
 
-#[allow(dead_code)]
 impl BreadcrumbBar {
     /// Create a new `BreadcrumbBar` from a slice of segment label strings.
     pub fn new(segments: &[&str]) -> Self {
