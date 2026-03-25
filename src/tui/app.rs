@@ -188,6 +188,12 @@ pub struct App {
     pub show_help: bool,
     pub editor_request: Option<String>,
     req_tx: Option<mpsc::Sender<QueryRequest>>,
+    /// Project names from config, used when creating fresh Board screens.
+    project_names: Vec<String>,
+    /// The CWD-resolved project name, if any.
+    inferred_project: Option<String>,
+    /// Hold a clone of config for loading data.
+    config: Option<Config>,
 }
 
 impl std::fmt::Debug for App {
@@ -236,6 +242,9 @@ impl App {
             show_help: false,
             editor_request: None,
             req_tx: None,
+            project_names: vec!["demo".into()],
+            inferred_project: Some("demo".into()),
+            config: None,
         }
     }
 
@@ -250,6 +259,9 @@ impl App {
             show_help: false,
             editor_request: None,
             req_tx: None,
+            project_names: vec![],
+            inferred_project: None,
+            config: None,
         }
     }
 
@@ -261,23 +273,24 @@ impl App {
     ) -> crate::error::Result<Self> {
         let cwd = std::env::current_dir()?;
         let project = crate::project::resolve_from_cwd(&cwd, &config.projects);
+        let project_names: Vec<String> = config.projects.keys().cloned().collect();
+        let inferred_project = project.as_ref().map(|p| p.name.clone());
 
         let root_screen = if let Some(proj) = project {
-            // Start on milestones for the resolved project
+            // Load milestones synchronously for the resolved project
+            let milestones = load_milestones_with_counts(config, &proj.name);
             Screen::Board(BoardState {
                 level: BoardLevel::Milestones {
                     project: proj.name.clone(),
                     selected: 0,
-                    milestones: vec![], // will be populated by query actor
+                    milestones,
                 },
             })
         } else {
-            // No project found — show project list
-            let projects: Vec<String> = config.projects.keys().cloned().collect();
             Screen::Board(BoardState {
                 level: BoardLevel::Projects {
                     selected: 0,
-                    projects,
+                    projects: project_names.clone(),
                 },
             })
         };
@@ -291,6 +304,9 @@ impl App {
             show_help: false,
             editor_request: None,
             req_tx: Some(req_tx),
+            project_names,
+            inferred_project,
+            config: Some(config.clone()),
         })
     }
 
@@ -451,7 +467,7 @@ impl App {
             }
 
             AppAction::SwitchTab(tab) => {
-                let root = make_root_screen(tab);
+                let root = self.make_root_screen(tab);
                 self.stack = vec![root];
             }
 
@@ -462,6 +478,16 @@ impl App {
             AppAction::Escape => {
                 if self.show_help {
                     self.show_help = false;
+                } else if matches!(self.current_screen(), Screen::Search(s) if s.input_focused) {
+                    // Unfocus search input — move to results or allow tab switch
+                    if let Screen::Search(s) = self.current_screen_mut() {
+                        s.input_focused = false;
+                    }
+                } else if matches!(self.current_screen(), Screen::Search(_)) {
+                    // On search results — pop back if stacked
+                    if self.stack.len() > 1 {
+                        self.stack.pop();
+                    }
                 } else if let Screen::Context(s) = self.current_screen_mut() {
                     if s.input_active {
                         // Cancel input without changing center
@@ -1046,11 +1072,16 @@ impl App {
             Screen::Board(ref board) => match &board.level {
                 BoardLevel::Projects { selected, projects } => {
                     if let Some(proj) = projects.get(*selected) {
+                        let milestones = self
+                            .config
+                            .as_ref()
+                            .map(|c| load_milestones_with_counts(c, proj))
+                            .unwrap_or_default();
                         let next = Screen::Board(BoardState {
                             level: BoardLevel::Milestones {
                                 project: proj.clone(),
                                 selected: 0,
-                                milestones: vec![],
+                                milestones,
                             },
                         });
                         self.stack.push(next);
@@ -1087,22 +1118,29 @@ impl App {
                     columns,
                     column,
                     row,
+                    project,
                     ..
                 } => {
                     if let Some(tickets) = columns.get(*column) {
                         if let Some(ticket) = tickets.get(*row) {
-                            let doc = VaultDocument {
-                                path: format!("tickets/{}.md", ticket.slug),
-                                note_type: "ticket".into(),
-                                title: ticket.title.clone(),
-                                frontmatter: serde_yaml::Value::Null,
-                                body: String::new(),
-                            };
-                            self.stack.push(Screen::Viewer(ViewerState {
-                                document: doc,
-                                scroll_offset: 0,
-                                source_label: "Board".into(),
-                            }));
+                            if let Some(config) = &self.config {
+                                let ticket_path = config
+                                    .vault_root
+                                    .join("tickets")
+                                    .join(&ticket.project)
+                                    .join(format!("{}.md", ticket.slug));
+                                if let Ok(doc) = crate::actions::vault::read_document(&ticket_path)
+                                {
+                                    self.stack.push(Screen::Viewer(ViewerState {
+                                        document: doc,
+                                        scroll_offset: 0,
+                                        source_label: format!(
+                                            "Board > {} > {}",
+                                            project, ticket.title
+                                        ),
+                                    }));
+                                }
+                            }
                         }
                     }
                 }
@@ -1223,6 +1261,55 @@ impl App {
             },
         }
     }
+
+    fn make_root_screen(&self, tab: Tab) -> Screen {
+        match tab {
+            Tab::Board => {
+                // If we have an inferred project, load its milestones
+                if let (Some(proj), Some(config)) = (&self.inferred_project, &self.config) {
+                    let milestones = load_milestones_with_counts(config, proj);
+                    Screen::Board(BoardState {
+                        level: BoardLevel::Milestones {
+                            project: proj.clone(),
+                            selected: 0,
+                            milestones,
+                        },
+                    })
+                } else {
+                    Screen::Board(BoardState {
+                        level: BoardLevel::Projects {
+                            selected: 0,
+                            projects: self.project_names.clone(),
+                        },
+                    })
+                }
+            }
+            Tab::Search => Screen::Search(SearchState {
+                query: String::new(),
+                cursor_pos: 0,
+                results: vec![],
+                selected: 0,
+                input_focused: true,
+                loading: false,
+            }),
+            Tab::Context => Screen::Context(ContextState {
+                center_stack: vec![],
+                current_center: String::new(),
+                depth: 1,
+                neighbors: vec![],
+                selected: 0,
+                loading: false,
+                input_active: true,
+                input_text: String::new(),
+            }),
+            Tab::Maintain => Screen::Maintain(MaintainState {
+                index_stats: None,
+                last_normalize: None,
+                progress_message: None,
+                running: false,
+            }),
+        }
+    }
 }
 
 enum Direction {
@@ -1236,39 +1323,35 @@ enum Direction {
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn make_root_screen(tab: Tab) -> Screen {
-    match tab {
-        Tab::Board => Screen::Board(BoardState {
-            level: BoardLevel::Projects {
-                selected: 0,
-                projects: vec![],
-            },
-        }),
-        Tab::Search => Screen::Search(SearchState {
-            query: String::new(),
-            cursor_pos: 0,
-            results: vec![],
-            selected: 0,
-            input_focused: true,
-            loading: false,
-        }),
-        Tab::Context => Screen::Context(ContextState {
-            center_stack: vec![],
-            current_center: String::new(),
-            depth: 0,
-            neighbors: vec![],
-            selected: 0,
-            loading: false,
-            input_active: true,
-            input_text: String::new(),
-        }),
-        Tab::Maintain => Screen::Maintain(MaintainState {
-            index_stats: None,
-            last_normalize: None,
-            progress_message: None,
-            running: false,
-        }),
-    }
+fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneWithCounts> {
+    let milestones = match crate::actions::milestone::load_milestones(config, Some(project)) {
+        Ok(ms) => ms,
+        Err(_) => return vec![],
+    };
+    let counts =
+        crate::actions::milestone::count_tickets_by_stage(config, project).unwrap_or_default();
+
+    milestones
+        .into_iter()
+        .map(|info| {
+            let slug_counts = counts.get(&info.slug);
+            MilestoneWithCounts {
+                backlog: slug_counts
+                    .and_then(|c| c.get("backlog"))
+                    .copied()
+                    .unwrap_or(0),
+                in_progress: slug_counts
+                    .and_then(|c| c.get("in-progress"))
+                    .copied()
+                    .unwrap_or(0),
+                done: slug_counts
+                    .and_then(|c| c.get("done"))
+                    .copied()
+                    .unwrap_or(0),
+                info,
+            }
+        })
+        .collect()
 }
 
 fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
