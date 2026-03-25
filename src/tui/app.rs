@@ -1093,12 +1093,19 @@ impl App {
                     milestones,
                 } => {
                     if let Some(ms) = milestones.get(*selected) {
-                        let proj = project.clone();
                         let ms_slug = ms.info.slug.clone();
                         let ms_title = ms.info.title.clone();
+                        // For "__all__" synthetic entry, pass __all__ for both
+                        // project and milestone so the actor loads everything
+                        let load_project = ms.info.project.clone();
+                        let display_project = if load_project == "__all__" {
+                            "All".to_string()
+                        } else {
+                            project.clone()
+                        };
                         let next = Screen::Board(BoardState {
                             level: BoardLevel::Swimlanes {
-                                project: proj.clone(),
+                                project: display_project,
                                 milestone: ms_title,
                                 column: 0,
                                 row: 0,
@@ -1106,10 +1113,9 @@ impl App {
                             },
                         });
                         self.stack.push(next);
-                        // Kick off ticket loading for the swimlane
                         if let Some(tx) = &self.req_tx {
                             let _ = tx.try_send(super::query_actor::QueryRequest::LoadTickets {
-                                project: proj,
+                                project: load_project,
                                 milestone: ms_slug,
                             });
                         }
@@ -1332,21 +1338,24 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
     let counts =
         crate::actions::milestone::count_tickets_by_stage(config, project).unwrap_or_default();
 
-    // "All Tickets" synthetic entry — total counts across all milestones
+    // "All Tickets" synthetic entry — every ticket across the entire vault
     let all_tickets = {
+        let all = crate::actions::ticket::load_tickets(config, None, None).unwrap_or_default();
         let mut backlog = 0usize;
         let mut in_progress = 0usize;
         let mut done = 0usize;
-        for stage_map in counts.values() {
-            backlog += stage_map.get("backlog").copied().unwrap_or(0);
-            in_progress += stage_map.get("in-progress").copied().unwrap_or(0);
-            done += stage_map.get("done").copied().unwrap_or(0);
+        for t in &all {
+            match t.stage.as_str() {
+                "in-progress" => in_progress += 1,
+                "done" | "cancelled" => done += 1,
+                _ => backlog += 1,
+            }
         }
         MilestoneWithCounts {
             info: MilestoneInfo {
                 title: "(All Tickets)".into(),
                 slug: "__all__".into(),
-                project: project.into(),
+                project: "__all__".into(),
                 seq: 0,
                 status: "active".into(),
             },
