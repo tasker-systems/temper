@@ -1,3 +1,4 @@
+use temper_cli::tui::app::state::FocusRegion;
 use temper_cli::tui::app::{App, AppAction, Tab};
 use temper_cli::tui::event::parse_command;
 
@@ -27,25 +28,38 @@ fn test_tab_switch_replaces_stack() {
 #[test]
 fn test_esc_pops_stack() {
     let mut app = App::new_for_test();
-    // new_for_test starts at Milestones with one milestone
     assert_eq!(app.stack_depth(), 1);
 
-    // Enter drills into Swimlanes
+    // First Enter focuses the detail panel (Secondary), stack unchanged
     app.dispatch(AppAction::Enter);
-    assert_eq!(app.stack_depth(), 2);
+    assert_eq!(
+        app.stack_depth(),
+        1,
+        "Enter on Primary should focus Secondary, not push"
+    );
 
-    // Esc pops back
+    // Second Enter on milestone detail pushes Swimlanes
+    app.dispatch(AppAction::Enter);
+    assert_eq!(
+        app.stack_depth(),
+        2,
+        "Enter on Secondary should push Swimlanes"
+    );
+
+    // Esc pops back to ProjectList
     app.dispatch(AppAction::Escape);
     assert_eq!(app.stack_depth(), 1);
 }
 
 #[test]
-fn test_esc_on_root_does_nothing() {
+fn test_esc_on_root_moves_to_tabbar() {
     let mut app = App::new_for_test();
     assert_eq!(app.stack_depth(), 1);
 
     app.dispatch(AppAction::Escape);
     assert_eq!(app.stack_depth(), 1);
+    // Focus should now be on TabBar
+    assert_eq!(app.focus_region(), FocusRegion::TabBar);
 }
 
 #[test]

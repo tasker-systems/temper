@@ -23,16 +23,21 @@ pub enum Tab {
 }
 
 #[derive(Debug, Clone)]
+pub struct DetailPanel {
+    pub project: String,
+    pub milestones: Vec<MilestoneWithCounts>,
+    pub selected: usize,
+}
+
+#[derive(Debug, Clone)]
 pub enum BoardLevel {
-    Projects {
+    /// Two-panel split: left = project list, right = milestones for selected project
+    ProjectList {
         selected: usize,
         projects: Vec<String>,
+        detail: Option<DetailPanel>,
     },
-    Milestones {
-        project: String,
-        selected: usize,
-        milestones: Vec<MilestoneWithCounts>,
-    },
+    /// Full-screen swimlanes (pushed onto stack from milestone selection)
     Swimlanes {
         project: String,
         milestone: String,

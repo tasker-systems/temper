@@ -45,3 +45,17 @@ fn tab_switch_resets_focus_to_first_content() {
     app.dispatch(AppAction::SwitchTab(Tab::Search));
     assert_ne!(app.focus_region(), FocusRegion::TabBar);
 }
+
+#[test]
+fn project_list_has_two_content_regions() {
+    let app = App::new_for_test();
+    let regions = app.focus_regions();
+    assert_eq!(
+        regions,
+        vec![
+            FocusRegion::TabBar,
+            FocusRegion::Primary,
+            FocusRegion::Secondary
+        ],
+    );
+}

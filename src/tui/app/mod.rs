@@ -58,8 +58,8 @@ impl std::fmt::Debug for App {
 }
 
 impl App {
-    /// Create an App suitable for tests — starts on Board / Milestones with one
-    /// dummy milestone so that `Enter` can push a Swimlanes screen.
+    /// Create an App suitable for tests — starts on Board / ProjectList with one
+    /// dummy project and milestone so that `Enter` can navigate to Swimlanes.
     pub fn new_for_test() -> Self {
         let milestone = MilestoneWithCounts {
             info: MilestoneInfo {
@@ -74,10 +74,14 @@ impl App {
             done: 0,
         };
         let board = BoardState {
-            level: BoardLevel::Milestones {
-                project: "demo".into(),
+            level: BoardLevel::ProjectList {
                 selected: 0,
-                milestones: vec![milestone],
+                projects: vec!["demo".into()],
+                detail: Some(DetailPanel {
+                    project: "demo".into(),
+                    milestones: vec![milestone],
+                    selected: 0,
+                }),
             },
         };
         Self {
@@ -125,24 +129,29 @@ impl App {
         let project_names: Vec<String> = config.projects.keys().cloned().collect();
         let inferred_project = project.as_ref().map(|p| p.name.clone());
 
-        let root_screen = if let Some(proj) = project {
-            // Load milestones synchronously for the resolved project
+        let detail = if let Some(proj) = &project {
             let milestones = load_milestones_with_counts(config, &proj.name);
-            Screen::Projects(BoardState {
-                level: BoardLevel::Milestones {
-                    project: proj.name.clone(),
-                    selected: 0,
-                    milestones,
-                },
+            Some(DetailPanel {
+                project: proj.name.clone(),
+                milestones,
+                selected: 0,
             })
         } else {
-            Screen::Projects(BoardState {
-                level: BoardLevel::Projects {
-                    selected: 0,
-                    projects: project_names.clone(),
-                },
-            })
+            None
         };
+
+        let selected = project
+            .as_ref()
+            .and_then(|p| project_names.iter().position(|n| n == &p.name))
+            .unwrap_or(0);
+
+        let root_screen = Screen::Projects(BoardState {
+            level: BoardLevel::ProjectList {
+                selected,
+                projects: project_names.clone(),
+                detail,
+            },
+        });
 
         Ok(Self {
             stack: vec![root_screen],
@@ -741,24 +750,29 @@ impl App {
     fn make_root_screen(&self, tab: Tab) -> Screen {
         match tab {
             Tab::Projects => {
-                // If we have an inferred project, load its milestones
-                if let (Some(proj), Some(config)) = (&self.inferred_project, &self.config) {
-                    let milestones = load_milestones_with_counts(config, proj);
-                    Screen::Projects(BoardState {
-                        level: BoardLevel::Milestones {
+                let detail =
+                    if let (Some(proj), Some(config)) = (&self.inferred_project, &self.config) {
+                        let milestones = load_milestones_with_counts(config, proj);
+                        Some(DetailPanel {
                             project: proj.clone(),
-                            selected: 0,
                             milestones,
-                        },
-                    })
-                } else {
-                    Screen::Projects(BoardState {
-                        level: BoardLevel::Projects {
                             selected: 0,
-                            projects: self.project_names.clone(),
-                        },
-                    })
-                }
+                        })
+                    } else {
+                        None
+                    };
+                let selected = self
+                    .inferred_project
+                    .as_ref()
+                    .and_then(|p| self.project_names.iter().position(|n| n == p))
+                    .unwrap_or(0);
+                Screen::Projects(BoardState {
+                    level: BoardLevel::ProjectList {
+                        selected,
+                        projects: self.project_names.clone(),
+                        detail,
+                    },
+                })
             }
             Tab::Search => Screen::Search(SearchState {
                 query: String::new(),

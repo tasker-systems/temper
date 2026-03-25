@@ -11,8 +11,16 @@ impl App {
     pub fn focus_regions(&self) -> Vec<FocusRegion> {
         match self.current_screen() {
             Screen::Projects(board) => match &board.level {
-                BoardLevel::Projects { .. } | BoardLevel::Milestones { .. } => {
-                    vec![FocusRegion::TabBar, FocusRegion::Primary]
+                BoardLevel::ProjectList { detail, .. } => {
+                    if detail.is_some() {
+                        vec![
+                            FocusRegion::TabBar,
+                            FocusRegion::Primary,
+                            FocusRegion::Secondary,
+                        ]
+                    } else {
+                        vec![FocusRegion::TabBar, FocusRegion::Primary]
+                    }
                 }
                 BoardLevel::Swimlanes { .. } => {
                     vec![
@@ -73,7 +81,7 @@ impl App {
 
     /// After focus changes, sync legacy state flags so existing rendering
     /// and event mapping still works correctly.
-    fn sync_focus_to_state(&mut self) {
+    pub(super) fn sync_focus_to_state(&mut self) {
         let focus = self.focus;
         match self.current_screen_mut() {
             Screen::Search(s) => {

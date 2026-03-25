@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{List, ListItem, Paragraph};
 
-use crate::tui::app::{BoardLevel, BoardState, FocusRegion, MilestoneWithCounts};
+use crate::tui::app::{BoardLevel, BoardState, DetailPanel, FocusRegion, MilestoneWithCounts};
 use crate::tui::widgets::breadcrumb_bar::BreadcrumbBar;
 use crate::tui::widgets::focusable_block::{FocusStyle, FocusableBlock};
 use crate::tui::widgets::swimlane::Swimlane;
@@ -9,14 +9,11 @@ use crate::tui::widgets::swimlane::Swimlane;
 /// Render the projects tab content into `area` based on the current board state.
 pub fn render_projects_tab(frame: &mut Frame, area: Rect, state: &BoardState, focus: FocusRegion) {
     match &state.level {
-        BoardLevel::Projects {
-            projects, selected, ..
-        } => render_projects(frame, area, projects, *selected, focus),
-        BoardLevel::Milestones {
-            project,
-            milestones,
+        BoardLevel::ProjectList {
+            projects,
             selected,
-        } => render_milestones(frame, area, project, milestones, *selected, focus),
+            detail,
+        } => render_project_list(frame, area, projects, *selected, detail.as_ref(), focus),
         BoardLevel::Swimlanes {
             project,
             milestone,
@@ -30,11 +27,12 @@ pub fn render_projects_tab(frame: &mut Frame, area: Rect, state: &BoardState, fo
     }
 }
 
-fn render_projects(
+fn render_project_list(
     frame: &mut Frame,
     area: Rect,
     projects: &[String],
     selected: usize,
+    detail: Option<&DetailPanel>,
     focus: FocusRegion,
 ) {
     // Layout: breadcrumb (1 line) + content
@@ -44,70 +42,89 @@ fn render_projects(
         .split(area);
 
     // Breadcrumb
-    let breadcrumb = Paragraph::new(BreadcrumbBar::new(&["All"]).to_line());
+    let breadcrumb_segments: Vec<&str> = if let Some(d) = detail {
+        vec!["All", &d.project]
+    } else {
+        vec!["All"]
+    };
+    let breadcrumb = Paragraph::new(BreadcrumbBar::new(&breadcrumb_segments).to_line());
     frame.render_widget(breadcrumb, chunks[0]);
 
+    // Horizontal split: left 35% projects, right 65% milestones
+    let panels = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .split(chunks[1]);
+
+    // Left panel: project list
     if projects.is_empty() {
         let msg =
             Paragraph::new("No projects configured").style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(msg, chunks[1]);
-        return;
+        frame.render_widget(msg, panels[0]);
+    } else {
+        let items: Vec<ListItem> = projects
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let marker = if i == selected { "\u{25b8} " } else { "  " };
+                let style = if i == selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .bg(Color::Rgb(42, 42, 74))
+                        .bold()
+                } else {
+                    Style::default()
+                };
+                ListItem::new(format!("{}{}", marker, name)).style(style)
+            })
+            .collect();
+
+        let fb = FocusableBlock::new(FocusStyle::Content).focused(focus == FocusRegion::Primary);
+        let block = fb.to_block();
+        let list = List::new(items).block(block);
+        frame.render_widget(list, panels[0]);
     }
 
-    let items: Vec<ListItem> = projects
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let marker = if i == selected { "\u{25b8} " } else { "  " };
-            let style = if i == selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .bg(Color::Rgb(42, 42, 74))
-                    .bold()
-            } else {
-                Style::default()
-            };
-            ListItem::new(format!("{}{}", marker, name)).style(style)
-        })
-        .collect();
-
-    let fb = FocusableBlock::new(FocusStyle::Content).focused(focus != FocusRegion::TabBar);
-    let block = fb.to_block();
-    let list = List::new(items).block(block);
-    frame.render_widget(list, chunks[1]);
+    // Right panel: milestone detail or placeholder
+    if let Some(d) = detail {
+        render_milestone_detail(frame, panels[1], d, focus);
+    } else {
+        let fb = FocusableBlock::new(FocusStyle::Content).focused(false);
+        let block = fb.to_block();
+        let msg = Paragraph::new("Select a project")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(block);
+        frame.render_widget(msg, panels[1]);
+    }
 }
 
-fn render_milestones(
+fn render_milestone_detail(
     frame: &mut Frame,
     area: Rect,
-    project: &str,
-    milestones: &[MilestoneWithCounts],
-    selected: usize,
+    detail: &DetailPanel,
     focus: FocusRegion,
 ) {
-    // Layout: breadcrumb (1 line) + content
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .split(area);
-
-    // Breadcrumb
-    let breadcrumb = Paragraph::new(BreadcrumbBar::new(&["All", project]).to_line());
-    frame.render_widget(breadcrumb, chunks[0]);
-
-    if milestones.is_empty() {
-        let msg =
-            Paragraph::new("Loading milestones...").style(Style::default().fg(Color::DarkGray));
-        frame.render_widget(msg, chunks[1]);
+    if detail.milestones.is_empty() {
+        let fb = FocusableBlock::new(FocusStyle::Content).focused(focus == FocusRegion::Secondary);
+        let block = fb.to_block();
+        let msg = Paragraph::new("No milestones")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(block);
+        frame.render_widget(msg, area);
         return;
     }
 
-    let items: Vec<ListItem> = milestones
+    let items: Vec<ListItem> = detail
+        .milestones
         .iter()
         .enumerate()
         .map(|(i, ms)| {
-            let marker = if i == selected { "\u{25b8} " } else { "  " };
-            let style = if i == selected {
+            let marker = if i == detail.selected {
+                "\u{25b8} "
+            } else {
+                "  "
+            };
+            let style = if i == detail.selected {
                 Style::default()
                     .fg(Color::Yellow)
                     .bg(Color::Rgb(42, 42, 74))
@@ -122,10 +139,10 @@ fn render_milestones(
         })
         .collect();
 
-    let fb = FocusableBlock::new(FocusStyle::Content).focused(focus != FocusRegion::TabBar);
+    let fb = FocusableBlock::new(FocusStyle::Content).focused(focus == FocusRegion::Secondary);
     let block = fb.to_block();
     let list = List::new(items).block(block);
-    frame.render_widget(list, chunks[1]);
+    frame.render_widget(list, area);
 }
 
 fn format_milestone_counts(ms: &MilestoneWithCounts) -> String {

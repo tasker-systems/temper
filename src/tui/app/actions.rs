@@ -7,58 +7,46 @@ impl App {
         let screen = self.current_screen().clone();
         match screen {
             Screen::Projects(ref board) => match &board.level {
-                BoardLevel::Projects { selected, projects } => {
-                    if let Some(proj) = projects.get(*selected) {
-                        let milestones = self
-                            .config
-                            .as_ref()
-                            .map(|c| load_milestones_with_counts(c, proj))
-                            .unwrap_or_default();
-                        let next = Screen::Projects(BoardState {
-                            level: BoardLevel::Milestones {
-                                project: proj.clone(),
-                                selected: 0,
-                                milestones,
-                            },
-                        });
-                        self.stack.push(next);
-                    }
-                }
-                BoardLevel::Milestones {
-                    project,
-                    selected,
-                    milestones,
-                } => {
-                    if let Some(ms) = milestones.get(*selected) {
-                        let ms_slug = ms.info.slug.clone();
-                        let ms_title = ms.info.title.clone();
-                        // For "__all__" synthetic entry, pass __all__ for both
-                        // project and milestone so the actor loads everything
-                        let load_project = ms.info.project.clone();
-                        let display_project = if load_project == "__all__" {
-                            "All".to_string()
-                        } else {
-                            project.clone()
-                        };
-                        let next = Screen::Projects(BoardState {
-                            level: BoardLevel::Swimlanes {
-                                project: display_project,
-                                milestone: ms_title,
-                                load_project: load_project.clone(),
-                                load_milestone: ms_slug.clone(),
-                                column: 0,
-                                row: 0,
-                                columns: [vec![], vec![], vec![]],
-                            },
-                        });
-                        self.stack.push(next);
-                        if let Some(tx) = &self.req_tx {
-                            let _ =
-                                tx.try_send(super::super::query_actor::QueryRequest::LoadTickets {
-                                    project: load_project,
-                                    milestone: ms_slug,
+                BoardLevel::ProjectList { detail, .. } => {
+                    if self.focus == FocusRegion::Secondary {
+                        // Enter on milestone — push swimlanes
+                        if let Some(d) = detail {
+                            if let Some(ms) = d.milestones.get(d.selected) {
+                                let ms_slug = ms.info.slug.clone();
+                                let ms_title = ms.info.title.clone();
+                                let load_project = ms.info.project.clone();
+                                let display_project = if load_project == "__all__" {
+                                    "All".to_string()
+                                } else {
+                                    d.project.clone()
+                                };
+                                let next = Screen::Projects(BoardState {
+                                    level: BoardLevel::Swimlanes {
+                                        project: display_project,
+                                        milestone: ms_title,
+                                        load_project: load_project.clone(),
+                                        load_milestone: ms_slug.clone(),
+                                        column: 0,
+                                        row: 0,
+                                        columns: [vec![], vec![], vec![]],
+                                    },
                                 });
+                                self.stack.push(next);
+                                self.reset_focus();
+                                if let Some(tx) = &self.req_tx {
+                                    let _ = tx.try_send(
+                                        super::super::query_actor::QueryRequest::LoadTickets {
+                                            project: load_project,
+                                            milestone: ms_slug,
+                                        },
+                                    );
+                                }
+                            }
                         }
+                    } else {
+                        // Enter on project — focus the detail panel
+                        self.focus = FocusRegion::Secondary;
+                        self.sync_focus_to_state();
                     }
                 }
                 BoardLevel::Swimlanes {
@@ -147,30 +135,44 @@ impl App {
     }
 
     pub(super) fn move_selection(&mut self, dir: Direction) {
+        let mut reload_project_detail = false;
+        let current_focus = self.focus;
+
         match self.current_screen_mut() {
             Screen::Projects(board) => match &mut board.level {
-                BoardLevel::Projects { selected, projects } => match dir {
-                    Direction::Up => *selected = selected.saturating_sub(1),
-                    Direction::Down => {
-                        if !projects.is_empty() {
-                            *selected = (*selected + 1).min(projects.len() - 1);
-                        }
-                    }
-                    _ => {}
-                },
-                BoardLevel::Milestones {
+                BoardLevel::ProjectList {
                     selected,
-                    milestones,
-                    ..
-                } => match dir {
-                    Direction::Up => *selected = selected.saturating_sub(1),
-                    Direction::Down => {
-                        if !milestones.is_empty() {
-                            *selected = (*selected + 1).min(milestones.len() - 1);
+                    projects,
+                    detail,
+                } => {
+                    if current_focus == FocusRegion::Secondary {
+                        if let Some(d) = detail {
+                            match dir {
+                                Direction::Up => d.selected = d.selected.saturating_sub(1),
+                                Direction::Down => {
+                                    if !d.milestones.is_empty() {
+                                        d.selected = (d.selected + 1).min(d.milestones.len() - 1);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else {
+                        match dir {
+                            Direction::Up => {
+                                *selected = selected.saturating_sub(1);
+                                reload_project_detail = true;
+                            }
+                            Direction::Down => {
+                                if !projects.is_empty() {
+                                    *selected = (*selected + 1).min(projects.len() - 1);
+                                    reload_project_detail = true;
+                                }
+                            }
+                            _ => {}
                         }
                     }
-                    _ => {}
-                },
+                }
                 BoardLevel::Swimlanes {
                     column,
                     row,
@@ -220,6 +222,46 @@ impl App {
                 Direction::Down => v.scroll_offset += 1,
                 _ => {}
             },
+        }
+
+        if reload_project_detail {
+            self.load_detail_for_selected_project();
+        }
+    }
+
+    /// Load milestones for the currently selected project in ProjectList and
+    /// write them into the detail panel. Avoids borrow issues by extracting
+    /// the project name first, loading data, then writing back.
+    pub(super) fn load_detail_for_selected_project(&mut self) {
+        let proj_name = if let Screen::Projects(board) = self.current_screen() {
+            if let BoardLevel::ProjectList {
+                selected, projects, ..
+            } = &board.level
+            {
+                projects.get(*selected).cloned()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let Some(proj_name) = proj_name else { return };
+
+        let milestones = self
+            .config
+            .as_ref()
+            .map(|c| load_milestones_with_counts(c, &proj_name))
+            .unwrap_or_default();
+
+        if let Screen::Projects(board) = self.current_screen_mut() {
+            if let BoardLevel::ProjectList { detail, .. } = &mut board.level {
+                *detail = Some(DetailPanel {
+                    project: proj_name,
+                    milestones,
+                    selected: 0,
+                });
+            }
         }
     }
 
