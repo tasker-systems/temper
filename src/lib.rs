@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod chunker;
 pub mod commands;
 pub mod config;
@@ -10,4 +11,5 @@ pub mod ids;
 pub mod output;
 pub mod project;
 pub mod registry;
+pub mod tui;
 pub mod vault;
