@@ -51,7 +51,10 @@ A 1-line horizontal divider using `─` characters in DarkGray. Accepts an optio
 The app gains a `FocusRegion` enum tracking which section of the current screen has focus. Each screen defines its own region list:
 
 ```
-Projects tab:  TabBar → ProjectList | MilestoneList | Swimlanes
+Projects tab (per drill-down level — only one level visible at a time):
+  Level 1:  TabBar → ProjectList
+  Level 2:  TabBar → MilestoneList
+  Level 3:  TabBar → SwimCol1 → SwimCol2 → SwimCol3
 Search tab:    TabBar → SearchInput → ResultsList
 Context tab:   TabBar → TopicInput → NeighborList
 Maintain tab:  TabBar → ActionButtons
