@@ -27,33 +27,61 @@ pub struct MilestoneInfo {
 /// A single search hit with score and metadata.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchHit {
-    pub path: String,
-    pub title: String,
     pub score: f32,
-    pub snippet: String,
+    pub file_path: String,
+    pub chunk_index: usize,
+    pub note_type: String,
+    pub cluster: Option<String>,
+    pub project: Option<String>,
+    pub content: String,
 }
 
 /// Collection of search results.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchResults {
-    pub hits: Vec<SearchHit>,
     pub query: String,
+    pub hits: Vec<SearchHit>,
 }
 
-/// A neighbor document in the context graph.
+/// A single chunk result within a grouped context result.
 #[derive(Debug, Clone, Serialize)]
-pub struct ContextNeighbor {
+pub struct ContextChunk {
+    pub score: f32,
+    pub header_path: String,
+    pub content: String,
+}
+
+/// A group of related chunks from the same file.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextGroup {
+    pub file_path: String,
+    pub note_type: String,
+    pub title: String,
+    pub chunks: Vec<ContextChunk>,
+}
+
+/// Detail about the primary note resolved from a topic.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextNoteDetail {
     pub path: String,
     pub title: String,
-    pub score: f32,
-    pub link_type: String,
+    pub tags: Vec<String>,
+    pub content: String,
 }
 
-/// Results from a context lookup.
+/// A single hop of context results.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContextHop {
+    pub topic: String,
+    pub primary: Option<ContextNoteDetail>,
+    pub related_chunks: Vec<ContextGroup>,
+    pub hop: usize,
+}
+
+/// Results from a context lookup (may contain multiple hops).
 #[derive(Debug, Clone, Serialize)]
 pub struct ContextResults {
-    pub source: String,
-    pub neighbors: Vec<ContextNeighbor>,
+    pub hops: Vec<ContextHop>,
 }
 
 /// Statistics about the vault index.
