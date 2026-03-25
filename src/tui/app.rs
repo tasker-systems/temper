@@ -1095,10 +1095,11 @@ impl App {
                     if let Some(ms) = milestones.get(*selected) {
                         let proj = project.clone();
                         let ms_slug = ms.info.slug.clone();
+                        let ms_title = ms.info.title.clone();
                         let next = Screen::Board(BoardState {
                             level: BoardLevel::Swimlanes {
                                 project: proj.clone(),
-                                milestone: ms_slug.clone(),
+                                milestone: ms_title,
                                 column: 0,
                                 row: 0,
                                 columns: [vec![], vec![], vec![]],
@@ -1331,27 +1332,50 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
     let counts =
         crate::actions::milestone::count_tickets_by_stage(config, project).unwrap_or_default();
 
-    milestones
-        .into_iter()
-        .map(|info| {
-            let slug_counts = counts.get(&info.slug);
-            MilestoneWithCounts {
-                backlog: slug_counts
-                    .and_then(|c| c.get("backlog"))
-                    .copied()
-                    .unwrap_or(0),
-                in_progress: slug_counts
-                    .and_then(|c| c.get("in-progress"))
-                    .copied()
-                    .unwrap_or(0),
-                done: slug_counts
-                    .and_then(|c| c.get("done"))
-                    .copied()
-                    .unwrap_or(0),
-                info,
-            }
-        })
-        .collect()
+    // "All Tickets" synthetic entry — total counts across all milestones
+    let all_tickets = {
+        let mut backlog = 0usize;
+        let mut in_progress = 0usize;
+        let mut done = 0usize;
+        for stage_map in counts.values() {
+            backlog += stage_map.get("backlog").copied().unwrap_or(0);
+            in_progress += stage_map.get("in-progress").copied().unwrap_or(0);
+            done += stage_map.get("done").copied().unwrap_or(0);
+        }
+        MilestoneWithCounts {
+            info: MilestoneInfo {
+                title: "(All Tickets)".into(),
+                slug: "__all__".into(),
+                project: project.into(),
+                seq: 0,
+                status: "active".into(),
+            },
+            backlog,
+            in_progress,
+            done,
+        }
+    };
+
+    let mut result = vec![all_tickets];
+    result.extend(milestones.into_iter().map(|info| {
+        let slug_counts = counts.get(&info.slug);
+        MilestoneWithCounts {
+            backlog: slug_counts
+                .and_then(|c| c.get("backlog"))
+                .copied()
+                .unwrap_or(0),
+            in_progress: slug_counts
+                .and_then(|c| c.get("in-progress"))
+                .copied()
+                .unwrap_or(0),
+            done: slug_counts
+                .and_then(|c| c.get("done"))
+                .copied()
+                .unwrap_or(0),
+            info,
+        }
+    }));
+    result
 }
 
 fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {

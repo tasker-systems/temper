@@ -169,7 +169,12 @@ fn load_swimlane_tickets(
     Vec<crate::actions::types::TicketInfo>,
     Vec<crate::actions::types::TicketInfo>,
 )> {
-    let all = actions::ticket::load_tickets(config, Some(project), Some(milestone))?;
+    let ms_filter = if milestone == "__all__" {
+        None
+    } else {
+        Some(milestone)
+    };
+    let all = actions::ticket::load_tickets(config, Some(project), ms_filter)?;
     let mut backlog = Vec::new();
     let mut in_progress = Vec::new();
     let mut done = Vec::new();
