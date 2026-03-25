@@ -659,16 +659,16 @@ impl App {
                 board::render_board(frame, chunks[1], board_state);
             }
             Screen::Search(search_state) => {
-                search::render_search(frame, chunks[1], search_state);
+                search::render_search(frame, chunks[1], search_state, self.focus);
             }
             Screen::Context(context_state) => {
-                context::render_context(frame, chunks[1], context_state);
+                context::render_context(frame, chunks[1], context_state, self.focus);
             }
             Screen::Viewer(viewer_state) => {
                 viewer::render_viewer(frame, chunks[1], viewer_state);
             }
             Screen::Maintain(s) => {
-                maintain::render_maintain(frame, chunks[1], s);
+                maintain::render_maintain(frame, chunks[1], s, self.focus);
             }
         }
 

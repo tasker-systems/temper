@@ -1,23 +1,27 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use crate::tui::app::SearchState;
+use crate::tui::app::state::{FocusRegion, SearchState};
+use crate::tui::widgets::focusable_block::{FocusStyle, FocusableBlock};
 use crate::tui::widgets::result_list::{render_result_list, ResultItem};
+use crate::tui::widgets::section_separator::SectionSeparator;
 
-/// Render the search tab into `area`.
-///
-/// Layout: query input (1 line), result count (1 line), result list (fills rest).
-pub fn render_search(frame: &mut Frame, area: Rect, state: &SearchState) {
+pub fn render_search(frame: &mut Frame, area: Rect, state: &SearchState, focus: FocusRegion) {
+    let input_focused = focus == FocusRegion::Primary;
+    let results_focused = focus == FocusRegion::Secondary;
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // input line
-            Constraint::Length(1), // status / result count
-            Constraint::Min(1),    // results
+            Constraint::Length(3), // input with border
+            Constraint::Length(1), // separator
+            Constraint::Min(3),    // results with border
         ])
         .split(area);
 
-    // -- Input line ----------------------------------------------------------
+    // Input block
+    let input_focusable = FocusableBlock::new(FocusStyle::Input).focused(input_focused);
+    let input_block = input_focusable.to_block();
     let cursor_char = if state.input_focused { "\u{2502}" } else { "" };
     let input_text = format!("/ {}{}", state.query, cursor_char);
     let input_style = if state.input_focused {
@@ -25,11 +29,13 @@ pub fn render_search(frame: &mut Frame, area: Rect, state: &SearchState) {
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    let input_paragraph = Paragraph::new(Span::styled(input_text, input_style));
-    frame.render_widget(input_paragraph, chunks[0]);
+    frame.render_widget(
+        Paragraph::new(Span::styled(input_text, input_style)).block(input_block),
+        chunks[0],
+    );
 
-    // -- Status line ---------------------------------------------------------
-    let status_text = if state.loading {
+    // Separator with result count
+    let status = if state.loading {
         "Searching...".to_string()
     } else if state.query.is_empty() {
         String::new()
@@ -40,20 +46,29 @@ pub fn render_search(frame: &mut Frame, area: Rect, state: &SearchState) {
             if state.results.len() == 1 { "" } else { "s" }
         )
     };
-    let status_paragraph = Paragraph::new(Span::styled(
-        status_text,
-        Style::default().fg(Color::DarkGray),
-    ));
-    frame.render_widget(status_paragraph, chunks[1]);
+    let sep_widget = if status.is_empty() {
+        SectionSeparator::new(area.width)
+    } else {
+        SectionSeparator::new(area.width).label(&status)
+    };
+    let sep = sep_widget.to_line();
+    frame.render_widget(Paragraph::new(sep), chunks[1]);
 
-    // -- Result list ---------------------------------------------------------
+    // Results block
+    let results_focusable = FocusableBlock::new(FocusStyle::Content).focused(results_focused);
+    let results_block = results_focusable.to_block();
+    let results_inner = results_block.inner(chunks[2]);
+    frame.render_widget(results_block, chunks[2]);
+
     if state.results.is_empty() {
         if !state.query.is_empty() && !state.loading {
-            let no_results = Paragraph::new(Span::styled(
-                "No results",
-                Style::default().fg(Color::DarkGray),
-            ));
-            frame.render_widget(no_results, chunks[2]);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    "No results",
+                    Style::default().fg(Color::DarkGray),
+                )),
+                results_inner,
+            );
         }
         return;
     }
@@ -69,6 +84,5 @@ pub fn render_search(frame: &mut Frame, area: Rect, state: &SearchState) {
             depth: None,
         })
         .collect();
-
-    render_result_list(frame, chunks[2], &items, state.selected);
+    render_result_list(frame, results_inner, &items, state.selected);
 }
