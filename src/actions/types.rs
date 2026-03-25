@@ -104,9 +104,11 @@ pub struct NormalizeSummary {
 }
 
 /// A document in the vault with its content and metadata.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct VaultDocument {
     pub path: String,
+    pub note_type: String,
     pub title: String,
-    pub content: String,
+    pub frontmatter: serde_yaml::Value,
+    pub body: String,
 }
