@@ -42,6 +42,9 @@ pub enum BoardLevel {
     Swimlanes {
         project: String,
         milestone: String,
+        /// Slugs used for matching query actor responses (may differ from display names)
+        load_project: String,
+        load_milestone: String,
         column: usize,
         row: usize,
         columns: [Vec<TicketInfo>; 3],
@@ -931,14 +934,14 @@ impl App {
         for screen in &mut self.stack {
             if let Screen::Board(board) = screen {
                 if let BoardLevel::Swimlanes {
-                    project: ref p,
-                    milestone: ref m,
+                    load_project: ref lp,
+                    load_milestone: ref lm,
                     columns,
                     row,
                     ..
                 } = &mut board.level
                 {
-                    if p == project && m == milestone {
+                    if lp == project && lm == milestone {
                         columns[0] = backlog;
                         columns[1] = in_progress;
                         columns[2] = done;
@@ -1107,6 +1110,8 @@ impl App {
                             level: BoardLevel::Swimlanes {
                                 project: display_project,
                                 milestone: ms_title,
+                                load_project: load_project.clone(),
+                                load_milestone: ms_slug.clone(),
                                 column: 0,
                                 row: 0,
                                 columns: [vec![], vec![], vec![]],
