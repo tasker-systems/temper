@@ -1,4 +1,5 @@
 mod actions;
+mod focus;
 mod queries;
 pub mod state;
 pub use state::*;
@@ -25,6 +26,7 @@ use crate::config::Config;
 
 pub struct App {
     stack: Vec<Screen>,
+    pub focus: FocusRegion,
     pub command_mode: bool,
     pub command_input: String,
     pub should_quit: bool,
@@ -44,6 +46,7 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("stack", &self.stack)
+            .field("focus", &self.focus)
             .field("command_mode", &self.command_mode)
             .field("command_input", &self.command_input)
             .field("should_quit", &self.should_quit)
@@ -79,6 +82,7 @@ impl App {
         };
         Self {
             stack: vec![Screen::Projects(board)],
+            focus: FocusRegion::Primary,
             command_mode: false,
             command_input: String::new(),
             should_quit: false,
@@ -96,6 +100,7 @@ impl App {
     pub fn new(root: Screen) -> Self {
         Self {
             stack: vec![root],
+            focus: FocusRegion::Primary,
             command_mode: false,
             command_input: String::new(),
             should_quit: false,
@@ -141,6 +146,7 @@ impl App {
 
         Ok(Self {
             stack: vec![root_screen],
+            focus: FocusRegion::Primary,
             command_mode: false,
             command_input: String::new(),
             should_quit: false,
@@ -313,6 +319,7 @@ impl App {
             AppAction::SwitchTab(tab) => {
                 let root = self.make_root_screen(tab);
                 self.stack = vec![root];
+                self.reset_focus();
             }
 
             AppAction::Enter => {
@@ -594,6 +601,9 @@ impl App {
                     });
                 }
             }
+
+            AppAction::FocusNext => self.focus_next(),
+            AppAction::FocusPrev => self.focus_prev(),
 
             AppAction::CommandInput(_) | AppAction::CommandBackspace => {
                 // only meaningful in command mode, handled above

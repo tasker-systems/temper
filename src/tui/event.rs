@@ -99,6 +99,8 @@ fn map_search_results(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('k') | KeyCode::Up => Some(AppAction::MoveUp),
         KeyCode::Enter => Some(AppAction::Enter),
         KeyCode::Char('c') => Some(AppAction::OpenContextForSelected),
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
         KeyCode::Char('q') => Some(AppAction::Quit),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
         KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
@@ -130,6 +132,8 @@ fn map_context_results(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('c') => Some(AppAction::ContextRecenter),
         KeyCode::Char('+') | KeyCode::Char('=') => Some(AppAction::ContextDepthUp),
         KeyCode::Char('-') => Some(AppAction::ContextDepthDown),
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
         KeyCode::Char('q') => Some(AppAction::Quit),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
         KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
@@ -147,6 +151,8 @@ fn map_viewer(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('k') | KeyCode::Up => Some(AppAction::MoveUp),
         KeyCode::Esc | KeyCode::Char('q') => Some(AppAction::Escape),
         KeyCode::Char('e') => Some(AppAction::OpenEditor),
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
         KeyCode::Char('?') => Some(AppAction::ToggleHelp),
         _ => None,
@@ -164,6 +170,10 @@ fn map_normal(key: KeyEvent) -> Option<AppAction> {
         // Enter / Esc
         KeyCode::Enter => Some(AppAction::Enter),
         KeyCode::Esc => Some(AppAction::Escape),
+
+        // Focus cycling
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
 
         // Command mode
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),

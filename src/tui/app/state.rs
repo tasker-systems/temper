@@ -7,6 +7,14 @@ use crate::actions::types::{
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FocusRegion {
+    TabBar,
+    Primary,
+    Secondary,
+    Tertiary(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Projects,
     Search,
@@ -162,4 +170,7 @@ pub enum AppAction {
     // Maintain actions
     IndexRebuild,
     NormalizeRun,
+    // Focus cycling
+    FocusNext,
+    FocusPrev,
 }
