@@ -17,7 +17,7 @@ pub enum FocusStyle {
 
 /// A configurable bordered region whose border color reflects focus state.
 ///
-/// All blocks use [`Borders::ALL`] and [`Padding::horizontal`](1).
+/// All blocks use `Borders::ALL` and `Padding::horizontal(1)`.
 ///
 /// # Border colors
 ///
