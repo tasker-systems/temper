@@ -54,10 +54,10 @@ Five workstreams that produce findings before any implementation begins. Each pr
 
 ### R1: Workflow & Lifecycle Vision
 
-**Question**: What does it look like, step by step, for one or more developers and agents to use temper-cloud day to day? What are the responsibility boundaries between Postgres and git, and how do they intersect and reconcile?
+**Question**: What does it look like, step by step, for one or more developers and agents to use Temper Cloud day to day? What are the responsibility boundaries between Postgres and git, and how do they intersect and reconcile?
 
 **Outputs**:
-- Narrative walkthrough of key workflows: create a ticket, search across projects, pick up a session on a new machine, agent indexes external research, two developers contribute to the same project
+- Narrative walkthrough of key workflows: create a ticket, search across projects, pick up a session on a new machine, agent indexes external research, two developers contribute to the same project (multi-developer walkthrough is for informing data model extensibility only — not for driving implementation phase work)
 - Responsibility matrix: for each operation, which system is authoritative, which is derived, and what triggers reconciliation
 - Edge case catalog: what happens on conflict, stale cache, offline work, partial sync failure
 - Decision: what requires human-in-the-loop vs. what can be automated
@@ -73,10 +73,11 @@ Five workstreams that produce findings before any implementation begins. Each pr
 - Schema design: tables, relationships, pg_vector column strategy, frontmatter-to-Postgres field mapping
 - Drift detection design: how frontmatter on disk and Postgres metadata stay in agreement, what constitutes drift, how it's resolved
 - UUIDv7 and content-hash (sha2) strategy for identity and change detection
+- Migration plan: how existing markdown files, frontmatter, and HNSW indexes map to the new Postgres schema — preserving all existing knowledge base content
 
 ### R3: Deployment Platform Evaluation
 
-**Question**: Given the workflow goals from R1 and the data model from R2, should temper-cloud deploy on Vercel, Shuttle.dev, or another platform?
+**Question**: Given the workflow goals from R1 and the data model from R2, should Temper Cloud deploy on Vercel, Shuttle.dev, or another platform?
 
 **Depends on**: R1, R2
 
@@ -102,24 +103,25 @@ Five workstreams that produce findings before any implementation begins. Each pr
 
 **Question**: How do local and remote indexing work together? How do external resources get tracked? What can be automated vs. what needs human review?
 
-**Depends on**: R1, R2, R4
+**Depends on**: R2, R3, R4
 
 **Outputs**:
+- Embedding model strategy: what model, what dimensionality, how it relates to the current candle-based local pipeline, and implications for schema and deployment resources
 - Indexing architecture: can stream-based chunking/vectorization work serverless, or must the CLI do local embedding and push vectors to the API?
-- Sync model: does temper-cloud need a full checkout, a shallow clone, or can it work stream-based against the git remote?
+- Sync model: does the cloud deployment need a full checkout, a shallow clone, or can it work stream-based against the git remote?
 - Local HNSW role: persist as local cache/offline fallback, or fully replaced by pg_vector?
 - External resource model: FQDN/URL tracking, what "indexing an external resource" means in practice, deferred transport layer
-- temper-cloud process model: long-running service vs. composed serverless functions (temper-api + temper-mcp)
+- Process model: is `temper-cloud` a long-running service crate, or does the deployment platform compose `temper-api` + `temper-mcp` as serverless functions directly?
 
 ### Research Dependency Graph
 
 ```
 R1 (Workflow) ──→ R2 (Data Model) ──→ R4 (Crates & Auth)
       │                 │                      │
-      └────────→ R3 (Deployment) ──────→ R4    │
-                        │                      │
-                        └──────────────→ R5 (Indexing & Sync)
-                                               ↑
+      └────────→ R3 (Deployment) ──────→ R4    ↓
+                        │               R5 (Indexing & Sync)
+                        │                 ↑    ↑
+                        └─────────────────┘    │
                                           R2 ──┘
 ```
 
@@ -191,8 +193,8 @@ Five workstreams that execute after research phases produce their findings. Each
 
 ```
 I1 (Crate Restructure) ──→ I2 (Postgres Local) ──→ I4 (First Deploy)
-                                    │                      │
-                              I3 (API & Auth) ────→ I4     │
+          │                                                │
+          └──→ I3 (API & Auth) ──────────────────→ I4     │
                                                            │
                                                     I5 (MCP & Agents)
 ```
@@ -206,7 +208,7 @@ These are captured here for tracking. Each should be resolved by the research ph
 - **R2**: Should composable behaviors be modeled as Postgres columns, JSONB fields, or a separate behaviors table?
 - **R3**: Can Rust serverless functions on Vercel/Shuttle perform git operations (clone, push) within acceptable latency and resource constraints?
 - **R4**: Does temper-cloud exist as its own crate or is it just temper-api + temper-mcp composed by the deployment platform?
-- **R5**: Is a shallow clone sufficient for cloud-side operations, or does temper-cloud need full history for drift detection?
+- **R5**: Is a shallow clone sufficient for cloud-side operations, or does the cloud deployment need full history for drift detection?
 - **R5**: Can embedding generation happen serverless, or must it always be CLI-side with vectors pushed to the API?
 
 ## Focused Scope Reminder
