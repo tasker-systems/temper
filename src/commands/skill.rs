@@ -55,7 +55,7 @@ working inside the temper source repo.
 - `temper session list` — List recent sessions
 - `temper ticket create --title <t> [--project <p>] [--scope patch|feature|epic]` — Create ticket (stdin auto-detected)
 - `temper ticket list [--project <p>] [--format json|text]` — List tickets
-- `temper ticket board [--project <p>]` — Board view
+- `temper tui` — Interactive terminal UI (board, search, context, maintain)
 - `temper ticket move <slug> --stage <s> [--project <p>] [--scope patch|feature|epic]` — Move ticket between stages or update scope
 - `temper ticket done <slug> [--project <p>]` — Mark ticket done
 - `temper ticket show <slug> [--project <p>] [--format json|text]` — Show ticket content
