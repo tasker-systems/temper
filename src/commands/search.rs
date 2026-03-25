@@ -1,9 +1,7 @@
+use crate::actions::types::{SearchHit, SearchResults};
 use crate::config::Config;
-use crate::embedder::{self, Embedder};
 use crate::error::Result;
 use crate::format::OutputFormat;
-use crate::hnsw::{SearchFilter, SearchIndex};
-use crate::output;
 use serde::Serialize;
 use std::fmt;
 
@@ -22,6 +20,33 @@ struct SearchHitOutput {
 struct SearchOutput {
     query: String,
     hits: Vec<SearchHitOutput>,
+}
+
+impl From<SearchHit> for SearchHitOutput {
+    fn from(hit: SearchHit) -> Self {
+        SearchHitOutput {
+            score: hit.score,
+            file_path: hit.file_path,
+            chunk_index: hit.chunk_index,
+            note_type: hit.note_type,
+            cluster: hit.cluster,
+            project: hit.project,
+            content: hit.content,
+        }
+    }
+}
+
+impl From<SearchResults> for SearchOutput {
+    fn from(results: SearchResults) -> Self {
+        SearchOutput {
+            query: results.query,
+            hits: results
+                .hits
+                .into_iter()
+                .map(SearchHitOutput::from)
+                .collect(),
+        }
+    }
 }
 
 impl fmt::Display for SearchHitOutput {
@@ -80,56 +105,13 @@ pub fn run(
 ) -> Result<()> {
     let fmt = OutputFormat::parse(format);
 
-    let state_dir = &config.state_dir;
+    let results = crate::actions::search::run(config, query, note_type, project, limit)?;
 
-    let index = match SearchIndex::load(state_dir) {
-        Ok(idx) => idx,
-        Err(_) => {
-            output::warning("No search index found. Run 'temper index' to build it.");
-            return Ok(());
-        }
-    };
-
-    if index.entry_count() == 0 {
-        output::warning("Index is empty. Run 'temper index' to populate it.");
-        return Ok(());
+    if results.hits.is_empty() && fmt == OutputFormat::Text {
+        crate::output::warning("No results found. Run 'temper index' if you haven't indexed yet.");
     }
 
-    let mut embedder = Embedder::new(config.model_cache_dir.clone());
-    let preprocessed = embedder::preprocess_chunk(query, "");
-    let query_vector = embedder.embed(&preprocessed)?;
-
-    let filter = if note_type.is_some() || project.is_some() {
-        Some(SearchFilter {
-            note_type: note_type.map(String::from),
-            cluster: None,
-            project: project.map(String::from),
-            tags: None,
-        })
-    } else {
-        None
-    };
-
-    let hits = index.search(&query_vector, limit, filter.as_ref());
-
-    let hit_outputs: Vec<SearchHitOutput> = hits
-        .into_iter()
-        .map(|h| SearchHitOutput {
-            score: h.score,
-            file_path: h.entry.file_path,
-            chunk_index: h.entry.chunk_index,
-            note_type: h.entry.metadata.note_type,
-            cluster: h.entry.metadata.cluster,
-            project: h.entry.metadata.project,
-            content: h.entry.content,
-        })
-        .collect();
-
-    let output = SearchOutput {
-        query: query.to_string(),
-        hits: hit_outputs,
-    };
-
+    let output: SearchOutput = results.into();
     crate::format::output(&output, fmt);
     Ok(())
 }

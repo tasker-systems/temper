@@ -134,6 +134,8 @@ pub enum Commands {
         #[command(subcommand)]
         action: ResearchAction,
     },
+    /// Launch interactive TUI
+    Tui,
 }
 
 #[derive(Subcommand)]
@@ -210,15 +212,6 @@ pub enum TicketAction {
         slug: String,
         #[arg(long)]
         project: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-    /// Show project board
-    Board {
-        #[arg(long)]
-        project: Option<String>,
-        #[arg(long)]
-        milestone: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
