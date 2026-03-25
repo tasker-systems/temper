@@ -1,182 +1,24 @@
+mod actions;
+mod focus;
+mod queries;
+pub mod state;
+pub use state::*;
+
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tokio::sync::mpsc;
 
 use super::query_actor::{QueryRequest, QueryResult};
-use super::tabs::board;
 use super::tabs::context;
 use super::tabs::maintain;
+use super::tabs::projects;
 use super::tabs::search;
 use super::views::popup::{render_popup, scope_options, stage_options};
 use super::views::viewer;
 use super::widgets::command_line::render_command_line;
 use super::widgets::keyhints::render_keyhints;
-use crate::actions::types::{
-    IndexStats, MilestoneInfo, NormalizeSummary, SearchHit, TicketInfo, VaultDocument,
-};
+use crate::actions::types::MilestoneInfo;
 use crate::config::Config;
-
-// ---------------------------------------------------------------------------
-// Enums & structs
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Board,
-    Search,
-    Context,
-    Maintain,
-}
-
-#[derive(Debug, Clone)]
-pub enum BoardLevel {
-    Projects {
-        selected: usize,
-        projects: Vec<String>,
-    },
-    Milestones {
-        project: String,
-        selected: usize,
-        milestones: Vec<MilestoneWithCounts>,
-    },
-    Swimlanes {
-        project: String,
-        milestone: String,
-        /// Slugs used for matching query actor responses (may differ from display names)
-        load_project: String,
-        load_milestone: String,
-        column: usize,
-        row: usize,
-        columns: [Vec<TicketInfo>; 3],
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct MilestoneWithCounts {
-    pub info: MilestoneInfo,
-    pub backlog: usize,
-    pub in_progress: usize,
-    pub done: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct BoardState {
-    pub level: BoardLevel,
-}
-
-#[derive(Debug, Clone)]
-pub struct SearchState {
-    pub query: String,
-    pub cursor_pos: usize,
-    pub results: Vec<SearchHit>,
-    pub selected: usize,
-    pub input_focused: bool,
-    pub loading: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContextNeighbor {
-    pub label: String,
-    pub file_path: String,
-    pub note_type: String,
-    pub score: f32,
-    pub depth: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContextState {
-    pub center_stack: Vec<String>,
-    pub current_center: String,
-    pub depth: usize,
-    pub neighbors: Vec<ContextNeighbor>,
-    pub selected: usize,
-    pub loading: bool,
-    pub input_active: bool,
-    pub input_text: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct MaintainState {
-    pub index_stats: Option<IndexStats>,
-    pub last_normalize: Option<NormalizeSummary>,
-    pub progress_message: Option<String>,
-    pub running: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ViewerState {
-    pub document: VaultDocument,
-    pub scroll_offset: usize,
-    pub source_label: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum Screen {
-    Board(BoardState),
-    Search(SearchState),
-    Context(ContextState),
-    Maintain(MaintainState),
-    Viewer(ViewerState),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PopupState {
-    None,
-    StagePicker {
-        slug: String,
-        project: String,
-        selected: usize,
-    },
-    ScopePicker {
-        slug: String,
-        project: String,
-        selected: usize,
-    },
-}
-
-// ---------------------------------------------------------------------------
-// Actions
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppAction {
-    Quit,
-    SwitchTab(Tab),
-    Enter,
-    Escape,
-    MoveUp,
-    MoveDown,
-    MoveLeft,
-    MoveRight,
-    EnterCommandMode,
-    SubmitCommand(String),
-    CommandInput(char),
-    CommandBackspace,
-    ToggleHelp,
-    // Search-specific
-    SearchInput(char),
-    SearchBackspace,
-    SearchFocusResults,
-    SearchRefocusInput,
-    // Context-specific
-    ContextActivateInput,
-    ContextInput(char),
-    ContextBackspace,
-    ContextSubmitInput,
-    ContextRecenter,
-    ContextDepthUp,
-    ContextDepthDown,
-    // Search-to-context
-    OpenContextForSelected,
-    // Viewer
-    OpenEditor,
-    // Ticket mutation popups
-    OpenStagePicker,
-    OpenScopePicker,
-    // Maintain actions
-    IndexRebuild,
-    NormalizeRun,
-}
 
 // ---------------------------------------------------------------------------
 // App
@@ -184,6 +26,7 @@ pub enum AppAction {
 
 pub struct App {
     stack: Vec<Screen>,
+    pub focus: FocusRegion,
     pub command_mode: bool,
     pub command_input: String,
     pub should_quit: bool,
@@ -203,6 +46,7 @@ impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("App")
             .field("stack", &self.stack)
+            .field("focus", &self.focus)
             .field("command_mode", &self.command_mode)
             .field("command_input", &self.command_input)
             .field("should_quit", &self.should_quit)
@@ -214,8 +58,8 @@ impl std::fmt::Debug for App {
 }
 
 impl App {
-    /// Create an App suitable for tests — starts on Board / Milestones with one
-    /// dummy milestone so that `Enter` can push a Swimlanes screen.
+    /// Create an App suitable for tests — starts on Board / ProjectList with one
+    /// dummy project and milestone so that `Enter` can navigate to Swimlanes.
     pub fn new_for_test() -> Self {
         let milestone = MilestoneWithCounts {
             info: MilestoneInfo {
@@ -230,14 +74,19 @@ impl App {
             done: 0,
         };
         let board = BoardState {
-            level: BoardLevel::Milestones {
-                project: "demo".into(),
+            level: BoardLevel::ProjectList {
                 selected: 0,
-                milestones: vec![milestone],
+                projects: vec!["demo".into()],
+                detail: Some(DetailPanel {
+                    project: "demo".into(),
+                    milestones: vec![milestone],
+                    selected: 0,
+                }),
             },
         };
         Self {
-            stack: vec![Screen::Board(board)],
+            stack: vec![Screen::Projects(board)],
+            focus: FocusRegion::Primary,
             command_mode: false,
             command_input: String::new(),
             should_quit: false,
@@ -255,6 +104,7 @@ impl App {
     pub fn new(root: Screen) -> Self {
         Self {
             stack: vec![root],
+            focus: FocusRegion::Primary,
             command_mode: false,
             command_input: String::new(),
             should_quit: false,
@@ -279,27 +129,33 @@ impl App {
         let project_names: Vec<String> = config.projects.keys().cloned().collect();
         let inferred_project = project.as_ref().map(|p| p.name.clone());
 
-        let root_screen = if let Some(proj) = project {
-            // Load milestones synchronously for the resolved project
+        let detail = if let Some(proj) = &project {
             let milestones = load_milestones_with_counts(config, &proj.name);
-            Screen::Board(BoardState {
-                level: BoardLevel::Milestones {
-                    project: proj.name.clone(),
-                    selected: 0,
-                    milestones,
-                },
+            Some(DetailPanel {
+                project: proj.name.clone(),
+                milestones,
+                selected: 0,
             })
         } else {
-            Screen::Board(BoardState {
-                level: BoardLevel::Projects {
-                    selected: 0,
-                    projects: project_names.clone(),
-                },
-            })
+            None
         };
+
+        let selected = project
+            .as_ref()
+            .and_then(|p| project_names.iter().position(|n| n == &p.name))
+            .unwrap_or(0);
+
+        let root_screen = Screen::Projects(BoardState {
+            level: BoardLevel::ProjectList {
+                selected,
+                projects: project_names.clone(),
+                detail,
+            },
+        });
 
         Ok(Self {
             stack: vec![root_screen],
+            focus: FocusRegion::Primary,
             command_mode: false,
             command_input: String::new(),
             should_quit: false,
@@ -317,11 +173,11 @@ impl App {
 
     pub fn active_tab(&self) -> Tab {
         match &self.stack[0] {
-            Screen::Board(_) => Tab::Board,
+            Screen::Projects(_) => Tab::Projects,
             Screen::Search(_) => Tab::Search,
             Screen::Context(_) => Tab::Context,
             Screen::Maintain(_) => Tab::Maintain,
-            Screen::Viewer(_) => Tab::Board, // viewer is always pushed atop something
+            Screen::Viewer(_) => Tab::Projects, // viewer is always pushed atop something
         }
     }
 
@@ -464,6 +320,32 @@ impl App {
             }
         }
 
+        // Tab bar navigation — intercept movement when focus is on tab bar
+        if self.focus == FocusRegion::TabBar {
+            match action {
+                AppAction::MoveLeft | AppAction::MoveRight => {
+                    let tabs = [Tab::Projects, Tab::Search, Tab::Context, Tab::Maintain];
+                    let current = self.active_tab();
+                    let idx = tabs.iter().position(|t| *t == current).unwrap_or(0);
+                    let new_idx = if matches!(action, AppAction::MoveRight) {
+                        (idx + 1) % tabs.len()
+                    } else if idx == 0 {
+                        tabs.len() - 1
+                    } else {
+                        idx - 1
+                    };
+                    self.stack = vec![self.make_root_screen(tabs[new_idx])];
+                    self.focus = FocusRegion::TabBar; // stay on tab bar
+                    return;
+                }
+                AppAction::Enter => {
+                    self.reset_focus();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match action {
             AppAction::Quit => {
                 self.should_quit = true;
@@ -472,6 +354,7 @@ impl App {
             AppAction::SwitchTab(tab) => {
                 let root = self.make_root_screen(tab);
                 self.stack = vec![root];
+                self.reset_focus();
             }
 
             AppAction::Enter => {
@@ -490,6 +373,9 @@ impl App {
                     // On search results — pop back if stacked
                     if self.stack.len() > 1 {
                         self.stack.pop();
+                        self.reset_focus();
+                    } else if self.focus != FocusRegion::TabBar {
+                        self.focus = FocusRegion::TabBar;
                     }
                 } else if let Screen::Context(s) = self.current_screen_mut() {
                     if s.input_active {
@@ -513,9 +399,15 @@ impl App {
                         }
                     } else if self.stack.len() > 1 {
                         self.stack.pop();
+                        self.reset_focus();
+                    } else if self.focus != FocusRegion::TabBar {
+                        self.focus = FocusRegion::TabBar;
                     }
                 } else if self.stack.len() > 1 {
                     self.stack.pop();
+                    self.reset_focus();
+                } else if self.focus != FocusRegion::TabBar {
+                    self.focus = FocusRegion::TabBar;
                 }
             }
 
@@ -754,6 +646,9 @@ impl App {
                 }
             }
 
+            AppAction::FocusNext => self.focus_next(),
+            AppAction::FocusPrev => self.focus_prev(),
+
             AppAction::CommandInput(_) | AppAction::CommandBackspace => {
                 // only meaningful in command mode, handled above
             }
@@ -775,7 +670,7 @@ impl App {
         // Tab bar — custom Line with Spans for active/inactive styling
         let active_tab = self.active_tab();
         let tab_defs: &[(&str, Tab)] = &[
-            ("Board", Tab::Board),
+            ("Projects", Tab::Projects),
             ("Search", Tab::Search),
             ("Context", Tab::Context),
             ("Maintain", Tab::Maintain),
@@ -799,25 +694,30 @@ impl App {
                 spans.push(Span::styled(*name, Style::default().fg(Color::DarkGray)));
             }
         }
-        let tab_bar = Paragraph::new(Line::from(spans));
+        let tab_bar_style = if self.focus == FocusRegion::TabBar {
+            Style::default().bg(Color::Rgb(30, 30, 50))
+        } else {
+            Style::default()
+        };
+        let tab_bar = Paragraph::new(Line::from(spans)).style(tab_bar_style);
         frame.render_widget(tab_bar, chunks[0]);
 
         // Content area
         match self.current_screen() {
-            Screen::Board(board_state) => {
-                board::render_board(frame, chunks[1], board_state);
+            Screen::Projects(board_state) => {
+                projects::render_projects_tab(frame, chunks[1], board_state, self.focus);
             }
             Screen::Search(search_state) => {
-                search::render_search(frame, chunks[1], search_state);
+                search::render_search(frame, chunks[1], search_state, self.focus);
             }
             Screen::Context(context_state) => {
-                context::render_context(frame, chunks[1], context_state);
+                context::render_context(frame, chunks[1], context_state, self.focus);
             }
             Screen::Viewer(viewer_state) => {
-                viewer::render_viewer(frame, chunks[1], viewer_state);
+                viewer::render_viewer(frame, chunks[1], viewer_state, self.focus);
             }
             Screen::Maintain(s) => {
-                maintain::render_maintain(frame, chunks[1], s);
+                maintain::render_maintain(frame, chunks[1], s, self.focus);
             }
         }
 
@@ -847,454 +747,32 @@ impl App {
         }
     }
 
-    // -- Query results ------------------------------------------------------
-
-    pub fn handle_query_result(&mut self, result: QueryResult) {
-        match result {
-            QueryResult::SearchResults(sr) => {
-                if let Screen::Search(s) = self.current_screen_mut() {
-                    s.results = sr.hits;
-                    s.loading = false;
-                }
-            }
-            QueryResult::ContextResults(cr) => {
-                if let Screen::Context(s) = self.current_screen_mut() {
-                    // Flatten hops into neighbor entries for display, tracking depth by hop index
-                    s.neighbors = cr
-                        .hops
-                        .into_iter()
-                        .enumerate()
-                        .flat_map(|(hop_idx, hop)| {
-                            hop.related_chunks.into_iter().map(move |group| {
-                                let best_score =
-                                    group.chunks.iter().map(|c| c.score).fold(0.0f32, f32::max);
-                                ContextNeighbor {
-                                    label: group.title,
-                                    file_path: group.file_path,
-                                    note_type: group.note_type,
-                                    score: best_score,
-                                    depth: hop_idx,
-                                }
-                            })
-                        })
-                        .collect();
-                    s.loading = false;
-                }
-            }
-            QueryResult::IndexComplete(stats) => {
-                if let Screen::Maintain(s) = self.current_screen_mut() {
-                    s.index_stats = Some(stats);
-                    s.running = false;
-                    s.progress_message = None;
-                }
-            }
-            QueryResult::NormalizeComplete(summary) => {
-                if let Screen::Maintain(s) = self.current_screen_mut() {
-                    s.last_normalize = Some(summary);
-                    s.running = false;
-                    s.progress_message = None;
-                }
-            }
-            QueryResult::Progress { message } => {
-                if let Screen::Maintain(s) = self.current_screen_mut() {
-                    s.progress_message = Some(message);
-                }
-            }
-            QueryResult::Error(msg) => {
-                tracing::warn!("query actor error: {}", msg);
-            }
-            QueryResult::TicketsLoaded {
-                project,
-                milestone,
-                backlog,
-                in_progress,
-                done,
-            }
-            | QueryResult::TicketMoved {
-                project,
-                milestone,
-                backlog,
-                in_progress,
-                done,
-            } => {
-                self.apply_swimlane_columns(&project, &milestone, backlog, in_progress, done);
-            }
-        }
-    }
-
-    /// Apply loaded ticket columns to the matching Swimlanes screen in the stack.
-    fn apply_swimlane_columns(
-        &mut self,
-        project: &str,
-        milestone: &str,
-        backlog: Vec<crate::actions::types::TicketInfo>,
-        in_progress: Vec<crate::actions::types::TicketInfo>,
-        done: Vec<crate::actions::types::TicketInfo>,
-    ) {
-        for screen in &mut self.stack {
-            if let Screen::Board(board) = screen {
-                if let BoardLevel::Swimlanes {
-                    load_project: ref lp,
-                    load_milestone: ref lm,
-                    columns,
-                    row,
-                    ..
-                } = &mut board.level
-                {
-                    if lp == project && lm == milestone {
-                        columns[0] = backlog;
-                        columns[1] = in_progress;
-                        columns[2] = done;
-                        // Clamp row so it doesn't point past end
-                        // (column clamping happens in move_selection)
-                        *row = 0;
-                        return;
-                    }
-                }
-            }
-        }
-    }
-
-    // -- Helpers ------------------------------------------------------------
-
-    /// Return the (slug, project) of the currently selected ticket, if any.
-    /// Works for both Swimlanes and Viewer screens.
-    fn selected_ticket_identity(&self) -> Option<(String, String)> {
-        match self.current_screen() {
-            Screen::Board(board) => {
-                if let BoardLevel::Swimlanes {
-                    project,
-                    columns,
-                    column,
-                    row,
-                    ..
-                } = &board.level
-                {
-                    let ticket = columns.get(*column)?.get(*row)?;
-                    Some((ticket.slug.clone(), project.clone()))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    /// Return the milestone slug for the current swimlane view, if any.
-    fn current_swimlane_milestone(&self) -> Option<(String, String)> {
-        match self.current_screen() {
-            Screen::Board(board) => {
-                if let BoardLevel::Swimlanes {
-                    project, milestone, ..
-                } = &board.level
-                {
-                    Some((project.clone(), milestone.clone()))
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        }
-    }
-
-    /// Confirm the active popup: send the mutation request and close the popup.
-    fn confirm_popup(&mut self) {
-        let popup = std::mem::replace(&mut self.popup, PopupState::None);
-        let milestone_info = self.current_swimlane_milestone();
-
-        match popup {
-            PopupState::StagePicker {
-                slug,
-                project,
-                selected,
-            } => {
-                let stages = ["backlog", "in-progress", "done", "cancelled"];
-                if let Some(&stage) = stages.get(selected) {
-                    if let Some((_, milestone)) = milestone_info {
-                        if let Some(tx) = &self.req_tx {
-                            let _ = tx.try_send(super::query_actor::QueryRequest::MoveTicket {
-                                slug,
-                                project,
-                                milestone,
-                                stage: Some(stage.to_string()),
-                                scope: None,
-                            });
-                        }
-                    }
-                }
-            }
-            PopupState::ScopePicker {
-                slug,
-                project,
-                selected,
-            } => {
-                let scopes = ["patch", "feature", "epic"];
-                if let Some(&scope) = scopes.get(selected) {
-                    if let Some((_, milestone)) = milestone_info {
-                        if let Some(tx) = &self.req_tx {
-                            let _ = tx.try_send(super::query_actor::QueryRequest::MoveTicket {
-                                slug,
-                                project,
-                                milestone,
-                                stage: None,
-                                scope: Some(scope.to_string()),
-                            });
-                        }
-                    }
-                }
-            }
-            PopupState::None => {}
-        }
-    }
-
-    /// Send the current search query to the query actor (non-blocking).
-    /// Only sends if the query is non-empty; clears loading flag if empty.
-    fn send_search_query(&mut self) {
-        let query = if let Screen::Search(s) = self.current_screen() {
-            s.query.clone()
-        } else {
-            return;
-        };
-
-        if query.is_empty() {
-            if let Screen::Search(s) = self.current_screen_mut() {
-                s.loading = false;
-                s.results.clear();
-            }
-            return;
-        }
-
-        if let Some(tx) = &self.req_tx {
-            let _ = tx.try_send(super::query_actor::QueryRequest::Search { query });
-        }
-    }
-
-    fn handle_enter(&mut self) {
-        let screen = self.current_screen().clone();
-        match screen {
-            Screen::Board(ref board) => match &board.level {
-                BoardLevel::Projects { selected, projects } => {
-                    if let Some(proj) = projects.get(*selected) {
-                        let milestones = self
-                            .config
-                            .as_ref()
-                            .map(|c| load_milestones_with_counts(c, proj))
-                            .unwrap_or_default();
-                        let next = Screen::Board(BoardState {
-                            level: BoardLevel::Milestones {
-                                project: proj.clone(),
-                                selected: 0,
-                                milestones,
-                            },
-                        });
-                        self.stack.push(next);
-                    }
-                }
-                BoardLevel::Milestones {
-                    project,
-                    selected,
-                    milestones,
-                } => {
-                    if let Some(ms) = milestones.get(*selected) {
-                        let ms_slug = ms.info.slug.clone();
-                        let ms_title = ms.info.title.clone();
-                        // For "__all__" synthetic entry, pass __all__ for both
-                        // project and milestone so the actor loads everything
-                        let load_project = ms.info.project.clone();
-                        let display_project = if load_project == "__all__" {
-                            "All".to_string()
-                        } else {
-                            project.clone()
-                        };
-                        let next = Screen::Board(BoardState {
-                            level: BoardLevel::Swimlanes {
-                                project: display_project,
-                                milestone: ms_title,
-                                load_project: load_project.clone(),
-                                load_milestone: ms_slug.clone(),
-                                column: 0,
-                                row: 0,
-                                columns: [vec![], vec![], vec![]],
-                            },
-                        });
-                        self.stack.push(next);
-                        if let Some(tx) = &self.req_tx {
-                            let _ = tx.try_send(super::query_actor::QueryRequest::LoadTickets {
-                                project: load_project,
-                                milestone: ms_slug,
-                            });
-                        }
-                    }
-                }
-                BoardLevel::Swimlanes {
-                    columns,
-                    column,
-                    row,
-                    project,
-                    ..
-                } => {
-                    if let Some(tickets) = columns.get(*column) {
-                        if let Some(ticket) = tickets.get(*row) {
-                            if let Some(config) = &self.config {
-                                let ticket_path = config
-                                    .vault_root
-                                    .join("tickets")
-                                    .join(&ticket.project)
-                                    .join(format!("{}.md", ticket.slug));
-                                if let Ok(doc) = crate::actions::vault::read_document(&ticket_path)
-                                {
-                                    self.stack.push(Screen::Viewer(ViewerState {
-                                        document: doc,
-                                        scroll_offset: 0,
-                                        source_label: format!(
-                                            "Board > {} > {}",
-                                            project, ticket.title
-                                        ),
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            Screen::Search(ref s) => {
-                if !s.input_focused {
-                    if let Some(hit) = s.results.get(s.selected) {
-                        let doc = VaultDocument {
-                            path: hit.file_path.clone(),
-                            note_type: hit.note_type.clone(),
-                            title: hit.file_path.clone(),
-                            frontmatter: serde_yaml::Value::Null,
-                            body: hit.content.clone(),
-                        };
-                        self.stack.push(Screen::Viewer(ViewerState {
-                            document: doc,
-                            scroll_offset: 0,
-                            source_label: "Search".into(),
-                        }));
-                    }
-                }
-            }
-            Screen::Context(ref s) => {
-                if !s.input_active {
-                    if let Some(neighbor) = s.neighbors.get(s.selected) {
-                        let doc = VaultDocument {
-                            path: neighbor.file_path.clone(),
-                            note_type: neighbor.note_type.clone(),
-                            title: neighbor.label.clone(),
-                            frontmatter: serde_yaml::Value::Null,
-                            body: String::new(),
-                        };
-                        self.stack.push(Screen::Viewer(ViewerState {
-                            document: doc,
-                            scroll_offset: 0,
-                            source_label: "Context".into(),
-                        }));
-                    }
-                }
-            }
-            Screen::Maintain(_) | Screen::Viewer(_) => {}
-        }
-    }
-
-    fn move_selection(&mut self, dir: Direction) {
-        match self.current_screen_mut() {
-            Screen::Board(board) => match &mut board.level {
-                BoardLevel::Projects { selected, projects } => match dir {
-                    Direction::Up => *selected = selected.saturating_sub(1),
-                    Direction::Down => {
-                        if !projects.is_empty() {
-                            *selected = (*selected + 1).min(projects.len() - 1);
-                        }
-                    }
-                    _ => {}
-                },
-                BoardLevel::Milestones {
-                    selected,
-                    milestones,
-                    ..
-                } => match dir {
-                    Direction::Up => *selected = selected.saturating_sub(1),
-                    Direction::Down => {
-                        if !milestones.is_empty() {
-                            *selected = (*selected + 1).min(milestones.len() - 1);
-                        }
-                    }
-                    _ => {}
-                },
-                BoardLevel::Swimlanes {
-                    column,
-                    row,
-                    columns,
-                    ..
-                } => match dir {
-                    Direction::Left => *column = column.saturating_sub(1),
-                    Direction::Right => *column = (*column + 1).min(2),
-                    Direction::Up => *row = row.saturating_sub(1),
-                    Direction::Down => {
-                        let col = &columns[*column];
-                        if !col.is_empty() {
-                            *row = (*row + 1).min(col.len() - 1);
-                        }
-                    }
-                },
-            },
-            Screen::Search(s) => {
-                if !s.input_focused {
-                    match dir {
-                        Direction::Up => s.selected = s.selected.saturating_sub(1),
-                        Direction::Down => {
-                            if !s.results.is_empty() {
-                                s.selected = (s.selected + 1).min(s.results.len() - 1);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Screen::Context(s) => {
-                if !s.input_active {
-                    match dir {
-                        Direction::Up => s.selected = s.selected.saturating_sub(1),
-                        Direction::Down => {
-                            if !s.neighbors.is_empty() {
-                                s.selected = (s.selected + 1).min(s.neighbors.len() - 1);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Screen::Maintain(_) => {}
-            Screen::Viewer(v) => match dir {
-                Direction::Up => v.scroll_offset = v.scroll_offset.saturating_sub(1),
-                Direction::Down => v.scroll_offset += 1,
-                _ => {}
-            },
-        }
-    }
-
     fn make_root_screen(&self, tab: Tab) -> Screen {
         match tab {
-            Tab::Board => {
-                // If we have an inferred project, load its milestones
-                if let (Some(proj), Some(config)) = (&self.inferred_project, &self.config) {
-                    let milestones = load_milestones_with_counts(config, proj);
-                    Screen::Board(BoardState {
-                        level: BoardLevel::Milestones {
+            Tab::Projects => {
+                let detail =
+                    if let (Some(proj), Some(config)) = (&self.inferred_project, &self.config) {
+                        let milestones = load_milestones_with_counts(config, proj);
+                        Some(DetailPanel {
                             project: proj.clone(),
-                            selected: 0,
                             milestones,
-                        },
-                    })
-                } else {
-                    Screen::Board(BoardState {
-                        level: BoardLevel::Projects {
                             selected: 0,
-                            projects: self.project_names.clone(),
-                        },
-                    })
-                }
+                        })
+                    } else {
+                        None
+                    };
+                let selected = self
+                    .inferred_project
+                    .as_ref()
+                    .and_then(|p| self.project_names.iter().position(|n| n == p))
+                    .unwrap_or(0);
+                Screen::Projects(BoardState {
+                    level: BoardLevel::ProjectList {
+                        selected,
+                        projects: self.project_names.clone(),
+                        detail,
+                    },
+                })
             }
             Tab::Search => Screen::Search(SearchState {
                 query: String::new(),
@@ -1343,9 +821,10 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
     let counts =
         crate::actions::milestone::count_tickets_by_stage(config, project).unwrap_or_default();
 
-    // "All Tickets" synthetic entry — every ticket across the entire vault
+    // "All Tickets" synthetic entry — all tickets within this project
     let all_tickets = {
-        let all = crate::actions::ticket::load_tickets(config, None, None).unwrap_or_default();
+        let all =
+            crate::actions::ticket::load_tickets(config, Some(project), None).unwrap_or_default();
         let mut backlog = 0usize;
         let mut in_progress = 0usize;
         let mut done = 0usize;
@@ -1360,7 +839,7 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
             info: MilestoneInfo {
                 title: "(All Tickets)".into(),
                 slug: "__all__".into(),
-                project: "__all__".into(),
+                project: project.to_string(),
                 seq: 0,
                 status: "active".into(),
             },
@@ -1393,9 +872,9 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
 }
 
 fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
-    // Overlay dimensions: ~44 chars wide, 27 lines tall
+    // Overlay dimensions: ~44 chars wide, 29 lines tall
     const OVERLAY_W: u16 = 44;
-    const OVERLAY_H: u16 = 27;
+    const OVERLAY_H: u16 = 29;
 
     let x = area.x + area.width.saturating_sub(OVERLAY_W) / 2;
     let y = area.y + area.height.saturating_sub(OVERLAY_H) / 2;
@@ -1409,10 +888,11 @@ fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
             Style::default().fg(Color::Yellow).bold(),
         )),
         Line::from("  1-4         Switch tab"),
+        Line::from("  Tab / S-Tab Cycle focus regions"),
         Line::from("  j/k ↑↓      Move selection"),
         Line::from("  h/l ←→      Columns / projects"),
         Line::from("  Enter       Open / drill in"),
-        Line::from("  Esc         Back / up"),
+        Line::from("  Esc         Back / focus tab bar"),
         Line::from(""),
         Line::from(Span::styled(
             "Mutation",
@@ -1443,7 +923,7 @@ fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
             Style::default().fg(Color::Yellow).bold(),
         )),
         Line::from("  :q          Quit"),
-        Line::from("  :b :s :c :m Switch tabs"),
+        Line::from("  :p :s :c :m Switch tabs"),
         Line::from("  :? :h       This help"),
         Line::from(""),
         Line::from(Span::styled(

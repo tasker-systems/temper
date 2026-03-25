@@ -99,9 +99,11 @@ fn map_search_results(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('k') | KeyCode::Up => Some(AppAction::MoveUp),
         KeyCode::Enter => Some(AppAction::Enter),
         KeyCode::Char('c') => Some(AppAction::OpenContextForSelected),
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
         KeyCode::Char('q') => Some(AppAction::Quit),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
-        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Board)),
+        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
         KeyCode::Char('2') => Some(AppAction::SwitchTab(Tab::Search)),
         KeyCode::Char('3') => Some(AppAction::SwitchTab(Tab::Context)),
         KeyCode::Char('4') => Some(AppAction::SwitchTab(Tab::Maintain)),
@@ -130,9 +132,11 @@ fn map_context_results(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('c') => Some(AppAction::ContextRecenter),
         KeyCode::Char('+') | KeyCode::Char('=') => Some(AppAction::ContextDepthUp),
         KeyCode::Char('-') => Some(AppAction::ContextDepthDown),
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
         KeyCode::Char('q') => Some(AppAction::Quit),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
-        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Board)),
+        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
         KeyCode::Char('2') => Some(AppAction::SwitchTab(Tab::Search)),
         KeyCode::Char('3') => Some(AppAction::SwitchTab(Tab::Context)),
         KeyCode::Char('4') => Some(AppAction::SwitchTab(Tab::Maintain)),
@@ -147,6 +151,8 @@ fn map_viewer(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('k') | KeyCode::Up => Some(AppAction::MoveUp),
         KeyCode::Esc | KeyCode::Char('q') => Some(AppAction::Escape),
         KeyCode::Char('e') => Some(AppAction::OpenEditor),
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
         KeyCode::Char('?') => Some(AppAction::ToggleHelp),
         _ => None,
@@ -165,6 +171,10 @@ fn map_normal(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Enter => Some(AppAction::Enter),
         KeyCode::Esc => Some(AppAction::Escape),
 
+        // Focus cycling
+        KeyCode::Tab if key.modifiers.is_empty() => Some(AppAction::FocusNext),
+        KeyCode::BackTab => Some(AppAction::FocusPrev),
+
         // Command mode
         KeyCode::Char(':') => Some(AppAction::EnterCommandMode),
 
@@ -172,7 +182,7 @@ fn map_normal(key: KeyEvent) -> Option<AppAction> {
         KeyCode::Char('/') => Some(AppAction::SwitchTab(Tab::Search)),
 
         // Tab shortcuts (1-based)
-        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Board)),
+        KeyCode::Char('1') => Some(AppAction::SwitchTab(Tab::Projects)),
         KeyCode::Char('2') => Some(AppAction::SwitchTab(Tab::Search)),
         KeyCode::Char('3') => Some(AppAction::SwitchTab(Tab::Context)),
         KeyCode::Char('4') => Some(AppAction::SwitchTab(Tab::Maintain)),
@@ -199,7 +209,7 @@ pub fn parse_command(input: &str) -> Option<AppAction> {
     let trimmed = input.trim();
     match trimmed {
         "q" | "quit" => Some(AppAction::Quit),
-        "b" | "board" => Some(AppAction::SwitchTab(Tab::Board)),
+        "p" | "projects" | "b" | "board" => Some(AppAction::SwitchTab(Tab::Projects)),
         "s" | "search" => Some(AppAction::SwitchTab(Tab::Search)),
         "c" | "context" => Some(AppAction::SwitchTab(Tab::Context)),
         "m" | "maintain" => Some(AppAction::SwitchTab(Tab::Maintain)),

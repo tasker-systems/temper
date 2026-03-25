@@ -42,29 +42,46 @@ pub fn render_result_list(frame: &mut Frame, area: Rect, items: &[ResultItem], s
                 _ => String::new(),
             };
 
+            let selected_bg = Color::Rgb(42, 42, 74);
+
             let header_style = if is_selected {
-                Style::default().fg(Color::Yellow).bold()
+                Style::default().fg(Color::Yellow).bg(selected_bg).bold()
             } else {
                 Style::default().fg(Color::White)
             };
             let meta_style = if is_selected {
-                Style::default().fg(Color::Cyan)
+                Style::default().fg(Color::Cyan).bg(selected_bg)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let depth_style = if is_selected {
+                Style::default().bg(selected_bg)
+            } else {
+                Style::default()
+            };
+            let snippet_style = if is_selected {
+                Style::default().fg(Color::Gray).bg(selected_bg)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            let dot_style = if is_selected {
+                Style::default().fg(Color::DarkGray).bg(selected_bg)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
 
             let score_text = format!("[{:.2}]", item.score);
             let header_line = Line::from(vec![
-                Span::styled(depth_prefix.clone(), Style::default()),
+                Span::styled(depth_prefix.clone(), depth_style),
                 Span::styled(score_text, meta_style),
-                Span::styled(" ", Style::default()),
+                Span::styled(" ", depth_style),
                 Span::styled(item.path, header_style),
             ]);
             let detail_line = Line::from(vec![
-                Span::styled(format!("{}  ", depth_prefix), Style::default()),
+                Span::styled(format!("{}  ", depth_prefix), depth_style),
                 Span::styled(item.note_type, meta_style),
-                Span::styled(" \u{00b7} ", Style::default().fg(Color::DarkGray)),
-                Span::styled(snippet_truncated, Style::default().fg(Color::Gray)),
+                Span::styled(" \u{00b7} ", dot_style),
+                Span::styled(snippet_truncated, snippet_style),
             ]);
 
             let text = Text::from(vec![header_line, detail_line]);

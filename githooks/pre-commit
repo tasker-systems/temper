@@ -11,4 +11,8 @@ echo "  Running Clippy..."
 cargo clippy --all-targets -- -D warnings
 echo "  ✓ Clippy OK"
 
+echo "  Checking docs..."
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items --quiet
+echo "  ✓ Docs OK"
+
 echo "==> All pre-commit checks passed."
