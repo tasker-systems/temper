@@ -60,7 +60,10 @@ fn render_projects(
         .map(|(i, name)| {
             let marker = if i == selected { "\u{25b8} " } else { "  " };
             let style = if i == selected {
-                Style::default().fg(Color::Yellow).bold()
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Rgb(42, 42, 74))
+                    .bold()
             } else {
                 Style::default()
             };
@@ -105,7 +108,10 @@ fn render_milestones(
         .map(|(i, ms)| {
             let marker = if i == selected { "\u{25b8} " } else { "  " };
             let style = if i == selected {
-                Style::default().fg(Color::Yellow).bold()
+                Style::default()
+                    .fg(Color::Yellow)
+                    .bg(Color::Rgb(42, 42, 74))
+                    .bold()
             } else {
                 Style::default()
             };
