@@ -311,6 +311,32 @@ impl App {
             }
         }
 
+        // Tab bar navigation — intercept movement when focus is on tab bar
+        if self.focus == FocusRegion::TabBar {
+            match action {
+                AppAction::MoveLeft | AppAction::MoveRight => {
+                    let tabs = [Tab::Projects, Tab::Search, Tab::Context, Tab::Maintain];
+                    let current = self.active_tab();
+                    let idx = tabs.iter().position(|t| *t == current).unwrap_or(0);
+                    let new_idx = if matches!(action, AppAction::MoveRight) {
+                        (idx + 1) % tabs.len()
+                    } else if idx == 0 {
+                        tabs.len() - 1
+                    } else {
+                        idx - 1
+                    };
+                    self.stack = vec![self.make_root_screen(tabs[new_idx])];
+                    self.focus = FocusRegion::TabBar; // stay on tab bar
+                    return;
+                }
+                AppAction::Enter => {
+                    self.reset_focus();
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         match action {
             AppAction::Quit => {
                 self.should_quit = true;
@@ -338,6 +364,9 @@ impl App {
                     // On search results — pop back if stacked
                     if self.stack.len() > 1 {
                         self.stack.pop();
+                        self.reset_focus();
+                    } else if self.focus != FocusRegion::TabBar {
+                        self.focus = FocusRegion::TabBar;
                     }
                 } else if let Screen::Context(s) = self.current_screen_mut() {
                     if s.input_active {
@@ -361,9 +390,15 @@ impl App {
                         }
                     } else if self.stack.len() > 1 {
                         self.stack.pop();
+                        self.reset_focus();
+                    } else if self.focus != FocusRegion::TabBar {
+                        self.focus = FocusRegion::TabBar;
                     }
                 } else if self.stack.len() > 1 {
                     self.stack.pop();
+                    self.reset_focus();
+                } else if self.focus != FocusRegion::TabBar {
+                    self.focus = FocusRegion::TabBar;
                 }
             }
 
@@ -650,7 +685,12 @@ impl App {
                 spans.push(Span::styled(*name, Style::default().fg(Color::DarkGray)));
             }
         }
-        let tab_bar = Paragraph::new(Line::from(spans));
+        let tab_bar_style = if self.focus == FocusRegion::TabBar {
+            Style::default().bg(Color::Rgb(30, 30, 50))
+        } else {
+            Style::default()
+        };
+        let tab_bar = Paragraph::new(Line::from(spans)).style(tab_bar_style);
         frame.render_widget(tab_bar, chunks[0]);
 
         // Content area
@@ -817,9 +857,9 @@ fn load_milestones_with_counts(config: &Config, project: &str) -> Vec<MilestoneW
 }
 
 fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
-    // Overlay dimensions: ~44 chars wide, 27 lines tall
+    // Overlay dimensions: ~44 chars wide, 29 lines tall
     const OVERLAY_W: u16 = 44;
-    const OVERLAY_H: u16 = 27;
+    const OVERLAY_H: u16 = 29;
 
     let x = area.x + area.width.saturating_sub(OVERLAY_W) / 2;
     let y = area.y + area.height.saturating_sub(OVERLAY_H) / 2;
@@ -833,10 +873,11 @@ fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
             Style::default().fg(Color::Yellow).bold(),
         )),
         Line::from("  1-4         Switch tab"),
+        Line::from("  Tab / S-Tab Cycle focus regions"),
         Line::from("  j/k ↑↓      Move selection"),
         Line::from("  h/l ←→      Columns / projects"),
         Line::from("  Enter       Open / drill in"),
-        Line::from("  Esc         Back / up"),
+        Line::from("  Esc         Back / focus tab bar"),
         Line::from(""),
         Line::from(Span::styled(
             "Mutation",
@@ -867,7 +908,7 @@ fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
             Style::default().fg(Color::Yellow).bold(),
         )),
         Line::from("  :q          Quit"),
-        Line::from("  :b :s :c :m Switch tabs"),
+        Line::from("  :p :s :c :m Switch tabs"),
         Line::from("  :? :h       This help"),
         Line::from(""),
         Line::from(Span::styled(

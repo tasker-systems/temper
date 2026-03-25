@@ -1,6 +1,7 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Padding, Paragraph};
+use ratatui::widgets::Paragraph;
 
+use super::focusable_block::{FocusStyle, FocusableBlock};
 use crate::actions::types::TicketInfo;
 
 /// A stateless widget that renders a single kanban column.
@@ -14,19 +15,10 @@ pub struct Swimlane<'a> {
 
 impl<'a> Widget for Swimlane<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let header = format!("{} ({})", self.title, self.count);
-
-        let border_style = if self.focused {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::DarkGray)
-        };
-
-        let block = Block::default()
-            .title(header)
-            .borders(Borders::ALL)
-            .border_style(border_style)
-            .padding(Padding::horizontal(1));
+        let focusable = FocusableBlock::new(FocusStyle::Content)
+            .focused(self.focused)
+            .title(&format!("{} ({})", self.title, self.count));
+        let block = focusable.to_block();
 
         let inner = block.inner(area);
         block.render(area, buf);
