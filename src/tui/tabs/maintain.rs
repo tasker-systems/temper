@@ -5,12 +5,8 @@ use crate::tui::app::MaintainState;
 
 /// Render the maintain tab into `area`.
 ///
-/// Layout:
-///   [0] 1 line  — "Maintenance" header
-///   [1] 2 lines — Index section
-///   [2] 4 lines — Normalize section
-///   [3] 1 line  — Progress message (if running)
-///   [4] 1 line  — Key hints
+/// Layout (vertical chunks):
+///   Header, index section, normalize section, progress, key hints.
 pub fn render_maintain(frame: &mut Frame, area: Rect, state: &MaintainState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)

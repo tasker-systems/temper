@@ -6,10 +6,7 @@ use crate::tui::widgets::result_list::{render_result_list, ResultItem};
 
 /// Render the search tab into `area`.
 ///
-/// Layout:
-///   [0] 1 line  — query input
-///   [1] 1 line  — result count / loading indicator
-///   [2] Min(1)  — result list
+/// Layout: query input (1 line), result count (1 line), result list (fills rest).
 pub fn render_search(frame: &mut Frame, area: Rect, state: &SearchState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
