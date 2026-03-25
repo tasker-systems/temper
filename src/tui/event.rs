@@ -18,10 +18,16 @@ pub fn map_key(
     in_context_input: bool,
     in_context_results: bool,
     in_viewer: bool,
+    show_help: bool,
 ) -> Option<AppAction> {
     // Ctrl-C always quits
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         return Some(AppAction::Quit);
+    }
+
+    // Help overlay: any key press dismisses it
+    if show_help {
+        return Some(AppAction::ToggleHelp);
     }
 
     if in_popup {

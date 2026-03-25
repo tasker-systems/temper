@@ -1,6 +1,6 @@
-mod app;
-mod event;
-mod query_actor;
+pub mod app;
+pub mod event;
+pub mod query_actor;
 mod tabs;
 mod views;
 mod widgets;

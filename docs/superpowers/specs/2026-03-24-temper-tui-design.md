@@ -228,7 +228,7 @@ Existing dependencies that remain relevant: `clap` (CLI parsing, unchanged), `an
 ## Out of Scope
 
 - Text editing within the TUI (defers to `$EDITOR`)
-- Creating new tickets or milestones from the TUI (use CLI)
+- Creating new tickets or milestones from the TUI (planned follow-up, use CLI for now)
 - Session management from the TUI
 - Mouse support (keyboard-only)
 - Configuration or theming (uses terminal colors)

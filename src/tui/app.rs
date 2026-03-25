@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use tokio::sync::mpsc;
 
 use super::query_actor::{QueryRequest, QueryResult};
@@ -811,6 +811,11 @@ impl App {
                 render_popup(frame, chunks[1], " Set Scope ", &opts, *selected);
             }
         }
+
+        // Help overlay (rendered on top of everything)
+        if self.show_help {
+            render_help_overlay(frame, frame.area());
+        }
     }
 
     // -- Query results ------------------------------------------------------
@@ -1266,6 +1271,82 @@ fn make_root_screen(tab: Tab) -> Screen {
     }
 }
 
+fn render_help_overlay(frame: &mut ratatui::Frame, area: Rect) {
+    // Overlay dimensions: ~44 chars wide, 27 lines tall
+    const OVERLAY_W: u16 = 44;
+    const OVERLAY_H: u16 = 27;
+
+    let x = area.x + area.width.saturating_sub(OVERLAY_W) / 2;
+    let y = area.y + area.height.saturating_sub(OVERLAY_H) / 2;
+    let w = OVERLAY_W.min(area.width);
+    let h = OVERLAY_H.min(area.height);
+    let overlay_area = Rect::new(x, y, w, h);
+
+    let help_text = vec![
+        Line::from(Span::styled(
+            "Navigation",
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from("  1-4         Switch tab"),
+        Line::from("  j/k ↑↓      Move selection"),
+        Line::from("  h/l ←→      Columns / projects"),
+        Line::from("  Enter       Open / drill in"),
+        Line::from("  Esc         Back / up"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Mutation",
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from("  s           Change stage"),
+        Line::from("  S           Change scope"),
+        Line::from("  e           Open in $EDITOR"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Search / Context",
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from("  /           Focus search input"),
+        Line::from("  c           Context from item"),
+        Line::from("  +/-         Context depth"),
+        Line::from("  Tab         Input → results"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Maintenance",
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from("  i           Rebuild index"),
+        Line::from("  n           Run normalize"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Command Mode",
+            Style::default().fg(Color::Yellow).bold(),
+        )),
+        Line::from("  :q          Quit"),
+        Line::from("  :b :s :c :m Switch tabs"),
+        Line::from("  :? :h       This help"),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Press any key to close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+
+    let block = Block::default()
+        .title(Span::styled(
+            " Help ",
+            Style::default().fg(Color::White).bold(),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let paragraph = Paragraph::new(help_text)
+        .block(block)
+        .style(Style::default().fg(Color::White));
+
+    frame.render_widget(Clear, overlay_area);
+    frame.render_widget(paragraph, overlay_area);
+}
+
 /// Launch the TUI event loop.
 pub fn run(config: &Config) -> crate::error::Result<()> {
     // Terminal setup
@@ -1342,6 +1423,7 @@ pub fn run(config: &Config) -> crate::error::Result<()> {
                             app.in_context_input(),
                             app.in_context_results(),
                             app.in_viewer(),
+                            app.show_help,
                         ) {
                             app.dispatch(action);
                         }
