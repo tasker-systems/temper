@@ -16,31 +16,43 @@ Developers compensate by re-explaining context, copy-pasting old chat logs, and 
 
 The deeper issue is one of **throughline**. Knowing what's been done, what's up next, what decisions have been made and which are still open — this is the connective tissue that turns a pile of specs and tickets into a navigable development history. Without it, each session reinvents context from scratch. With it, sessions build on each other in a virtuous cycle: work concludes with explicit guidance on where it ended, what the next session should consider, and which open threads remain.
 
-Meanwhile, the process itself is one-size-fits-all. A one-line typo fix gets the same brainstorm-design-plan-implement ceremony as a new authentication system. An ambitious multi-week initiative gets the same treatment as a single-session feature. The mismatch wastes time in both directions: too much overhead on small tasks, too little structure on complex ones.
+## Throughline: The Missing Layer
 
-## How Temper Solves This
+Temper is a local-first knowledge base that embeds **throughline** directly into the development process — not a ticketing system competing with Linear or GitHub Issues, but a way of organizing sessions into a coherent narrative that agents can read, write, and build on.
 
-Temper is a local-first knowledge base and workflow tool that embeds throughline directly into the development process. It is not a ticketing system competing with Linear or GitHub Issues — it is a way of organizing sessions into a coherent narrative that agents can read, write, and build on.
+Milestones hold the project vision. Tickets carry the immediate work. Session notes capture what happened, what changed, and what comes next. Each layer provides context for the layer below, and each session's conclusions feed back up — refining the roadmap, sharpening the vision. The result is a living development history, not a pile of disconnected artifacts.
 
 <p align="center">
   <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from project vision through milestones and tickets down to sessions" width="700" />
 </p>
 
-**A markdown vault as institutional memory.** Temper stores tickets, milestones, session notes, and research in plain markdown files with YAML frontmatter — human-readable, git-trackable, and natively understood by language models. The vault is the source of truth that agents consume at session start and write back to at session end.
+## Session Continuity
 
-**Throughline as a first-class concern.** Milestones hold the high-level project vision. Tickets carry the immediate work. Session notes capture what happened, what changed, and what comes next. Each session picks up a ticket, carries it to execution, and leaves explicit guidance — where the work concluded, which decisions were made, what the next session should consider. Context management becomes embedded in the workflow itself, not bolted on after the fact.
+Every new session starts with `temper warmup`, which injects in-progress tickets, recent session summaries, and the last session's full content via a Claude Code startup hook. The agent resumes where you left off instead of starting from scratch.
 
-**Automatic context continuity across sessions.** `temper warmup` injects in-progress tickets, recent session summaries, and the last session's full content into every new Claude Code session via a startup hook. The agent resumes where you left off instead of starting from scratch.
+At the end of each session, `temper session save` captures what happened — decisions made, tickets updated, next steps identified — and writes it back to the vault. The next session reads it. Context compounds instead of decaying.
 
 <p align="center">
   <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session Continuity Cycle: warmup, work, save — each session feeds back into the vault" width="700" />
 </p>
 
-**Adaptive workflow that matches process to complexity.** Every ticket carries a `scope` — `patch`, `feature`, or `epic` — that controls how much ceremony the agent applies. A patch gets direct implementation. A feature gets the full design pipeline. An epic produces a strategic roadmap, not code. Creative freedom to grow and shift scope within a session is encouraged — so long as the information is carried forward and the evolving decisions are tracked.
+## Adaptive Workflow
 
-**Semantic search across everything.** Temper embeds your vault content using local ML models and builds an HNSW index for fast similarity search. Cross-project and cross-workspace concept findability means you can ask for "error handling patterns" and get relevant results across all your indexed content — no keyword guessing required.
+Not every task deserves the same process. A one-line typo fix shouldn't get the same brainstorm-design-plan-implement ceremony as a new authentication system. Every ticket carries a `scope` — `patch`, `feature`, or `epic` — that controls how much ceremony the agent applies.
 
-**A generated skill file that teaches the agent your workflow.** `temper skill install` produces a Claude Code skill that documents your vault structure, available commands, and scope-routing logic. The agent doesn't need to be told how to use Temper — the skill makes it a first-class capability.
+<p align="center">
+  <img src="docs/diagrams/scope-routing.svg" alt="Scope Routing: patch gets direct implementation, feature gets the full pipeline, epic produces a roadmap" width="700" />
+</p>
+
+A patch gets direct implementation. A feature gets the full design pipeline. An epic produces a strategic roadmap, not code. Scope can shift within a session — so long as the information is carried forward and the evolving decisions are tracked.
+
+## What's Under the Hood
+
+**A markdown vault as institutional memory.** Tickets, milestones, session notes, and research live in plain markdown files with YAML frontmatter — human-readable, git-trackable, and natively understood by language models.
+
+**Semantic search across everything.** Temper embeds your vault using local ML models and builds an HNSW index for fast similarity search. Ask for "error handling patterns" and get relevant results across all your indexed content — no keyword guessing.
+
+**A generated skill file that teaches the agent your workflow.** `temper skill install` produces a Claude Code skill documenting your vault structure, available commands, and scope-routing logic. The agent doesn't need to be told how to use Temper — the skill makes it a first-class capability.
 
 ## Installation
 
@@ -82,15 +94,7 @@ temper session save "Implemented auth flow"
 temper skill install
 ```
 
-## Adaptive Workflow
-
-Temper uses a **scope** field on tickets to control how much process ceremony is applied. This makes the investment in workflow proportional to the complexity of the work.
-
-<p align="center">
-  <img src="docs/diagrams/scope-routing.svg" alt="Scope Routing" width="700" />
-</p>
-
-### Scope Levels
+## Scope Details
 
 | Scope | Nature | Ceremony | Output |
 |-------|--------|----------|--------|
