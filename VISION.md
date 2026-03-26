@@ -10,6 +10,10 @@ It is not about elaborating sets of tickets that map to a current vision. It is 
 
 Rapid development, ideation, and delivery are facilitated by allowing creative freedom to grow and shift scope within a session, so long as that information is carried forward and the evolving decisions and revisions to documents are tracked and managed.
 
+<p align="center">
+  <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: From Vision to Sessions" width="700" />
+</p>
+
 ## The Problem Space
 
 ### Context Rot
@@ -72,6 +76,10 @@ Each session is a unit of work that:
 
 This creates a virtuous cycle: the more sessions you run, the richer the context for future sessions. The vault accumulates institutional memory that compounds over time.
 
+<p align="center">
+  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session Continuity Cycle" width="700" />
+</p>
+
 ### Not a Ticketing System
 
 Temper is not competing with Linear, Jira, or GitHub Issues. It is a **knowledge base with lightweight workflow** — enough structure to maintain throughline, not so much that it becomes the thing you're managing instead of building. Tickets exist to organize sessions into a narrative, not to be a comprehensive project management surface.
@@ -88,6 +96,10 @@ Git and Postgres are both authoritative, for different things:
 - **Postgres**: Structured metadata, lifecycle state, search vectors (pg_vector), user/author tracking, type behaviors
 
 Temper is the intervention layer that manages both and reconciles drift between them. Direct git edits and direct Postgres mutations are both valid — temper detects and reconciles.
+
+<p align="center">
+  <img src="docs/diagrams/dual-authority-model.svg" alt="Dual Authority Model" width="700" />
+</p>
 
 ### Resource Model
 
