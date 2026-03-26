@@ -18,7 +18,7 @@ Meanwhile, the process itself is one-size-fits-all. A one-line typo fix gets the
 
 Temper is a local-first knowledge base and workflow tool that embeds throughline directly into the development process. It is not a ticketing system competing with Linear or GitHub Issues — it is a way of organizing sessions into a coherent narrative that agents can read, write, and build on.
 
-**A markdown vault as institutional memory.** Temper stores tickets, milestones, session notes, and research in plain markdown files with YAML frontmatter. No database, no hosted service — just files that are human-readable, git-trackable, and natively understood by language models. The vault is the source of truth that agents consume at session start and write back to at session end.
+**A markdown vault as institutional memory.** Temper stores tickets, milestones, session notes, and research in plain markdown files with YAML frontmatter — human-readable, git-trackable, and natively understood by language models. The vault is the source of truth that agents consume at session start and write back to at session end.
 
 **Throughline as a first-class concern.** Milestones hold the high-level project vision. Tickets carry the immediate work. Session notes capture what happened, what changed, and what comes next. Each session picks up a ticket, carries it to execution, and leaves explicit guidance — where the work concluded, which decisions were made, what the next session should consider. Context management becomes embedded in the workflow itself, not bolted on after the fact.
 

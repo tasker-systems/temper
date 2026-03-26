@@ -8,7 +8,7 @@ Specification documents, plans, session notes, tickets, and milestones are only 
 
 It is not about elaborating sets of tickets that map to a current vision. It is about holding a high-level project vision and milestone-as-roadmap, and having each session take up a ticket, carry that ticket to execution, and leave explicit guidance on where the outcome of that work concluded — what the next session should consider, which tickets are open that relate to the work — so that context management becomes embedded in the session-over-session workflow as a virtuous cycle.
 
-Rapid development, ideation, and delivery are facilitated by allowing creative freedom to grow and shift scope within a session, so long as that information is carried forward and the evolving decisions and revisions to documents are tracked and managed.
+Rapid development, ideation, and delivery are facilitated by allowing creative freedom to grow and shift scope within a session, so long as that information is carried forward and the evolving decisions and revisions to documents are tracked and managed. This frees us from backlog rot — the cognitive overhead of reconciling every ticket's assumptions with a system that has evolved past them. The goal is not to spend less time on specifications and planning; if anything, we invest more. But that investment stays tracked to the overall roadmap goals while remaining nimble in the session-by-session process of developing toward them.
 
 <p align="center">
   <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: From Vision to Sessions" width="700" />
