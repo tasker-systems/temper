@@ -8,6 +8,10 @@ Developer workflow tool for agent-assisted development. Semantic search across p
 
 AI coding agents are powerful but forgetful. Every session starts blank — no memory of yesterday's decisions, no awareness of in-flight work, no sense of what matters next. The industry is starting to call this [context rot](https://www.understandingai.org/p/context-rot-the-emerging-challenge): the progressive degradation of an agent's understanding as work spans sessions, branches, and projects.
 
+<p align="center">
+  <img src="docs/diagrams/context-rot.svg" alt="Context Rot: without a knowledge base, understanding degrades; with one, it compounds" width="720" />
+</p>
+
 Developers compensate by re-explaining context, copy-pasting old chat logs, and manually steering agents through workflows that the agent should already understand. Frameworks like [superpowers](https://github.com/obra/superpowers), [speckit](https://github.com/github/spec-kit), [OpenSpec](https://github.com/Fission-AI/OpenSpec), and [GSD](https://thenewstack.io/beating-the-rot-and-getting-stuff-done/) are all working on parts of this — organizing specifications, plans, and workflows to give agents better footing. But the artifacts these frameworks produce are only as useful as they are **coherent, evolving, organized, and findable**.
 
 The deeper issue is one of **throughline**. Knowing what's been done, what's up next, what decisions have been made and which are still open — this is the connective tissue that turns a pile of specs and tickets into a navigable development history. Without it, each session reinvents context from scratch. With it, sessions build on each other in a virtuous cycle: work concludes with explicit guidance on where it ended, what the next session should consider, and which open threads remain.
@@ -18,13 +22,21 @@ Meanwhile, the process itself is one-size-fits-all. A one-line typo fix gets the
 
 Temper is a local-first knowledge base and workflow tool that embeds throughline directly into the development process. It is not a ticketing system competing with Linear or GitHub Issues — it is a way of organizing sessions into a coherent narrative that agents can read, write, and build on.
 
+<p align="center">
+  <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from project vision through milestones and tickets down to sessions" width="700" />
+</p>
+
 **A markdown vault as institutional memory.** Temper stores tickets, milestones, session notes, and research in plain markdown files with YAML frontmatter — human-readable, git-trackable, and natively understood by language models. The vault is the source of truth that agents consume at session start and write back to at session end.
 
 **Throughline as a first-class concern.** Milestones hold the high-level project vision. Tickets carry the immediate work. Session notes capture what happened, what changed, and what comes next. Each session picks up a ticket, carries it to execution, and leaves explicit guidance — where the work concluded, which decisions were made, what the next session should consider. Context management becomes embedded in the workflow itself, not bolted on after the fact.
 
-**Adaptive workflow that matches process to complexity.** Every ticket carries a `scope` — `patch`, `feature`, or `epic` — that controls how much ceremony the agent applies. A patch gets direct implementation. A feature gets the full design pipeline. An epic produces a strategic roadmap, not code. Creative freedom to grow and shift scope within a session is encouraged — so long as the information is carried forward and the evolving decisions are tracked.
-
 **Automatic context continuity across sessions.** `temper warmup` injects in-progress tickets, recent session summaries, and the last session's full content into every new Claude Code session via a startup hook. The agent resumes where you left off instead of starting from scratch.
+
+<p align="center">
+  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session Continuity Cycle: warmup, work, save — each session feeds back into the vault" width="700" />
+</p>
+
+**Adaptive workflow that matches process to complexity.** Every ticket carries a `scope` — `patch`, `feature`, or `epic` — that controls how much ceremony the agent applies. A patch gets direct implementation. A feature gets the full design pipeline. An epic produces a strategic roadmap, not code. Creative freedom to grow and shift scope within a session is encouraged — so long as the information is carried forward and the evolving decisions are tracked.
 
 **Semantic search across everything.** Temper embeds your vault content using local ML models and builds an HNSW index for fast similarity search. Cross-project and cross-workspace concept findability means you can ask for "error handling patterns" and get relevant results across all your indexed content — no keyword guessing required.
 
