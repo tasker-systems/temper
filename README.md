@@ -1,4 +1,6 @@
-# Temper
+# **Temper**
+
+**/ˈtempər/** — *to make stronger and more resilient through a deliberate process*
 
 Developer workflow tool for agent-assisted development. Semantic search across projects, session-based checkpointing, local ticket/milestone tracking, and Claude Code skill generation — all backed by a markdown vault with YAML frontmatter.
 
