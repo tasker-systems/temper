@@ -18,6 +18,8 @@ During design, several corrections to the epic design spec were identified:
 
 5. **1:1 deployment model**: One knowledge base = one git repo = one Postgres instance = one temper-cloud deployment. This is not a multi-tenant or multi-vault system.
 
+6. **IngestedResource — new concept**: A third resource type between IndexableResource and KnowledgeBaseResource. An IngestedResource is external content (PDF, HTML, DOCX, etc.) that is fetched, converted to markdown via a processing pipeline (kreuzberg v4 — https://github.com/kreuzberg-dev/kreuzberg), and the resulting markdown is stored in the knowledge base as a git-managed file. The original file is not stored — temper is a knowledge base, not a file server. The provenance chain tracks the original URI and conversion metadata. IngestedResources compose behaviors like any KnowledgeBaseResource (Taggable, etc.) since they live in the vault as markdown. The key distinction: IndexableResource = pointer + embeddings (content lives elsewhere), IngestedResource = fetched + converted + stored as markdown (original discarded), KnowledgeBaseResource = authored natively in the knowledge base. Kreuzberg should also be evaluated as a potential replacement for the current embedding/chunking pipeline across all temper operations.
+
 ## Deliverable Structure
 
 Three layers, each building on the previous:
