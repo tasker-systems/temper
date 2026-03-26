@@ -1,0 +1,98 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 370" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="cr-arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555" />
+    </marker>
+    <marker id="cr-arrow-red" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#dc2626" />
+    </marker>
+    <marker id="cr-arrow-green" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#16a34a" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="720" height="370" rx="8" fill="#fafafa" stroke="#e0e0e0" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="360" y="30" text-anchor="middle" font-size="16" font-weight="600" fill="#1a1a1a">Context Rot: The Problem and the Fix</text>
+
+  <!-- LEFT SIDE: Without a knowledge base -->
+  <rect x="15" y="48" width="335" height="310" rx="8" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5" />
+  <text x="182" y="70" text-anchor="middle" font-size="13" font-weight="600" fill="#991b1b">Without a knowledge base</text>
+
+  <!-- Session boxes (left) -->
+  <rect x="35" y="85" width="130" height="50" rx="6" fill="#fee2e2" stroke="#fca5a5" stroke-width="1" />
+  <text x="100" y="105" text-anchor="middle" font-size="11" font-weight="500" fill="#991b1b">Session 1</text>
+  <text x="100" y="120" text-anchor="middle" font-size="9" fill="#b91c1c">Builds context</text>
+
+  <rect x="35" y="155" width="130" height="50" rx="6" fill="#fee2e2" stroke="#fca5a5" stroke-width="1" />
+  <text x="100" y="175" text-anchor="middle" font-size="11" font-weight="500" fill="#991b1b">Session 2</text>
+  <text x="100" y="190" text-anchor="middle" font-size="9" fill="#b91c1c">Starts from scratch</text>
+
+  <rect x="35" y="225" width="130" height="50" rx="6" fill="#fee2e2" stroke="#fca5a5" stroke-width="1" />
+  <text x="100" y="245" text-anchor="middle" font-size="11" font-weight="500" fill="#991b1b">Session 3</text>
+  <text x="100" y="260" text-anchor="middle" font-size="9" fill="#b91c1c">Starts from scratch</text>
+
+  <!-- Red X between sessions -->
+  <text x="100" y="147" text-anchor="middle" font-size="14" font-weight="700" fill="#dc2626">context lost</text>
+  <text x="100" y="217" text-anchor="middle" font-size="14" font-weight="700" fill="#dc2626">context lost</text>
+
+  <!-- Degradation arrow -->
+  <text x="205" y="105" font-size="10" fill="#991b1b">Understanding</text>
+  <rect x="270" y="95" width="60" height="12" rx="3" fill="#22c55e" />
+  <text x="205" y="180" font-size="10" fill="#991b1b">Understanding</text>
+  <rect x="270" y="170" width="35" height="12" rx="3" fill="#f59e0b" />
+  <text x="205" y="250" font-size="10" fill="#991b1b">Understanding</text>
+  <rect x="270" y="240" width="18" height="12" rx="3" fill="#ef4444" />
+
+  <!-- Summary text left -->
+  <text x="182" y="302" text-anchor="middle" font-size="10" fill="#991b1b">Each session re-explains context.</text>
+  <text x="182" y="316" text-anchor="middle" font-size="10" fill="#991b1b">Decisions are forgotten. Mistakes repeat.</text>
+  <text x="182" y="340" text-anchor="middle" font-size="11" font-weight="600" fill="#dc2626">Context degrades over time</text>
+
+  <!-- RIGHT SIDE: With Temper -->
+  <rect x="370" y="48" width="335" height="310" rx="8" fill="#f0fdf4" stroke="#86efac" stroke-width="1.5" />
+  <text x="537" y="70" text-anchor="middle" font-size="13" font-weight="600" fill="#166534">With Temper</text>
+
+  <!-- Central vault -->
+  <rect x="490" y="120" width="100" height="160" rx="8" fill="#eff6ff" stroke="#93c5fd" stroke-width="2" />
+  <text x="540" y="145" text-anchor="middle" font-size="11" font-weight="600" fill="#1e40af">Vault</text>
+  <line x1="500" y1="152" x2="580" y2="152" stroke="#93c5fd" stroke-width="1" />
+  <text x="540" y="170" text-anchor="middle" font-size="8" fill="#2563eb">Milestones</text>
+  <text x="540" y="183" text-anchor="middle" font-size="8" fill="#2563eb">Tickets</text>
+  <text x="540" y="196" text-anchor="middle" font-size="8" fill="#2563eb">Sessions</text>
+  <text x="540" y="209" text-anchor="middle" font-size="8" fill="#2563eb">Research</text>
+  <text x="540" y="222" text-anchor="middle" font-size="8" fill="#2563eb">Search index</text>
+
+  <!-- Session boxes (right) -->
+  <rect x="385" y="90" width="85" height="40" rx="6" fill="#dcfce7" stroke="#86efac" stroke-width="1" />
+  <text x="427" y="110" text-anchor="middle" font-size="10" font-weight="500" fill="#166534">Session 1</text>
+  <text x="427" y="122" text-anchor="middle" font-size="8" fill="#15803d">warm + save</text>
+
+  <rect x="385" y="160" width="85" height="40" rx="6" fill="#dcfce7" stroke="#86efac" stroke-width="1" />
+  <text x="427" y="180" text-anchor="middle" font-size="10" font-weight="500" fill="#166534">Session 2</text>
+  <text x="427" y="192" text-anchor="middle" font-size="8" fill="#15803d">warm + save</text>
+
+  <rect x="385" y="230" width="85" height="40" rx="6" fill="#dcfce7" stroke="#86efac" stroke-width="1" />
+  <text x="427" y="250" text-anchor="middle" font-size="10" font-weight="500" fill="#166534">Session 3</text>
+  <text x="427" y="262" text-anchor="middle" font-size="8" fill="#15803d">warm + save</text>
+
+  <!-- Arrows: sessions <-> vault -->
+  <line x1="470" y1="110" x2="488" y2="140" stroke="#16a34a" stroke-width="1.5" marker-end="url(#cr-arrow-green)" />
+  <line x1="470" y1="180" x2="488" y2="190" stroke="#16a34a" stroke-width="1.5" marker-end="url(#cr-arrow-green)" />
+  <line x1="470" y1="250" x2="488" y2="240" stroke="#16a34a" stroke-width="1.5" marker-end="url(#cr-arrow-green)" />
+
+  <!-- Growing understanding bars -->
+  <text x="607" y="105" font-size="10" fill="#166534">Understanding</text>
+  <rect x="607" y="110" width="60" height="12" rx="3" fill="#22c55e" />
+  <text x="607" y="177" font-size="10" fill="#166534">Understanding</text>
+  <rect x="607" y="182" width="75" height="12" rx="3" fill="#22c55e" />
+  <text x="607" y="247" font-size="10" fill="#166534">Understanding</text>
+  <rect x="607" y="252" width="90" height="12" rx="3" fill="#22c55e" />
+
+  <!-- Summary text right -->
+  <text x="537" y="302" text-anchor="middle" font-size="10" fill="#166534">Each session reads and writes back.</text>
+  <text x="537" y="316" text-anchor="middle" font-size="10" fill="#166534">Decisions persist. Throughline grows.</text>
+  <text x="537" y="340" text-anchor="middle" font-size="11" font-weight="600" fill="#16a34a">Context compounds over time</text>
+</svg>
