@@ -2,6 +2,26 @@
 
 Developer workflow tool for agent-assisted development. Semantic search across projects, session-based checkpointing, local ticket/milestone tracking, and Claude Code skill generation — all backed by a markdown vault with YAML frontmatter.
 
+## The Problem
+
+AI coding agents are powerful but forgetful. Every session starts blank — no memory of yesterday's decisions, no awareness of in-flight work, no sense of what matters next. Developers compensate by re-explaining context, copy-pasting old chat logs, and manually steering agents through workflows that the agent should already understand.
+
+Meanwhile, the process itself is one-size-fits-all. A one-line typo fix gets the same brainstorm-design-plan-implement ceremony as a new authentication system. An ambitious multi-week initiative gets the same treatment as a single-session feature. The mismatch wastes time in both directions: too much overhead on small tasks, too little structure on complex ones.
+
+The underlying issue is that **development knowledge has no home that agents can read**. Tickets live in GitHub, decisions live in chat history, session context evaporates when the window closes. There's no structured, portable, version-controllable source of truth that an agent can consume at session start and write back to at session end.
+
+## How Temper Solves This
+
+**A markdown vault as institutional memory.** Temper stores tickets, milestones, session notes, and research in plain markdown files with YAML frontmatter. No database, no hosted service — just files that are human-readable, git-trackable, and natively understood by language models.
+
+**Adaptive workflow that matches process to complexity.** Every ticket carries a `scope` — `patch`, `feature`, or `epic` — that controls how much ceremony the agent applies. A patch gets direct implementation. A feature gets the full design pipeline. An epic produces a strategic roadmap, not code. The agent reads the scope and knows exactly which workflow to follow.
+
+**Automatic context continuity across sessions.** `temper warmup` injects in-progress tickets, recent session summaries, and the last session's full content into every new Claude Code session via a startup hook. The agent resumes where you left off instead of starting from scratch.
+
+**Semantic search across everything.** Temper embeds your vault content using local ML models and builds an HNSW index for fast similarity search. Ask for "error handling patterns" and get relevant results across all your projects — no keyword guessing required.
+
+**A generated skill file that teaches the agent your workflow.** `temper skill install` produces a Claude Code skill that documents your vault structure, available commands, and scope-routing logic. The agent doesn't need to be told how to use Temper — the skill makes it a first-class capability.
+
 ## Installation
 
 ```bash
