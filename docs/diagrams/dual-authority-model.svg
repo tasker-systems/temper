@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 400" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="da-arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555" />
+    </marker>
+    <marker id="da-arrow-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb" />
+    </marker>
+  </defs>
+
+  <!-- Background -->
+  <rect width="700" height="400" rx="8" fill="#fafafa" stroke="#e0e0e0" stroke-width="1"/>
+
+  <!-- Title -->
+  <text x="350" y="32" text-anchor="middle" font-size="16" font-weight="600" fill="#1a1a1a">Temper Cloud: Dual Authority Model</text>
+  <text x="350" y="50" text-anchor="middle" font-size="11" fill="#888">Git owns content. Postgres owns state. Temper reconciles.</text>
+
+  <!-- Git Authority (left) -->
+  <rect x="40" y="75" width="250" height="200" rx="10" fill="#fff7ed" stroke="#fdba74" stroke-width="2" />
+  <text x="165" y="100" text-anchor="middle" font-size="14" font-weight="600" fill="#9a3412">Git</text>
+  <text x="165" y="118" text-anchor="middle" font-size="10" fill="#c2410c">Authoritative for content</text>
+  <line x1="60" y1="128" x2="270" y2="128" stroke="#fdba74" stroke-width="1" />
+
+  <text x="75" y="152" font-size="11" fill="#9a3412">Document prose</text>
+  <text x="75" y="172" font-size="11" fill="#9a3412">Version history</text>
+  <text x="75" y="192" font-size="11" fill="#9a3412">Markdown + YAML frontmatter</text>
+  <text x="75" y="212" font-size="11" fill="#9a3412">Collaboration via PRs</text>
+  <text x="75" y="232" font-size="11" fill="#9a3412">Offline edits</text>
+  <text x="75" y="255" font-size="10" fill="#78350f" font-style="italic">Direct edits are valid</text>
+
+  <!-- Postgres Authority (right) -->
+  <rect x="410" y="75" width="250" height="200" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="2" />
+  <text x="535" y="100" text-anchor="middle" font-size="14" font-weight="600" fill="#1e40af">Postgres</text>
+  <text x="535" y="118" text-anchor="middle" font-size="10" fill="#2563eb">Authoritative for state</text>
+  <line x1="430" y1="128" x2="640" y2="128" stroke="#93c5fd" stroke-width="1" />
+
+  <text x="425" y="152" font-size="11" fill="#1e40af">Structured metadata</text>
+  <text x="425" y="172" font-size="11" fill="#1e40af">Lifecycle state (stage, scope)</text>
+  <text x="425" y="192" font-size="11" fill="#1e40af">pg_vector embeddings</text>
+  <text x="425" y="212" font-size="11" fill="#1e40af">User/author tracking</text>
+  <text x="425" y="232" font-size="11" fill="#1e40af">Type behaviors (composable)</text>
+  <text x="425" y="255" font-size="10" fill="#1e3a8a" font-style="italic">Direct mutations are valid</text>
+
+  <!-- Temper (center, reconciliation layer) -->
+  <rect x="250" y="130" width="200" height="120" rx="10" fill="#dcfce7" stroke="#86efac" stroke-width="2" />
+  <text x="350" y="158" text-anchor="middle" font-size="14" font-weight="600" fill="#166534">Temper</text>
+  <text x="350" y="176" text-anchor="middle" font-size="10" fill="#15803d">Intervention layer</text>
+  <line x1="270" y1="185" x2="430" y2="185" stroke="#86efac" stroke-width="1" />
+  <text x="350" y="205" text-anchor="middle" font-size="10" fill="#166534">Detects drift</text>
+  <text x="350" y="222" text-anchor="middle" font-size="10" fill="#166534">Reconciles conflicts</text>
+  <text x="350" y="239" text-anchor="middle" font-size="10" fill="#166534">Manages both sources</text>
+
+  <!-- Bidirectional arrows -->
+  <line x1="250" y1="175" x2="290" y2="175" stroke="#555" stroke-width="1.5" />
+  <line x1="410" y1="175" x2="450" y2="175" stroke="#555" stroke-width="1.5" />
+
+  <!-- Access layer at bottom -->
+  <rect x="100" y="300" width="500" height="80" rx="8" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5" />
+  <text x="350" y="325" text-anchor="middle" font-size="12" font-weight="600" fill="#334155">Access Patterns</text>
+  <line x1="120" y1="335" x2="580" y2="335" stroke="#e2e8f0" stroke-width="1" />
+
+  <!-- Three access methods -->
+  <text x="200" y="357" text-anchor="middle" font-size="11" font-weight="500" fill="#475569">CLI</text>
+  <text x="200" y="372" text-anchor="middle" font-size="9" fill="#94a3b8">temper ticket create</text>
+
+  <text x="350" y="357" text-anchor="middle" font-size="11" font-weight="500" fill="#475569">API</text>
+  <text x="350" y="372" text-anchor="middle" font-size="9" fill="#94a3b8">REST + GitHub OAuth</text>
+
+  <text x="500" y="357" text-anchor="middle" font-size="11" font-weight="500" fill="#475569">MCP Server</text>
+  <text x="500" y="372" text-anchor="middle" font-size="9" fill="#94a3b8">Direct agent integration</text>
+
+  <!-- Arrows from access to temper -->
+  <line x1="200" y1="300" x2="300" y2="250" stroke="#555" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#da-arrow)" />
+  <line x1="350" y1="300" x2="350" y2="250" stroke="#555" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#da-arrow)" />
+  <line x1="500" y1="300" x2="400" y2="250" stroke="#555" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#da-arrow)" />
+</svg>
