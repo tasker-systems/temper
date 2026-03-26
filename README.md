@@ -264,6 +264,8 @@ temper context "Authentication" --depth 2
 
 Temper is local-first today. **Temper Cloud** is in active design — a cloud-native extension where Postgres owns structured metadata and lifecycle state, git owns document content and history, and temper is the intervention layer that reconciles between them. The cloud layer adds multi-machine access, pg_vector-backed search, and an MCP server for direct agent integration. The guiding constraint is continuity: temper continues to function locally throughout, and the knowledge base — not the tool — is the unit of value.
 
+See **[VISION.md](VISION.md)** for the full design philosophy, throughline concept, and Temper Cloud architecture.
+
 ## Related Work
 
 Temper draws on ideas from several projects working on adjacent problems:
