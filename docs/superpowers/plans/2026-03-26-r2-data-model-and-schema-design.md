@@ -299,6 +299,8 @@ git commit -m "feat: add R2 schema migration — temper cloud tables, indexes, v
 
 ### Task 3: Create Seed Data Migration
 
+> **Deprecation note:** This SQL-based seed approach is for R2 research validation only. When I2 (Postgres implementation) begins, seed data should move to a Rust-based seeder using sqlx directly — proper UUIDv7 generation via `uuid::Uuid::now_v7()`, programmatic behavior composition, and integration with the temper config system for context discovery from `temper.toml`. The deterministic UUIDs below are placeholders that will not carry forward.
+
 **Files:**
 - Create: `migrations/20260326000002_r2_seed.sql`
 
