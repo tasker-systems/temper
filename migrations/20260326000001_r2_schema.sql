@@ -30,14 +30,15 @@ CREATE TABLE kb_doc_type_behaviors (
 );
 
 CREATE TABLE kb_profiles (
-    id              UUID PRIMARY KEY,
-    provider        VARCHAR(32) NOT NULL,
-    external_id     VARCHAR(128),
+    id              UUID PRIMARY KEY,              -- UUIDv7
     display_name    VARCHAR(128) NOT NULL,
-    email           VARCHAR(256),
+    email           VARCHAR(256),                  -- cached from default auth provider
+    avatar_url      TEXT,
+    preferences     JSONB NOT NULL DEFAULT '{}',   -- theme, default project, notifications
+    vault_config    JSONB NOT NULL DEFAULT '{}',   -- local vault path, sync preferences
+    is_active       BOOLEAN NOT NULL DEFAULT true,
     created         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated         TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE(provider, external_id)
+    updated         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE resources (
