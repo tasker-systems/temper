@@ -78,7 +78,25 @@ CREATE INDEX idx_resources_updated ON resources(updated);
 - **No `resource_kind` discriminator.** The R1 distinction (indexable/ingested/knowledge_base) is retired. All resources are peers. Ingestion provenance is tracked via `kb_ingestion_records` when applicable. Behavioral differences come from `kb_doc_type_behaviors`.
 - `doc_type` is a FK to `kb_doc_types`, not free text — enforces type registration while keeping types extensible via data
 - `slug` unique within `kb_context_id` — same slug can exist in different contexts
-- `uri` globally unique — each resource has one canonical URI. KB/ingested resources use vault-relative paths (`file://tickets/temper/2026-03-26-fix-search.md`), indexable resources use external URIs (`https://...`, `s3://...`). Vault-relative paths ensure URIs are stable across machines.
+- `uri` globally unique — each resource has one canonical URI that communicates both provenance and resolution strategy. The URI scheme tells clients where the content originates and how to resolve it. See **URI Scheme Design** section below.
+
+### URI Scheme Design
+
+The `uri` field on every resource is a canonical identifier that communicates **provenance** (where the content originates) and **resolution strategy** (how a client can access it). URIs don't describe where a file exists on disk — files on disk are an optional materialization. The URI describes where the content *can be* resolved from.
+
+| Scheme | Provenance | Resolution | Example |
+|--------|-----------|------------|---------|
+| `kb://` | Authored in the knowledge base | Content lives in Postgres chunks. Can be materialized to disk via `temper sync pull` at the path following the scheme. | `kb://tickets/temper/2026-03-26-fix-search.md` |
+| `https://` | External web resource | Client fetches from the URL. Content cached in Postgres chunks after ingestion. | `https://arxiv.org/abs/2401.12345` |
+| `s3://` | Cloud storage | Client resolves via S3 API. | `s3://bucket/research/paper.pdf` |
+| `github://` | GitHub-hosted content | Client resolves via GitHub API. | `github://anthropics/claude-code/README.md` |
+
+**Key properties:**
+- The URI is stable across machines — it does not reference a local filesystem path
+- `kb://` resources use vault-relative paths (`kb://tickets/temper/...`) that map to materialization paths when synced to disk
+- Search and context queries return URIs. The client decides how to render them — a TUI shows the vault-relative path portion, a web UI makes external URIs clickable, an agent uses the API to request full content
+- Provenance is in the URI itself: `kb://` means "born here", `https://` means "came from there"
+- The `kb_ingestion_records` table provides additional provenance detail for resources whose content was converted from an external source (the `source_uri` may differ from the resource `uri` if the converted markdown gets a `kb://` URI)
 
 ### Behavior Composition
 
