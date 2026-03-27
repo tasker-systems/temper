@@ -158,6 +158,131 @@ CREATE TABLE kb_ingestion_records (
     source_hash         VARCHAR(64)
 );
 
+-- R4: Team and access control enums
+CREATE TYPE team_role AS ENUM ('owner', 'maintainer', 'member', 'watcher');
+CREATE TYPE access_level AS ENUM ('vault', 'mutable', 'immutable');
+CREATE TYPE invitation_status AS ENUM ('pending', 'accepted', 'declined', 'expired');
+
+CREATE TABLE kb_teams (
+    id                      UUID PRIMARY KEY,              -- UUIDv7
+    name                    VARCHAR(128) NOT NULL,
+    slug                    VARCHAR(128) NOT NULL UNIQUE,
+    description             VARCHAR(512),
+    metadata                JSONB NOT NULL DEFAULT '{}',
+    created_by_profile_id   UUID NOT NULL REFERENCES kb_profiles(id),
+    is_active               BOOLEAN NOT NULL DEFAULT true,
+    created                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated                 TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE kb_team_members (
+    id                      UUID PRIMARY KEY,              -- UUIDv7
+    team_id                 UUID NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
+    profile_id              UUID NOT NULL REFERENCES kb_profiles(id),
+    role                    team_role NOT NULL,
+    joined_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    invited_by_profile_id   UUID REFERENCES kb_profiles(id),
+    UNIQUE(team_id, profile_id)
+);
+
+CREATE INDEX idx_team_members_profile ON kb_team_members(profile_id);
+CREATE INDEX idx_team_members_team ON kb_team_members(team_id);
+
+CREATE TABLE kb_team_resources (
+    id                      UUID PRIMARY KEY,              -- UUIDv7
+    team_id                 UUID NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
+    resource_id             UUID NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+    access_level            access_level NOT NULL,
+    added_by_profile_id     UUID NOT NULL REFERENCES kb_profiles(id),
+    added_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(team_id, resource_id)
+);
+
+CREATE INDEX idx_team_resources_resource ON kb_team_resources(resource_id);
+CREATE INDEX idx_team_resources_team ON kb_team_resources(team_id);
+
+CREATE TABLE kb_team_invitations (
+    id                      UUID PRIMARY KEY,              -- UUIDv7
+    team_id                 UUID NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
+    invited_email           VARCHAR(256) NOT NULL,
+    invited_by_profile_id   UUID NOT NULL REFERENCES kb_profiles(id),
+    role                    team_role NOT NULL,
+    token                   VARCHAR(128) NOT NULL UNIQUE,
+    status                  invitation_status NOT NULL DEFAULT 'pending',
+    expires_at              TIMESTAMPTZ NOT NULL DEFAULT now() + INTERVAL '7 days',
+    created                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(team_id, invited_email)
+);
+
+CREATE INDEX idx_invitations_token ON kb_team_invitations(token);
+CREATE INDEX idx_invitations_email ON kb_team_invitations(invited_email);
+
+-- R4: Composable access control functions
+-- These are STABLE (no side effects) so the query planner can inline them.
+-- They compose into CTEs, subqueries, and joins for vector search and graph traversal.
+
+CREATE FUNCTION resources_visible_to(
+    p_profile_id UUID,
+    p_team_id UUID DEFAULT NULL
+) RETURNS TABLE(resource_id UUID, access_level VARCHAR(32), via VARCHAR(256))
+LANGUAGE SQL STABLE AS $$
+    -- Resources I own (always visible, full control)
+    SELECT id, 'owner'::VARCHAR(32), 'ownership'::VARCHAR(256)
+    FROM resources
+    WHERE owner_profile_id = p_profile_id
+      AND is_active = true
+
+    UNION
+
+    -- Resources shared with teams I belong to
+    SELECT tr.resource_id, tr.access_level::VARCHAR(32), ('team:' || t.slug)::VARCHAR(256)
+    FROM kb_team_resources tr
+    JOIN kb_teams t ON t.id = tr.team_id
+    JOIN kb_team_members tm ON tm.team_id = tr.team_id
+    WHERE tm.profile_id = p_profile_id
+      AND t.is_active = true
+      AND (p_team_id IS NULL OR tr.team_id = p_team_id)
+$$;
+
+CREATE FUNCTION can_modify_resource(
+    p_profile_id UUID,
+    p_resource_id UUID
+) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+    SELECT EXISTS (
+        -- I own it
+        SELECT 1 FROM resources
+        WHERE id = p_resource_id AND owner_profile_id = p_profile_id
+    ) OR EXISTS (
+        -- It's vault or mutable in a team I belong to, and I'm not a watcher
+        SELECT 1
+        FROM kb_team_resources tr
+        JOIN kb_team_members tm ON tm.team_id = tr.team_id
+        WHERE tr.resource_id = p_resource_id
+          AND tm.profile_id = p_profile_id
+          AND tr.access_level IN ('vault', 'mutable')
+          AND tm.role != 'watcher'
+    )
+$$;
+
+CREATE FUNCTION can_manage_team(
+    p_profile_id UUID,
+    p_team_id UUID,
+    p_action VARCHAR(32)  -- 'invite', 'remove', 'change_role', 'delete'
+) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+    SELECT EXISTS (
+        SELECT 1 FROM kb_team_members
+        WHERE team_id = p_team_id
+          AND profile_id = p_profile_id
+          AND (
+            (p_action = 'delete' AND role = 'owner')
+            OR (p_action IN ('invite', 'remove', 'change_role')
+                AND role IN ('owner', 'maintainer'))
+          )
+    )
+$$;
+
 CREATE TABLE kb_events (
     id              UUID PRIMARY KEY,
     profile_id      UUID NOT NULL REFERENCES kb_profiles(id),
