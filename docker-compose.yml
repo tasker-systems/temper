@@ -1,0 +1,44 @@
+# =============================================================================
+# Development Compose Configuration — PostgreSQL 18 with PGVector
+# =============================================================================
+# Provides persistent graph-capable database for local development.
+#
+# Usage:
+#   docker compose -f docker-compose.yml up -d
+#   docker compose -f docker-compose.yml down
+#
+# Access:
+#   PostgreSQL: localhost:5435 (temper/temper)
+#   Database:   temper_development
+#
+# Port 5437 avoids conflict with tasker-core's PostgreSQL (5432/5433).
+
+name: temper
+
+services:
+  temper-postgres:
+    image: pgvector/pgvector:0.8.2-pg18-trixie
+    container_name: temper-postgres
+    environment:
+      POSTGRES_DB: temper_development
+      POSTGRES_USER: temper
+      POSTGRES_PASSWORD: temper
+      POSTGRES_HOST_AUTH_METHOD: trust
+    ports:
+      - "5437:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temper -d temper_development"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - temper-development
+
+volumes:
+  postgres_data:
+
+networks:
+  temper-development:
+    driver: bridge
