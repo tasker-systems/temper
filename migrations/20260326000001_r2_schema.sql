@@ -217,6 +217,34 @@ CREATE TABLE kb_team_invitations (
 CREATE INDEX idx_invitations_token ON kb_team_invitations(token);
 CREATE INDEX idx_invitations_email ON kb_team_invitations(invited_email);
 
+CREATE TYPE transfer_status AS ENUM ('pending', 'accepted', 'declined', 'cancelled');
+
+CREATE TABLE kb_transfers (
+    id                      UUID PRIMARY KEY,              -- UUIDv7
+    resource_id             UUID NOT NULL REFERENCES resources(id),
+    from_profile_id         UUID NOT NULL REFERENCES kb_profiles(id),
+    to_profile_id           UUID NOT NULL REFERENCES kb_profiles(id),
+    status                  transfer_status NOT NULL DEFAULT 'pending',
+    created                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at             TIMESTAMPTZ,
+    UNIQUE(resource_id, from_profile_id, to_profile_id, status)
+);
+
+CREATE INDEX idx_transfers_to_profile ON kb_transfers(to_profile_id) WHERE status = 'pending';
+CREATE INDEX idx_transfers_from_profile ON kb_transfers(from_profile_id) WHERE status = 'pending';
+CREATE INDEX idx_transfers_resource ON kb_transfers(resource_id);
+
+CREATE TABLE kb_device_sync_state (
+    id                      UUID PRIMARY KEY,              -- UUIDv7
+    profile_id              UUID NOT NULL REFERENCES kb_profiles(id),
+    client_id               VARCHAR(64) NOT NULL,
+    last_sync_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    manifest_hash           VARCHAR(64),
+    UNIQUE(profile_id, client_id)
+);
+
+CREATE INDEX idx_device_sync_profile ON kb_device_sync_state(profile_id);
+
 -- R4: Composable access control functions
 -- These are STABLE (no side effects) so the query planner can inline them.
 -- They compose into CTEs, subqueries, and joins for vector search and graph traversal.
