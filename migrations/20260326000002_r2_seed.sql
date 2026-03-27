@@ -56,6 +56,10 @@ INSERT INTO kb_contexts (id, name) VALUES
     ('00000000-0000-0000-0003-000000000004', 'knowledge'),
     ('00000000-0000-0000-0003-000000000005', 'writing');
 
-INSERT INTO kb_profiles (id, provider, external_id, display_name) VALUES
-    ('00000000-0000-0000-0004-000000000001', 'system', NULL, 'System'),
-    ('00000000-0000-0000-0004-000000000002', 'anonymous', NULL, 'Anonymous');
+INSERT INTO kb_profiles (id, display_name) VALUES
+    ('00000000-0000-0000-0004-000000000001', 'System'),
+    ('00000000-0000-0000-0004-000000000002', 'Anonymous');
+
+INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id, is_default) VALUES
+    ('00000000-0000-0000-0005-000000000001', '00000000-0000-0000-0004-000000000001', 'system', 'system', true),
+    ('00000000-0000-0000-0005-000000000002', '00000000-0000-0000-0004-000000000002', 'anonymous', 'anonymous', true);
