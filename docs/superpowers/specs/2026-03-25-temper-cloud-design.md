@@ -13,22 +13,27 @@ Transform temper from a local-only CLI into a cloud-native knowledge base system
 
 ## Key Decisions
 
-### Dual Authority Model
+### ~~Dual Authority Model~~ → Single Authority (Postgres)
 
-Git and Postgres are both authoritative, for different things:
-- **Git**: Document content, prose, version history, collaboration via PRs
-- **Postgres**: Structured metadata, lifecycle state, search vectors (pg_vector), user/author tracking, type behaviors
+> **R2 Pivot (2026-03-26):** During R2 data model design, the dual-authority model was replaced by Postgres as single source of truth. Documents are recomposable from versioned chunks in Postgres, making git an optional materialization layer rather than a content authority. This simplifies reconciliation (6 drift types → push/pull sync), enables multi-tenancy via scoping, and unblocks Apache AGE knowledge graph integration. See `docs/superpowers/specs/2026-03-26-r2-data-model-and-schema-design.md`.
 
-Temper is the intervention layer that manages both and reconciles drift between them. Direct git edits and direct Postgres mutations are both valid — temper detects and reconciles.
+~~Git and Postgres are both authoritative, for different things:~~
+~~- **Git**: Document content, prose, version history, collaboration via PRs~~
+~~- **Postgres**: Structured metadata, lifecycle state, search vectors (pg_vector), user/author tracking, type behaviors~~
+
+**Postgres** is authoritative for everything — content (via versioned chunks), metadata, vectors, events. Git and local filesystem are an optional **materialization layer**: a convenient way to have the knowledge base on disk as markdown for agents, editors, and Obsidian. `temper sync push` sends local edits to Postgres. `temper sync pull` materializes files from Postgres. Postgres always wins ties.
 
 ### Resource Model
 
-Two foundational types replace the current directory-based typology:
+> **R1/R2 Update:** Three resource kinds (not two) with a single `resources` table and `resource_kind` enum discriminator.
 
-- **IndexableResource**: Any markdown document temper knows about. Has an FQDN, URL, mimetype, provenance chain, open metadata, and index chunks. May live outside the knowledge base (external docs, other repos). Schema supports this from day one; transport/fetch deferred.
-- **KnowledgeBaseResource**: A special case of IndexableResource that lives within the knowledge base as a git-managed file. Has frontmatter that mirrors Postgres metadata for drift detection.
+Three resource kinds stored in a single `resources` table:
 
-Whether something is a ticket, milestone, research doc, decision, or any future type is metadata on the resource, not a function of directory path. Directory structure is a visual/tooling convenience (`tickets/storyteller/...` implies type and project), but typology lives in Postgres. Adding a new type (e.g., "masterplan", "decision") requires only database records, a filepath convention, and frontmatter — no code changes.
+- **IndexableResource**: External content referenced by URI. Lives only in Postgres (metadata + vectors). No git file. Example: a blog post at `https://example.com/post`.
+- **IngestedResource**: External content fetched, converted to markdown via kreuzberg v4, stored as a git-managed file with provenance chain. Example: a PDF converted to markdown.
+- **KnowledgeBaseResource**: Authored natively in the knowledge base. Git-managed markdown with YAML frontmatter. Example: a ticket, session note, research doc.
+
+Whether something is a ticket, milestone, research doc, decision, or any future type is metadata on the resource (`kb_doc_types` table), not a function of directory path. Adding a new type requires only database records (type + behavior composition), a template, and a directory convention — no code changes.
 
 ### Composable Behaviors
 
