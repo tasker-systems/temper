@@ -41,6 +41,20 @@ CREATE TABLE kb_profiles (
     updated         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE kb_profile_auth_links (
+    id                        UUID PRIMARY KEY,              -- UUIDv7
+    profile_id                UUID NOT NULL REFERENCES kb_profiles(id) ON DELETE CASCADE,
+    auth_provider             VARCHAR(32) NOT NULL,          -- "neon_auth", "auth0", "okta", etc.
+    auth_provider_user_id     VARCHAR(128) NOT NULL,         -- external identity ID from this provider
+    email                     VARCHAR(256),                  -- email from this provider at link time
+    is_default                BOOLEAN NOT NULL DEFAULT false, -- which link is the primary identity
+    linked_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(auth_provider, auth_provider_user_id)
+);
+
+CREATE INDEX idx_auth_links_profile ON kb_profile_auth_links(profile_id);
+CREATE INDEX idx_auth_links_email ON kb_profile_auth_links(email);
+
 CREATE TABLE resources (
     id              UUID PRIMARY KEY,
     kb_context_id   UUID NOT NULL REFERENCES kb_contexts(id),
