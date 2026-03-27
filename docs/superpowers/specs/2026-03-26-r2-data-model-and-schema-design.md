@@ -12,6 +12,7 @@ Git and the local filesystem become an optional **materialization layer**: a con
 |-----------|-------------|
 | Git = content authority | Postgres = content authority (via versioned chunks) |
 | Postgres = metadata authority | Postgres = everything authority |
+| Three resource kinds (indexable/ingested/knowledge_base) | One resource type — behavioral differences via doc type behaviors, ingestion provenance via `kb_ingestion_records` |
 | Dual-authority reconciliation (6 drift types) | Single-authority sync (push local changes up, pull current state down) |
 | Local HNSW as offline fallback | Local HNSW as optional offline cache |
 | events.jsonl as local audit trail | events.jsonl as local buffer → drains to Postgres on sync |
@@ -22,12 +23,15 @@ Git and the local filesystem become an optional **materialization layer**: a con
 - **Apache AGE knowledge graph** alongside pg_vector, since Postgres holds all content
 - **Cloud-first without git**: `temper auth login` gives full access; `git clone` becomes optional for local editing convenience
 - **Simpler architecture**: one authority eliminates most reconciliation complexity
+- **No resource kinds**: The R1 distinction between IndexableResource, IngestedResource, and KnowledgeBaseResource collapses. If everything lives in Postgres and everything is always indexed, then "indexable" and "knowledge base" are not typal distinctions — they're behavioral capabilities already surfaced through `kb_doc_type_behaviors`. Whether content was authored natively or converted from an external source is captured by the presence of an ingestion provenance record, not a type discriminator.
 
 ## Schema Design
 
 ### Approach: Flat Resources + Per-Behavior Join Tables
 
-Single `resources` table for all three resource kinds. Behavior composition via `kb_doc_type_behaviors` join table linking types to behaviors, with per-behavior state tables holding actual field values. Chosen over JSONB (no type safety, weaker constraints) and EAV (query complexity for ~4 behaviors is not justified).
+Single `resources` table for all resources regardless of origin. No `resource_kind` discriminator — the R1 distinction between IndexableResource, IngestedResource, and KnowledgeBaseResource is retired. Every resource is indexed, every resource lives in Postgres, and behavioral differences are expressed through `kb_doc_type_behaviors`. Whether content was ingested from an external source is captured by the presence of a `kb_ingestion_records` row (provenance chain), not a type on the resource itself.
+
+Behavior composition via `kb_doc_type_behaviors` join table linking types to behaviors, with per-behavior state tables holding actual field values. Chosen over JSONB (no type safety, weaker constraints) and EAV (query complexity for ~4 behaviors is not justified).
 
 ### Core Tables
 
@@ -49,18 +53,14 @@ CREATE TABLE kb_doc_types (
     created     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- The single resource table for all three kinds
-CREATE TYPE resource_kind AS ENUM ('indexable', 'ingested', 'knowledge_base');
-
 CREATE TABLE resources (
     id              UUID PRIMARY KEY,              -- UUIDv7, time-ordered
-    kind            resource_kind NOT NULL,
     kb_context_id   UUID NOT NULL REFERENCES kb_contexts(id),
     kb_doc_type_id  UUID NOT NULL REFERENCES kb_doc_types(id),
     uri             TEXT NOT NULL,
     title           TEXT NOT NULL,
     slug            VARCHAR(256),
-    content_hash    VARCHAR(64),                   -- SHA-256 hex, null for indexable
+    content_hash    VARCHAR(64),                   -- SHA-256 hex of current document content
     mimetype        VARCHAR(128),
     created         TIMESTAMPTZ NOT NULL,
     updated         TIMESTAMPTZ NOT NULL,
@@ -71,12 +71,11 @@ CREATE TABLE resources (
 
 CREATE INDEX idx_resources_context ON resources(kb_context_id);
 CREATE INDEX idx_resources_doc_type ON resources(kb_doc_type_id);
-CREATE INDEX idx_resources_kind ON resources(kind);
 CREATE INDEX idx_resources_updated ON resources(updated);
 ```
 
 **Key decisions:**
-- `resource_kind` is one of the few enums — we have conviction these three kinds are stable and want the constraint as a forcing function
+- **No `resource_kind` discriminator.** The R1 distinction (indexable/ingested/knowledge_base) is retired. All resources are peers. Ingestion provenance is tracked via `kb_ingestion_records` when applicable. Behavioral differences come from `kb_doc_type_behaviors`.
 - `doc_type` is a FK to `kb_doc_types`, not free text — enforces type registration while keeping types extensible via data
 - `slug` unique within `kb_context_id` — same slug can exist in different contexts
 - `uri` globally unique — each resource has one canonical URI. KB/ingested resources use vault-relative paths (`file://tickets/temper/2026-03-26-fix-search.md`), indexable resources use external URIs (`https://...`, `s3://...`). Vault-relative paths ensure URIs are stable across machines.
@@ -237,7 +236,7 @@ CREATE TABLE kb_ingestion_records (
 );
 ```
 
-Only `ingested` kind resources have provenance records. `source_hash` enables detecting when original content has changed upstream.
+Any resource that originated from external content has a provenance record. Resources without ingestion records were authored natively. `source_hash` enables detecting when original content has changed upstream.
 
 ### Events Table
 
@@ -381,10 +380,11 @@ Local vault remains as-is after migration. It becomes the first materialized cli
 | pg_vector dimensions | 768-dim from day one (kreuzberg balanced) |
 | pg_vector index type | HNSW with partial index on `is_current = true` |
 | Distance function | Cosine (`vector_cosine_ops`) |
+| Resource kind discriminator | Retired. No `resource_kind` enum. All resources are peers. Ingestion provenance via `kb_ingestion_records`. Behavioral differences via `kb_doc_type_behaviors`. |
 
 ## Open Questions for Downstream Workstreams
 
-1. **R3**: Does the deployment platform support pg_vector and Apache AGE extensions? This is now a hard requirement.
+1. **R3**: Does the deployment platform support pg_vector and Apache AGE extensions? pg_vector is a hard requirement; AGE is strongly desired for future knowledge graph integration.
 2. **R4**: The `kb_profiles` table is a placeholder — full auth flow design (GitHub OAuth, token management) is R4 scope.
 3. **R4**: `kb_contexts` may need ownership/permission columns for multi-tenancy — deferred to auth design.
 4. **R5**: Should the local HNSW offline cache use 768-dim (matching cloud) or stay at 384-dim (lighter weight)? The cloud uses 768 regardless.
