@@ -64,6 +64,9 @@ CREATE TABLE resources (
     slug            VARCHAR(256),
     content_hash    VARCHAR(64),
     mimetype        VARCHAR(128),
+    originator_profile_id UUID NOT NULL REFERENCES kb_profiles(id),
+    owner_profile_id    UUID NOT NULL REFERENCES kb_profiles(id),
+    is_active           BOOLEAN NOT NULL DEFAULT true,
     created         TIMESTAMPTZ NOT NULL,
     updated         TIMESTAMPTZ NOT NULL,
     UNIQUE(slug, kb_context_id),
@@ -73,6 +76,8 @@ CREATE TABLE resources (
 CREATE INDEX idx_resources_context ON resources(kb_context_id);
 CREATE INDEX idx_resources_doc_type ON resources(kb_doc_type_id);
 CREATE INDEX idx_resources_updated ON resources(updated);
+CREATE INDEX idx_resources_owner ON resources(owner_profile_id);
+CREATE INDEX idx_resources_originator ON resources(originator_profile_id);
 
 CREATE TABLE kb_lifecycle_stages (
     id              UUID PRIMARY KEY,
