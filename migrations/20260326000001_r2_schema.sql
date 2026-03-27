@@ -220,6 +220,7 @@ CREATE INDEX idx_invitations_email ON kb_team_invitations(invited_email);
 -- R4: Composable access control functions
 -- These are STABLE (no side effects) so the query planner can inline them.
 -- They compose into CTEs, subqueries, and joins for vector search and graph traversal.
+-- Functions: resources_visible_to, can_modify_resource, can_manage_team
 
 CREATE FUNCTION resources_visible_to(
     p_profile_id UUID,
