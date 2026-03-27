@@ -51,7 +51,7 @@ working inside the temper source repo.
 
 - `temper search <query>` — Semantic search across indexed content (reach for this before grep/find)
 - `temper context <topic> [--depth N]` — Traverse nearest neighbors for related content
-- `temper session save [<title>] [--ticket <slug>] [--state <state>]` — Create/update session note, optionally link to ticket
+- `temper session save [<title>] [--ticket <slug>] [--state <state>]` — Create/update session note, optionally link to ticket (stdin auto-detected — pipe content to populate the body; without stdin, creates from template with placeholder text that must be edited)
 - `temper session list` — List recent sessions
 - `temper ticket create --title <t> [--project <p>] [--scope patch|feature|epic]` — Create ticket (stdin auto-detected)
 - `temper ticket list [--project <p>] [--format json|text]` — List tickets
@@ -100,8 +100,9 @@ When starting a session:
 - Search for relevant context: `temper search "<topic>"`
 
 When ending a session:
-- Suggest: `temper session save --ticket <slug> --state done` (if working on a ticket)
-- Or just: `temper session save`
+- Pipe session content via stdin: `cat <<'EOF' | temper session save "<title>" --ticket <slug> --state done\n<content>\nEOF`
+- Or create from template and edit after: `temper session save "<title>"` then edit the file
+- **Important**: Without stdin, `temper session save` creates a template with placeholder text. You must either pipe content or edit the file afterward — otherwise the session note will be empty boilerplate.
 
 When the user says `/temper ticket start <slug>`:
 1. Run `temper ticket move <slug> --stage in-progress --project <p>`
@@ -122,7 +123,7 @@ When the user says `/temper ticket start <slug>`:
 2. Implement directly with tests
 3. `cargo test` / `cargo clippy`
 4. Commit
-5. `temper session save "<summary>" --ticket <slug> --state done`
+5. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --ticket <slug> --state done` with goal, what happened, decisions, connections, and next steps via stdin
 
 ### Feature Workflow
 1. Read ticket content
@@ -131,7 +132,7 @@ When the user says `/temper ticket start <slug>`:
 4. Produce design spec, then invoke superpowers:writing-plans
 5. Implement via plan execution
 6. Full verification (tests, clippy, fmt)
-7. `temper session save "<summary>" --ticket <slug> --state done`
+7. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --ticket <slug> --state done` with goal, what happened, decisions, connections, and next steps via stdin
 
 ### Epic Workflow
 1. Read ticket content
@@ -140,7 +141,7 @@ When the user says `/temper ticket start <slug>`:
 4. Produce a milestone roadmap via `temper milestone create`:
    - Throughline summary, sequenced deliverable chunks, validation gates, open questions
 5. Create the FIRST actionable ticket under that milestone
-6. `temper session save "<summary>" --ticket <slug>`
+6. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --ticket <slug>` with goal, what happened, decisions, connections, and next steps via stdin
 7. Code only if the user actively pushes for it
 
 Epic philosophy: the roadmap guides session work, not ticket-spread. Each session: work the current ticket, learn, evolve the roadmap, create the next ticket.
