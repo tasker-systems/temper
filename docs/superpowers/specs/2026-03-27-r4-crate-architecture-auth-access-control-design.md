@@ -50,7 +50,7 @@ temper-api ──→ temper-core
 **temper-core** — The shared vocabulary. No runtime, no IO, no framework dependencies beyond sqlx's compile-time `FromRow` derive (Postgres-as-authority commitment makes DB-agnostic core unnecessary).
 
 Contains:
-- Domain types: `Profile`, `Team`, `TeamMember`, `Resource`, `Chunk`, `Context`, `DocType`
+- Domain types: `Profile`, `ProfileAuthLink`, `Team`, `TeamMember`, `Resource`, `Chunk`, `Context`, `DocType`
 - Behavior state types: `WorkflowableState`, `SequenceableState`, `AssignableState`, `TaggableState`
 - Team/access types: `TeamRole`, `AccessLevel`, `TeamInvitation`, `TeamResource`
 - Ownership types: `ResourceOwnership` (originator + owner)
@@ -118,10 +118,20 @@ Authentication is provider-agnostic. Neon Auth is the default identity provider,
 ### The Identity Seam
 
 ```
-auth_provider.user_id  →  kb_profiles.auth_provider_user_id
+auth_provider.user_id  →  kb_profile_auth_links.auth_provider_user_id  →  kb_profiles.id
 ```
 
-This is the only join point between external identity and the temper domain. Everything downstream works with `kb_profiles.id`.
+Auth provider identities are linked to profiles via `kb_profile_auth_links`, not stored on the profile itself. A profile can have multiple linked providers (e.g., Google and GitHub with the same email). The profile is a pure temper-domain entity with no auth provider contamination. Everything downstream works with `kb_profiles.id`.
+
+### Identity Reconciliation Policy
+
+If a user authenticates from a legitimate provider with the same email address as an existing profile's linked identity, we treat them as the same person and auto-link the new provider. This is documented as public policy. The reconciliation flow:
+
+1. JWT arrives → extract provider + user_id
+2. Check `kb_profile_auth_links` for matching `(auth_provider, auth_provider_user_id)`
+3. If found → load that profile
+4. If not found → check if email matches an existing link's email → auto-link new provider to existing profile
+5. If no match at all → create new profile + first auth link (marked as default)
 
 ### Auth Provider Configuration
 
@@ -152,13 +162,14 @@ Flow for every authenticated request:
 3. Validate signature against cached JWKS keys
 4. Validate `exp`, `iss`, `aud` claims against `AuthProvider` config
 5. Extract user ID from the configured claim (`user_id_claim`)
-6. Lookup `kb_profiles` by `auth_provider` + `auth_provider_user_id`
-7. If no profile exists, auto-provision one from JWT claims (first login)
-8. Inject `AuthenticatedProfile` into axum handler extractors
+6. Lookup `kb_profile_auth_links` by `(auth_provider, auth_provider_user_id)` → get `profile_id`
+7. If link found → load profile by `profile_id`
+8. If link not found → check email reconciliation → auto-link or create new profile + link
+9. Inject `AuthenticatedProfile` into axum handler extractors
 
 **JWKS caching**: Fetch on startup, store in `Arc<RwLock<JwksCache>>` in axum state. Refresh when verification fails with unknown key ID (key rotation), rate-limited to prevent abuse. No background polling.
 
-**Profile lookup**: Per-request, not globally cached. Single-row indexed lookup by `(auth_provider, auth_provider_user_id)` — sub-millisecond. A shared cache introduces invalidation complexity that isn't justified for the throughput profile of this application.
+**Profile lookup**: Per-request, not globally cached. Single-row indexed lookup on `kb_profile_auth_links(auth_provider, auth_provider_user_id)` then a PK lookup on `kb_profiles` — two sub-millisecond queries. A shared cache introduces invalidation complexity that isn't justified for the throughput profile of this application.
 
 ### Auth Types (temper-core)
 
@@ -227,30 +238,39 @@ Profile is the temper-domain identity. It bridges the external auth identity to 
 ```sql
 CREATE TABLE kb_profiles (
     id                        UUID PRIMARY KEY,              -- UUIDv7
-    auth_provider             VARCHAR(32) NOT NULL,          -- "neon_auth", "auth0", etc.
-    auth_provider_user_id     VARCHAR(128) NOT NULL,         -- external identity ID
     display_name              VARCHAR(128) NOT NULL,
-    email                     VARCHAR(256),                  -- cached from provider for display
+    email                     VARCHAR(256),                  -- cached from default provider for display
     avatar_url                TEXT,
     preferences               JSONB NOT NULL DEFAULT '{}',   -- theme, default project, notifications
     vault_config              JSONB NOT NULL DEFAULT '{}',   -- local vault path, sync preferences
     is_active                 BOOLEAN NOT NULL DEFAULT true,
     created                   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated                   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated                   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE kb_profile_auth_links (
+    id                        UUID PRIMARY KEY,              -- UUIDv7
+    profile_id                UUID NOT NULL REFERENCES kb_profiles(id) ON DELETE CASCADE,
+    auth_provider             VARCHAR(32) NOT NULL,          -- "neon_auth", "auth0", "okta", etc.
+    auth_provider_user_id     VARCHAR(128) NOT NULL,         -- external identity ID from this provider
+    email                     VARCHAR(256),                  -- email from this provider at link time
+    is_default                BOOLEAN NOT NULL DEFAULT false, -- which link is the primary identity
+    linked_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE(auth_provider, auth_provider_user_id)
 );
+
+CREATE INDEX idx_auth_links_profile ON kb_profile_auth_links(profile_id);
+CREATE INDEX idx_auth_links_email ON kb_profile_auth_links(email);
 ```
 
-This evolves the R2 placeholder (`provider`/`external_id`) with clearer naming and the addition of `avatar_url`, `preferences`, `vault_config`, and `is_active`. The unique constraint means one profile per provider identity — identity reconciliation (same person, multiple providers) is handled at the provider level (Neon Auth matches by email), not by temper.
+This evolves the R2 placeholder (`provider`/`external_id`) by separating auth provider linkage from the profile entirely. The profile is a pure temper-domain entity — no auth provider fields. All provider identities are tracked in `kb_profile_auth_links`, where each row maps one provider identity to one profile. A profile can have multiple linked providers (Google, GitHub, email, etc.) and one is marked as default. Identity reconciliation is temper-owned: when a new provider identity arrives with an email matching an existing link, it auto-links to the same profile.
 
-### Rust Type (temper-core)
+### Rust Types (temper-core)
 
 ```rust
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Profile {
     pub id: Uuid,
-    pub auth_provider: String,
-    pub auth_provider_user_id: String,
     pub display_name: String,
     pub email: Option<String>,
     pub avatar_url: Option<String>,
@@ -259,6 +279,17 @@ pub struct Profile {
     pub is_active: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ProfileAuthLink {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub auth_provider: String,
+    pub auth_provider_user_id: String,
+    pub email: Option<String>,
+    pub is_default: bool,
+    pub linked_at: DateTime<Utc>,
 }
 ```
 
@@ -289,7 +320,7 @@ pub struct ResourceOwnership {
 
 ### Profile Lifecycle
 
-- **Auto-provisioned** on first authenticated request: JWT arrives with no matching profile → create from claims (email, display name from provider)
+- **Auto-provisioned** on first authenticated request: JWT arrives with no matching auth link → create profile from claims (email, display name from provider) + first auth link marked as default
 - **Preferences**: JSONB for CLI behavior — default project, sync frequency, embedding mode, theme. Schema-less to evolve without migrations.
 - **Vault config**: JSONB for local vault path and sync preferences. Each profile can have different local materialization settings.
 
@@ -767,13 +798,13 @@ All R4 changes are folded into the existing R2 migration (`20260326000001_r2_sch
 
 ### Changes to Existing R2 Tables
 
-**`kb_profiles`** — replace the placeholder:
+**`kb_profiles`** — replace the placeholder, extract auth linkage:
 ```sql
 -- R2 placeholder:
 --   provider VARCHAR(32), external_id VARCHAR(128), display_name, email, created, updated
 -- R4 replacement:
---   auth_provider VARCHAR(32), auth_provider_user_id VARCHAR(128), display_name, email,
---   avatar_url, preferences JSONB, vault_config JSONB, is_active, created, updated
+--   display_name, email, avatar_url, preferences JSONB, vault_config JSONB, is_active, created, updated
+--   Auth provider fields moved to new kb_profile_auth_links table
 ```
 
 **`resources`** — add ownership and soft-delete columns:
@@ -794,6 +825,7 @@ CREATE TYPE invitation_status AS ENUM ('pending', 'accepted', 'declined', 'expir
 
 ### New Tables
 
+- `kb_profile_auth_links` — provider identity linkage with default flag, email-based reconciliation
 - `kb_teams` — team definitions with slug, metadata, soft-delete
 - `kb_team_members` — membership with `team_role` enum, invited-by provenance
 - `kb_team_resources` — resource scoping with `access_level` enum, added-by provenance
@@ -807,6 +839,7 @@ CREATE TYPE invitation_status AS ENUM ('pending', 'accepted', 'declined', 'expir
 
 ### New Indexes
 
+- `idx_auth_links_profile`, `idx_auth_links_email` — auth link lookups and email reconciliation
 - `idx_team_members_profile`, `idx_team_members_team` — membership lookups
 - `idx_team_resources_resource`, `idx_team_resources_team` — resource scoping lookups
 - `idx_invitations_token`, `idx_invitations_email` — invitation resolution
@@ -884,8 +917,6 @@ pub struct AuthenticatedProfile {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Profile {
     pub id: Uuid,
-    pub auth_provider: String,
-    pub auth_provider_user_id: String,
     pub display_name: String,
     pub email: Option<String>,
     pub avatar_url: Option<String>,
@@ -894,6 +925,17 @@ pub struct Profile {
     pub is_active: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ProfileAuthLink {
+    pub id: Uuid,
+    pub profile_id: Uuid,
+    pub auth_provider: String,
+    pub auth_provider_user_id: String,
+    pub email: Option<String>,
+    pub is_default: bool,
+    pub linked_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
