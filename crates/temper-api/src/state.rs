@@ -1,4 +1,4 @@
-use jsonwebtoken::jwk::JwkSet;
+use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, JwkSet};
 use jsonwebtoken::{Algorithm, DecodingKey, Validation};
 use sqlx::PgPool;
 use std::sync::Arc;
@@ -29,6 +29,15 @@ impl std::fmt::Debug for JwksKeyStore {
             .field("ttl", &self.ttl)
             .finish_non_exhaustive()
     }
+}
+
+/// Check if a JWK is an OKP key with Ed25519 curve (the only key type
+/// we accept for EdDSA verification).
+fn is_ed25519_okp(params: &AlgorithmParameters) -> bool {
+    matches!(
+        params,
+        AlgorithmParameters::OctetKeyPair(p) if p.curve == EllipticCurve::Ed25519
+    )
 }
 
 impl JwksKeyStore {
@@ -118,13 +127,14 @@ impl JwksKeyStore {
             .await
             .map_err(|e| format!("JWKS parse error: {e}"))?;
 
-        // Find the first key that jsonwebtoken can turn into a DecodingKey.
-        // The crate natively handles OKP/Ed25519 (kty=OKP, crv=Ed25519).
+        // Find the first Ed25519 OKP key that jsonwebtoken can turn into a DecodingKey.
+        // Explicitly filter to kty=OKP crv=Ed25519 before attempting to build a key.
         let decoding_key = jwks
             .keys
             .iter()
+            .filter(|jwk| is_ed25519_okp(&jwk.algorithm))
             .find_map(|jwk| DecodingKey::from_jwk(jwk).ok())
-            .ok_or_else(|| "No usable EdDSA key found in JWKS".to_string())?;
+            .ok_or_else(|| "No Ed25519 (OKP) key found in JWKS response".to_string())?;
 
         let cached = CachedKeys {
             key: decoding_key,
@@ -260,5 +270,42 @@ mod tests {
             .expect("token verification should succeed");
 
         assert_eq!(data.claims.sub, "user-123");
+    }
+
+    #[test]
+    fn is_ed25519_okp_accepts_valid_key() {
+        use jsonwebtoken::jwk::{
+            AlgorithmParameters, EllipticCurve, OctetKeyPairParameters, OctetKeyPairType,
+        };
+        let params = AlgorithmParameters::OctetKeyPair(OctetKeyPairParameters {
+            key_type: OctetKeyPairType::OctetKeyPair,
+            curve: EllipticCurve::Ed25519,
+            x: "test".to_string(),
+        });
+        assert!(is_ed25519_okp(&params));
+    }
+
+    #[test]
+    fn is_ed25519_okp_rejects_rsa() {
+        use jsonwebtoken::jwk::{AlgorithmParameters, RSAKeyParameters, RSAKeyType};
+        let params = AlgorithmParameters::RSA(RSAKeyParameters {
+            key_type: RSAKeyType::RSA,
+            n: "test".to_string(),
+            e: "test".to_string(),
+        });
+        assert!(!is_ed25519_okp(&params));
+    }
+
+    #[test]
+    fn is_ed25519_okp_rejects_wrong_curve() {
+        use jsonwebtoken::jwk::{
+            AlgorithmParameters, EllipticCurve, OctetKeyPairParameters, OctetKeyPairType,
+        };
+        let params = AlgorithmParameters::OctetKeyPair(OctetKeyPairParameters {
+            key_type: OctetKeyPairType::OctetKeyPair,
+            curve: EllipticCurve::P256,
+            x: "test".to_string(),
+        });
+        assert!(!is_ed25519_okp(&params));
     }
 }
