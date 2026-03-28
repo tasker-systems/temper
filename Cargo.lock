@@ -3483,6 +3483,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "sqlx",
+ "temper-core",
  "tempfile",
  "thiserror 2.0.18",
  "tokenizers",
@@ -3490,6 +3491,20 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "temper-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sqlx",
+ "thiserror 2.0.18",
+ "toml",
  "uuid",
 ]
 
