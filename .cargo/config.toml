@@ -1,0 +1,14 @@
+[env]
+WORKSPACE_PATH = { value = ".", relative = true }
+
+[profile.dev]
+incremental = true
+split-debuginfo = "unpacked"
+
+[profile.release]
+incremental = false
+opt-level = 3
+strip = true
+lto = "fat"
+panic = "abort"
+codegen-units = 1

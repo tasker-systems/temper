@@ -1,0 +1,99 @@
+# =============================================================================
+# Temper — Workspace-Level cargo-make Tasks
+# =============================================================================
+# Composite tasks that operate across the entire workspace.
+# Extended by the root Makefile.toml.
+
+extend = "./base-tasks.toml"
+
+# =============================================================================
+# Composite Tasks
+# =============================================================================
+
+[tasks.check]
+description = "Run all quality checks"
+dependencies = ["rust-fmt-check", "rust-clippy", "rust-docs", "rust-machete"]
+
+[tasks.test]
+description = "Run tests (unit tests, no feature flags)"
+command = "cargo"
+args = ["nextest", "run", "--workspace"]
+
+[tasks.test-db]
+description = "Run tests including database integration tests (requires Docker Postgres)"
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--features", "test-db"]
+
+[tasks.test-all]
+description = "Run all test tiers including embedder tests"
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--features", "test-db,test-embedder"]
+
+[tasks.fix]
+description = "Auto-fix formatting and lint issues"
+dependencies = ["rust-fmt-fix", "rust-clippy-fix"]
+
+[tasks.build]
+description = "Build all workspace crates"
+command = "cargo"
+args = ["build", "--workspace", "--all-features"]
+
+[tasks.audit]
+description = "Run security audit on dependencies"
+command = "cargo"
+args = ["audit"]
+
+[tasks.run]
+description = "Run the temper-api server locally"
+command = "cargo"
+args = ["run", "-p", "temper-api"]
+
+# =============================================================================
+# Sub-Tasks
+# =============================================================================
+
+[tasks.rust-fmt-check]
+description = "Check Rust formatting"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.rust-fmt-fix]
+description = "Fix Rust formatting"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.rust-clippy]
+description = "Run Clippy lints"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+[tasks.rust-clippy-fix]
+description = "Fix Clippy issues"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--fix", "--allow-dirty", "--allow-staged"]
+
+[tasks.rust-docs]
+description = "Check documentation builds"
+command = "cargo"
+args = ["doc", "--workspace", "--no-deps", "--document-private-items"]
+
+[tasks.rust-machete]
+description = "Check for unused Cargo dependencies"
+command = "cargo"
+args = ["machete", "--with-metadata"]
+
+# =============================================================================
+# Docker Tasks
+# =============================================================================
+
+[tasks.docker-up]
+description = "Start PostgreSQL development database"
+script = ["docker compose up -d"]
+
+[tasks.docker-down]
+description = "Stop PostgreSQL development database"
+script = ["docker compose down"]
+
+[tasks.docker-down-volumes]
+description = "Stop PostgreSQL and remove data volumes"
+script = ["docker compose down -v"]
