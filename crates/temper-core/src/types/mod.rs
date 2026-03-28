@@ -23,6 +23,7 @@ pub mod team;
 pub mod transfer;
 pub mod upload;
 pub mod vault;
+pub mod vault_config;
 
 pub use access::{AccessLevel, AccessScoped, TeamResource};
 pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
@@ -49,3 +50,4 @@ pub use upload::{
     UploadStatusResponse,
 };
 pub use vault::{IngestionSource, ResourceFrontmatter, VaultAddResult};
+pub use vault_config::{DeviceOverrides, Subscription, SubscriptionOverride, VaultConfig};
