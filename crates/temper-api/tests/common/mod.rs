@@ -122,6 +122,7 @@ pub async fn setup_test_app() -> TestApp {
         auth_provider_name: "test-provider".to_string(),
         cors_origins: vec![],
         port: 0,
+        enable_swagger: false,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, config);

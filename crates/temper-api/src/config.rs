@@ -9,6 +9,7 @@ pub struct ApiConfig {
     pub auth_provider_name: String,
     pub cors_origins: Vec<String>,
     pub port: u16,
+    pub enable_swagger: bool,
 }
 
 impl ApiConfig {
@@ -39,6 +40,14 @@ impl ApiConfig {
             );
         }
 
+        let enable_swagger = env::var("ENABLE_SWAGGER")
+            .map(|v| v == "true" || v == "1")
+            .unwrap_or(false);
+
+        if enable_swagger {
+            tracing::info!("Swagger UI enabled at /api-docs/ui");
+        }
+
         Ok(Self {
             database_url: env::var("DATABASE_URL")?,
             jwks_url: env::var("JWKS_URL")?,
@@ -50,6 +59,7 @@ impl ApiConfig {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
+            enable_swagger,
         })
     }
 }
