@@ -1,0 +1,8 @@
+[package]
+name = "temper-api"
+version = "0.1.0"
+edition = "2021"
+description = "Axum HTTP server implementing the temper cloud API"
+
+[dependencies]
+temper-core = { path = "../temper-core" }

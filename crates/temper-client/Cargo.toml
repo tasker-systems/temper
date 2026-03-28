@@ -1,0 +1,8 @@
+[package]
+name = "temper-client"
+version = "0.1.0"
+edition = "2021"
+description = "Auth-aware HTTP client for the temper cloud API"
+
+[dependencies]
+temper-core = { path = "../temper-core" }

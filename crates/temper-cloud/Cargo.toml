@@ -1,0 +1,8 @@
+[package]
+name = "temper-cloud"
+version = "0.1.0"
+edition = "2021"
+description = "Vercel deployment adapter for temper-api"
+
+[dependencies]
+temper-core = { path = "../temper-core" }

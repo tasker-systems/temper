@@ -1,0 +1,8 @@
+[package]
+name = "temper-embed"
+version = "0.1.0"
+edition = "2021"
+description = "Embedding and extraction pipeline for temper knowledge base"
+
+[dependencies]
+temper-core = { path = "../temper-core" }
