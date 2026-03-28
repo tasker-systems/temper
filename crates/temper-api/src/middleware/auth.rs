@@ -1,6 +1,6 @@
 use axum::body::Body;
 use axum::extract::{FromRequestParts, State};
-use axum::http::{request::Parts, Request, StatusCode};
+use axum::http::{request::Parts, Request};
 use axum::middleware::Next;
 use axum::response::Response;
 use jsonwebtoken::{decode, TokenData};
@@ -36,7 +36,7 @@ impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
 {
-    type Rejection = (StatusCode, &'static str);
+    type Rejection = ApiError;
 
     fn from_request_parts(
         parts: &mut Parts,
@@ -47,7 +47,9 @@ where
             .get::<AuthenticatedProfile>()
             .cloned()
             .map(AuthUser)
-            .ok_or((StatusCode::UNAUTHORIZED, "Authentication required"));
+            .ok_or(ApiError::Unauthorized(
+                "Authentication required".to_string(),
+            ));
         std::future::ready(result)
     }
 }
@@ -64,25 +66,27 @@ pub async fn require_auth(
     let token = extract_bearer_token(&request)?;
 
     // 2. Get the current decoding key from the JWKS store (cached).
-    let decoding_key = state
-        .jwks_store
-        .get_decoding_key()
-        .await
-        .map_err(|e| ApiError::Unauthorized(format!("JWKS error: {e}")))?;
+    let decoding_key = state.jwks_store.get_decoding_key().await.map_err(|e| {
+        tracing::error!("JWKS key retrieval failed: {e}");
+        ApiError::Unauthorized("Authentication service unavailable".to_string())
+    })?;
 
     // 3. Decode and verify the JWT.
     let issuer = &state.config.auth_issuer;
     let audience = state.config.auth_audience.as_deref();
     let validation = state.jwks_store.validation(issuer, audience);
 
-    let token_data: TokenData<JwtClaims> = decode(&token, &decoding_key, &validation)
-        .map_err(|e| ApiError::Unauthorized(format!("Invalid token: {e}")))?;
+    let token_data: TokenData<JwtClaims> =
+        decode(&token, &decoding_key, &validation).map_err(|e| {
+            tracing::debug!("JWT verification failed: {e}");
+            ApiError::Unauthorized("Invalid or expired token".to_string())
+        })?;
 
     // 4. Build AuthClaims.
     let email = token_data
         .claims
         .email
-        .unwrap_or_else(|| token_data.claims.sub.clone());
+        .ok_or_else(|| ApiError::Unauthorized("Token missing required email claim".to_string()))?;
 
     let claims = AuthClaims {
         provider: "neon_auth".to_string(),
