@@ -119,6 +119,7 @@ pub async fn setup_test_app() -> TestApp {
         jwks_url: "unused".to_string(),
         auth_issuer: "test-issuer".to_string(),
         auth_audience: None,
+        auth_provider_name: "test-provider".to_string(),
         cors_origins: vec![],
         port: 0,
     };

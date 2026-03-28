@@ -90,7 +90,7 @@ pub async fn require_auth(
         .ok_or_else(|| ApiError::Unauthorized("Token missing required email claim".to_string()))?;
 
     let claims = AuthClaims {
-        provider: "neon_auth".to_string(),
+        provider: state.config.auth_provider_name.clone(),
         external_user_id: token_data.claims.sub,
         email,
         email_verified: token_data.claims.email_verified,

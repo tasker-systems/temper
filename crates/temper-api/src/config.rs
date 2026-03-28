@@ -6,6 +6,7 @@ pub struct ApiConfig {
     pub jwks_url: String,
     pub auth_issuer: String,
     pub auth_audience: Option<String>,
+    pub auth_provider_name: String,
     pub cors_origins: Vec<String>,
     pub port: u16,
 }
@@ -20,6 +21,9 @@ impl ApiConfig {
             .collect();
 
         let auth_audience = env::var("AUTH_AUDIENCE").ok().filter(|s| !s.is_empty());
+
+        let auth_provider_name =
+            env::var("AUTH_PROVIDER_NAME").unwrap_or_else(|_| "neon_auth".to_string());
 
         if auth_audience.is_none() {
             tracing::warn!(
@@ -40,6 +44,7 @@ impl ApiConfig {
             jwks_url: env::var("JWKS_URL")?,
             auth_issuer: env::var("AUTH_ISSUER")?,
             auth_audience,
+            auth_provider_name,
             cors_origins,
             port: env::var("PORT")
                 .ok()
