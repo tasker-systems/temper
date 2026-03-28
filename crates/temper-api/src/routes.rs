@@ -57,6 +57,10 @@ pub fn create_app(state: AppState) -> Router {
 
 fn cors_layer(state: &AppState) -> CorsLayer {
     if state.config.cors_origins.is_empty() {
+        // No origins configured — deny all cross-origin requests.
+        // Use CORS_ORIGINS=* for permissive mode in development.
+        CorsLayer::new()
+    } else if state.config.cors_origins.len() == 1 && state.config.cors_origins[0] == "*" {
         CorsLayer::permissive()
     } else {
         CorsLayer::new()
