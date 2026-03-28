@@ -1399,12 +1399,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glob"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
-
-[[package]]
 name = "h2"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3741,7 +3735,6 @@ dependencies = [
  "serde_json",
  "sqlx",
  "temper-core",
- "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
@@ -3766,7 +3759,6 @@ dependencies = [
  "clap",
  "crossterm",
  "dirs 5.0.1",
- "glob",
  "hf-hub",
  "instant-distance",
  "pulldown-cmark",
@@ -3776,16 +3768,13 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sha2",
- "sqlx",
  "temper-core",
  "tempfile",
- "thiserror 2.0.18",
  "tokenizers",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
