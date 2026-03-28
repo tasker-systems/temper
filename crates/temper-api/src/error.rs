@@ -58,7 +58,10 @@ impl From<sqlx::Error> for ApiError {
             sqlx::Error::Database(db_err) if db_err.code().as_deref() == Some("23505") => {
                 ApiError::Conflict("Resource already exists".to_string())
             }
-            _ => ApiError::Internal(format!("Database error: {err}")),
+            _ => {
+                tracing::error!("Database error: {err}");
+                ApiError::Internal("An internal error occurred".to_string())
+            }
         }
     }
 }
