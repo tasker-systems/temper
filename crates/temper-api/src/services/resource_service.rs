@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 
 /// Row type matching the `resources` table.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct ResourceRow {
     pub id: Uuid,
     pub kb_context_id: Uuid,
@@ -24,7 +25,7 @@ pub struct ResourceRow {
 }
 
 /// Query parameters for listing visible resources.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct ResourceListParams {
     /// Filter by context ID.
     pub kb_context_id: Option<Uuid>,
@@ -35,7 +36,7 @@ pub struct ResourceListParams {
 }
 
 /// Request body for creating a resource.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ResourceCreateRequest {
     pub kb_context_id: Uuid,
     pub kb_doc_type_id: Uuid,
@@ -46,7 +47,7 @@ pub struct ResourceCreateRequest {
 }
 
 /// Request body for updating a resource.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct ResourceUpdateRequest {
     pub title: Option<String>,
     pub slug: Option<String>,

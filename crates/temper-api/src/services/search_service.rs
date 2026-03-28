@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::ApiResult;
 
 /// Query parameters for search.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct SearchParams {
     /// Full-text or semantic query string.
     pub q: String,
@@ -16,7 +17,7 @@ pub struct SearchParams {
 }
 
 /// A single search result.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct SearchResultRow {
     pub resource_id: Uuid,
     pub title: String,

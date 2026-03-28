@@ -14,6 +14,7 @@ use uuid::Uuid;
 /// Auto-provisioned on first authenticated request. Soft-deleted via
 /// `is_active = false` for referential integrity and GDPR compliance.
 #[derive(Debug, Clone, Serialize, FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct Profile {
     pub id: Uuid,
     pub display_name: String,
@@ -33,6 +34,7 @@ pub struct Profile {
 /// with an email matching an existing link, it auto-links to the same profile.
 /// One link is marked `is_default` as the primary identity.
 #[derive(Debug, Clone, Serialize, FromRow)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ProfileAuthLink {
     pub id: Uuid,
     pub profile_id: Uuid,

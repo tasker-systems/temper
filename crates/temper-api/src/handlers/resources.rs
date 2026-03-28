@@ -1,15 +1,27 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Serialize;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-use crate::error::ApiResult;
+use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
 use crate::services::resource_service::{
     self, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
 };
 use crate::state::AppState;
 
+#[utoipa::path(
+    get,
+    path = "/api/resources",
+    tag = "Resources",
+    params(ResourceListParams),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "List of visible resources", body = Vec<ResourceRow>),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+    )
+)]
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -20,6 +32,18 @@ pub async fn list(
         .map(Json)
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/resources/{id}",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Resource metadata", body = ResourceRow),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
 pub async fn get(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -30,12 +54,24 @@ pub async fn get(
         .map(Json)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct ContentResponse {
     pub resource_id: Uuid,
     pub markdown: String,
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/resources/{id}/content",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Reconstituted markdown content", body = ContentResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
 pub async fn get_content(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -49,6 +85,18 @@ pub async fn get_content(
     }))
 }
 
+#[utoipa::path(
+    post,
+    path = "/api/resources",
+    tag = "Resources",
+    request_body = ResourceCreateRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Created resource", body = ResourceRow),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 409, description = "Conflict", body = ErrorBody),
+    )
+)]
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -59,6 +107,20 @@ pub async fn create(
         .map(Json)
 }
 
+#[utoipa::path(
+    patch,
+    path = "/api/resources/{id}",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    request_body = ResourceUpdateRequest,
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Updated resource", body = ResourceRow),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -70,11 +132,24 @@ pub async fn update(
         .map(Json)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, ToSchema)]
 pub struct DeleteResponse {
     pub deleted: bool,
 }
 
+#[utoipa::path(
+    delete,
+    path = "/api/resources/{id}",
+    tag = "Resources",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Resource deleted", body = DeleteResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 403, description = "Forbidden", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
 pub async fn delete(
     State(state): State<AppState>,
     auth: AuthUser,

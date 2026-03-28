@@ -1,12 +1,13 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::ApiResult;
 
 /// Row type matching the `kb_events` table.
-#[derive(Debug, Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
 pub struct EventRow {
     pub id: Uuid,
     pub profile_id: Uuid,
@@ -19,7 +20,7 @@ pub struct EventRow {
 }
 
 /// Query parameters for listing events.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, IntoParams)]
 pub struct EventListParams {
     /// Filter by resource ID.
     pub resource_id: Option<Uuid>,

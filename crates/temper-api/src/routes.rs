@@ -1,9 +1,12 @@
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::handlers;
 use crate::middleware::auth;
+use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 pub fn create_app(state: AppState) -> Router {
@@ -46,6 +49,7 @@ pub fn create_app(state: AppState) -> Router {
     Router::new()
         .merge(public)
         .merge(protected)
+        .merge(SwaggerUi::new("/api-docs/ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
