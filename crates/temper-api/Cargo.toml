@@ -4,5 +4,28 @@ version = "0.1.0"
 edition = "2021"
 description = "Axum HTTP server implementing the temper cloud API"
 
+[[bin]]
+name = "temper-api"
+path = "src/main.rs"
+
 [dependencies]
 temper-core = { path = "../temper-core" }
+axum = { version = "0.8", features = ["json", "query"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "macros", "migrate"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+
+[features]
+test-db = []
+
+[dev-dependencies]
+tempfile = "3"
