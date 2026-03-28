@@ -6,6 +6,22 @@ use temper_core::types::{AuthClaims, Profile, ProfileAuthLink};
 
 use crate::error::{ApiError, ApiResult};
 
+/// Maximum serialized size for the preferences JSON field (64KB).
+const MAX_PREFERENCES_BYTES: usize = 65_536;
+
+/// Validate that preferences JSON does not exceed the size limit.
+pub fn validate_preferences_size(preferences: Option<&Value>) -> ApiResult<()> {
+    if let Some(prefs) = preferences {
+        let size = serde_json::to_string(prefs).map(|s| s.len()).unwrap_or(0);
+        if size > MAX_PREFERENCES_BYTES {
+            return Err(ApiError::BadRequest(format!(
+                "preferences exceeds maximum size of {MAX_PREFERENCES_BYTES} bytes"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Resolve a profile from JWT claims.
 ///
 /// Lookup order:
@@ -193,6 +209,26 @@ mod tests {
         let pool = PgPool::connect(&url).await.unwrap();
         sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
         pool
+    }
+
+    #[test]
+    fn oversized_preferences_rejected() {
+        let large_value: serde_json::Value = serde_json::Value::String("x".repeat(65_537));
+        let result = validate_preferences_size(Some(&large_value));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn normal_preferences_accepted() {
+        let small_value: serde_json::Value = serde_json::json!({"theme": "dark"});
+        let result = validate_preferences_size(Some(&small_value));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn none_preferences_accepted() {
+        let result = validate_preferences_size(None);
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

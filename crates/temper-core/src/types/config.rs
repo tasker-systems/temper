@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Merge policy for conflict resolution within a subscription scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MergePolicy {
     /// Require explicit resolution via `temper sync resolve`

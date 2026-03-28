@@ -9,6 +9,7 @@ use super::config::MergePolicy;
 /// Describes sync subscriptions, per-device overrides, and the vault path.
 /// Stored as JSONB — existing empty `{}` values deserialize to defaults.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct VaultConfig {
     /// Managed vault root path
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -26,6 +27,7 @@ pub struct VaultConfig {
 /// Each subscription is self-contained with its own sync and merge settings.
 /// `local_paths` and `repos` enable CWD-to-context inference.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct Subscription {
     /// Which kb_context this subscription targets
     pub context: String,
@@ -51,6 +53,7 @@ pub struct Subscription {
 
 /// Per-device configuration overrides keyed by X-Temper-Client-Id.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct DeviceOverrides {
     /// Device-specific vault location
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,6 +65,7 @@ pub struct DeviceOverrides {
 
 /// Overrides for a specific subscription on a specific device.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct SubscriptionOverride {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_sync: Option<bool>,
