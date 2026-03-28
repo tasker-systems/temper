@@ -6,3 +6,6 @@ description = "Auth-aware HTTP client for the temper cloud API"
 
 [dependencies]
 temper-core = { path = "../temper-core" }
+
+[package.metadata.cargo-machete]
+ignored = ["temper-core"]

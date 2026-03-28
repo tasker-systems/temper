@@ -6,3 +6,6 @@ description = "Vercel deployment adapter for temper-api"
 
 [dependencies]
 temper-core = { path = "../temper-core" }
+
+[package.metadata.cargo-machete]
+ignored = ["temper-core"]

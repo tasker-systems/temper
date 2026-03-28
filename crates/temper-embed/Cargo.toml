@@ -6,3 +6,6 @@ description = "Embedding and extraction pipeline for temper knowledge base"
 
 [dependencies]
 temper-core = { path = "../temper-core" }
+
+[package.metadata.cargo-machete]
+ignored = ["temper-core"]

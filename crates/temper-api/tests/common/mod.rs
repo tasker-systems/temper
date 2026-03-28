@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared test helpers for temper-api integration tests.
 //!
 //! Provides `TestApp` — a running server bound to a random port, backed by
