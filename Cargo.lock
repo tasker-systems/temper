@@ -3459,6 +3459,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-api"
+version = "0.1.0"
+dependencies = [
+ "temper-core",
+]
+
+[[package]]
 name = "temper-cli"
 version = "0.1.0"
 dependencies = [
@@ -3495,6 +3502,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-client"
+version = "0.1.0"
+dependencies = [
+ "temper-core",
+]
+
+[[package]]
+name = "temper-cloud"
+version = "0.1.0"
+dependencies = [
+ "temper-core",
+]
+
+[[package]]
 name = "temper-core"
 version = "0.1.0"
 dependencies = [
@@ -3506,6 +3527,20 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "uuid",
+]
+
+[[package]]
+name = "temper-embed"
+version = "0.1.0"
+dependencies = [
+ "temper-core",
+]
+
+[[package]]
+name = "temper-mcp"
+version = "0.1.0"
+dependencies = [
+ "temper-core",
 ]
 
 [[package]]
