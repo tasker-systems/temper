@@ -33,38 +33,46 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
         return get_by_id(pool, link.profile_id).await;
     }
 
-    // 3: email reconciliation — find any existing link with the same email
-    let reconciled_link = sqlx::query_as::<_, ProfileAuthLink>(
-        r#"
-        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
-          FROM kb_profile_auth_links
-         WHERE email = $1
-         LIMIT 1
-        "#,
-    )
-    .bind(&claims.email)
-    .fetch_optional(pool)
-    .await?;
-
-    if let Some(existing) = reconciled_link {
-        // 4: create new auth link for this provider pointing to the existing profile
-        let new_link_id = Uuid::now_v7();
-        sqlx::query(
+    // 3: email reconciliation — only if the new identity's email is verified
+    if claims.email_verified == Some(true) {
+        let reconciled_link = sqlx::query_as::<_, ProfileAuthLink>(
             r#"
-            INSERT INTO kb_profile_auth_links
-                (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
-            VALUES ($1, $2, $3, $4, $5, false, now())
+            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+              FROM kb_profile_auth_links
+             WHERE email = $1
+             LIMIT 1
             "#,
         )
-        .bind(new_link_id)
-        .bind(existing.profile_id)
-        .bind(&claims.provider)
-        .bind(&claims.external_user_id)
         .bind(&claims.email)
-        .execute(pool)
+        .fetch_optional(pool)
         .await?;
 
-        return get_by_id(pool, existing.profile_id).await;
+        if let Some(existing) = reconciled_link {
+            // 4: create new auth link for this provider pointing to the existing profile
+            let new_link_id = Uuid::now_v7();
+            sqlx::query(
+                r#"
+                INSERT INTO kb_profile_auth_links
+                    (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
+                VALUES ($1, $2, $3, $4, $5, false, now())
+                "#,
+            )
+            .bind(new_link_id)
+            .bind(existing.profile_id)
+            .bind(&claims.provider)
+            .bind(&claims.external_user_id)
+            .bind(&claims.email)
+            .execute(pool)
+            .await?;
+
+            return get_by_id(pool, existing.profile_id).await;
+        }
+    } else {
+        tracing::warn!(
+            provider = %claims.provider,
+            external_user_id = %claims.external_user_id,
+            "Skipping email reconciliation: email_verified is not true"
+        );
     }
 
     // 5: brand new profile + auth link
@@ -171,4 +179,150 @@ pub async fn list_auth_links(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<P
     .await?;
 
     Ok(links)
+}
+
+#[cfg(all(test, feature = "test-db"))]
+mod tests {
+    use super::*;
+    use sqlx::PgPool;
+
+    async fn test_pool() -> PgPool {
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgresql://temper:temper@localhost:5437/temper_test".to_string()
+        });
+        let pool = PgPool::connect(&url).await.unwrap();
+        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn verified_email_reconciles_to_existing_profile() {
+        let pool = test_pool().await;
+
+        let claims_a = AuthClaims {
+            provider: "provider_a".to_string(),
+            external_user_id: "user-recon-verified-a".to_string(),
+            email: "recon-verified@example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+
+        let claims_b = AuthClaims {
+            provider: "provider_b".to_string(),
+            external_user_id: "user-recon-verified-b".to_string(),
+            email: "recon-verified@example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+
+        assert_eq!(
+            profile_a.id, profile_b.id,
+            "verified email should reconcile to same profile"
+        );
+
+        // Cleanup
+        sqlx::query(
+            "DELETE FROM kb_profile_auth_links WHERE auth_provider IN ('provider_a', 'provider_b')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM kb_profiles WHERE id = $1")
+            .bind(profile_a.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn unverified_email_creates_separate_profile() {
+        let pool = test_pool().await;
+
+        let claims_a = AuthClaims {
+            provider: "provider_a".to_string(),
+            external_user_id: "user-recon-unverified-a".to_string(),
+            email: "recon-unverified@example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+
+        let claims_b = AuthClaims {
+            provider: "provider_b".to_string(),
+            external_user_id: "user-recon-unverified-b".to_string(),
+            email: "recon-unverified@example.com".to_string(),
+            email_verified: Some(false),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+
+        assert_ne!(
+            profile_a.id, profile_b.id,
+            "unverified email should create separate profile"
+        );
+
+        // Cleanup
+        sqlx::query(
+            "DELETE FROM kb_profile_auth_links WHERE auth_provider IN ('provider_a', 'provider_b')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM kb_profiles WHERE id IN ($1, $2)")
+            .bind(profile_a.id)
+            .bind(profile_b.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn missing_email_verified_creates_separate_profile() {
+        let pool = test_pool().await;
+
+        let claims_a = AuthClaims {
+            provider: "provider_a".to_string(),
+            external_user_id: "user-recon-none-a".to_string(),
+            email: "recon-none@example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_a = resolve_from_claims(&pool, &claims_a).await.unwrap();
+
+        let claims_b = AuthClaims {
+            provider: "provider_b".to_string(),
+            external_user_id: "user-recon-none-b".to_string(),
+            email: "recon-none@example.com".to_string(),
+            email_verified: None,
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile_b = resolve_from_claims(&pool, &claims_b).await.unwrap();
+
+        assert_ne!(
+            profile_a.id, profile_b.id,
+            "None email_verified should create separate profile"
+        );
+
+        // Cleanup
+        sqlx::query(
+            "DELETE FROM kb_profile_auth_links WHERE auth_provider IN ('provider_a', 'provider_b')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM kb_profiles WHERE id IN ($1, $2)")
+            .bind(profile_a.id)
+            .bind(profile_b.id)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
 }
