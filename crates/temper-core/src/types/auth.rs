@@ -32,6 +32,9 @@ pub struct AuthClaims {
     pub external_user_id: String,
     /// User's email from token claims
     pub email: String,
+    /// Whether the identity provider has verified the user's email.
+    /// `None` means the provider didn't include the claim.
+    pub email_verified: Option<bool>,
     /// Token expiry (Unix timestamp)
     pub exp: i64,
     /// Token issued-at (Unix timestamp)

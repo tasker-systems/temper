@@ -18,6 +18,7 @@ use crate::state::AppState;
 struct JwtClaims {
     sub: String,
     email: Option<String>,
+    email_verified: Option<bool>,
     exp: i64,
     iat: i64,
 }
@@ -92,6 +93,7 @@ pub async fn require_auth(
         provider: "neon_auth".to_string(),
         external_user_id: token_data.claims.sub,
         email,
+        email_verified: token_data.claims.email_verified,
         exp: token_data.claims.exp,
         iat: token_data.claims.iat,
     };

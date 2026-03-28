@@ -44,6 +44,7 @@ impl TestApp {
 struct TestClaims {
     sub: String,
     email: String,
+    email_verified: bool,
     iss: String,
     iat: i64,
     exp: i64,
@@ -60,6 +61,7 @@ pub fn generate_test_jwt(sub: &str, email: &str) -> String {
     let claims = TestClaims {
         sub: sub.to_string(),
         email: email.to_string(),
+        email_verified: true,
         iss: "test-issuer".to_string(),
         iat: now,
         exp: now + 3600,
@@ -78,6 +80,7 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
     let claims = TestClaims {
         sub: sub.to_string(),
         email: email.to_string(),
+        email_verified: true,
         iss: "test-issuer".to_string(),
         iat: now - 7200,
         exp: now - 3600,
