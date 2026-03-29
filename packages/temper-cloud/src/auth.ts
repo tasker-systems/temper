@@ -8,13 +8,19 @@ export interface AuthClaims {
 
 export async function verifyToken(
   token: string,
-  key: jose.KeyLike | jose.JWTVerifyGetKey,
-  issuer: string
+  key: jose.CryptoKey | jose.KeyObject | jose.JWK | Uint8Array | jose.JWTVerifyGetKey,
+  issuer: string,
 ): Promise<AuthClaims> {
-  const { payload } = await jose.jwtVerify(token, key, {
-    issuer,
-    algorithms: ["EdDSA"],
-  });
+  const opts: jose.JWTVerifyOptions = { issuer, algorithms: ["EdDSA"] };
+  // jose v6 has separate overloads for key vs getKey — narrow to match
+  const { payload } =
+    typeof key === "function"
+      ? await jose.jwtVerify(token, key as jose.JWTVerifyGetKey, opts)
+      : await jose.jwtVerify(
+          token,
+          key as jose.CryptoKey | jose.KeyObject | jose.JWK | Uint8Array,
+          opts,
+        );
 
   const sub = payload.sub;
   const email = payload.email as string | undefined;

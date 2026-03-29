@@ -30,7 +30,7 @@ async function extractStep(blobFileId: string, blobUrl: string): Promise<string>
 
   // Update status to processing
   const statusQuery = buildStatusUpdateQuery(blobFileId, "processing", null);
-  await db(statusQuery.sql, statusQuery.params);
+  await db.query(statusQuery.sql, statusQuery.params);
 
   // Download file from Vercel Blob
   const response = await fetch(blobUrl, {
@@ -81,7 +81,7 @@ async function storeStep(
 
   // Mark old chunks as not current
   const bumpQuery = buildVersionBumpQuery(resourceId, nextVersion);
-  await db(bumpQuery.sql, bumpQuery.params);
+  await db.query(bumpQuery.sql, bumpQuery.params);
 
   // Build chunk rows with embeddings
   const chunkRows: ChunkRow[] = chunks.map((chunk, i) => ({
@@ -98,10 +98,10 @@ async function storeStep(
   // Store chunks
   const storeQuery = buildStoreChunksQuery(chunkRows);
   if (storeQuery.sql) {
-    await db(storeQuery.sql, storeQuery.params);
+    await db.query(storeQuery.sql, storeQuery.params);
   }
 
   // Update blob_files status to processed
   const statusQuery = buildStatusUpdateQuery(blobFileId, "processed", null);
-  await db(statusQuery.sql, statusQuery.params);
+  await db.query(statusQuery.sql, statusQuery.params);
 }

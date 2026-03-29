@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { chunkText, type Chunk } from "../../src/workflow/chunk.js";
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { chunkText } from "../../src/workflow/chunk.js";
 
 describe("chunkText", () => {
   it("chunks a simple markdown document by headers", () => {
@@ -36,9 +36,7 @@ Content of section two.
 
     expect(chunks1[0].content_hash).toBe(chunks2[0].content_hash);
 
-    const expectedHash = createHash("sha256")
-      .update(chunks1[0].content)
-      .digest("hex");
+    const expectedHash = createHash("sha256").update(chunks1[0].content).digest("hex");
     expect(chunks1[0].content_hash).toBe(expectedHash);
   });
 

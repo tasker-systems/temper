@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
 import { extractText } from "../../src/workflow/extract.js";
-import { writeFileSync, mkdtempSync, unlinkSync } from "fs";
-import { join } from "path";
-import { tmpdir } from "os";
 
 describe("extractText", () => {
   it("extracts text from a markdown file", async () => {

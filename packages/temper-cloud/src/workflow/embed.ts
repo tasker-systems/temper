@@ -1,11 +1,7 @@
-import {
-  AutoTokenizer,
-  type PreTrainedTokenizer,
-  type Tensor,
-} from "@huggingface/transformers";
-import * as ort from "onnxruntime-node";
-import { existsSync, mkdirSync } from "fs";
-import { join } from "path";
+import { existsSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
+import { AutoTokenizer, type PreTrainedTokenizer, type Tensor } from "@huggingface/transformers";
+import { InferenceSession, Tensor as OrtTensor } from "onnxruntime-node";
 
 export const EMBEDDING_DIM = 768;
 
@@ -14,7 +10,7 @@ const CACHE_DIR = join("/tmp", "temper-models", "bge-base-en-v1.5");
 const ONNX_FILE = "onnx/model.onnx";
 
 let _tokenizer: PreTrainedTokenizer | null = null;
-let _session: ort.InferenceSession | null = null;
+let _session: InferenceSession | null = null;
 
 async function getTokenizer(): Promise<PreTrainedTokenizer> {
   if (!_tokenizer) {
@@ -46,16 +42,16 @@ async function ensureModel(): Promise<string> {
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
-  const { writeFileSync } = await import("fs");
+  const { writeFileSync } = await import("node:fs");
   writeFileSync(modelPath, buffer);
 
   return modelPath;
 }
 
-async function getSession(): Promise<ort.InferenceSession> {
+async function getSession(): Promise<InferenceSession> {
   if (!_session) {
     const modelPath = await ensureModel();
-    _session = await ort.InferenceSession.create(modelPath, {
+    _session = await InferenceSession.create(modelPath, {
       executionProviders: ["cpu"],
     });
   }
@@ -150,24 +146,19 @@ export async function embedTexts(texts: string[]): Promise<number[][]> {
     return arr;
   };
 
-  const inputIdsTensor = new ort.Tensor(
-    "int64",
-    toBigInt64(inputIds.data),
-    [batchSize, seqLen],
-  );
-  const attentionMaskTensor = new ort.Tensor(
-    "int64",
-    toBigInt64(attentionMask.data),
-    [batchSize, seqLen],
-  );
-  const tokenTypeIdsTensor = new ort.Tensor(
+  const inputIdsTensor = new OrtTensor("int64", toBigInt64(inputIds.data), [batchSize, seqLen]);
+  const attentionMaskTensor = new OrtTensor("int64", toBigInt64(attentionMask.data), [
+    batchSize,
+    seqLen,
+  ]);
+  const tokenTypeIdsTensor = new OrtTensor(
     "int64",
     new BigInt64Array(batchSize * seqLen), // zeros
     [batchSize, seqLen],
   );
 
   // Run inference
-  const feeds: Record<string, ort.Tensor> = {
+  const feeds: Record<string, OrtTensor> = {
     input_ids: inputIdsTensor,
     attention_mask: attentionMaskTensor,
     token_type_ids: tokenTypeIdsTensor,

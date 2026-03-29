@@ -1,8 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
+  buildStatusUpdateQuery,
   buildStoreChunksQuery,
   buildVersionBumpQuery,
-  buildStatusUpdateQuery,
   type ChunkRow,
 } from "../../src/workflow/store.js";
 
@@ -48,7 +48,7 @@ describe("buildStatusUpdateQuery", () => {
   });
 
   it("includes error_message for failed status", () => {
-    const { sql, params } = buildStatusUpdateQuery("file-001", "failed", "ONNX load error");
+    const { params } = buildStatusUpdateQuery("file-001", "failed", "ONNX load error");
     expect(params).toContain("ONNX load error");
   });
 });

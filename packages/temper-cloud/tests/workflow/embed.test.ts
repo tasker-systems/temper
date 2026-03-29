@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { embedTexts, EMBEDDING_DIM } from "../../src/workflow/embed.js";
+import { describe, expect, it } from "vitest";
+import { EMBEDDING_DIM, embedTexts } from "../../src/workflow/embed.js";
 
 describe("embedTexts", () => {
   it("produces 768-dimensional vectors", async () => {

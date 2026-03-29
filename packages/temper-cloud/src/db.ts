@@ -1,6 +1,6 @@
-import { neon } from "@neondatabase/serverless";
+import { type NeonQueryFunction, neon } from "@neondatabase/serverless";
 
-export function getDb() {
+export function getDb(): NeonQueryFunction<false, false> {
   const databaseUrl = process.env.DATABASE_URL;
   if (!databaseUrl) {
     throw new Error("DATABASE_URL environment variable is required");
@@ -8,4 +8,4 @@ export function getDb() {
   return neon(databaseUrl);
 }
 
-export type NeonClient = ReturnType<typeof neon>;
+export type NeonClient = NeonQueryFunction<false, false>;

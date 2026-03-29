@@ -1,23 +1,23 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { join } from "path";
-import postgres from "postgres";
-import {
-  getTestDb,
-  createTestResource,
-  createTestBlobFile,
-  cleanupTestResource,
-  type TestResource,
-} from "./helpers/db.js";
-import { extractText } from "../../src/workflow/extract.js";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
+import type postgres from "postgres";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chunkText } from "../../src/workflow/chunk.js";
-import { embedTexts, EMBEDDING_DIM } from "../../src/workflow/embed.js";
+import { EMBEDDING_DIM, embedTexts } from "../../src/workflow/embed.js";
+import { extractText } from "../../src/workflow/extract.js";
 import {
+  buildStatusUpdateQuery,
   buildStoreChunksQuery,
   buildVersionBumpQuery,
-  buildStatusUpdateQuery,
   type ChunkRow,
 } from "../../src/workflow/store.js";
-import { randomUUID } from "crypto";
+import {
+  cleanupTestResource,
+  createTestBlobFile,
+  createTestResource,
+  getTestDb,
+  type TestResource,
+} from "./helpers/db.js";
 
 const FIXTURES = join(import.meta.dirname, "../fixtures");
 

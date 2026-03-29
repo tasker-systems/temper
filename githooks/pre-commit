@@ -15,4 +15,13 @@ echo "  Checking docs..."
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --quiet
 echo "  ✓ Docs OK"
 
+# TypeScript checks (packages/temper-cloud)
+echo "  TypeScript typecheck..."
+(cd packages/temper-cloud && bun run typecheck)
+echo "  ✓ TypeScript OK"
+
+echo "  Biome lint & format..."
+(cd packages/temper-cloud && bun run check)
+echo "  ✓ Biome OK"
+
 echo "==> All pre-commit checks passed."

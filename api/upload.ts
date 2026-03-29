@@ -78,7 +78,7 @@ export default async function handler(req: Request): Promise<Response> {
 
   // Store in Vercel Blob
   const pathname = buildBlobPathname(profileId, resourceId, file.name);
-  const blob = await put(pathname, file, { access: "private" });
+  const blob = await put(pathname, file, { access: "public" });
 
   // Insert blob_files record
   const { sql, params } = buildInsertBlobFileQuery({
@@ -89,7 +89,7 @@ export default async function handler(req: Request): Promise<Response> {
     contentType: file.type || null,
     fileSizeBytes: file.size,
   });
-  const insertResult = await db(sql, params);
+  const insertResult = await db.query(sql, params);
   const blobFileId = insertResult[0].id as string;
 
   // Trigger the processing workflow. The "use workflow" directive makes this

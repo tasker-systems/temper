@@ -1,8 +1,4 @@
-export function buildBlobPathname(
-  profileId: string,
-  resourceId: string,
-  filename: string
-): string {
+export function buildBlobPathname(profileId: string, resourceId: string, filename: string): string {
   // Prevent path traversal
   const safeFilename = filename.replace(/\.\./g, "");
   return `${profileId}/${resourceId}/${safeFilename}`;

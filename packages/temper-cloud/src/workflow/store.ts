@@ -31,7 +31,7 @@ export function buildStoreChunksQuery(chunks: ChunkRow[]): QueryResult {
   for (const chunk of chunks) {
     const embeddingStr = `[${chunk.embedding.join(",")}]`;
     values.push(
-      `($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6}, $${paramIndex + 7}::vector, true)`
+      `($${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2}, $${paramIndex + 3}, $${paramIndex + 4}, $${paramIndex + 5}, $${paramIndex + 6}, $${paramIndex + 7}::vector, true)`,
     );
     params.push(
       chunk.id,
@@ -41,7 +41,7 @@ export function buildStoreChunksQuery(chunks: ChunkRow[]): QueryResult {
       chunk.header_path,
       chunk.content,
       chunk.content_hash,
-      embeddingStr
+      embeddingStr,
     );
     paramIndex += 8;
   }
@@ -61,7 +61,7 @@ ON CONFLICT (resource_id, chunk_index, version) DO UPDATE SET
 export function buildStatusUpdateQuery(
   blobFileId: string,
   status: "pending" | "processing" | "processed" | "failed",
-  errorMessage: string | null
+  errorMessage: string | null,
 ): QueryResult {
   return {
     sql: `UPDATE blob_files SET status = $1, error_message = $2, updated_at = now() WHERE id = $3`,

@@ -11,8 +11,8 @@ extend = "./base-tasks.toml"
 # =============================================================================
 
 [tasks.check]
-description = "Run all quality checks"
-dependencies = ["rust-fmt-check", "rust-clippy", "rust-docs", "rust-machete"]
+description = "Run all quality checks (Rust + TypeScript)"
+dependencies = ["rust-fmt-check", "rust-clippy", "rust-docs", "rust-machete", "ts-check"]
 
 [tasks.test]
 description = "Run tests (unit tests, no feature flags)"
@@ -25,13 +25,17 @@ command = "cargo"
 args = ["nextest", "run", "--workspace", "--features", "test-db"]
 
 [tasks.test-all]
-description = "Run all test tiers including embedder tests"
+description = "Run all test tiers including embedder and TypeScript tests"
+dependencies = ["test-all-rust", "ts-test", "ts-test-integration"]
+
+[tasks.test-all-rust]
+description = "Run all Rust test tiers"
 command = "cargo"
 args = ["nextest", "run", "--workspace", "--features", "test-db,test-embedder"]
 
 [tasks.fix]
-description = "Auto-fix formatting and lint issues"
-dependencies = ["rust-fmt-fix", "rust-clippy-fix"]
+description = "Auto-fix formatting and lint issues (Rust + TypeScript)"
+dependencies = ["rust-fmt-fix", "rust-clippy-fix", "ts-fix"]
 
 [tasks.build]
 description = "Build all workspace crates"
@@ -81,6 +85,44 @@ args = ["doc", "--workspace", "--no-deps", "--document-private-items"]
 description = "Check for unused Cargo dependencies"
 command = "cargo"
 args = ["machete", "--with-metadata"]
+
+# =============================================================================
+# TypeScript Tasks (packages/temper-cloud)
+# =============================================================================
+
+[tasks.ts-check]
+description = "Run TypeScript quality checks (typecheck + biome)"
+dependencies = ["ts-typecheck", "ts-lint"]
+
+[tasks.ts-typecheck]
+description = "TypeScript type checking"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "typecheck"]
+
+[tasks.ts-lint]
+description = "TypeScript lint and format check (biome)"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "check"]
+
+[tasks.ts-fix]
+description = "Auto-fix TypeScript formatting and lint issues"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "check:fix"]
+
+[tasks.ts-test]
+description = "Run TypeScript unit tests"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "test"]
+
+[tasks.ts-test-integration]
+description = "Run TypeScript integration tests (requires Docker Postgres)"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "test:integration"]
 
 # =============================================================================
 # Docker Tasks

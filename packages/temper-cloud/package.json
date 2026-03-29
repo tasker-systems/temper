@@ -7,7 +7,13 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit --project tsconfig.api.json",
+    "format": "biome format --write",
+    "format:check": "biome format",
+    "lint": "biome lint",
+    "lint:fix": "biome lint --fix",
+    "check": "biome check",
+    "check:fix": "biome check --fix"
   },
   "dependencies": {
     "@huggingface/transformers": "^3.8.1",
@@ -19,6 +25,7 @@
     "workflow": "^0"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.9",
     "@types/node": "^22",
     "docx": "^9.6.1",
     "pdf-lib": "^1.17.1",

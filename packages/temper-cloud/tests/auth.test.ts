@@ -1,17 +1,17 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import * as jose from "jose";
+import { beforeAll, describe, expect, it } from "vitest";
 import { verifyToken } from "../src/auth.js";
-import { readFileSync } from "fs";
-import { resolve } from "path";
 
 // Load the same Ed25519 test keys used by the Rust tests.
 const privateKeyPem = readFileSync(
   resolve(__dirname, "../../../crates/temper-api/tests/common/test_ed25519.key"),
-  "utf-8"
+  "utf-8",
 );
 const publicKeyPem = readFileSync(
   resolve(__dirname, "../../../crates/temper-api/tests/common/test_ed25519.pub"),
-  "utf-8"
+  "utf-8",
 );
 
 let privateKey: jose.KeyLike;
@@ -61,7 +61,11 @@ describe("verifyToken", () => {
   });
 
   it("rejects a JWT with wrong issuer", async () => {
-    const token = await signTestJwt({ sub: "user-789", email: "wrong@example.com", email_verified: true });
+    const token = await signTestJwt({
+      sub: "user-789",
+      email: "wrong@example.com",
+      email_verified: true,
+    });
 
     await expect(verifyToken(token, publicKey, "wrong-issuer")).rejects.toThrow();
   });
