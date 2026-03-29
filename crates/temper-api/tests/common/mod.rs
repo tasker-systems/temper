@@ -123,6 +123,11 @@ pub async fn setup_test_app() -> TestApp {
         cors_origins: vec![],
         port: 0,
         enable_swagger: false,
+        r2_account_id: None,
+        r2_access_key_id: None,
+        r2_secret_access_key: None,
+        r2_bucket_name: None,
+        r2_public_base_url: None,
     };
 
     let state = AppState::new(pool.clone(), jwks_store, config);
