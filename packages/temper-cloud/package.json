@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
     "@kreuzberg/node": "latest",
     "@neondatabase/serverless": "^1",
     "@vercel/blob": "^1",
