@@ -1,9 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "cd packages/temper-cloud && bun install",
   "fluid": true,
-  "rewrites": [
-    { "source": "/api/upload", "destination": "/api/upload" },
-    { "source": "/api/workflows/(.*)", "destination": "/api/workflows/$1" },
-    { "source": "/(.*)", "destination": "/api/axum" }
-  ]
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/axum" }]
 }
