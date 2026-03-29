@@ -1,4 +1,8 @@
 {
   "private": true,
-  "workspaces": ["packages/temper-cloud"]
+  "workspaces": ["packages/temper-cloud"],
+  "devDependencies": {
+    "@vercel/blob": "^1",
+    "typescript": "^5.8"
+  }
 }

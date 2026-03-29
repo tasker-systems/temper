@@ -2,7 +2,12 @@
   "lockfileVersion": 1,
   "configVersion": 1,
   "workspaces": {
-    "": {},
+    "": {
+      "devDependencies": {
+        "@vercel/blob": "^1",
+        "typescript": "^5.8",
+      },
+    },
     "packages/temper-cloud": {
       "name": "temper-cloud",
       "version": "0.1.0",
