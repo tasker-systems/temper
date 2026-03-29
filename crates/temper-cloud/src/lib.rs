@@ -1,4 +1,5 @@
-//! temper-cloud — Thin Vercel adapter wrapping temper-api for serverless deployment.
+//! temper-cloud — Vercel serverless adapter for temper-api.
 //!
-//! ~100 lines of composition: imports temper-api routes, bridges to vercel_runtime,
-//! configures environment-based database and auth settings.
+//! Wraps [`temper_api::create_app`] with the official `vercel_runtime` v2
+//! VercelLayer to serve the axum Router as a Vercel serverless function.
+//! No migrations at runtime — connect, serve, done.

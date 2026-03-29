@@ -4,8 +4,15 @@ version = "0.1.0"
 edition = "2021"
 description = "Vercel deployment adapter for temper-api"
 
-[dependencies]
-temper-core = { path = "../temper-core" }
+[[bin]]
+name = "axum"
+path = "../../api/axum.rs"
 
-[package.metadata.cargo-machete]
-ignored = ["temper-core"]
+[dependencies]
+temper-api = { path = "../temper-api" }
+vercel_runtime = { version = "2", features = ["axum"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
