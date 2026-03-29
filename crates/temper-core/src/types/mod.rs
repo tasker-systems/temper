@@ -45,9 +45,6 @@ pub use sync::{
 };
 pub use team::{Team, TeamMember, TeamRole};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};
-pub use upload::{
-    UploadCompleteRequest, UploadInitRequest, UploadInitResponse, UploadProcessingStatus,
-    UploadStatusResponse,
-};
+pub use upload::{UploadProcessingStatus, UploadResponse};
 pub use vault::{IngestionSource, ResourceFrontmatter, VaultAddResult};
 pub use vault_config::{DeviceOverrides, Subscription, SubscriptionOverride, VaultConfig};

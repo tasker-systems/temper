@@ -1,52 +1,32 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Request body for `POST /api/upload/init`.
+/// Response body from `POST /api/upload` (TypeScript endpoint).
+///
+/// The upload endpoint stores the file in Vercel Blob and returns
+/// a tracking ID with initial status. Processing (extract, chunk,
+/// embed) happens asynchronously via Vercel Workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UploadInitRequest {
-    pub filename: String,
-    pub size: u64,
-    pub mime: String,
+pub struct UploadResponse {
+    pub blob_file_id: Uuid,
+    pub status: UploadProcessingStatus,
 }
 
-/// Response body for `POST /api/upload/init`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UploadInitResponse {
-    /// Presigned PUT URL for direct R2 upload
-    pub upload_url: String,
-    /// Object key in R2 (e.g., "{context_id}/{resource_id}/{filename}")
-    pub key: String,
-}
-
-/// Request body for `POST /api/upload/complete`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UploadCompleteRequest {
-    pub key: String,
-    pub resource_ids: Vec<Uuid>,
-    pub manifest_hash: String,
-}
-
-/// Processing status for an upload.
+/// Processing status for an uploaded file.
+///
+/// Tracks the lifecycle of the durable Workflow pipeline:
+/// pending → processing → processed → failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UploadProcessingStatus {
-    /// Upload received, not yet processed
-    Queued,
-    /// Chunking and embedding in progress
+    /// File stored in Vercel Blob, workflow not yet started
+    Pending,
+    /// Extraction, chunking, and embedding in progress
     Processing,
-    /// Chunks and embeddings written to Neon
-    Complete,
-    /// Processing failed
+    /// Chunks and embeddings written to kb_chunks
+    Processed,
+    /// Processing failed (check error_message)
     Failed,
-}
-
-/// Response body for `GET /api/upload/:key/status`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UploadStatusResponse {
-    pub key: String,
-    pub status: UploadProcessingStatus,
-    pub resources_processed: u32,
-    pub resources_total: u32,
 }
 
 #[cfg(test)]
@@ -54,27 +34,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_upload_init_request_serde() {
-        let req = UploadInitRequest {
-            filename: "sync-batch-2026-03-27.zip".to_string(),
-            size: 1024 * 1024,
-            mime: "application/zip".to_string(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let parsed: UploadInitRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.filename, req.filename);
-        assert_eq!(parsed.size, 1024 * 1024);
+    fn test_upload_processing_status_serde() {
+        assert_eq!(
+            serde_json::to_string(&UploadProcessingStatus::Pending).unwrap(),
+            "\"pending\""
+        );
+        assert_eq!(
+            serde_json::to_string(&UploadProcessingStatus::Processed).unwrap(),
+            "\"processed\""
+        );
     }
 
     #[test]
-    fn test_upload_processing_status_serde() {
-        assert_eq!(
-            serde_json::to_string(&UploadProcessingStatus::Queued).unwrap(),
-            "\"queued\""
-        );
-        assert_eq!(
-            serde_json::to_string(&UploadProcessingStatus::Complete).unwrap(),
-            "\"complete\""
-        );
+    fn test_upload_response_serde() {
+        let resp = UploadResponse {
+            blob_file_id: Uuid::nil(),
+            status: UploadProcessingStatus::Pending,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: UploadResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.status, UploadProcessingStatus::Pending);
     }
 }
