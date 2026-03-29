@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
@@ -19,6 +20,10 @@
   },
   "devDependencies": {
     "@types/node": "^22",
+    "docx": "^9.6.1",
+    "pdf-lib": "^1.17.1",
+    "postgres": "^3.4.8",
+    "sharp": "^0.34.5",
     "typescript": "^5.8",
     "vitest": "^3"
   }

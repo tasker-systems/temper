@@ -1,0 +1,1 @@
+Temper is a knowledge management tool that combines local-first vault storage with cloud-powered search and collaboration. It supports semantic search via HNSW vector indexing, markdown-based content authoring, and cross-device synchronization through a manifest-driven sync protocol.

@@ -2,6 +2,7 @@ import { put } from "@vercel/blob";
 import { verifyToken, getJwksVerifier, getIssuer, type AuthClaims } from "../packages/temper-cloud/src/auth.js";
 import { buildBlobPathname, buildInsertBlobFileQuery } from "../packages/temper-cloud/src/upload.js";
 import { getDb } from "../packages/temper-cloud/src/db.js";
+import { processUpload } from "./workflows/process-upload.js";
 
 export const config = { runtime: "nodejs" };
 
@@ -91,9 +92,14 @@ export default async function handler(req: Request): Promise<Response> {
   const insertResult = await db(sql, params);
   const blobFileId = insertResult[0].id as string;
 
-  // Note: Workflow trigger will be added when Vercel Workflow beta is configured.
-  // For now, the file is stored and the record is created with status "pending".
-  // The workflow can be triggered manually or via a follow-up integration.
+  // Trigger the processing workflow. The "use workflow" directive makes this
+  // a durable invocation — Vercel executes the steps asynchronously.
+  // If the workflow fails to start, we still return 202 since the file is stored.
+  try {
+    await processUpload(blobFileId, blob.url, resourceId);
+  } catch (err) {
+    console.error("Failed to trigger processing workflow:", err);
+  }
 
   return new Response(
     JSON.stringify({
