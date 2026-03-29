@@ -10,11 +10,6 @@ pub struct ApiConfig {
     pub cors_origins: Vec<String>,
     pub port: u16,
     pub enable_swagger: bool,
-    pub r2_account_id: Option<String>,
-    pub r2_access_key_id: Option<String>,
-    pub r2_secret_access_key: Option<String>,
-    pub r2_bucket_name: Option<String>,
-    pub r2_public_base_url: Option<String>,
 }
 
 impl ApiConfig {
@@ -53,20 +48,6 @@ impl ApiConfig {
             tracing::info!("Swagger UI enabled at /api-docs/ui");
         }
 
-        let r2_account_id = env::var("R2_ACCOUNT_ID").ok().filter(|s| !s.is_empty());
-        let r2_access_key_id = env::var("R2_ACCESS_KEY_ID").ok().filter(|s| !s.is_empty());
-        let r2_secret_access_key = env::var("R2_SECRET_ACCESS_KEY")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let r2_bucket_name = env::var("R2_BUCKET_NAME").ok().filter(|s| !s.is_empty());
-        let r2_public_base_url = env::var("R2_PUBLIC_BASE_URL")
-            .ok()
-            .filter(|s| !s.is_empty());
-
-        if r2_account_id.is_none() || r2_bucket_name.is_none() {
-            tracing::info!("R2 not configured — file upload endpoints will be unavailable");
-        }
-
         Ok(Self {
             database_url: env::var("DATABASE_URL")?,
             jwks_url: env::var("JWKS_URL")?,
@@ -79,11 +60,6 @@ impl ApiConfig {
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(3000),
             enable_swagger,
-            r2_account_id,
-            r2_access_key_id,
-            r2_secret_access_key,
-            r2_bucket_name,
-            r2_public_base_url,
         })
     }
 }
