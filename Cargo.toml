@@ -1,3 +1,22 @@
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+
+[package]
+name = "temper-cloud"
+version = "0.1.0"
+edition = "2021"
+description = "Vercel deployment adapter for temper-api"
+
+[[bin]]
+name = "axum"
+path = "api/axum.rs"
+
+[dependencies]
+temper-api = { path = "crates/temper-api" }
+vercel_runtime = { version = "2", features = ["axum"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }
