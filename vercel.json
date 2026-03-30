@@ -2,6 +2,5 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "cd packages/temper-cloud && bun install",
-  "fluid": true,
   "rewrites": [{ "source": "/(.*)", "destination": "/api/axum" }]
 }
