@@ -16,7 +16,7 @@ pub struct HealthResponse {
 }
 
 /// Row type matching the `kb_events` table.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct EventRow {
     pub id: Uuid,
@@ -30,7 +30,7 @@ pub struct EventRow {
 }
 
 /// Query parameters for listing events.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct EventListParams {
     /// Filter by resource ID.

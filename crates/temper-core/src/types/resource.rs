@@ -6,7 +6,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 /// Row type matching the `resources` table.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ResourceRow {
     pub id: Uuid,
@@ -25,7 +25,7 @@ pub struct ResourceRow {
 }
 
 /// Query parameters for listing visible resources.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct ResourceListParams {
     /// Filter by context ID.

@@ -119,6 +119,23 @@ pub fn auth_status() -> Result<AuthStatus> {
 }
 
 // ---------------------------------------------------------------------------
+// Current token helper
+// ---------------------------------------------------------------------------
+
+/// Load the stored access token, returning an error if not authenticated
+/// or if the token has expired.
+///
+/// This is the primary helper used by sub-clients to get a bearer token
+/// for outgoing requests without needing access to the OAuth config.
+pub fn current_token() -> Result<String> {
+    let auth = load_auth()?.ok_or(ClientError::NotAuthenticated)?;
+    if auth.expires_at <= Utc::now() {
+        return Err(ClientError::TokenExpired);
+    }
+    Ok(auth.access_token)
+}
+
+// ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
 

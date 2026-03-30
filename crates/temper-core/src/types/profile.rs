@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -13,7 +13,7 @@ use uuid::Uuid;
 ///
 /// Auto-provisioned on first authenticated request. Soft-deleted via
 /// `is_active = false` for referential integrity and GDPR compliance.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct Profile {
     pub id: Uuid,
@@ -33,7 +33,7 @@ pub struct Profile {
 /// same email). Identity reconciliation: when a new provider identity arrives
 /// with an email matching an existing link, it auto-links to the same profile.
 /// One link is marked `is_default` as the primary identity.
-#[derive(Debug, Clone, Serialize, FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ProfileAuthLink {
     pub id: Uuid,
