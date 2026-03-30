@@ -2,8 +2,8 @@ mod cli;
 
 use clap::Parser;
 use cli::{
-    Cli, Commands, ContextAction, GoalAction, NoteAction, ResearchAction, SessionAction,
-    SkillAction, TaskAction,
+    AuthAction, Cli, Commands, ContextAction, GoalAction, NoteAction, ResearchAction,
+    SessionAction, SkillAction, TaskAction,
 };
 
 fn main() {
@@ -329,6 +329,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 }
             }
         }
+        Commands::Auth { action } => match action {
+            AuthAction::Login => temper_cli::commands::auth::login(),
+            AuthAction::Logout => temper_cli::commands::auth::logout(),
+            AuthAction::Status => temper_cli::commands::auth::status(),
+        },
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             match action {

@@ -95,6 +95,12 @@ pub enum Commands {
         #[command(subcommand)]
         action: ResearchAction,
     },
+    /// Authenticate with temper cloud
+    #[command(name = "auth")]
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -270,6 +276,16 @@ pub enum ResearchAction {
         #[arg(long, hide = true)]
         stdin: bool,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum AuthAction {
+    /// Log in via browser OAuth (PKCE flow)
+    Login,
+    /// Clear stored credentials
+    Logout,
+    /// Show current auth status
+    Status,
 }
 
 #[derive(Subcommand)]
