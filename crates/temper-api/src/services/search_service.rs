@@ -1,30 +1,9 @@
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::ApiResult;
 
-/// Query parameters for search.
-#[derive(Debug, Deserialize, IntoParams)]
-pub struct SearchParams {
-    /// Full-text or semantic query string.
-    pub q: String,
-    /// Limit to a specific context.
-    pub kb_context_id: Option<Uuid>,
-    /// Maximum results to return (default 20, max 100).
-    pub limit: Option<i64>,
-}
-
-/// A single search result.
-#[derive(Debug, Serialize, ToSchema)]
-pub struct SearchResultRow {
-    pub resource_id: Uuid,
-    pub title: String,
-    pub uri: String,
-    pub snippet: String,
-    pub score: f32,
-}
+pub use temper_core::types::api::{SearchParams, SearchResultRow};
 
 /// Search resources visible to the given profile.
 ///

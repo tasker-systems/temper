@@ -1,58 +1,11 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 
-/// Row type matching the `resources` table.
-#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
-pub struct ResourceRow {
-    pub id: Uuid,
-    pub kb_context_id: Uuid,
-    pub kb_doc_type_id: Uuid,
-    pub uri: String,
-    pub title: String,
-    pub slug: Option<String>,
-    pub content_hash: Option<String>,
-    pub mimetype: Option<String>,
-    pub originator_profile_id: Uuid,
-    pub owner_profile_id: Uuid,
-    pub is_active: bool,
-    pub created: DateTime<Utc>,
-    pub updated: DateTime<Utc>,
-}
-
-/// Query parameters for listing visible resources.
-#[derive(Debug, Deserialize, IntoParams)]
-pub struct ResourceListParams {
-    /// Filter by context ID.
-    pub kb_context_id: Option<Uuid>,
-    /// Maximum results to return (default 50, max 200).
-    pub limit: Option<i64>,
-    /// Offset for pagination.
-    pub offset: Option<i64>,
-}
-
-/// Request body for creating a resource.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct ResourceCreateRequest {
-    pub kb_context_id: Uuid,
-    pub kb_doc_type_id: Uuid,
-    pub uri: String,
-    pub title: String,
-    pub slug: Option<String>,
-    pub mimetype: Option<String>,
-}
-
-/// Request body for updating a resource.
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct ResourceUpdateRequest {
-    pub title: Option<String>,
-    pub slug: Option<String>,
-    pub mimetype: Option<String>,
-}
+pub use temper_core::types::resource::{
+    ContentChunk, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
+};
 
 /// List resources visible to the given profile.
 ///
@@ -138,14 +91,6 @@ pub async fn get_visible(
     .ok_or(ApiError::NotFound)?;
 
     Ok(row)
-}
-
-/// Chunk used to reconstitute markdown content.
-#[derive(Debug, Serialize, sqlx::FromRow)]
-pub struct ContentChunk {
-    pub chunk_index: i32,
-    pub header_path: String,
-    pub content: String,
 }
 
 /// Reconstitute resource content from `kb_current_chunks`, returning markdown.

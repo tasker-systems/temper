@@ -8,6 +8,7 @@
 //! (Postgres enums) or add `Serialize, Deserialize` (API enums).
 
 pub mod access;
+pub mod api;
 pub mod auth;
 pub mod config;
 pub mod conflict;
@@ -17,6 +18,7 @@ pub mod invitation;
 pub mod manifest;
 pub mod ownership;
 pub mod profile;
+pub mod resource;
 pub mod search;
 pub mod sync;
 pub mod team;
@@ -26,6 +28,9 @@ pub mod vault;
 pub mod vault_config;
 
 pub use access::{AccessLevel, AccessScoped, TeamResource};
+pub use api::{
+    EventListParams, EventRow, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
+};
 pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
 pub use config::{
     CliConfig, CloudConfig, CloudVaultConfig, MergePolicy, SyncConfig, SyncSubscription,
@@ -37,6 +42,10 @@ pub use invitation::{InvitationStatus, TeamInvitation};
 pub use manifest::{Manifest, ManifestEntry, ManifestEntryState};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
+pub use resource::{
+    ContentChunk, ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
+    ResourceRow, ResourceUpdateRequest,
+};
 pub use search::{SearchMode, SearchRequest, SearchResponse, SearchResult};
 pub use sync::{
     ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictEntry,

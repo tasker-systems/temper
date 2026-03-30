@@ -1,14 +1,8 @@
 use axum::Json;
-use serde::Serialize;
-use utoipa::ToSchema;
+
+use temper_core::types::api::HealthResponse;
 
 use crate::error::ApiResult;
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct HealthResponse {
-    pub status: &'static str,
-    pub version: &'static str,
-}
 
 #[utoipa::path(
     get,

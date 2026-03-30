@@ -1,7 +1,5 @@
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use serde::Serialize;
-use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{ApiResult, ErrorBody};
@@ -10,6 +8,8 @@ use crate::services::resource_service::{
     self, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
 };
 use crate::state::AppState;
+
+use temper_core::types::resource::{ContentResponse, DeleteResponse};
 
 #[utoipa::path(
     get,
@@ -52,12 +52,6 @@ pub async fn get(
     resource_service::get_visible(&state.pool, auth.0.profile.id, resource_id)
         .await
         .map(Json)
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct ContentResponse {
-    pub resource_id: Uuid,
-    pub markdown: String,
 }
 
 #[utoipa::path(
@@ -130,11 +124,6 @@ pub async fn update(
     resource_service::update(&state.pool, auth.0.profile.id, resource_id, req)
         .await
         .map(Json)
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct DeleteResponse {
-    pub deleted: bool,
 }
 
 #[utoipa::path(

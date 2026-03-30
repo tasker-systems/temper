@@ -1,36 +1,9 @@
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
-use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::error::ApiResult;
 
-/// Row type matching the `kb_events` table.
-#[derive(Debug, Serialize, sqlx::FromRow, ToSchema)]
-pub struct EventRow {
-    pub id: Uuid,
-    pub profile_id: Uuid,
-    pub client_id: String,
-    pub kb_context_id: Option<Uuid>,
-    pub resource_id: Option<Uuid>,
-    pub event_type: String,
-    pub payload: serde_json::Value,
-    pub created: DateTime<Utc>,
-}
-
-/// Query parameters for listing events.
-#[derive(Debug, Deserialize, IntoParams)]
-pub struct EventListParams {
-    /// Filter by resource ID.
-    pub resource_id: Option<Uuid>,
-    /// Filter by event type.
-    pub event_type: Option<String>,
-    /// Maximum results to return (default 50, max 200).
-    pub limit: Option<i64>,
-    /// Offset for pagination.
-    pub offset: Option<i64>,
-}
+pub use temper_core::types::api::{EventListParams, EventRow};
 
 /// List events visible to the given profile.
 ///

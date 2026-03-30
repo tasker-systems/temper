@@ -2,14 +2,10 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
-use crate::handlers::health::HealthResponse;
-use crate::handlers::profiles::ProfileUpdateRequest;
-use crate::handlers::resources::{ContentResponse, DeleteResponse};
-use crate::services::event_service::EventRow;
-use crate::services::resource_service::{
-    ResourceCreateRequest, ResourceRow, ResourceUpdateRequest,
+use temper_core::types::api::{EventRow, HealthResponse, ProfileUpdateRequest, SearchResultRow};
+use temper_core::types::resource::{
+    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceRow, ResourceUpdateRequest,
 };
-use crate::services::search_service::SearchResultRow;
 
 #[derive(OpenApi)]
 #[openapi(

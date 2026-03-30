@@ -1,10 +1,7 @@
 use axum::extract::State;
 use axum::Json;
-use serde::Deserialize;
-use serde_json::Value;
-use utoipa::ToSchema;
 
-use temper_core::types::{Profile, ProfileAuthLink, VaultConfig};
+use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
@@ -25,13 +22,6 @@ pub async fn get(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Jso
     profile_service::get_by_id(&state.pool, auth.0.profile.id)
         .await
         .map(Json)
-}
-
-#[derive(Debug, Deserialize, ToSchema)]
-pub struct ProfileUpdateRequest {
-    pub display_name: Option<String>,
-    pub preferences: Option<Value>,
-    pub vault_config: Option<VaultConfig>,
 }
 
 #[utoipa::path(
