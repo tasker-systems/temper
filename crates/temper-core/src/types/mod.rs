@@ -14,6 +14,7 @@ pub mod config;
 pub mod conflict;
 pub mod device;
 pub mod event;
+pub mod ingest;
 pub mod invitation;
 pub mod manifest;
 pub mod ownership;
@@ -38,6 +39,7 @@ pub use config::{
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use device::{DeviceIdentity, DeviceSyncState};
 pub use event::{EventQuery, EventResponse};
+pub use ingest::IngestRequest;
 pub use invitation::{InvitationStatus, TeamInvitation};
 pub use manifest::{Manifest, ManifestEntry, ManifestEntryState};
 pub use ownership::ResourceOwnership;

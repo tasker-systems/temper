@@ -9,6 +9,7 @@ pub mod config;
 pub mod error;
 pub mod events;
 pub mod http;
+pub mod ingest;
 pub mod login;
 pub mod profile;
 pub mod resources;
@@ -81,6 +82,11 @@ impl TemperClient {
     /// Upload sub-client.
     pub fn upload(&self) -> upload::UploadClient<'_> {
         upload::UploadClient::new(&self.http)
+    }
+
+    /// Ingest sub-client.
+    pub fn ingest(&self) -> ingest::IngestClient<'_> {
+        ingest::IngestClient::new(&self.http)
     }
 
     // ----- Auth lifecycle -----
