@@ -2,26 +2,26 @@ use std::fs;
 
 use chrono::Local;
 
-use crate::actions::types::TicketInfo;
-use crate::commands::milestone;
+use crate::actions::types::TaskInfo;
+use crate::commands::goal;
 use crate::config::Config;
 use crate::discovery;
 use crate::error::{Result, TemperError};
 use crate::output;
 use crate::vault;
 
-/// Load all tickets, optionally filtered by project and/or milestone.
-pub fn load_tickets(
+/// Load all tasks, optionally filtered by context and/or goal.
+pub fn load_tasks(
     config: &Config,
-    project: Option<&str>,
-    milestone_slug: Option<&str>,
-) -> Result<Vec<TicketInfo>> {
-    let base = &config.tickets_dir;
+    context: Option<&str>,
+    goal_slug: Option<&str>,
+) -> Result<Vec<TaskInfo>> {
+    let base = &config.tasks_dir;
     if !base.is_dir() {
         return Ok(vec![]);
     }
-    let mut tickets = Vec::new();
-    let dirs: Vec<_> = if let Some(p) = project {
+    let mut tasks = Vec::new();
+    let dirs: Vec<_> = if let Some(p) = context {
         let d = base.join(p);
         if d.is_dir() {
             vec![d]
@@ -49,36 +49,36 @@ pub fn load_tickets(
                 Some(fm) => fm,
                 None => continue,
             };
-            let info: TicketInfo = match serde_yaml::from_value(fm) {
+            let info: TaskInfo = match serde_yaml::from_value(fm) {
                 Ok(i) => i,
                 Err(_) => continue,
             };
-            if let Some(ms) = milestone_slug {
-                if info.milestone != ms {
+            if let Some(gs) = goal_slug {
+                if info.goal != gs {
                     continue;
                 }
             }
-            tickets.push(info);
+            tasks.push(info);
         }
     }
-    tickets.sort_by_key(|t| t.seq);
-    Ok(tickets)
+    tasks.sort_by_key(|t| t.seq);
+    Ok(tasks)
 }
 
-/// Get the next seq value for a new ticket in a milestone.
-pub fn next_seq(config: &Config, project: &str, milestone_slug: &str) -> Result<u32> {
-    let tickets = load_tickets(config, Some(project), Some(milestone_slug))?;
-    let max_seq = tickets.iter().map(|t| t.seq).max().unwrap_or(0);
+/// Get the next seq value for a new task in a goal.
+pub fn next_seq(config: &Config, context: &str, goal_slug: &str) -> Result<u32> {
+    let tasks = load_tasks(config, Some(context), Some(goal_slug))?;
+    let max_seq = tasks.iter().map(|t| t.seq).max().unwrap_or(0);
     Ok(max_seq + 10)
 }
 
-/// Find a ticket by exact slug or unambiguous suffix match.
-pub fn find_ticket(
+/// Find a task by exact slug or unambiguous suffix match.
+pub fn find_task(
     config: &Config,
     slug_or_suffix: &str,
-    project: Option<&str>,
-) -> Result<Option<TicketInfo>> {
-    let all = load_tickets(config, project, None)?;
+    context: Option<&str>,
+) -> Result<Option<TaskInfo>> {
+    let all = load_tasks(config, context, None)?;
     // Exact match first
     if let Some(t) = all.iter().find(|t| t.slug == slug_or_suffix) {
         return Ok(Some(t.clone()));
@@ -112,40 +112,50 @@ fn templates_dir_str(config: &Config) -> String {
         .to_string()
 }
 
-/// Create a new ticket.
+/// Create a new task.
 pub fn create(
     config: &Config,
-    project: &str,
+    context: &str,
     title: &str,
-    milestone_slug: Option<&str>,
-    scope: Option<&str>,
+    goal_slug: Option<&str>,
+    mode: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<String> {
-    // Ensure maintenance milestone exists if needed
-    let ms_slug = match milestone_slug {
-        Some(ms) => ms.to_string(),
-        None => milestone::ensure_maintenance(config, project)?,
+    // Ensure maintenance goal exists if needed
+    let gs = match goal_slug {
+        Some(gs) => gs.to_string(),
+        None => goal::ensure_maintenance(config, context)?,
     };
-    // Verify milestone exists and project matches
-    if let Some(ms) = milestone::find_milestone(config, &ms_slug, None)? {
-        if ms.project != project {
+    // Verify goal exists and context matches
+    if let Some(gi) = goal::find_goal(config, &gs, None)? {
+        if gi.context != context {
             return Err(TemperError::Vault(format!(
-                "milestone '{}' belongs to project '{}', not '{project}'",
-                ms_slug, ms.project
+                "goal '{}' belongs to context '{}', not '{context}'",
+                gs, gi.context
             )));
         }
-    } else if milestone_slug.is_some() {
-        return Err(TemperError::Vault(format!(
-            "milestone not found: {ms_slug}"
-        )));
+    } else if goal_slug.is_some() {
+        return Err(TemperError::Vault(format!("goal not found: {gs}")));
     }
 
-    // Validate scope if provided
-    let valid_scopes = ["patch", "feature", "epic"];
-    if let Some(sc) = scope {
-        if !valid_scopes.contains(&sc) {
+    // Validate mode if provided
+    let valid_modes = ["plan", "build"];
+    if let Some(m) = mode {
+        if !valid_modes.contains(&m) {
             return Err(TemperError::Vault(format!(
-                "invalid scope: {sc}. Must be one of: {}",
-                valid_scopes.join(", ")
+                "invalid mode: {m}. Must be one of: {}",
+                valid_modes.join(", ")
+            )));
+        }
+    }
+
+    // Validate effort if provided
+    let valid_efforts = ["small", "medium", "large"];
+    if let Some(e) = effort {
+        if !valid_efforts.contains(&e) {
+            return Err(TemperError::Vault(format!(
+                "invalid effort: {e}. Must be one of: {}",
+                valid_efforts.join(", ")
             )));
         }
     }
@@ -154,65 +164,64 @@ pub fn create(
     let slug_title = vault::slugify(title);
     let slug = format!("{date}-{slug_title}");
     let datetime = Local::now().to_rfc3339();
-    let seq = next_seq(config, project, &ms_slug)?;
+    let seq = next_seq(config, context, &gs)?;
     let seq_str = seq.to_string();
     let id = crate::ids::generate_id();
 
     let templates_dir = templates_dir_str(config);
-    let scope_str = scope.unwrap_or("null");
+    let mode_str = mode.unwrap_or("null");
+    let effort_str = effort.unwrap_or("null");
     let vars = vec![
         ("slug", slug.as_str()),
-        ("project", project),
-        ("milestone", ms_slug.as_str()),
+        ("context", context),
+        ("goal", gs.as_str()),
         ("seq", seq_str.as_str()),
         ("datetime", datetime.as_str()),
         ("id", id.as_str()),
-        ("scope", scope_str),
+        ("mode", mode_str),
+        ("effort", effort_str),
     ];
-    let mut content = vault::render_template_with_vars(
-        &config.vault_root,
-        &templates_dir,
-        "ticket",
-        title,
-        &vars,
-    )?;
+    let mut content =
+        vault::render_template_with_vars(&config.vault_root, &templates_dir, "task", title, &vars)?;
 
     if let Some(stdin_content) = vault::read_stdin_if_piped() {
         content.push_str(&stdin_content);
         content.push('\n');
     }
 
-    let dir = config.tickets_dir.join(project);
+    let dir = config.tasks_dir.join(context);
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     let path = dir.join(format!("{slug}.md"));
     vault::write_note(&path, &content)?;
 
-    let event = discovery::Event::TicketCreate {
+    let event = discovery::Event::TaskCreate {
         ts: datetime,
-        project: project.to_string(),
-        ticket: slug.clone(),
-        milestone: ms_slug,
+        context: context.to_string(),
+        task: slug.clone(),
+        goal: gs,
         title: title.to_string(),
-        scope: scope.map(String::from),
+        mode: mode.map(String::from),
+        effort: effort.map(String::from),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    output::success(format!("Created ticket: {slug}"));
+    output::success(format!("Created task: {slug}"));
     Ok(slug)
 }
 
-/// Move a ticket to a new stage and/or milestone.
-pub fn move_ticket(
+/// Move a task to a new stage and/or goal.
+pub fn move_task(
     config: &Config,
     slug_or_suffix: &str,
     stage: Option<&str>,
-    new_milestone: Option<&str>,
-    project: Option<&str>,
-    scope: Option<&str>,
+    new_goal: Option<&str>,
+    context: Option<&str>,
+    mode: Option<&str>,
+    effort: Option<&str>,
 ) -> Result<()> {
-    let ticket = find_ticket(config, slug_or_suffix, project)?
-        .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
+    let task = find_task(config, slug_or_suffix, context)?
+        .ok_or_else(|| TemperError::Vault(format!("task not found: {slug_or_suffix}")))?;
 
     let valid_stages = ["backlog", "in-progress", "done", "cancelled"];
     if let Some(s) = stage {
@@ -224,97 +233,116 @@ pub fn move_ticket(
         }
     }
 
-    let valid_scopes = ["patch", "feature", "epic"];
-    if let Some(sc) = scope {
-        if !valid_scopes.contains(&sc) {
+    let valid_modes = ["plan", "build"];
+    if let Some(m) = mode {
+        if !valid_modes.contains(&m) {
             return Err(TemperError::Vault(format!(
-                "invalid scope: {sc}. Must be one of: {}",
-                valid_scopes.join(", ")
+                "invalid mode: {m}. Must be one of: {}",
+                valid_modes.join(", ")
+            )));
+        }
+    }
+
+    let valid_efforts = ["small", "medium", "large"];
+    if let Some(e) = effort {
+        if !valid_efforts.contains(&e) {
+            return Err(TemperError::Vault(format!(
+                "invalid effort: {e}. Must be one of: {}",
+                valid_efforts.join(", ")
             )));
         }
     }
 
     let path = config
-        .tickets_dir
-        .join(&ticket.project)
-        .join(format!("{}.md", ticket.slug));
+        .tasks_dir
+        .join(&task.context)
+        .join(format!("{}.md", task.slug));
     let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
-    let from_stage = ticket.stage.clone();
+    let from_stage = task.stage.clone();
     let to_stage = stage.unwrap_or(&from_stage);
-    let from_scope = ticket.scope.clone();
+    let from_mode = task.mode.clone();
+    let from_effort = task.effort.clone();
 
     if let Some(s) = stage {
         content = vault::set_frontmatter_field(&content, "stage", s);
     }
 
-    let mut from_ms: Option<String> = None;
-    let mut to_ms: Option<String> = None;
-    if let Some(ms) = new_milestone {
-        // Validate milestone exists and project matches
-        let ms_info = milestone::find_milestone(config, ms, None)?
-            .ok_or_else(|| TemperError::Vault(format!("milestone not found: {ms}")))?;
-        if ms_info.project != ticket.project {
+    let mut from_goal: Option<String> = None;
+    let mut to_goal: Option<String> = None;
+    if let Some(g) = new_goal {
+        // Validate goal exists and context matches
+        let goal_info = goal::find_goal(config, g, None)?
+            .ok_or_else(|| TemperError::Vault(format!("goal not found: {g}")))?;
+        if goal_info.context != task.context {
             return Err(TemperError::Vault(format!(
-                "milestone '{}' belongs to project '{}', not '{}'",
-                ms, ms_info.project, ticket.project
+                "goal '{}' belongs to context '{}', not '{}'",
+                g, goal_info.context, task.context
             )));
         }
-        from_ms = Some(ticket.milestone.clone());
-        to_ms = Some(ms.to_string());
-        content = vault::set_frontmatter_field(&content, "milestone", ms);
-        // Assign new seq at end of target milestone
-        let new_seq = next_seq(config, &ticket.project, ms)?;
+        from_goal = Some(task.goal.clone());
+        to_goal = Some(g.to_string());
+        content = vault::set_frontmatter_field(&content, "goal", g);
+        // Assign new seq at end of target goal
+        let new_seq = next_seq(config, &task.context, g)?;
         content = vault::set_frontmatter_field(&content, "seq", &new_seq.to_string());
     }
 
-    if let Some(sc) = scope {
-        content = vault::set_frontmatter_field(&content, "scope", sc);
+    if let Some(m) = mode {
+        content = vault::set_frontmatter_field(&content, "mode", m);
+    }
+
+    if let Some(e) = effort {
+        content = vault::set_frontmatter_field(&content, "effort", e);
     }
 
     let datetime = Local::now().to_rfc3339();
     content = vault::set_frontmatter_field(&content, "updated", &datetime);
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
 
-    let to_scope = scope.map(String::from);
-    let from_scope_for_event = if scope.is_some() { from_scope } else { None };
+    let to_mode = mode.map(String::from);
+    let to_effort = effort.map(String::from);
+    let from_mode_for_event = if mode.is_some() { from_mode } else { None };
+    let from_effort_for_event = if effort.is_some() { from_effort } else { None };
 
-    let event = discovery::Event::TicketMove {
+    let event = discovery::Event::TaskMove {
         ts: datetime,
-        project: ticket.project,
-        ticket: ticket.slug.clone(),
+        context: task.context,
+        task: task.slug.clone(),
         from_stage: from_stage.clone(),
         to_stage: to_stage.to_string(),
-        from_milestone: from_ms,
-        to_milestone: to_ms,
-        from_scope: from_scope_for_event,
-        to_scope,
+        from_goal,
+        to_goal,
+        from_mode: from_mode_for_event,
+        to_mode,
+        from_effort: from_effort_for_event,
+        to_effort,
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
     output::success(format!(
-        "Moved ticket {}: {from_stage} → {to_stage}",
-        ticket.slug
+        "Moved task {}: {from_stage} → {to_stage}",
+        task.slug
     ));
     Ok(())
 }
 
-/// Mark a ticket as done with branch and PR info.
+/// Mark a task as done with branch and PR info.
 pub fn done(
     config: &Config,
     slug_or_suffix: &str,
     branch: Option<&str>,
     pr: Option<&str>,
-    project: Option<&str>,
+    context: Option<&str>,
 ) -> Result<()> {
-    let ticket = find_ticket(config, slug_or_suffix, project)?
-        .ok_or_else(|| TemperError::Vault(format!("ticket not found: {slug_or_suffix}")))?;
+    let task = find_task(config, slug_or_suffix, context)?
+        .ok_or_else(|| TemperError::Vault(format!("task not found: {slug_or_suffix}")))?;
 
     let path = config
-        .tickets_dir
-        .join(&ticket.project)
-        .join(format!("{}.md", ticket.slug));
+        .tasks_dir
+        .join(&task.context)
+        .join(format!("{}.md", task.slug));
     let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     let datetime = Local::now().to_rfc3339();
@@ -328,16 +356,16 @@ pub fn done(
     }
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
 
-    let event = discovery::Event::TicketDone {
+    let event = discovery::Event::TaskDone {
         ts: datetime,
-        project: ticket.project,
-        ticket: ticket.slug.clone(),
+        context: task.context,
+        task: task.slug.clone(),
         branch: branch.map(String::from),
         pr: pr.map(String::from),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
     }
-    output::success(format!("Completed ticket: {}", ticket.slug));
+    output::success(format!("Completed task: {}", task.slug));
     Ok(())
 }

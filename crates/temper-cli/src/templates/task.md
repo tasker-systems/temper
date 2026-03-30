@@ -1,12 +1,13 @@
 ---
 id: "{{id}}"
-type: ticket
+type: task
 title: "{{title}}"
 slug: "{{slug}}"
-project: "{{project}}"
-milestone: "{{milestone}}"
+context: "{{context}}"
+goal: "{{goal}}"
 stage: backlog
-scope: {{scope}}
+mode: {{mode}}
+effort: {{effort}}
 seq: {{seq}}
 created: {{datetime}}
 updated: {{datetime}}

@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn test_extract_body_with_frontmatter() {
-        let content = "---\ntype: ticket\ntitle: My Ticket\n---\n\n# Body here\n\nSome text.";
+        let content = "---\ntype: task\ntitle: My Task\n---\n\n# Body here\n\nSome text.";
         let body = extract_body(content);
         assert_eq!(body, "# Body here\n\nSome text.");
     }

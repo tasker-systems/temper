@@ -38,7 +38,7 @@ pub enum Commands {
     /// Show recent vault events
     Events {
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, default_value = "20")]
         limit: usize,
         #[arg(long, default_value = "text")]
@@ -54,25 +54,25 @@ pub enum Commands {
         #[command(subcommand)]
         action: SessionAction,
     },
-    /// Manage tickets
-    Ticket {
+    /// Manage tasks
+    Task {
         #[command(subcommand)]
-        action: TicketAction,
+        action: TaskAction,
     },
-    /// Manage milestones
-    Milestone {
+    /// Manage goals
+    Goal {
         #[command(subcommand)]
-        action: MilestoneAction,
+        action: GoalAction,
     },
-    /// Manage projects
-    Project {
+    /// Manage contexts (projects)
+    Context {
         #[command(subcommand)]
-        action: ProjectAction,
+        action: ContextAction,
     },
     /// Normalize vault structure and repair drift
     Normalize {
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long)]
         dry_run: bool,
         #[arg(long)]
@@ -81,7 +81,7 @@ pub enum Commands {
     /// Context primer for new sessions
     Warmup {
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
@@ -106,7 +106,7 @@ pub enum NoteAction {
         #[arg(required_unless_present = "show_template")]
         title: Option<String>,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, hide = true)]
         stdin: bool,
         /// Print the raw template and exit
@@ -118,36 +118,40 @@ pub enum NoteAction {
 }
 
 #[derive(Subcommand)]
-pub enum TicketAction {
-    /// Create a new ticket
+pub enum TaskAction {
+    /// Create a new task
     Create {
         #[arg(long, required_unless_present = "show_template")]
         title: Option<String>,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long)]
-        milestone: Option<String>,
+        goal: Option<String>,
         #[arg(long)]
-        scope: Option<String>,
+        mode: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
         #[arg(long, hide = true)]
         stdin: bool,
         /// Print the raw template and exit
         #[arg(long)]
         show_template: bool,
     },
-    /// Move a ticket to a new stage or milestone
+    /// Move a task to a new stage or goal
     Move {
         slug: String,
         #[arg(long)]
         stage: Option<String>,
         #[arg(long)]
-        milestone: Option<String>,
+        goal: Option<String>,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long)]
-        scope: Option<String>,
+        mode: Option<String>,
+        #[arg(long)]
+        effort: Option<String>,
     },
-    /// Mark a ticket as done
+    /// Mark a task as done
     Done {
         slug: String,
         #[arg(long)]
@@ -155,60 +159,60 @@ pub enum TicketAction {
         #[arg(long)]
         pr: Option<String>,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
     },
-    /// List tickets
+    /// List tasks
     List {
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long)]
-        milestone: Option<String>,
+        goal: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// Show a ticket's content
+    /// Show a task's content
     Show {
         slug: String,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
 }
 
 #[derive(Subcommand)]
-pub enum MilestoneAction {
-    /// Create a new milestone
+pub enum GoalAction {
+    /// Create a new goal
     Create {
         #[arg(long)]
         title: String,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long)]
         slug: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// List milestones for a project
+    /// List goals for a context
     List {
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// Update milestone status
+    /// Update goal status
     Update {
         slug: String,
         #[arg(long)]
         status: String,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
-pub enum ProjectAction {
-    /// Add a project to temper.toml
+pub enum ContextAction {
+    /// Add a context (project) to temper.toml
     Add {
         #[arg(long)]
         name: String,
@@ -217,9 +221,9 @@ pub enum ProjectAction {
         #[arg(long)]
         repo: Option<String>,
     },
-    /// Remove a project from temper.toml
+    /// Remove a context from temper.toml
     Remove { name: String },
-    /// List configured projects
+    /// List configured contexts
     List,
 }
 
@@ -229,14 +233,14 @@ pub enum SessionAction {
     Save {
         title: Option<String>,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, hide = true)]
         stdin: bool,
         /// Print the raw template and exit
         #[arg(long)]
         show_template: bool,
         #[arg(long)]
-        ticket: Option<String>,
+        task: Option<String>,
         #[arg(long)]
         state: Option<String>,
         #[arg(long, default_value = "text")]
@@ -245,7 +249,7 @@ pub enum SessionAction {
     /// List recent sessions
     List {
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
@@ -258,7 +262,7 @@ pub enum ResearchAction {
         #[arg(required_unless_present = "show_template")]
         title: Option<String>,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
         #[arg(long)]
@@ -277,7 +281,7 @@ pub enum SkillAction {
         #[arg(long)]
         global: bool,
         #[arg(long)]
-        project: Option<String>,
+        context: Option<String>,
         #[arg(long)]
         path: Option<String>,
     },

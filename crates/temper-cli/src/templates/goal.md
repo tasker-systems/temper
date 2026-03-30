@@ -1,9 +1,9 @@
 ---
 id: "{{id}}"
-type: milestone
+type: goal
 title: "{{title}}"
 slug: "{{slug}}"
-project: "{{project}}"
+context: "{{context}}"
 seq: {{seq}}
 status: active
 created: {{date}}

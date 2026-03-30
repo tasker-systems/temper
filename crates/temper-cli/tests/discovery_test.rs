@@ -25,19 +25,19 @@ fn test_append_and_read_event() {
 fn test_events_list_returns_recent_events() {
     let dir = TempDir::new().unwrap();
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
+    temper_cli::commands::context_cmd::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
         .unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
-    let ms_slug =
-        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::ticket::create(&config, "myapp", "Test ticket", Some(&ms_slug), None)
+    let g_slug =
+        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    temper_cli::commands::task::create(&config, "myapp", "Test task", Some(&g_slug), None, None)
         .unwrap();
 
     let events = temper_cli::commands::events::load_events(&config, None, 20).unwrap();
     assert!(
         events.len() >= 2,
-        "should have at least 2 events (milestone create + ticket create)"
+        "should have at least 2 events (goal create + task create)"
     );
 }
 
@@ -45,18 +45,16 @@ fn test_events_list_returns_recent_events() {
 fn test_events_filter_by_project() {
     let dir = TempDir::new().unwrap();
     temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    temper_cli::commands::project::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
+    temper_cli::commands::context_cmd::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
         .unwrap();
-    temper_cli::commands::project::add(dir.path(), "other", "/tmp/other", Some("org/other"))
+    temper_cli::commands::context_cmd::add(dir.path(), "other", "/tmp/other", Some("org/other"))
         .unwrap();
     let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
 
-    let ms1 =
-        temper_cli::commands::milestone::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let ms2 =
-        temper_cli::commands::milestone::create(&config, "other", "v0.2", None, "text").unwrap();
-    temper_cli::commands::ticket::create(&config, "myapp", "Ticket A", Some(&ms1), None).unwrap();
-    temper_cli::commands::ticket::create(&config, "other", "Ticket B", Some(&ms2), None).unwrap();
+    let g1 = temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let g2 = temper_cli::commands::goal::create(&config, "other", "v0.2", None, "text").unwrap();
+    temper_cli::commands::task::create(&config, "myapp", "Task A", Some(&g1), None, None).unwrap();
+    temper_cli::commands::task::create(&config, "other", "Task B", Some(&g2), None, None).unwrap();
 
     let myapp_events =
         temper_cli::commands::events::load_events(&config, Some("myapp"), 20).unwrap();

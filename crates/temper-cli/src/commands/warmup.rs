@@ -31,14 +31,15 @@ fn run_text(config: &Config, project: &str) -> Result<()> {
     }
     println!();
 
-    // Section: In-progress tickets
-    let in_progress = collect_in_progress_tickets(config, project);
+    // Section: In-progress tasks
+    let in_progress = collect_in_progress_tasks(config, project);
     if !in_progress.is_empty() {
-        println!("## In-Progress Tickets");
+        println!("## In-Progress Tasks");
         println!();
-        for (title, slug, scope) in &in_progress {
-            let scope_label = scope.as_deref().unwrap_or("unscoped");
-            println!("- [{scope_label}] {title} ({slug})");
+        for (title, slug, mode, effort) in &in_progress {
+            let mode_label = mode.as_deref().unwrap_or("no-mode");
+            let effort_label = effort.as_deref().unwrap_or("no-effort");
+            println!("- [{mode_label}/{effort_label}] {title} ({slug})");
         }
         println!();
     }
@@ -83,14 +84,15 @@ fn run_text(config: &Config, project: &str) -> Result<()> {
 fn run_json(config: &Config, project: &str) -> Result<()> {
     let sessions = collect_recent_sessions(config, project, 3);
     let recent_events = events::load_events(config, Some(project), 15)?;
-    let in_progress = collect_in_progress_tickets(config, project);
+    let in_progress = collect_in_progress_tasks(config, project);
     let in_progress_json: Vec<_> = in_progress
         .iter()
-        .map(|(title, slug, scope)| {
+        .map(|(title, slug, mode, effort)| {
             serde_json::json!({
                 "title": title,
                 "slug": slug,
-                "scope": scope,
+                "mode": mode,
+                "effort": effort,
             })
         })
         .collect();
@@ -115,7 +117,7 @@ fn run_json(config: &Config, project: &str) -> Result<()> {
         "recent_events": recent_events.iter().map(|e| {
             serde_json::to_value(e).unwrap_or_default()
         }).collect::<Vec<_>>(),
-        "in_progress_tickets": in_progress_json,
+        "in_progress_tasks": in_progress_json,
     });
 
     println!(
@@ -173,20 +175,20 @@ fn collect_recent_sessions(
     entries
 }
 
-/// Collect in-progress tickets for a project.
-/// Returns (title, slug, scope) tuples.
-fn collect_in_progress_tickets(
+/// Collect in-progress tasks for a project.
+/// Returns (title, slug, mode, effort) tuples.
+fn collect_in_progress_tasks(
     config: &Config,
     project: &str,
-) -> Vec<(String, String, Option<String>)> {
-    let tickets = match crate::commands::ticket::load_tickets(config, Some(project), None) {
+) -> Vec<(String, String, Option<String>, Option<String>)> {
+    let tasks = match crate::commands::task::load_tasks(config, Some(project), None) {
         Ok(t) => t,
         Err(_) => return vec![],
     };
-    tickets
+    tasks
         .into_iter()
         .filter(|t| t.stage == "in-progress")
-        .map(|t| (t.title, t.slug, t.scope))
+        .map(|t| (t.title, t.slug, t.mode, t.effort))
         .collect()
 }
 
@@ -203,43 +205,37 @@ fn format_event_brief(event: &crate::discovery::Event) -> String {
             let date = &ts[..10];
             format!("  {date}  created {note_type}: {title}")
         }
-        Event::TicketCreate {
-            ts, ticket, title, ..
+        Event::TaskCreate {
+            ts, task, title, ..
         } => {
             let date = &ts[..10];
-            format!("  {date}  created ticket: {title} ({ticket})")
+            format!("  {date}  created task: {title} ({task})")
         }
-        Event::TicketMove {
+        Event::TaskMove {
             ts,
-            ticket,
+            task,
             from_stage,
             to_stage,
             ..
         } => {
             let date = &ts[..10];
-            format!("  {date}  moved {ticket}: {from_stage} \u{2192} {to_stage}")
+            format!("  {date}  moved {task}: {from_stage} \u{2192} {to_stage}")
         }
-        Event::TicketDone { ts, ticket, .. } => {
+        Event::TaskDone { ts, task, .. } => {
             let date = &ts[..10];
-            format!("  {date}  completed {ticket}")
+            format!("  {date}  completed {task}")
         }
-        Event::MilestoneCreate {
-            ts,
-            milestone,
-            title,
-            ..
+        Event::GoalCreate {
+            ts, goal, title, ..
         } => {
             let date = &ts[..10];
-            format!("  {date}  created milestone: {title} ({milestone})")
+            format!("  {date}  created goal: {title} ({goal})")
         }
-        Event::MilestoneUpdate {
-            ts,
-            milestone,
-            status,
-            ..
+        Event::GoalUpdate {
+            ts, goal, status, ..
         } => {
             let date = &ts[..10];
-            format!("  {date}  milestone {milestone} \u{2192} {status}")
+            format!("  {date}  goal {goal} \u{2192} {status}")
         }
         Event::Normalize { ts, .. } => {
             let date = &ts[..10];

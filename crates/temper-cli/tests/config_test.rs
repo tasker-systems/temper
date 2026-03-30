@@ -9,8 +9,8 @@ fn test_parse_minimal_config() {
     let config =
         temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
     assert_eq!(config.vault.sessions, "sessions");
-    assert_eq!(config.vault.tickets, "tickets");
-    assert_eq!(config.vault.milestones, "milestones");
+    assert_eq!(config.vault.tasks, "tasks");
+    assert_eq!(config.vault.goals, "goals");
     assert_eq!(config.vault.templates, "templates");
     assert_eq!(config.vault.state_dir, ".temper");
 }

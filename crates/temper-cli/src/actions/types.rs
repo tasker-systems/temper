@@ -1,25 +1,26 @@
 use serde::{Deserialize, Serialize};
 
-/// Ticket metadata parsed from frontmatter.
+/// Task metadata parsed from frontmatter.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TicketInfo {
+pub struct TaskInfo {
     pub title: String,
     pub slug: String,
-    pub project: String,
-    pub milestone: String,
+    pub context: String,
+    pub goal: String,
     pub stage: String,
-    pub scope: Option<String>,
+    pub mode: Option<String>,
+    pub effort: Option<String>,
     pub seq: u32,
     pub branch: Option<String>,
     pub pr: Option<String>,
 }
 
-/// Milestone metadata parsed from frontmatter.
+/// Goal metadata parsed from frontmatter.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct MilestoneInfo {
+pub struct GoalInfo {
     pub title: String,
     pub slug: String,
-    pub project: String,
+    pub context: String,
     pub seq: u32,
     pub status: String,
 }
@@ -100,7 +101,7 @@ pub struct NormalizeSummary {
     pub stages_migrated: u32,
     pub slugs_fixed: u32,
     pub frontmatter_fixed: u32,
-    pub unscoped_tickets: u32,
+    pub tasks_without_effort: u32,
 }
 
 /// A document in the vault with its content and metadata.

@@ -33,16 +33,12 @@ pub fn run(
         stages_migrated: 0,
         slugs_fixed: 0,
         frontmatter_fixed: 0,
-        unscoped_tickets: 0,
+        tasks_without_effort: 0,
     };
 
     let opts = NormalizeOptions { dry_run, fix_slugs };
 
-    let entity_base_dirs = [
-        &config.tickets_dir,
-        &config.sessions_dir,
-        &config.milestones_dir,
-    ];
+    let entity_base_dirs = [&config.tasks_dir, &config.sessions_dir, &config.goals_dir];
 
     for base_dir in entity_base_dirs {
         if !base_dir.is_dir() {
@@ -89,7 +85,7 @@ fn normalize_directory(
     filter_project: Option<&str>,
     summary: &mut NormalizeSummary,
 ) -> Result<()> {
-    // Collect project subdirectories
+    // Collect context subdirectories
     let proj_dirs: Vec<_> = fs::read_dir(base_dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -97,15 +93,15 @@ fn normalize_directory(
         .collect();
 
     for proj_dir in proj_dirs {
-        let dir_project_name = proj_dir
+        let dir_context_name = proj_dir
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("")
             .to_string();
 
-        // If filtering by project, skip non-matching directories
+        // If filtering by context, skip non-matching directories
         if let Some(fp) = filter_project {
-            if dir_project_name != fp {
+            if dir_context_name != fp {
                 continue;
             }
         }
@@ -117,7 +113,7 @@ fn normalize_directory(
             .collect();
 
         for file_path in md_files {
-            process_file(opts, base_dir, &file_path, &dir_project_name, summary)?;
+            process_file(opts, base_dir, &file_path, &dir_context_name, summary)?;
         }
     }
 
@@ -128,7 +124,7 @@ fn process_file(
     opts: &NormalizeOptions,
     base_dir: &Path,
     file_path: &Path,
-    dir_project_name: &str,
+    dir_context_name: &str,
     summary: &mut NormalizeSummary,
 ) -> Result<()> {
     let content = fs::read_to_string(file_path)?;
@@ -171,12 +167,12 @@ fn process_file(
     // Re-parse frontmatter after stage migration
     let fm = vault::parse_frontmatter(&modified);
 
-    // --- Check if file is in wrong project directory ---
+    // --- Check if file is in wrong context directory ---
     if let Some(ref v) = fm {
-        if let Some(fm_project) = v.get("project").and_then(|p| p.as_str()) {
-            if fm_project != dir_project_name {
-                // Move file to correct project directory
-                let correct_dir = base_dir.join(fm_project);
+        if let Some(fm_context) = v.get("context").and_then(|p| p.as_str()) {
+            if fm_context != dir_context_name {
+                // Move file to correct context directory
+                let correct_dir = base_dir.join(fm_context);
                 let file_name = file_path.file_name().unwrap_or_default();
                 let correct_path = correct_dir.join(file_name);
 
@@ -221,13 +217,13 @@ fn process_file(
         }
     }
 
-    // --- Backfill missing scope field on tickets ---
-    if base_dir.ends_with("tickets") {
+    // --- Backfill missing effort field on tasks ---
+    if base_dir.ends_with("tasks") {
         if let Some(ref v) = fm {
-            // Check if scope key exists at all (null counts as existing)
-            let has_scope_key = v.get("scope").is_some();
-            if !has_scope_key {
-                // Insert scope: null after the stage: line so set_frontmatter_field works later
+            // Check if effort key exists at all (null counts as existing)
+            let has_effort_key = v.get("effort").is_some();
+            if !has_effort_key {
+                // Insert effort: null after the stage: line so set_frontmatter_field works later
                 let mut new_lines = Vec::new();
                 let mut in_fm = false;
                 for line in modified.lines() {
@@ -235,11 +231,11 @@ fn process_file(
                     if line.trim() == "---" {
                         in_fm = !in_fm;
                     } else if in_fm && line.starts_with("stage:") {
-                        new_lines.push("scope: null".to_string());
+                        new_lines.push("effort: null".to_string());
                     }
                 }
                 modified = new_lines.join("\n") + "\n";
-                summary.unscoped_tickets += 1;
+                summary.tasks_without_effort += 1;
                 changed = true;
             }
         }

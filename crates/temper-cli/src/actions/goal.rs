@@ -2,20 +2,20 @@ use std::fs;
 
 use chrono::Local;
 
-use crate::actions::types::MilestoneInfo;
+use crate::actions::types::GoalInfo;
 use crate::config::Config;
 use crate::discovery;
 use crate::error::{Result, TemperError};
 use crate::vault;
 
-/// Load all milestones, optionally filtered by project, sorted by seq.
-pub fn load_milestones(config: &Config, project: Option<&str>) -> Result<Vec<MilestoneInfo>> {
-    let base = &config.milestones_dir;
+/// Load all goals, optionally filtered by context, sorted by seq.
+pub fn load_goals(config: &Config, context: Option<&str>) -> Result<Vec<GoalInfo>> {
+    let base = &config.goals_dir;
     if !base.is_dir() {
         return Ok(vec![]);
     }
-    let mut milestones = Vec::new();
-    let dirs: Vec<_> = if let Some(p) = project {
+    let mut goals = Vec::new();
+    let dirs: Vec<_> = if let Some(p) = context {
         let d = base.join(p);
         if d.is_dir() {
             vec![d]
@@ -43,38 +43,34 @@ pub fn load_milestones(config: &Config, project: Option<&str>) -> Result<Vec<Mil
                 Some(fm) => fm,
                 None => continue,
             };
-            let info: MilestoneInfo = match serde_yaml::from_value(fm) {
+            let info: GoalInfo = match serde_yaml::from_value(fm) {
                 Ok(i) => i,
                 Err(_) => continue,
             };
-            milestones.push(info);
+            goals.push(info);
         }
     }
-    milestones.sort_by_key(|m| m.seq);
-    Ok(milestones)
+    goals.sort_by_key(|m| m.seq);
+    Ok(goals)
 }
 
-/// Get the next seq value for a new milestone in a project (max seq + 10, minimum 10).
-pub fn next_seq(config: &Config, project: &str) -> Result<u32> {
-    let milestones = load_milestones(config, Some(project))?;
-    let max_seq = milestones.iter().map(|m| m.seq).max().unwrap_or(0);
+/// Get the next seq value for a new goal in a context (max seq + 10, minimum 10).
+pub fn next_seq(config: &Config, context: &str) -> Result<u32> {
+    let goals = load_goals(config, Some(context))?;
+    let max_seq = goals.iter().map(|m| m.seq).max().unwrap_or(0);
     Ok(max_seq + 10)
 }
 
-/// Find a milestone by slug, optionally scoped to a project.
-pub fn find_milestone(
-    config: &Config,
-    slug: &str,
-    project: Option<&str>,
-) -> Result<Option<MilestoneInfo>> {
-    let milestones = load_milestones(config, project)?;
-    Ok(milestones.into_iter().find(|m| m.slug == slug))
+/// Find a goal by slug, optionally scoped to a context.
+pub fn find_goal(config: &Config, slug: &str, context: Option<&str>) -> Result<Option<GoalInfo>> {
+    let goals = load_goals(config, context)?;
+    Ok(goals.into_iter().find(|m| m.slug == slug))
 }
 
-/// Ensure the maintenance milestone exists for a project, creating it if missing.
-pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
-    let slug = format!("{project}-maintenance");
-    let dir = config.milestones_dir.join(project);
+/// Ensure the maintenance goal exists for a context, creating it if missing.
+pub fn ensure_maintenance(config: &Config, context: &str) -> Result<String> {
+    let slug = format!("{context}-maintenance");
+    let dir = config.goals_dir.join(context);
     let path = dir.join(format!("{slug}.md"));
     if path.exists() {
         return Ok(slug);
@@ -88,23 +84,23 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
     let id = crate::ids::generate_id();
     let vars = vec![
         ("slug", slug.as_str()),
-        ("project", project),
+        ("context", context),
         ("seq", "0"),
         ("id", id.as_str()),
     ];
     let content = vault::render_template_with_vars(
         &config.vault_root,
         templates_dir,
-        "milestone",
+        "goal",
         "Maintenance",
         &vars,
     )?;
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
-    let event = discovery::Event::MilestoneCreate {
+    let event = discovery::Event::GoalCreate {
         ts: Local::now().to_rfc3339(),
-        project: project.to_string(),
-        milestone: slug.clone(),
+        context: context.to_string(),
+        goal: slug.clone(),
         title: "Maintenance".to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
@@ -113,20 +109,18 @@ pub fn ensure_maintenance(config: &Config, project: &str) -> Result<String> {
     Ok(slug)
 }
 
-/// Create a new milestone. Returns the slug of the created milestone.
-pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -> Result<String> {
+/// Create a new goal. Returns the slug of the created goal.
+pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -> Result<String> {
     let slug = match slug {
         Some(s) => s.to_string(),
         None => vault::slugify(title),
     };
-    let dir = config.milestones_dir.join(project);
+    let dir = config.goals_dir.join(context);
     let path = dir.join(format!("{slug}.md"));
     if path.exists() {
-        return Err(TemperError::Vault(format!(
-            "milestone already exists: {slug}"
-        )));
+        return Err(TemperError::Vault(format!("goal already exists: {slug}")));
     }
-    let seq = next_seq(config, project)?;
+    let seq = next_seq(config, context)?;
     let seq_str = seq.to_string();
     let id = crate::ids::generate_id();
     let templates_dir = config
@@ -137,23 +131,18 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
         .unwrap_or("templates");
     let vars = vec![
         ("slug", slug.as_str()),
-        ("project", project),
+        ("context", context),
         ("seq", seq_str.as_str()),
         ("id", id.as_str()),
     ];
-    let content = vault::render_template_with_vars(
-        &config.vault_root,
-        templates_dir,
-        "milestone",
-        title,
-        &vars,
-    )?;
+    let content =
+        vault::render_template_with_vars(&config.vault_root, templates_dir, "goal", title, &vars)?;
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
-    let event = discovery::Event::MilestoneCreate {
+    let event = discovery::Event::GoalCreate {
         ts: Local::now().to_rfc3339(),
-        project: project.to_string(),
-        milestone: slug.clone(),
+        context: context.to_string(),
+        goal: slug.clone(),
         title: title.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
@@ -162,8 +151,8 @@ pub fn create(config: &Config, project: &str, title: &str, slug: Option<&str>) -
     Ok(slug)
 }
 
-/// Update a milestone's status.
-pub fn update(config: &Config, slug: &str, status: &str, project: Option<&str>) -> Result<()> {
+/// Update a goal's status.
+pub fn update(config: &Config, slug: &str, status: &str, context: Option<&str>) -> Result<()> {
     let valid_statuses = ["active", "completed", "paused", "cancelled"];
     if !valid_statuses.contains(&status) {
         return Err(TemperError::Vault(format!(
@@ -171,22 +160,22 @@ pub fn update(config: &Config, slug: &str, status: &str, project: Option<&str>) 
             valid_statuses.join(", ")
         )));
     }
-    let info = find_milestone(config, slug, project)?
-        .ok_or_else(|| TemperError::Vault(format!("milestone not found: {slug}")))?;
+    let info = find_goal(config, slug, context)?
+        .ok_or_else(|| TemperError::Vault(format!("goal not found: {slug}")))?;
     let path = config
-        .milestones_dir
-        .join(&info.project)
+        .goals_dir
+        .join(&info.context)
         .join(format!("{slug}.md"));
     if !path.exists() {
-        return Err(TemperError::Vault(format!("milestone not found: {slug}")));
+        return Err(TemperError::Vault(format!("goal not found: {slug}")));
     }
     let content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     let updated = vault::set_frontmatter_field(&content, "status", status);
     fs::write(&path, updated).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let event = discovery::Event::MilestoneUpdate {
+    let event = discovery::Event::GoalUpdate {
         ts: Local::now().to_rfc3339(),
-        project: info.project,
-        milestone: slug.to_string(),
+        context: info.context,
+        goal: slug.to_string(),
         status: status.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
@@ -195,12 +184,12 @@ pub fn update(config: &Config, slug: &str, status: &str, project: Option<&str>) 
     Ok(())
 }
 
-/// Count tickets per milestone and stage by scanning ticket files directly.
-pub fn count_tickets_by_stage(
+/// Count tasks per goal and stage by scanning task files directly.
+pub fn count_tasks_by_stage(
     config: &Config,
-    project: &str,
+    context: &str,
 ) -> Result<std::collections::HashMap<String, std::collections::HashMap<String, usize>>> {
-    let dir = config.tickets_dir.join(project);
+    let dir = config.tasks_dir.join(context);
     let mut counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>> =
         std::collections::HashMap::new();
     if !dir.is_dir() {
@@ -217,16 +206,13 @@ pub fn count_tickets_by_stage(
             Some(fm) => fm,
             None => continue,
         };
-        let ms = fm
-            .get("milestone")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+        let g = fm.get("goal").and_then(|v| v.as_str()).unwrap_or("unknown");
         let stage = fm
             .get("stage")
             .and_then(|v| v.as_str())
             .unwrap_or("backlog");
         *counts
-            .entry(ms.to_string())
+            .entry(g.to_string())
             .or_default()
             .entry(stage.to_string())
             .or_default() += 1;

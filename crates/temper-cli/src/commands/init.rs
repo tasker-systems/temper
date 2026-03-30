@@ -6,8 +6,8 @@ use crate::output;
 
 const TEMPER_TOML: &str = r#"[vault]
 # sessions = "sessions"
-# tickets = "tickets"
-# milestones = "milestones"
+# tasks = "tasks"
+# goals = "goals"
 # templates = "templates"
 # state_dir = ".temper"
 
@@ -17,8 +17,8 @@ const TEMPER_TOML: &str = r#"[vault]
 "#;
 
 const EMBEDDED_SESSION: &str = include_str!("../templates/session.md");
-const EMBEDDED_TICKET: &str = include_str!("../templates/ticket.md");
-const EMBEDDED_MILESTONE: &str = include_str!("../templates/milestone.md");
+const EMBEDDED_TASK: &str = include_str!("../templates/task.md");
+const EMBEDDED_GOAL: &str = include_str!("../templates/goal.md");
 
 /// Run temper init.
 ///
@@ -40,7 +40,7 @@ pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<(
     }
 
     // 3. Create essential directories
-    for dir in &["sessions", "tickets", "milestones", "templates"] {
+    for dir in &["sessions", "tasks", "goals", "templates"] {
         let dir_path = path.join(dir);
         std::fs::create_dir_all(&dir_path)?;
         output::item(format!("Created {dir}/"));
@@ -50,8 +50,8 @@ pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<(
     let templates_dir = path.join("templates");
     write_template_if_missing(&templates_dir.join("session.md"), EMBEDDED_SESSION)?;
 
-    write_template_if_missing(&templates_dir.join("ticket.md"), EMBEDDED_TICKET)?;
-    write_template_if_missing(&templates_dir.join("milestone.md"), EMBEDDED_MILESTONE)?;
+    write_template_if_missing(&templates_dir.join("task.md"), EMBEDDED_TASK)?;
+    write_template_if_missing(&templates_dir.join("goal.md"), EMBEDDED_GOAL)?;
 
     // 5. Register as default vault in ~/.config/temper/config.toml if none exists
     if register_global {
@@ -66,7 +66,7 @@ pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<(
         output::header("Next steps");
         output::hint("  temper check          — verify vault and tool health");
         output::hint("  temper note create session \"My First Session\"");
-        output::hint("  temper ticket create --title \"First Ticket\" --project myproject");
+        output::hint("  temper task create --title \"First Task\" --context myproject");
         output::blank();
         output::hint("To generate a Claude skill for this vault:");
         output::hint("  temper skill generate  (coming soon)");

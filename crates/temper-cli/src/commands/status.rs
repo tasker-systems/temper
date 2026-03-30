@@ -9,14 +9,14 @@ pub fn run(config: &Config, verbose: bool) -> Result<()> {
 
     // File counts per essential directory
     let sessions = count_md_files(&config.sessions_dir);
-    let tickets = count_md_files(&config.tickets_dir);
-    let milestones = count_md_files(&config.milestones_dir);
+    let tasks = count_md_files(&config.tasks_dir);
+    let goals = count_md_files(&config.goals_dir);
     let templates = count_md_files(&config.templates_dir);
 
     output::header("Files");
     output::label("Sessions", sessions);
-    output::label("Tickets", tickets);
-    output::label("Milestones", milestones);
+    output::label("Tasks", tasks);
+    output::label("Goals", goals);
     output::label("Templates", templates);
     output::blank();
 

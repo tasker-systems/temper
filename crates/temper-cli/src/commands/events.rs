@@ -3,15 +3,15 @@ use crate::discovery::Event;
 use crate::error::{Result, TemperError};
 use crate::output;
 
-/// Extract the project field from any Event variant.
+/// Extract the project/context field from any Event variant.
 pub fn event_project(event: &Event) -> &str {
     match event {
-        Event::NoteCreate { project, .. }
-        | Event::TicketCreate { project, .. }
-        | Event::TicketMove { project, .. }
-        | Event::TicketDone { project, .. }
-        | Event::MilestoneCreate { project, .. }
-        | Event::MilestoneUpdate { project, .. } => project,
+        Event::NoteCreate { project, .. } => project,
+        Event::TaskCreate { context, .. }
+        | Event::TaskMove { context, .. }
+        | Event::TaskDone { context, .. }
+        | Event::GoalCreate { context, .. }
+        | Event::GoalUpdate { context, .. } => context,
         Event::Normalize { project, .. } => project.as_deref().unwrap_or("general"),
     }
 }
@@ -54,41 +54,38 @@ fn format_event(event: &Event) -> String {
             project,
             ..
         } => format!("{ts}  {project:<12}  note_create     {note_type}: {title}"),
-        Event::TicketCreate {
+        Event::TaskCreate {
             ts,
-            project,
-            ticket,
+            context,
+            task,
             title,
             ..
-        } => format!("{ts}  {project:<12}  ticket_create   {ticket}: {title}"),
-        Event::TicketMove {
+        } => format!("{ts}  {context:<12}  task_create     {task}: {title}"),
+        Event::TaskMove {
             ts,
-            project,
-            ticket,
+            context,
+            task,
             from_stage,
             to_stage,
             ..
         } => {
-            format!("{ts}  {project:<12}  ticket_move     {ticket}: {from_stage} → {to_stage}")
+            format!("{ts}  {context:<12}  task_move       {task}: {from_stage} \u{2192} {to_stage}")
         }
-        Event::TicketDone {
+        Event::TaskDone {
+            ts, context, task, ..
+        } => format!("{ts}  {context:<12}  task_done       {task}"),
+        Event::GoalCreate {
             ts,
-            project,
-            ticket,
-            ..
-        } => format!("{ts}  {project:<12}  ticket_done     {ticket}"),
-        Event::MilestoneCreate {
-            ts,
-            project,
-            milestone,
+            context,
+            goal,
             title,
-        } => format!("{ts}  {project:<12}  ms_create       {milestone}: {title}"),
-        Event::MilestoneUpdate {
+        } => format!("{ts}  {context:<12}  goal_create     {goal}: {title}"),
+        Event::GoalUpdate {
             ts,
-            project,
-            milestone,
+            context,
+            goal,
             status,
-        } => format!("{ts}  {project:<12}  ms_update       {milestone} → {status}"),
+        } => format!("{ts}  {context:<12}  goal_update     {goal} \u{2192} {status}"),
         Event::Normalize {
             ts,
             project,

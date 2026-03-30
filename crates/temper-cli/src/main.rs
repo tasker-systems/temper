@@ -2,8 +2,8 @@ mod cli;
 
 use clap::Parser;
 use cli::{
-    Cli, Commands, MilestoneAction, NoteAction, ProjectAction, ResearchAction, SessionAction,
-    SkillAction, TicketAction,
+    Cli, Commands, ContextAction, GoalAction, NoteAction, ResearchAction, SessionAction,
+    SkillAction, TaskAction,
 };
 
 fn main() {
@@ -41,17 +41,17 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             temper_cli::commands::status::run(&config, verbose)
         }
         Commands::Events {
-            project,
+            context,
             limit,
             format,
         } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let cwd = std::env::current_dir().unwrap_or_default();
             let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
-            let project = project
+            let context = context
                 .as_deref()
                 .or_else(|| resolved.map(|r| r.name.as_str()));
-            temper_cli::commands::events::run(&config, project, limit, &format)
+            temper_cli::commands::events::run(&config, context, limit, &format)
         }
         Commands::Note { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
@@ -59,7 +59,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 NoteAction::Create {
                     note_type,
                     title,
-                    project,
+                    context,
                     stdin: _,
                     show_template,
                     format,
@@ -77,7 +77,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         &config,
                         &note_type,
                         &title,
-                        project.as_deref(),
+                        context.as_deref(),
                         &format,
                     )
                 }
@@ -88,10 +88,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             match action {
                 SessionAction::Save {
                     title,
-                    project,
+                    context,
                     stdin: _,
                     show_template,
-                    ticket,
+                    task,
                     state,
                     format,
                 } => {
@@ -104,206 +104,205 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     temper_cli::commands::session::save(
                         &config,
                         title.as_deref(),
-                        project.as_deref(),
+                        context.as_deref(),
                         stdin_content.as_deref(),
-                        ticket.as_deref(),
+                        task.as_deref(),
                         state.as_deref(),
                         &format,
                     )
                 }
-                SessionAction::List { project, format } => {
-                    temper_cli::commands::session::list(&config, project.as_deref(), &format)
+                SessionAction::List { context, format } => {
+                    temper_cli::commands::session::list(&config, context.as_deref(), &format)
                 }
             }
         }
-        Commands::Ticket { action } => {
+        Commands::Task { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let cwd = std::env::current_dir().unwrap_or_default();
             let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
             match action {
-                TicketAction::Create {
+                TaskAction::Create {
                     title,
-                    project,
-                    milestone,
-                    scope,
+                    context,
+                    goal,
+                    mode,
+                    effort,
                     stdin: _,
                     show_template,
                 } => {
                     if show_template {
-                        let content = temper_cli::vault::get_template("ticket")?;
+                        let content = temper_cli::vault::get_template("task")?;
                         print!("{content}");
                         return Ok(());
                     }
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()))
                         .ok_or_else(|| {
                             temper_cli::error::TemperError::Project(
-                                "no project specified and could not infer from CWD".into(),
+                                "no context specified and could not infer from CWD".into(),
                             )
                         })?;
                     let title = title.expect("title required when not using --show-template");
-                    temper_cli::commands::ticket::create(
+                    temper_cli::commands::task::create(
                         &config,
-                        project,
+                        context,
                         &title,
-                        milestone.as_deref(),
-                        scope.as_deref(),
+                        goal.as_deref(),
+                        mode.as_deref(),
+                        effort.as_deref(),
                     )?;
                     Ok(())
                 }
-                TicketAction::Move {
+                TaskAction::Move {
                     slug,
                     stage,
-                    milestone,
-                    project,
-                    scope,
+                    goal,
+                    context,
+                    mode,
+                    effort,
                 } => {
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
-                    temper_cli::commands::ticket::move_ticket(
+                    temper_cli::commands::task::move_task(
                         &config,
                         &slug,
                         stage.as_deref(),
-                        milestone.as_deref(),
-                        project,
-                        scope.as_deref(),
+                        goal.as_deref(),
+                        context,
+                        mode.as_deref(),
+                        effort.as_deref(),
                     )
                 }
-                TicketAction::Done {
+                TaskAction::Done {
                     slug,
                     branch,
                     pr,
-                    project,
+                    context,
                 } => {
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
-                    temper_cli::commands::ticket::done(
+                    temper_cli::commands::task::done(
                         &config,
                         &slug,
                         branch.as_deref(),
                         pr.as_deref(),
-                        project,
+                        context,
                     )
                 }
-                TicketAction::List {
-                    project,
-                    milestone,
+                TaskAction::List {
+                    context,
+                    goal,
                     format,
                 } => {
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
-                    temper_cli::commands::ticket::list(
-                        &config,
-                        project,
-                        milestone.as_deref(),
-                        &format,
-                    )
+                    temper_cli::commands::task::list(&config, context, goal.as_deref(), &format)
                 }
-                TicketAction::Show {
+                TaskAction::Show {
                     slug,
-                    project,
+                    context,
                     format,
                 } => {
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
-                    temper_cli::commands::ticket::show(&config, &slug, project, &format)
+                    temper_cli::commands::task::show(&config, &slug, context, &format)
                 }
             }
         }
-        Commands::Project { action } => match action {
-            ProjectAction::Add { name, path, repo } => {
+        Commands::Context { action } => match action {
+            ContextAction::Add { name, path, repo } => {
                 let vault_root = temper_cli::config::resolve_vault(cli.vault.as_deref())?;
-                temper_cli::commands::project::add(&vault_root, &name, &path, repo.as_deref())
+                temper_cli::commands::context_cmd::add(&vault_root, &name, &path, repo.as_deref())
             }
-            ProjectAction::Remove { name } => {
+            ContextAction::Remove { name } => {
                 let vault_root = temper_cli::config::resolve_vault(cli.vault.as_deref())?;
-                temper_cli::commands::project::remove(&vault_root, &name)
+                temper_cli::commands::context_cmd::remove(&vault_root, &name)
             }
-            ProjectAction::List => {
+            ContextAction::List => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
-                temper_cli::commands::project::list(&config)
+                temper_cli::commands::context_cmd::list(&config)
             }
         },
-        Commands::Milestone { action } => {
+        Commands::Goal { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let cwd = std::env::current_dir().unwrap_or_default();
             let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
             match action {
-                MilestoneAction::Create {
+                GoalAction::Create {
                     title,
-                    project,
+                    context,
                     slug,
                     format,
                 } => {
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()))
                         .ok_or_else(|| {
                             temper_cli::error::TemperError::Project(
-                                "no project specified and could not infer from CWD".into(),
+                                "no context specified and could not infer from CWD".into(),
                             )
                         })?;
-                    temper_cli::commands::milestone::create(
+                    temper_cli::commands::goal::create(
                         &config,
-                        project,
+                        context,
                         &title,
                         slug.as_deref(),
                         &format,
                     )?;
                     Ok(())
                 }
-                MilestoneAction::List { project, format } => {
-                    let project = project
+                GoalAction::List { context, format } => {
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()))
                         .ok_or_else(|| {
                             temper_cli::error::TemperError::Project(
-                                "no project specified and could not infer from CWD".into(),
+                                "no context specified and could not infer from CWD".into(),
                             )
                         })?;
-                    temper_cli::commands::milestone::list(&config, project, &format)
+                    temper_cli::commands::goal::list(&config, context, &format)
                 }
-                MilestoneAction::Update {
+                GoalAction::Update {
                     slug,
                     status,
-                    project,
+                    context,
                 } => {
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
-                    temper_cli::commands::milestone::update(&config, &slug, &status, project)
+                    temper_cli::commands::goal::update(&config, &slug, &status, context)
                 }
             }
         }
         Commands::Normalize {
-            project,
+            context,
             dry_run,
             fix_slugs,
         } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::normalize::run(&config, project.as_deref(), dry_run, fix_slugs)?;
+            temper_cli::commands::normalize::run(&config, context.as_deref(), dry_run, fix_slugs)?;
             Ok(())
         }
-        Commands::Warmup { project, format } => {
+        Commands::Warmup { context, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let cwd = std::env::current_dir().unwrap_or_default();
             let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
-            let project = project
+            let context = context
                 .as_deref()
                 .or_else(|| resolved.map(|r| r.name.as_str()));
-            temper_cli::commands::warmup::run(&config, project, &format)
+            temper_cli::commands::warmup::run(&config, context, &format)
         }
         Commands::Research { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             match action {
                 ResearchAction::Save {
                     title,
-                    project,
+                    context,
                     format,
                     show_template,
                     stdin: _,
@@ -315,7 +314,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     }
                     let cwd = std::env::current_dir().unwrap_or_default();
                     let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
-                    let project = project
+                    let context = context
                         .as_deref()
                         .or_else(|| resolved.map(|r| r.name.as_str()));
                     let title = title.expect("title required when not using --show-template");
@@ -323,7 +322,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     temper_cli::commands::research::save(
                         &config,
                         &title,
-                        project,
+                        context,
                         stdin_content.as_deref(),
                         &format,
                     )
@@ -340,15 +339,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 }
                 SkillAction::Install {
                     global: _,
-                    project,
+                    context,
                     path,
                 } => {
                     let output_path = if let Some(p) = path {
                         std::path::PathBuf::from(p)
-                    } else if let Some(proj) = project {
+                    } else if let Some(ctx) = context {
                         temper_cli::config::expand_tilde(&format!(
                             "{}/.claude/commands/temper.md",
-                            proj
+                            ctx
                         ))
                     } else {
                         config.skill_output.clone()

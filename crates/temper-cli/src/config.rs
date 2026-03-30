@@ -13,10 +13,10 @@ use crate::error::{Result, TemperError};
 pub struct VaultConfig {
     #[serde(default = "default_sessions")]
     pub sessions: String,
-    #[serde(default = "default_tickets")]
-    pub tickets: String,
-    #[serde(default = "default_milestones")]
-    pub milestones: String,
+    #[serde(default = "default_tasks")]
+    pub tasks: String,
+    #[serde(default = "default_goals")]
+    pub goals: String,
     #[serde(default = "default_templates")]
     pub templates: String,
     #[serde(default = "default_state_dir")]
@@ -26,11 +26,11 @@ pub struct VaultConfig {
 fn default_sessions() -> String {
     "sessions".to_string()
 }
-fn default_tickets() -> String {
-    "tickets".to_string()
+fn default_tasks() -> String {
+    "tasks".to_string()
 }
-fn default_milestones() -> String {
-    "milestones".to_string()
+fn default_goals() -> String {
+    "goals".to_string()
 }
 fn default_templates() -> String {
     "templates".to_string()
@@ -43,8 +43,8 @@ impl Default for VaultConfig {
     fn default() -> Self {
         Self {
             sessions: default_sessions(),
-            tickets: default_tickets(),
-            milestones: default_milestones(),
+            tasks: default_tasks(),
+            goals: default_goals(),
             templates: default_templates(),
             state_dir: default_state_dir(),
         }
@@ -148,8 +148,8 @@ pub struct ResolvedProject {
 pub struct Config {
     pub vault_root: PathBuf,
     pub sessions_dir: PathBuf,
-    pub tickets_dir: PathBuf,
-    pub milestones_dir: PathBuf,
+    pub tasks_dir: PathBuf,
+    pub goals_dir: PathBuf,
     pub templates_dir: PathBuf,
     pub state_dir: PathBuf,
     pub projects: HashMap<String, ResolvedProject>,
@@ -245,8 +245,8 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
 
     Ok(Config {
         sessions_dir: join(&raw.vault.sessions),
-        tickets_dir: join(&raw.vault.tickets),
-        milestones_dir: join(&raw.vault.milestones),
+        tasks_dir: join(&raw.vault.tasks),
+        goals_dir: join(&raw.vault.goals),
         templates_dir: join(&raw.vault.templates),
         state_dir: join(&raw.vault.state_dir),
         vault_root,

@@ -18,14 +18,14 @@ use crate::vault;
 /// - `title` defaults to today's date if omitted
 /// - If the file already exists and `stdin_content` is None: no-op (idempotent)
 /// - If the file already exists and `stdin_content` is Some: replace body, preserve frontmatter
-/// - If `ticket` is provided, links the session to the ticket (updates sessions list in ticket frontmatter)
-/// - If `state` is also provided, updates the ticket's stage field
+/// - If `task` is provided, links the session to the task (updates sessions list in task frontmatter)
+/// - If `state` is also provided, updates the task's stage field
 pub fn save(
     config: &Config,
     title: Option<&str>,
     project: Option<&str>,
     stdin_content: Option<&str>,
-    ticket: Option<&str>,
+    task: Option<&str>,
     state: Option<&str>,
     format: &str,
 ) -> Result<()> {
@@ -128,26 +128,24 @@ pub fn save(
         tracing::warn!("Failed to append discovery event: {e}");
     }
 
-    // Link session to ticket if provided
-    if let Some(ticket_slug) = ticket {
-        link_session_to_ticket(config, &note_path, ticket_slug, state)?;
+    // Link session to task if provided
+    if let Some(task_slug) = task {
+        link_session_to_task(config, &note_path, task_slug, state)?;
     }
 
     Ok(())
 }
 
-/// Link a session note to a ticket: update the ticket's sessions list and optionally its stage.
-fn link_session_to_ticket(
+/// Link a session note to a task: update the task's sessions list and optionally its stage.
+fn link_session_to_task(
     config: &Config,
     session_path: &std::path::Path,
-    ticket_slug: &str,
+    task_slug: &str,
     state: Option<&str>,
 ) -> Result<()> {
-    // Find the ticket
-    let ticket_info =
-        crate::commands::ticket::find_ticket(config, ticket_slug, None)?.ok_or_else(|| {
-            crate::error::TemperError::Vault(format!("ticket not found: {ticket_slug}"))
-        })?;
+    // Find the task
+    let task_info = crate::commands::task::find_task(config, task_slug, None)?
+        .ok_or_else(|| crate::error::TemperError::Vault(format!("task not found: {task_slug}")))?;
 
     // Extract the session's id from its frontmatter
     let session_content = std::fs::read_to_string(session_path)?;
@@ -160,39 +158,35 @@ fn link_session_to_ticket(
         String::new()
     };
 
-    // Read the ticket file
-    let ticket_path = config
-        .tickets_dir
-        .join(&ticket_info.project)
-        .join(format!("{}.md", ticket_info.slug));
-    let mut ticket_content = std::fs::read_to_string(&ticket_path)?;
+    // Read the task file
+    let task_path = config
+        .tasks_dir
+        .join(&task_info.context)
+        .join(format!("{}.md", task_info.slug));
+    let mut task_content = std::fs::read_to_string(&task_path)?;
 
     // Add/append to the sessions list in frontmatter
     if !session_id.is_empty() {
-        if ticket_content.contains("\nsessions:") {
+        if task_content.contains("\nsessions:") {
             // sessions key already exists — append to the list
-            // Find the sessions: line and add a new entry after it (or after existing entries)
             let sessions_marker = "\nsessions:";
-            if let Some(pos) = ticket_content.find(sessions_marker) {
+            if let Some(pos) = task_content.find(sessions_marker) {
                 let after_marker = pos + sessions_marker.len();
-                // Find the end of the sessions block: next non-indented line or closing ---
-                // Find where to insert the new entry: right after "sessions:"
                 let insert_pos = after_marker;
                 let new_entry = format!("\n  - {session_id}");
-                ticket_content.insert_str(insert_pos, &new_entry);
+                task_content.insert_str(insert_pos, &new_entry);
             }
         } else {
             // Insert sessions field before the closing --- of frontmatter
-            // Find the second --- (closing frontmatter)
-            let trimmed_start = if ticket_content.starts_with("---") {
+            let trimmed_start = if task_content.starts_with("---") {
                 3
             } else {
                 0
             };
-            if let Some(close_pos) = ticket_content[trimmed_start..].find("\n---") {
+            if let Some(close_pos) = task_content[trimmed_start..].find("\n---") {
                 let insert_at = trimmed_start + close_pos;
                 let new_field = format!("\nsessions:\n  - {session_id}");
-                ticket_content.insert_str(insert_at, &new_field);
+                task_content.insert_str(insert_at, &new_field);
             }
         }
     }
@@ -205,12 +199,12 @@ fn link_session_to_ticket(
         if output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !branch.is_empty() && branch != "HEAD" {
-                ticket_content = vault::set_frontmatter_field(&ticket_content, "branch", &branch);
+                task_content = vault::set_frontmatter_field(&task_content, "branch", &branch);
             }
         }
     }
 
-    // Optionally update the ticket stage
+    // Optionally update the task stage
     if let Some(s) = state {
         let valid_stages = ["backlog", "in-progress", "done", "cancelled"];
         if !valid_stages.contains(&s) {
@@ -219,10 +213,10 @@ fn link_session_to_ticket(
                 valid_stages.join(", ")
             )));
         }
-        ticket_content = vault::set_frontmatter_field(&ticket_content, "stage", s);
+        task_content = vault::set_frontmatter_field(&task_content, "stage", s);
     }
 
-    std::fs::write(&ticket_path, &ticket_content)?;
+    std::fs::write(&task_path, &task_content)?;
     Ok(())
 }
 

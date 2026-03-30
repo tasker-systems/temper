@@ -25,10 +25,10 @@ pub fn run(
         "  {} frontmatter fields fixed",
         summary.frontmatter_fixed
     ));
-    if summary.unscoped_tickets > 0 {
+    if summary.tasks_without_effort > 0 {
         output::plain(format!(
-            "  {} tickets without scope",
-            summary.unscoped_tickets
+            "  {} tasks without effort",
+            summary.tasks_without_effort
         ));
     }
 

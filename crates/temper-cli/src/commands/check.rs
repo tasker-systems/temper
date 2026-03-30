@@ -26,7 +26,7 @@ pub fn run(config: &Config, quiet: bool) -> Result<()> {
     }
 
     match &dirs_ok {
-        Ok(()) => output::status_icon(true, "Dirs: sessions, tickets, milestones, templates"),
+        Ok(()) => output::status_icon(true, "Dirs: sessions, tasks, goals, templates"),
         Err(msg) => output::warning(format!("Dirs: {msg}")),
     }
 
@@ -58,8 +58,8 @@ fn check_vault(config: &Config) -> std::result::Result<(), String> {
 fn check_dirs(config: &Config) -> std::result::Result<(), String> {
     let dirs = [
         ("sessions", &config.sessions_dir),
-        ("tickets", &config.tickets_dir),
-        ("milestones", &config.milestones_dir),
+        ("tasks", &config.tasks_dir),
+        ("goals", &config.goals_dir),
         ("templates", &config.templates_dir),
     ];
 

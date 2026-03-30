@@ -13,54 +13,60 @@ pub enum Event {
         path: String,
         project: String,
     },
-    #[serde(rename = "ticket_create")]
-    TicketCreate {
+    #[serde(rename = "task_create")]
+    TaskCreate {
         ts: String,
-        project: String,
-        ticket: String,
-        milestone: String,
+        context: String,
+        task: String,
+        goal: String,
         title: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        scope: Option<String>,
+        mode: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<String>,
     },
-    #[serde(rename = "ticket_move")]
-    TicketMove {
+    #[serde(rename = "task_move")]
+    TaskMove {
         ts: String,
-        project: String,
-        ticket: String,
+        context: String,
+        task: String,
         from_stage: String,
         to_stage: String,
         #[serde(skip_serializing_if = "Option::is_none")]
-        from_milestone: Option<String>,
+        from_goal: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        to_milestone: Option<String>,
+        to_goal: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        from_scope: Option<String>,
+        from_mode: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
-        to_scope: Option<String>,
+        to_mode: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        from_effort: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        to_effort: Option<String>,
     },
-    #[serde(rename = "ticket_done")]
-    TicketDone {
+    #[serde(rename = "task_done")]
+    TaskDone {
         ts: String,
-        project: String,
-        ticket: String,
+        context: String,
+        task: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         branch: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pr: Option<String>,
     },
-    #[serde(rename = "milestone_create")]
-    MilestoneCreate {
+    #[serde(rename = "goal_create")]
+    GoalCreate {
         ts: String,
-        project: String,
-        milestone: String,
+        context: String,
+        goal: String,
         title: String,
     },
-    #[serde(rename = "milestone_update")]
-    MilestoneUpdate {
+    #[serde(rename = "goal_update")]
+    GoalUpdate {
         ts: String,
-        project: String,
-        milestone: String,
+        context: String,
+        goal: String,
         status: String,
     },
     #[serde(rename = "normalize")]

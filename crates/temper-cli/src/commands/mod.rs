@@ -1,13 +1,13 @@
 pub mod check;
+pub mod context_cmd;
 pub mod events;
+pub mod goal;
 pub mod init;
-pub mod milestone;
 pub mod normalize;
 pub mod note;
-pub mod project;
 pub mod research;
 pub mod session;
 pub mod skill;
 pub mod status;
-pub mod ticket;
+pub mod task;
 pub mod warmup;

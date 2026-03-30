@@ -3,15 +3,15 @@ use chrono::Local;
 use std::path::{Path, PathBuf};
 
 const EMBEDDED_SESSION: &str = include_str!("templates/session.md");
-const EMBEDDED_TICKET: &str = include_str!("templates/ticket.md");
-const EMBEDDED_MILESTONE: &str = include_str!("templates/milestone.md");
+const EMBEDDED_TASK: &str = include_str!("templates/task.md");
+const EMBEDDED_GOAL: &str = include_str!("templates/goal.md");
 const EMBEDDED_RESEARCH: &str = include_str!("templates/research.md");
 
 fn embedded_template(note_type: &str) -> Option<&'static str> {
     match note_type {
         "session" => Some(EMBEDDED_SESSION),
-        "ticket" => Some(EMBEDDED_TICKET),
-        "milestone" => Some(EMBEDDED_MILESTONE),
+        "task" => Some(EMBEDDED_TASK),
+        "goal" => Some(EMBEDDED_GOAL),
         "research" => Some(EMBEDDED_RESEARCH),
         _ => None,
     }
