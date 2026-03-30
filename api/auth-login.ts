@@ -3,104 +3,67 @@
  *
  * Redirects the browser to the Google OAuth flow via Neon Auth.
  * After sign-in, Neon Auth redirects to /api/auth-callback.
- *
- * Query params:
- *   - cli_port: (optional) passed through to callback for localhost redirect
- *   - provider: (optional) OAuth provider, defaults to "google"
  */
 
-export const config = { runtime: "nodejs" };
-
-function neonAuthBase(): string {
-	const url = process.env.NEON_AUTH_URL;
-	if (!url) {
-		throw new Error("NEON_AUTH_URL environment variable is required");
-	}
-	return url;
-}
-
-export default async function handler(req: Request): Promise<Response> {
+export function GET(req: Request): Response {
 	const url = new URL(req.url, "https://temperkb.io");
-	const cliPort = url.searchParams.get("cli_port");
-	const provider = url.searchParams.get("provider") || "google";
-	const neonAuth = process.env.NEON_AUTH_URL || "NOT_SET";
 
-	console.log("[auth-login] Starting", { provider, cliPort, neonAuth: neonAuth.substring(0, 30) });
-
-	if (req.method !== "GET") {
-		return new Response(JSON.stringify({ error: "Method not allowed" }), {
-			status: 405,
-			headers: { "Content-Type": "application/json" },
-		});
-	}
-
-	// Debug: if ?debug=1, return env info without calling Neon Auth
+	// Debug: if ?debug=1, return immediately to confirm function is reachable
 	if (url.searchParams.get("debug") === "1") {
 		return new Response(
 			JSON.stringify({
-				status: "auth-login function reached",
-				neon_auth_url: neonAuth.substring(0, 40) + "...",
-				provider,
-				cli_port: cliPort,
+				ok: true,
+				neon_auth: (process.env.NEON_AUTH_URL || "NOT_SET").substring(0, 40),
 			}),
 			{ status: 200, headers: { "Content-Type": "application/json" } },
 		);
 	}
 
-	const callbackBase = "https://temperkb.io/api/auth-callback";
-	const callbackURL = cliPort
-		? `${callbackBase}?cli_port=${cliPort}`
-		: callbackBase;
+	const cliPort = url.searchParams.get("cli_port");
+	const provider = url.searchParams.get("provider") || "google";
+	const neonAuth = process.env.NEON_AUTH_URL;
 
-	try {
-		console.log("[auth-login] Fetching Neon Auth sign-in/social...");
-		const res = await fetch(`${neonAuth}/sign-in/social`, {
-			method: "POST",
-			headers: {
-				"Content-Type": "application/json",
-				Origin: "https://temperkb.io",
-			},
-			body: JSON.stringify({ provider, callbackURL }),
-			signal: AbortSignal.timeout(10000),
-		});
-		console.log("[auth-login] Neon Auth responded:", res.status);
-
-		if (!res.ok) {
-			const body = await res.text();
-			return new Response(
-				JSON.stringify({
-					error: { code: "AUTH_INIT_FAILED", message: body },
-				}),
-				{ status: 502, headers: { "Content-Type": "application/json" } },
-			);
-		}
-
-		const data = await res.json();
-		const redirectUrl = data.url;
-
-		if (!redirectUrl) {
-			return new Response(
-				JSON.stringify({
-					error: {
-						code: "NO_REDIRECT",
-						message: "Neon Auth did not return a redirect URL",
-						response: data,
-					},
-				}),
-				{ status: 502, headers: { "Content-Type": "application/json" } },
-			);
-		}
-
-		console.log("[auth-login] Redirecting to:", redirectUrl.substring(0, 60));
-		return Response.redirect(redirectUrl, 302);
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		console.error("[auth-login] Error:", message);
+	if (!neonAuth) {
 		return new Response(
-			JSON.stringify({
-				error: { code: "AUTH_ERROR", message },
-			}),
+			JSON.stringify({ error: { code: "CONFIG_ERROR", message: "NEON_AUTH_URL not set" } }),
 			{ status: 500, headers: { "Content-Type": "application/json" } },
 		);
 	}
+
+	const callbackBase = "https://temperkb.io/api/auth-callback";
+	const callbackURL = cliPort ? `${callbackBase}?cli_port=${cliPort}` : callbackBase;
+
+	// Build the Neon Auth sign-in URL directly instead of POSTing server-side.
+	// This avoids async fetch issues in the serverless runtime.
+	// We construct the redirect URL that Neon Auth's sign-in/social endpoint would give us.
+	const initUrl = new URL(`${neonAuth}/sign-in/social`, "https://temperkb.io");
+
+	// Redirect to a simple HTML page that does the POST client-side
+	const html = `<!DOCTYPE html>
+<html><head><title>temper auth</title>
+<style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 20px;color:#e0e0e0;background:#0f0f1a}</style>
+</head><body>
+<p>Redirecting to sign in...</p>
+<script>
+(async()=>{
+  try {
+    const res = await fetch("${neonAuth}/sign-in/social", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({provider:"${provider}",callbackURL:"${callbackURL}"})
+    });
+    const data = await res.json();
+    if(data.url) { window.location.href = data.url; }
+    else { document.body.innerHTML = "<pre>Error: " + JSON.stringify(data) + "</pre>"; }
+  } catch(e) {
+    document.body.innerHTML = "<pre>Error: " + e.message + "</pre>";
+  }
+})();
+</script>
+</body></html>`;
+
+	return new Response(html, {
+		status: 200,
+		headers: { "Content-Type": "text/html" },
+	});
 }
