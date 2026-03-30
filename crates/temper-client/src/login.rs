@@ -1,13 +1,12 @@
 //! Neon Auth (Better Auth) login flow with local callback server.
 //!
-//! 1. POST to Neon Auth `/sign-in/social` to get a Google OAuth redirect URL
-//! 2. Open the browser to that URL
-//! 3. Spin up a localhost TCP server for the callback
-//! 4. Neon Auth redirects back to localhost after Google sign-in
-//! 5. Serve an HTML page that fetches `/auth/token` with `credentials: include`
-//!    (cookies are first-party because localhost is the redirect target)
-//! 6. The page POSTs the JWT back to the localhost server
-//! 7. Persist the token to `~/.config/temper/auth.json`
+//! 1. POST to Neon Auth `/sign-in/social` — get Google OAuth redirect URL + challenge cookie
+//! 2. Open browser for Google sign-in
+//! 3. Neon Auth redirects to temperkb.io/api/auth-callback which passes the
+//!    session verifier back to our localhost server
+//! 4. CLI uses the challenge cookie + verifier to exchange for session cookies
+//! 5. CLI uses session cookies to fetch JWT from `/auth/token`
+//! 6. Persist the token to `~/.config/temper/auth.json`
 
 use chrono::{DateTime, Utc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -20,48 +19,35 @@ use crate::error::{ClientError, Result};
 /// Configuration for the Neon Auth social sign-in flow.
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
-    /// Neon Auth base URL (e.g., `https://ep-xxx.neonauth.region.aws.neon.tech/neondb/auth`)
+    /// Neon Auth base URL
     pub authorize_url: String,
-    /// Token URL — same as authorize_url for Better Auth (not used separately)
+    /// Same as authorize_url for Better Auth
     pub token_url: String,
     /// Not used for Better Auth, kept for interface compat
     pub client_id: String,
-    /// OAuth provider (e.g., "google")
+    /// First element is the OAuth provider name (e.g., "google")
     pub scopes: Vec<String>,
 }
 
 impl OAuthConfig {
-    /// The Neon Auth base URL (stored in authorize_url for config compat).
     fn neon_auth_base(&self) -> &str {
         &self.authorize_url
     }
 
-    /// The OAuth provider name. Defaults to "google" if scopes is empty.
     fn provider(&self) -> &str {
         self.scopes.first().map(|s| s.as_str()).unwrap_or("google")
     }
 }
 
-/// Response from Better Auth `/sign-in/social` endpoint.
 #[derive(Debug, serde::Deserialize)]
 struct SignInResponse {
     url: Option<String>,
-    redirect: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
 // Login flow
 // ---------------------------------------------------------------------------
 
-/// Run the Neon Auth login flow:
-///
-/// 1. Bind a localhost callback server on a random port
-/// 2. POST to Neon Auth `/sign-in/social` to get the Google OAuth URL
-/// 3. Open the browser to that URL
-/// 4. Wait for the redirect callback from Neon Auth
-/// 5. Serve an HTML page that fetches the JWT using browser cookies
-/// 6. Wait for the page to POST the JWT back
-/// 7. Persist and return [`StoredAuth`]
 pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
     let neon_auth = config.neon_auth_base();
     let provider = config.provider();
@@ -69,16 +55,17 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
     // Bind to a random port on localhost.
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
-    // Use temperkb.io as the callback so session cookies are forwarded
-    // server-side. The Vercel endpoint fetches the JWT and redirects
-    // back to localhost with ?jwt=<token>.
+
+    // Callback goes through temperkb.io which passes the verifier to localhost.
     let callback_url = format!("https://temperkb.io/api/auth-callback?cli_port={port}");
 
     debug!(port, "Callback server listening");
 
     // POST to Neon Auth to initiate social sign-in.
+    // IMPORTANT: capture the challenge cookie from the response — we need it later.
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
+        .cookie_store(true)
         .build()
         .map_err(|e| ClientError::Other(format!("http client: {e}")))?;
 
@@ -109,19 +96,72 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
     open::that(&auth_url)
         .map_err(|e| ClientError::Other(format!("failed to open browser: {e}")))?;
 
-    // Now we need to handle two requests:
-    // 1. The callback redirect from Neon Auth (GET /callback?neon_auth_session_verifier=...)
-    //    → serve HTML page that fetches JWT
-    // 2. The JWT POST from the HTML page (POST /token with JWT in body)
-    //    → capture and save
+    // Wait for the callback with the session verifier.
+    // temperkb.io/api/auth-callback redirects to localhost:{port}/callback?verifier=...
+    let verifier = wait_for_verifier(&listener).await?;
+    debug!("Got session verifier, exchanging for JWT...");
 
-    let mut jwt: Option<String> = None;
+    // Exchange verifier for session cookies using the challenge cookie from init.
+    // The reqwest client has cookie_store enabled and holds the challenge cookie.
+    let callback_resp = client
+        .get(format!(
+            "{neon_auth}/callback/{provider}?neon_auth_session_verifier={verifier}"
+        ))
+        .send()
+        .await?;
+
+    debug!(
+        status = %callback_resp.status(),
+        "Verifier exchange response"
+    );
+
+    // The client's cookie jar now has the session cookies.
+    // Use them to get the JWT.
+    let token_resp = client
+        .get(format!("{neon_auth}/token"))
+        .header("Accept", "application/json")
+        .send()
+        .await?;
+
+    if !token_resp.status().is_success() {
+        let body = token_resp.text().await.unwrap_or_default();
+        return Err(ClientError::Other(format!(
+            "JWT token request failed: {body}"
+        )));
+    }
+
+    let token_data: serde_json::Value = token_resp.json().await?;
+    let jwt = token_data
+        .get("token")
+        .or_else(|| token_data.get("access_token"))
+        .or_else(|| token_data.get("jwt"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ClientError::Other(format!("no JWT in token response: {token_data}")))?;
+
+    let claims = decode_jwt_claims(jwt)?;
+
+    let stored = StoredAuth {
+        provider: provider.to_owned(),
+        access_token: jwt.to_owned(),
+        refresh_token: None,
+        expires_at: claims.expires_at,
+        profile_id: claims.subject,
+    };
+
+    auth::save_auth(&stored)?;
+    info!("Authentication successful — token saved");
+
+    Ok(stored)
+}
+
+/// Wait for the callback redirect from temperkb.io with the session verifier.
+async fn wait_for_verifier(listener: &TcpListener) -> Result<String> {
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
 
-    while jwt.is_none() {
+    loop {
         let accept = tokio::time::timeout_at(deadline, listener.accept()).await;
 
-        let (mut stream, _addr) = match accept {
+        let (mut stream, _) = match accept {
             Ok(Ok(conn)) => conn,
             Ok(Err(e)) => {
                 warn!("accept error: {e}");
@@ -143,65 +183,39 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
 
         debug!(method, path, "Received request");
 
-        if method == "GET" && path.starts_with("/token") {
-            // The Vercel callback redirected here with ?jwt=<token>
+        if method == "GET" && path.starts_with("/callback") {
+            // Parse verifier from query string
             let full_url = url::Url::parse(&format!("http://localhost{path}"))
                 .map_err(|e| ClientError::Other(format!("parse error: {e}")))?;
-            let token = full_url
+
+            let verifier = full_url
                 .query_pairs()
-                .find(|(k, _)| k == "jwt")
+                .find(|(k, _)| k == "verifier")
                 .map(|(_, v)| v.into_owned());
 
-            if let Some(token) = token {
-                if token.starts_with("eyJ") {
-                    jwt = Some(token);
-                    let html = "<!DOCTYPE html><html><body><h2>Authenticated!</h2><p>You can close this tab.</p></body></html>";
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        html.len(), html
-                    );
-                    let _ = stream.write_all(response.as_bytes()).await;
-                } else {
-                    let html = format!("<!DOCTYPE html><html><body><h2>Error</h2><pre>Invalid token format</pre></body></html>");
-                    let response = format!(
-                        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        html.len(), html
-                    );
-                    let _ = stream.write_all(response.as_bytes()).await;
-                }
-            }
-        } else if method == "GET" && path.starts_with("/callback") {
-            // Legacy: direct callback without JWT — show waiting message
-            let html = "<!DOCTYPE html><html><body><h2>Waiting for authentication...</h2><p>Processing your sign-in. This page will update automatically.</p></body></html>";
+            // Send success response
+            let html = "<!DOCTYPE html><html><body>\
+                <h2>Completing authentication...</h2>\
+                <p>You can close this tab once the CLI confirms success.</p>\
+                </body></html>";
             let response = format!(
                 "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                html.len(), html
+                html.len(),
+                html
             );
             let _ = stream.write_all(response.as_bytes()).await;
+
+            if let Some(v) = verifier {
+                return Ok(v);
+            }
+            // No verifier in callback — keep waiting (might be favicon request etc.)
         } else {
+            // Favicon or other request — ignore
             let response =
                 "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(response.as_bytes()).await;
         }
     }
-
-    let jwt = jwt.expect("jwt should be set after loop");
-
-    // Decode JWT to extract expiry and subject
-    let claims = decode_jwt_claims(&jwt)?;
-
-    let stored = StoredAuth {
-        provider: provider.to_owned(),
-        access_token: jwt,
-        refresh_token: None,
-        expires_at: claims.expires_at,
-        profile_id: claims.subject,
-    };
-
-    auth::save_auth(&stored)?;
-    info!("Authentication successful — token saved");
-
-    Ok(stored)
 }
 
 struct JwtClaims {
@@ -209,7 +223,6 @@ struct JwtClaims {
     subject: Option<uuid::Uuid>,
 }
 
-/// Decode JWT payload without verification (just extract exp and sub).
 fn decode_jwt_claims(jwt: &str) -> Result<JwtClaims> {
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
