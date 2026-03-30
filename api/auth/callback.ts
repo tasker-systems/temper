@@ -30,7 +30,7 @@ export default async function handler(req: Request): Promise<Response> {
 		});
 	}
 
-	const url = new URL(req.url);
+	const url = new URL(req.url, "https://temperkb.io");
 	const cliPort = url.searchParams.get("cli_port");
 	const authBase = neonAuthBase();
 
