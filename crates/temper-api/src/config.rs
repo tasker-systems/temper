@@ -24,7 +24,7 @@ impl ApiConfig {
         let auth_audience = env::var("AUTH_AUDIENCE").ok().filter(|s| !s.is_empty());
 
         let auth_provider_name =
-            env::var("AUTH_PROVIDER_NAME").unwrap_or_else(|_| "neon_auth".to_string());
+            env::var("AUTH_PROVIDER_NAME").unwrap_or_else(|_| "auth0".to_string());
 
         if auth_audience.is_none() {
             tracing::warn!(
