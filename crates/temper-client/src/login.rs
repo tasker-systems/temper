@@ -96,49 +96,48 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
     open::that(&auth_url)
         .map_err(|e| ClientError::Other(format!("failed to open browser: {e}")))?;
 
-    // Wait for the callback with the session verifier.
-    // temperkb.io/api/auth-callback redirects to localhost:{port}/callback?verifier=...
-    let verifier = wait_for_verifier(&listener).await?;
-    debug!("Got session verifier, exchanging for JWT...");
+    // Wait for the callback. The temperkb.io callback page fetches the JWT
+    // client-side and redirects to localhost:{port}/callback?verifier=<jwt>
+    let verifier_or_jwt = wait_for_verifier(&listener).await?;
 
-    // Exchange verifier for session cookies using the challenge cookie from init.
-    // The reqwest client has cookie_store enabled and holds the challenge cookie.
-    let callback_resp = client
-        .get(format!(
-            "{neon_auth}/callback/{provider}?neon_auth_session_verifier={verifier}"
-        ))
-        .send()
-        .await?;
+    // If it starts with eyJ, it's already a JWT (from the client-side fetch)
+    let jwt = if verifier_or_jwt.starts_with("eyJ") {
+        debug!("Received JWT directly from callback page");
+        verifier_or_jwt
+    } else {
+        // It's a session verifier — try to exchange it (may not work due to cookie issues)
+        debug!("Got session verifier, attempting exchange...");
+        let callback_resp = client
+            .get(format!(
+                "{neon_auth}/callback/{provider}?neon_auth_session_verifier={verifier_or_jwt}"
+            ))
+            .send()
+            .await?;
+        debug!(status = %callback_resp.status(), "Verifier exchange");
 
-    debug!(
-        status = %callback_resp.status(),
-        "Verifier exchange response"
-    );
+        let token_resp = client
+            .get(format!("{neon_auth}/token"))
+            .header("Accept", "application/json")
+            .send()
+            .await?;
 
-    // The client's cookie jar now has the session cookies.
-    // Use them to get the JWT.
-    let token_resp = client
-        .get(format!("{neon_auth}/token"))
-        .header("Accept", "application/json")
-        .send()
-        .await?;
+        if !token_resp.status().is_success() {
+            let body = token_resp.text().await.unwrap_or_default();
+            return Err(ClientError::Other(format!(
+                "JWT token request failed: {body}"
+            )));
+        }
 
-    if !token_resp.status().is_success() {
-        let body = token_resp.text().await.unwrap_or_default();
-        return Err(ClientError::Other(format!(
-            "JWT token request failed: {body}"
-        )));
-    }
+        let data: serde_json::Value = token_resp.json().await?;
+        data.get("token")
+            .or_else(|| data.get("access_token"))
+            .or_else(|| data.get("jwt"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ClientError::Other(format!("no JWT in response: {data}")))?
+            .to_owned()
+    };
 
-    let token_data: serde_json::Value = token_resp.json().await?;
-    let jwt = token_data
-        .get("token")
-        .or_else(|| token_data.get("access_token"))
-        .or_else(|| token_data.get("jwt"))
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| ClientError::Other(format!("no JWT in token response: {token_data}")))?;
-
-    let claims = decode_jwt_claims(jwt)?;
+    let claims = decode_jwt_claims(&jwt)?;
 
     let stored = StoredAuth {
         provider: provider.to_owned(),
