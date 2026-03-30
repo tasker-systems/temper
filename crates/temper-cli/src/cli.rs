@@ -282,6 +282,14 @@ pub enum ResearchAction {
 pub enum AuthAction {
     /// Log in via browser OAuth (PKCE flow)
     Login,
+    /// Store a JWT directly (for API-only clients or manual auth)
+    Token {
+        /// The JWT access token
+        jwt: String,
+        /// Auth provider name (default: neon_auth)
+        #[arg(long, default_value = "neon_auth")]
+        provider: String,
+    },
     /// Clear stored credentials
     Logout,
     /// Show current auth status

@@ -331,6 +331,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         }
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(),
+            AuthAction::Token { jwt, provider } => {
+                temper_cli::commands::auth::token(&jwt, &provider)
+            }
             AuthAction::Logout => temper_cli::commands::auth::logout(),
             AuthAction::Status => temper_cli::commands::auth::status(),
         },

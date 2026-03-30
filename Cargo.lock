@@ -2471,6 +2471,7 @@ version = "0.1.0"
 dependencies = [
  "anstream 0.6.21",
  "anstyle",
+ "base64",
  "chrono",
  "clap",
  "dirs",
@@ -2485,6 +2486,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
