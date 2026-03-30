@@ -13,7 +13,8 @@ export default async function handler(req: Request): Promise<Response> {
   // Dynamic imports to avoid ESM/CJS conflict in Vercel's hybrid runtime
   const { verifyToken, getJwksVerifier, getIssuer } = await import("../../packages/temper-cloud/src/auth.js");
   const { getDb } = await import("../../packages/temper-cloud/src/db.js");
-  const { getProfileId, processContentInline, updateResourceHash } = await import("../../packages/temper-cloud/src/ingest.js");
+  const { getProfileId, updateResourceHash } = await import("../../packages/temper-cloud/src/ingest.js");
+  const { processIngest } = await import("../workflows/process-ingest.js");
   const { createHash } = await import("node:crypto");
 
   // Extract resource ID from URL path (/api/ingest/<id>)
@@ -98,8 +99,8 @@ export default async function handler(req: Request): Promise<Response> {
     });
   }
 
-  // Process content inline: chunk → embed → store
-  await processContentInline(db, resourceId, content);
+  // Trigger async workflow: chunk → embed → store
+  await processIngest(resourceId, content);
 
   // Update the resource's content hash
   await updateResourceHash(db, resourceId, contentHash);

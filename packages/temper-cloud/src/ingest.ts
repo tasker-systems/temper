@@ -1,13 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { AuthClaims } from "./auth.js";
 import type { NeonClient } from "./db.js";
-import type { ChunkRow } from "./processing/index.js";
-import {
-  buildStoreChunksQuery,
-  buildVersionBumpQuery,
-  chunkText,
-  embedTexts,
-} from "./processing/index.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -220,65 +213,4 @@ export async function updateResourceHash(
     SET content_hash = ${contentHash}, updated = now()
     WHERE id = ${resourceId}::uuid
   `;
-}
-
-// ---------------------------------------------------------------------------
-// Inline content processing pipeline
-// ---------------------------------------------------------------------------
-
-/**
- * Full inline processing pipeline:
- *   1. Chunk the markdown text via chunkText()
- *   2. Embed all chunks via embedTexts()
- *   3. Determine next version number from existing chunks
- *   4. Mark old chunks as non-current (version bump)
- *   5. Insert new chunk rows
- *
- * Returns the number of chunks stored.
- */
-export async function processContentInline(
-  db: NeonClient,
-  resourceId: string,
-  markdown: string,
-): Promise<number> {
-  const chunks = chunkText(markdown);
-  if (chunks.length === 0) return 0;
-
-  // Embed all chunk contents in a single batch
-  const texts = chunks.map((c) => c.content);
-  const embeddings = await embedTexts(texts);
-
-  // Determine the next version number
-  const versionRows = await db`
-    SELECT COALESCE(MAX(version), 0) AS max_version
-    FROM kb_chunks
-    WHERE resource_id = ${resourceId}::uuid
-  `;
-  const nextVersion = (Number(versionRows[0].max_version) + 1) as number;
-
-  // Build ChunkRow records with UUIDs
-  const chunkRows: ChunkRow[] = chunks.map((chunk, i) => ({
-    id: randomUUID(),
-    resource_id: resourceId,
-    chunk_index: chunk.chunk_index,
-    version: nextVersion,
-    header_path: chunk.header_path,
-    content: chunk.content,
-    content_hash: chunk.content_hash,
-    embedding: embeddings[i],
-  }));
-
-  // Version bump: mark previous current chunks as non-current
-  const versionBump = buildVersionBumpQuery(resourceId, nextVersion);
-  if (versionBump.sql) {
-    await db.query(versionBump.sql, versionBump.params);
-  }
-
-  // Store new chunks
-  const storeQuery = buildStoreChunksQuery(chunkRows);
-  if (storeQuery.sql) {
-    await db.query(storeQuery.sql, storeQuery.params);
-  }
-
-  return chunkRows.length;
 }
