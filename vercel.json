@@ -4,7 +4,8 @@
   "installCommand": "cd packages/temper-cloud && bun install",
   "fluid": true,
   "rewrites": [
-    { "source": "/api/auth/:path*", "destination": "/api/auth/:path*" },
+    { "source": "/api/auth-login", "destination": "/api/auth-login" },
+    { "source": "/api/auth-callback", "destination": "/api/auth-callback" },
     { "source": "/api/upload", "destination": "/api/upload" },
     { "source": "/(.*)", "destination": "/api/axum" }
   ]

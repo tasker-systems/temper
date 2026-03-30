@@ -2,7 +2,7 @@
  * CLI auth login — initiates Neon Auth social sign-in.
  *
  * Redirects the browser to the Google OAuth flow via Neon Auth.
- * After sign-in, Neon Auth redirects to /api/auth/callback.
+ * After sign-in, Neon Auth redirects to /api/auth-callback.
  *
  * Query params:
  *   - cli_port: (optional) passed through to callback for localhost redirect
@@ -32,7 +32,7 @@ export default async function handler(req: Request): Promise<Response> {
 	const provider = url.searchParams.get("provider") || "google";
 
 	// Build callback URL that preserves cli_port
-	const callbackBase = "https://temperkb.io/api/auth/callback";
+	const callbackBase = "https://temperkb.io/api/auth-callback";
 	const callbackURL = cliPort
 		? `${callbackBase}?cli_port=${cliPort}`
 		: callbackBase;

@@ -73,7 +73,7 @@ a { color: #6366f1; }
 <div id="error" style="display:none">
   <h2 class="error">Authentication Error</h2>
   <pre id="error-detail"></pre>
-  <p><a href="/api/auth/login${cliPort ? `?cli_port=${escapeHtml(cliPort)}` : ""}">Try signing in again</a></p>
+  <p><a href="/api/auth-login${cliPort ? `?cli_port=${escapeHtml(cliPort)}` : ""}">Try signing in again</a></p>
 </div>
 <script>
 (async () => {
