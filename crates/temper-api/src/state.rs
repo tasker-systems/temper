@@ -13,7 +13,7 @@ struct CachedKeys {
     fetched_at: Instant,
 }
 
-/// Fetches EdDSA/Ed25519 public keys from a JWKS endpoint, caches them,
+/// Fetches RSA and EdDSA/Ed25519 public keys from a JWKS endpoint, caches them,
 /// and provides them for JWT verification.
 pub struct JwksKeyStore {
     url: String,
@@ -31,13 +31,13 @@ impl std::fmt::Debug for JwksKeyStore {
     }
 }
 
-/// Check if a JWK is an OKP key with Ed25519 curve (the only key type
-/// we accept for EdDSA verification).
-fn is_ed25519_okp(params: &AlgorithmParameters) -> bool {
-    matches!(
-        params,
-        AlgorithmParameters::OctetKeyPair(p) if p.curve == EllipticCurve::Ed25519
-    )
+/// Check if a JWK is a supported key type: RSA (for RS256) or OKP/Ed25519 (for EdDSA).
+fn is_supported_key(params: &AlgorithmParameters) -> bool {
+    match params {
+        AlgorithmParameters::RSA(_) => true,
+        AlgorithmParameters::OctetKeyPair(p) if p.curve == EllipticCurve::Ed25519 => true,
+        _ => false,
+    }
 }
 
 impl JwksKeyStore {
@@ -94,10 +94,11 @@ impl JwksKeyStore {
             .ok_or_else(|| "JWKS cache empty after refresh".to_string())
     }
 
-    /// Build a `Validation` struct configured for EdDSA with the given issuer
+    /// Build a `Validation` struct configured for RS256 and EdDSA with the given issuer
     /// and optional audience.
     pub fn validation(&self, issuer: &str, audience: Option<&str>) -> Validation {
-        let mut v = Validation::new(Algorithm::EdDSA);
+        let mut v = Validation::new(Algorithm::RS256);
+        v.algorithms = vec![Algorithm::RS256, Algorithm::EdDSA];
         v.set_issuer(&[issuer]);
         if let Some(aud) = audience {
             v.set_audience(&[aud]);
@@ -127,14 +128,15 @@ impl JwksKeyStore {
             .await
             .map_err(|e| format!("JWKS parse error: {e}"))?;
 
-        // Find the first Ed25519 OKP key that jsonwebtoken can turn into a DecodingKey.
-        // Explicitly filter to kty=OKP crv=Ed25519 before attempting to build a key.
+        // Find the first supported key (RSA or Ed25519 OKP) that jsonwebtoken can turn into a DecodingKey.
         let decoding_key = jwks
             .keys
             .iter()
-            .filter(|jwk| is_ed25519_okp(&jwk.algorithm))
+            .filter(|jwk| is_supported_key(&jwk.algorithm))
             .find_map(|jwk| DecodingKey::from_jwk(jwk).ok())
-            .ok_or_else(|| "No Ed25519 (OKP) key found in JWKS response".to_string())?;
+            .ok_or_else(|| {
+                "No supported key (RSA or Ed25519) found in JWKS response".to_string()
+            })?;
 
         let cached = CachedKeys {
             key: decoding_key,
@@ -218,7 +220,8 @@ mod tests {
         let store = JwksKeyStore::new("https://example.com/.well-known/jwks.json".to_string());
         let v = store.validation("https://auth.example.com", Some("temper-api"));
         assert!(v.validate_aud, "audience validation should be enabled");
-        assert_eq!(v.algorithms, vec![Algorithm::EdDSA]);
+        assert!(v.algorithms.contains(&Algorithm::RS256));
+        assert!(v.algorithms.contains(&Algorithm::EdDSA));
     }
 
     #[test]
@@ -273,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn is_ed25519_okp_accepts_valid_key() {
+    fn is_supported_key_accepts_ed25519() {
         use jsonwebtoken::jwk::{
             AlgorithmParameters, EllipticCurve, OctetKeyPairParameters, OctetKeyPairType,
         };
@@ -282,22 +285,33 @@ mod tests {
             curve: EllipticCurve::Ed25519,
             x: "test".to_string(),
         });
-        assert!(is_ed25519_okp(&params));
+        assert!(is_supported_key(&params));
     }
 
     #[test]
-    fn is_ed25519_okp_rejects_rsa() {
+    fn is_supported_key_accepts_rsa() {
         use jsonwebtoken::jwk::{AlgorithmParameters, RSAKeyParameters, RSAKeyType};
         let params = AlgorithmParameters::RSA(RSAKeyParameters {
             key_type: RSAKeyType::RSA,
             n: "test".to_string(),
             e: "test".to_string(),
         });
-        assert!(!is_ed25519_okp(&params));
+        assert!(is_supported_key(&params));
     }
 
     #[test]
-    fn is_ed25519_okp_rejects_wrong_curve() {
+    fn is_rsa_key_accepted() {
+        use jsonwebtoken::jwk::{AlgorithmParameters, RSAKeyParameters, RSAKeyType};
+        let params = AlgorithmParameters::RSA(RSAKeyParameters {
+            key_type: RSAKeyType::RSA,
+            n: "test".to_string(),
+            e: "test".to_string(),
+        });
+        assert!(is_supported_key(&params));
+    }
+
+    #[test]
+    fn is_supported_key_rejects_wrong_curve() {
         use jsonwebtoken::jwk::{
             AlgorithmParameters, EllipticCurve, OctetKeyPairParameters, OctetKeyPairType,
         };
@@ -306,6 +320,6 @@ mod tests {
             curve: EllipticCurve::P256,
             x: "test".to_string(),
         });
-        assert!(!is_ed25519_okp(&params));
+        assert!(!is_supported_key(&params));
     }
 }

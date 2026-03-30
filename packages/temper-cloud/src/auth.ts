@@ -11,7 +11,7 @@ export async function verifyToken(
   key: jose.CryptoKey | jose.KeyObject | jose.JWK | Uint8Array | jose.JWTVerifyGetKey,
   issuer: string,
 ): Promise<AuthClaims> {
-  const opts: jose.JWTVerifyOptions = { issuer, algorithms: ["EdDSA"] };
+  const opts: jose.JWTVerifyOptions = { issuer, algorithms: ["RS256", "EdDSA"] };
   // jose v6 has separate overloads for key vs getKey — narrow to match
   const { payload } =
     typeof key === "function"
