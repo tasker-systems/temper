@@ -3,10 +3,5 @@
   "framework": null,
   "installCommand": "cd packages/temper-cloud && bun install",
   "fluid": true,
-  "routes": [
-    { "src": "/api/auth-login", "dest": "/api/auth-login" },
-    { "src": "/api/auth-callback", "dest": "/api/auth-callback" },
-    { "src": "/api/upload", "dest": "/api/upload" },
-    { "src": "/(.*)", "dest": "/api/axum" }
-  ]
+  "rewrites": [{ "source": "/(.*)", "destination": "/api/axum" }]
 }
