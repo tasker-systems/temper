@@ -12,7 +12,7 @@ use std::path::PathBuf;
 // ---------------------------------------------------------------------------
 
 /// Top-level cloud configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CloudConfig {
     #[serde(default)]
     pub auth: AuthConfig,
@@ -20,23 +20,14 @@ pub struct CloudConfig {
     pub cloud: CloudSection,
 }
 
-impl Default for CloudConfig {
-    fn default() -> Self {
-        Self {
-            auth: AuthConfig::default(),
-            cloud: CloudSection::default(),
-        }
-    }
-}
-
 /// Authentication configuration — which provider is active and how to reach it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthConfig {
-    /// Active provider name (e.g., `"neon_auth"`).
+    /// Active provider name (e.g., `"auth0"`).
     #[serde(default = "default_provider")]
     pub provider: String,
     /// Provider-specific OAuth configurations, keyed by provider name.
-    #[serde(default)]
+    #[serde(default = "default_providers")]
     pub providers: HashMap<String, ProviderConfig>,
 }
 
@@ -44,7 +35,7 @@ impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             provider: default_provider(),
-            providers: HashMap::new(),
+            providers: default_providers(),
         }
     }
 }
@@ -55,6 +46,8 @@ pub struct ProviderConfig {
     pub authorize_url: String,
     pub token_url: String,
     pub client_id: String,
+    #[serde(default)]
+    pub audience: Option<String>,
     #[serde(default)]
     pub scopes: Vec<String>,
 }
@@ -76,11 +69,31 @@ impl Default for CloudSection {
 }
 
 fn default_provider() -> String {
-    "neon_auth".into()
+    "auth0".into()
 }
 
 fn default_api_url() -> String {
     "https://temperkb.io".into()
+}
+
+fn default_providers() -> HashMap<String, ProviderConfig> {
+    let mut map = HashMap::new();
+    map.insert(
+        "auth0".to_string(),
+        ProviderConfig {
+            authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
+            token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
+            client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
+            audience: Some("https://temperkb.io/api".to_string()),
+            scopes: vec![
+                "openid".to_string(),
+                "profile".to_string(),
+                "email".to_string(),
+                "offline_access".to_string(),
+            ],
+        },
+    );
+    map
 }
 
 // ---------------------------------------------------------------------------
@@ -145,6 +158,7 @@ pub fn oauth_config(config: &CloudConfig) -> crate::error::Result<crate::login::
         authorize_url: provider.authorize_url.clone(),
         token_url: provider.token_url.clone(),
         client_id: provider.client_id.clone(),
+        audience: provider.audience.clone(),
         scopes: provider.scopes.clone(),
     })
 }
@@ -159,26 +173,12 @@ pub fn build_client() -> crate::error::Result<crate::TemperClient> {
     let url = api_url(&config);
     let device_id = load_device_id();
     let mut client = crate::TemperClient::new(&url, device_id);
-    let config_path = config_path();
-    eprintln!("[debug] config path: {}", config_path.display());
-    eprintln!("[debug] config exists: {}", config_path.exists());
-    eprintln!("[debug] auth.provider = {:?}", config.auth.provider);
-    eprintln!(
-        "[debug] auth.providers count = {}",
-        config.auth.providers.len()
-    );
-    for (k, v) in &config.auth.providers {
-        eprintln!(
-            "[debug]   provider '{k}': authorize_url={}",
-            v.authorize_url
-        );
-    }
     match oauth_config(&config) {
         Ok(oauth) => {
             client = client.with_oauth(oauth);
         }
         Err(e) => {
-            eprintln!("[debug] oauth_config error: {e}");
+            tracing::debug!("OAuth config not available: {e}");
         }
     }
     Ok(client)
@@ -218,9 +218,17 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.toml");
         let config = load_cloud_config_from(&path).unwrap();
-        assert_eq!(config.auth.provider, "neon_auth");
+        assert_eq!(config.auth.provider, "auth0");
         assert_eq!(config.cloud.api_url, "https://temperkb.io");
-        assert!(config.auth.providers.is_empty());
+        let provider = config.auth.providers.get("auth0").unwrap();
+        assert_eq!(
+            provider.authorize_url,
+            "https://temperkb.us.auth0.com/authorize"
+        );
+        assert_eq!(
+            provider.token_url,
+            "https://temperkb.us.auth0.com/oauth/token"
+        );
     }
 
     #[test]
@@ -304,9 +312,62 @@ scopes        = ["openid"]
 
     #[test]
     fn oauth_config_missing_provider_returns_error() {
-        let config = CloudConfig::default(); // no providers defined
+        let config = CloudConfig {
+            auth: AuthConfig {
+                provider: "nonexistent".to_string(),
+                providers: HashMap::new(),
+            },
+            cloud: CloudSection::default(),
+        };
         let err = oauth_config(&config).unwrap_err();
-        assert!(err.to_string().contains("neon_auth"));
+        assert!(err.to_string().contains("nonexistent"));
+    }
+
+    // --- default provider tests ---
+
+    #[test]
+    fn default_provider_is_auth0_with_config() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = load_cloud_config_from(&path).unwrap();
+        assert_eq!(config.auth.provider, "auth0");
+        let provider = config.auth.providers.get("auth0").unwrap();
+        assert_eq!(
+            provider.authorize_url,
+            "https://temperkb.us.auth0.com/authorize"
+        );
+        assert_eq!(
+            provider.token_url,
+            "https://temperkb.us.auth0.com/oauth/token"
+        );
+        assert_eq!(provider.client_id, "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF");
+        assert_eq!(
+            provider.audience,
+            Some("https://temperkb.io/api".to_string())
+        );
+        assert!(provider.scopes.contains(&"offline_access".to_string()));
+    }
+
+    #[test]
+    fn config_file_overrides_defaults() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("config.toml");
+        let toml = r#"
+[auth]
+provider = "keycloak"
+
+[auth.providers.keycloak]
+authorize_url = "https://sso.example.com/auth"
+token_url     = "https://sso.example.com/token"
+client_id     = "custom-client"
+audience      = "custom-api"
+scopes        = ["openid", "profile"]
+"#;
+        fs::write(&path, toml).unwrap();
+        let config = load_cloud_config_from(&path).unwrap();
+        assert_eq!(config.auth.provider, "keycloak");
+        let p = config.auth.providers.get("keycloak").unwrap();
+        assert_eq!(p.audience, Some("custom-api".to_string()));
     }
 
     // --- build_client smoke test ---

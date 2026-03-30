@@ -16,16 +16,18 @@ use tracing::{debug, info, warn};
 use crate::auth::{self, StoredAuth};
 use crate::error::{ClientError, Result};
 
-/// Configuration for the Neon Auth social sign-in flow.
+/// Configuration for the OAuth sign-in flow.
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
-    /// Neon Auth base URL
+    /// Authorization endpoint URL
     pub authorize_url: String,
-    /// Same as authorize_url for Better Auth
+    /// Token endpoint URL
     pub token_url: String,
-    /// Not used for Better Auth, kept for interface compat
+    /// OAuth client ID
     pub client_id: String,
-    /// First element is the OAuth provider name (e.g., "google")
+    /// Optional audience parameter (required by Auth0)
+    pub audience: Option<String>,
+    /// OAuth scopes to request
     pub scopes: Vec<String>,
 }
 
