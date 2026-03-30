@@ -43,7 +43,10 @@ pub async fn login(State(_): State<AppState>, Query(params): Query<LoginParams>)
         None => callback_base,
     };
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .unwrap_or_default();
     let res = match client
         .post(format!("{neon_auth_url}/sign-in/social"))
         .header("Content-Type", "application/json")
