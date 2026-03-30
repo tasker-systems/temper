@@ -6,6 +6,23 @@ description = "Auth-aware HTTP client for the temper cloud API"
 
 [dependencies]
 temper-core = { path = "../temper-core" }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["rt", "macros", "sync", "net"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+thiserror = "2"
+tracing = "0.1"
+url = "2"
+open = "5"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+dirs = "5"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
 
-[package.metadata.cargo-machete]
-ignored = ["temper-core"]
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
