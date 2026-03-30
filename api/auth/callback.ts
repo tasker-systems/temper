@@ -1,15 +1,15 @@
 /**
- * CLI auth callback — exchanges Neon Auth session for a JWT.
+ * CLI auth callback — renders a page that fetches a JWT from Neon Auth.
  *
  * Flow:
  *   1. CLI opens browser → Neon Auth Google sign-in
- *   2. Neon Auth redirects here with session cookies set
- *   3. We call /auth/token on Neon Auth (same-origin cookies work via server-side fetch)
- *   4. Return page showing JWT + optional redirect to CLI localhost callback
+ *   2. Neon Auth redirects here — session cookies are set on the Neon Auth domain
+ *   3. We render a client-side page that fetches /auth/token with credentials:include
+ *      (the browser has the session cookies, the server does not)
+ *   4. Page shows the JWT for `temper auth token` or redirects to CLI localhost
  *
  * Query params:
- *   - neon_auth_session_verifier: session verifier from Neon Auth callback
- *   - cli_port: (optional) localhost port for CLI callback — if set, redirects with ?token=<jwt>
+ *   - cli_port: (optional) localhost port — if set, auto-redirects with ?token=<jwt>
  */
 
 export const config = { runtime: "nodejs" };
@@ -32,111 +32,112 @@ export default async function handler(req: Request): Promise<Response> {
 
 	const url = new URL(req.url);
 	const cliPort = url.searchParams.get("cli_port");
+	const authBase = neonAuthBase();
 
-	// Forward cookies from the incoming request to Neon Auth /token endpoint
-	const cookieHeader = req.headers.get("cookie") || "";
-
-	try {
-		const tokenRes = await fetch(`${neonAuthBase()}/token`, {
-			headers: {
-				Cookie: cookieHeader,
-				Accept: "application/json",
-			},
-		});
-
-		if (!tokenRes.ok) {
-			const body = await tokenRes.text();
-			return respondWithError(
-				`Authentication incomplete (${tokenRes.status}). ${body || "No session found."}`,
-				`Try signing in again at: ${signInUrl(cliPort)}`,
-				cliPort,
-			);
-		}
-
-		const data = await tokenRes.json();
-		const jwt = data.token || data.access_token || data.jwt;
-
-		if (!jwt) {
-			return respondWithError(
-				"No JWT in token response",
-				`Response: ${JSON.stringify(data)}`,
-				cliPort,
-			);
-		}
-
-		// If CLI port is set, redirect to localhost with the token
-		if (cliPort) {
-			return new Response(null, {
-				status: 302,
-				headers: {
-					Location: `http://localhost:${cliPort}/callback?token=${encodeURIComponent(jwt)}`,
-				},
-			});
-		}
-
-		// Otherwise show the JWT for manual copy
-		return new Response(successPage(jwt), {
-			status: 200,
-			headers: { "Content-Type": "text/html" },
-		});
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return respondWithError(
-			`Token exchange failed: ${message}`,
-			"Check NEON_AUTH_URL configuration",
-			cliPort,
-		);
-	}
-}
-
-function signInUrl(cliPort: string | null): string {
-	const callback = cliPort
-		? `https://temperkb.io/api/auth/callback?cli_port=${cliPort}`
-		: "https://temperkb.io/api/auth/callback";
-	return `/api/auth/login?callbackURL=${encodeURIComponent(callback)}`;
-}
-
-function respondWithError(
-	title: string,
-	detail: string,
-	cliPort: string | null,
-): Response {
-	const retryUrl = signInUrl(cliPort);
-	const html = `<!DOCTYPE html>
-<html><head><title>temper auth</title>
-<style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 20px}
-pre{background:#1a1a2e;color:#e0e0e0;padding:16px;border-radius:8px;overflow-x:auto;white-space:pre-wrap}
-a{color:#6366f1}</style></head>
-<body>
-<h2>Authentication Error</h2>
-<pre>${escapeHtml(title)}\n\n${escapeHtml(detail)}</pre>
-<p><a href="${retryUrl}">Try signing in again</a></p>
-</body></html>`;
-
-	return new Response(html, {
-		status: 400,
+	// Render a client-side page that fetches the JWT using browser cookies
+	return new Response(tokenFetchPage(authBase, cliPort), {
+		status: 200,
 		headers: { "Content-Type": "text/html" },
 	});
 }
 
-function successPage(jwt: string): string {
+function tokenFetchPage(authBase: string, cliPort: string | null): string {
+	const cliRedirect = cliPort
+		? `"http://localhost:${escapeHtml(cliPort)}/callback?token=" + encodeURIComponent(jwt)`
+		: "null";
+
 	return `<!DOCTYPE html>
 <html><head><title>temper auth</title>
-<style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 20px}
-pre{background:#1a1a2e;color:#e0e0e0;padding:16px;border-radius:8px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
-code{background:#2a2a3e;padding:2px 6px;border-radius:4px}
-.success{color:#22c55e}
-button{background:#6366f1;color:white;border:none;padding:8px 16px;border-radius:6px;cursor:pointer;font-size:14px}
-button:hover{background:#4f46e5}</style></head>
+<style>
+body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 0 20px; color: #e0e0e0; background: #0f0f1a; }
+pre { background: #1a1a2e; color: #e0e0e0; padding: 16px; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+.success { color: #22c55e; }
+.error { color: #ef4444; }
+.loading { color: #a0a0b0; }
+button { background: #6366f1; color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+button:hover { background: #4f46e5; }
+a { color: #6366f1; }
+</style></head>
 <body>
-<h2 class="success">Authenticated!</h2>
-<p>Run this in your terminal:</p>
-<pre id="cmd">temper auth token ${escapeHtml(jwt)}</pre>
-<button onclick="navigator.clipboard.writeText(document.getElementById('cmd').textContent)">Copy command</button>
-<p style="margin-top:24px;color:#888">You can close this tab after copying.</p>
+<div id="loading">
+  <h2 class="loading">Completing authentication...</h2>
+  <p>Fetching token from Neon Auth...</p>
+</div>
+<div id="success" style="display:none">
+  <h2 class="success">Authenticated!</h2>
+  <p>Run this in your terminal:</p>
+  <pre id="cmd"></pre>
+  <button onclick="navigator.clipboard.writeText(document.getElementById('cmd').textContent)">Copy command</button>
+  <p style="margin-top:24px;color:#888">You can close this tab after copying.</p>
+</div>
+<div id="error" style="display:none">
+  <h2 class="error">Authentication Error</h2>
+  <pre id="error-detail"></pre>
+  <p><a href="/api/auth/login${cliPort ? `?cli_port=${escapeHtml(cliPort)}` : ""}">Try signing in again</a></p>
+</div>
+<script>
+(async () => {
+  try {
+    const res = await fetch("${escapeHtml(authBase)}/token", {
+      credentials: "include",
+      headers: { "Accept": "application/json" }
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      showError("Token request failed (" + res.status + ")\\n\\n" + (body || "No session found.") +
+        "\\n\\nThis usually means the session cookies were not set. " +
+        "Make sure third-party cookies are enabled for the Neon Auth domain.");
+      return;
+    }
+
+    const text = await res.text();
+    let jwt = null;
+
+    try {
+      const data = JSON.parse(text);
+      jwt = data.token || data.access_token || data.jwt;
+    } catch {
+      if (text.startsWith("eyJ")) jwt = text.trim();
+    }
+
+    if (!jwt) {
+      showError("No JWT found in response.\\n\\nResponse: " + text);
+      return;
+    }
+
+    // Check for CLI auto-redirect
+    const cliRedirect = ${cliRedirect};
+    if (cliRedirect) {
+      window.location.href = cliRedirect;
+      return;
+    }
+
+    // Show for manual copy
+    document.getElementById("loading").style.display = "none";
+    document.getElementById("success").style.display = "block";
+    document.getElementById("cmd").textContent = "temper auth token " + jwt;
+
+  } catch (err) {
+    showError("Fetch error: " + err.message +
+      "\\n\\nThis is likely a CORS issue. The Neon Auth service may need " +
+      "to allow https://temperkb.io as an origin.");
+  }
+})();
+
+function showError(msg) {
+  document.getElementById("loading").style.display = "none";
+  document.getElementById("error").style.display = "block";
+  document.getElementById("error-detail").textContent = msg;
+}
+</script>
 </body></html>`;
 }
 
 function escapeHtml(s: string): string {
-	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+	return s
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;");
 }
