@@ -53,9 +53,29 @@ pub fn create_app(state: AppState) -> Router {
             .merge(SwaggerUi::new("/api-docs/ui").url("/api-docs/openapi.json", ApiDoc::openapi()));
     }
 
-    app.layer(TraceLayer::new_for_http())
+    app.fallback(fallback_handler)
+        .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)
+}
+
+async fn fallback_handler(req: axum::extract::Request) -> axum::response::Response {
+    let path = req.uri().path().to_string();
+    let method = req.method().to_string();
+    tracing::warn!(path = %path, method = %method, "unmatched route");
+    axum::response::Response::builder()
+        .status(404)
+        .header("content-type", "application/json")
+        .body(axum::body::Body::from(
+            serde_json::json!({
+                "error": {
+                    "code": "NOT_FOUND",
+                    "message": format!("No route matches {method} {path}")
+                }
+            })
+            .to_string(),
+        ))
+        .expect("fallback response")
 }
 
 fn cors_layer(state: &AppState) -> CorsLayer {
