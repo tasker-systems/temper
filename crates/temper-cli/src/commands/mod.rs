@@ -1,14 +1,11 @@
 pub mod check;
-pub mod context;
 pub mod events;
-pub mod index;
 pub mod init;
 pub mod milestone;
 pub mod normalize;
 pub mod note;
 pub mod project;
 pub mod research;
-pub mod search;
 pub mod session;
 pub mod skill;
 pub mod status;

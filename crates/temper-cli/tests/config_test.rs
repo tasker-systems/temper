@@ -23,14 +23,6 @@ fn test_parse_full_config() {
 sessions = "journal"
 state_dir = ".data"
 
-[index]
-include = ["docs"]
-exclude = [".git"]
-sources = ["/tmp/external"]
-
-[embedder]
-model = "all-MiniLM-L6-v2"
-
 [projects.myapp]
 repo = "org/myapp"
 path = "/tmp/myapp"
@@ -43,8 +35,6 @@ framework = "superpowers"
         temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
     assert_eq!(config.vault.sessions, "journal");
     assert_eq!(config.vault.state_dir, ".data");
-    assert_eq!(config.index.include, vec!["docs"]);
-    assert_eq!(config.index.exclude, vec![".git"]);
     assert!(config.projects.contains_key("myapp"));
 }
 

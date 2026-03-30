@@ -51,40 +51,6 @@ impl Default for VaultConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
-pub struct IndexConfig {
-    #[serde(default)]
-    pub include: Vec<String>,
-    #[serde(default)]
-    pub exclude: Vec<String>,
-    #[serde(default)]
-    pub sources: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct EmbedderConfig {
-    #[serde(default = "default_model")]
-    pub model: String,
-    #[serde(default = "default_cache_dir")]
-    pub cache_dir: String,
-}
-
-fn default_model() -> String {
-    "all-MiniLM-L6-v2".to_string()
-}
-fn default_cache_dir() -> String {
-    "~/.cache/temper/models".to_string()
-}
-
-impl Default for EmbedderConfig {
-    fn default() -> Self {
-        Self {
-            model: default_model(),
-            cache_dir: default_cache_dir(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProjectConfig {
     pub repo: String,
@@ -120,10 +86,6 @@ impl Default for SkillConfig {
 pub struct TemperConfig {
     #[serde(default)]
     pub vault: VaultConfig,
-    #[serde(default)]
-    pub index: IndexConfig,
-    #[serde(default)]
-    pub embedder: EmbedderConfig,
     #[serde(default)]
     pub projects: HashMap<String, ProjectConfig>,
     #[serde(default)]
@@ -190,11 +152,6 @@ pub struct Config {
     pub milestones_dir: PathBuf,
     pub templates_dir: PathBuf,
     pub state_dir: PathBuf,
-    pub index_include: Vec<String>,
-    pub index_exclude: Vec<String>,
-    pub index_sources: Vec<PathBuf>,
-    pub model_name: String,
-    pub model_cache_dir: PathBuf,
     pub projects: HashMap<String, ResolvedProject>,
     pub skill_output: PathBuf,
     pub skill_framework: String,
@@ -293,11 +250,6 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
         templates_dir: join(&raw.vault.templates),
         state_dir: join(&raw.vault.state_dir),
         vault_root,
-        index_include: raw.index.include,
-        index_exclude: raw.index.exclude,
-        index_sources: raw.index.sources.iter().map(|s| expand_tilde(s)).collect(),
-        model_name: raw.embedder.model,
-        model_cache_dir: expand_tilde(&raw.embedder.cache_dir),
         projects,
         skill_output: expand_tilde(&raw.skill.output),
         skill_framework: raw.skill.framework,

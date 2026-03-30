@@ -1,8 +1,6 @@
 use crate::config::Config;
 use crate::error::Result;
-use crate::hnsw::SearchIndex;
 use crate::output;
-use crate::registry::Registry;
 
 pub fn run(config: &Config, verbose: bool) -> Result<()> {
     output::header("Temper Vault");
@@ -20,36 +18,6 @@ pub fn run(config: &Config, verbose: bool) -> Result<()> {
     output::label("Tickets", tickets);
     output::label("Milestones", milestones);
     output::label("Templates", templates);
-    output::blank();
-
-    // Index stats
-    output::header("Index");
-    match SearchIndex::load(&config.state_dir) {
-        Ok(idx) => {
-            let reg = Registry::load(&config.state_dir).ok();
-            let last = reg.and_then(|r| {
-                if r.last_indexed.is_empty() {
-                    None
-                } else {
-                    Some(r.last_indexed)
-                }
-            });
-            let chunks_str = if let Some(ref last_str) = last {
-                format!(
-                    "{} from {} files (last: {})",
-                    idx.entry_count(),
-                    idx.file_count(),
-                    last_str
-                )
-            } else {
-                format!("{} from {} files", idx.entry_count(), idx.file_count())
-            };
-            output::label("Chunks", chunks_str);
-        }
-        Err(_) => {
-            output::hint("  not built — run 'temper index embed'");
-        }
-    }
     output::blank();
 
     // Projects

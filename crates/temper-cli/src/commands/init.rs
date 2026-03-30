@@ -11,15 +11,6 @@ const TEMPER_TOML: &str = r#"[vault]
 # templates = "templates"
 # state_dir = ".temper"
 
-[index]
-# include = []
-# exclude = [".git"]
-# sources = []
-
-[embedder]
-# model = "all-MiniLM-L6-v2"
-# cache_dir = "~/.cache/temper/models"
-
 [skill]
 # output = "~/.claude/commands/temper.md"
 # framework = "superpowers"

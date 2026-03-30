@@ -44,45 +44,6 @@ pub enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// Build semantic search index
-    Index {
-        /// Force reindex all files
-        #[arg(long)]
-        force: bool,
-        /// Limit scope to specific paths (comma-separated or glob)
-        #[arg(long)]
-        paths: Option<String>,
-        /// Override configured sources for this run
-        #[arg(long)]
-        sources: Option<String>,
-    },
-    /// Search the vault
-    Search {
-        query: String,
-        #[arg(long, default_value = "text")]
-        format: String,
-        /// Filter by note type
-        #[arg(long, name = "type")]
-        note_type: Option<String>,
-        /// Filter by project
-        #[arg(long)]
-        project: Option<String>,
-        /// Max results
-        #[arg(long, default_value = "10")]
-        limit: usize,
-    },
-    /// Show topic with related context
-    Context {
-        topic: String,
-        /// How many related hops
-        #[arg(long, default_value = "1")]
-        depth: usize,
-        /// Max related results per hop
-        #[arg(long, default_value = "5")]
-        limit: usize,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
     /// Create a new note
     Note {
         #[command(subcommand)]
@@ -134,8 +95,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: ResearchAction,
     },
-    /// Launch interactive TUI
-    Tui,
 }
 
 #[derive(Subcommand)]
