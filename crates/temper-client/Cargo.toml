@@ -21,6 +21,7 @@ sha2 = "0.10"
 base64 = "0.22"
 dirs = "5"
 hex = "0.4"
+toml = "0.8"
 hyper = { version = "1", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"

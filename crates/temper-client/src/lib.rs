@@ -5,6 +5,7 @@
 //! for every R5 API endpoint.
 
 pub mod auth;
+pub mod config;
 pub mod error;
 pub mod events;
 pub mod http;
