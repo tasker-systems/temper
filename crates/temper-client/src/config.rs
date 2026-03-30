@@ -179,7 +179,11 @@ fn load_device_id() -> Option<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Mutex;
     use tempfile::TempDir;
+
+    /// Serialize tests that mutate `TEMPER_API_URL` to prevent races.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     // --- load_cloud_config ---
 
@@ -231,6 +235,7 @@ api_url = "https://api.example.com"
 
     #[test]
     fn api_url_uses_config_by_default() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let config = CloudConfig::default();
         // Remove any env var that may be set in the test environment.
         std::env::remove_var("TEMPER_API_URL");
@@ -240,6 +245,7 @@ api_url = "https://api.example.com"
 
     #[test]
     fn api_url_env_var_takes_priority() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let config = CloudConfig::default();
         std::env::set_var("TEMPER_API_URL", "https://localhost:3000");
         let url = api_url(&config);
