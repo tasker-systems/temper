@@ -1,214 +1,246 @@
-//! OAuth2 PKCE login flow with local callback server.
+//! Neon Auth (Better Auth) login flow with local callback server.
 //!
-//! Opens the browser to the provider's authorize URL, spins up a one-shot
-//! TCP listener on localhost to capture the redirect, exchanges the auth code
-//! for tokens, and persists the result to `~/.config/temper/auth.json`.
+//! 1. POST to Neon Auth `/sign-in/social` to get a Google OAuth redirect URL
+//! 2. Open the browser to that URL
+//! 3. Spin up a localhost TCP server for the callback
+//! 4. Neon Auth redirects back to localhost after Google sign-in
+//! 5. Serve an HTML page that fetches `/auth/token` with `credentials: include`
+//!    (cookies are first-party because localhost is the redirect target)
+//! 6. The page POSTs the JWT back to the localhost server
+//! 7. Persist the token to `~/.config/temper/auth.json`
 
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use chrono::{Duration, Utc};
-use rand::Rng;
-use sha2::{Digest, Sha256};
+use chrono::{DateTime, Utc};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
-use tracing::{debug, info};
-use url::Url;
+use tracing::{debug, info, warn};
 
 use crate::auth::{self, StoredAuth};
 use crate::error::{ClientError, Result};
 
-/// Configuration for the OAuth2 PKCE flow.
+/// Configuration for the Neon Auth social sign-in flow.
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
+    /// Neon Auth base URL (e.g., `https://ep-xxx.neonauth.region.aws.neon.tech/neondb/auth`)
     pub authorize_url: String,
+    /// Token URL — same as authorize_url for Better Auth (not used separately)
     pub token_url: String,
+    /// Not used for Better Auth, kept for interface compat
     pub client_id: String,
+    /// OAuth provider (e.g., "google")
     pub scopes: Vec<String>,
 }
 
-/// OAuth2 token response — the fields we extract from the provider.
+impl OAuthConfig {
+    /// The Neon Auth base URL (stored in authorize_url for config compat).
+    fn neon_auth_base(&self) -> &str {
+        &self.authorize_url
+    }
+
+    /// The OAuth provider name. Defaults to "google" if scopes is empty.
+    fn provider(&self) -> &str {
+        self.scopes.first().map(|s| s.as_str()).unwrap_or("google")
+    }
+}
+
+/// Response from Better Auth `/sign-in/social` endpoint.
 #[derive(Debug, serde::Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    refresh_token: Option<String>,
-    expires_in: Option<u64>,
-}
-
-// ---------------------------------------------------------------------------
-// PKCE helpers
-// ---------------------------------------------------------------------------
-
-/// Charset used for PKCE code_verifier (RFC 7636 Appendix B).
-const PKCE_CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
-
-/// Generate a random PKCE code_verifier of the given length.
-///
-/// Length must be 43..=128 per RFC 7636. Panics if out of range.
-pub(crate) fn generate_code_verifier(len: usize) -> String {
-    assert!(
-        (43..=128).contains(&len),
-        "code_verifier length must be 43..=128"
-    );
-    let mut rng = rand::thread_rng();
-    (0..len)
-        .map(|_| {
-            let idx = rng.gen_range(0..PKCE_CHARSET.len());
-            PKCE_CHARSET[idx] as char
-        })
-        .collect()
-}
-
-/// Compute the S256 code_challenge from a code_verifier.
-///
-/// `code_challenge = BASE64URL(SHA256(code_verifier))` with no padding.
-pub(crate) fn compute_code_challenge(verifier: &str) -> String {
-    let digest = Sha256::digest(verifier.as_bytes());
-    URL_SAFE_NO_PAD.encode(digest)
-}
-
-/// Generate a random hex state parameter (32 hex chars = 16 random bytes).
-pub(crate) fn generate_state() -> String {
-    let mut bytes = [0u8; 16];
-    rand::thread_rng().fill(&mut bytes);
-    hex::encode(bytes)
+struct SignInResponse {
+    url: Option<String>,
+    redirect: Option<bool>,
 }
 
 // ---------------------------------------------------------------------------
 // Login flow
 // ---------------------------------------------------------------------------
 
-/// Run the full OAuth2 PKCE login flow:
+/// Run the Neon Auth login flow:
 ///
-/// 1. Generate PKCE verifier + challenge and random state
-/// 2. Bind a localhost callback server
-/// 3. Open the browser to the authorize URL
-/// 4. Wait for the redirect callback with the auth code
-/// 5. Exchange the code for tokens
-/// 6. Persist and return [`StoredAuth`]
+/// 1. Bind a localhost callback server on a random port
+/// 2. POST to Neon Auth `/sign-in/social` to get the Google OAuth URL
+/// 3. Open the browser to that URL
+/// 4. Wait for the redirect callback from Neon Auth
+/// 5. Serve an HTML page that fetches the JWT using browser cookies
+/// 6. Wait for the page to POST the JWT back
+/// 7. Persist and return [`StoredAuth`]
 pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
-    let code_verifier = generate_code_verifier(128);
-    let code_challenge = compute_code_challenge(&code_verifier);
-    let state = generate_state();
+    let neon_auth = config.neon_auth_base();
+    let provider = config.provider();
 
     // Bind to a random port on localhost.
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
-    let redirect_uri = format!("http://127.0.0.1:{port}/callback");
+    // Use temperkb.io as the callback so session cookies are forwarded
+    // server-side. The Vercel endpoint fetches the JWT and redirects
+    // back to localhost with ?jwt=<token>.
+    let callback_url = format!("https://temperkb.io/api/auth-callback?cli_port={port}");
 
-    debug!(port, "PKCE callback server listening");
+    debug!(port, "Callback server listening");
 
-    // Build the authorize URL.
-    let mut authorize_url = Url::parse(&config.authorize_url)
-        .map_err(|e| ClientError::Other(format!("invalid authorize_url: {e}")))?;
+    // POST to Neon Auth to initiate social sign-in.
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .map_err(|e| ClientError::Other(format!("http client: {e}")))?;
 
-    authorize_url
-        .query_pairs_mut()
-        .append_pair("response_type", "code")
-        .append_pair("client_id", &config.client_id)
-        .append_pair("redirect_uri", &redirect_uri)
-        .append_pair("scope", &config.scopes.join(" "))
-        .append_pair("code_challenge", &code_challenge)
-        .append_pair("code_challenge_method", "S256")
-        .append_pair("state", &state);
-
-    info!("Opening browser for authentication…");
-    open::that(authorize_url.as_str())
-        .map_err(|e| ClientError::Other(format!("failed to open browser: {e}")))?;
-
-    // Accept exactly one connection and read the callback.
-    let (mut stream, _addr) = listener.accept().await?;
-
-    let mut buf = vec![0u8; 4096];
-    let n = stream.read(&mut buf).await?;
-    let request_str = String::from_utf8_lossy(&buf[..n]);
-
-    // Parse the first line: "GET /callback?code=...&state=... HTTP/1.1"
-    let first_line = request_str
-        .lines()
-        .next()
-        .ok_or_else(|| ClientError::Other("empty HTTP request".into()))?;
-
-    let path = first_line
-        .split_whitespace()
-        .nth(1)
-        .ok_or_else(|| ClientError::Other("malformed HTTP request line".into()))?;
-
-    // Parse query params using a dummy base URL.
-    let full_url = Url::parse(&format!("http://localhost{path}"))
-        .map_err(|e| ClientError::Other(format!("failed to parse callback URL: {e}")))?;
-
-    let params: std::collections::HashMap<String, String> = full_url
-        .query_pairs()
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-
-    // Verify state matches.
-    let returned_state = params
-        .get("state")
-        .ok_or_else(|| ClientError::Other("missing state in callback".into()))?;
-
-    if *returned_state != state {
-        let body = "Authentication failed: state mismatch.";
-        let response = format!(
-            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(),
-            body
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-        return Err(ClientError::Other("OAuth state mismatch".into()));
-    }
-
-    let code = params
-        .get("code")
-        .ok_or_else(|| ClientError::Other("missing code in callback".into()))?;
-
-    // Send success response to the browser.
-    let html = "<!DOCTYPE html><html><body><h2>Authentication successful!</h2>\
-                <p>You can close this tab.</p></body></html>";
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-        html.len(),
-        html
-    );
-    let _ = stream.write_all(response.as_bytes()).await;
-
-    // Exchange the authorization code for tokens.
-    let client = reqwest::Client::new();
     let resp = client
-        .post(&config.token_url)
-        .form(&[
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", &redirect_uri),
-            ("client_id", &config.client_id),
-            ("code_verifier", &code_verifier),
-        ])
+        .post(format!("{neon_auth}/sign-in/social"))
+        .header("Content-Type", "application/json")
+        .header("Origin", "https://temperkb.io")
+        .json(&serde_json::json!({
+            "provider": provider,
+            "callbackURL": callback_url,
+        }))
         .send()
         .await?;
 
-    let status = resp.status();
-    if !status.is_success() {
+    if !resp.status().is_success() {
         let body = resp.text().await.unwrap_or_default();
         return Err(ClientError::Other(format!(
-            "token exchange failed ({status}): {body}",
+            "Neon Auth sign-in failed: {body}"
         )));
     }
 
-    let tr: TokenResponse = resp.json().await?;
-    let expires_in = tr.expires_in.unwrap_or(3600);
-    let expires_at = Utc::now() + Duration::seconds(expires_in as i64);
+    let sign_in: SignInResponse = resp.json().await?;
+    let auth_url = sign_in
+        .url
+        .ok_or_else(|| ClientError::Other("no redirect URL from Neon Auth".into()))?;
+
+    info!("Opening browser for authentication...");
+    open::that(&auth_url)
+        .map_err(|e| ClientError::Other(format!("failed to open browser: {e}")))?;
+
+    // Now we need to handle two requests:
+    // 1. The callback redirect from Neon Auth (GET /callback?neon_auth_session_verifier=...)
+    //    → serve HTML page that fetches JWT
+    // 2. The JWT POST from the HTML page (POST /token with JWT in body)
+    //    → capture and save
+
+    let mut jwt: Option<String> = None;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
+
+    while jwt.is_none() {
+        let accept = tokio::time::timeout_at(deadline, listener.accept()).await;
+
+        let (mut stream, _addr) = match accept {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                warn!("accept error: {e}");
+                continue;
+            }
+            Err(_) => {
+                return Err(ClientError::Other("authentication timed out (120s)".into()));
+            }
+        };
+
+        let mut buf = vec![0u8; 8192];
+        let n = stream.read(&mut buf).await?;
+        let request_str = String::from_utf8_lossy(&buf[..n]);
+
+        let first_line = request_str.lines().next().unwrap_or("");
+        let parts: Vec<&str> = first_line.split_whitespace().collect();
+        let method = parts.first().copied().unwrap_or("");
+        let path = parts.get(1).copied().unwrap_or("");
+
+        debug!(method, path, "Received request");
+
+        if method == "GET" && path.starts_with("/token") {
+            // The Vercel callback redirected here with ?jwt=<token>
+            let full_url = url::Url::parse(&format!("http://localhost{path}"))
+                .map_err(|e| ClientError::Other(format!("parse error: {e}")))?;
+            let token = full_url
+                .query_pairs()
+                .find(|(k, _)| k == "jwt")
+                .map(|(_, v)| v.into_owned());
+
+            if let Some(token) = token {
+                if token.starts_with("eyJ") {
+                    jwt = Some(token);
+                    let html = "<!DOCTYPE html><html><body><h2>Authenticated!</h2><p>You can close this tab.</p></body></html>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(), html
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                } else {
+                    let html = format!("<!DOCTYPE html><html><body><h2>Error</h2><pre>Invalid token format</pre></body></html>");
+                    let response = format!(
+                        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        html.len(), html
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                }
+            }
+        } else if method == "GET" && path.starts_with("/callback") {
+            // Legacy: direct callback without JWT — show waiting message
+            let html = "<!DOCTYPE html><html><body><h2>Waiting for authentication...</h2><p>Processing your sign-in. This page will update automatically.</p></body></html>";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                html.len(), html
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        } else {
+            let response =
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    }
+
+    let jwt = jwt.expect("jwt should be set after loop");
+
+    // Decode JWT to extract expiry and subject
+    let claims = decode_jwt_claims(&jwt)?;
 
     let stored = StoredAuth {
-        provider: "oauth".to_owned(),
-        access_token: tr.access_token,
-        refresh_token: tr.refresh_token,
-        expires_at,
-        profile_id: None,
+        provider: provider.to_owned(),
+        access_token: jwt,
+        refresh_token: None,
+        expires_at: claims.expires_at,
+        profile_id: claims.subject,
     };
 
     auth::save_auth(&stored)?;
     info!("Authentication successful — token saved");
 
     Ok(stored)
+}
+
+struct JwtClaims {
+    expires_at: DateTime<Utc>,
+    subject: Option<uuid::Uuid>,
+}
+
+/// Decode JWT payload without verification (just extract exp and sub).
+fn decode_jwt_claims(jwt: &str) -> Result<JwtClaims> {
+    use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return Err(ClientError::Other("invalid JWT format".into()));
+    }
+
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| ClientError::Other(format!("JWT decode error: {e}")))?;
+
+    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes)?;
+
+    let exp = payload
+        .get("exp")
+        .and_then(|v| v.as_i64())
+        .ok_or_else(|| ClientError::Other("JWT missing exp claim".into()))?;
+
+    let expires_at = DateTime::from_timestamp(exp, 0)
+        .ok_or_else(|| ClientError::Other("invalid exp timestamp".into()))?;
+
+    let subject = payload
+        .get("sub")
+        .and_then(|v| v.as_str())
+        .and_then(|s| uuid::Uuid::parse_str(s).ok());
+
+    Ok(JwtClaims {
+        expires_at,
+        subject,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -220,49 +252,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn code_verifier_length_and_charset() {
-        let verifier = generate_code_verifier(43);
-        assert_eq!(verifier.len(), 43);
+    fn decode_jwt_extracts_exp_and_sub() {
+        use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 
-        let verifier = generate_code_verifier(128);
-        assert_eq!(verifier.len(), 128);
+        let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"EdDSA","typ":"JWT"}"#);
+        let payload = URL_SAFE_NO_PAD
+            .encode(r#"{"sub":"418200cc-e77a-496f-b5cc-eb4228e0e828","exp":1711800000}"#);
+        let sig = URL_SAFE_NO_PAD.encode("fakesig");
+        let jwt = format!("{header}.{payload}.{sig}");
 
-        // Every character must be in the PKCE charset.
-        for ch in verifier.chars() {
-            assert!(
-                PKCE_CHARSET.contains(&(ch as u8)),
-                "unexpected char in verifier: {ch:?}"
-            );
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "code_verifier length must be 43..=128")]
-    fn code_verifier_rejects_too_short() {
-        generate_code_verifier(42);
-    }
-
-    #[test]
-    #[should_panic(expected = "code_verifier length must be 43..=128")]
-    fn code_verifier_rejects_too_long() {
-        generate_code_verifier(129);
-    }
-
-    #[test]
-    fn code_challenge_known_test_vector() {
-        // RFC 7636 Appendix B test vector.
-        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
-        let challenge = compute_code_challenge(verifier);
-        assert_eq!(challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
-    }
-
-    #[test]
-    fn state_generation_length_and_hex() {
-        let state = generate_state();
-        assert_eq!(state.len(), 32, "state should be 32 hex chars");
-        assert!(
-            state.chars().all(|c| c.is_ascii_hexdigit()),
-            "state should contain only hex digits"
+        let claims = decode_jwt_claims(&jwt).unwrap();
+        assert!(claims.subject.is_some());
+        assert_eq!(
+            claims.subject.unwrap().to_string(),
+            "418200cc-e77a-496f-b5cc-eb4228e0e828"
         );
+        assert_eq!(claims.expires_at.timestamp(), 1711800000);
+    }
+
+    #[test]
+    fn decode_jwt_rejects_malformed() {
+        assert!(decode_jwt_claims("not.a.valid-jwt").is_err());
+        assert!(decode_jwt_claims("only-one-part").is_err());
     }
 }

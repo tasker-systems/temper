@@ -29,10 +29,11 @@ pub struct AuthStatus {
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/// Returns `~/.config/temper/` (or the platform equivalent).
+/// Returns `~/.config/temper/`.
 pub fn auth_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join(".config")
         .join("temper")
 }
 

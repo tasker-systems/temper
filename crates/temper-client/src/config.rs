@@ -87,10 +87,14 @@ fn default_api_url() -> String {
 // Path helpers
 // ---------------------------------------------------------------------------
 
-/// Returns `~/.config/temper/config.toml` (or the platform equivalent).
+/// Returns `~/.config/temper/config.toml`.
+///
+/// We use `~/.config/temper/` explicitly (not the platform-specific config dir)
+/// because the CLI, auth.json, and device.json all live here.
 pub fn config_path() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("~/.config"))
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("~"))
+        .join(".config")
         .join("temper")
         .join("config.toml")
 }
@@ -155,8 +159,27 @@ pub fn build_client() -> crate::error::Result<crate::TemperClient> {
     let url = api_url(&config);
     let device_id = load_device_id();
     let mut client = crate::TemperClient::new(&url, device_id);
-    if let Ok(oauth) = oauth_config(&config) {
-        client = client.with_oauth(oauth);
+    let config_path = config_path();
+    eprintln!("[debug] config path: {}", config_path.display());
+    eprintln!("[debug] config exists: {}", config_path.exists());
+    eprintln!("[debug] auth.provider = {:?}", config.auth.provider);
+    eprintln!(
+        "[debug] auth.providers count = {}",
+        config.auth.providers.len()
+    );
+    for (k, v) in &config.auth.providers {
+        eprintln!(
+            "[debug]   provider '{k}': authorize_url={}",
+            v.authorize_url
+        );
+    }
+    match oauth_config(&config) {
+        Ok(oauth) => {
+            client = client.with_oauth(oauth);
+        }
+        Err(e) => {
+            eprintln!("[debug] oauth_config error: {e}");
+        }
     }
     Ok(client)
 }
@@ -165,7 +188,10 @@ pub fn build_client() -> crate::error::Result<crate::TemperClient> {
 ///
 /// Returns `None` if the file is absent or cannot be parsed.
 fn load_device_id() -> Option<String> {
-    let path = dirs::config_dir()?.join("temper").join("device.json");
+    let path = dirs::home_dir()?
+        .join(".config")
+        .join("temper")
+        .join("device.json");
     let content = std::fs::read_to_string(path).ok()?;
     let val: serde_json::Value = serde_json::from_str(&content).ok()?;
     val.get("client_id")?.as_str().map(String::from)
