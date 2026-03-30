@@ -48,8 +48,14 @@ pub struct ProviderConfig {
     pub client_id: String,
     #[serde(default)]
     pub audience: Option<String>,
+    #[serde(default = "default_callback_url")]
+    pub callback_url: String,
     #[serde(default)]
     pub scopes: Vec<String>,
+}
+
+fn default_callback_url() -> String {
+    "https://temperkb.io/api/auth/cli-callback".into()
 }
 
 /// Cloud API section of the configuration.
@@ -85,6 +91,7 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
             token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
             client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
             audience: Some("https://temperkb.io/api".to_string()),
+            callback_url: default_callback_url(),
             scopes: vec![
                 "openid".to_string(),
                 "profile".to_string(),
@@ -159,6 +166,7 @@ pub fn oauth_config(config: &CloudConfig) -> crate::error::Result<crate::login::
         token_url: provider.token_url.clone(),
         client_id: provider.client_id.clone(),
         audience: provider.audience.clone(),
+        callback_url: provider.callback_url.clone(),
         scopes: provider.scopes.clone(),
     })
 }

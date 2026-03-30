@@ -1,8 +1,9 @@
 //! OAuth2 Authorization Code + PKCE login flow with local callback server.
 //!
 //! 1. Generate PKCE code_verifier and code_challenge
-//! 2. Open browser to provider's /authorize endpoint
-//! 3. Provider redirects to http://localhost:{port}/callback?code=...
+//! 2. Open browser to provider's /authorize endpoint with
+//!    redirect_uri pointing to the callback relay and state={port}
+//! 3. Provider redirects to temperkb.io, which relays ?code= to localhost:{port}
 //! 4. Exchange authorization code for tokens at /oauth/token
 //! 5. Persist tokens to ~/.config/temper/auth.json
 
@@ -25,6 +26,9 @@ pub struct OAuthConfig {
     pub client_id: String,
     /// API audience (sent as `audience` parameter)
     pub audience: Option<String>,
+    /// Callback relay URL that forwards the authorization code to the CLI's localhost server.
+    /// The CLI port is passed via the OAuth2 `state` parameter.
+    pub callback_url: String,
     /// OAuth2 scopes (e.g., `["openid", "profile", "email", "offline_access"]`)
     pub scopes: Vec<String>,
 }
@@ -47,8 +51,11 @@ pub fn generate_pkce_pair() -> (String, String) {
 }
 
 /// Build the full authorization URL with PKCE parameters.
+///
+/// Uses `CLI_CALLBACK_URL` as the redirect_uri and passes the localhost port
+/// via the OAuth2 `state` parameter. The callback relay on temperkb.io reads
+/// the port from `state` and redirects the authorization code to localhost.
 pub fn build_authorize_url(config: &OAuthConfig, port: u16, code_challenge: &str) -> String {
-    let redirect_uri = format!("http://localhost:{port}/callback");
     let scope = config.scopes.join(" ");
 
     let mut url =
@@ -57,9 +64,10 @@ pub fn build_authorize_url(config: &OAuthConfig, port: u16, code_challenge: &str
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", &config.client_id)
-        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("redirect_uri", &config.callback_url)
         .append_pair("code_challenge", code_challenge)
         .append_pair("code_challenge_method", "S256")
+        .append_pair("state", &port.to_string())
         .append_pair("scope", &scope);
 
     if let Some(audience) = &config.audience {
@@ -121,11 +129,11 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
     // Bind to a random port on localhost.
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let port = listener.local_addr()?.port();
-    let redirect_uri = format!("http://localhost:{port}/callback");
 
     debug!(port, "Callback server listening");
 
     // Build authorization URL and open browser.
+    // The redirect_uri points to temperkb.io which relays the code to localhost.
     let auth_url = build_authorize_url(config, port, &code_challenge);
 
     info!("Opening browser for authentication...");
@@ -137,8 +145,8 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
 
     debug!("Authorization code received, exchanging for tokens...");
 
-    // Exchange code for tokens.
-    let tokens = exchange_code(config, &code, &code_verifier, &redirect_uri).await?;
+    // Exchange code for tokens. The redirect_uri must match what was sent to /authorize.
+    let tokens = exchange_code(config, &code, &code_verifier, &config.callback_url).await?;
 
     // Decode claims from the access token.
     let claims = decode_jwt_claims(&tokens.access_token)?;
@@ -192,7 +200,9 @@ async fn wait_for_code(listener: &TcpListener) -> Result<String> {
 
         debug!(method, path, "Received request");
 
-        if method == "GET" && path.starts_with("/callback") {
+        if method == "GET"
+            && (path.starts_with("/callback") || path.starts_with("/?") || path == "/")
+        {
             let full_url = url::Url::parse(&format!("http://localhost{path}"))
                 .map_err(|e| ClientError::Other(format!("parse error: {e}")))?;
 
@@ -319,6 +329,7 @@ mod tests {
             token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
             client_id: "test-client-id".to_string(),
             audience: Some("https://temperkb.io/api".to_string()),
+            callback_url: "https://temperkb.io/api/auth/cli-callback".to_string(),
             scopes: vec![
                 "openid".to_string(),
                 "profile".to_string(),
@@ -332,6 +343,9 @@ mod tests {
         assert!(url.contains("code_challenge_method=S256"));
         assert!(url.contains(&format!("code_challenge={challenge}")));
         assert!(url.contains("audience="));
+        // redirect_uri goes to temperkb.io, port is in state
+        assert!(url.contains("redirect_uri=https%3A%2F%2Ftemperkb.io%2Fapi%2Fauth%2Fcli-callback"));
+        assert!(url.contains("state=12345"));
     }
 
     #[test]
@@ -341,6 +355,7 @@ mod tests {
             token_url: "https://example.com/token".to_string(),
             client_id: "test".to_string(),
             audience: None,
+            callback_url: "https://example.com/callback".to_string(),
             scopes: vec!["openid".to_string()],
         };
         let (_verifier, challenge) = generate_pkce_pair();
