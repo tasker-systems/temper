@@ -1,8 +1,4 @@
-import { put } from "@vercel/blob";
-import { verifyToken, getJwksVerifier, getIssuer, type AuthClaims } from "../packages/temper-cloud/src/auth.js";
-import { buildBlobPathname, buildInsertBlobFileQuery } from "../packages/temper-cloud/src/upload.js";
-import { getDb } from "../packages/temper-cloud/src/db.js";
-import { processUpload } from "./workflows/process-upload.js";
+import type { AuthClaims } from "../packages/temper-cloud/src/auth.js";
 
 export const config = { runtime: "nodejs" };
 
@@ -13,6 +9,13 @@ export default async function handler(req: Request): Promise<Response> {
       headers: { "Content-Type": "application/json" },
     });
   }
+
+  // Dynamic imports to avoid ESM/CJS conflict in Vercel's hybrid runtime
+  const { verifyToken, getJwksVerifier, getIssuer } = await import("../packages/temper-cloud/src/auth.js");
+  const { buildBlobPathname, buildInsertBlobFileQuery } = await import("../packages/temper-cloud/src/upload.js");
+  const { getDb } = await import("../packages/temper-cloud/src/db.js");
+  const { put } = await import("@vercel/blob");
+  const { processUpload } = await import("./workflows/process-upload.js");
 
   // Authenticate
   const authHeader = req.headers.get("authorization");
