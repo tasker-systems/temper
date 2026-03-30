@@ -1,5 +1,6 @@
 //! `temper add` — ingest a single file or directory into the knowledge base.
 
+use std::io::IsTerminal;
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -302,7 +303,9 @@ pub fn run_directory(
     }
 
     let json_mode = format == "json";
+    let use_progress = std::io::stderr().is_terminal() && !json_mode;
     let max_concurrent = config.max_concurrent;
+    let file_count = files.len();
 
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| crate::error::TemperError::Config(format!("tokio runtime: {e}")))?;
@@ -322,6 +325,21 @@ pub fn run_directory(
         let skipped = Arc::new(Mutex::new(0u64));
         let failed = Arc::new(Mutex::new(0u64));
 
+        // Progress bar (TTY + non-JSON mode only).
+        let pb: Option<indicatif::ProgressBar> = if use_progress {
+            let bar = indicatif::ProgressBar::new(file_count as u64);
+            bar.set_style(
+                indicatif::ProgressStyle::default_bar()
+                    .template("  [{bar:40.cyan/blue}] {pos}/{len}  {msg}")
+                    .unwrap()
+                    .progress_chars("\u{2588}\u{2591}\u{2591}"),
+            );
+            Some(bar)
+        } else {
+            None
+        };
+        let pb = Arc::new(pb);
+
         let mut handles = Vec::with_capacity(files.len());
 
         for file_path in files {
@@ -330,6 +348,7 @@ pub fn run_directory(
             let added = Arc::clone(&added);
             let skipped = Arc::clone(&skipped);
             let failed = Arc::clone(&failed);
+            let pb = Arc::clone(&pb);
             let context = context.to_string();
             let doc_type = doc_type.to_string();
 
@@ -353,8 +372,11 @@ pub fn run_directory(
                                 "error": err.to_string(),
                             });
                             println!("{event}");
+                        } else if let Some(bar) = pb.as_ref() {
+                            bar.set_message(format!("\u{2717} {file_name}: extract failed"));
+                            bar.inc(1);
                         } else {
-                            eprintln!("  \u{2717} {file_name}: extract failed — {err}");
+                            eprintln!("  \u{2717} {file_name}: extract failed \u{2014} {err}");
                         }
                         *failed.lock().await += 1;
                         return None;
@@ -416,6 +438,9 @@ pub fn run_directory(
                                 "resource_id": resource.id,
                             });
                             println!("{event}");
+                        } else if let Some(bar) = pb.as_ref() {
+                            bar.set_message(file_name.clone());
+                            bar.inc(1);
                         } else {
                             println!("  \u{2713} {file_name}");
                         }
@@ -434,6 +459,9 @@ pub fn run_directory(
                                     "reason": "duplicate",
                                 });
                                 println!("{event}");
+                            } else if let Some(bar) = pb.as_ref() {
+                                bar.set_message(format!("{file_name} (duplicate)"));
+                                bar.inc(1);
                             } else {
                                 println!("  \u{2192} {file_name} (duplicate, skipped)");
                             }
@@ -446,8 +474,11 @@ pub fn run_directory(
                                     "error": err_str,
                                 });
                                 println!("{event}");
+                            } else if let Some(bar) = pb.as_ref() {
+                                bar.set_message(format!("\u{2717} {file_name}: upload failed"));
+                                bar.inc(1);
                             } else {
-                                eprintln!("  \u{2717} {file_name}: upload failed — {err_str}");
+                                eprintln!("  \u{2717} {file_name}: upload failed \u{2014} {err_str}");
                             }
                             *failed.lock().await += 1;
                         }
@@ -461,6 +492,11 @@ pub fn run_directory(
 
         for handle in handles {
             let _ = handle.await;
+        }
+
+        // Finish and clear the progress bar before printing the summary line.
+        if let Some(bar) = Arc::try_unwrap(pb).ok().and_then(|opt| opt) {
+            bar.finish_and_clear();
         }
 
         let added = *added.lock().await;

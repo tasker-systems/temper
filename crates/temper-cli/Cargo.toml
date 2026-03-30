@@ -28,6 +28,7 @@ base64 = "0.22"
 uuid = { version = "1", features = ["v7", "serde"] }
 kreuzberg = { version = "4.6.3", optional = true, features = ["tokio-runtime"] }
 ignore = "0.4"
+indicatif = "0.17"
 
 [features]
 default = ["extract"]
