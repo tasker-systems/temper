@@ -12,7 +12,10 @@ use crate::state::AppState;
 pub fn create_app(state: AppState) -> Router {
     use axum::routing::get;
 
-    let public = Router::new().route("/api/health", get(handlers::health::health_check));
+    let public = Router::new()
+        .route("/api/health", get(handlers::health::health_check))
+        .route("/api/auth-login", get(handlers::auth_flow::login))
+        .route("/api/auth-callback", get(handlers::auth_flow::callback));
 
     let protected = Router::new()
         .route(
