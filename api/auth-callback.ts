@@ -1,18 +1,10 @@
 /**
  * CLI auth callback — renders a page that fetches a JWT from Neon Auth.
  *
- * Flow:
- *   1. CLI opens browser → Neon Auth Google sign-in
- *   2. Neon Auth redirects here — session cookies are set on the Neon Auth domain
- *   3. We render a client-side page that fetches /auth/token with credentials:include
- *      (the browser has the session cookies, the server does not)
- *   4. Page shows the JWT for `temper auth token` or redirects to CLI localhost
- *
- * Query params:
- *   - cli_port: (optional) localhost port — if set, auto-redirects with ?token=<jwt>
+ * After Google sign-in, Neon Auth redirects here with session cookies
+ * set on the Neon Auth domain. We render a client-side page that fetches
+ * /auth/token with credentials:include (browser has the cookies).
  */
-
-export const config = { runtime: "nodejs" };
 
 function neonAuthBase(): string {
 	const url = process.env.NEON_AUTH_URL;
@@ -22,31 +14,18 @@ function neonAuthBase(): string {
 	return url;
 }
 
-export default async function handler(req: Request): Promise<Response> {
-	if (req.method !== "GET") {
-		return new Response(JSON.stringify({ error: "Method not allowed" }), {
-			status: 405,
-			headers: { "Content-Type": "application/json" },
-		});
-	}
-
+export function GET(req: Request): Response {
 	const url = new URL(req.url, "https://temperkb.io");
-	const cliPort = url.searchParams.get("cli_port");
+	const cliPort = url.searchParams.get("cli_port") || "";
 	const authBase = neonAuthBase();
 
-	// Render a client-side page that fetches the JWT using browser cookies
-	return new Response(tokenFetchPage(authBase, cliPort), {
-		status: 200,
-		headers: { "Content-Type": "text/html" },
-	});
-}
-
-function tokenFetchPage(authBase: string, cliPort: string | null): string {
 	const cliRedirect = cliPort
-		? `"http://localhost:${escapeHtml(cliPort)}/callback?token=" + encodeURIComponent(jwt)`
+		? `"http://localhost:${esc(cliPort)}/callback?token=" + encodeURIComponent(jwt)`
 		: "null";
 
-	return `<!DOCTYPE html>
+	const retryUrl = cliPort ? `/api/auth-login?cli_port=${esc(cliPort)}` : "/api/auth-login";
+
+	const html = `<!DOCTYPE html>
 <html><head><title>temper auth</title>
 <style>
 body { font-family: system-ui; max-width: 600px; margin: 40px auto; padding: 0 20px; color: #e0e0e0; background: #0f0f1a; }
@@ -73,27 +52,25 @@ a { color: #6366f1; }
 <div id="error" style="display:none">
   <h2 class="error">Authentication Error</h2>
   <pre id="error-detail"></pre>
-  <p><a href="/api/auth-login${cliPort ? `?cli_port=${escapeHtml(cliPort)}` : ""}">Try signing in again</a></p>
+  <p><a href="${retryUrl}">Try signing in again</a></p>
 </div>
 <script>
 (async () => {
   try {
-    const res = await fetch("${escapeHtml(authBase)}/token", {
+    const res = await fetch("${esc(authBase)}/token", {
       credentials: "include",
       headers: { "Accept": "application/json" }
     });
 
     if (!res.ok) {
       const body = await res.text();
-      showError("Token request failed (" + res.status + ")\\n\\n" + (body || "No session found.") +
-        "\\n\\nThis usually means the session cookies were not set. " +
-        "Make sure third-party cookies are enabled for the Neon Auth domain.");
+      showError("Token request failed (" + res.status + ")\\n\\n" + (body || "No session.") +
+        "\\n\\nThis usually means session cookies were not set or are blocked as third-party cookies.");
       return;
     }
 
     const text = await res.text();
     let jwt = null;
-
     try {
       const data = JSON.parse(text);
       jwt = data.token || data.access_token || data.jwt;
@@ -102,26 +79,23 @@ a { color: #6366f1; }
     }
 
     if (!jwt) {
-      showError("No JWT found in response.\\n\\nResponse: " + text);
+      showError("No JWT in response.\\n\\nResponse: " + text);
       return;
     }
 
-    // Check for CLI auto-redirect
     const cliRedirect = ${cliRedirect};
     if (cliRedirect) {
       window.location.href = cliRedirect;
       return;
     }
 
-    // Show for manual copy
     document.getElementById("loading").style.display = "none";
     document.getElementById("success").style.display = "block";
     document.getElementById("cmd").textContent = "temper auth token " + jwt;
 
   } catch (err) {
     showError("Fetch error: " + err.message +
-      "\\n\\nThis is likely a CORS issue. The Neon Auth service may need " +
-      "to allow https://temperkb.io as an origin.");
+      "\\n\\nThis is likely a CORS issue. Neon Auth may need to allow https://temperkb.io.");
   }
 })();
 
@@ -132,12 +106,13 @@ function showError(msg) {
 }
 </script>
 </body></html>`;
+
+	return new Response(html, {
+		status: 200,
+		headers: { "Content-Type": "text/html" },
+	});
 }
 
-function escapeHtml(s: string): string {
-	return s
-		.replace(/&/g, "&amp;")
-		.replace(/</g, "&lt;")
-		.replace(/>/g, "&gt;")
-		.replace(/"/g, "&quot;");
+function esc(s: string): string {
+	return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }

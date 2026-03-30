@@ -38,25 +38,49 @@ export function GET(req: Request): Response {
 	// We construct the redirect URL that Neon Auth's sign-in/social endpoint would give us.
 	const initUrl = new URL(`${neonAuth}/sign-in/social`, "https://temperkb.io");
 
-	// Redirect to a simple HTML page that does the POST client-side
 	const html = `<!DOCTYPE html>
 <html><head><title>temper auth</title>
-<style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 20px;color:#e0e0e0;background:#0f0f1a}</style>
+<style>body{font-family:system-ui;max-width:600px;margin:40px auto;padding:0 20px;color:#e0e0e0;background:#0f0f1a}
+pre{background:#1a1a2e;padding:12px;border-radius:6px;white-space:pre-wrap;word-break:break-all}</style>
 </head><body>
-<p>Redirecting to sign in...</p>
+<p id="status">Redirecting to sign in...</p>
+<pre id="log" style="display:none"></pre>
 <script>
+const log = document.getElementById("log");
+const status = document.getElementById("status");
+function show(msg) { log.style.display="block"; log.textContent += msg + "\\n"; }
+
 (async()=>{
+  const target = "${neonAuth}/sign-in/social";
+  show("POST " + target);
+  show("provider: ${provider}");
+  show("callbackURL: ${callbackURL}");
   try {
-    const res = await fetch("${neonAuth}/sign-in/social", {
+    const res = await fetch(target, {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify({provider:"${provider}",callbackURL:"${callbackURL}"})
     });
-    const data = await res.json();
-    if(data.url) { window.location.href = data.url; }
-    else { document.body.innerHTML = "<pre>Error: " + JSON.stringify(data) + "</pre>"; }
+    show("Status: " + res.status);
+    const text = await res.text();
+    show("Body: " + text.substring(0, 500));
+    try {
+      const data = JSON.parse(text);
+      if(data.url) {
+        status.textContent = "Redirecting to Google...";
+        show("Redirect: " + data.url.substring(0, 100));
+        window.location.href = data.url;
+      } else {
+        status.textContent = "Unexpected response";
+      }
+    } catch(e) {
+      status.textContent = "Parse error";
+      show("Parse error: " + e.message);
+    }
   } catch(e) {
-    document.body.innerHTML = "<pre>Error: " + e.message + "</pre>";
+    status.textContent = "Request failed";
+    show("Fetch error: " + e.message);
+    show("This is likely a CORS issue. The Neon Auth service needs to allow https://temperkb.io as an origin.");
   }
 })();
 </script>
