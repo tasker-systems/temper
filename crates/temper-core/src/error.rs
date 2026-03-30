@@ -31,6 +31,9 @@ pub enum TemperError {
 
     #[error("TOML parse error: {0}")]
     Toml(#[from] toml::de::Error),
+
+    #[error("Extraction error: {0}")]
+    Extraction(String),
 }
 
 pub type Result<T> = std::result::Result<T, TemperError>;

@@ -3,6 +3,7 @@ pub mod commands;
 pub mod config;
 pub mod discovery;
 pub mod error;
+pub mod extract;
 pub mod format;
 pub mod ids;
 pub mod output;
