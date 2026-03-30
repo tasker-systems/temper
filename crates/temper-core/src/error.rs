@@ -34,6 +34,12 @@ pub enum TemperError {
 
     #[error("Extraction error: {0}")]
     Extraction(String),
+
+    #[error("API error: {0}")]
+    Api(String),
+
+    #[error("Not found: {0}")]
+    NotFound(String),
 }
 
 pub type Result<T> = std::result::Result<T, TemperError>;

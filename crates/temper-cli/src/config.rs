@@ -256,6 +256,19 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
     })
 }
 
+/// Load the device UUID string from `~/.config/temper/device.json`.
+///
+/// Returns `None` when the file is absent or cannot be parsed.
+pub fn load_device_id() -> Option<String> {
+    let path = dirs::home_dir()?
+        .join(".config")
+        .join("temper")
+        .join("device.json");
+    let content = std::fs::read_to_string(path).ok()?;
+    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
+    val.get("client_id")?.as_str().map(String::from)
+}
+
 /// Safe-write protocol: read → validate original TOML → apply transform →
 /// validate result → atomic write via tmp + rename.
 pub fn safe_write<F>(path: &Path, transform: F) -> Result<()>
