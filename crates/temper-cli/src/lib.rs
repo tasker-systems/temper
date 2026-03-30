@@ -6,6 +6,7 @@ pub mod error;
 pub mod extract;
 pub mod format;
 pub mod ids;
+pub mod manifest_io;
 pub mod output;
 pub mod project;
 pub mod vault;

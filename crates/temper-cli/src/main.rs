@@ -5,6 +5,7 @@ use cli::{
     AuthAction, Cli, Commands, ContextAction, GoalAction, NoteAction, ResearchAction,
     SessionAction, SkillAction, TaskAction,
 };
+use temper_cli::commands;
 
 fn main() {
     tracing_subscriber::fmt()
@@ -370,5 +371,23 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 SkillAction::Check => temper_cli::commands::skill::check(&config),
             }
         }
+        Commands::Add {
+            path,
+            dir,
+            context,
+            doc_type,
+            format,
+            force,
+        } => commands::add::run(&path, dir, &context, &doc_type, &format, force),
+        Commands::Import {
+            path,
+            dir,
+            context,
+            doc_type,
+            format,
+            force,
+        } => commands::import_cmd::run(&path, dir, context.as_deref(), &doc_type, &format, force),
+        Commands::Pull { resource_id } => commands::pull::run(&resource_id),
+        Commands::Remove { resource_id, force } => commands::remove::run(&resource_id, force),
     }
 }

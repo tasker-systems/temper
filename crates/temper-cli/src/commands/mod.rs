@@ -1,11 +1,15 @@
+pub mod add;
 pub mod auth;
 pub mod check;
 pub mod context_cmd;
 pub mod events;
 pub mod goal;
+pub mod import_cmd;
 pub mod init;
 pub mod normalize;
 pub mod note;
+pub mod pull;
+pub mod remove;
 pub mod research;
 pub mod session;
 pub mod skill;

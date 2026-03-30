@@ -101,6 +101,63 @@ pub enum Commands {
         #[command(subcommand)]
         action: AuthAction,
     },
+
+    /// Add a file to the cloud (fire-and-forget, searchable, pullable)
+    Add {
+        /// File or directory path to add
+        path: String,
+        /// Add all files in a directory
+        #[arg(long)]
+        dir: bool,
+        /// Context name
+        #[arg(long)]
+        context: String,
+        /// Doc type (default: "resource")
+        #[arg(long, default_value = "resource")]
+        doc_type: String,
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Override size guardrails for directory mode
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Import a file into the vault (managed, frontmatter, sync-ready)
+    Import {
+        /// File path, directory path, or resource UUID (for promotion)
+        path: String,
+        /// Import all files in a directory
+        #[arg(long)]
+        dir: bool,
+        /// Context name (required for file imports)
+        #[arg(long)]
+        context: Option<String>,
+        /// Doc type (default: "resource")
+        #[arg(long, default_value = "resource")]
+        doc_type: String,
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Override size guardrails
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Pull a resource from the cloud
+    Pull {
+        /// Resource UUID
+        resource_id: String,
+    },
+
+    /// Remove a resource from the cloud
+    Remove {
+        /// Resource UUID
+        resource_id: String,
+        /// Skip confirmation for vault file removal
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]
