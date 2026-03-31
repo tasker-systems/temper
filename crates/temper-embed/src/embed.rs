@@ -258,12 +258,14 @@ mod tests {
 
     // ---- Integration tests (require model — may be slow on first run) ----
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn test_embed_text_dimension() {
         let vec = embed_text("hello world").unwrap();
         assert_eq!(vec.len(), EMBEDDING_DIM);
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn test_embed_text_is_normalized() {
         let vec = embed_text("hello world").unwrap();
@@ -271,6 +273,7 @@ mod tests {
         assert!((norm - 1.0).abs() < 1e-4, "norm was {norm}");
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn test_embed_texts_batch() {
         let vecs = embed_texts(&["hello", "world"]).unwrap();
@@ -279,6 +282,7 @@ mod tests {
         assert_eq!(vecs[1].len(), EMBEDDING_DIM);
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn test_similar_texts_higher_similarity() {
         let v1 = embed_text("rust programming language").unwrap();

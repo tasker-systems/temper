@@ -17,6 +17,7 @@ ndarray = { version = "0.17", optional = true }
 default = ["extract", "embed"]
 extract = ["dep:kreuzberg"]
 embed = ["dep:ort", "dep:hf-hub", "dep:tokenizers", "dep:ndarray"]
+test-embed = ["embed"]
 
 [dev-dependencies]
 tempfile = "3"
