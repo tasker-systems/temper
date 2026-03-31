@@ -91,6 +91,109 @@ pub fn build_ingest_request(
 }
 
 // ---------------------------------------------------------------------------
+// URL fetch
+// ---------------------------------------------------------------------------
+
+/// Fetch a URL to a temporary file, returning the path and inferred filename.
+///
+/// The response body is written to a temp file with the appropriate extension
+/// (`.html` for HTML content, derived from URL path otherwise). The temp file
+/// persists as long as the returned `TempPath` is alive.
+pub async fn fetch_url_to_tempfile(url: &str) -> Result<(tempfile::TempPath, String)> {
+    let response = reqwest::get(url)
+        .await
+        .map_err(|e| TemperError::Api(format!("fetch {url}: {e}")))?;
+
+    if !response.status().is_success() {
+        return Err(TemperError::Api(format!(
+            "fetch {url}: HTTP {}",
+            response.status()
+        )));
+    }
+
+    // Determine file extension from content-type or URL path.
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let extension = extension_from_content_type(&content_type)
+        .or_else(|| extension_from_url(url))
+        .unwrap_or("html");
+
+    // Derive a display name from the URL path.
+    let display_name = display_name_from_url(url);
+
+    let mut tmp = tempfile::Builder::new()
+        .suffix(&format!(".{extension}"))
+        .tempfile()
+        .map_err(|e| TemperError::Extraction(format!("create temp file: {e}")))?;
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| TemperError::Api(format!("read response body: {e}")))?;
+
+    std::io::Write::write_all(&mut tmp, &bytes)
+        .map_err(|e| TemperError::Extraction(format!("write temp file: {e}")))?;
+
+    let path = tmp.into_temp_path();
+    Ok((path, display_name))
+}
+
+/// Map a Content-Type header to a file extension.
+fn extension_from_content_type(ct: &str) -> Option<&'static str> {
+    let ct = ct.split(';').next().unwrap_or("").trim();
+    match ct {
+        "text/html" => Some("html"),
+        "text/plain" => Some("txt"),
+        "text/markdown" => Some("md"),
+        "application/pdf" => Some("pdf"),
+        _ => None,
+    }
+}
+
+/// Extract a file extension from the URL path.
+fn extension_from_url(url: &str) -> Option<&'static str> {
+    let path = url.split('?').next().unwrap_or(url);
+    let last_segment = path.rsplit('/').next().unwrap_or("");
+    let ext = last_segment.rsplit('.').next().unwrap_or("");
+    match ext {
+        "html" | "htm" => Some("html"),
+        "md" | "markdown" => Some("md"),
+        "txt" => Some("txt"),
+        "pdf" => Some("pdf"),
+        _ => None,
+    }
+}
+
+/// Derive a human-readable display name from a URL.
+fn display_name_from_url(url: &str) -> String {
+    let path = url
+        .split("://")
+        .nth(1)
+        .unwrap_or(url)
+        .split('?')
+        .next()
+        .unwrap_or(url);
+    // Use the last meaningful path segment, or the domain
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    match segments.last() {
+        Some(&seg) if seg.contains('.') => {
+            // Strip extension for title
+            seg.rsplit_once('.')
+                .map(|(name, _)| name)
+                .unwrap_or(seg)
+                .to_string()
+        }
+        Some(&seg) => seg.to_string(),
+        None => path.to_string(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Cloud ingest
 // ---------------------------------------------------------------------------
 
@@ -114,6 +217,41 @@ pub async fn ingest_file(
         context,
         doc_type,
     );
+
+    let resource = client
+        .ingest()
+        .create(&request)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+
+    Ok((resource, extracted_content))
+}
+
+/// Fetch a URL and ingest its content via the same pipeline as local files.
+///
+/// Downloads to a temp file, extracts via kreuzberg, then uploads. The origin_uri
+/// is set to the original URL (not the temp file path).
+pub async fn ingest_url(
+    client: &temper_client::TemperClient,
+    url: &str,
+    context: &str,
+    doc_type: &str,
+) -> Result<(temper_core::types::ResourceRow, String)> {
+    let (temp_path, display_name) = fetch_url_to_tempfile(url).await?;
+
+    let extraction = crate::extract::extract_to_markdown(temp_path.as_ref())?;
+    let extracted_content = extraction.content.clone();
+
+    // Build request but override the origin_uri to use the URL, not the temp path.
+    let mut request = build_ingest_request(
+        extraction.content,
+        extraction.mime_type,
+        // Use a synthetic path so title_from_path produces a good title
+        Path::new(&display_name),
+        context,
+        doc_type,
+    );
+    request.origin_uri = url.to_string();
 
     let resource = client
         .ingest()
@@ -373,5 +511,72 @@ mod tests {
     fn derive_context_returns_none_for_empty_context() {
         let ctx = derive_context_from_uri("kb:///note/my-doc");
         assert_eq!(ctx, None);
+    }
+
+    // --- URL helpers ---
+
+    #[test]
+    fn extension_from_content_type_html() {
+        assert_eq!(extension_from_content_type("text/html"), Some("html"));
+        assert_eq!(
+            extension_from_content_type("text/html; charset=utf-8"),
+            Some("html")
+        );
+    }
+
+    #[test]
+    fn extension_from_content_type_plain() {
+        assert_eq!(extension_from_content_type("text/plain"), Some("txt"));
+    }
+
+    #[test]
+    fn extension_from_content_type_unknown() {
+        assert_eq!(extension_from_content_type("application/json"), None);
+        assert_eq!(extension_from_content_type(""), None);
+    }
+
+    #[test]
+    fn extension_from_url_with_extension() {
+        assert_eq!(
+            extension_from_url("https://example.com/docs/guide.html"),
+            Some("html")
+        );
+        assert_eq!(
+            extension_from_url("https://example.com/paper.pdf"),
+            Some("pdf")
+        );
+    }
+
+    #[test]
+    fn extension_from_url_no_extension() {
+        assert_eq!(extension_from_url("https://example.com/docs/guide"), None);
+        assert_eq!(extension_from_url("https://example.com/"), None);
+    }
+
+    #[test]
+    fn extension_from_url_with_query() {
+        assert_eq!(
+            extension_from_url("https://example.com/doc.html?version=2"),
+            Some("html")
+        );
+    }
+
+    #[test]
+    fn display_name_from_url_path_segment() {
+        assert_eq!(
+            display_name_from_url("https://example.com/docs/getting-started.html"),
+            "getting-started"
+        );
+    }
+
+    #[test]
+    fn display_name_from_url_no_extension() {
+        assert_eq!(display_name_from_url("https://example.com/about"), "about");
+    }
+
+    #[test]
+    fn display_name_from_url_root() {
+        // Domain "example.com" is treated as a filename — dot stripped → "example"
+        assert_eq!(display_name_from_url("https://example.com/"), "example");
     }
 }

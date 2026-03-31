@@ -25,9 +25,7 @@ pub fn run(
     force: bool,
 ) -> crate::error::Result<()> {
     if path.starts_with("http://") || path.starts_with("https://") {
-        return Err(crate::error::TemperError::Config(
-            "URL support not yet implemented. Please provide a file path.".to_string(),
-        ));
+        return run_url(path, context, doc_type, format);
     }
 
     if dir {
@@ -85,6 +83,51 @@ fn run_single_file(
             let event = serde_json::json!({
                 "event": "upload",
                 "file": file_name,
+                "status": "done",
+                "resource_id": resource.id,
+                "size_bytes": extraction_content.len(),
+            });
+            output::plain(event);
+        }
+        OutputFormat::Text => {
+            output::plain(format!(
+                "done ({} KB markdown)",
+                extraction_content.len() / 1024
+            ));
+            output::success(format!("Added: \"{}\" ({})", resource.title, resource.id));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// URL ingest
+// ---------------------------------------------------------------------------
+
+fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::error::Result<()> {
+    let fmt = OutputFormat::parse(format);
+
+    if fmt == OutputFormat::Text {
+        output::progress("  Fetching... ");
+    }
+
+    let (resource, extraction_content) = runtime::with_client(|client| {
+        let url = url.to_string();
+        let context = context.to_string();
+        let doc_type = doc_type.to_string();
+        Box::pin(async move {
+            ingest::ingest_url(client, &url, &context, &doc_type)
+                .await
+                .map_err(|e| crate::error::TemperError::Api(e.to_string()))
+        })
+    })?;
+
+    match fmt {
+        OutputFormat::Json => {
+            let event = serde_json::json!({
+                "event": "upload",
+                "url": url,
                 "status": "done",
                 "resource_id": resource.id,
                 "size_bytes": extraction_content.len(),
@@ -393,7 +436,9 @@ mod tests {
     // --- URL detection ---
 
     #[test]
-    fn url_http_returns_error() {
+    fn url_http_routes_to_url_handler() {
+        // URL paths are routed to run_url, which will fail without auth/network
+        // but should NOT fail with "not yet implemented".
         let err = run(
             "http://example.com/doc.pdf",
             false,
@@ -403,11 +448,14 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
+        assert!(
+            !err.to_string().contains("not yet implemented"),
+            "URL should be routed, not rejected: {err}"
+        );
     }
 
     #[test]
-    fn url_https_returns_error() {
+    fn url_https_routes_to_url_handler() {
         let err = run(
             "https://example.com/paper.md",
             false,
@@ -417,7 +465,10 @@ mod tests {
             false,
         )
         .unwrap_err();
-        assert!(err.to_string().contains("not yet implemented"));
+        assert!(
+            !err.to_string().contains("not yet implemented"),
+            "URL should be routed, not rejected: {err}"
+        );
     }
 
     // --- Nonexistent file ---
