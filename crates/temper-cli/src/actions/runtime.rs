@@ -5,13 +5,14 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::error::{Result, TemperError};
 
 /// Create a tokio runtime and temper client, then execute an async closure.
 ///
-/// This is the standard pattern for CLI commands that need to make API calls.
-/// The closure receives a reference to the built client.
+/// The closure receives a reference to the built client. Use this for
+/// simple request-response patterns (single API call, no spawned tasks).
 pub fn with_client<F, T>(f: F) -> Result<T>
 where
     F: FnOnce(&temper_client::TemperClient) -> Pin<Box<dyn Future<Output = Result<T>> + '_>>,
@@ -21,6 +22,35 @@ where
     let client =
         temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
     rt.block_on(f(&client))
+}
+
+/// Like [`with_client`], but wraps the client in `Arc` for use with
+/// concurrent tasks (`tokio::spawn`), shared references across async
+/// boundaries, or patterns that need owned client handles.
+pub fn with_arc_client<F, T>(f: F) -> Result<T>
+where
+    F: FnOnce(Arc<temper_client::TemperClient>) -> Pin<Box<dyn Future<Output = Result<T>>>>,
+{
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    let client = Arc::new(
+        temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?,
+    );
+    rt.block_on(f(client))
+}
+
+/// Create a tokio runtime and temper client pair.
+///
+/// Use this when you need the runtime and client as separate values —
+/// e.g., when the async block needs mutable references to local state
+/// that can't be moved into a closure.
+pub fn build_runtime_and_client() -> Result<(tokio::runtime::Runtime, temper_client::TemperClient)>
+{
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    let client =
+        temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
+    Ok((rt, client))
 }
 
 /// Require a device_id or return a clear auth error.

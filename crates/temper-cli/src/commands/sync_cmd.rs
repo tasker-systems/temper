@@ -4,8 +4,8 @@
 //! - `temper sync run` — full sync cycle (push, pull, remove, complete)
 //! - `temper sync status` — dry-run diff (no changes)
 
-use crate::actions::sync as sync_actions;
-use crate::error::{Result, TemperError};
+use crate::actions::{runtime, sync as sync_actions};
+use crate::error::Result;
 use crate::format::OutputFormat;
 use crate::output;
 
@@ -14,16 +14,11 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
     let fmt = OutputFormat::parse(format);
     let vault_root = crate::config::resolve_vault(None)?;
     let temper_dir = vault_root.join(".temper");
-    let device_id = crate::config::load_device_id().ok_or_else(|| {
-        TemperError::Config("no device_id — run `temper auth login` first".into())
-    })?;
+    let device_id = runtime::require_device_id()?;
 
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-    let client =
-        temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
+    let (rt, client) = runtime::build_runtime_and_client()?;
 
     let result = rt.block_on(async {
         sync_actions::sync_orchestration(&client, &mut manifest, &vault_root, contexts).await
@@ -81,16 +76,11 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
     let fmt = OutputFormat::parse(format);
     let vault_root = crate::config::resolve_vault(None)?;
     let temper_dir = vault_root.join(".temper");
-    let device_id = crate::config::load_device_id().ok_or_else(|| {
-        TemperError::Config("no device_id — run `temper auth login` first".into())
-    })?;
+    let device_id = runtime::require_device_id()?;
 
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-    let client =
-        temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
+    let (rt, client) = runtime::build_runtime_and_client()?;
 
     let diff = rt.block_on(async {
         sync_actions::sync_status_check(&client, &mut manifest, &vault_root, contexts).await

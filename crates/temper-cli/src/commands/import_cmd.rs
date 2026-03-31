@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use uuid::Uuid;
 
-use crate::actions::ingest;
+use crate::actions::{ingest, runtime};
 use crate::error::TemperError;
 use crate::format::OutputFormat;
 use crate::output;
@@ -71,15 +71,10 @@ fn run_single_import(
         output::progress("  Extracting... ");
     }
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    let (rt, client) = runtime::build_runtime_and_client()?;
 
-    let (resource, extracted_content) = rt.block_on(async {
-        let client =
-            temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
-
-        ingest::ingest_file(&client, &file_path, context, doc_type).await
-    })?;
+    let (resource, extracted_content) =
+        rt.block_on(async { ingest::ingest_file(&client, &file_path, context, doc_type).await })?;
 
     if fmt == OutputFormat::Text {
         output::plain(format!(
@@ -140,13 +135,9 @@ fn promote_resource(
 ) -> crate::error::Result<()> {
     let fmt = OutputFormat::parse(format);
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    let (rt, client) = runtime::build_runtime_and_client()?;
 
     let (resource, content_response) = rt.block_on(async {
-        let client =
-            temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
-
         let resource = client
             .resources()
             .get(resource_id)
@@ -245,19 +236,14 @@ fn run_directory_import(
         return Ok(());
     }
 
-    // Single runtime for all files (fixes N-runtime issue).
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-
     let mut added = 0u64;
     let mut failed = 0u64;
 
     let vault_root = crate::config::resolve_vault(None)?;
 
-    rt.block_on(async {
-        let client =
-            temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
+    let (rt, client) = runtime::build_runtime_and_client()?;
 
+    rt.block_on(async {
         for file in &files {
             let file_name = file
                 .file_name()

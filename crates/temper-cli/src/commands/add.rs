@@ -245,17 +245,15 @@ pub fn run_directory(
     let max_concurrent = config.max_concurrent;
     let file_count = files.len();
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| crate::error::TemperError::Api(format!("tokio runtime: {e}")))?;
+    use std::sync::Arc;
+    use tokio::sync::{Mutex, Semaphore};
+
+    use crate::actions::runtime;
+
+    let (rt, raw_client) = runtime::build_runtime_and_client()?;
+    let client = Arc::new(raw_client);
 
     rt.block_on(async move {
-        use std::sync::Arc;
-        use tokio::sync::{Mutex, Semaphore};
-
-        let client = Arc::new(
-            temper_client::config::build_client()
-                .map_err(|e| crate::error::TemperError::Api(e.to_string()))?,
-        );
         let semaphore = Arc::new(Semaphore::new(max_concurrent));
 
         let added = Arc::new(Mutex::new(0u64));
