@@ -63,7 +63,7 @@ export default async function handler(req: Request): Promise<Response> {
   const resourceRows = await db`
     SELECT id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
            mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
-    FROM resources
+    FROM kb_resources
     WHERE id = ${resourceId}::uuid
       AND (owner_profile_id = ${profileId}::uuid OR originator_profile_id = ${profileId}::uuid)
       AND is_active = true
@@ -109,7 +109,7 @@ export default async function handler(req: Request): Promise<Response> {
   const updatedRows = await db`
     SELECT id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
            mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
-    FROM resources
+    FROM kb_resources
     WHERE id = ${resourceId}::uuid
     LIMIT 1
   `;

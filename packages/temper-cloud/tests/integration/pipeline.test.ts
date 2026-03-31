@@ -307,7 +307,7 @@ describe("blob_files status lifecycle", () => {
   it("creates blob_file in pending state", async () => {
     blobFileId = await createTestBlobFile(sql, resource.id);
 
-    const rows = await sql`SELECT status FROM blob_files WHERE id = ${blobFileId}`;
+    const rows = await sql`SELECT status FROM kb_blob_files WHERE id = ${blobFileId}`;
     expect(rows[0].status).toBe("pending");
   });
 
@@ -315,7 +315,7 @@ describe("blob_files status lifecycle", () => {
     const q = buildStatusUpdateQuery(blobFileId, "processing", null);
     await sql.unsafe(q.sql, q.params);
 
-    const rows = await sql`SELECT status FROM blob_files WHERE id = ${blobFileId}`;
+    const rows = await sql`SELECT status FROM kb_blob_files WHERE id = ${blobFileId}`;
     expect(rows[0].status).toBe("processing");
   });
 
@@ -323,7 +323,7 @@ describe("blob_files status lifecycle", () => {
     const q = buildStatusUpdateQuery(blobFileId, "processed", null);
     await sql.unsafe(q.sql, q.params);
 
-    const rows = await sql`SELECT status, updated_at FROM blob_files WHERE id = ${blobFileId}`;
+    const rows = await sql`SELECT status, updated_at FROM kb_blob_files WHERE id = ${blobFileId}`;
     expect(rows[0].status).toBe("processed");
   });
 
@@ -335,7 +335,8 @@ describe("blob_files status lifecycle", () => {
     const q2 = buildStatusUpdateQuery(blobFileId, "failed", "ONNX model load timeout");
     await sql.unsafe(q2.sql, q2.params);
 
-    const rows = await sql`SELECT status, error_message FROM blob_files WHERE id = ${blobFileId}`;
+    const rows =
+      await sql`SELECT status, error_message FROM kb_blob_files WHERE id = ${blobFileId}`;
     expect(rows[0].status).toBe("failed");
     expect(rows[0].error_message).toBe("ONNX model load timeout");
   });

@@ -18,7 +18,7 @@ export function buildInsertBlobFileQuery(params: InsertBlobFileParams): {
   params: (string | number | null)[];
 } {
   return {
-    sql: `INSERT INTO blob_files (profile_id, resource_id, blob_url, pathname, content_type, file_size_bytes, status)
+    sql: `INSERT INTO kb_blob_files (profile_id, resource_id, blob_url, pathname, content_type, file_size_bytes, status)
 VALUES ($1, $2, $3, $4, $5, $6, 'pending')
 RETURNING id, status, created_at`,
     params: [

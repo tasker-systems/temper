@@ -39,9 +39,9 @@ describe("buildVersionBumpQuery", () => {
 });
 
 describe("buildStatusUpdateQuery", () => {
-  it("generates UPDATE SQL for blob_files status", () => {
+  it("generates UPDATE SQL for kb_blob_files status", () => {
     const { sql, params } = buildStatusUpdateQuery("file-001", "processed", null);
-    expect(sql).toContain("UPDATE blob_files");
+    expect(sql).toContain("UPDATE kb_blob_files");
     expect(sql).toContain("status");
     expect(params).toContain("file-001");
     expect(params).toContain("processed");

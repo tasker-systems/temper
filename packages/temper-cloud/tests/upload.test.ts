@@ -24,7 +24,7 @@ describe("buildInsertBlobFileQuery", () => {
       fileSizeBytes: 1024,
     });
 
-    expect(sql).toContain("INSERT INTO blob_files");
+    expect(sql).toContain("INSERT INTO kb_blob_files");
     expect(params).toContain("profile-123");
     expect(params).toContain("resource-456");
     expect(params).toContain("https://blob.vercel-storage.com/abc");

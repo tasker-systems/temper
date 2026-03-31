@@ -64,7 +64,7 @@ export function buildStatusUpdateQuery(
   errorMessage: string | null,
 ): QueryResult {
   return {
-    sql: `UPDATE blob_files SET status = $1, error_message = $2, updated_at = now() WHERE id = $3`,
+    sql: `UPDATE kb_blob_files SET status = $1, error_message = $2, updated_at = now() WHERE id = $3`,
     params: [status, errorMessage, blobFileId],
   };
 }

@@ -73,7 +73,7 @@ export async function findByContentHash(
   const rows = await db`
     SELECT id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
            mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
-    FROM resources
+    FROM kb_resources
     WHERE content_hash = ${contentHash}
       AND owner_profile_id = ${profileId}::uuid
       AND is_active = true
@@ -170,7 +170,7 @@ export async function insertResource(
   const mimetype = meta.mimetype ?? null;
 
   const rows = await db`
-    INSERT INTO resources (
+    INSERT INTO kb_resources (
       id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
       mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
     ) VALUES (
@@ -209,7 +209,7 @@ export async function updateResourceHash(
   contentHash: string,
 ): Promise<void> {
   await db`
-    UPDATE resources
+    UPDATE kb_resources
     SET content_hash = ${contentHash}, updated = now()
     WHERE id = ${resourceId}::uuid
   `;

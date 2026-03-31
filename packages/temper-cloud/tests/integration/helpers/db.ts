@@ -24,7 +24,7 @@ export async function createTestResource(sql: postgres.Sql, title: string): Prom
   const now = new Date().toISOString();
 
   await sql`
-    INSERT INTO resources (id, kb_context_id, kb_doc_type_id, uri, title, slug,
+    INSERT INTO kb_resources (id, kb_context_id, kb_doc_type_id, uri, title, slug,
                            originator_profile_id, owner_profile_id, created, updated)
     VALUES (${id}, ${TEMPER_CONTEXT_ID}, ${SOURCE_DOC_TYPE_ID},
             ${`test://${id}`}, ${title}, ${`test-${id}`},
@@ -39,7 +39,7 @@ export async function createTestBlobFile(sql: postgres.Sql, resourceId: string):
   const id = randomUUID();
 
   await sql`
-    INSERT INTO blob_files (id, profile_id, resource_id, blob_url, pathname, content_type, status)
+    INSERT INTO kb_blob_files (id, profile_id, resource_id, blob_url, pathname, content_type, status)
     VALUES (${id}, ${SYSTEM_PROFILE_ID}, ${resourceId},
             ${`https://blob.test/${id}`}, ${`test/${id}.md`},
             'text/markdown', 'pending')
@@ -50,6 +50,6 @@ export async function createTestBlobFile(sql: postgres.Sql, resourceId: string):
 
 export async function cleanupTestResource(sql: postgres.Sql, resourceId: string): Promise<void> {
   await sql`DELETE FROM kb_chunks WHERE resource_id = ${resourceId}`;
-  await sql`DELETE FROM blob_files WHERE resource_id = ${resourceId}`;
-  await sql`DELETE FROM resources WHERE id = ${resourceId}`;
+  await sql`DELETE FROM kb_blob_files WHERE resource_id = ${resourceId}`;
+  await sql`DELETE FROM kb_resources WHERE id = ${resourceId}`;
 }
