@@ -26,13 +26,13 @@ sha2 = "0.10"
 dirs = "5"
 base64 = "0.22"
 uuid = { version = "1", features = ["v7", "serde"] }
-kreuzberg = { version = "4.6.3", optional = true, features = ["tokio-runtime"] }
+temper-embed = { path = "../temper-embed" }
 ignore = "0.4"
 indicatif = "0.17"
 
 [features]
 default = ["extract"]
-extract = ["dep:kreuzberg"]
+extract = ["temper-embed/extract"]
 
 [dev-dependencies]
 tempfile = "3"
