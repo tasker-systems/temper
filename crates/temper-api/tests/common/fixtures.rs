@@ -91,7 +91,7 @@ pub async fn clean_and_seed(pool: &PgPool) {
     .expect("clean test profiles");
 
     // Seed one stable research resource owned by System profile.
-    // ON CONFLICT DO NOTHING so repeated runs are idempotent.
+    // Use upsert to handle concurrent test setup racing on both id and origin_uri.
     sqlx::query(
         r#"
         INSERT INTO kb_resources
@@ -106,7 +106,7 @@ pub async fn clean_and_seed(pool: &PgPool) {
             $3, $3,
             true, now(), now()
         )
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT (id) DO UPDATE SET updated = now()
         "#,
     )
     .bind(uuid::Uuid::parse_str(TEMPER_CONTEXT_ID).unwrap())

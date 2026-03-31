@@ -202,15 +202,6 @@ mod tests {
     use super::*;
     use sqlx::PgPool;
 
-    async fn test_pool() -> PgPool {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgresql://temper:temper@localhost:5437/temper_test".to_string()
-        });
-        let pool = PgPool::connect(&url).await.unwrap();
-        sqlx::migrate!("../../migrations").run(&pool).await.unwrap();
-        pool
-    }
-
     #[test]
     fn oversized_preferences_rejected() {
         let large_value: serde_json::Value = serde_json::Value::String("x".repeat(65_537));
@@ -231,10 +222,8 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
-    async fn verified_email_reconciles_to_existing_profile() {
-        let pool = test_pool().await;
-
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn verified_email_reconciles_to_existing_profile(pool: PgPool) {
         let claims_a = AuthClaims {
             provider: "provider_a".to_string(),
             external_user_id: "user-recon-verified-a".to_string(),
@@ -259,25 +248,10 @@ mod tests {
             profile_a.id, profile_b.id,
             "verified email should reconcile to same profile"
         );
-
-        // Cleanup
-        sqlx::query(
-            "DELETE FROM kb_profile_auth_links WHERE auth_provider IN ('provider_a', 'provider_b')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query("DELETE FROM kb_profiles WHERE id = $1")
-            .bind(profile_a.id)
-            .execute(&pool)
-            .await
-            .unwrap();
     }
 
-    #[tokio::test]
-    async fn unverified_email_creates_separate_profile() {
-        let pool = test_pool().await;
-
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn unverified_email_creates_separate_profile(pool: PgPool) {
         let claims_a = AuthClaims {
             provider: "provider_a".to_string(),
             external_user_id: "user-recon-unverified-a".to_string(),
@@ -302,26 +276,10 @@ mod tests {
             profile_a.id, profile_b.id,
             "unverified email should create separate profile"
         );
-
-        // Cleanup
-        sqlx::query(
-            "DELETE FROM kb_profile_auth_links WHERE auth_provider IN ('provider_a', 'provider_b')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query("DELETE FROM kb_profiles WHERE id IN ($1, $2)")
-            .bind(profile_a.id)
-            .bind(profile_b.id)
-            .execute(&pool)
-            .await
-            .unwrap();
     }
 
-    #[tokio::test]
-    async fn missing_email_verified_creates_separate_profile() {
-        let pool = test_pool().await;
-
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn missing_email_verified_creates_separate_profile(pool: PgPool) {
         let claims_a = AuthClaims {
             provider: "provider_a".to_string(),
             external_user_id: "user-recon-none-a".to_string(),
@@ -346,19 +304,5 @@ mod tests {
             profile_a.id, profile_b.id,
             "None email_verified should create separate profile"
         );
-
-        // Cleanup
-        sqlx::query(
-            "DELETE FROM kb_profile_auth_links WHERE auth_provider IN ('provider_a', 'provider_b')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        sqlx::query("DELETE FROM kb_profiles WHERE id IN ($1, $2)")
-            .bind(profile_a.id)
-            .bind(profile_b.id)
-            .execute(&pool)
-            .await
-            .unwrap();
     }
 }

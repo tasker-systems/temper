@@ -3,7 +3,7 @@ mod cli;
 use clap::Parser;
 use cli::{
     AuthAction, Cli, Commands, ContextAction, GoalAction, NoteAction, ResearchAction,
-    SessionAction, SkillAction, TaskAction,
+    SessionAction, SkillAction, SyncAction, TaskAction,
 };
 use temper_cli::commands;
 
@@ -389,5 +389,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         } => commands::import_cmd::run(&path, dir, context.as_deref(), &doc_type, &format, force),
         Commands::Pull { resource_id } => commands::pull::run(&resource_id),
         Commands::Remove { resource_id, force } => commands::remove::run(&resource_id, force),
+        Commands::Sync { action } => match action {
+            SyncAction::Run { context, format } => commands::sync_cmd::run(&context, &format),
+            SyncAction::Status { context, format } => commands::sync_cmd::status(&context, &format),
+        },
     }
 }

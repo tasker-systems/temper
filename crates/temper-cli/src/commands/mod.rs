@@ -14,5 +14,6 @@ pub mod research;
 pub mod session;
 pub mod skill;
 pub mod status;
+pub mod sync_cmd;
 pub mod task;
 pub mod warmup;

@@ -16,6 +16,7 @@ export default async function handler(req: Request): Promise<Response> {
   const { getDb } = await import("../packages/temper-cloud/src/db.js");
   const { put } = await import("@vercel/blob");
   const { processUpload } = await import("./workflows/process-upload.js");
+  const { getProfileId } = await import("../packages/temper-cloud/src/ingest.js");
 
   // Authenticate
   const authHeader = req.headers.get("authorization");
@@ -57,16 +58,13 @@ export default async function handler(req: Request): Promise<Response> {
   const db = getDb();
 
   // Get profile_id and verify resource access
-  const profileRows = await db`
-    SELECT id FROM kb_profiles WHERE auth_provider_sub = ${claims.sub} LIMIT 1
-  `;
-  if (profileRows.length === 0) {
+  const profileId = await getProfileId(db, claims);
+  if (!profileId) {
     return new Response(
       JSON.stringify({ error: "Profile not found" }),
       { status: 404, headers: { "Content-Type": "application/json" } }
     );
   }
-  const profileId = profileRows[0].id as string;
 
   const visibleResources = await db`
     SELECT resource_id FROM resources_visible_to(${profileId}::uuid)

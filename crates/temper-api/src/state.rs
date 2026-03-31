@@ -98,7 +98,7 @@ impl JwksKeyStore {
     /// and optional audience.
     pub fn validation(&self, issuer: &str, audience: Option<&str>) -> Validation {
         let mut v = Validation::new(Algorithm::RS256);
-        v.algorithms = vec![Algorithm::RS256, Algorithm::EdDSA];
+        v.algorithms = vec![Algorithm::RS256];
         v.set_issuer(&[issuer]);
         if let Some(aud) = audience {
             v.set_audience(&[aud]);
@@ -221,7 +221,6 @@ mod tests {
         let v = store.validation("https://auth.example.com", Some("temper-api"));
         assert!(v.validate_aud, "audience validation should be enabled");
         assert!(v.algorithms.contains(&Algorithm::RS256));
-        assert!(v.algorithms.contains(&Algorithm::EdDSA));
     }
 
     #[test]

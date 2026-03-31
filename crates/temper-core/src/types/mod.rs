@@ -50,9 +50,9 @@ pub use resource::{
 };
 pub use search::{SearchMode, SearchRequest, SearchResponse, SearchResult};
 pub use sync::{
-    ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictEntry,
-    SyncManifestEntry, SyncPullEntry, SyncPullRequest, SyncPullResourceMeta, SyncPushEntry,
-    SyncRemovedEntry, SyncResolveRequest, SyncStatusRequest, SyncStatusResponse,
+    MergedResource, ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
+    SyncContextEntries, SyncManifestEntry, SyncPullItem, SyncPushItem, SyncRemovedItem,
+    SyncResolveRequest, SyncStatusRequest, SyncStatusResponse,
 };
 pub use team::{Team, TeamMember, TeamRole};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};

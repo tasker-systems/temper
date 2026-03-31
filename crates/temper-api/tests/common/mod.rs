@@ -50,12 +50,12 @@ struct TestClaims {
     exp: i64,
 }
 
-/// Sign a JWT with the test Ed25519 private key.
+/// Sign a JWT with the test RSA private key (matches Auth0 RS256 production flow).
 ///
 /// The token is valid for 1 hour from `now`, issued by `"test-issuer"`.
 pub fn generate_test_jwt(sub: &str, email: &str) -> String {
-    let encoding_key = EncodingKey::from_ed_pem(include_bytes!("test_ed25519.key"))
-        .expect("Failed to load test private key");
+    let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("test_rsa.key"))
+        .expect("Failed to load test RSA private key");
 
     let now = chrono::Utc::now().timestamp();
     let claims = TestClaims {
@@ -67,14 +67,14 @@ pub fn generate_test_jwt(sub: &str, email: &str) -> String {
         exp: now + 3600,
     };
 
-    jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key)
+    jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
         .expect("Failed to sign test JWT")
 }
 
 /// Sign a JWT that expired 1 hour ago.
 pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
-    let encoding_key = EncodingKey::from_ed_pem(include_bytes!("test_ed25519.key"))
-        .expect("Failed to load test private key");
+    let encoding_key = EncodingKey::from_rsa_pem(include_bytes!("test_rsa.key"))
+        .expect("Failed to load test RSA private key");
 
     let now = chrono::Utc::now().timestamp();
     let claims = TestClaims {
@@ -86,7 +86,7 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
         exp: now - 3600,
     };
 
-    jsonwebtoken::encode(&Header::new(Algorithm::EdDSA), &claims, &encoding_key)
+    jsonwebtoken::encode(&Header::new(Algorithm::RS256), &claims, &encoding_key)
         .expect("Failed to sign expired test JWT")
 }
 
@@ -110,8 +110,8 @@ pub async fn setup_test_app() -> TestApp {
     fixtures::clean_and_seed(&pool).await;
 
     // Build AppState with a static test key.
-    let decoding_key = jsonwebtoken::DecodingKey::from_ed_pem(include_bytes!("test_ed25519.pub"))
-        .expect("Failed to load test public key");
+    let decoding_key = jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("test_rsa.pub"))
+        .expect("Failed to load test RSA public key");
     let jwks_store = JwksKeyStore::with_static_key(decoding_key);
 
     let config = ApiConfig {

@@ -158,6 +158,12 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Sync local vault with temper cloud
+    Sync {
+        #[command(subcommand)]
+        action: SyncAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -368,4 +374,26 @@ pub enum SkillAction {
     },
     /// Check skill status
     Check,
+}
+
+#[derive(Subcommand)]
+pub enum SyncAction {
+    /// Run a full sync cycle
+    Run {
+        /// Context names to sync (default: all configured)
+        #[arg(long)]
+        context: Vec<String>,
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Show sync status without making changes
+    Status {
+        /// Context names to check
+        #[arg(long)]
+        context: Vec<String>,
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
