@@ -83,12 +83,18 @@ pub fn enrich_results(
         .collect()
 }
 
-/// Truncate a snippet to max_chars, breaking at word boundaries.
+/// Truncate a snippet to max_chars (character count), breaking at word boundaries.
 pub fn truncate_snippet(text: &str, max_chars: usize) -> String {
-    if text.len() <= max_chars {
+    if text.chars().count() <= max_chars {
         return text.to_string();
     }
-    let truncated = &text[..max_chars];
+    // Find the byte offset of the max_chars-th character
+    let byte_offset = text
+        .char_indices()
+        .nth(max_chars)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    let truncated = &text[..byte_offset];
     match truncated.rfind(' ') {
         Some(pos) => format!("{}...", &text[..pos]),
         None => format!("{truncated}..."),

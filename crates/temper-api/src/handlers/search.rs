@@ -14,6 +14,7 @@ use crate::state::AppState;
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Search results", body = Vec<SearchResultRow>),
+        (status = 400, description = "Invalid request", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
