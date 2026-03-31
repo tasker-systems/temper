@@ -31,8 +31,9 @@ ignore = "0.4"
 indicatif = "0.17"
 
 [features]
-default = ["extract"]
+default = ["extract", "embed"]
 extract = ["temper-embed/extract"]
+embed = ["temper-embed/embed"]
 
 [dev-dependencies]
 tempfile = "3"

@@ -164,6 +164,24 @@ pub enum Commands {
         #[command(subcommand)]
         action: SyncAction,
     },
+
+    /// Search the knowledge base
+    Search {
+        /// Search query text
+        query: String,
+        /// Filter by context name
+        #[arg(long)]
+        context: Option<String>,
+        /// Filter by document type
+        #[arg(long)]
+        doc_type: Option<String>,
+        /// Maximum results (default 10)
+        #[arg(long)]
+        limit: Option<i64>,
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]

@@ -393,5 +393,18 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             SyncAction::Run { context, format } => commands::sync_cmd::run(&context, &format),
             SyncAction::Status { context, format } => commands::sync_cmd::status(&context, &format),
         },
+        Commands::Search {
+            query,
+            context,
+            doc_type,
+            limit,
+            format,
+        } => commands::search_cmd::run(
+            &query,
+            context.as_deref(),
+            doc_type.as_deref(),
+            limit,
+            &format,
+        ),
     }
 }
