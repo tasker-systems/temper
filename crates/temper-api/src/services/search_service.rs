@@ -60,6 +60,22 @@ pub fn build_filter_clause(
     (clause, ctx_bind, dt_bind)
 }
 
+/// Resolve a context name to its UUID for the given profile.
+/// Returns None if the context doesn't exist (no auto-create for search).
+async fn resolve_context_id(
+    pool: &PgPool,
+    name: &str,
+    profile_id: Uuid,
+) -> ApiResult<Option<Uuid>> {
+    let row: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM kb_contexts WHERE name = $1 AND owner_profile_id = $2")
+            .bind(name)
+            .bind(profile_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 /// Execute the vector similarity search query.
 pub async fn search(
     pool: &PgPool,
@@ -69,10 +85,17 @@ pub async fn search(
     let limit = validate_params(&params)?;
     let embedding_str = format_embedding(&params.embedding);
 
+    // Resolve context name → UUID (if provided)
+    let context_id = if let Some(ref name) = params.context_name {
+        resolve_context_id(pool, name, profile_id).await?
+    } else {
+        None
+    };
+
     // Parameter slots: $1 = embedding, $2 = profile_id, then optional filters, then limit.
     let mut next_param: i32 = 3;
     let (filter_clause, ctx_bind, dt_bind) =
-        build_filter_clause(params.context, params.doc_type.as_deref(), &mut next_param);
+        build_filter_clause(context_id, params.doc_type.as_deref(), &mut next_param);
     let limit_param = next_param;
 
     let sql = format!(
@@ -114,7 +137,7 @@ mod tests {
     fn test_validate_params_wrong_dimension() {
         let params = SearchParams {
             embedding: vec![0.0; 100],
-            context: None,
+            context_name: None,
             doc_type: None,
             limit: None,
         };
@@ -126,7 +149,7 @@ mod tests {
     fn test_validate_params_correct_dimension() {
         let params = SearchParams {
             embedding: vec![0.0; 768],
-            context: None,
+            context_name: None,
             doc_type: None,
             limit: None,
         };
@@ -138,7 +161,7 @@ mod tests {
     fn test_validate_params_clamps_limit() {
         let params = SearchParams {
             embedding: vec![0.0; 768],
-            context: None,
+            context_name: None,
             doc_type: None,
             limit: Some(200),
         };

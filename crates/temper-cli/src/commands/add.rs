@@ -4,6 +4,7 @@ use std::io::IsTerminal;
 use std::path::Path;
 
 use crate::actions::ingest;
+use crate::actions::runtime;
 use crate::format::OutputFormat;
 use crate::output;
 
@@ -67,14 +68,15 @@ fn run_single_file(
         output::progress("  Extracting... ");
     }
 
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| crate::error::TemperError::Api(format!("tokio runtime: {e}")))?;
-
-    let (resource, extraction_content) = rt.block_on(async {
-        let client = temper_client::config::build_client()
-            .map_err(|e| crate::error::TemperError::Api(e.to_string()))?;
-
-        ingest::ingest_file(&client, &file_path, context, doc_type).await
+    let (resource, extraction_content) = runtime::with_client(|client| {
+        let file_path = file_path.clone();
+        let context = context.to_string();
+        let doc_type = doc_type.to_string();
+        Box::pin(async move {
+            ingest::ingest_file(client, &file_path, &context, &doc_type)
+                .await
+                .map_err(|e| crate::error::TemperError::Api(e.to_string()))
+        })
     })?;
 
     // Step 2: Print result.
