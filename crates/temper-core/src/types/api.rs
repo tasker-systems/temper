@@ -61,7 +61,7 @@ pub struct SearchParams {
 pub struct SearchResultRow {
     pub resource_id: Uuid,
     pub title: String,
-    pub uri: String,
+    pub origin_uri: String,
     pub snippet: String,
     pub score: f32,
 }

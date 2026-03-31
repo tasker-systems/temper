@@ -39,7 +39,7 @@ impl<'a> IngestClient<'a> {
             "title": request.title,
             "kb_context_id": request.kb_context_id,
             "kb_doc_type_id": request.kb_doc_type_id,
-            "uri": request.uri,
+            "origin_uri": request.origin_uri,
             "slug": request.slug,
             "mimetype": request.mimetype,
             "tags": request.tags,
@@ -84,7 +84,7 @@ mod tests {
             title: "Test Doc".to_owned(),
             kb_context_id: sample_uuid(),
             kb_doc_type_id: sample_uuid(),
-            uri: "kb://temper/resource/test-doc".to_owned(),
+            origin_uri: "kb://temper/resource/test-doc".to_owned(),
             slug: None,
             mimetype: None,
             tags: None,
@@ -101,7 +101,7 @@ mod tests {
             "title": req.title,
             "kb_context_id": req.kb_context_id,
             "kb_doc_type_id": req.kb_doc_type_id,
-            "uri": req.uri,
+            "origin_uri": req.origin_uri,
             "slug": req.slug,
             "mimetype": req.mimetype,
             "tags": req.tags,
@@ -116,7 +116,7 @@ mod tests {
             "metadata must not include content"
         );
         assert_eq!(metadata["title"], "Test Doc");
-        assert_eq!(metadata["uri"], "kb://temper/resource/test-doc");
+        assert_eq!(metadata["origin_uri"], "kb://temper/resource/test-doc");
     }
 
     #[test]
@@ -134,7 +134,7 @@ mod tests {
             "title": req.title,
             "kb_context_id": req.kb_context_id,
             "kb_doc_type_id": req.kb_doc_type_id,
-            "uri": req.uri,
+            "origin_uri": req.origin_uri,
             "slug": req.slug,
             "mimetype": req.mimetype,
             "tags": req.tags,

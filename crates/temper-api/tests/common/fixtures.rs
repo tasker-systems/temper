@@ -95,7 +95,7 @@ pub async fn clean_and_seed(pool: &PgPool) {
     sqlx::query(
         r#"
         INSERT INTO kb_resources
-            (id, kb_context_id, kb_doc_type_id, uri, title, slug,
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
              originator_profile_id, owner_profile_id, is_active, created, updated)
         VALUES (
             '00000000-0000-0000-0099-000000000001',

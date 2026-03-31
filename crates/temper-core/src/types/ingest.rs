@@ -11,8 +11,8 @@ pub struct IngestRequest {
     pub title: String,
     pub kb_context_id: Uuid,
     pub kb_doc_type_id: Uuid,
-    /// Resource URI (e.g., "kb://temper/resource/my-doc")
-    pub uri: String,
+    /// Origin URI — provenance of the resource (e.g., "kb://temper/resource/my-doc")
+    pub origin_uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,7 +45,7 @@ mod tests {
             title: "Hello Doc".to_owned(),
             kb_context_id: sample_uuid(),
             kb_doc_type_id: sample_uuid(),
-            uri: "kb://temper/resource/hello-doc".to_owned(),
+            origin_uri: "kb://temper/resource/hello-doc".to_owned(),
             slug: None,
             mimetype: None,
             tags: None,
@@ -62,7 +62,7 @@ mod tests {
 
         assert_eq!(json["content"], "# Hello\n\nWorld");
         assert_eq!(json["title"], "Hello Doc");
-        assert_eq!(json["uri"], "kb://temper/resource/hello-doc");
+        assert_eq!(json["origin_uri"], "kb://temper/resource/hello-doc");
         assert_eq!(
             json["kb_context_id"],
             "00000000-0000-0000-0000-000000000001"

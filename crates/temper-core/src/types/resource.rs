@@ -5,14 +5,14 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-/// Row type matching the `resources` table.
+/// Row type matching the `kb_resources` table.
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ResourceRow {
     pub id: Uuid,
     pub kb_context_id: Uuid,
     pub kb_doc_type_id: Uuid,
-    pub uri: String,
+    pub origin_uri: String,
     pub title: String,
     pub slug: Option<String>,
     pub content_hash: Option<String>,
@@ -42,7 +42,7 @@ pub struct ResourceListParams {
 pub struct ResourceCreateRequest {
     pub kb_context_id: Uuid,
     pub kb_doc_type_id: Uuid,
-    pub uri: String,
+    pub origin_uri: String,
     pub title: String,
     pub slug: Option<String>,
     pub mimetype: Option<String>,

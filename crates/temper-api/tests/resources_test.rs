@@ -17,7 +17,7 @@ async fn test_create_and_list_resources() {
     let payload = json!({
         "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
         "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
-        "uri": format!("test://resource-{}", uuid::Uuid::new_v4()),
+        "origin_uri": format!("test://resource-{}", uuid::Uuid::new_v4()),
         "title": "My Integration Test Resource",
         "slug": null,
         "mimetype": "text/markdown"
@@ -46,7 +46,7 @@ async fn test_create_and_list_resources() {
         .json(&json!({
             "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
-            "uri": format!("test://listed-resource-{}", uuid::Uuid::new_v4()),
+            "origin_uri": format!("test://listed-resource-{}", uuid::Uuid::new_v4()),
             "title": "Listed Resource",
             "slug": null,
             "mimetype": "text/markdown"
@@ -97,7 +97,7 @@ async fn test_resource_visibility_scoping() {
         .json(&json!({
             "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
-            "uri": format!("test://private-{}", uuid::Uuid::new_v4()),
+            "origin_uri": format!("test://private-{}", uuid::Uuid::new_v4()),
             "title": "User A's Private Resource",
             "slug": null,
             "mimetype": "text/plain"

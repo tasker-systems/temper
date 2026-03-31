@@ -22,7 +22,7 @@ pub async fn list_visible(
         sqlx::query_as::<_, ResourceRow>(
             r#"
             WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-            SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.uri, r.title,
+            SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
                    r.slug, r.content_hash, r.mimetype,
                    r.originator_profile_id, r.owner_profile_id, r.is_active,
                    r.created, r.updated
@@ -44,7 +44,7 @@ pub async fn list_visible(
         sqlx::query_as::<_, ResourceRow>(
             r#"
             WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-            SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.uri, r.title,
+            SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
                    r.slug, r.content_hash, r.mimetype,
                    r.originator_profile_id, r.owner_profile_id, r.is_active,
                    r.created, r.updated
@@ -74,7 +74,7 @@ pub async fn get_visible(
     let row = sqlx::query_as::<_, ResourceRow>(
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.uri, r.title,
+        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
                r.slug, r.content_hash, r.mimetype,
                r.originator_profile_id, r.owner_profile_id, r.is_active,
                r.created, r.updated
@@ -135,7 +135,7 @@ pub async fn create(
     sqlx::query(
         r#"
         INSERT INTO kb_resources
-            (id, kb_context_id, kb_doc_type_id, uri, title, slug, mimetype,
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, mimetype,
              originator_profile_id, owner_profile_id, is_active, created, updated)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, true, now(), now())
         "#,
@@ -143,7 +143,7 @@ pub async fn create(
     .bind(id)
     .bind(req.kb_context_id)
     .bind(req.kb_doc_type_id)
-    .bind(&req.uri)
+    .bind(&req.origin_uri)
     .bind(&req.title)
     .bind(&req.slug)
     .bind(&req.mimetype)

@@ -165,7 +165,7 @@ fn promote_resource(
     // Determine context: from flag or derive from resource URI
     let resolved_context = context
         .map(String::from)
-        .or_else(|| ingest::derive_context_from_uri(&resource.uri))
+        .or_else(|| ingest::derive_context_from_uri(&resource.origin_uri))
         .ok_or_else(|| {
             TemperError::Config(
                 "--context is required when promoting a resource without a context in its URI"

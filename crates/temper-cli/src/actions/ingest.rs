@@ -80,7 +80,7 @@ pub fn build_ingest_request(
         title,
         kb_context_id: Uuid::nil(),
         kb_doc_type_id: Uuid::nil(),
-        uri,
+        origin_uri: uri,
         slug: None,
         mimetype: Some(mime_type),
         tags: None,
