@@ -19,16 +19,12 @@ pub fn run(
 
     let embedding = search_actions::embed_query(query)?;
 
-    // Context name → UUID not yet wired. Search returns all accessible results.
-    if context.is_some() {
-        crate::output::warning("--context filtering not yet implemented; showing all results");
-    }
-
     let results = runtime::with_client(|client| {
         let embedding = embedding.clone();
+        let context_name = context.map(String::from);
         let doc_type = doc_type.map(String::from);
         Box::pin(async move {
-            search_actions::query_api(client, embedding, None, doc_type, limit).await
+            search_actions::query_api(client, embedding, context_name, doc_type, limit).await
         })
     })?;
 

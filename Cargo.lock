@@ -3546,6 +3546,7 @@ dependencies = [
  "dirs 5.0.1",
  "ignore",
  "indicatif 0.17.11",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",

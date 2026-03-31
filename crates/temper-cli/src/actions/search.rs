@@ -46,13 +46,13 @@ pub fn embed_query(_text: &str) -> Result<Vec<f32>> {
 pub async fn query_api(
     client: &temper_client::TemperClient,
     embedding: Vec<f32>,
-    context: Option<Uuid>,
+    context_name: Option<String>,
     doc_type: Option<String>,
     limit: Option<i64>,
 ) -> Result<Vec<SearchResultRow>> {
     client
         .search()
-        .query(embedding, context, doc_type, limit)
+        .query(embedding, context_name, doc_type, limit)
         .await
         .map_err(|e| TemperError::Api(e.to_string()))
 }

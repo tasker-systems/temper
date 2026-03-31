@@ -4,7 +4,6 @@ use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::api::{SearchParams, SearchResultRow};
-use uuid::Uuid;
 
 /// Sub-client for search operations.
 pub struct SearchClient<'a> {
@@ -26,14 +25,14 @@ impl<'a> SearchClient<'a> {
     pub async fn query(
         &self,
         embedding: Vec<f32>,
-        context: Option<Uuid>,
+        context_name: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
     ) -> Result<Vec<SearchResultRow>> {
         let token = auth::current_token()?;
         let params = SearchParams {
             embedding,
-            context,
+            context_name,
             doc_type,
             limit,
         };

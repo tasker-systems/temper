@@ -49,8 +49,8 @@ pub struct EventListParams {
 pub struct SearchParams {
     /// Pre-computed 768-dim embedding vector.
     pub embedding: Vec<f32>,
-    /// Filter by kb_context ID.
-    pub context: Option<Uuid>,
+    /// Filter by context name (resolved to UUID server-side).
+    pub context_name: Option<String>,
     /// Filter by document type.
     pub doc_type: Option<String>,
     /// Maximum results (default 10, max 50).
