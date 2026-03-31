@@ -16,8 +16,8 @@ pub const RESEARCH_DOC_TYPE_ID: &str = "00000000-0000-0000-0001-000000000004";
 ///
 /// Preserves the System and Anonymous profiles inserted by migrations.
 pub async fn clean_and_seed(pool: &PgPool) {
-    // Delete in reverse FK order. Leave kb_behaviors, kb_doc_types, kb_contexts,
-    // kb_lifecycle_stages, and the two seed profiles intact.
+    // Delete in reverse FK order. Leave kb_doc_types, kb_contexts,
+    // and the two seed profiles intact.
     sqlx::query(
         "DELETE FROM kb_events WHERE profile_id NOT IN (
             '00000000-0000-0000-0004-000000000001',
@@ -60,7 +60,7 @@ pub async fn clean_and_seed(pool: &PgPool) {
 
     // Remove test resources (not the seed ones if we re-run).
     sqlx::query(
-        "DELETE FROM resources WHERE owner_profile_id NOT IN (
+        "DELETE FROM kb_resources WHERE owner_profile_id NOT IN (
             '00000000-0000-0000-0004-000000000001',
             '00000000-0000-0000-0004-000000000002'
         )",
@@ -94,7 +94,7 @@ pub async fn clean_and_seed(pool: &PgPool) {
     // ON CONFLICT DO NOTHING so repeated runs are idempotent.
     sqlx::query(
         r#"
-        INSERT INTO resources
+        INSERT INTO kb_resources
             (id, kb_context_id, kb_doc_type_id, uri, title, slug,
              originator_profile_id, owner_profile_id, is_active, created, updated)
         VALUES (

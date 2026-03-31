@@ -26,7 +26,7 @@ pub async fn list_visible(
                    r.slug, r.content_hash, r.mimetype,
                    r.originator_profile_id, r.owner_profile_id, r.is_active,
                    r.created, r.updated
-              FROM resources r
+              FROM kb_resources r
               JOIN visible v ON v.resource_id = r.id
              WHERE r.is_active = true
                AND r.kb_context_id = $2
@@ -48,7 +48,7 @@ pub async fn list_visible(
                    r.slug, r.content_hash, r.mimetype,
                    r.originator_profile_id, r.owner_profile_id, r.is_active,
                    r.created, r.updated
-              FROM resources r
+              FROM kb_resources r
               JOIN visible v ON v.resource_id = r.id
              WHERE r.is_active = true
              ORDER BY r.updated DESC
@@ -78,7 +78,7 @@ pub async fn get_visible(
                r.slug, r.content_hash, r.mimetype,
                r.originator_profile_id, r.owner_profile_id, r.is_active,
                r.created, r.updated
-          FROM resources r
+          FROM kb_resources r
           JOIN visible v ON v.resource_id = r.id
          WHERE r.id = $2
            AND r.is_active = true
@@ -134,7 +134,7 @@ pub async fn create(
     let id = Uuid::now_v7();
     sqlx::query(
         r#"
-        INSERT INTO resources
+        INSERT INTO kb_resources
             (id, kb_context_id, kb_doc_type_id, uri, title, slug, mimetype,
              originator_profile_id, owner_profile_id, is_active, created, updated)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, true, now(), now())
@@ -179,7 +179,7 @@ pub async fn update(
 
     sqlx::query(
         r#"
-        UPDATE resources
+        UPDATE kb_resources
            SET title    = $1,
                slug     = $2,
                mimetype = $3,
@@ -212,7 +212,7 @@ pub async fn delete(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiRe
 
     sqlx::query(
         r#"
-        UPDATE resources
+        UPDATE kb_resources
            SET is_active = false,
                updated   = now()
          WHERE id = $1
