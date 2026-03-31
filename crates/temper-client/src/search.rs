@@ -4,6 +4,7 @@ use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::api::{SearchParams, SearchResultRow};
+use uuid::Uuid;
 
 /// Sub-client for search operations.
 pub struct SearchClient<'a> {
@@ -21,10 +22,22 @@ impl<'a> SearchClient<'a> {
         Self { http }
     }
 
-    /// Run a full-text or semantic search query.
-    pub async fn query(&self, params: &SearchParams) -> Result<Vec<SearchResultRow>> {
+    /// Run a vector similarity search.
+    pub async fn query(
+        &self,
+        embedding: Vec<f32>,
+        context: Option<Uuid>,
+        doc_type: Option<String>,
+        limit: Option<i64>,
+    ) -> Result<Vec<SearchResultRow>> {
         let token = auth::current_token()?;
-        let req = self.http.get("/api/search").query(params);
+        let params = SearchParams {
+            embedding,
+            context,
+            doc_type,
+            limit,
+        };
+        let req = self.http.post("/api/search").json(&params);
         self.http.send_json(req, Some(&token)).await
     }
 }
