@@ -10,7 +10,7 @@ export interface IngestMetadata {
   title: string;
   kb_context_id: string; // UUID or resolved from name
   kb_doc_type_id: string; // UUID or resolved from name
-  uri: string;
+  origin_uri: string;
   slug?: string;
   mimetype?: string;
   tags?: string[];
@@ -23,7 +23,7 @@ export interface ResourceRecord {
   id: string;
   kb_context_id: string;
   kb_doc_type_id: string;
-  uri: string;
+  origin_uri: string;
   title: string;
   slug: string | null;
   content_hash: string | null;
@@ -71,7 +71,7 @@ export async function findByContentHash(
   profileId: string,
 ): Promise<ResourceRecord | null> {
   const rows = await db`
-    SELECT id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
+    SELECT id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
            mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
     FROM kb_resources
     WHERE content_hash = ${contentHash}
@@ -171,13 +171,13 @@ export async function insertResource(
 
   const rows = await db`
     INSERT INTO kb_resources (
-      id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
+      id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
       mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
     ) VALUES (
       ${newId}::uuid,
       ${contextId}::uuid,
       ${docTypeId}::uuid,
-      ${meta.uri},
+      ${meta.origin_uri},
       ${meta.title},
       ${slug},
       ${contentHash},
@@ -188,7 +188,7 @@ export async function insertResource(
       now(),
       now()
     )
-    RETURNING id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
+    RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
               mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
   `;
 

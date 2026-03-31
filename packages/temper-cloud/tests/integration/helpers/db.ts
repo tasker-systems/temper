@@ -24,7 +24,7 @@ export async function createTestResource(sql: postgres.Sql, title: string): Prom
   const now = new Date().toISOString();
 
   await sql`
-    INSERT INTO kb_resources (id, kb_context_id, kb_doc_type_id, uri, title, slug,
+    INSERT INTO kb_resources (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
                            originator_profile_id, owner_profile_id, created, updated)
     VALUES (${id}, ${TEMPER_CONTEXT_ID}, ${SOURCE_DOC_TYPE_ID},
             ${`test://${id}`}, ${title}, ${`test-${id}`},

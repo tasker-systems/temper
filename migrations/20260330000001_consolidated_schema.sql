@@ -67,7 +67,7 @@ CREATE TABLE kb_resources (
     id                     UUID PRIMARY KEY,
     kb_context_id          UUID NOT NULL REFERENCES kb_contexts(id),
     kb_doc_type_id         UUID NOT NULL REFERENCES kb_doc_types(id),
-    uri                    TEXT NOT NULL UNIQUE,
+    origin_uri             TEXT NOT NULL UNIQUE,
     title                  TEXT NOT NULL,
     slug                   VARCHAR(256),
     content_hash           VARCHAR(64),
@@ -255,27 +255,34 @@ CREATE INDEX idx_transfers_resource ON kb_transfers(resource_id);
 -- ─── SQL Functions ───────────────────────────────────────────────────────────
 
 CREATE FUNCTION resources_visible_to(
-    p_profile_id UUID,
-    p_team_id    UUID DEFAULT NULL
-) RETURNS TABLE (resource_id UUID, access_level VARCHAR(32), via VARCHAR(256))
+    p_profile_id   UUID,
+    p_team_id      UUID DEFAULT NULL,
+    p_resource_ids UUID[] DEFAULT '{}'
+) RETURNS TABLE (resource_id UUID, access_level VARCHAR(32), via VARCHAR(256), team_role team_role)
 LANGUAGE SQL STABLE AS $$
+    -- Resources owned directly by this profile
     SELECT r.id AS resource_id,
            'vault'::VARCHAR(32) AS access_level,
-           ('owner:' || p_profile_id)::VARCHAR(256) AS via
+           ('owner:' || p_profile_id)::VARCHAR(256) AS via,
+           'owner'::team_role AS team_role
       FROM kb_resources r
      WHERE r.owner_profile_id = p_profile_id
        AND r.is_active = true
+       AND (p_resource_ids = '{}' OR r.id = ANY(p_resource_ids))
 
     UNION ALL
 
+    -- Resources shared via team membership
     SELECT tr.resource_id,
            tr.access_level::VARCHAR(32),
-           ('team:' || t.slug)::VARCHAR(256) AS via
+           ('team:' || t.slug)::VARCHAR(256) AS via,
+           tm.role AS team_role
       FROM kb_team_resources tr
       JOIN kb_teams t ON t.id = tr.team_id AND t.is_active = true
       JOIN kb_team_members tm ON tm.team_id = t.id AND tm.profile_id = p_profile_id
       JOIN kb_resources r ON r.id = tr.resource_id AND r.is_active = true
      WHERE (p_team_id IS NULL OR t.id = p_team_id)
+       AND (p_resource_ids = '{}' OR r.id = ANY(p_resource_ids))
 $$;
 
 CREATE FUNCTION can_modify_resource(
@@ -284,21 +291,10 @@ CREATE FUNCTION can_modify_resource(
 ) RETURNS BOOLEAN
 LANGUAGE SQL STABLE AS $$
     SELECT EXISTS (
-        SELECT 1 FROM kb_resources
-         WHERE id = p_resource_id
-           AND owner_profile_id = p_profile_id
-           AND is_active = true
-
-        UNION ALL
-
         SELECT 1
-          FROM kb_team_resources tr
-          JOIN kb_teams t ON t.id = tr.team_id AND t.is_active = true
-          JOIN kb_team_members tm ON tm.team_id = t.id AND tm.profile_id = p_profile_id
-          JOIN kb_resources r ON r.id = tr.resource_id AND r.is_active = true
-         WHERE tr.resource_id = p_resource_id
-           AND tr.access_level IN ('vault', 'mutable')
-           AND tm.role != 'watcher'
+          FROM resources_visible_to(p_profile_id, NULL, ARRAY[p_resource_id]) v
+         WHERE v.access_level IN ('vault', 'mutable')
+           AND v.team_role != 'watcher'
     )
 $$;
 
@@ -340,16 +336,59 @@ LANGUAGE SQL STABLE AS $$
      WHERE (p_team_id IS NULL OR t.id = p_team_id)
 $$;
 
+-- Generate a canonical kb:// URI for a resource via joins.
+-- Format: kb://context_name/doc_type_name/resource_uuid
+CREATE FUNCTION kb_resource_uri(p_resource_id UUID)
+RETURNS TEXT
+LANGUAGE SQL STABLE AS $$
+    SELECT 'kb://' || c.name || '/' || dt.name || '/' || r.id::text
+      FROM kb_resources r
+      JOIN kb_contexts c ON c.id = r.kb_context_id
+      JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
+     WHERE r.id = p_resource_id
+$$;
+
+-- Resolve a kb:// URI to a visible resource for a profile.
+-- Extracts the resource UUID from the last segment of the URI,
+-- then checks visibility via resources_visible_to.
+CREATE FUNCTION resource_for_uri(p_profile_id UUID, p_kb_uri TEXT)
+RETURNS TABLE (
+    resource_id  UUID,
+    origin_uri   TEXT,
+    content_hash VARCHAR(64),
+    updated      TIMESTAMPTZ,
+    is_active    BOOLEAN,
+    access_level VARCHAR(32),
+    team_role    team_role
+)
+LANGUAGE SQL STABLE AS $$
+    WITH parsed AS (
+        -- Extract UUID from kb://context/doc_type/uuid
+        SELECT (split_part(p_kb_uri, '/', 5))::UUID AS extracted_id
+    )
+    SELECT r.id AS resource_id,
+           r.origin_uri,
+           r.content_hash,
+           r.updated,
+           r.is_active,
+           v.access_level,
+           v.team_role
+      FROM parsed p
+      JOIN kb_resources r ON r.id = p.extracted_id
+      JOIN resources_visible_to(p_profile_id, NULL, ARRAY[p.extracted_id]) v
+        ON v.resource_id = r.id
+$$;
+
 CREATE FUNCTION sync_diff_for_device(
     p_profile_id    UUID,
     p_context_names TEXT[],
-    p_manifest      JSONB
+    p_manifest      JSONB  -- [{"uri": "kb://ctx/type/uuid", "local_hash": "...", "remote_hash": "..."}, ...]
 ) RETURNS TABLE (
-    resource_id UUID,
-    uri         TEXT,
+    resource_id  UUID,
+    kb_uri       TEXT,
     content_hash VARCHAR(64),
-    updated     TIMESTAMPTZ,
-    diff_type   VARCHAR(16)
+    updated      TIMESTAMPTZ,
+    diff_type    VARCHAR(16)  -- 'to_push', 'to_pull', 'conflict', 'removed'
 )
 LANGUAGE SQL STABLE AS $$
     WITH
@@ -359,21 +398,24 @@ LANGUAGE SQL STABLE AS $$
     manifest_entries AS (
         SELECT
             (entry->>'uri')::TEXT AS uri,
+            -- Extract resource UUID from last segment of kb://context/doc_type/uuid
+            (split_part(entry->>'uri', '/', 5))::UUID AS extracted_resource_id,
             (entry->>'local_hash')::VARCHAR(64) AS local_hash,
             (entry->>'remote_hash')::VARCHAR(64) AS remote_hash
         FROM jsonb_array_elements(p_manifest) AS entry
     ),
     server_resources AS (
-        SELECT r.id, r.uri, r.content_hash, r.updated, r.is_active
+        SELECT r.id, kb_resource_uri(r.id) AS kb_uri, r.content_hash, r.updated, r.is_active
           FROM kb_resources r
           JOIN visible v ON v.resource_id = r.id
           JOIN kb_contexts c ON c.id = r.kb_context_id
          WHERE r.resource_mode = 'imported'
            AND c.name = ANY(p_context_names)
     )
+    -- Server resource exists, manifest entry exists: compare hashes (join on resource_id)
     SELECT
         sr.id AS resource_id,
-        sr.uri,
+        sr.kb_uri,
         sr.content_hash,
         sr.updated,
         CASE
@@ -383,32 +425,34 @@ LANGUAGE SQL STABLE AS $$
             WHEN me.local_hash = me.remote_hash AND sr.content_hash != me.remote_hash THEN 'to_pull'
         END AS diff_type
       FROM server_resources sr
-      JOIN manifest_entries me ON me.uri = sr.uri
+      JOIN manifest_entries me ON me.extracted_resource_id = sr.id
      WHERE sr.is_active = false
         OR me.local_hash != sr.content_hash
 
     UNION ALL
 
+    -- Server resource exists but not in manifest → new remote resource to pull
     SELECT
         sr.id AS resource_id,
-        sr.uri,
+        sr.kb_uri,
         sr.content_hash,
         sr.updated,
         'to_pull'::VARCHAR(16) AS diff_type
       FROM server_resources sr
-      LEFT JOIN manifest_entries me ON me.uri = sr.uri
+      LEFT JOIN manifest_entries me ON me.extracted_resource_id = sr.id
      WHERE me.uri IS NULL
        AND sr.is_active = true
 
     UNION ALL
 
+    -- Manifest entry exists but no server resource → new local resource to push
     SELECT
-        NULL::UUID AS resource_id,
-        me.uri,
+        me.extracted_resource_id AS resource_id,
+        me.uri AS kb_uri,
         me.local_hash AS content_hash,
         NULL::TIMESTAMPTZ AS updated,
         'to_push'::VARCHAR(16) AS diff_type
       FROM manifest_entries me
-      LEFT JOIN server_resources sr ON sr.uri = me.uri
+      LEFT JOIN server_resources sr ON sr.id = me.extracted_resource_id
      WHERE sr.id IS NULL
 $$;

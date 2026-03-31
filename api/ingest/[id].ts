@@ -61,7 +61,7 @@ export default async function handler(req: Request): Promise<Response> {
 
   // Verify resource exists and caller owns it
   const resourceRows = await db`
-    SELECT id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
+    SELECT id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
            mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
     FROM kb_resources
     WHERE id = ${resourceId}::uuid
@@ -107,7 +107,7 @@ export default async function handler(req: Request): Promise<Response> {
 
   // Return updated resource
   const updatedRows = await db`
-    SELECT id, kb_context_id, kb_doc_type_id, uri, title, slug, content_hash,
+    SELECT id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
            mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
     FROM kb_resources
     WHERE id = ${resourceId}::uuid
