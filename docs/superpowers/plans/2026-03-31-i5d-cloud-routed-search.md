@@ -164,7 +164,9 @@ pub struct SearchParams {
 pub struct SearchResultRow {
     pub resource_id: Uuid,
     pub title: String,
-    /// Canonical resource path: kb://{context}/{doc_type}/{resource_id}
+    /// Canonical kb:// URI: kb://context/doc_type/uuid (from kb_resource_uri SQL function)
+    pub kb_uri: String,
+    /// Original source URL or file reference
     pub origin_uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
@@ -208,7 +210,7 @@ Expected: Compilation errors in downstream crates referencing removed types — 
 
 ```bash
 git add crates/temper-core/src/types/api.rs crates/temper-core/src/types/search.rs crates/temper-core/src/types/mod.rs
-git commit -m "refactor: update search types for vector search, add origin_uri"
+git commit -m "refactor: update search types for vector search, add kb_uri and origin_uri"
 ```
 
 ---
@@ -279,7 +281,7 @@ pub fn build_filter_clause(
         ctx_bind = Some(ctx);
     }
     if let Some(dt) = doc_type {
-        clause.push_str(&format!(" AND r.doc_type = ${next_param}"));
+        clause.push_str(&format!(" AND dt.name = ${next_param}"));
         *next_param += 1;
         dt_bind = Some(dt.to_string());
     }
@@ -304,13 +306,15 @@ pub async fn search(
     let limit_param = next_param;
 
     let sql = format!(
-        "SELECT r.id AS resource_id, r.title, r.origin_uri, \
-         ctx.name AS context, r.doc_type, \
+        "SELECT r.id AS resource_id, r.title, \
+         kb_resource_uri(r.id) AS kb_uri, r.origin_uri, \
+         ctx.name AS context, dt.name AS doc_type, \
          c.content AS snippet, c.header_path, \
          (1 - (c.embedding <=> $1::vector))::real AS score \
          FROM kb_current_chunks c \
          JOIN kb_resources r ON c.resource_id = r.id \
          LEFT JOIN kb_contexts ctx ON r.kb_context_id = ctx.id \
+         JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id \
          WHERE r.id IN (SELECT resource_id FROM resources_visible_to($2)) \
          {filter_clause} \
          ORDER BY c.embedding <=> $1::vector LIMIT ${limit_param}"
@@ -410,7 +414,7 @@ mod tests {
         let mut next = 3;
         let id = Uuid::nil();
         let (clause, ctx, dt) = build_filter_clause(Some(id), Some("task"), &mut next);
-        assert_eq!(clause, " AND r.kb_context_id = $3 AND r.doc_type = $4");
+        assert_eq!(clause, " AND r.kb_context_id = $3 AND dt.name = $4");
         assert_eq!(ctx, Some(id));
         assert_eq!(dt.as_deref(), Some("task"));
         assert_eq!(next, 5);
@@ -420,7 +424,7 @@ mod tests {
     fn test_build_filter_clause_doc_type_only() {
         let mut next = 3;
         let (clause, ctx, dt) = build_filter_clause(None, Some("session"), &mut next);
-        assert_eq!(clause, " AND r.doc_type = $3");
+        assert_eq!(clause, " AND dt.name = $3");
         assert!(ctx.is_none());
         assert_eq!(dt.as_deref(), Some("session"));
         assert_eq!(next, 4);
@@ -1210,6 +1214,7 @@ use crate::error::{Result, TemperError};
 pub struct EnrichedSearchResult {
     pub resource_id: Uuid,
     pub title: String,
+    pub kb_uri: String,
     pub origin_uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
@@ -1264,6 +1269,7 @@ pub fn enrich_results(
             EnrichedSearchResult {
                 resource_id: row.resource_id,
                 title: row.title,
+                kb_uri: row.kb_uri,
                 origin_uri: row.origin_uri,
                 context: row.context,
                 doc_type: row.doc_type,
@@ -1322,7 +1328,8 @@ mod tests {
         SearchResultRow {
             resource_id,
             title: title.to_string(),
-            origin_uri: format!("kb://temper/task/{resource_id}"),
+            kb_uri: format!("kb://temper/task/{resource_id}"),
+            origin_uri: "file:///vault/temper/tasks/test.md".to_string(),
             context: Some("temper".to_string()),
             doc_type: "task".to_string(),
             score: 0.85,
@@ -1360,11 +1367,11 @@ mod tests {
     }
 
     #[test]
-    fn test_enrich_preserves_origin_uri() {
+    fn test_enrich_preserves_kb_uri() {
         let id = Uuid::nil();
         let results = vec![sample_result(id, "Task")];
         let enriched = enrich_results(results, &Manifest::new("d".into()));
-        assert_eq!(enriched[0].origin_uri, format!("kb://temper/task/{id}"));
+        assert_eq!(enriched[0].kb_uri, format!("kb://temper/task/{id}"));
     }
 
     #[test]
@@ -1414,6 +1421,7 @@ mod tests {
         let enriched = enrich_results(results, &sample_manifest());
         let json = serde_json::to_value(&enriched[0]).unwrap();
         assert!(json.get("resource_id").is_some());
+        assert!(json.get("kb_uri").is_some());
         assert!(json.get("origin_uri").is_some());
         assert!(json.get("local").is_some());
         assert!(json.get("score").is_some());
