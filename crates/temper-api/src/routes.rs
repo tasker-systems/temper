@@ -10,7 +10,7 @@ use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 pub fn create_app(state: AppState) -> Router {
-    use axum::routing::get;
+    use axum::routing::{get, post};
 
     let public = Router::new().route("/api/health", get(handlers::health::health_check));
 
@@ -38,7 +38,7 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::profiles::list_auth_links),
         )
         .route("/api/events", get(handlers::events::list))
-        .route("/api/search", get(handlers::search::search))
+        .route("/api/search", post(handlers::search::search))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

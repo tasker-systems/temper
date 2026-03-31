@@ -48,7 +48,6 @@ pub use resource::{
     ContentChunk, ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
     ResourceRow, ResourceUpdateRequest,
 };
-pub use search::{SearchMode, SearchRequest, SearchResponse, SearchResult};
 pub use sync::{
     MergedResource, ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
     SyncContextEntries, SyncManifestEntry, SyncPullItem, SyncPushItem, SyncRemovedItem,
