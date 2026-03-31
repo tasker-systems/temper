@@ -21,7 +21,7 @@ pub struct HealthResponse {
 pub struct EventRow {
     pub id: Uuid,
     pub profile_id: Uuid,
-    pub client_id: String,
+    pub device_id: String,
     pub kb_context_id: Option<Uuid>,
     pub resource_id: Option<Uuid>,
     pub event_type: String,

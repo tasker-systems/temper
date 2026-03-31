@@ -32,7 +32,7 @@ pub struct TemperClient {
 impl TemperClient {
     /// Create a new client targeting `base_url`.
     ///
-    /// `device_id` is sent as `X-Temper-Client-Id` on every request for
+    /// `device_id` is sent as `X-Temper-Device-Id` on every request for
     /// per-device manifest tracking.
     pub fn new(base_url: &str, device_id: Option<String>) -> Self {
         Self {

@@ -157,12 +157,15 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
         claims.expires_at
     };
 
+    let device_id = auth::load_or_create_device_id();
+
     let stored = StoredAuth {
         provider: "auth0".to_owned(),
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_at,
         profile_id: claims.subject,
+        device_id: Some(device_id),
     };
 
     auth::save_auth(&stored)?;

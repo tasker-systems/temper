@@ -3,11 +3,12 @@
 mod common;
 
 use serde_json::Value;
+use sqlx::PgPool;
 
 /// GET /api/profile without an Authorization header must return 401.
-#[tokio::test]
-async fn test_missing_auth_returns_401() {
-    let app = common::setup_test_app().await;
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_missing_auth_returns_401(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
 
     let resp = app
         .client
@@ -24,9 +25,9 @@ async fn test_missing_auth_returns_401() {
 }
 
 /// GET /api/profile with an expired JWT must return 401.
-#[tokio::test]
-async fn test_expired_jwt_returns_401() {
-    let app = common::setup_test_app().await;
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_expired_jwt_returns_401(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
 
     let token = common::generate_expired_jwt("expired-user-sub", "expired@example.com");
 
@@ -45,9 +46,9 @@ async fn test_expired_jwt_returns_401() {
 /// - return 200
 /// - auto-provision a profile
 /// - set display_name to the email prefix
-#[tokio::test]
-async fn test_valid_jwt_auto_provisions_profile() {
-    let app = common::setup_test_app().await;
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_valid_jwt_auto_provisions_profile(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
 
     let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("autoprovision-{}@example.com", uuid::Uuid::new_v4());

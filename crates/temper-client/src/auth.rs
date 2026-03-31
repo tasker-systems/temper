@@ -7,6 +7,10 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ClientError, Result};
 
 /// Persisted auth state written to `~/.config/temper/auth.json`.
+///
+/// `device_id` is a UUIDv7 generated on first login, identifying this machine.
+/// It is sent as `X-Temper-Device-Id` on every API request and used for
+/// per-device sync state and vault config overrides.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredAuth {
     pub provider: String,
@@ -14,6 +18,9 @@ pub struct StoredAuth {
     pub refresh_token: Option<String>,
     pub expires_at: DateTime<Utc>,
     pub profile_id: Option<uuid::Uuid>,
+    /// Per-device identity — generated once on first login, stable across re-auth.
+    #[serde(default)]
+    pub device_id: Option<String>,
 }
 
 /// Summary returned by `auth_status` — safe to display without exposing tokens.
@@ -120,6 +127,34 @@ pub fn auth_status() -> Result<AuthStatus> {
 }
 
 // ---------------------------------------------------------------------------
+// Device ID helper
+// ---------------------------------------------------------------------------
+
+/// Load an existing device_id from auth.json, or generate a new UUIDv7.
+///
+/// Called during login to ensure every auth.json has a stable device_id.
+/// If the user already has one (re-login), it is preserved.
+pub fn load_or_create_device_id() -> String {
+    if let Ok(Some(auth)) = load_auth() {
+        if let Some(id) = auth.device_id {
+            if !id.is_empty() {
+                return id;
+            }
+        }
+    }
+    uuid::Uuid::now_v7().to_string()
+}
+
+/// Load the device_id from auth.json.
+///
+/// Returns `None` if not authenticated or if the stored auth predates
+/// the device_id field.
+pub fn load_device_id() -> Option<String> {
+    let auth = load_auth().ok()??;
+    auth.device_id.filter(|id| !id.is_empty())
+}
+
+// ---------------------------------------------------------------------------
 // Current token helper
 // ---------------------------------------------------------------------------
 
@@ -189,6 +224,7 @@ pub async fn refresh_token(
         refresh_token: tr.refresh_token.or_else(|| auth.refresh_token.clone()),
         expires_at,
         profile_id: auth.profile_id,
+        device_id: auth.device_id.clone(),
     };
 
     save_auth(&updated)?;
@@ -223,6 +259,7 @@ mod tests {
             refresh_token: Some("rtok_test".to_owned()),
             expires_at,
             profile_id: None,
+            device_id: Some("test-device-id".to_owned()),
         }
     }
 

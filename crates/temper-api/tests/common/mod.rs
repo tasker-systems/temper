@@ -2,8 +2,8 @@
 //! Shared test helpers for temper-api integration tests.
 //!
 //! Provides `TestApp` — a running server bound to a random port, backed by
-//! the `temper_test` Docker Postgres database — and JWT generation utilities
-//! signed with the local Ed25519 test key pair.
+//! an isolated per-test database (via `#[sqlx::test]`) — and JWT generation
+//! utilities signed with the local RSA test key pair.
 
 pub mod fixtures;
 
@@ -90,23 +90,12 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
         .expect("Failed to sign expired test JWT")
 }
 
-/// Create a pool, run migrations, seed test data, start the server on a
-/// random port, and return a `TestApp` ready for requests.
-pub async fn setup_test_app() -> TestApp {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://temper:temper@localhost:5437/temper_test".to_string());
-
-    // Build pool and run migrations.
-    let pool = PgPool::connect(&database_url)
-        .await
-        .expect("Failed to connect to test database");
-
-    sqlx::migrate!("../../migrations")
-        .run(&pool)
-        .await
-        .expect("Failed to run migrations");
-
-    // Seed / clean test data.
+/// Build a `TestApp` from a pool provided by `#[sqlx::test]`.
+///
+/// The pool already points at an isolated per-test database with migrations
+/// applied. We seed fixtures and start the Axum server on a random port.
+pub async fn setup_test_app(pool: PgPool) -> TestApp {
+    // Seed test data into the isolated database.
     fixtures::clean_and_seed(&pool).await;
 
     // Build AppState with a static test key.
@@ -115,7 +104,7 @@ pub async fn setup_test_app() -> TestApp {
     let jwks_store = JwksKeyStore::with_static_key(decoding_key);
 
     let config = ApiConfig {
-        database_url: database_url.clone(),
+        database_url: "unused".to_string(),
         jwks_url: "unused".to_string(),
         auth_issuer: "test-issuer".to_string(),
         auth_audience: None,

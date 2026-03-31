@@ -31,6 +31,7 @@ test-db = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migrate"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }

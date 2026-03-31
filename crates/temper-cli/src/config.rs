@@ -256,17 +256,12 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
     })
 }
 
-/// Load the device UUID string from `~/.config/temper/device.json`.
+/// Load the device UUID from auth.json's `device_id` field.
 ///
-/// Returns `None` when the file is absent or cannot be parsed.
+/// Returns `None` when not authenticated or if the stored auth predates
+/// the device_id field.
 pub fn load_device_id() -> Option<String> {
-    let path = dirs::home_dir()?
-        .join(".config")
-        .join("temper")
-        .join("device.json");
-    let content = std::fs::read_to_string(path).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
-    val.get("client_id")?.as_str().map(String::from)
+    temper_client::auth::load_device_id()
 }
 
 /// Safe-write protocol: read → validate original TOML → apply transform →

@@ -102,7 +102,7 @@ pub fn build_status_request(manifest: &Manifest, context_filter: &[String]) -> S
 /// Build a SyncCompleteRequest.
 pub fn build_complete_request(device_id: &str, merged: Vec<MergedResource>) -> SyncCompleteRequest {
     SyncCompleteRequest {
-        client_id: device_id.to_string(),
+        device_id: device_id.to_string(),
         merged_resources: merged,
     }
 }
@@ -522,7 +522,7 @@ mod tests {
     #[test]
     fn build_complete_request_sets_fields() {
         let req = build_complete_request("device-1", vec![]);
-        assert_eq!(req.client_id, "device-1");
+        assert_eq!(req.device_id, "device-1");
         assert!(req.merged_resources.is_empty());
     }
 

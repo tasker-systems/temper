@@ -17,7 +17,7 @@ pub struct VaultConfig {
     /// What this profile syncs
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub subscriptions: Vec<Subscription>,
-    /// Per-device overrides keyed by X-Temper-Client-Id
+    /// Per-device overrides keyed by X-Temper-Device-Id
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub per_device: HashMap<String, DeviceOverrides>,
 }
@@ -51,7 +51,7 @@ pub struct Subscription {
     pub repos: Vec<String>,
 }
 
-/// Per-device configuration overrides keyed by X-Temper-Client-Id.
+/// Per-device configuration overrides keyed by X-Temper-Device-Id.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct DeviceOverrides {

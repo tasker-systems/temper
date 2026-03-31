@@ -71,12 +71,15 @@ pub fn token(jwt: &str, provider: &str) -> Result<()> {
         .and_then(|v| v.as_str())
         .and_then(|s| uuid::Uuid::parse_str(s).ok());
 
+    let device_id = temper_client::auth::load_or_create_device_id();
+
     let stored = temper_client::auth::StoredAuth {
         provider: provider.to_string(),
         access_token: jwt.to_string(),
         refresh_token: None,
         expires_at,
         profile_id,
+        device_id: Some(device_id),
     };
 
     temper_client::auth::save_auth(&stored)

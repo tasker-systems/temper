@@ -3,10 +3,11 @@
 mod common;
 
 use serde_json::Value;
+use sqlx::PgPool;
 
-#[tokio::test]
-async fn test_health_check() {
-    let app = common::setup_test_app().await;
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_health_check(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
 
     let resp = app
         .client

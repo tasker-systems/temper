@@ -42,7 +42,7 @@ pub struct ManifestEntry {
 /// Updated after every sync round and on local-only pre-flight checks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
-    /// Device identifier (matches DeviceIdentity.client_id)
+    /// Device identifier (UUIDv7, stored in auth.json)
     pub device_id: String,
     /// Timestamp of last completed sync round
     pub last_sync: Option<DateTime<Utc>>,

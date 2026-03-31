@@ -24,7 +24,7 @@ pub struct EventQuery {
 pub struct EventResponse {
     pub id: Uuid,
     pub profile_id: Uuid,
-    pub client_id: String,
+    pub device_id: String,
     pub context: Option<String>,
     pub resource_id: Option<Uuid>,
     pub event_type: String,
@@ -55,7 +55,7 @@ mod tests {
         let event = EventResponse {
             id: Uuid::nil(),
             profile_id: Uuid::nil(),
-            client_id: "device-abc".to_string(),
+            device_id: "device-abc".to_string(),
             context: Some("temper".to_string()),
             resource_id: Some(Uuid::nil()),
             event_type: "resource.modified".to_string(),

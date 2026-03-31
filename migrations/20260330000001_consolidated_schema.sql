@@ -158,7 +158,7 @@ CREATE TABLE kb_ingestion_records (
 CREATE TABLE kb_events (
     id            UUID PRIMARY KEY,
     profile_id    UUID NOT NULL REFERENCES kb_profiles(id),
-    client_id     VARCHAR(64) NOT NULL,
+    device_id     VARCHAR(64) NOT NULL,
     kb_context_id UUID REFERENCES kb_contexts(id),
     resource_id   UUID REFERENCES kb_resources(id),
     event_type    VARCHAR(64) NOT NULL,
@@ -168,7 +168,7 @@ CREATE TABLE kb_events (
 CREATE INDEX idx_events_resource ON kb_events(resource_id);
 CREATE INDEX idx_events_type ON kb_events(event_type);
 CREATE INDEX idx_events_created ON kb_events(created);
-CREATE INDEX idx_events_client ON kb_events(client_id);
+CREATE INDEX idx_events_device ON kb_events(device_id);
 CREATE INDEX idx_events_profile ON kb_events(profile_id);
 
 -- ─── Sync ────────────────────────────────────────────────────────────────────
@@ -176,10 +176,10 @@ CREATE INDEX idx_events_profile ON kb_events(profile_id);
 CREATE TABLE kb_device_sync_state (
     id            UUID PRIMARY KEY,
     profile_id    UUID NOT NULL REFERENCES kb_profiles(id),
-    client_id     VARCHAR(64) NOT NULL,
+    device_id     VARCHAR(64) NOT NULL,
     last_sync_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     manifest_hash VARCHAR(64),
-    UNIQUE(profile_id, client_id)
+    UNIQUE(profile_id, device_id)
 );
 CREATE INDEX idx_device_sync_profile ON kb_device_sync_state(profile_id);
 

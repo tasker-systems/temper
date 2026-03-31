@@ -37,7 +37,7 @@ pub use config::{
     CliConfig, CloudConfig, CloudVaultConfig, MergePolicy, SyncConfig, SyncSubscription,
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
-pub use device::{DeviceIdentity, DeviceSyncState};
+pub use device::DeviceSyncState;
 pub use event::{EventQuery, EventResponse};
 pub use ingest::IngestRequest;
 pub use invitation::{InvitationStatus, TeamInvitation};

@@ -20,7 +20,7 @@ rand = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
 dirs = "5"
-hex = "0.4"
+# hex = "0.4"
 toml = "0.8"
 
 [features]

@@ -21,7 +21,7 @@ export const SyncStatusBodySchema = z.object({
 });
 
 export const SyncCompleteBodySchema = z.object({
-  client_id: z.string().min(1),
+  device_id: z.string().min(1),
   merged_resources: z
     .array(
       z.object({
@@ -184,9 +184,9 @@ export async function completeSyncRound(
   }
 
   await db`
-    INSERT INTO kb_device_sync_state (id, profile_id, client_id, last_sync_at)
-    VALUES (gen_random_uuid(), ${profileId}::uuid, ${body.client_id}, now())
-    ON CONFLICT (profile_id, client_id)
+    INSERT INTO kb_device_sync_state (id, profile_id, device_id, last_sync_at)
+    VALUES (gen_random_uuid(), ${profileId}::uuid, ${body.device_id}, now())
+    ON CONFLICT (profile_id, device_id)
     DO UPDATE SET last_sync_at = now()
   `;
 

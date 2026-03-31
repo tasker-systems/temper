@@ -12,7 +12,7 @@ use crate::error::{ClientError, Result};
 /// Wraps a `reqwest::Client` with base URL and optional device identity.
 ///
 /// All request methods prepend `base_url` to the given path and inject the
-/// `X-Temper-Client-Id` header when a device ID has been set.
+/// `X-Temper-Device-Id` header when a device ID has been set.
 #[derive(Debug, Clone)]
 pub struct HttpClient {
     inner: Client,
@@ -40,7 +40,7 @@ impl HttpClient {
 
     fn apply_device_header(&self, req: RequestBuilder) -> RequestBuilder {
         if let Some(id) = &self.device_id {
-            req.header("X-Temper-Client-Id", id.as_str())
+            req.header("X-Temper-Device-Id", id.as_str())
         } else {
             req
         }

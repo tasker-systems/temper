@@ -3,11 +3,12 @@
 mod common;
 
 use serde_json::{json, Value};
+use sqlx::PgPool;
 
 /// POST /api/resources creates a resource; GET /api/resources lists it.
-#[tokio::test]
-async fn test_create_and_list_resources() {
-    let app = common::setup_test_app().await;
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_create_and_list_resources(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
 
     let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("resource-user-{}@example.com", uuid::Uuid::new_v4());
@@ -81,9 +82,9 @@ async fn test_create_and_list_resources() {
 }
 
 /// User A's private resource must NOT be visible to User B.
-#[tokio::test]
-async fn test_resource_visibility_scoping() {
-    let app = common::setup_test_app().await;
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_resource_visibility_scoping(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
 
     // User A creates a resource.
     let sub_a = format!("test-sub-a-{}", uuid::Uuid::new_v4());

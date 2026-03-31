@@ -23,9 +23,9 @@ struct JwtClaims {
     iat: i64,
 }
 
-/// Newtype carrying the value of the `X-Temper-Client-Id` request header.
+/// Newtype carrying the value of the `X-Temper-Device-Id` request header.
 #[derive(Debug, Clone)]
-pub struct ClientId(pub String);
+pub struct DeviceId(pub String);
 
 /// Local wrapper around [`AuthenticatedProfile`] that implements axum's
 /// [`FromRequestParts`] extractor. Route handlers use `AuthUser` and
@@ -101,14 +101,14 @@ pub async fn require_auth(
     // 5. Resolve (or auto-provision) the profile.
     let profile = profile_service::resolve_from_claims(&state.pool, &claims).await?;
 
-    // 6. Optionally capture X-Temper-Client-Id.
-    let client_id = request
+    // 6. Optionally capture X-Temper-Device-Id.
+    let device_id = request
         .headers()
-        .get("X-Temper-Client-Id")
+        .get("X-Temper-Device-Id")
         .and_then(|v| v.to_str().ok())
-        .map(|s| ClientId(s.to_string()));
+        .map(|s| DeviceId(s.to_string()));
 
-    if let Some(id) = client_id {
+    if let Some(id) = device_id {
         request.extensions_mut().insert(id);
     }
 

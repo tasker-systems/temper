@@ -81,7 +81,7 @@ pub struct MergedResource {
 /// Request body for `POST /api/sync/complete`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncCompleteRequest {
-    pub client_id: String,
+    pub device_id: String,
     pub merged_resources: Vec<MergedResource>,
 }
 
@@ -156,7 +156,7 @@ mod tests {
     #[test]
     fn sync_complete_request_serde_roundtrip() {
         let req = SyncCompleteRequest {
-            client_id: "device-abc".to_string(),
+            device_id: "device-abc".to_string(),
             merged_resources: vec![MergedResource {
                 resource_id: Uuid::nil(),
                 content_hash: "sha256:def".to_string(),
@@ -164,7 +164,7 @@ mod tests {
         };
         let json = serde_json::to_string(&req).unwrap();
         let parsed: SyncCompleteRequest = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.client_id, "device-abc");
+        assert_eq!(parsed.device_id, "device-abc");
         assert_eq!(parsed.merged_resources.len(), 1);
     }
 

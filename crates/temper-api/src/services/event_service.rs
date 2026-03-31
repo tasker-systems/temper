@@ -23,7 +23,7 @@ pub async fn list_visible(
             sqlx::query_as::<_, EventRow>(
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.client_id, e.kb_context_id,
+                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
                        e.resource_id, e.event_type, e.payload, e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
@@ -45,7 +45,7 @@ pub async fn list_visible(
             sqlx::query_as::<_, EventRow>(
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.client_id, e.kb_context_id,
+                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
                        e.resource_id, e.event_type, e.payload, e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
@@ -65,7 +65,7 @@ pub async fn list_visible(
             sqlx::query_as::<_, EventRow>(
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.client_id, e.kb_context_id,
+                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
                        e.resource_id, e.event_type, e.payload, e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
@@ -85,7 +85,7 @@ pub async fn list_visible(
             sqlx::query_as::<_, EventRow>(
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.client_id, e.kb_context_id,
+                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
                        e.resource_id, e.event_type, e.payload, e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))

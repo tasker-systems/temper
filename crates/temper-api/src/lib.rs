@@ -13,3 +13,6 @@ pub mod services;
 pub mod state;
 
 pub use routes::create_app;
+
+/// Migrator used by `#[sqlx::test]` to create isolated per-test databases.
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("../../migrations");

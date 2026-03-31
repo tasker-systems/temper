@@ -110,7 +110,7 @@ fn default_providers() -> HashMap<String, ProviderConfig> {
 /// Returns `~/.config/temper/config.toml`.
 ///
 /// We use `~/.config/temper/` explicitly (not the platform-specific config dir)
-/// because the CLI, auth.json, and device.json all live here.
+/// because the CLI and auth.json all live here.
 pub fn config_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("~"))
@@ -174,8 +174,8 @@ pub fn oauth_config(config: &CloudConfig) -> crate::error::Result<crate::login::
 /// Convenience: load config and build a fully-configured [`TemperClient`](crate::TemperClient).
 ///
 /// Reads `~/.config/temper/config.toml`, resolves the API URL (with env-var
-/// override), loads the device UUID from `~/.config/temper/device.json`, and
-/// attaches OAuth config when a provider is configured.
+/// override), loads the device UUID from `auth.json`, and attaches OAuth
+/// config when a provider is configured.
 pub fn build_client() -> crate::error::Result<crate::TemperClient> {
     let config = load_cloud_config()?;
     let url = api_url(&config);
@@ -192,17 +192,12 @@ pub fn build_client() -> crate::error::Result<crate::TemperClient> {
     Ok(client)
 }
 
-/// Try to read the device UUID from `~/.config/temper/device.json`.
+/// Load the device UUID from auth.json's `device_id` field.
 ///
-/// Returns `None` if the file is absent or cannot be parsed.
+/// Returns `None` if not authenticated or if the stored auth predates
+/// the device_id field.
 fn load_device_id() -> Option<String> {
-    let path = dirs::home_dir()?
-        .join(".config")
-        .join("temper")
-        .join("device.json");
-    let content = std::fs::read_to_string(path).ok()?;
-    let val: serde_json::Value = serde_json::from_str(&content).ok()?;
-    val.get("client_id")?.as_str().map(String::from)
+    crate::auth::load_device_id()
 }
 
 // ---------------------------------------------------------------------------
