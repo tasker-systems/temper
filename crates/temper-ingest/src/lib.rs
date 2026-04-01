@@ -4,6 +4,7 @@
 //! - `extract`: kreuzberg-based document extraction
 //! - `embed`: bge-base-en-v1.5 text embedding via ONNX Runtime
 
+pub mod chunk;
 pub mod error;
 pub mod extract;
 
