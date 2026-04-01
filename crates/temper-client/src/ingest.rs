@@ -91,6 +91,7 @@ mod tests {
             metadata: None,
             context_name: None,
             doc_type_name: None,
+            resource_mode: None,
         }
     }
 

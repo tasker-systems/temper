@@ -28,6 +28,9 @@ pub struct IngestRequest {
     /// Doc type name — resolved to UUID server-side (alternative to kb_doc_type_id)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc_type_name: Option<String>,
+    /// Resource mode: "added" for temper add, "imported" for temper import
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource_mode: Option<String>,
 }
 
 #[cfg(test)]
@@ -52,6 +55,7 @@ mod tests {
             metadata: None,
             context_name: None,
             doc_type_name: None,
+            resource_mode: None,
         }
     }
 
@@ -85,6 +89,7 @@ mod tests {
         assert!(!obj.contains_key("metadata"));
         assert!(!obj.contains_key("context_name"));
         assert!(!obj.contains_key("doc_type_name"));
+        assert!(!obj.contains_key("resource_mode"));
     }
 
     #[test]

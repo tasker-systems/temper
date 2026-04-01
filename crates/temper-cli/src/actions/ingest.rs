@@ -87,6 +87,7 @@ pub fn build_ingest_request(
         metadata: Some(metadata),
         context_name: Some(context.to_string()),
         doc_type_name: Some(doc_type.to_string()),
+        resource_mode: None,
     }
 }
 

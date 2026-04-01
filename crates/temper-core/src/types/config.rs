@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 /// Merge policy for conflict resolution within a subscription scope.
@@ -83,6 +85,120 @@ pub struct CloudConfig {
 pub struct CloudVaultConfig {
     /// Path to the local vault directory
     pub path: String,
+}
+
+/// Auto-sync configuration — which doc types trigger auto-sync on create/update.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncAutoConfig {
+    #[serde(default)]
+    pub doctypes: Vec<String>,
+}
+
+/// Sync subscriptions — which contexts are synced.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SyncSubscriptionsConfig {
+    #[serde(default)]
+    pub contexts: Vec<String>,
+}
+
+/// New sync config with auto + subscriptions sub-sections.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UnifiedSyncConfig {
+    #[serde(default)]
+    pub auto: SyncAutoConfig,
+    #[serde(default)]
+    pub subscriptions: SyncSubscriptionsConfig,
+}
+
+/// Skill generation config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillConfig {
+    #[serde(default = "default_skill_output")]
+    pub output: String,
+    #[serde(default = "default_skill_framework")]
+    pub framework: String,
+}
+
+fn default_skill_output() -> String {
+    "~/.claude/commands/temper.md".to_string()
+}
+
+fn default_skill_framework() -> String {
+    "superpowers".to_string()
+}
+
+impl Default for SkillConfig {
+    fn default() -> Self {
+        Self {
+            output: default_skill_output(),
+            framework: default_skill_framework(),
+        }
+    }
+}
+
+/// Auth provider configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthProviderConfig {
+    pub authorize_url: String,
+    pub token_url: String,
+    pub client_id: String,
+    pub audience: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+
+/// Auth configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthConfig {
+    #[serde(default = "default_auth_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub providers: HashMap<String, AuthProviderConfig>,
+}
+
+fn default_auth_provider() -> String {
+    "auth0".to_string()
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "auth0".to_string(),
+            AuthProviderConfig {
+                authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
+                token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
+                client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
+                audience: "https://temperkb.io/api".to_string(),
+                scopes: vec![
+                    "openid".to_string(),
+                    "profile".to_string(),
+                    "email".to_string(),
+                    "offline_access".to_string(),
+                ],
+            },
+        );
+        Self {
+            provider: default_auth_provider(),
+            providers,
+        }
+    }
+}
+
+/// Unified config — `~/.config/temper/config.toml`.
+///
+/// Single config file replacing the old split model (global config + vault temper.toml).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UnifiedConfig {
+    pub vault: CloudVaultConfig,
+    #[serde(default)]
+    pub sync: UnifiedSyncConfig,
+    #[serde(default)]
+    pub cli: CliConfig,
+    #[serde(default)]
+    pub skill: SkillConfig,
+    #[serde(default)]
+    pub auth: AuthConfig,
 }
 
 #[cfg(test)]
@@ -171,5 +287,62 @@ path = "~/vault"
         let json = serde_json::to_string(&sub).unwrap();
         assert!(!json.contains("team"));
         assert!(!json.contains("doc_types"));
+    }
+
+    #[test]
+    fn test_unified_config_toml_roundtrip() {
+        let toml_str = r#"
+[vault]
+path = "~/projects/kb-vault"
+
+[sync.auto]
+doctypes = ["task", "goal", "session"]
+
+[sync.subscriptions]
+contexts = ["temper", "storyteller", "tasker", "writing"]
+
+[cli]
+progress = "bar"
+
+[skill]
+output = "~/.claude/commands/temper.md"
+framework = "superpowers"
+
+[auth]
+provider = "auth0"
+
+[auth.providers.auth0]
+authorize_url = "https://temperkb.us.auth0.com/authorize"
+token_url = "https://temperkb.us.auth0.com/oauth/token"
+client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
+audience = "https://temperkb.io/api"
+scopes = ["openid", "profile", "email", "offline_access"]
+"#;
+        let config: UnifiedConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.vault.path, "~/projects/kb-vault");
+        assert_eq!(config.sync.auto.doctypes, vec!["task", "goal", "session"]);
+        assert_eq!(
+            config.sync.subscriptions.contexts,
+            vec!["temper", "storyteller", "tasker", "writing"]
+        );
+        assert_eq!(config.cli.progress, "bar");
+        assert_eq!(config.skill.output, "~/.claude/commands/temper.md");
+        assert_eq!(config.skill.framework, "superpowers");
+        assert_eq!(config.auth.provider, "auth0");
+        assert!(config.auth.providers.contains_key("auth0"));
+    }
+
+    #[test]
+    fn test_unified_config_minimal() {
+        let toml_str = r#"
+[vault]
+path = "~/vault"
+"#;
+        let config: UnifiedConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.vault.path, "~/vault");
+        assert!(config.sync.auto.doctypes.is_empty());
+        assert!(config.sync.subscriptions.contexts.is_empty());
+        assert_eq!(config.cli.progress, "bar");
+        assert_eq!(config.auth.provider, "auth0");
     }
 }
