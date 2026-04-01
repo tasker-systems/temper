@@ -15,9 +15,10 @@ pub use temper_core::types::context::{ContextCreateRequest, ContextRow};
 pub async fn list_visible(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<ContextRow>> {
     let rows = sqlx::query_as::<_, ContextRow>(
         r#"
-        SELECT id, name, kb_owner_table, kb_owner_id, created, updated
-          FROM contexts_visible_to($1)
-         ORDER BY name
+        SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
+          FROM contexts_visible_to($1) cv
+          JOIN kb_contexts c ON c.id = cv.id
+         ORDER BY c.name
         "#,
     )
     .bind(profile_id)
@@ -35,9 +36,10 @@ pub async fn get_visible(
 ) -> ApiResult<ContextRow> {
     sqlx::query_as::<_, ContextRow>(
         r#"
-        SELECT id, name, kb_owner_table, kb_owner_id, created, updated
-          FROM contexts_visible_to($1)
-         WHERE id = $2
+        SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
+          FROM contexts_visible_to($1) cv
+          JOIN kb_contexts c ON c.id = cv.id
+         WHERE c.id = $2
         "#,
     )
     .bind(profile_id)
@@ -51,9 +53,10 @@ pub async fn get_visible(
 pub async fn resolve_by_name(pool: &PgPool, profile_id: Uuid, name: &str) -> ApiResult<ContextRow> {
     sqlx::query_as::<_, ContextRow>(
         r#"
-        SELECT id, name, kb_owner_table, kb_owner_id, created, updated
-          FROM contexts_visible_to($1)
-         WHERE name = $2
+        SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
+          FROM contexts_visible_to($1) cv
+          JOIN kb_contexts c ON c.id = cv.id
+         WHERE c.name = $2
         "#,
     )
     .bind(profile_id)
