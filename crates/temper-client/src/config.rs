@@ -1,107 +1,12 @@
 //! Cloud configuration loaded from `~/.config/temper/config.toml`.
 //!
-//! Provides provider-agnostic auth and API URL resolution, shared by
-//! `temper-cli`, `temper-mcp`, and any future client crate.
+//! Uses the canonical [`TemperConfig`] from `temper-core` as the single source
+//! of truth. Provides helpers for loading the config, resolving the API URL,
+//! extracting OAuth settings, and building a fully-configured client.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 
-// ---------------------------------------------------------------------------
-// Config types
-// ---------------------------------------------------------------------------
-
-/// Top-level cloud configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct CloudConfig {
-    #[serde(default)]
-    pub auth: AuthConfig,
-    #[serde(default)]
-    pub cloud: CloudSection,
-}
-
-/// Authentication configuration — which provider is active and how to reach it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthConfig {
-    /// Active provider name (e.g., `"auth0"`).
-    #[serde(default = "default_provider")]
-    pub provider: String,
-    /// Provider-specific OAuth configurations, keyed by provider name.
-    #[serde(default = "default_providers")]
-    pub providers: HashMap<String, ProviderConfig>,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            provider: default_provider(),
-            providers: default_providers(),
-        }
-    }
-}
-
-/// OAuth2 PKCE provider configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderConfig {
-    pub authorize_url: String,
-    pub token_url: String,
-    pub client_id: String,
-    #[serde(default)]
-    pub audience: Option<String>,
-    #[serde(default = "default_callback_url")]
-    pub callback_url: String,
-    #[serde(default)]
-    pub scopes: Vec<String>,
-}
-
-fn default_callback_url() -> String {
-    "https://temperkb.io/api/auth/cli-callback".into()
-}
-
-/// Cloud API section of the configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CloudSection {
-    /// API base URL (overridden by `TEMPER_API_URL` environment variable).
-    #[serde(default = "default_api_url")]
-    pub api_url: String,
-}
-
-impl Default for CloudSection {
-    fn default() -> Self {
-        Self {
-            api_url: default_api_url(),
-        }
-    }
-}
-
-fn default_provider() -> String {
-    "auth0".into()
-}
-
-fn default_api_url() -> String {
-    "https://temperkb.io".into()
-}
-
-fn default_providers() -> HashMap<String, ProviderConfig> {
-    let mut map = HashMap::new();
-    map.insert(
-        "auth0".to_string(),
-        ProviderConfig {
-            authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
-            token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
-            client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
-            audience: Some("https://temperkb.io/api".to_string()),
-            callback_url: default_callback_url(),
-            scopes: vec![
-                "openid".to_string(),
-                "profile".to_string(),
-                "email".to_string(),
-                "offline_access".to_string(),
-            ],
-        },
-    );
-    map
-}
+use temper_core::types::config::{AuthProviderConfig, CloudSection, TemperConfig};
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -125,33 +30,50 @@ pub fn config_path() -> PathBuf {
 
 /// Load cloud config from `~/.config/temper/config.toml`.
 ///
-/// Returns a [`CloudConfig`] with all defaults applied when the file does not
+/// Returns a [`TemperConfig`] with all defaults applied when the file does not
 /// exist. Returns an error only if the file exists but cannot be parsed.
-pub fn load_cloud_config() -> crate::error::Result<CloudConfig> {
+pub fn load_cloud_config() -> crate::error::Result<TemperConfig> {
     load_cloud_config_from(&config_path())
 }
 
 /// Load cloud config from an explicit path (used in tests).
-pub fn load_cloud_config_from(path: &std::path::Path) -> crate::error::Result<CloudConfig> {
+pub fn load_cloud_config_from(path: &std::path::Path) -> crate::error::Result<TemperConfig> {
     if !path.exists() {
-        return Ok(CloudConfig::default());
+        return Ok(default_temper_config());
     }
     let content = std::fs::read_to_string(path)?;
-    let config: CloudConfig = toml::from_str(&content)
+    let config: TemperConfig = toml::from_str(&content)
         .map_err(|e| crate::error::ClientError::Other(format!("config parse error: {e}")))?;
     Ok(config)
 }
 
+/// Build a default `TemperConfig` suitable for when no config file exists.
+///
+/// `TemperConfig` requires a `vault` section, so we provide a sensible default
+/// path. All other sections use their own `Default` impls.
+fn default_temper_config() -> TemperConfig {
+    TemperConfig {
+        vault: temper_core::types::config::CloudVaultConfig {
+            path: "~/projects/knowledge".to_string(),
+        },
+        sync: Default::default(),
+        cli: Default::default(),
+        skill: Default::default(),
+        auth: Default::default(),
+        cloud: CloudSection::default(),
+    }
+}
+
 /// Return the API base URL, letting `TEMPER_API_URL` take priority.
-pub fn api_url(config: &CloudConfig) -> String {
+pub fn api_url(config: &TemperConfig) -> String {
     std::env::var("TEMPER_API_URL").unwrap_or_else(|_| config.cloud.api_url.clone())
 }
 
 /// Build an [`OAuthConfig`](crate::login::OAuthConfig) from the active provider.
 ///
 /// Returns an error when the named provider is not present in the config.
-pub fn oauth_config(config: &CloudConfig) -> crate::error::Result<crate::login::OAuthConfig> {
-    let provider = config
+pub fn oauth_config(config: &TemperConfig) -> crate::error::Result<crate::login::OAuthConfig> {
+    let provider: &AuthProviderConfig = config
         .auth
         .providers
         .get(&config.auth.provider)
@@ -165,7 +87,7 @@ pub fn oauth_config(config: &CloudConfig) -> crate::error::Result<crate::login::
         authorize_url: provider.authorize_url.clone(),
         token_url: provider.token_url.clone(),
         client_id: provider.client_id.clone(),
-        audience: provider.audience.clone(),
+        audience: Some(provider.audience.clone()),
         callback_url: provider.callback_url.clone(),
         scopes: provider.scopes.clone(),
     })
@@ -207,9 +129,12 @@ fn load_device_id() -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
     use std::sync::Mutex;
     use tempfile::TempDir;
+
+    use temper_core::types::config::AuthConfig;
 
     /// Serialize tests that mutate `TEMPER_API_URL` to prevent races.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -232,6 +157,10 @@ mod tests {
             provider.token_url,
             "https://temperkb.us.auth0.com/oauth/token"
         );
+        assert_eq!(
+            provider.callback_url,
+            "https://temperkb.io/api/auth/cli-callback"
+        );
     }
 
     #[test]
@@ -239,6 +168,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.toml");
         let toml = r#"
+[vault]
+path = "~/projects/knowledge"
+
 [auth]
 provider = "my_provider"
 
@@ -246,6 +178,7 @@ provider = "my_provider"
 authorize_url = "https://example.com/auth"
 token_url     = "https://example.com/token"
 client_id     = "abc123"
+audience      = "https://example.com/api"
 scopes        = ["openid", "profile"]
 
 [cloud]
@@ -273,8 +206,7 @@ api_url = "https://api.example.com"
     #[test]
     fn api_url_uses_config_by_default() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let config = CloudConfig::default();
-        // Remove any env var that may be set in the test environment.
+        let config = default_temper_config();
         std::env::remove_var("TEMPER_API_URL");
         let url = api_url(&config);
         assert_eq!(url, "https://temperkb.io");
@@ -283,7 +215,7 @@ api_url = "https://api.example.com"
     #[test]
     fn api_url_env_var_takes_priority() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let config = CloudConfig::default();
+        let config = default_temper_config();
         std::env::set_var("TEMPER_API_URL", "https://localhost:3000");
         let url = api_url(&config);
         std::env::remove_var("TEMPER_API_URL");
@@ -297,6 +229,9 @@ api_url = "https://api.example.com"
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.toml");
         let toml = r#"
+[vault]
+path = "~/vault"
+
 [auth]
 provider = "neon_auth"
 
@@ -304,6 +239,7 @@ provider = "neon_auth"
 authorize_url = "https://id.example.com/auth"
 token_url     = "https://id.example.com/token"
 client_id     = "client_xyz"
+audience      = "https://id.example.com/api"
 scopes        = ["openid"]
 "#;
         fs::write(&path, toml).unwrap();
@@ -311,11 +247,21 @@ scopes        = ["openid"]
         let oauth = oauth_config(&config).unwrap();
         assert_eq!(oauth.client_id, "client_xyz");
         assert_eq!(oauth.scopes, vec!["openid"]);
+        assert_eq!(
+            oauth.audience,
+            Some("https://id.example.com/api".to_string())
+        );
     }
 
     #[test]
     fn oauth_config_missing_provider_returns_error() {
-        let config = CloudConfig {
+        let config = TemperConfig {
+            vault: temper_core::types::config::CloudVaultConfig {
+                path: "~/vault".to_string(),
+            },
+            sync: Default::default(),
+            cli: Default::default(),
+            skill: Default::default(),
             auth: AuthConfig {
                 provider: "nonexistent".to_string(),
                 providers: HashMap::new(),
@@ -344,10 +290,7 @@ scopes        = ["openid"]
             "https://temperkb.us.auth0.com/oauth/token"
         );
         assert_eq!(provider.client_id, "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF");
-        assert_eq!(
-            provider.audience,
-            Some("https://temperkb.io/api".to_string())
-        );
+        assert_eq!(provider.audience, "https://temperkb.io/api");
         assert!(provider.scopes.contains(&"offline_access".to_string()));
     }
 
@@ -356,6 +299,9 @@ scopes        = ["openid"]
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.toml");
         let toml = r#"
+[vault]
+path = "~/vault"
+
 [auth]
 provider = "keycloak"
 
@@ -370,16 +316,14 @@ scopes        = ["openid", "profile"]
         let config = load_cloud_config_from(&path).unwrap();
         assert_eq!(config.auth.provider, "keycloak");
         let p = config.auth.providers.get("keycloak").unwrap();
-        assert_eq!(p.audience, Some("custom-api".to_string()));
+        assert_eq!(p.audience, "custom-api");
     }
 
     // --- build_client smoke test ---
 
     #[test]
     fn build_client_succeeds_with_defaults() {
-        // Ensure env var doesn't interfere.
         std::env::remove_var("TEMPER_API_URL");
-        // With no config file this should still produce a client (no oauth).
         let result = build_client();
         assert!(result.is_ok(), "build_client failed: {:?}", result.err());
     }

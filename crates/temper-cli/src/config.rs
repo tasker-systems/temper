@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use temper_core::types::config::UnifiedConfig;
+use temper_core::types::config::TemperConfig;
 
 use crate::error::{Result, TemperError};
 
@@ -9,7 +9,7 @@ use crate::error::{Result, TemperError};
 // ---------------------------------------------------------------------------
 
 /// The deserialized global config. Re-export for convenience.
-pub type GlobalConfig = UnifiedConfig;
+pub type GlobalConfig = TemperConfig;
 
 // ---------------------------------------------------------------------------
 // Resolved runtime config

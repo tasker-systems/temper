@@ -143,8 +143,14 @@ pub struct AuthProviderConfig {
     pub token_url: String,
     pub client_id: String,
     pub audience: String,
+    #[serde(default = "default_callback_url")]
+    pub callback_url: String,
     #[serde(default)]
     pub scopes: Vec<String>,
+}
+
+fn default_callback_url() -> String {
+    "https://temperkb.io/api/auth/cli-callback".to_string()
 }
 
 /// Auth configuration.
@@ -170,6 +176,7 @@ impl Default for AuthConfig {
                 token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
                 client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
                 audience: "https://temperkb.io/api".to_string(),
+                callback_url: default_callback_url(),
                 scopes: vec![
                     "openid".to_string(),
                     "profile".to_string(),
@@ -185,11 +192,32 @@ impl Default for AuthConfig {
     }
 }
 
-/// Unified config — `~/.config/temper/config.toml`.
+/// Cloud API section of the configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CloudSection {
+    /// API base URL (overridden by `TEMPER_API_URL` environment variable).
+    #[serde(default = "default_api_url")]
+    pub api_url: String,
+}
+
+impl Default for CloudSection {
+    fn default() -> Self {
+        Self {
+            api_url: default_api_url(),
+        }
+    }
+}
+
+fn default_api_url() -> String {
+    "https://temperkb.io".to_string()
+}
+
+/// Canonical temper config — `~/.config/temper/config.toml`.
 ///
 /// Single config file replacing the old split model (global config + vault temper.toml).
+/// Imported by temper-cli, temper-client, temper-mcp, and any future crate.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UnifiedConfig {
+pub struct TemperConfig {
     pub vault: CloudVaultConfig,
     #[serde(default)]
     pub sync: UnifiedSyncConfig,
@@ -199,7 +227,12 @@ pub struct UnifiedConfig {
     pub skill: SkillConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub cloud: CloudSection,
 }
+
+/// Backward-compatible alias for `TemperConfig`.
+pub type UnifiedConfig = TemperConfig;
 
 #[cfg(test)]
 mod tests {
@@ -290,7 +323,7 @@ path = "~/vault"
     }
 
     #[test]
-    fn test_unified_config_toml_roundtrip() {
+    fn test_temper_config_toml_roundtrip() {
         let toml_str = r#"
 [vault]
 path = "~/projects/kb-vault"
@@ -317,8 +350,11 @@ token_url = "https://temperkb.us.auth0.com/oauth/token"
 client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
 audience = "https://temperkb.io/api"
 scopes = ["openid", "profile", "email", "offline_access"]
+
+[cloud]
+api_url = "https://api.example.com"
 "#;
-        let config: UnifiedConfig = toml::from_str(toml_str).unwrap();
+        let config: TemperConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/projects/kb-vault");
         assert_eq!(config.sync.auto.doctypes, vec!["task", "goal", "session"]);
         assert_eq!(
@@ -330,19 +366,33 @@ scopes = ["openid", "profile", "email", "offline_access"]
         assert_eq!(config.skill.framework, "superpowers");
         assert_eq!(config.auth.provider, "auth0");
         assert!(config.auth.providers.contains_key("auth0"));
+        assert_eq!(config.cloud.api_url, "https://api.example.com");
+        let auth0 = config.auth.providers.get("auth0").unwrap();
+        assert_eq!(
+            auth0.callback_url,
+            "https://temperkb.io/api/auth/cli-callback"
+        );
     }
 
     #[test]
-    fn test_unified_config_minimal() {
+    fn test_temper_config_minimal() {
         let toml_str = r#"
 [vault]
 path = "~/vault"
 "#;
-        let config: UnifiedConfig = toml::from_str(toml_str).unwrap();
+        let config: TemperConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/vault");
         assert!(config.sync.auto.doctypes.is_empty());
         assert!(config.sync.subscriptions.contexts.is_empty());
         assert_eq!(config.cli.progress, "bar");
         assert_eq!(config.auth.provider, "auth0");
+        // Cloud section defaults
+        assert_eq!(config.cloud.api_url, "https://temperkb.io");
+        // Auth provider defaults include callback_url
+        let auth0 = config.auth.providers.get("auth0").unwrap();
+        assert_eq!(
+            auth0.callback_url,
+            "https://temperkb.io/api/auth/cli-callback"
+        );
     }
 }

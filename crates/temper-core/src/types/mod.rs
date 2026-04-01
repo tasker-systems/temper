@@ -34,9 +34,9 @@ pub use api::{
 };
 pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
 pub use config::{
-    AuthConfig, AuthProviderConfig, CliConfig, CloudConfig, CloudVaultConfig, MergePolicy,
-    SkillConfig, SyncAutoConfig, SyncConfig, SyncSubscription, SyncSubscriptionsConfig,
-    UnifiedConfig, UnifiedSyncConfig,
+    AuthConfig, AuthProviderConfig, CliConfig, CloudConfig, CloudSection, CloudVaultConfig,
+    MergePolicy, SkillConfig, SyncAutoConfig, SyncConfig, SyncSubscription,
+    SyncSubscriptionsConfig, TemperConfig, UnifiedConfig, UnifiedSyncConfig,
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use device::DeviceSyncState;
