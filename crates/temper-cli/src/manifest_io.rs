@@ -10,8 +10,12 @@ pub fn load_manifest(temper_dir: &Path, device_id: &str) -> crate::error::Result
         return Ok(Manifest::new(device_id.to_string()));
     }
     let content = std::fs::read_to_string(&path)?;
-    let manifest: Manifest = serde_json::from_str(&content)?;
-    Ok(manifest)
+    // Fall back to a fresh manifest if the file is empty or has an
+    // incompatible schema (e.g. bare `{}` from vault init).
+    match serde_json::from_str::<Manifest>(&content) {
+        Ok(manifest) => Ok(manifest),
+        Err(_) => Ok(Manifest::new(device_id.to_string())),
+    }
 }
 
 /// Save manifest to `<temper_dir>/manifest.json`.
