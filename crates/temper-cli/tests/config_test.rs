@@ -2,44 +2,7 @@ use std::fs;
 use tempfile::TempDir;
 
 #[test]
-fn test_parse_minimal_config() {
-    let dir = TempDir::new().unwrap();
-    let toml_content = "[vault]\n";
-    fs::write(dir.path().join("temper.toml"), toml_content).unwrap();
-    let config =
-        temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
-    assert_eq!(config.vault.sessions, "sessions");
-    assert_eq!(config.vault.tasks, "tasks");
-    assert_eq!(config.vault.goals, "goals");
-    assert_eq!(config.vault.templates, "templates");
-    assert_eq!(config.vault.state_dir, ".temper");
-}
-
-#[test]
-fn test_parse_full_config() {
-    let dir = TempDir::new().unwrap();
-    let toml_content = r#"
-[vault]
-sessions = "journal"
-state_dir = ".data"
-
-[projects.myapp]
-repo = "org/myapp"
-path = "/tmp/myapp"
-
-[skill]
-framework = "superpowers"
-"#;
-    fs::write(dir.path().join("temper.toml"), toml_content).unwrap();
-    let config =
-        temper_cli::config::TemperConfig::from_path(dir.path().join("temper.toml")).unwrap();
-    assert_eq!(config.vault.sessions, "journal");
-    assert_eq!(config.vault.state_dir, ".data");
-    assert!(config.projects.contains_key("myapp"));
-}
-
-#[test]
-fn test_tilde_expansion() {
+fn test_expand_tilde() {
     let expanded = temper_cli::config::expand_tilde("~/projects/foo");
     assert!(!expanded.to_string_lossy().starts_with("~"));
     assert!(expanded.to_string_lossy().contains("projects/foo"));
@@ -48,22 +11,54 @@ fn test_tilde_expansion() {
 #[test]
 fn test_resolve_vault_from_env() {
     let dir = TempDir::new().unwrap();
-    fs::write(dir.path().join("temper.toml"), "[vault]\n").unwrap();
-    std::env::set_var("TEMPER_VAULT", dir.path().to_str().unwrap());
+
+    // Create a minimal global config so load_global_config doesn't fail
+    let config_path = dir.path().join("config.toml");
+    fs::write(
+        &config_path,
+        "[vault]\npath = \"/tmp/fallback\"\n[sync.subscriptions]\ncontexts = []\n",
+    )
+    .unwrap();
+
+    // Use TEMPER_VAULT to override vault path
+    let vault_dir = dir.path().join("myvault");
+    fs::create_dir_all(&vault_dir).unwrap();
+
+    // TEMPER_VAULT takes priority over global config
+    unsafe {
+        std::env::set_var("TEMPER_VAULT", vault_dir.to_str().unwrap());
+        std::env::set_var("TEMPER_GLOBAL_CONFIG", config_path.to_str().unwrap());
+    }
     let result = temper_cli::config::resolve_vault(None);
-    std::env::remove_var("TEMPER_VAULT");
+    unsafe {
+        std::env::remove_var("TEMPER_VAULT");
+        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
+    }
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), dir.path());
+    assert_eq!(result.unwrap(), vault_dir);
 }
 
 #[test]
 fn test_safe_write_validates_toml() {
     let dir = TempDir::new().unwrap();
-    let path = dir.path().join("temper.toml");
-    fs::write(&path, "[vault]\nsessions = \"sessions\"\n").unwrap();
+    let path = dir.path().join("config.toml");
+    fs::write(&path, "[vault]\npath = \"sessions\"\n").unwrap();
     let result =
         temper_cli::config::safe_write(&path, |content| content.replace("sessions", "journal"));
     assert!(result.is_ok());
     let content = fs::read_to_string(&path).unwrap();
     assert!(content.contains("journal"));
+}
+
+#[test]
+fn test_config_doc_type_dir() {
+    let config = temper_cli::config::Config {
+        vault_root: std::path::PathBuf::from("/tmp/vault"),
+        state_dir: std::path::PathBuf::from("/tmp/vault/.temper"),
+        contexts: vec!["myapp".to_string()],
+        skill_output: std::path::PathBuf::from("/tmp/temper.md"),
+        skill_framework: "superpowers".to_string(),
+    };
+    let dir = config.doc_type_dir("myapp", "task");
+    assert_eq!(dir, std::path::PathBuf::from("/tmp/vault/myapp/task"));
 }

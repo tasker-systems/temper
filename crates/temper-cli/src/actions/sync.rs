@@ -546,6 +546,6 @@ mod tests {
         remove_resource(&mut manifest, vault, &item).unwrap();
 
         assert!(!file_path.exists());
-        assert!(manifest.entries.get(&id).is_none());
+        assert!(!manifest.entries.contains_key(&id));
     }
 }

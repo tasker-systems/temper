@@ -1,10 +1,23 @@
 use tempfile::TempDir;
 
+fn test_config(dir: &TempDir) -> temper_cli::config::Config {
+    let state_dir = dir.path().join(".temper");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
+    std::fs::write(state_dir.join("events.jsonl"), "").unwrap();
+    temper_cli::config::Config {
+        vault_root: dir.path().to_path_buf(),
+        state_dir,
+        contexts: vec!["myapp".to_string()],
+        skill_output: dir.path().join("temper.md"),
+        skill_framework: "superpowers".to_string(),
+    }
+}
+
 #[test]
 fn test_actions_load_tasks_returns_correct_results() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -27,8 +40,7 @@ fn test_actions_load_tasks_returns_correct_results() {
 #[test]
 fn test_actions_load_tasks_empty_vault() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let tasks = temper_cli::actions::task::load_tasks(&config, None, None).unwrap();
     assert!(tasks.is_empty(), "should return empty vec for fresh vault");
@@ -37,8 +49,7 @@ fn test_actions_load_tasks_empty_vault() {
 #[test]
 fn test_actions_find_task_by_slug() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -56,8 +67,7 @@ fn test_actions_find_task_by_slug() {
 #[test]
 fn test_actions_next_seq_increments() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -74,8 +84,7 @@ fn test_actions_next_seq_increments() {
 fn test_actions_reexports_match_commands() {
     // Verify that the re-exports from commands::task work identically
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();

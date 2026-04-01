@@ -1,10 +1,23 @@
 use tempfile::TempDir;
 
+fn test_config(dir: &TempDir) -> temper_cli::config::Config {
+    let state_dir = dir.path().join(".temper");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
+    std::fs::write(state_dir.join("events.jsonl"), "").unwrap();
+    temper_cli::config::Config {
+        vault_root: dir.path().to_path_buf(),
+        state_dir,
+        contexts: vec!["myapp".to_string()],
+        skill_output: dir.path().join("temper.md"),
+        skill_framework: "superpowers".to_string(),
+    }
+}
+
 #[test]
 fn test_session_save_with_task_links_entities() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -32,7 +45,7 @@ fn test_session_save_with_task_links_entities() {
     // Verify task was updated with sessions field
     let task_content = std::fs::read_to_string(
         dir.path()
-            .join("tasks/myapp")
+            .join("myapp/task")
             .join(format!("{task_slug}.md")),
     )
     .unwrap();
@@ -45,8 +58,7 @@ fn test_session_save_with_task_links_entities() {
 #[test]
 fn test_session_save_with_task_and_state_moves_task() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -73,7 +85,7 @@ fn test_session_save_with_task_and_state_moves_task() {
 
     let task_content = std::fs::read_to_string(
         dir.path()
-            .join("tasks/myapp")
+            .join("myapp/task")
             .join(format!("{task_slug}.md")),
     )
     .unwrap();

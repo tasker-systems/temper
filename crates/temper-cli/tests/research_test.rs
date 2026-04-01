@@ -1,10 +1,23 @@
 use tempfile::TempDir;
 
+fn test_config(dir: &TempDir) -> temper_cli::config::Config {
+    let state_dir = dir.path().join(".temper");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
+    std::fs::write(state_dir.join("events.jsonl"), "").unwrap();
+    temper_cli::config::Config {
+        vault_root: dir.path().to_path_buf(),
+        state_dir,
+        contexts: vec!["myapp".to_string()],
+        skill_output: dir.path().join("temper.md"),
+        skill_framework: "superpowers".to_string(),
+    }
+}
+
 #[test]
 fn test_research_save_creates_note() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let result = temper_cli::commands::research::save(
         &config,
@@ -30,8 +43,7 @@ fn test_research_save_creates_note() {
 #[test]
 fn test_research_save_idempotent_without_stdin() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     temper_cli::commands::research::save(&config, "Topic", Some("myapp"), None, "text").unwrap();
 
@@ -48,8 +60,7 @@ fn test_research_save_idempotent_without_stdin() {
 #[test]
 fn test_research_save_with_stdin_replaces_body() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     temper_cli::commands::research::save(&config, "Topic", Some("myapp"), None, "text").unwrap();
     temper_cli::commands::research::save(

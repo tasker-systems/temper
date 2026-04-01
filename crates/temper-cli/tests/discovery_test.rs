@@ -1,5 +1,23 @@
 use tempfile::TempDir;
 
+fn test_config(dir: &TempDir, contexts: Vec<&str>) -> temper_cli::config::Config {
+    let state_dir = dir.path().join(".temper");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
+    // Only create events.jsonl if it doesn't exist (some tests append events first)
+    let events_path = state_dir.join("events.jsonl");
+    if !events_path.exists() {
+        std::fs::write(&events_path, "").unwrap();
+    }
+    temper_cli::config::Config {
+        vault_root: dir.path().to_path_buf(),
+        state_dir,
+        contexts: contexts.into_iter().map(String::from).collect(),
+        skill_output: dir.path().join("temper.md"),
+        skill_framework: "superpowers".to_string(),
+    }
+}
+
 #[test]
 fn test_append_and_read_event() {
     let dir = TempDir::new().unwrap();
@@ -24,10 +42,7 @@ fn test_append_and_read_event() {
 #[test]
 fn test_events_list_returns_recent_events() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    temper_cli::commands::context_cmd::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
-        .unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir, vec!["myapp"]);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -44,12 +59,7 @@ fn test_events_list_returns_recent_events() {
 #[test]
 fn test_events_filter_by_project() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    temper_cli::commands::context_cmd::add(dir.path(), "myapp", "/tmp/myapp", Some("org/myapp"))
-        .unwrap();
-    temper_cli::commands::context_cmd::add(dir.path(), "other", "/tmp/other", Some("org/other"))
-        .unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir, vec!["myapp", "other"]);
 
     let g1 = temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
     let g2 = temper_cli::commands::goal::create(&config, "other", "v0.2", None, "text").unwrap();

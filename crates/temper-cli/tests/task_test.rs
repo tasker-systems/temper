@@ -1,10 +1,23 @@
 use tempfile::TempDir;
 
+fn test_config(dir: &TempDir) -> temper_cli::config::Config {
+    let state_dir = dir.path().join(".temper");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
+    std::fs::write(state_dir.join("events.jsonl"), "").unwrap();
+    temper_cli::config::Config {
+        vault_root: dir.path().to_path_buf(),
+        state_dir,
+        contexts: vec!["myapp".to_string()],
+        skill_output: dir.path().join("temper.md"),
+        skill_framework: "superpowers".to_string(),
+    }
+}
+
 #[test]
 fn test_task_create_includes_uuid_id() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -13,7 +26,7 @@ fn test_task_create_includes_uuid_id() {
             .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(
         content.contains("id: \"0"),
         "should contain a UUIDv7 id field"
@@ -23,14 +36,13 @@ fn test_task_create_includes_uuid_id() {
 #[test]
 fn test_goal_create_and_task_create() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
     assert!(dir
         .path()
-        .join("goals/myapp")
+        .join("myapp/goal")
         .join(format!("{g_slug}.md"))
         .exists());
 
@@ -45,13 +57,13 @@ fn test_goal_create_and_task_create() {
     .unwrap();
     assert!(dir
         .path()
-        .join("tasks/myapp")
+        .join("myapp/task")
         .join(format!("{task_slug}.md"))
         .exists());
 
     let content = std::fs::read_to_string(
         dir.path()
-            .join("tasks/myapp")
+            .join("myapp/task")
             .join(format!("{task_slug}.md")),
     )
     .unwrap();
@@ -62,8 +74,7 @@ fn test_goal_create_and_task_create() {
 #[test]
 fn test_task_move_to_in_progress() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -83,15 +94,14 @@ fn test_task_move_to_in_progress() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(content.contains("stage: in-progress"));
 }
 
 #[test]
 fn test_task_move_rejects_old_stages() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -114,8 +124,7 @@ fn test_task_move_rejects_old_stages() {
 #[test]
 fn test_task_move_to_cancelled() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -135,15 +144,14 @@ fn test_task_move_to_cancelled() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(content.contains("stage: cancelled"));
 }
 
 #[test]
 fn test_task_move_and_done() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -171,7 +179,7 @@ fn test_task_move_and_done() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(content.contains("stage: done"));
     assert!(content.contains("feat/test"));
 }
@@ -179,20 +187,19 @@ fn test_task_move_and_done() {
 #[test]
 fn test_goal_creates_in_context_subdir() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.2", None, "text").unwrap();
 
-    let expected_path = dir.path().join("goals/myapp").join(format!("{g_slug}.md"));
+    let expected_path = dir.path().join("myapp/goal").join(format!("{g_slug}.md"));
     assert!(
         expected_path.exists(),
         "goal should be in context subdir: {}",
         expected_path.display()
     );
 
-    let flat_path = dir.path().join("goals").join(format!("{g_slug}.md"));
+    let flat_path = dir.path().join("goal").join(format!("{g_slug}.md"));
     assert!(
         !flat_path.exists(),
         "goal should NOT be at flat path: {}",
@@ -203,8 +210,7 @@ fn test_goal_creates_in_context_subdir() {
 #[test]
 fn test_task_list_json_format() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -218,8 +224,7 @@ fn test_task_list_json_format() {
 #[test]
 fn test_task_create_with_mode_and_effort() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -234,7 +239,7 @@ fn test_task_create_with_mode_and_effort() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(
         content.contains("mode: build"),
         "should contain mode: build"
@@ -248,8 +253,7 @@ fn test_task_create_with_mode_and_effort() {
 #[test]
 fn test_task_create_without_mode_effort() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -264,7 +268,7 @@ fn test_task_create_without_mode_effort() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(content.contains("mode: null"), "should contain mode: null");
     assert!(
         content.contains("effort: null"),
@@ -275,8 +279,7 @@ fn test_task_create_without_mode_effort() {
 #[test]
 fn test_task_create_rejects_invalid_mode() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -294,8 +297,7 @@ fn test_task_create_rejects_invalid_mode() {
 #[test]
 fn test_task_move_with_effort() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -313,7 +315,7 @@ fn test_task_move_with_effort() {
         .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(
         content.contains("effort: large"),
         "effort should be updated to large"
@@ -323,8 +325,7 @@ fn test_task_move_with_effort() {
 #[test]
 fn test_task_move_with_stage_and_mode() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -350,7 +351,7 @@ fn test_task_move_with_stage_and_mode() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("tasks/myapp").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
     assert!(content.contains("stage: in-progress"));
     assert!(content.contains("mode: build"));
 }
@@ -358,8 +359,7 @@ fn test_task_move_with_stage_and_mode() {
 #[test]
 fn test_task_move_rejects_invalid_effort() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -381,8 +381,7 @@ fn test_task_move_rejects_invalid_effort() {
 #[test]
 fn test_task_show_json_includes_mode_effort() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();

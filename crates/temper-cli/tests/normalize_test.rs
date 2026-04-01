@@ -1,10 +1,23 @@
 use tempfile::TempDir;
 
+fn test_config(dir: &TempDir) -> temper_cli::config::Config {
+    let state_dir = dir.path().join(".temper");
+    std::fs::create_dir_all(&state_dir).unwrap();
+    std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
+    std::fs::write(state_dir.join("events.jsonl"), "").unwrap();
+    temper_cli::config::Config {
+        vault_root: dir.path().to_path_buf(),
+        state_dir,
+        contexts: vec!["myapp".to_string()],
+        skill_output: dir.path().join("temper.md"),
+        skill_framework: "superpowers".to_string(),
+    }
+}
+
 #[test]
 fn test_normalize_backfills_missing_ids() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -13,7 +26,7 @@ fn test_normalize_backfills_missing_ids() {
             .unwrap();
 
     // Strip the id field to simulate a pre-UUIDv7 task
-    let path = dir.path().join("tasks/myapp").join(format!("{slug}.md"));
+    let path = dir.path().join("myapp/task").join(format!("{slug}.md"));
     let content = std::fs::read_to_string(&path).unwrap();
     let stripped = content
         .lines()
@@ -32,8 +45,7 @@ fn test_normalize_backfills_missing_ids() {
 #[test]
 fn test_normalize_migrates_old_stages() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -47,7 +59,7 @@ fn test_normalize_migrates_old_stages() {
     )
     .unwrap();
 
-    let path = dir.path().join("tasks/myapp").join(format!("{slug}.md"));
+    let path = dir.path().join("myapp/task").join(format!("{slug}.md"));
     let content = std::fs::read_to_string(&path).unwrap();
     let modified = content.replace("stage: backlog", "stage: brainstorm");
     std::fs::write(&path, &modified).unwrap();
@@ -62,8 +74,7 @@ fn test_normalize_migrates_old_stages() {
 #[test]
 fn test_normalize_dry_run_makes_no_changes() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -71,7 +82,7 @@ fn test_normalize_dry_run_makes_no_changes() {
         temper_cli::commands::task::create(&config, "myapp", "Dry run", Some(&g_slug), None, None)
             .unwrap();
 
-    let path = dir.path().join("tasks/myapp").join(format!("{slug}.md"));
+    let path = dir.path().join("myapp/task").join(format!("{slug}.md"));
     let content = std::fs::read_to_string(&path).unwrap();
     let stripped = content
         .lines()
@@ -88,10 +99,9 @@ fn test_normalize_dry_run_makes_no_changes() {
 }
 
 #[test]
-fn test_normalize_moves_misplaced_files() {
+fn test_normalize_detects_misplaced_files() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -105,25 +115,23 @@ fn test_normalize_moves_misplaced_files() {
     )
     .unwrap();
 
-    let correct_path = dir.path().join("tasks/myapp").join(format!("{slug}.md"));
-    let wrong_dir = dir.path().join("tasks/wrong");
-    std::fs::create_dir_all(&wrong_dir).unwrap();
-    let wrong_path = wrong_dir.join(format!("{slug}.md"));
-    std::fs::rename(&correct_path, &wrong_path).unwrap();
+    // Edit the frontmatter context to differ from the directory context
+    let path = dir.path().join("myapp/task").join(format!("{slug}.md"));
+    let content = std::fs::read_to_string(&path).unwrap();
+    let modified = content.replace("context: \"myapp\"", "context: \"other\"");
+    std::fs::write(&path, &modified).unwrap();
 
     let summary = temper_cli::commands::normalize::run(&config, None, false, false).unwrap();
-    assert!(summary.files_moved > 0);
     assert!(
-        correct_path.exists(),
-        "file should be moved back to correct context dir"
+        summary.files_moved > 0,
+        "should detect context mismatch between frontmatter and directory"
     );
 }
 
 #[test]
 fn test_normalize_backfills_missing_effort() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
-    let config = temper_cli::config::load(Some(dir.path().to_str().unwrap())).unwrap();
+    let config = test_config(&dir);
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
@@ -138,7 +146,7 @@ fn test_normalize_backfills_missing_effort() {
     .unwrap();
 
     // Strip the effort field to simulate a pre-effort task
-    let path = dir.path().join("tasks/myapp").join(format!("{slug}.md"));
+    let path = dir.path().join("myapp/task").join(format!("{slug}.md"));
     let content = std::fs::read_to_string(&path).unwrap();
     let stripped = content
         .lines()
