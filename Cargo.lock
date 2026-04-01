@@ -3608,11 +3608,9 @@ name = "temper-api"
 version = "0.1.0"
 dependencies = [
  "axum",
- "base64 0.22.1",
  "chrono",
  "jsonwebtoken",
  "reqwest",
- "rmp-serde",
  "serde",
  "serde_json",
  "sqlx",
@@ -3641,7 +3639,6 @@ dependencies = [
  "ignore",
  "indicatif 0.17.11",
  "reqwest",
- "rmp-serde",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3674,7 +3671,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "toml 0.8.23",
  "tracing",
  "url",
  "uuid",
