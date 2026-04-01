@@ -48,11 +48,77 @@ pub fn build_uri(context: &str, doc_type: &str, title: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Source frontmatter parsing
+// ---------------------------------------------------------------------------
+
+/// Structured metadata parsed from a source file's YAML frontmatter.
+///
+/// Field names are normalised from legacy formats (e.g. `type` → `doc_type`,
+/// `id` → `legacy_id`).
+#[derive(Debug, Default)]
+pub struct ParsedFrontmatter {
+    pub title: Option<String>,
+    pub doc_type: Option<String>,
+    pub context: Option<String>,
+    pub slug: Option<String>,
+    pub date: Option<String>,
+    pub legacy_id: Option<String>,
+    pub goal: Option<String>,
+    pub stage: Option<String>,
+    pub mode: Option<String>,
+    pub effort: Option<String>,
+    pub status: Option<String>,
+}
+
+/// Parse YAML frontmatter from a source markdown file and return structured
+/// metadata.  Maps legacy field names (`type` → `doc_type`, `id` →
+/// `legacy_id`).
+pub fn parse_source_frontmatter(content: &str) -> Option<ParsedFrontmatter> {
+    let yaml = crate::vault::parse_frontmatter(content)?;
+
+    let s = |key: &str| yaml.get(key).and_then(|v| v.as_str()).map(String::from);
+
+    Some(ParsedFrontmatter {
+        title: s("title"),
+        // "type" is the legacy field; "doc_type" is the new one.
+        doc_type: s("doc_type").or_else(|| s("type")),
+        context: s("context"),
+        slug: s("slug"),
+        date: s("date").or_else(|| s("created").map(|c| c[..10].to_string())),
+        legacy_id: s("id").or_else(|| s("temper-id")),
+        goal: s("goal"),
+        stage: s("stage"),
+        mode: s("mode"),
+        effort: s("effort"),
+        status: s("status"),
+    })
+}
+
+/// Strip YAML frontmatter from markdown content, returning only the body.
+///
+/// If the content does not start with `---`, returns the original content
+/// unchanged.
+pub fn strip_frontmatter(content: &str) -> &str {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return content;
+    }
+    let rest = &trimmed[3..];
+    if let Some(end) = rest.find("\n---") {
+        // Skip past the closing `---` and the newline after it.
+        let after = &rest[end + 4..];
+        after.strip_prefix('\n').unwrap_or(after)
+    } else {
+        content
+    }
+}
+
+// ---------------------------------------------------------------------------
 // IngestPayload construction
 // ---------------------------------------------------------------------------
 
 /// Slugify a title for use in URIs and slugs.
-fn slug_from_title(title: &str) -> String {
+pub fn slug_from_title(title: &str) -> String {
     title
         .to_lowercase()
         .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
@@ -329,21 +395,46 @@ pub async fn ingest_url(
 
 /// Canonical vault path for a managed resource.
 ///
-/// `{vault_root}/{context}/{doc_type}/{uuid}.md`
-pub fn build_vault_path(vault_root: &Path, context: &str, doc_type: &str, id: Uuid) -> PathBuf {
+/// `{vault_root}/{context}/{doc_type}/{slug}.md`
+///
+/// The slug is a human-readable identifier derived from the resource title.
+/// Falls back to the UUID string when no slug is available.
+pub fn build_vault_path(vault_root: &Path, context: &str, doc_type: &str, slug: &str) -> PathBuf {
     vault_root
         .join(context)
         .join(doc_type)
-        .join(format!("{id}.md"))
+        .join(format!("{slug}.md"))
+}
+
+/// De-duplicate a vault slug by appending `-2`, `-3`, etc. when the target
+/// path already exists.
+pub fn dedup_vault_slug(vault_root: &Path, context: &str, doc_type: &str, slug: &str) -> String {
+    let base_path = build_vault_path(vault_root, context, doc_type, slug);
+    if !base_path.exists() {
+        return slug.to_string();
+    }
+    for i in 2..1000 {
+        let candidate = format!("{slug}-{i}");
+        let path = build_vault_path(vault_root, context, doc_type, &candidate);
+        if !path.exists() {
+            return candidate;
+        }
+    }
+    // Extremely unlikely — fall back to UUID-suffixed slug.
+    format!("{slug}-{}", Uuid::now_v7())
 }
 
 /// Generate YAML frontmatter for a vault file.
+///
+/// `extra_fields` allows callers to inject additional key-value pairs (e.g.
+/// `legacy_id`, `goal`, `stage`) without bloating this function's signature.
 pub fn build_frontmatter(
     id: Uuid,
     title: &str,
     context: &str,
     doc_type: &str,
     ingestion_source: Option<&str>,
+    extra_fields: Option<&[(&str, &str)]>,
 ) -> String {
     let now = chrono::Utc::now().to_rfc3339();
     let mut fm = format!(
@@ -352,22 +443,36 @@ pub fn build_frontmatter(
     if let Some(source) = ingestion_source {
         fm.push_str(&format!("ingestion_source: \"{source}\"\n"));
     }
+    if let Some(fields) = extra_fields {
+        for (key, value) in fields {
+            fm.push_str(&format!("{key}: \"{value}\"\n"));
+        }
+    }
     fm.push_str(&format!("created: {now}\n---\n\n"));
     fm
 }
 
 /// Write a vault file and register the resource in the manifest.
 ///
+/// `slug` determines the vault filename (`{slug}.md`).  Pass
+/// `slug_from_title(&resource.title)` when no better slug is available.
+///
 /// Returns the absolute vault path.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "vault write needs context, slug, resource, content, source, and extra fields"
+)]
 pub fn write_vault_file_and_register(
     vault_root: &Path,
     context: &str,
     doc_type: &str,
+    slug: &str,
     resource: &temper_core::types::ResourceRow,
     content: &str,
     ingestion_source: Option<&str>,
+    extra_fields: Option<&[(&str, &str)]>,
 ) -> Result<PathBuf> {
-    let vault_path = build_vault_path(vault_root, context, doc_type, resource.id);
+    let vault_path = build_vault_path(vault_root, context, doc_type, slug);
 
     if let Some(parent) = vault_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -379,6 +484,7 @@ pub fn write_vault_file_and_register(
         context,
         doc_type,
         ingestion_source,
+        extra_fields,
     );
     let vault_content = format!("{frontmatter}{content}");
     std::fs::write(&vault_path, &vault_content)?;
@@ -498,24 +604,17 @@ mod tests {
     #[test]
     fn build_vault_path_produces_correct_path() {
         let root = Path::new("/vault");
-        let id = Uuid::nil();
-        let path = build_vault_path(root, "work", "note", id);
-        assert_eq!(
-            path,
-            PathBuf::from("/vault/work/note/00000000-0000-0000-0000-000000000000.md")
-        );
+        let path = build_vault_path(root, "work", "note", "my-document");
+        assert_eq!(path, PathBuf::from("/vault/work/note/my-document.md"));
     }
 
     #[test]
     fn build_vault_path_nested_context() {
         let root = Path::new("/home/user/kb");
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
-        let path = build_vault_path(root, "personal", "resource", id);
+        let path = build_vault_path(root, "personal", "resource", "research-paper");
         assert_eq!(
             path,
-            PathBuf::from(
-                "/home/user/kb/personal/resource/12345678-1234-1234-1234-123456789abc.md"
-            )
+            PathBuf::from("/home/user/kb/personal/resource/research-paper.md")
         );
     }
 
@@ -524,7 +623,7 @@ mod tests {
     #[test]
     fn build_frontmatter_includes_required_fields() {
         let id = Uuid::nil();
-        let fm = build_frontmatter(id, "My Title", "work", "note", None);
+        let fm = build_frontmatter(id, "My Title", "work", "note", None, None);
         assert!(fm.contains("temper-id:"));
         assert!(fm.contains("title: \"My Title\""));
         assert!(fm.contains("context: work"));
@@ -537,7 +636,14 @@ mod tests {
     #[test]
     fn build_frontmatter_includes_ingestion_source_when_provided() {
         let id = Uuid::nil();
-        let fm = build_frontmatter(id, "My Title", "work", "note", Some("/home/user/file.pdf"));
+        let fm = build_frontmatter(
+            id,
+            "My Title",
+            "work",
+            "note",
+            Some("/home/user/file.pdf"),
+            None,
+        );
         assert!(
             fm.contains("ingestion_source: \"/home/user/file.pdf\""),
             "expected ingestion_source in frontmatter:\n{fm}"
@@ -547,11 +653,125 @@ mod tests {
     #[test]
     fn build_frontmatter_omits_ingestion_source_when_absent() {
         let id = Uuid::nil();
-        let fm = build_frontmatter(id, "My Title", "work", "note", None);
+        let fm = build_frontmatter(id, "My Title", "work", "note", None, None);
         assert!(
             !fm.contains("ingestion_source"),
             "unexpected ingestion_source in frontmatter:\n{fm}"
         );
+    }
+
+    #[test]
+    fn build_frontmatter_includes_extra_fields() {
+        let id = Uuid::nil();
+        let extras = [("legacy_id", "abc-123"), ("goal", "temper-cloud")];
+        let fm = build_frontmatter(id, "Title", "work", "task", None, Some(&extras));
+        assert!(fm.contains("legacy_id: \"abc-123\""));
+        assert!(fm.contains("goal: \"temper-cloud\""));
+    }
+
+    // --- parse_source_frontmatter ---
+
+    #[test]
+    fn parse_frontmatter_task() {
+        let content = r#"---
+id: "019d17fd-c400-72c1-8c8a-a1ed6c25a158"
+type: task
+title: "Prettier Temper CLI"
+slug: "2026-03-23-prettier-temper-cli"
+context: "temper"
+goal: "temper-maintenance"
+stage: in-progress
+mode: build
+effort: medium
+---
+
+# Prettier Temper CLI
+"#;
+        let fm = parse_source_frontmatter(content).expect("should parse");
+        assert_eq!(fm.title.as_deref(), Some("Prettier Temper CLI"));
+        assert_eq!(fm.doc_type.as_deref(), Some("task"));
+        assert_eq!(fm.slug.as_deref(), Some("2026-03-23-prettier-temper-cli"));
+        assert_eq!(fm.context.as_deref(), Some("temper"));
+        assert_eq!(fm.goal.as_deref(), Some("temper-maintenance"));
+        assert_eq!(fm.stage.as_deref(), Some("in-progress"));
+        assert_eq!(fm.mode.as_deref(), Some("build"));
+        assert_eq!(fm.effort.as_deref(), Some("medium"));
+        assert_eq!(
+            fm.legacy_id.as_deref(),
+            Some("019d17fd-c400-72c1-8c8a-a1ed6c25a158")
+        );
+    }
+
+    #[test]
+    fn parse_frontmatter_goal() {
+        let content = r#"---
+id: "019d20f9-6a90-7e52-80d7-20c2f36cabb1"
+type: goal
+title: "Maintenance"
+slug: "temper-maintenance"
+context: "temper"
+status: active
+created: 2026-03-23
+---
+
+# Maintenance
+"#;
+        let fm = parse_source_frontmatter(content).expect("should parse");
+        assert_eq!(fm.doc_type.as_deref(), Some("goal"));
+        assert_eq!(fm.status.as_deref(), Some("active"));
+        assert_eq!(fm.date.as_deref(), Some("2026-03-23"));
+    }
+
+    #[test]
+    fn parse_frontmatter_session_minimal() {
+        let content = "---\ntype: session\ndate: 2026-03-27\ncontext: temper\n---\n\n# Session\n";
+        let fm = parse_source_frontmatter(content).expect("should parse");
+        assert_eq!(fm.doc_type.as_deref(), Some("session"));
+        assert_eq!(fm.date.as_deref(), Some("2026-03-27"));
+        assert!(fm.legacy_id.is_none());
+    }
+
+    #[test]
+    fn parse_frontmatter_new_format() {
+        let content = "---\ntemper-id: abc-123\ndoc_type: research\n---\n\nBody\n";
+        let fm = parse_source_frontmatter(content).expect("should parse");
+        assert_eq!(fm.doc_type.as_deref(), Some("research"));
+        assert_eq!(fm.legacy_id.as_deref(), Some("abc-123"));
+    }
+
+    #[test]
+    fn parse_frontmatter_returns_none_without_frontmatter() {
+        let content = "# Just a heading\n\nSome text.\n";
+        assert!(parse_source_frontmatter(content).is_none());
+    }
+
+    // --- strip_frontmatter ---
+
+    #[test]
+    fn strip_frontmatter_removes_yaml_block() {
+        let content = "---\ntype: task\ntitle: Test\n---\n# Body\n";
+        let body = strip_frontmatter(content);
+        assert_eq!(body, "# Body\n");
+    }
+
+    #[test]
+    fn strip_frontmatter_preserves_blank_line_gap() {
+        let content = "---\ntype: task\n---\n\n# Body\n";
+        let body = strip_frontmatter(content);
+        assert_eq!(body, "\n# Body\n");
+    }
+
+    #[test]
+    fn strip_frontmatter_returns_content_without_frontmatter() {
+        let content = "# No frontmatter here\n";
+        assert_eq!(strip_frontmatter(content), content);
+    }
+
+    #[test]
+    fn strip_frontmatter_handles_no_trailing_newline() {
+        let content = "---\ntype: task\n---\nBody text";
+        let body = strip_frontmatter(content);
+        assert_eq!(body, "Body text");
     }
 
     // --- derive_context_from_uri ---

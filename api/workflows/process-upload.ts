@@ -3,7 +3,7 @@ import { chunkText } from "../../packages/temper-cloud/src/workflow/chunk.js";
 import { embedTexts } from "../../packages/temper-cloud/src/workflow/embed.js";
 import {
   buildVersionBumpQuery,
-  buildStoreChunksQuery,
+  buildStoreChunksQueries,
   buildStatusUpdateQuery,
   type ChunkRow,
 } from "../../packages/temper-cloud/src/workflow/store.js";
@@ -95,10 +95,12 @@ async function storeStep(
     embedding: embeddings[i],
   }));
 
-  // Store chunks
-  const storeQuery = buildStoreChunksQuery(chunkRows);
-  if (storeQuery.sql) {
-    await db.query(storeQuery.sql, storeQuery.params);
+  // Store chunks + content (separate tables)
+  const storeQueries = buildStoreChunksQueries(chunkRows);
+  for (const q of storeQueries) {
+    if (q.sql) {
+      await db.query(q.sql, q.params);
+    }
   }
 
   // Update blob_files status to processed

@@ -1,13 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   buildStatusUpdateQuery,
-  buildStoreChunksQuery,
+  buildStoreChunksQueries,
   buildVersionBumpQuery,
   type ChunkRow,
 } from "../../src/workflow/store.js";
 
-describe("buildStoreChunksQuery", () => {
-  it("generates INSERT SQL for chunks with embeddings", () => {
+describe("buildStoreChunksQueries", () => {
+  it("generates INSERT SQL for chunks and content in separate tables", () => {
     const chunks: ChunkRow[] = [
       {
         id: "00000000-0000-0000-0000-000000000001",
@@ -21,10 +21,21 @@ describe("buildStoreChunksQuery", () => {
       },
     ];
 
-    const { sql, params } = buildStoreChunksQuery(chunks);
-    expect(sql).toContain("INSERT INTO kb_chunks");
-    expect(sql).toContain("ON CONFLICT");
-    expect(params.length).toBeGreaterThan(0);
+    const queries = buildStoreChunksQueries(chunks);
+    expect(queries.length).toBe(2);
+
+    // First query: kb_chunks (no content column)
+    expect(queries[0].sql).toContain("INSERT INTO kb_chunks");
+    expect(queries[0].sql).not.toContain("content,");
+    expect(queries[0].sql).toContain("ON CONFLICT");
+
+    // Second query: kb_chunk_content
+    expect(queries[1].sql).toContain("INSERT INTO kb_chunk_content");
+    expect(queries[1].params).toContain("Hello world");
+  });
+
+  it("returns empty array for no chunks", () => {
+    expect(buildStoreChunksQueries([])).toEqual([]);
   });
 });
 

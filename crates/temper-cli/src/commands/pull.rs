@@ -40,7 +40,7 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     std::fs::create_dir_all(parent)?;
                 }
 
-                // Parse context/doc_type from manifest path: "{context}/{doc_type}/{uuid}.md"
+                // Parse context/doc_type from manifest path: "{context}/{doc_type}/{slug}.md"
                 let parts: Vec<&str> = entry.path.split('/').collect();
                 let ctx = parts.first().copied().unwrap_or("default");
                 let dtype = if parts.len() > 1 {
@@ -49,7 +49,8 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     "resource"
                 };
 
-                let frontmatter = ingest::build_frontmatter(id, &resource.title, ctx, dtype, None);
+                let frontmatter =
+                    ingest::build_frontmatter(id, &resource.title, ctx, dtype, None, None);
                 let full_content = format!("{frontmatter}{}", content_response.markdown);
                 std::fs::write(&vault_path, &full_content)?;
 

@@ -3638,6 +3638,7 @@ dependencies = [
  "dirs 5.0.1",
  "ignore",
  "indicatif 0.17.11",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

@@ -130,10 +130,10 @@ pub enum Commands {
         /// Import all files in a directory
         #[arg(long)]
         dir: bool,
-        /// Context name (required for file imports)
+        /// Context name (required for file imports, unless --doc-type auto)
         #[arg(long)]
         context: Option<String>,
-        /// Doc type (default: "resource")
+        /// Doc type — use "auto" to read from each file's YAML frontmatter
         #[arg(long, default_value = "resource")]
         doc_type: String,
         /// Output format
@@ -142,6 +142,12 @@ pub enum Commands {
         /// Override size guardrails
         #[arg(long)]
         force: bool,
+        /// Preview what would be imported without uploading
+        #[arg(long)]
+        dry_run: bool,
+        /// Regex pattern to exclude files (matched against filename)
+        #[arg(long)]
+        ignore: Option<String>,
     },
 
     /// Pull a resource from the cloud

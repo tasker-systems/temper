@@ -1,5 +1,6 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { downloadFile } from "@huggingface/hub";
 import { AutoTokenizer, type PreTrainedTokenizer, type Tensor } from "@huggingface/transformers";
 // eslint-disable-next-line -- onnxruntime-node re-exports from onnxruntime-common.
 // Vercel's TypeScript may not resolve the re-exported types; local typecheck uses
@@ -25,8 +26,9 @@ async function getTokenizer(): Promise<PreTrainedTokenizer> {
 }
 
 /**
- * Download the ONNX model file from HuggingFace if not already cached.
- * Returns the local path to the model file.
+ * Download the ONNX model file from HuggingFace Hub if not already cached.
+ * Uses @huggingface/hub for reliable downloading with proper caching,
+ * matching the Rust crate's hf_hub approach.
  */
 async function ensureModel(): Promise<string> {
   const modelPath = join(CACHE_DIR, ONNX_FILE);
@@ -38,14 +40,16 @@ async function ensureModel(): Promise<string> {
 
   mkdirSync(modelDir, { recursive: true });
 
-  const url = `https://huggingface.co/${MODEL_NAME}/resolve/main/${ONNX_FILE}`;
-  const response = await fetch(url);
-  if (!response.ok) {
-    throw new Error(`Failed to download model: ${response.status} ${response.statusText}`);
+  const response = await downloadFile({
+    repo: MODEL_NAME,
+    path: ONNX_FILE,
+  });
+
+  if (!response) {
+    throw new Error(`Failed to download model from ${MODEL_NAME}/${ONNX_FILE}`);
   }
 
   const buffer = Buffer.from(await response.arrayBuffer());
-  const { writeFileSync } = await import("node:fs");
   writeFileSync(modelPath, buffer);
 
   return modelPath;

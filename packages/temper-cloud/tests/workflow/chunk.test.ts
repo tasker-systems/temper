@@ -65,4 +65,26 @@ Deep content.
     const deepChunk = chunks.find((c) => c.content.includes("Deep content"));
     expect(deepChunk?.header_path).toBe("Top > Mid > Deep");
   });
+
+  it("splits oversized sections at paragraph boundaries", () => {
+    const para = "x".repeat(1000);
+    const text = `# Big Section\n\n${para}\n\n${para}\n\n${para}`;
+    const chunks = chunkText(text);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    for (const chunk of chunks) {
+      // ~1785 chars max + small tolerance
+      expect(chunk.content.length).toBeLessThan(2000);
+    }
+  });
+
+  it("maintains sequential chunk indices after splitting", () => {
+    const para = "x".repeat(1000);
+    const text = `# A\n\n${para}\n\n${para}\n\n## B\n\nSmall.`;
+    const chunks = chunkText(text);
+
+    for (let i = 0; i < chunks.length; i++) {
+      expect(chunks[i].chunk_index).toBe(i);
+    }
+  });
 });

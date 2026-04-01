@@ -16,6 +16,7 @@
     "check:fix": "biome check --fix"
   },
   "dependencies": {
+    "@huggingface/hub": "^2.11.0",
     "@huggingface/transformers": "^3.8.1",
     "@kreuzberg/node": "latest",
     "@neondatabase/serverless": "^1",

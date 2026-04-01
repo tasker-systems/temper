@@ -1,5 +1,6 @@
 export {
   buildStatusUpdateQuery,
+  buildStoreChunksQueries,
   buildStoreChunksQuery,
   buildVersionBumpQuery,
   type ChunkRow,

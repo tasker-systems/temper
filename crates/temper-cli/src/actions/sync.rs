@@ -343,12 +343,17 @@ async fn pull_resource(
 
     let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
 
+    let slug = ingest::slug_from_title(&resource.title);
+    let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
+
     let vault_path = ingest::write_vault_file_and_register(
         vault_root,
         &ctx,
         &doc_type,
+        &slug,
         &resource,
         &content_response.markdown,
+        None,
         None,
     )?;
 

@@ -51,7 +51,7 @@ async fn find_by_content_hash(
     Ok(row)
 }
 
-/// Insert chunks with embeddings into kb_chunks.
+/// Insert chunks with embeddings into kb_chunks + content into kb_chunk_content.
 async fn insert_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_id: Uuid,
@@ -64,20 +64,25 @@ async fn insert_chunks(
             r#"
             INSERT INTO kb_chunks (
                 id, resource_id, chunk_index, version, header_path,
-                content, content_hash, embedding, is_current
+                content_hash, embedding, is_current
             )
-            VALUES ($1, $2, $3, 1, $4, $5, $6, $7::vector, true)
+            VALUES ($1, $2, $3, 1, $4, $5, $6::vector, true)
             "#,
         )
         .bind(chunk_id)
         .bind(resource_id)
         .bind(chunk.chunk_index as i32)
         .bind(&chunk.header_path)
-        .bind(&chunk.content)
         .bind(&chunk.content_hash)
         .bind(&embedding_str)
         .execute(&mut **tx)
         .await?;
+
+        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, $2)")
+            .bind(chunk_id)
+            .bind(&chunk.content)
+            .execute(&mut **tx)
+            .await?;
     }
     Ok(())
 }
@@ -200,23 +205,28 @@ pub async fn update(
             r#"
             INSERT INTO kb_chunks (
                 id, resource_id, chunk_index, version, header_path,
-                content, content_hash, embedding, is_current
+                content_hash, embedding, is_current
             )
             VALUES ($1, $2, $3,
                     COALESCE((SELECT MAX(version) FROM kb_chunks
                               WHERE resource_id = $2 AND chunk_index = $3), 0) + 1,
-                    $4, $5, $6, $7::vector, true)
+                    $4, $5, $6::vector, true)
             "#,
         )
         .bind(chunk_id)
         .bind(resource_id)
         .bind(chunk.chunk_index as i32)
         .bind(&chunk.header_path)
-        .bind(&chunk.content)
         .bind(&chunk.content_hash)
         .bind(&embedding_str)
         .execute(&mut *tx)
         .await?;
+
+        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, $2)")
+            .bind(chunk_id)
+            .bind(&chunk.content)
+            .execute(&mut *tx)
+            .await?;
     }
 
     tx.commit().await?;

@@ -2,7 +2,7 @@ import { chunkText } from "../../packages/temper-cloud/src/processing/chunk.js";
 import { embedTexts } from "../../packages/temper-cloud/src/processing/embed.js";
 import {
   buildVersionBumpQuery,
-  buildStoreChunksQuery,
+  buildStoreChunksQueries,
   type ChunkRow,
 } from "../../packages/temper-cloud/src/processing/store.js";
 import { getDb } from "../../packages/temper-cloud/src/db.js";
@@ -62,9 +62,11 @@ async function storeStep(
     embedding: embeddings[i],
   }));
 
-  // Store chunks
-  const storeQuery = buildStoreChunksQuery(chunkRows);
-  if (storeQuery.sql) {
-    await db.query(storeQuery.sql, storeQuery.params);
+  // Store chunks + content (separate tables)
+  const storeQueries = buildStoreChunksQueries(chunkRows);
+  for (const q of storeQueries) {
+    if (q.sql) {
+      await db.query(q.sql, q.params);
+    }
   }
 }
