@@ -61,16 +61,16 @@ pub fn build_filter_clause(
 }
 
 /// Resolve a context name to its UUID for the given profile.
-/// Returns None if the context doesn't exist (no auto-create for search).
+/// Uses contexts_visible_to() for proper visibility scoping.
 async fn resolve_context_id(
     pool: &PgPool,
     name: &str,
     profile_id: Uuid,
 ) -> ApiResult<Option<Uuid>> {
     let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM kb_contexts WHERE name = $1 AND owner_profile_id = $2")
-            .bind(name)
+        sqlx::query_as("SELECT cv.id FROM contexts_visible_to($1) cv WHERE cv.name = $2")
             .bind(profile_id)
+            .bind(name)
             .fetch_optional(pool)
             .await?;
     Ok(row.map(|(id,)| id))
