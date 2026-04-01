@@ -299,16 +299,12 @@ pub enum GoalAction {
 
 #[derive(Subcommand)]
 pub enum ContextAction {
-    /// Add a context (project) to temper.toml
+    /// Add a context to subscriptions
     Add {
-        #[arg(long)]
+        /// Context name to add
         name: String,
-        #[arg(long)]
-        path: String,
-        #[arg(long)]
-        repo: Option<String>,
     },
-    /// Remove a context from temper.toml
+    /// Remove a context from subscriptions
     Remove { name: String },
     /// List configured contexts
     List,

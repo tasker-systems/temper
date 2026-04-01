@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use askama::Template;
 use chrono::Local;
 use serde::Serialize;
 
@@ -7,14 +8,14 @@ use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::Result;
 use crate::output;
-use crate::project;
+use crate::templates::SessionTemplate;
 use crate::vault;
 
 /// Create or update today's session note.
 ///
-/// Path: `<vault_root>/<sessions_dir>/<project>/<date> — <title>.md`
+/// Path: `<vault_root>/<context>/session/<date> — <title>.md`
 ///
-/// - If `project` is None, infers from CWD; falls back to "general"
+/// - If `context` is None, falls back to "general"
 /// - `title` defaults to today's date if omitted
 /// - If the file already exists and `stdin_content` is None: no-op (idempotent)
 /// - If the file already exists and `stdin_content` is Some: replace body, preserve frontmatter
@@ -23,7 +24,7 @@ use crate::vault;
 pub fn save(
     config: &Config,
     title: Option<&str>,
-    project: Option<&str>,
+    context: Option<&str>,
     stdin_content: Option<&str>,
     task: Option<&str>,
     state: Option<&str>,
@@ -31,29 +32,20 @@ pub fn save(
 ) -> Result<()> {
     let today = Local::now().format("%Y-%m-%d").to_string();
 
-    // Resolve project
-    let project_name: String = if let Some(p) = project {
-        p.to_string()
-    } else if let Ok(cwd) = std::env::current_dir() {
-        project::resolve_from_cwd(&cwd, &config.projects)
-            .map(|p| p.name.clone())
-            .unwrap_or_else(|| "general".to_string())
-    } else {
-        "general".to_string()
-    };
+    let context_name = context.unwrap_or("general");
 
     let note_title = title.unwrap_or(&today);
 
-    // Build path: <sessions_dir>/<project>/<date> — <title>.md
+    // Build path: <vault_root>/<context>/session/<date> — <title>.md
     let filename = format!("{today} \u{2014} {note_title}.md");
-    let session_project_dir = config.sessions_dir.join(&project_name);
-    let note_path = session_project_dir.join(&filename);
+    let session_dir = config.doc_type_dir(context_name, "session");
+    let note_path = session_dir.join(&filename);
 
     if note_path.exists() {
         // File exists: replace body if stdin provided, otherwise no-op
         if let Some(body) = stdin_content {
             let existing = std::fs::read_to_string(&note_path)?;
-            let updated = replace_body(&existing, body);
+            let updated = vault::replace_body(&existing, body);
             std::fs::write(&note_path, updated)?;
             let relative = note_path
                 .strip_prefix(&config.vault_root)
@@ -64,27 +56,22 @@ pub fn save(
     }
 
     // File doesn't exist: create from session template
-    let templates_rel = config
-        .templates_dir
-        .strip_prefix(&config.vault_root)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "templates".to_string());
-
     let id = crate::ids::generate_id();
-    let content = vault::render_template_with_vars(
-        &config.vault_root,
-        &templates_rel,
-        "session",
-        note_title,
-        &[("project", &project_name), ("id", &id)],
-    )?;
+    let tmpl = SessionTemplate {
+        id: &id,
+        title: note_title,
+        date: &today,
+    };
+    let content = tmpl
+        .render()
+        .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
     // Set project field in frontmatter
-    let content = vault::set_frontmatter_field(&content, "project", &project_name);
+    let content = vault::set_frontmatter_field(&content, "project", context_name);
 
     // If stdin content was piped, replace the template body
     let content = if let Some(body) = stdin_content {
-        replace_body(&content, body)
+        vault::replace_body(&content, body)
     } else {
         content
     };
@@ -108,7 +95,7 @@ pub fn save(
         }
         let info = SessionCreated {
             title: note_title,
-            project: &project_name,
+            project: context_name,
             path: &relative_str,
             date: &today,
         };
@@ -122,7 +109,7 @@ pub fn save(
         note_type: "session".to_string(),
         title: note_title.to_string(),
         path: relative_str.to_string(),
-        project: project_name.clone(),
+        project: context_name.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -160,8 +147,7 @@ fn link_session_to_task(
 
     // Read the task file
     let task_path = config
-        .tasks_dir
-        .join(&task_info.context)
+        .doc_type_dir(&task_info.context, "task")
         .join(format!("{}.md", task_info.slug));
     let mut task_content = std::fs::read_to_string(&task_path)?;
 
@@ -206,13 +192,7 @@ fn link_session_to_task(
 
     // Optionally update the task stage
     if let Some(s) = state {
-        let valid_stages = ["backlog", "in-progress", "done", "cancelled"];
-        if !valid_stages.contains(&s) {
-            return Err(crate::error::TemperError::Vault(format!(
-                "invalid stage: {s}. Must be one of: {}",
-                valid_stages.join(", ")
-            )));
-        }
+        vault::validate_stage(s)?;
         task_content = vault::set_frontmatter_field(&task_content, "stage", s);
     }
 
@@ -220,46 +200,23 @@ fn link_session_to_task(
     Ok(())
 }
 
-/// List recent sessions, optionally filtered by project.
+/// List recent sessions, optionally filtered by context.
 ///
-/// Scans `sessions_dir`, parses frontmatter for date, sorts by date descending,
+/// Scans `<context>/session/` dirs, parses frontmatter for date, sorts by date descending,
 /// displays up to 20 entries.
-pub fn list(config: &Config, project: Option<&str>, format: &str) -> Result<()> {
-    let sessions_root = &config.sessions_dir;
-
-    if !sessions_root.exists() {
-        output::warning("No sessions directory found.");
-        return Ok(());
-    }
-
+pub fn list(config: &Config, context: Option<&str>, format: &str) -> Result<()> {
     let mut entries: Vec<SessionEntry> = Vec::new();
 
-    // Scan project subdirectories (or the root if flat)
-    for proj_entry in std::fs::read_dir(sessions_root)? {
-        let proj_entry = proj_entry?;
-        let proj_path = proj_entry.path();
+    let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
+        vec![ctx.to_string()]
+    } else {
+        config.contexts.clone()
+    };
 
-        if proj_path.is_dir() {
-            let proj_name = proj_path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-
-            // Filter by project if specified
-            if let Some(filter) = project {
-                if proj_name != filter {
-                    continue;
-                }
-            }
-
-            collect_sessions(&proj_path, &proj_name, &mut entries)?;
-        } else if proj_path.extension().is_some_and(|e| e == "md") {
-            // Flat session files at root level
-            if project.is_none() {
-                let proj_name = "general".to_string();
-                add_session_entry(&proj_path, &proj_name, &mut entries);
-            }
+    for ctx in &contexts_to_scan {
+        let session_dir = config.doc_type_dir(ctx, "session");
+        if session_dir.is_dir() {
+            collect_sessions(&session_dir, ctx, &mut entries)?;
         }
     }
 
@@ -278,7 +235,7 @@ pub fn list(config: &Config, project: Option<&str>, format: &str) -> Result<()> 
         return Ok(());
     }
 
-    output::plain(format!("{:<12} {:<20} Title", "Date", "Project"));
+    output::plain(format!("{:<12} {:<20} Title", "Date", "Context"));
     output::dim("-".repeat(60));
     for entry in &entries {
         output::plain(format!(
@@ -359,24 +316,10 @@ fn extract_date_from_stem(stem: &str) -> Option<String> {
     None
 }
 
-/// Replace body content of a markdown note, preserving frontmatter.
-fn replace_body(existing: &str, new_body: &str) -> String {
-    let trimmed = existing.trim_start();
-    if let Some(after_open) = trimmed.strip_prefix("---") {
-        if let Some(end) = after_open.find("---") {
-            let frontmatter_end = 3 + end + 3;
-            let frontmatter = &trimmed[..frontmatter_end];
-            return format!("{frontmatter}\n\n{new_body}");
-        }
-    }
-    // No frontmatter: just replace entirely
-    new_body.to_string()
-}
-
 /// Return path that would be used for a session note (for testing/preview).
 #[allow(dead_code)]
-pub fn session_path(config: &Config, project: &str, title: &str) -> PathBuf {
+pub fn session_path(config: &Config, context: &str, title: &str) -> PathBuf {
     let today = Local::now().format("%Y-%m-%d").to_string();
     let filename = format!("{today} \u{2014} {title}.md");
-    config.sessions_dir.join(project).join(filename)
+    config.doc_type_dir(context, "session").join(filename)
 }

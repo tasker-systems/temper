@@ -1,34 +1,35 @@
 use std::fs;
 
+use askama::Template;
 use chrono::Local;
 
 use crate::actions::types::GoalInfo;
 use crate::config::Config;
 use crate::discovery;
 use crate::error::{Result, TemperError};
+use crate::templates::GoalTemplate;
 use crate::vault;
 
 /// Load all goals, optionally filtered by context, sorted by seq.
 pub fn load_goals(config: &Config, context: Option<&str>) -> Result<Vec<GoalInfo>> {
-    let base = &config.goals_dir;
-    if !base.is_dir() {
-        return Ok(vec![]);
-    }
     let mut goals = Vec::new();
     let dirs: Vec<_> = if let Some(p) = context {
-        let d = base.join(p);
+        let d = config.doc_type_dir(p, "goal");
         if d.is_dir() {
             vec![d]
         } else {
             vec![]
         }
     } else {
-        fs::read_dir(base)
-            .map_err(|e| TemperError::Vault(e.to_string()))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect()
+        // Scan all contexts for goal subdirectories
+        let mut found = Vec::new();
+        for ctx in &config.contexts {
+            let d = config.doc_type_dir(ctx, "goal");
+            if d.is_dir() {
+                found.push(d);
+            }
+        }
+        found
     };
     for dir in dirs {
         for entry in fs::read_dir(&dir).map_err(|e| TemperError::Vault(e.to_string()))? {
@@ -70,31 +71,24 @@ pub fn find_goal(config: &Config, slug: &str, context: Option<&str>) -> Result<O
 /// Ensure the maintenance goal exists for a context, creating it if missing.
 pub fn ensure_maintenance(config: &Config, context: &str) -> Result<String> {
     let slug = format!("{context}-maintenance");
-    let dir = config.goals_dir.join(context);
+    let dir = config.doc_type_dir(context, "goal");
     let path = dir.join(format!("{slug}.md"));
     if path.exists() {
         return Ok(slug);
     }
-    let templates_dir = config
-        .templates_dir
-        .strip_prefix(&config.vault_root)
-        .unwrap_or(&config.templates_dir)
-        .to_str()
-        .unwrap_or("templates");
     let id = crate::ids::generate_id();
-    let vars = vec![
-        ("slug", slug.as_str()),
-        ("context", context),
-        ("seq", "0"),
-        ("id", id.as_str()),
-    ];
-    let content = vault::render_template_with_vars(
-        &config.vault_root,
-        templates_dir,
-        "goal",
-        "Maintenance",
-        &vars,
-    )?;
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    let tmpl = GoalTemplate {
+        id: &id,
+        title: "Maintenance",
+        slug: &slug,
+        context,
+        seq: "0",
+        date: &date,
+    };
+    let content = tmpl
+        .render()
+        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
     let event = discovery::Event::GoalCreate {
@@ -115,7 +109,7 @@ pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -
         Some(s) => s.to_string(),
         None => vault::slugify(title),
     };
-    let dir = config.goals_dir.join(context);
+    let dir = config.doc_type_dir(context, "goal");
     let path = dir.join(format!("{slug}.md"));
     if path.exists() {
         return Err(TemperError::Vault(format!("goal already exists: {slug}")));
@@ -123,20 +117,18 @@ pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -
     let seq = next_seq(config, context)?;
     let seq_str = seq.to_string();
     let id = crate::ids::generate_id();
-    let templates_dir = config
-        .templates_dir
-        .strip_prefix(&config.vault_root)
-        .unwrap_or(&config.templates_dir)
-        .to_str()
-        .unwrap_or("templates");
-    let vars = vec![
-        ("slug", slug.as_str()),
-        ("context", context),
-        ("seq", seq_str.as_str()),
-        ("id", id.as_str()),
-    ];
-    let content =
-        vault::render_template_with_vars(&config.vault_root, templates_dir, "goal", title, &vars)?;
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    let tmpl = GoalTemplate {
+        id: &id,
+        title,
+        slug: &slug,
+        context,
+        seq: &seq_str,
+        date: &date,
+    };
+    let content = tmpl
+        .render()
+        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
     let event = discovery::Event::GoalCreate {
@@ -163,8 +155,7 @@ pub fn update(config: &Config, slug: &str, status: &str, context: Option<&str>) 
     let info = find_goal(config, slug, context)?
         .ok_or_else(|| TemperError::Vault(format!("goal not found: {slug}")))?;
     let path = config
-        .goals_dir
-        .join(&info.context)
+        .doc_type_dir(&info.context, "goal")
         .join(format!("{slug}.md"));
     if !path.exists() {
         return Err(TemperError::Vault(format!("goal not found: {slug}")));
@@ -189,7 +180,7 @@ pub fn count_tasks_by_stage(
     config: &Config,
     context: &str,
 ) -> Result<std::collections::HashMap<String, std::collections::HashMap<String, usize>>> {
-    let dir = config.tasks_dir.join(context);
+    let dir = config.doc_type_dir(context, "task");
     let mut counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>> =
         std::collections::HashMap::new();
     if !dir.is_dir() {

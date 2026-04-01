@@ -22,8 +22,7 @@ pub fn show(
         return Ok(());
     }
     let path = config
-        .tasks_dir
-        .join(&task.context)
+        .doc_type_dir(&task.context, "task")
         .join(format!("{}.md", task.slug));
     let content = std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     print!("{content}");

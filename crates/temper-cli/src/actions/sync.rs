@@ -261,7 +261,8 @@ async fn push_resource(
                 };
 
                 let (resource, _) =
-                    ingest::ingest_file(client, &file_path, context, doc_type).await?;
+                    ingest::ingest_file(client, &file_path, context, doc_type, Some("imported"))
+                        .await?;
 
                 // Update manifest entry with server-assigned data
                 if let Some(e) = manifest.entries.get_mut(&entry_id) {

@@ -91,7 +91,7 @@ pub fn load_global_config() -> Result<GlobalConfig> {
 /// 3-step vault resolution (no CWD walk-up):
 ///   1. CLI --vault flag
 ///   2. TEMPER_VAULT env var
-///   3. Global config [vault].path
+///   3. Global config `[vault].path`
 pub fn resolve_vault(cli_vault: Option<&str>) -> Result<PathBuf> {
     if let Some(v) = cli_vault {
         return Ok(expand_tilde(v));

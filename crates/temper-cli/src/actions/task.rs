@@ -1,5 +1,6 @@
 use std::fs;
 
+use askama::Template;
 use chrono::Local;
 
 use crate::actions::types::TaskInfo;
@@ -8,6 +9,7 @@ use crate::config::Config;
 use crate::discovery;
 use crate::error::{Result, TemperError};
 use crate::output;
+use crate::templates::TaskTemplate;
 use crate::vault;
 
 /// Load all tasks, optionally filtered by context and/or goal.
@@ -16,25 +18,24 @@ pub fn load_tasks(
     context: Option<&str>,
     goal_slug: Option<&str>,
 ) -> Result<Vec<TaskInfo>> {
-    let base = &config.tasks_dir;
-    if !base.is_dir() {
-        return Ok(vec![]);
-    }
     let mut tasks = Vec::new();
     let dirs: Vec<_> = if let Some(p) = context {
-        let d = base.join(p);
+        let d = config.doc_type_dir(p, "task");
         if d.is_dir() {
             vec![d]
         } else {
             vec![]
         }
     } else {
-        fs::read_dir(base)
-            .map_err(|e| TemperError::Vault(e.to_string()))?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.is_dir())
-            .collect()
+        // Scan all contexts for task subdirectories
+        let mut found = Vec::new();
+        for ctx in &config.contexts {
+            let d = config.doc_type_dir(ctx, "task");
+            if d.is_dir() {
+                found.push(d);
+            }
+        }
+        found
     };
     for dir in dirs {
         for entry in fs::read_dir(&dir).map_err(|e| TemperError::Vault(e.to_string()))? {
@@ -102,16 +103,6 @@ pub fn find_task(
     }
 }
 
-fn templates_dir_str(config: &Config) -> String {
-    config
-        .templates_dir
-        .strip_prefix(&config.vault_root)
-        .unwrap_or(&config.templates_dir)
-        .to_str()
-        .unwrap_or("templates")
-        .to_string()
-}
-
 /// Create a new task.
 pub fn create(
     config: &Config,
@@ -139,25 +130,13 @@ pub fn create(
     }
 
     // Validate mode if provided
-    let valid_modes = ["plan", "build"];
     if let Some(m) = mode {
-        if !valid_modes.contains(&m) {
-            return Err(TemperError::Vault(format!(
-                "invalid mode: {m}. Must be one of: {}",
-                valid_modes.join(", ")
-            )));
-        }
+        vault::validate_mode(m)?;
     }
 
     // Validate effort if provided
-    let valid_efforts = ["small", "medium", "large"];
     if let Some(e) = effort {
-        if !valid_efforts.contains(&e) {
-            return Err(TemperError::Vault(format!(
-                "invalid effort: {e}. Must be one of: {}",
-                valid_efforts.join(", ")
-            )));
-        }
+        vault::validate_effort(e)?;
     }
 
     let date = Local::now().format("%Y-%m-%d").to_string();
@@ -168,28 +147,29 @@ pub fn create(
     let seq_str = seq.to_string();
     let id = crate::ids::generate_id();
 
-    let templates_dir = templates_dir_str(config);
     let mode_str = mode.unwrap_or("null");
     let effort_str = effort.unwrap_or("null");
-    let vars = vec![
-        ("slug", slug.as_str()),
-        ("context", context),
-        ("goal", gs.as_str()),
-        ("seq", seq_str.as_str()),
-        ("datetime", datetime.as_str()),
-        ("id", id.as_str()),
-        ("mode", mode_str),
-        ("effort", effort_str),
-    ];
-    let mut content =
-        vault::render_template_with_vars(&config.vault_root, &templates_dir, "task", title, &vars)?;
+    let tmpl = TaskTemplate {
+        id: &id,
+        title,
+        slug: &slug,
+        context,
+        goal: &gs,
+        mode: mode_str,
+        effort: effort_str,
+        seq: &seq_str,
+        datetime: &datetime,
+    };
+    let mut content = tmpl
+        .render()
+        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
 
     if let Some(stdin_content) = vault::read_stdin_if_piped() {
         content.push_str(&stdin_content);
         content.push('\n');
     }
 
-    let dir = config.tasks_dir.join(context);
+    let dir = config.doc_type_dir(context, "task");
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     let path = dir.join(format!("{slug}.md"));
     vault::write_note(&path, &content)?;
@@ -223,39 +203,20 @@ pub fn move_task(
     let task = find_task(config, slug_or_suffix, context)?
         .ok_or_else(|| TemperError::Vault(format!("task not found: {slug_or_suffix}")))?;
 
-    let valid_stages = ["backlog", "in-progress", "done", "cancelled"];
     if let Some(s) = stage {
-        if !valid_stages.contains(&s) {
-            return Err(TemperError::Vault(format!(
-                "invalid stage: {s}. Must be one of: {}",
-                valid_stages.join(", ")
-            )));
-        }
+        vault::validate_stage(s)?;
     }
 
-    let valid_modes = ["plan", "build"];
     if let Some(m) = mode {
-        if !valid_modes.contains(&m) {
-            return Err(TemperError::Vault(format!(
-                "invalid mode: {m}. Must be one of: {}",
-                valid_modes.join(", ")
-            )));
-        }
+        vault::validate_mode(m)?;
     }
 
-    let valid_efforts = ["small", "medium", "large"];
     if let Some(e) = effort {
-        if !valid_efforts.contains(&e) {
-            return Err(TemperError::Vault(format!(
-                "invalid effort: {e}. Must be one of: {}",
-                valid_efforts.join(", ")
-            )));
-        }
+        vault::validate_effort(e)?;
     }
 
     let path = config
-        .tasks_dir
-        .join(&task.context)
+        .doc_type_dir(&task.context, "task")
         .join(format!("{}.md", task.slug));
     let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
@@ -340,8 +301,7 @@ pub fn done(
         .ok_or_else(|| TemperError::Vault(format!("task not found: {slug_or_suffix}")))?;
 
     let path = config
-        .tasks_dir
-        .join(&task.context)
+        .doc_type_dir(&task.context, "task")
         .join(format!("{}.md", task.slug));
     let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 

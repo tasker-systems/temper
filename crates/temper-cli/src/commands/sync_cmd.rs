@@ -20,6 +20,9 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
 
     let (rt, client) = runtime::build_runtime_and_client()?;
 
+    // Ensure profile exists before hitting TypeScript sync endpoints
+    rt.block_on(runtime::ensure_profile(&client))?;
+
     let result = rt.block_on(async {
         sync_actions::sync_orchestration(&client, &mut manifest, &vault_root, contexts).await
     })?;

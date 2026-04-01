@@ -71,7 +71,7 @@ fn run_single_file(
         let context = context.to_string();
         let doc_type = doc_type.to_string();
         Box::pin(async move {
-            ingest::ingest_file(client, &file_path, &context, &doc_type)
+            ingest::ingest_file(client, &file_path, &context, &doc_type, None)
                 .await
                 .map_err(|e| crate::error::TemperError::Api(e.to_string()))
         })
@@ -117,7 +117,7 @@ fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::err
         let context = context.to_string();
         let doc_type = doc_type.to_string();
         Box::pin(async move {
-            ingest::ingest_url(client, &url, &context, &doc_type)
+            ingest::ingest_url(client, &url, &context, &doc_type, None)
                 .await
                 .map_err(|e| crate::error::TemperError::Api(e.to_string()))
         })
@@ -338,7 +338,7 @@ pub fn run_directory(
                     .unwrap_or("unknown")
                     .to_string();
 
-                match ingest::ingest_file(&client, &file_path, &context, &doc_type).await {
+                match ingest::ingest_file(&client, &file_path, &context, &doc_type, None).await {
                     Ok((resource, _content)) => {
                         if json_mode {
                             let event = serde_json::json!({

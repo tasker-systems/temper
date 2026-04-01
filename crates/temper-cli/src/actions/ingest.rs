@@ -207,17 +207,19 @@ pub async fn ingest_file(
     file_path: &Path,
     context: &str,
     doc_type: &str,
+    resource_mode: Option<&str>,
 ) -> Result<(temper_core::types::ResourceRow, String)> {
     let extraction = crate::extract::extract_to_markdown(file_path)?;
     let extracted_content = extraction.content.clone();
 
-    let request = build_ingest_request(
+    let mut request = build_ingest_request(
         extraction.content,
         extraction.mime_type,
         file_path,
         context,
         doc_type,
     );
+    request.resource_mode = resource_mode.map(String::from);
 
     let resource = client
         .ingest()
@@ -237,6 +239,7 @@ pub async fn ingest_url(
     url: &str,
     context: &str,
     doc_type: &str,
+    resource_mode: Option<&str>,
 ) -> Result<(temper_core::types::ResourceRow, String)> {
     let (temp_path, display_name) = fetch_url_to_tempfile(url).await?;
 
@@ -253,6 +256,7 @@ pub async fn ingest_url(
         doc_type,
     );
     request.origin_uri = url.to_string();
+    request.resource_mode = resource_mode.map(String::from);
 
     let resource = client
         .ingest()

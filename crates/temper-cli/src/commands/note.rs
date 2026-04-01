@@ -9,7 +9,7 @@ use chrono::Local;
 
 /// Create a new note from a template.
 ///
-/// - `note_type`: any template name in the templates dir (e.g. "session", "concept")
+/// - `note_type`: any template name (e.g. "session", "concept")
 /// - `title`: note title (used in filename and template substitution)
 /// - `project`: optional project tag written into frontmatter
 pub fn create(
@@ -19,13 +19,16 @@ pub fn create(
     project: Option<&str>,
     format: &str,
 ) -> Result<()> {
-    let templates_rel = config
-        .templates_dir
-        .strip_prefix(&config.vault_root)
-        .map(|p| p.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "templates".to_string());
+    // Render the template using askama via get_template with actual values
+    let mut content = vault::get_template(note_type)?;
 
-    let mut content = vault::render_template(&config.vault_root, &templates_rel, note_type, title)?;
+    // Replace placeholders with actual values
+    let today = Local::now().format("%Y-%m-%d").to_string();
+    let id = crate::ids::generate_id();
+    content = content.replace("{{placeholder}}", title);
+    content = vault::set_frontmatter_field(&content, "title", title);
+    content = vault::set_frontmatter_field(&content, "date", &today);
+    content = vault::set_frontmatter_field(&content, "id", &format!("\"{id}\""));
 
     // Determine output path: <vault_root>/<note_type>s/<title>.md
     let slug = vault::slugify(title);
@@ -46,7 +49,7 @@ pub fn create(
 
     // If stdin is piped, read body from stdin and merge (keep frontmatter, replace body)
     if let Some(stdin_content) = vault::read_stdin_if_piped() {
-        content = merge_stdin_with_template(&content, &stdin_content);
+        content = vault::replace_body(&content, &stdin_content);
     }
 
     vault::write_note(&note_path, &content)?;
@@ -89,16 +92,4 @@ pub fn create(
     }
 
     Ok(())
-}
-
-fn merge_stdin_with_template(template: &str, stdin_content: &str) -> String {
-    let trimmed = template.trim_start();
-    if let Some(after_open) = trimmed.strip_prefix("---") {
-        if let Some(end) = after_open.find("---") {
-            let frontmatter_end = 3 + end + 3;
-            let frontmatter = &trimmed[..frontmatter_end];
-            return format!("{frontmatter}\n\n{stdin_content}");
-        }
-    }
-    stdin_content.to_string()
 }

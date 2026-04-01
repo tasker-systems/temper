@@ -1,24 +1,50 @@
 use crate::error::{Result, TemperError};
 use crate::templates::{GoalTemplate, ResearchTemplate, SessionTemplate, TaskTemplate};
 use askama::Template;
-use chrono::Local;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 
-// Legacy embedded templates — kept until callers migrate to Askama in Tasks 4-7.
-const EMBEDDED_SESSION: &str = include_str!("templates/session.md");
-const EMBEDDED_TASK: &str = include_str!("templates/task.md");
-const EMBEDDED_GOAL: &str = include_str!("templates/goal.md");
-const EMBEDDED_RESEARCH: &str = include_str!("templates/research.md");
+// ---------------------------------------------------------------------------
+// Validation constants and helpers
+// ---------------------------------------------------------------------------
 
-fn embedded_template(note_type: &str) -> Option<&'static str> {
-    match note_type {
-        "session" => Some(EMBEDDED_SESSION),
-        "task" => Some(EMBEDDED_TASK),
-        "goal" => Some(EMBEDDED_GOAL),
-        "research" => Some(EMBEDDED_RESEARCH),
-        _ => None,
+pub const VALID_STAGES: &[&str] = &["backlog", "in-progress", "done", "cancelled"];
+pub const VALID_MODES: &[&str] = &["plan", "build"];
+pub const VALID_EFFORTS: &[&str] = &["small", "medium", "large"];
+
+pub fn validate_stage(s: &str) -> Result<()> {
+    if !VALID_STAGES.contains(&s) {
+        return Err(TemperError::Vault(format!(
+            "invalid stage: {s}. Must be one of: {}",
+            VALID_STAGES.join(", ")
+        )));
     }
+    Ok(())
 }
+
+pub fn validate_mode(m: &str) -> Result<()> {
+    if !VALID_MODES.contains(&m) {
+        return Err(TemperError::Vault(format!(
+            "invalid mode: {m}. Must be one of: {}",
+            VALID_MODES.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+pub fn validate_effort(e: &str) -> Result<()> {
+    if !VALID_EFFORTS.contains(&e) {
+        return Err(TemperError::Vault(format!(
+            "invalid effort: {e}. Must be one of: {}",
+            VALID_EFFORTS.join(", ")
+        )));
+    }
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Template rendering (askama-based)
+// ---------------------------------------------------------------------------
 
 /// Return a rendered template with placeholder values for a note type.
 /// Used by `--show-template` flags to preview template structure.
@@ -68,6 +94,10 @@ pub fn get_template(note_type: &str) -> Result<String> {
     }
     .map_err(|e| TemperError::Vault(format!("Failed to render template: {e}")))
 }
+
+// ---------------------------------------------------------------------------
+// Frontmatter utilities
+// ---------------------------------------------------------------------------
 
 /// Parse YAML frontmatter from markdown content
 pub fn parse_frontmatter(content: &str) -> Option<serde_yaml::Value> {
@@ -138,51 +168,17 @@ pub fn write_note(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Legacy: will be replaced by Askama template structs in Task 4.
-pub fn render_template(
-    vault_root: &Path,
-    templates_dir: &str,
-    note_type: &str,
-    title: &str,
-) -> Result<String> {
-    let today = Local::now().format("%Y-%m-%d").to_string();
-    let template_path = vault_root
-        .join(templates_dir)
-        .join(format!("{note_type}.md"));
-
-    let content = if template_path.exists() {
-        std::fs::read_to_string(&template_path).map_err(|e| {
-            TemperError::Vault(format!(
-                "Failed to read template {}: {e}",
-                template_path.display()
-            ))
-        })?
-    } else if let Some(embedded) = embedded_template(note_type) {
-        embedded.to_string()
-    } else {
-        return Err(TemperError::Vault(format!(
-            "No template found for note type '{note_type}'"
-        )));
-    };
-
-    Ok(content
-        .replace("{{date}}", &today)
-        .replace("{{title}}", title))
-}
-
-/// Legacy: will be replaced by Askama template structs in Task 4.
-pub fn render_template_with_vars(
-    vault_root: &Path,
-    templates_dir: &str,
-    note_type: &str,
-    title: &str,
-    vars: &[(&str, &str)],
-) -> Result<String> {
-    let mut content = render_template(vault_root, templates_dir, note_type, title)?;
-    for (key, value) in vars {
-        content = content.replace(&format!("{{{{{key}}}}}"), value);
+/// Replace the body of a markdown note, preserving YAML frontmatter.
+pub fn replace_body(existing: &str, new_body: &str) -> String {
+    let trimmed = existing.trim_start();
+    if let Some(after_open) = trimmed.strip_prefix("---") {
+        if let Some(end) = after_open.find("---") {
+            let frontmatter_end = 3 + end + 3;
+            let frontmatter = &trimmed[..frontmatter_end];
+            return format!("{frontmatter}\n\n{new_body}");
+        }
     }
-    Ok(content)
+    new_body.to_string()
 }
 
 /// Read stdin content if stdin is not a terminal (piped input).

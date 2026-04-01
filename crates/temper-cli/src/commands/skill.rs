@@ -2,29 +2,29 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
 
 /// Generate the skill file content as a string.
 pub fn generate(config: &Config) -> Result<String> {
-    let toml_path = config.vault_root.join("temper.toml");
-    let toml_content = std::fs::read_to_string(&toml_path)
-        .map_err(|e| TemperError::Config(format!("cannot read temper.toml: {}", e)))?;
-    let hash = format!("{:x}", Sha256::digest(toml_content.as_bytes()));
+    let config_path = config::global_config_path();
+    let config_content = std::fs::read_to_string(&config_path)
+        .map_err(|e| TemperError::Config(format!("cannot read config: {}", e)))?;
+    let hash = format!("{:x}", Sha256::digest(config_content.as_bytes()));
 
     let vault_path = config.vault_root.display().to_string();
 
-    let mut project_lines = Vec::new();
-    let mut sorted_projects: Vec<_> = config.projects.values().collect();
-    sorted_projects.sort_by_key(|p| &p.name);
-    for project in sorted_projects {
-        project_lines.push(format!("- `{}` — {}", project.name, project.path.display()));
+    let mut context_lines = Vec::new();
+    let mut sorted_contexts = config.contexts.clone();
+    sorted_contexts.sort();
+    for ctx in &sorted_contexts {
+        context_lines.push(format!("- `{ctx}`"));
     }
-    let project_list = if project_lines.is_empty() {
+    let context_list = if context_lines.is_empty() {
         "(no contexts configured)".to_string()
     } else {
-        project_lines.join("\n")
+        context_lines.join("\n")
     };
 
     let content = format!(
@@ -45,7 +45,7 @@ Never use `cargo run`, `python`, full binary paths, or any other indirect method
 working inside the temper source repo.
 
 ## Contexts
-{project_list}
+{context_list}
 
 ## Commands
 
@@ -190,7 +190,7 @@ Stdin is auto-detected — pipe content directly without flags.
 "#,
         hash = hash,
         vault_path = vault_path,
-        project_list = project_list,
+        context_list = context_list,
     );
 
     Ok(content)
@@ -222,22 +222,24 @@ pub fn install(config: &Config, output_path: &Path) -> Result<()> {
 }
 
 /// Check skill installation status.
-/// 1. Checks if superpowers plugin is installed.
+/// 1. Checks if superpowers plugin is installed (when framework == "superpowers").
 /// 2. Checks if the skill file exists at the configured output path.
 /// 3. If it exists, compares the embedded config hash to detect staleness.
 pub fn check(config: &Config) -> Result<()> {
-    // Check superpowers installation
-    let superpowers_path = dirs::home_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("~"))
-        .join(".claude/plugins/cache/claude-plugins-official/superpowers");
+    // Check superpowers installation only when relevant
+    if config.skill_framework == "superpowers" {
+        let superpowers_path = dirs::home_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~"))
+            .join(".claude/plugins/cache/claude-plugins-official/superpowers");
 
-    if superpowers_path.exists() {
-        output::status_icon(true, format!("Superpowers: {}", superpowers_path.display()));
-    } else {
-        output::status_icon(
-            false,
-            format!("Superpowers: NOT FOUND ({})", superpowers_path.display()),
-        );
+        if superpowers_path.exists() {
+            output::status_icon(true, format!("Superpowers: {}", superpowers_path.display()));
+        } else {
+            output::status_icon(
+                false,
+                format!("Superpowers: NOT FOUND ({})", superpowers_path.display()),
+            );
+        }
     }
 
     // Check skill file
@@ -259,11 +261,11 @@ pub fn check(config: &Config) -> Result<()> {
 
     let embedded_hash = extract_config_hash(&existing);
 
-    // Compute current hash
-    let toml_path = config.vault_root.join("temper.toml");
-    let toml_content = std::fs::read_to_string(&toml_path)
-        .map_err(|e| TemperError::Config(format!("cannot read temper.toml: {}", e)))?;
-    let current_hash = format!("{:x}", Sha256::digest(toml_content.as_bytes()));
+    // Compute current hash from global config
+    let config_path = config::global_config_path();
+    let config_content = std::fs::read_to_string(&config_path)
+        .map_err(|e| TemperError::Config(format!("cannot read config: {}", e)))?;
+    let current_hash = format!("{:x}", Sha256::digest(config_content.as_bytes()));
 
     match embedded_hash {
         Some(h) if h == current_hash => {

@@ -134,7 +134,7 @@ fn collect_recent_sessions(
     project: &str,
     limit: usize,
 ) -> Vec<(String, String, std::path::PathBuf)> {
-    let sessions_dir = config.sessions_dir.join(project);
+    let sessions_dir = config.doc_type_dir(project, "session");
     if !sessions_dir.exists() {
         return vec![];
     }

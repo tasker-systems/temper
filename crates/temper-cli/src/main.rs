@@ -47,11 +47,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             format,
         } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
-            let context = context
-                .as_deref()
-                .or_else(|| resolved.map(|r| r.name.as_str()));
+            let context = context.as_deref();
             temper_cli::commands::events::run(&config, context, limit, &format)
         }
         Commands::Note { action } => {
@@ -119,8 +115,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         }
         Commands::Task { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
             match action {
                 TaskAction::Create {
                     title,
@@ -136,14 +130,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         print!("{content}");
                         return Ok(());
                     }
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()))
-                        .ok_or_else(|| {
-                            temper_cli::error::TemperError::Project(
-                                "no context specified and could not infer from CWD".into(),
-                            )
-                        })?;
+                    let context = context.as_deref().ok_or_else(|| {
+                        temper_cli::error::TemperError::Project(
+                            "no context specified — use --context <name>".into(),
+                        )
+                    })?;
                     let title = title.expect("title required when not using --show-template");
                     temper_cli::commands::task::create(
                         &config,
@@ -163,9 +154,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     mode,
                     effort,
                 } => {
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let context = context.as_deref();
                     temper_cli::commands::task::move_task(
                         &config,
                         &slug,
@@ -182,9 +171,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     pr,
                     context,
                 } => {
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let context = context.as_deref();
                     temper_cli::commands::task::done(
                         &config,
                         &slug,
@@ -198,9 +185,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     goal,
                     format,
                 } => {
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let context = context.as_deref();
                     temper_cli::commands::task::list(&config, context, goal.as_deref(), &format)
                 }
                 TaskAction::Show {
@@ -208,22 +193,14 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     context,
                     format,
                 } => {
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let context = context.as_deref();
                     temper_cli::commands::task::show(&config, &slug, context, &format)
                 }
             }
         }
         Commands::Context { action } => match action {
-            ContextAction::Add { name, path, repo } => {
-                let vault_root = temper_cli::config::resolve_vault(cli.vault.as_deref())?;
-                temper_cli::commands::context_cmd::add(&vault_root, &name, &path, repo.as_deref())
-            }
-            ContextAction::Remove { name } => {
-                let vault_root = temper_cli::config::resolve_vault(cli.vault.as_deref())?;
-                temper_cli::commands::context_cmd::remove(&vault_root, &name)
-            }
+            ContextAction::Add { name } => temper_cli::commands::context_cmd::add(&name),
+            ContextAction::Remove { name } => temper_cli::commands::context_cmd::remove(&name),
             ContextAction::List => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
                 temper_cli::commands::context_cmd::list(&config)
@@ -231,8 +208,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         },
         Commands::Goal { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
             match action {
                 GoalAction::Create {
                     title,
@@ -240,14 +215,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     slug,
                     format,
                 } => {
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()))
-                        .ok_or_else(|| {
-                            temper_cli::error::TemperError::Project(
-                                "no context specified and could not infer from CWD".into(),
-                            )
-                        })?;
+                    let context = context.as_deref().ok_or_else(|| {
+                        temper_cli::error::TemperError::Project(
+                            "no context specified — use --context <name>".into(),
+                        )
+                    })?;
                     temper_cli::commands::goal::create(
                         &config,
                         context,
@@ -258,14 +230,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     Ok(())
                 }
                 GoalAction::List { context, format } => {
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()))
-                        .ok_or_else(|| {
-                            temper_cli::error::TemperError::Project(
-                                "no context specified and could not infer from CWD".into(),
-                            )
-                        })?;
+                    let context = context.as_deref().ok_or_else(|| {
+                        temper_cli::error::TemperError::Project(
+                            "no context specified — use --context <name>".into(),
+                        )
+                    })?;
                     temper_cli::commands::goal::list(&config, context, &format)
                 }
                 GoalAction::Update {
@@ -273,9 +242,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     status,
                     context,
                 } => {
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let context = context.as_deref();
                     temper_cli::commands::goal::update(&config, &slug, &status, context)
                 }
             }
@@ -291,11 +258,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         }
         Commands::Warmup { context, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
-            let context = context
-                .as_deref()
-                .or_else(|| resolved.map(|r| r.name.as_str()));
+            let context = context.as_deref();
             temper_cli::commands::warmup::run(&config, context, &format)
         }
         Commands::Research { action } => {
@@ -313,11 +276,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         print!("{content}");
                         return Ok(());
                     }
-                    let cwd = std::env::current_dir().unwrap_or_default();
-                    let resolved = temper_cli::project::resolve_from_cwd(&cwd, &config.projects);
-                    let context = context
-                        .as_deref()
-                        .or_else(|| resolved.map(|r| r.name.as_str()));
+                    let context = context.as_deref();
                     let title = title.expect("title required when not using --show-template");
                     let stdin_content = temper_cli::vault::read_stdin_if_piped();
                     temper_cli::commands::research::save(

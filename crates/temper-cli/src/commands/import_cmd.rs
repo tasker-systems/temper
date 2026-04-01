@@ -73,8 +73,12 @@ fn run_single_import(
 
     let (rt, client) = runtime::build_runtime_and_client()?;
 
-    let (resource, extracted_content) =
-        rt.block_on(async { ingest::ingest_file(&client, &file_path, context, doc_type).await })?;
+    // Ensure profile exists before hitting TypeScript ingest endpoint
+    rt.block_on(runtime::ensure_profile(&client))?;
+
+    let (resource, extracted_content) = rt.block_on(async {
+        ingest::ingest_file(&client, &file_path, context, doc_type, Some("imported")).await
+    })?;
 
     if fmt == OutputFormat::Text {
         output::plain(format!(
@@ -251,7 +255,7 @@ fn run_directory_import(
                 .unwrap_or("unknown")
                 .to_string();
 
-            match ingest::ingest_file(&client, file, context, doc_type).await {
+            match ingest::ingest_file(&client, file, context, doc_type, Some("imported")).await {
                 Ok((resource, extracted_content)) => {
                     let canonical_path = std::fs::canonicalize(file)
                         .unwrap_or_else(|_| file.clone())
