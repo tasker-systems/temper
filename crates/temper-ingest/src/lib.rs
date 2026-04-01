@@ -1,4 +1,4 @@
-//! temper-embed — Embedding and extraction pipeline.
+//! temper-ingest — Embedding and extraction pipeline.
 //!
 //! Feature-gated:
 //! - `extract`: kreuzberg-based document extraction

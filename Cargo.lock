@@ -3616,7 +3616,7 @@ dependencies = [
  "sha2",
  "temper-client",
  "temper-core",
- "temper-embed",
+ "temper-ingest",
  "tempfile",
  "tokio",
  "toml 0.8.23",
@@ -3678,7 +3678,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "temper-embed"
+name = "temper-ingest"
 version = "0.1.0"
 dependencies = [
  "hf-hub",

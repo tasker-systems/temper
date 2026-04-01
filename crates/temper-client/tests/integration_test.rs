@@ -89,7 +89,7 @@ async fn search_query() {
         return;
     };
     // Use a zero vector as a smoke-test — we just verify the API call succeeds.
-    // A real semantic search would require embedding text via temper-embed first.
+    // A real semantic search would require embedding text via temper-ingest first.
     let embedding = vec![0.0_f32; 768];
     match c.search().query(embedding, None, None, Some(3)).await {
         Ok(rows) => {

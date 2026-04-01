@@ -28,10 +28,10 @@ pub struct EnrichedSearchResult {
     pub vault_path: Option<String>,
 }
 
-/// Embed query text locally via temper-embed.
+/// Embed query text locally via temper-ingest.
 #[cfg(feature = "embed")]
 pub fn embed_query(text: &str) -> Result<Vec<f32>> {
-    temper_embed::embed::embed_text(text)
+    temper_ingest::embed::embed_text(text)
         .map_err(|e| TemperError::Extraction(format!("embedding failed: {e}")))
 }
 
