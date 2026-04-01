@@ -47,6 +47,8 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/ingest/{id}", put(handlers::ingest::update))
         .route("/api/events", get(handlers::events::list))
         .route("/api/search", post(handlers::search::search))
+        .route("/api/sync/status", post(handlers::sync::status))
+        .route("/api/sync/complete", post(handlers::sync::complete))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,

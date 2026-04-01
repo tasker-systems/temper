@@ -44,8 +44,6 @@ pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow};
 pub use device::DeviceSyncState;
 pub use event::{EventQuery, EventResponse};
-#[allow(deprecated)]
-pub use ingest::IngestRequest;
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
 pub use manifest::{Manifest, ManifestEntry, ManifestEntryState};

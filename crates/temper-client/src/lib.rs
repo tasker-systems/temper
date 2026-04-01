@@ -6,6 +6,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod contexts;
 pub mod error;
 pub mod events;
 pub mod http;
@@ -78,6 +79,11 @@ impl TemperClient {
     /// Events sub-client.
     pub fn events(&self) -> events::EventClient<'_> {
         events::EventClient::new(&self.http)
+    }
+
+    /// Context CRUD sub-client.
+    pub fn contexts(&self) -> contexts::ContextClient<'_> {
+        contexts::ContextClient::new(&self.http)
     }
 
     /// Upload sub-client.

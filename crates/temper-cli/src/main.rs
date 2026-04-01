@@ -201,6 +201,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         Commands::Context { action } => match action {
             ContextAction::Add { name } => temper_cli::commands::context_cmd::add(&name),
             ContextAction::Remove { name } => temper_cli::commands::context_cmd::remove(&name),
+            ContextAction::Create { name } => temper_cli::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    temper_cli::commands::context_cmd::create_remote(client, &name).await
+                })
+            }),
             ContextAction::List => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
                 temper_cli::commands::context_cmd::list(&config)

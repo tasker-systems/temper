@@ -79,6 +79,20 @@ pub fn remove(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// Create a context on the remote server.
+pub async fn create_remote(client: &temper_client::TemperClient, name: &str) -> Result<()> {
+    let context = client
+        .contexts()
+        .create(name)
+        .await
+        .map_err(|e| crate::error::TemperError::Api(e.to_string()))?;
+    output::success(format!(
+        "Created context '{}' ({})",
+        context.name, context.id
+    ));
+    Ok(())
+}
+
 /// List configured contexts.
 pub fn list(config: &Config) -> Result<()> {
     if config.contexts.is_empty() {

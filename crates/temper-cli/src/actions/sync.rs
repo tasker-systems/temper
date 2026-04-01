@@ -287,9 +287,29 @@ async fn push_resource(
         let content = std::fs::read_to_string(&file_path)?;
         let raw_content = strip_frontmatter(&content);
 
+        // Derive context/doc_type from the vault path structure
+        let parts: Vec<&str> = entry.path.split('/').collect();
+        let context = parts.first().copied().unwrap_or("default");
+        let doc_type = if parts.len() > 1 {
+            parts[1]
+        } else {
+            "resource"
+        };
+        let title = ingest::title_from_path(&file_path);
+
+        let payload = ingest::build_ingest_payload(
+            raw_content,
+            &title,
+            context,
+            doc_type,
+            "imported",
+            "text/markdown",
+            None,
+        )?;
+
         let resource = client
             .ingest()
-            .update(resource_id, raw_content)
+            .update(resource_id, &payload)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
 

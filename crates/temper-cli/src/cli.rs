@@ -306,6 +306,11 @@ pub enum ContextAction {
     },
     /// Remove a context from subscriptions
     Remove { name: String },
+    /// Create a new context on the server
+    Create {
+        /// Context name to create
+        name: String,
+    },
     /// List configured contexts
     List,
 }

@@ -1,7 +1,6 @@
 //! Ingest API types — wire format for CLI → Axum ingest pipeline.
 
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Wire payload for POST /api/ingest — resource + pre-processed chunks.
 ///
@@ -17,7 +16,7 @@ pub struct IngestPayload {
     pub doc_type_name: String,
     /// "added" or "imported"
     pub resource_mode: String,
-    /// "sha256:<hex>"
+    /// `"sha256:<hex>"`
     pub content_hash: String,
     pub slug: String,
     pub mimetype: String,
@@ -65,35 +64,6 @@ pub enum PackError {
     Deserialize(rmp_serde::decode::Error),
     #[error("Base64 decode failed: {0}")]
     Base64(base64::DecodeError),
-}
-
-// ---------------------------------------------------------------------------
-// Deprecated — remove after CLI/client migration
-// ---------------------------------------------------------------------------
-
-/// Old multipart ingest request. Use [`IngestPayload`] instead.
-#[deprecated(note = "Use IngestPayload — the multipart ingest path is removed")]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IngestRequest {
-    pub content: String,
-    pub title: String,
-    pub kb_context_id: Uuid,
-    pub kb_doc_type_id: Uuid,
-    pub origin_uri: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub slug: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mimetype: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub doc_type_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub resource_mode: Option<String>,
 }
 
 #[cfg(test)]

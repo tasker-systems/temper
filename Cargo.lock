@@ -3641,6 +3641,7 @@ dependencies = [
  "ignore",
  "indicatif 0.17.11",
  "reqwest",
+ "rmp-serde",
  "serde",
  "serde_json",
  "serde_yaml",

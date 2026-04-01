@@ -48,47 +48,77 @@ pub fn build_uri(context: &str, doc_type: &str, title: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// IngestRequest construction
+// IngestPayload construction
 // ---------------------------------------------------------------------------
 
-/// Build an `IngestRequest` from extracted file content.
-pub fn build_ingest_request(
-    content: String,
-    mime_type: String,
-    file_path: &Path,
+/// Slugify a title for use in URIs and slugs.
+fn slug_from_title(title: &str) -> String {
+    title
+        .to_lowercase()
+        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+        .trim_matches('-')
+        .to_owned()
+}
+
+/// Build a wire-ready `IngestPayload` from extracted markdown.
+///
+/// Performs chunk → embed → pack locally, producing a payload ready
+/// for POST /api/ingest.
+#[cfg(feature = "embed")]
+pub fn build_ingest_payload(
+    content: &str,
+    title: &str,
     context: &str,
     doc_type: &str,
-) -> temper_core::types::IngestRequest {
-    let title = title_from_path(file_path);
-    let uri = build_uri(context, doc_type, &title);
+    resource_mode: &str,
+    mime_type: &str,
+    metadata: Option<serde_json::Value>,
+) -> Result<temper_core::types::IngestPayload> {
+    use temper_core::types::ingest::{pack_chunks, PackedChunk};
+    use temper_ingest::chunk::chunk_markdown;
+    use temper_ingest::embed::embed_texts;
 
-    let device_id = crate::config::load_device_id();
-    let canonical_path = std::fs::canonicalize(file_path)
-        .unwrap_or_else(|_| file_path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-    let content_hash = compute_content_hash(&content);
+    let content_hash = compute_content_hash(content);
+    let slug = slug_from_title(title);
+    let origin_uri = build_uri(context, doc_type, &slug);
 
-    let metadata = serde_json::json!({
-        "device_id": device_id,
-        "original_path": canonical_path,
-        "content_hash": content_hash,
-    });
+    // Chunk
+    let chunk_data = chunk_markdown(content);
 
-    temper_core::types::IngestRequest {
-        content,
-        title,
-        kb_context_id: Uuid::nil(),
-        kb_doc_type_id: Uuid::nil(),
-        origin_uri: uri,
-        slug: None,
-        mimetype: Some(mime_type),
-        tags: None,
-        metadata: Some(metadata),
-        context_name: Some(context.to_string()),
-        doc_type_name: Some(doc_type.to_string()),
-        resource_mode: None,
-    }
+    // Embed
+    let texts: Vec<&str> = chunk_data.iter().map(|c| c.content.as_str()).collect();
+    let embeddings = embed_texts(&texts)
+        .map_err(|e| TemperError::Extraction(format!("embedding failed: {e}")))?;
+
+    // Pack
+    let packed_chunks: Vec<PackedChunk> = chunk_data
+        .into_iter()
+        .zip(embeddings)
+        .map(|(cd, emb)| PackedChunk {
+            chunk_index: cd.chunk_index,
+            header_path: cd.header_path,
+            content: cd.content,
+            content_hash: cd.content_hash,
+            embedding: emb,
+        })
+        .collect();
+
+    let chunks_packed = pack_chunks(&packed_chunks)
+        .map_err(|e| TemperError::Extraction(format!("chunk packing failed: {e}")))?;
+
+    Ok(temper_core::types::IngestPayload {
+        title: title.to_owned(),
+        origin_uri,
+        context_name: context.to_owned(),
+        doc_type_name: doc_type.to_owned(),
+        resource_mode: resource_mode.to_owned(),
+        content_hash,
+        slug,
+        mimetype: mime_type.to_owned(),
+        content: content.to_owned(),
+        metadata,
+        chunks_packed,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -200,8 +230,10 @@ fn display_name_from_url(url: &str) -> String {
 
 /// Extract a file and upload it via the ingest API.
 ///
+/// Performs extract → chunk → embed → pack → upload locally.
 /// Returns `(resource, extracted_content)` — the content is needed by callers
 /// that write vault files.
+#[cfg(feature = "embed")]
 pub async fn ingest_file(
     client: &temper_client::TemperClient,
     file_path: &Path,
@@ -212,18 +244,32 @@ pub async fn ingest_file(
     let extraction = crate::extract::extract_to_markdown(file_path)?;
     let extracted_content = extraction.content.clone();
 
-    let mut request = build_ingest_request(
-        extraction.content,
-        extraction.mime_type,
-        file_path,
+    let title = title_from_path(file_path);
+    let mode = resource_mode.unwrap_or("added");
+
+    let device_id = crate::config::load_device_id();
+    let canonical_path = std::fs::canonicalize(file_path)
+        .unwrap_or_else(|_| file_path.to_path_buf())
+        .to_string_lossy()
+        .to_string();
+    let metadata = serde_json::json!({
+        "device_id": device_id,
+        "original_path": canonical_path,
+    });
+
+    let payload = build_ingest_payload(
+        &extraction.content,
+        &title,
         context,
         doc_type,
-    );
-    request.resource_mode = resource_mode.map(String::from);
+        mode,
+        &extraction.mime_type,
+        Some(metadata),
+    )?;
 
     let resource = client
         .ingest()
-        .create(&request)
+        .create(&payload)
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
@@ -234,6 +280,7 @@ pub async fn ingest_file(
 ///
 /// Downloads to a temp file, extracts via kreuzberg, then uploads. The origin_uri
 /// is set to the original URL (not the temp file path).
+#[cfg(feature = "embed")]
 pub async fn ingest_url(
     client: &temper_client::TemperClient,
     url: &str,
@@ -246,21 +293,30 @@ pub async fn ingest_url(
     let extraction = crate::extract::extract_to_markdown(temp_path.as_ref())?;
     let extracted_content = extraction.content.clone();
 
-    // Build request but override the origin_uri to use the URL, not the temp path.
-    let mut request = build_ingest_request(
-        extraction.content,
-        extraction.mime_type,
-        // Use a synthetic path so title_from_path produces a good title
-        Path::new(&display_name),
+    let title = display_name;
+    let mode = resource_mode.unwrap_or("added");
+
+    let device_id = crate::config::load_device_id();
+    let metadata = serde_json::json!({
+        "device_id": device_id,
+        "original_url": url,
+    });
+
+    let mut payload = build_ingest_payload(
+        &extraction.content,
+        &title,
         context,
         doc_type,
-    );
-    request.origin_uri = url.to_string();
-    request.resource_mode = resource_mode.map(String::from);
+        mode,
+        &extraction.mime_type,
+        Some(metadata),
+    )?;
+    // Override origin_uri with the original URL
+    payload.origin_uri = url.to_string();
 
     let resource = client
         .ingest()
-        .create(&request)
+        .create(&payload)
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
