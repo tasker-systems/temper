@@ -1,17 +1,84 @@
-//! Ingest API types — request body for POST /api/ingest.
+//! Ingest API types — wire format for CLI → Axum ingest pipeline.
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Request body for POST /api/ingest — create resource + upload content.
+/// Wire payload for POST /api/ingest — resource + pre-processed chunks.
+///
+/// The CLI performs extract → chunk → embed locally and sends everything
+/// in a single request. `chunks_packed` is a base64-encoded MessagePack
+/// blob containing `Vec<PackedChunk>`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct IngestPayload {
+    pub title: String,
+    pub origin_uri: String,
+    pub context_name: String,
+    pub doc_type_name: String,
+    /// "added" or "imported"
+    pub resource_mode: String,
+    /// "sha256:<hex>"
+    pub content_hash: String,
+    pub slug: String,
+    pub mimetype: String,
+    /// Full extracted markdown content.
+    pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
+    /// Base64-encoded MessagePack of `Vec<PackedChunk>`.
+    pub chunks_packed: String,
+}
+
+/// A single chunk with its embedding, serialized via MessagePack inside
+/// `IngestPayload::chunks_packed`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PackedChunk {
+    pub chunk_index: u32,
+    pub header_path: String,
+    pub content: String,
+    pub content_hash: String,
+    /// 768-dimensional embedding vector.
+    pub embedding: Vec<f32>,
+}
+
+/// Encode chunks into the `chunks_packed` wire format (MessagePack → base64).
+pub fn pack_chunks(chunks: &[PackedChunk]) -> Result<String, PackError> {
+    use base64::Engine;
+    let bytes = rmp_serde::to_vec(chunks).map_err(PackError::Serialize)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(&bytes))
+}
+
+/// Decode `chunks_packed` from wire format (base64 → MessagePack).
+pub fn unpack_chunks(packed: &str) -> Result<Vec<PackedChunk>, PackError> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(packed)
+        .map_err(PackError::Base64)?;
+    rmp_serde::from_slice(&bytes).map_err(PackError::Deserialize)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum PackError {
+    #[error("MessagePack serialization failed: {0}")]
+    Serialize(rmp_serde::encode::Error),
+    #[error("MessagePack deserialization failed: {0}")]
+    Deserialize(rmp_serde::decode::Error),
+    #[error("Base64 decode failed: {0}")]
+    Base64(base64::DecodeError),
+}
+
+// ---------------------------------------------------------------------------
+// Deprecated — remove after CLI/client migration
+// ---------------------------------------------------------------------------
+
+/// Old multipart ingest request. Use [`IngestPayload`] instead.
+#[deprecated(note = "Use IngestPayload — the multipart ingest path is removed")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestRequest {
-    /// Extracted markdown content
     pub content: String,
     pub title: String,
     pub kb_context_id: Uuid,
     pub kb_doc_type_id: Uuid,
-    /// Origin URI — provenance of the resource (e.g., "kb://temper/resource/my-doc")
     pub origin_uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
@@ -19,16 +86,12 @@ pub struct IngestRequest {
     pub mimetype: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
-    /// Provenance metadata: device_id, original_path, etc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
-    /// Context name — resolved to UUID server-side (alternative to kb_context_id)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_name: Option<String>,
-    /// Doc type name — resolved to UUID server-side (alternative to kb_doc_type_id)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc_type_name: Option<String>,
-    /// Resource mode: "added" for temper add, "imported" for temper import
     #[serde(skip_serializing_if = "Option::is_none")]
     pub resource_mode: Option<String>,
 }
@@ -36,108 +99,78 @@ pub struct IngestRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
 
-    fn sample_uuid() -> Uuid {
-        Uuid::parse_str("00000000-0000-0000-0000-000000000001").unwrap()
+    fn sample_chunks() -> Vec<PackedChunk> {
+        vec![
+            PackedChunk {
+                chunk_index: 0,
+                header_path: "Title".to_owned(),
+                content: "Hello world".to_owned(),
+                content_hash: "abc123".to_owned(),
+                embedding: vec![0.1; 768],
+            },
+            PackedChunk {
+                chunk_index: 1,
+                header_path: "Title > Section".to_owned(),
+                content: "Section content".to_owned(),
+                content_hash: "def456".to_owned(),
+                embedding: vec![0.2; 768],
+            },
+        ]
     }
 
-    fn minimal_request() -> IngestRequest {
-        IngestRequest {
-            content: "# Hello\n\nWorld".to_owned(),
-            title: "Hello Doc".to_owned(),
-            kb_context_id: sample_uuid(),
-            kb_doc_type_id: sample_uuid(),
-            origin_uri: "kb://temper/resource/hello-doc".to_owned(),
-            slug: None,
-            mimetype: None,
-            tags: None,
+    #[test]
+    fn pack_unpack_roundtrip() {
+        let chunks = sample_chunks();
+        let packed = pack_chunks(&chunks).unwrap();
+        let unpacked = unpack_chunks(&packed).unwrap();
+
+        assert_eq!(unpacked.len(), 2);
+        assert_eq!(unpacked[0].chunk_index, 0);
+        assert_eq!(unpacked[0].header_path, "Title");
+        assert_eq!(unpacked[0].content, "Hello world");
+        assert_eq!(unpacked[0].embedding.len(), 768);
+        assert_eq!(unpacked[1].chunk_index, 1);
+        assert_eq!(unpacked[1].header_path, "Title > Section");
+    }
+
+    #[test]
+    fn pack_produces_valid_base64() {
+        let packed = pack_chunks(&sample_chunks()).unwrap();
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(&packed)
+            .unwrap();
+    }
+
+    #[test]
+    fn unpack_invalid_base64_errors() {
+        let result = unpack_chunks("not-valid-base64!!!");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn payload_serialization_roundtrip() {
+        let payload = IngestPayload {
+            title: "Test".to_owned(),
+            origin_uri: "kb://ctx/task/test".to_owned(),
+            context_name: "ctx".to_owned(),
+            doc_type_name: "task".to_owned(),
+            resource_mode: "imported".to_owned(),
+            content_hash: "sha256:abc".to_owned(),
+            slug: "test".to_owned(),
+            mimetype: "text/markdown".to_owned(),
+            content: "# Test".to_owned(),
             metadata: None,
-            context_name: None,
-            doc_type_name: None,
-            resource_mode: None,
-        }
-    }
-
-    #[test]
-    fn test_required_fields_serialize_correctly() {
-        let req = minimal_request();
-        let json = serde_json::to_value(&req).unwrap();
-
-        assert_eq!(json["content"], "# Hello\n\nWorld");
-        assert_eq!(json["title"], "Hello Doc");
-        assert_eq!(json["origin_uri"], "kb://temper/resource/hello-doc");
-        assert_eq!(
-            json["kb_context_id"],
-            "00000000-0000-0000-0000-000000000001"
-        );
-        assert_eq!(
-            json["kb_doc_type_id"],
-            "00000000-0000-0000-0000-000000000001"
-        );
-    }
-
-    #[test]
-    fn test_optional_fields_skipped_when_none() {
-        let req = minimal_request();
-        let json = serde_json::to_value(&req).unwrap();
-        let obj = json.as_object().unwrap();
-
-        assert!(!obj.contains_key("slug"));
-        assert!(!obj.contains_key("mimetype"));
-        assert!(!obj.contains_key("tags"));
-        assert!(!obj.contains_key("metadata"));
-        assert!(!obj.contains_key("context_name"));
-        assert!(!obj.contains_key("doc_type_name"));
-        assert!(!obj.contains_key("resource_mode"));
-    }
-
-    #[test]
-    fn test_context_name_and_doc_type_name_serialize_when_some() {
-        let req = IngestRequest {
-            context_name: Some("my-context".to_owned()),
-            doc_type_name: Some("note".to_owned()),
-            ..minimal_request()
+            chunks_packed: pack_chunks(&sample_chunks()).unwrap(),
         };
-        let json = serde_json::to_value(&req).unwrap();
 
-        assert_eq!(json["context_name"], "my-context");
-        assert_eq!(json["doc_type_name"], "note");
-    }
+        let json = serde_json::to_string(&payload).unwrap();
+        let deserialized: IngestPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.title, "Test");
+        assert_eq!(deserialized.context_name, "ctx");
 
-    #[test]
-    fn test_all_optional_fields_serialize_when_some() {
-        let req = IngestRequest {
-            slug: Some("hello-doc".to_owned()),
-            mimetype: Some("text/markdown".to_owned()),
-            tags: Some(vec!["rust".to_owned(), "docs".to_owned()]),
-            metadata: Some(serde_json::json!({"device_id": "abc123"})),
-            context_name: Some("work".to_owned()),
-            doc_type_name: Some("note".to_owned()),
-            ..minimal_request()
-        };
-        let json = serde_json::to_value(&req).unwrap();
-
-        assert_eq!(json["slug"], "hello-doc");
-        assert_eq!(json["mimetype"], "text/markdown");
-        assert_eq!(
-            json["tags"],
-            Value::Array(vec!["rust".into(), "docs".into()])
-        );
-        assert_eq!(json["metadata"]["device_id"], "abc123");
-    }
-
-    #[test]
-    fn test_roundtrip_deserialization() {
-        let req = IngestRequest {
-            slug: Some("hello".to_owned()),
-            ..minimal_request()
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        let deserialized: IngestRequest = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(deserialized.title, req.title);
-        assert_eq!(deserialized.slug, req.slug);
-        assert_eq!(deserialized.content, req.content);
+        let chunks = unpack_chunks(&deserialized.chunks_packed).unwrap();
+        assert_eq!(chunks.len(), 2);
     }
 }

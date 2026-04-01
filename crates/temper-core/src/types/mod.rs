@@ -12,6 +12,7 @@ pub mod api;
 pub mod auth;
 pub mod config;
 pub mod conflict;
+pub mod context;
 pub mod device;
 pub mod event;
 pub mod ingest;
@@ -40,9 +41,12 @@ pub use config::{
     TemperConfig, UnifiedConfig, UnifiedSyncConfig,
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
+pub use context::{ContextCreateRequest, ContextRow};
 pub use device::DeviceSyncState;
 pub use event::{EventQuery, EventResponse};
+#[allow(deprecated)]
 pub use ingest::IngestRequest;
+pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
 pub use manifest::{Manifest, ManifestEntry, ManifestEntryState};
 pub use ownership::ResourceOwnership;

@@ -1,5 +1,6 @@
 use axum::Router;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::decompression::RequestDecompressionLayer;
 use tower_http::trace::TraceLayer;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -10,7 +11,7 @@ use crate::openapi::ApiDoc;
 use crate::state::AppState;
 
 pub fn create_app(state: AppState) -> Router {
-    use axum::routing::{get, post};
+    use axum::routing::{get, post, put};
 
     let public = Router::new().route("/api/health", get(handlers::health::health_check));
 
@@ -37,6 +38,13 @@ pub fn create_app(state: AppState) -> Router {
             "/api/profile/auth-links",
             get(handlers::profiles::list_auth_links),
         )
+        .route(
+            "/api/contexts",
+            get(handlers::contexts::list).post(handlers::contexts::create),
+        )
+        .route("/api/contexts/{id}", get(handlers::contexts::get))
+        .route("/api/ingest", post(handlers::ingest::create))
+        .route("/api/ingest/{id}", put(handlers::ingest::update))
         .route("/api/events", get(handlers::events::list))
         .route("/api/search", post(handlers::search::search))
         .layer(axum::middleware::from_fn_with_state(
@@ -54,6 +62,7 @@ pub fn create_app(state: AppState) -> Router {
     }
 
     app.fallback(fallback_handler)
+        .layer(RequestDecompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .with_state(state)

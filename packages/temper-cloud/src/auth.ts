@@ -23,14 +23,22 @@ export async function verifyToken(
         );
 
   const sub = payload.sub;
-  const email = payload.email as string | undefined;
-  const emailVerified = payload.email_verified as boolean | undefined;
+  let email = payload.email as string | undefined;
+  let emailVerified = payload.email_verified as boolean | undefined;
 
   if (!sub) {
     throw new Error("JWT missing sub claim");
   }
+
+  // Auth0 access tokens don't include email by default. Fall back to /userinfo.
   if (!email) {
-    throw new Error("JWT missing email claim");
+    const userinfo = await fetchUserinfo(token, issuer);
+    email = userinfo.email;
+    emailVerified = userinfo.email_verified;
+  }
+
+  if (!email) {
+    throw new Error("JWT missing email claim and userinfo lookup failed");
   }
 
   return {
@@ -38,6 +46,20 @@ export async function verifyToken(
     email,
     email_verified: emailVerified ?? false,
   };
+}
+
+async function fetchUserinfo(
+  accessToken: string,
+  issuer: string,
+): Promise<{ email?: string; email_verified?: boolean }> {
+  const url = `${issuer.replace(/\/$/, "")}/userinfo`;
+  const resp = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!resp.ok) {
+    throw new Error(`userinfo returned status ${resp.status}`);
+  }
+  return (await resp.json()) as { email?: string; email_verified?: boolean };
 }
 
 let cachedJwks: jose.JWTVerifyGetKey | null = null;
