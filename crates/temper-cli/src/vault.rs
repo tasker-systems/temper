@@ -1,7 +1,10 @@
 use crate::error::{Result, TemperError};
+use crate::templates::{GoalTemplate, ResearchTemplate, SessionTemplate, TaskTemplate};
+use askama::Template;
 use chrono::Local;
 use std::path::{Path, PathBuf};
 
+// Legacy embedded templates — kept until callers migrate to Askama in Tasks 4-7.
 const EMBEDDED_SESSION: &str = include_str!("templates/session.md");
 const EMBEDDED_TASK: &str = include_str!("templates/task.md");
 const EMBEDDED_GOAL: &str = include_str!("templates/goal.md");
@@ -17,11 +20,53 @@ fn embedded_template(note_type: &str) -> Option<&'static str> {
     }
 }
 
-/// Return the raw template content for a note type.
+/// Return a rendered template with placeholder values for a note type.
+/// Used by `--show-template` flags to preview template structure.
 pub fn get_template(note_type: &str) -> Result<String> {
-    embedded_template(note_type)
-        .map(String::from)
-        .ok_or_else(|| TemperError::Vault(format!("No template found for '{note_type}'")))
+    let placeholder = "{{placeholder}}";
+    match note_type {
+        "task" => TaskTemplate {
+            id: placeholder,
+            title: placeholder,
+            slug: placeholder,
+            context: placeholder,
+            goal: placeholder,
+            mode: "null",
+            effort: "null",
+            seq: "0",
+            datetime: placeholder,
+        }
+        .render(),
+        "session" => SessionTemplate {
+            id: placeholder,
+            title: placeholder,
+            date: placeholder,
+        }
+        .render(),
+        "goal" => GoalTemplate {
+            id: placeholder,
+            title: placeholder,
+            slug: placeholder,
+            context: placeholder,
+            seq: "0",
+            date: placeholder,
+        }
+        .render(),
+        "research" => ResearchTemplate {
+            id: placeholder,
+            title: placeholder,
+            date: placeholder,
+            project: placeholder,
+            slug: placeholder,
+        }
+        .render(),
+        _ => {
+            return Err(TemperError::Vault(format!(
+                "No template found for '{note_type}'"
+            )))
+        }
+    }
+    .map_err(|e| TemperError::Vault(format!("Failed to render template: {e}")))
 }
 
 /// Parse YAML frontmatter from markdown content
@@ -93,9 +138,7 @@ pub fn write_note(path: &Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Read a note template, fill in {{date}} and {{title}}.
-/// Looks for a template file in `vault_root/templates_dir/{note_type}.md` first,
-/// then falls back to the embedded template.
+/// Legacy: will be replaced by Askama template structs in Task 4.
 pub fn render_template(
     vault_root: &Path,
     templates_dir: &str,
@@ -127,8 +170,7 @@ pub fn render_template(
         .replace("{{title}}", title))
 }
 
-/// Render a template with the standard {{date}} and {{title}} substitutions
-/// plus additional custom variables.
+/// Legacy: will be replaced by Askama template structs in Task 4.
 pub fn render_template_with_vars(
     vault_root: &Path,
     templates_dir: &str,

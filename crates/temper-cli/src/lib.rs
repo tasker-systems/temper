@@ -9,4 +9,5 @@ pub mod ids;
 pub mod manifest_io;
 pub mod output;
 pub mod project;
+pub mod templates;
 pub mod vault;
