@@ -83,17 +83,25 @@ pub async fn require_auth(
             ApiError::Unauthorized("Invalid or expired token".to_string())
         })?;
 
-    // 4. Build AuthClaims.
-    let email = token_data
-        .claims
-        .email
-        .ok_or_else(|| ApiError::Unauthorized("Token missing required email claim".to_string()))?;
+    // 4. Resolve email — present in token claims (custom Auth0 Action) or
+    //    fetched from the OIDC /userinfo endpoint as a fallback.
+    let (email, email_verified) = match token_data.claims.email {
+        Some(email) => (email, token_data.claims.email_verified),
+        None => fetch_email_from_userinfo(&state.config.auth_issuer, &token)
+            .await
+            .map_err(|e| {
+                tracing::warn!("Failed to fetch email from userinfo: {e}");
+                ApiError::Unauthorized(
+                    "Token missing email claim and userinfo lookup failed".to_string(),
+                )
+            })?,
+    };
 
     let claims = AuthClaims {
         provider: state.config.auth_provider_name.clone(),
         external_user_id: token_data.claims.sub,
         email,
-        email_verified: token_data.claims.email_verified,
+        email_verified,
         exp: token_data.claims.exp,
         iat: token_data.claims.iat,
     };
@@ -119,6 +127,47 @@ pub async fn require_auth(
 
     // 8. Continue.
     Ok(next.run(request).await)
+}
+
+/// OIDC userinfo response (subset of fields we need).
+#[derive(Debug, Deserialize)]
+struct UserinfoResponse {
+    email: Option<String>,
+    email_verified: Option<bool>,
+}
+
+/// Fetch the user's email from the OIDC /userinfo endpoint.
+///
+/// Auth0 access tokens don't include `email` by default (it requires a custom
+/// Action). As a fallback, we call the issuer's `/userinfo` endpoint with the
+/// access token to retrieve the email claim.
+async fn fetch_email_from_userinfo(
+    issuer: &str,
+    access_token: &str,
+) -> Result<(String, Option<bool>), String> {
+    let url = format!("{}userinfo", issuer.trim_end_matches('/').to_owned() + "/");
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .bearer_auth(access_token)
+        .send()
+        .await
+        .map_err(|e| format!("userinfo request failed: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("userinfo returned status {}", resp.status()));
+    }
+
+    let info: UserinfoResponse = resp
+        .json()
+        .await
+        .map_err(|e| format!("userinfo parse error: {e}"))?;
+
+    let email = info
+        .email
+        .ok_or_else(|| "userinfo response missing email field".to_string())?;
+
+    Ok((email, info.email_verified))
 }
 
 /// Extract a Bearer token from the `Authorization` header.

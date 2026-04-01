@@ -1,67 +1,28 @@
 //! Cloud configuration loaded from `~/.config/temper/config.toml`.
 //!
 //! Uses the canonical [`TemperConfig`] from `temper-core` as the single source
-//! of truth. Provides helpers for loading the config, resolving the API URL,
-//! extracting OAuth settings, and building a fully-configured client.
+//! of truth. Path resolution, default construction, and parsing all live in
+//! `temper_core::types::config`. This module re-exports the core helpers and
+//! adds client-specific conveniences (API URL resolution, OAuth config, and
+//! building a fully-configured client).
 
-use std::path::PathBuf;
-
-use temper_core::types::config::{AuthProviderConfig, CloudSection, TemperConfig};
-
-// ---------------------------------------------------------------------------
-// Path helpers
-// ---------------------------------------------------------------------------
-
-/// Returns `~/.config/temper/config.toml`.
-///
-/// We use `~/.config/temper/` explicitly (not the platform-specific config dir)
-/// because the CLI and auth.json all live here.
-pub fn config_path() -> PathBuf {
-    dirs::home_dir()
-        .unwrap_or_else(|| PathBuf::from("~"))
-        .join(".config")
-        .join("temper")
-        .join("config.toml")
-}
+use temper_core::types::config::{AuthProviderConfig, TemperConfig};
 
 // ---------------------------------------------------------------------------
-// Load / resolve
+// Load / resolve  (delegated to temper-core)
 // ---------------------------------------------------------------------------
 
 /// Load cloud config from `~/.config/temper/config.toml`.
 ///
-/// Returns a [`TemperConfig`] with all defaults applied when the file does not
-/// exist. Returns an error only if the file exists but cannot be parsed.
+/// Returns a [`TemperConfig`] with defaults when the file does not exist.
+/// Returns an error only if the file exists but cannot be parsed.
 pub fn load_cloud_config() -> crate::error::Result<TemperConfig> {
-    load_cloud_config_from(&config_path())
+    temper_core::types::config::load_config().map_err(crate::error::ClientError::Other)
 }
 
 /// Load cloud config from an explicit path (used in tests).
 pub fn load_cloud_config_from(path: &std::path::Path) -> crate::error::Result<TemperConfig> {
-    if !path.exists() {
-        return Ok(default_temper_config());
-    }
-    let content = std::fs::read_to_string(path)?;
-    let config: TemperConfig = toml::from_str(&content)
-        .map_err(|e| crate::error::ClientError::Other(format!("config parse error: {e}")))?;
-    Ok(config)
-}
-
-/// Build a default `TemperConfig` suitable for when no config file exists.
-///
-/// `TemperConfig` requires a `vault` section, so we provide a sensible default
-/// path. All other sections use their own `Default` impls.
-fn default_temper_config() -> TemperConfig {
-    TemperConfig {
-        vault: temper_core::types::config::CloudVaultConfig {
-            path: "~/projects/knowledge".to_string(),
-        },
-        sync: Default::default(),
-        cli: Default::default(),
-        skill: Default::default(),
-        auth: Default::default(),
-        cloud: CloudSection::default(),
-    }
+    temper_core::types::config::load_config_from(path).map_err(crate::error::ClientError::Other)
 }
 
 /// Return the API base URL, letting `TEMPER_API_URL` take priority.
@@ -134,7 +95,7 @@ mod tests {
     use std::sync::Mutex;
     use tempfile::TempDir;
 
-    use temper_core::types::config::AuthConfig;
+    use temper_core::types::config::{AuthConfig, CloudSection};
 
     /// Serialize tests that mutate `TEMPER_API_URL` to prevent races.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -206,7 +167,7 @@ api_url = "https://api.example.com"
     #[test]
     fn api_url_uses_config_by_default() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let config = default_temper_config();
+        let config = TemperConfig::default();
         std::env::remove_var("TEMPER_API_URL");
         let url = api_url(&config);
         assert_eq!(url, "https://temperkb.io");
@@ -215,7 +176,7 @@ api_url = "https://api.example.com"
     #[test]
     fn api_url_env_var_takes_priority() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let config = default_temper_config();
+        let config = TemperConfig::default();
         std::env::set_var("TEMPER_API_URL", "https://localhost:3000");
         let url = api_url(&config);
         std::env::remove_var("TEMPER_API_URL");

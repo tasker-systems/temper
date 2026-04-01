@@ -5,6 +5,12 @@ use temper_core::types::config::TemperConfig;
 use crate::error::{Result, TemperError};
 
 // ---------------------------------------------------------------------------
+// Re-exports from temper-core for backward compatibility
+// ---------------------------------------------------------------------------
+
+pub use temper_core::types::config::{expand_tilde, global_config_path};
+
+// ---------------------------------------------------------------------------
 // Global config type alias
 // ---------------------------------------------------------------------------
 
@@ -33,34 +39,6 @@ impl Config {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-/// Expand a leading `~/` to the user's home directory.
-pub fn expand_tilde(path: &str) -> PathBuf {
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
-    } else if path == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
-    }
-    PathBuf::from(path)
-}
-
-/// Path to the global config file (~/.config/temper/config.toml).
-pub fn global_config_path() -> PathBuf {
-    if let Ok(p) = std::env::var("TEMPER_GLOBAL_CONFIG") {
-        if !p.is_empty() {
-            return PathBuf::from(p);
-        }
-    }
-    expand_tilde("~/.config/temper/config.toml")
-}
-
 /// Load the device UUID from auth.json's `device_id` field.
 ///
 /// Returns `None` when not authenticated or if the stored auth predates
@@ -74,6 +52,10 @@ pub fn load_device_id() -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Load and parse the global config from ~/.config/temper/config.toml.
+///
+/// Unlike `temper_core::types::config::load_config()` which returns defaults
+/// when the file is absent, this returns an error directing the user to run
+/// `temper init` — appropriate for the CLI where config must exist.
 pub fn load_global_config() -> Result<GlobalConfig> {
     let path = global_config_path();
     if !path.exists() {
@@ -82,10 +64,7 @@ pub fn load_global_config() -> Result<GlobalConfig> {
             path.display()
         )));
     }
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| TemperError::Config(format!("cannot read {}: {}", path.display(), e)))?;
-    let cfg: GlobalConfig = toml::from_str(&content)?;
-    Ok(cfg)
+    temper_core::types::config::load_config_from(&path).map_err(TemperError::Config)
 }
 
 /// 3-step vault resolution (no CWD walk-up):

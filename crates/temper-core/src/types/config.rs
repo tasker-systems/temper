@@ -231,8 +231,73 @@ pub struct TemperConfig {
     pub cloud: CloudSection,
 }
 
+impl Default for TemperConfig {
+    fn default() -> Self {
+        Self {
+            vault: CloudVaultConfig {
+                path: "~/vault".to_string(),
+            },
+            sync: Default::default(),
+            cli: Default::default(),
+            skill: Default::default(),
+            auth: Default::default(),
+            cloud: Default::default(),
+        }
+    }
+}
+
 /// Backward-compatible alias for `TemperConfig`.
 pub type UnifiedConfig = TemperConfig;
+
+// ---------------------------------------------------------------------------
+// Shared config path resolution and loading
+// ---------------------------------------------------------------------------
+
+/// Expand a leading `~/` to the user's home directory.
+pub fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    } else if path == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+    std::path::PathBuf::from(path)
+}
+
+/// Path to the global config file.
+///
+/// Resolution order:
+/// 1. `TEMPER_GLOBAL_CONFIG` env var
+/// 2. `~/.config/temper/config.toml`
+pub fn global_config_path() -> std::path::PathBuf {
+    if let Ok(p) = std::env::var("TEMPER_GLOBAL_CONFIG") {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    expand_tilde("~/.config/temper/config.toml")
+}
+
+/// Load and parse the global config from the config file.
+///
+/// Returns `TemperConfig` with defaults when file is absent.
+/// Returns an error only if the file exists but cannot be parsed.
+pub fn load_config() -> Result<TemperConfig, String> {
+    load_config_from(&global_config_path())
+}
+
+/// Load config from a specific path (useful for tests).
+pub fn load_config_from(path: &std::path::Path) -> Result<TemperConfig, String> {
+    if !path.exists() {
+        return Ok(TemperConfig::default());
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    toml::from_str(&content).map_err(|e| format!("config parse error in {}: {}", path.display(), e))
+}
 
 #[cfg(test)]
 mod tests {
