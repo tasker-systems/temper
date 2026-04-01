@@ -112,9 +112,10 @@ pub async fn ingest(
         INSERT INTO kb_resources (
             id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
             content_hash, mimetype, resource_mode,
-            originator_profile_id, owner_profile_id
+            originator_profile_id, owner_profile_id,
+            created, updated
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, now(), now())
         RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
                   slug, content_hash, mimetype,
                   originator_profile_id, owner_profile_id, is_active,
