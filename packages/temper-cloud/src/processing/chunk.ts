@@ -23,8 +23,8 @@ interface RawSection {
  */
 const MAX_TOKENS = 510;
 
-/** Conservative chars-per-token for English markdown (~3.5-4.0 average). */
-const CHARS_PER_TOKEN = 3.5;
+/** Conservative chars-per-token for mixed markdown (code/URLs tokenize at ~2.5-3.0). */
+const CHARS_PER_TOKEN = 2.8;
 
 /** Approximate max characters that fit within the token budget. */
 const MAX_CHARS = Math.floor(MAX_TOKENS * CHARS_PER_TOKEN); // ~1785

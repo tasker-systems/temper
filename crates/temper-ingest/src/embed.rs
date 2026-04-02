@@ -155,7 +155,27 @@ pub fn l2_normalize(vec: &mut [f32]) {
     }
 }
 
+// ---- Token limit ----
+
+/// Hard token limit for bge-base-en-v1.5 (including special tokens).
+const MAX_MODEL_TOKENS: usize = 512;
+
+/// Truncate an encoding to `max_len` tokens (modifying in place).
+fn truncate_encoding(enc: &mut Encoding, max_len: usize) {
+    if enc.get_ids().len() <= max_len {
+        return;
+    }
+    enc.truncate(max_len, 0, tokenizers::TruncationDirection::Right);
+}
+
 // ---- Public API ----
+
+/// Count the actual tokens for a text using the model's tokenizer.
+pub fn token_count(text: &str) -> Result<usize> {
+    let model = load_model()?;
+    let encodings = tokenize(&model.tokenizer, &[text])?;
+    Ok(encodings[0].get_ids().len())
+}
 
 /// Embed a single text string into a 768-dim normalized vector.
 pub fn embed_text(text: &str) -> Result<Vec<f32>> {
@@ -164,10 +184,17 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>> {
 }
 
 /// Embed multiple texts into 768-dim normalized vectors.
+///
+/// Encodings that exceed 512 tokens are truncated to fit the model's input
+/// limit.  The chunker should keep texts under budget, but this is a safety
+/// net to prevent ONNX runtime crashes.
 pub fn embed_texts(texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let model = load_model()?;
 
-    let encodings = tokenize(&model.tokenizer, texts)?;
+    let mut encodings = tokenize(&model.tokenizer, texts)?;
+    for enc in &mut encodings {
+        truncate_encoding(enc, MAX_MODEL_TOKENS);
+    }
     let tensors = build_input_tensors(&encodings);
 
     let input_ids_ref = TensorRef::from_array_view(tensors.input_ids.view())

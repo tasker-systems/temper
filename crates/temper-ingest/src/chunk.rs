@@ -48,10 +48,11 @@ fn sha256_hex(s: &str) -> String {
 /// special tokens (\[CLS\] + \[SEP\] = 2), so usable budget is 510.
 const MAX_TOKENS: usize = 510;
 
-/// Conservative chars-per-token ratio for English text.  The bge tokenizer
-/// averages ~3.5–4.0 chars/token on mixed markdown; we use 3.5 to stay safely
-/// under the limit.
-const CHARS_PER_TOKEN: f64 = 3.5;
+/// Conservative chars-per-token ratio for mixed markdown.  The bge tokenizer
+/// averages ~3.5–4.0 chars/token on prose, but markdown with code snippets,
+/// URLs, and punctuation tokenizes at closer to 2.5–3.0.  We use 2.8 to
+/// provide headroom against the model's hard 512-token limit.
+const CHARS_PER_TOKEN: f64 = 2.8;
 
 /// Approximate max characters that fit within the token budget.
 const MAX_CHARS: usize = (MAX_TOKENS as f64 * CHARS_PER_TOKEN) as usize; // ~1785
