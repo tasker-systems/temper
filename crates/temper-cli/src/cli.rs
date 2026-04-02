@@ -388,12 +388,9 @@ pub enum AuthAction {
 pub enum SkillAction {
     /// Generate skill content (preview to stdout)
     Generate,
-    /// Install skill file
+    /// Install skill directory and command wrapper
     Install {
-        #[arg(long)]
-        global: bool,
-        #[arg(long)]
-        context: Option<String>,
+        /// Override install directory (default: ~/.claude/skills/temper)
         #[arg(long)]
         path: Option<String>,
     },

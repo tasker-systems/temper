@@ -120,7 +120,7 @@ pub struct SkillConfig {
 }
 
 fn default_skill_output() -> String {
-    "~/.claude/commands/temper.md".to_string()
+    "~/.claude/skills/temper".to_string()
 }
 
 fn default_skill_framework() -> String {
@@ -403,7 +403,7 @@ contexts = ["temper", "storyteller", "tasker", "writing"]
 progress = "bar"
 
 [skill]
-output = "~/.claude/commands/temper.md"
+output = "~/.claude/skills/temper"
 framework = "superpowers"
 
 [auth]
@@ -427,7 +427,7 @@ api_url = "https://api.example.com"
             vec!["temper", "storyteller", "tasker", "writing"]
         );
         assert_eq!(config.cli.progress, "bar");
-        assert_eq!(config.skill.output, "~/.claude/commands/temper.md");
+        assert_eq!(config.skill.output, "~/.claude/skills/temper");
         assert_eq!(config.skill.framework, "superpowers");
         assert_eq!(config.auth.provider, "auth0");
         assert!(config.auth.providers.contains_key("auth0"));
