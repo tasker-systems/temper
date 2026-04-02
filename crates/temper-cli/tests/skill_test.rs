@@ -19,7 +19,7 @@ path = "{vault_path}"
 contexts = ["myapp"]
 
 [skill]
-output = "~/.claude/commands/temper.md"
+output = "~/.claude/skills/temper"
 framework = "superpowers"
 
 [auth]
@@ -45,7 +45,7 @@ scopes = ["openid"]
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["myapp".to_string()],
-        skill_output: dir.path().join("temper.md"),
+        skill_output: dir.path().join("skill-output"),
         skill_framework: "superpowers".to_string(),
     }
 }
@@ -58,7 +58,6 @@ fn test_skill_generate_produces_valid_content() {
     let content = temper_cli::commands::skill::generate(&config).unwrap();
     assert!(content.contains("temper"));
     assert!(content.contains("myapp"));
-    assert!(content.contains("superpowers"));
     assert!(content.contains("config-hash:"));
 
     unsafe {
@@ -67,13 +66,24 @@ fn test_skill_generate_produces_valid_content() {
 }
 
 #[test]
-fn test_skill_install_writes_file() {
+fn test_skill_install_writes_directory() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
-    let output_path = dir.path().join("skill-output/temper.md");
-    temper_cli::commands::skill::install(&config, &output_path).unwrap();
-    assert!(output_path.exists());
+    let skill_dir = dir.path().join("skill-output");
+    temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+
+    assert!(skill_dir.join("SKILL.md").exists());
+    assert!(skill_dir.join("reference.md").exists());
+    assert!(skill_dir.join("subagent-guidance.md").exists());
+    assert!(skill_dir.join("session-lifecycle.md").exists());
+    assert!(skill_dir.join("workflows/build-small.md").exists());
+    assert!(skill_dir.join("workflows/build-medium.md").exists());
+    assert!(skill_dir.join("workflows/build-large.md").exists());
+    assert!(skill_dir.join("workflows/plan-small.md").exists());
+    assert!(skill_dir.join("workflows/plan-medium.md").exists());
+    assert!(skill_dir.join("workflows/plan-large.md").exists());
+    assert!(skill_dir.join("guidance").is_dir());
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
@@ -81,14 +91,14 @@ fn test_skill_install_writes_file() {
 }
 
 #[test]
-fn test_skill_generate_includes_invocation_section() {
+fn test_skill_generate_includes_vault_and_contexts() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("## Invocation"));
-    assert!(content.contains("installed binary"));
-    assert!(content.contains("Never use `cargo run`"));
+    let vault_str = dir.path().to_string_lossy();
+    assert!(content.contains(&*vault_str), "should contain vault path");
+    assert!(content.contains("- `myapp`"), "should contain context list");
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
@@ -96,12 +106,15 @@ fn test_skill_generate_includes_invocation_section() {
 }
 
 #[test]
-fn test_skill_generate_documents_stdin_flag() {
+fn test_skill_generate_includes_modular_structure() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("stdin auto-detected"));
+    assert!(content.contains("## How This Skill Works"));
+    assert!(content.contains("reference.md"));
+    assert!(content.contains("subagent-guidance.md"));
+    assert!(content.contains("session-lifecycle.md"));
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
@@ -114,8 +127,8 @@ fn test_skill_generate_includes_task_start() {
     let config = test_config_with_global(&dir);
 
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("task start"));
-    assert!(content.contains("brainstorming skill"));
+    assert!(content.contains("## On Task Start"));
+    assert!(content.contains("mode and effort"));
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");

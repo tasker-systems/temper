@@ -1,232 +1,95 @@
+use std::collections::HashMap;
 use std::path::Path;
 
+use askama::Template;
 use sha2::{Digest, Sha256};
 
 use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
+use crate::templates::{CommandWrapperTemplate, SkillTemplate};
 
-/// Generate the skill file content as a string.
-pub fn generate(config: &Config) -> Result<String> {
-    let config_path = config::global_config_path();
-    let config_content = std::fs::read_to_string(&config_path)
-        .map_err(|e| TemperError::Config(format!("cannot read config: {}", e)))?;
-    let hash = format!("{:x}", Sha256::digest(config_content.as_bytes()));
+// ── Static content (compiled into the binary) ────────────────────────────────
 
-    let vault_path = config.vault_root.display().to_string();
+static REFERENCE_MD: &str = include_str!("../../skill-content/reference.md");
+static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
+static SESSION_LIFECYCLE_MD: &str = include_str!("../../skill-content/session-lifecycle.md");
+static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
+static WF_BUILD_MEDIUM: &str = include_str!("../../skill-content/workflows/build-medium.md");
+static WF_BUILD_LARGE: &str = include_str!("../../skill-content/workflows/build-large.md");
+static WF_PLAN_SMALL: &str = include_str!("../../skill-content/workflows/plan-small.md");
+static WF_PLAN_MEDIUM: &str = include_str!("../../skill-content/workflows/plan-medium.md");
+static WF_PLAN_LARGE: &str = include_str!("../../skill-content/workflows/plan-large.md");
 
-    let mut context_lines = Vec::new();
-    let mut sorted_contexts = config.contexts.clone();
-    sorted_contexts.sort();
-    for ctx in &sorted_contexts {
-        context_lines.push(format!("- `{ctx}`"));
-    }
-    let context_list = if context_lines.is_empty() {
-        "(no contexts configured)".to_string()
-    } else {
-        context_lines.join("\n")
-    };
+// ── Public API ───────────────────────────────────────────────────────────────
 
-    let content = format!(
-        r#"<!-- config-hash: {hash} -->
----
-name: temper
-description: Knowledge vault operations — context lookup, session notes, task management, semantic search
----
-
-# Temper — Vault Workflow Tool
-
-Vault: {vault_path}
-
-## Invocation
-
-`temper` is an installed binary in `$PATH`. Always run it directly as `temper <subcommand>`.
-Never use `cargo run`, `python`, full binary paths, or any other indirect method — even when
-working inside the temper source repo.
-
-## Contexts
-{context_list}
-
-## Commands
-
-- `temper search <query>` — Semantic search across indexed content (reach for this before grep/find)
-- `temper context <topic> [--depth N]` — Traverse nearest neighbors for related content
-- `temper session save [<title>] [--task <slug>] [--state <state>]` — Create/update session note, optionally link to task (stdin auto-detected — pipe content to populate the body; without stdin, creates from template with placeholder text that must be edited)
-- `temper session list` — List recent sessions
-- `temper task create --title <t> [--context <c>] [--mode plan|build] [--effort small|medium|large]` — Create task (stdin auto-detected)
-- `temper task list [--context <c>] [--format json|text]` — List tasks
-- `temper task move <slug> --stage <s> [--context <c>] [--mode plan|build] [--effort small|medium|large]` — Move task between stages or update mode/effort
-- `temper task done <slug> [--context <c>]` — Mark task done
-- `temper task show <slug> [--context <c>] [--format json|text]` — Show task content
-- `temper task start <slug> [--context <c>]` — Move to in-progress, show content, invoke brainstorming skill
-- `temper goal list [--context <c>]` — Roadmap view
-- `temper note create <type> <title> [--context <c>]` — Create note from template (stdin auto-detected)
-- `temper research save <title> [--context <c>]` — Create high-fidelity research note (stdin auto-detected)
-- `temper normalize [--context <c>] [--dry-run]` — Repair vault structure drift
-- `temper events [--context <c>] [--limit <n>]` — Show recent vault events
-- `temper warmup [--context <c>]` — Context primer for new sessions
-- `temper index` — Rebuild search index
-- `temper status` — Vault overview
-
-## Discovery
-
-Before launching subagents to grep or find across the vault, use temper's semantic tools:
-
-- `temper search "<query>"` uses embeddings to find conceptually related content — not just keyword matches
-- `temper context <topic> --depth 2` traverses nearest neighbors in the HNSW index to surface related entities
-- Workflow: search → context → targeted file reads. This is what the index is for.
-
-Templates are available via `--show-template` on create/save commands.
-
-## Stages
-
-Tasks use four stages: `backlog`, `in-progress`, `done`, `cancelled`.
-
-## Mode and Effort
-
-Tasks have two optional classification fields:
-
-**Mode** (`--mode`): `plan` or `build`
-- `plan` — research, design, discovery work; output is knowledge, not code
-- `build` — implementation work; output is delivered code
-
-**Effort** (`--effort`): `small`, `medium`, or `large`
-- `small` — single focused session
-- `medium` — multi-step but bounded
-- `large` — multi-session, may spawn sub-tasks
-
-## Workflow Integration
-
-When starting a session:
-- Check for recent sessions: `temper session list --context <current>`
-- Search for relevant context: `temper search "<topic>"`
-
-When ending a session:
-- Pipe session content via stdin: `cat <<'EOF' | temper session save "<title>" --task <slug> --state done\n<content>\nEOF`
-- Or create from template and edit after: `temper session save "<title>"` then edit the file
-- **Important**: Without stdin, `temper session save` creates a template with placeholder text. You must either pipe content or edit the file afterward — otherwise the session note will be empty boilerplate.
-
-When the user says `/temper task start <slug>`:
-1. Run `temper task move <slug> --stage in-progress --context <c>`
-2. Run `temper task show <slug>`
-3. Check the `mode` and `effort` fields and route accordingly:
-
-### Mode + Effort Routing
-
-**If mode and effort are set**, announce the workflow:
-
-| Mode | Effort | Workflow |
-|------|--------|----------|
-| `build` | `small` | Implement directly with tests |
-| `build` | `medium` | Brainstorm → plan → implement |
-| `build` | `large` | Brainstorm → plan → implement (multi-session) |
-| `plan` | `small` | Quick research, write up findings |
-| `plan` | `medium` | Brainstorm → design spec |
-| `plan` | `large` | Deep discovery → goal roadmap → first actionable task |
-
-**If mode or effort is missing**, ask briefly: "What mode (plan/build) and effort (small/medium/large)?" Then set via `temper task move <slug> --mode <m> --effort <e>`.
-
-### build/small Workflow
-1. Read task content
-2. Implement directly with tests
-3. `cargo test` / `cargo clippy`
-4. Commit
-5. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --task <slug> --state done` with goal, what happened, decisions, connections, and next steps via stdin
-
-### build/medium Workflow
-1. Read task content
-2. `temper search` / `temper context` for discovery
-3. Invoke superpowers:brainstorming (design the implementation)
-4. Produce design spec, then invoke superpowers:writing-plans
-5. Implement via plan execution
-6. Full verification (tests, clippy, fmt)
-7. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --task <slug> --state done` with goal, what happened, decisions, connections, and next steps via stdin
-
-### build/large Workflow
-1. Same as build/medium but expect multi-session execution
-2. Create sub-tasks as work is decomposed
-3. Each session: work the current task, learn, create the next task
-4. Pipe session content after each session
-
-### plan/small Workflow
-1. Read task content
-2. Quick research — `temper search`, targeted file reads
-3. Write up findings
-4. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --task <slug> --state done` via stdin
-
-### plan/medium Workflow
-1. Read task content
-2. `temper search` / `temper context` for discovery
-3. Invoke superpowers:brainstorming (explore the problem space)
-4. Produce design spec
-5. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --task <slug> --state done` via stdin
-
-### plan/large Workflow
-1. Read task content
-2. Deep discovery — `temper search`, `temper context`, codebase exploration
-3. Invoke superpowers:brainstorming (map the problem space, NOT design an implementation)
-4. Produce a goal roadmap via `temper goal create`:
-   - Throughline summary, sequenced deliverable chunks, validation gates, open questions
-5. Create the FIRST actionable task under that goal
-6. Pipe session content: `cat <<'EOF' | temper session save "<summary>" --task <slug>` with goal, what happened, decisions, connections, and next steps via stdin
-7. Code only if the user actively pushes for it
-
-plan/large philosophy: the roadmap guides session work, not task-spread. Each session: work the current task, learn, evolve the roadmap, create the next task.
-
-### Mid-Session Drift Detection
-
-Watch for mode/effort mismatch:
-- **build/small drifting up**: needing design decisions, touching 3+ files, considering multiple approaches → suggest build/medium
-- **build/medium drifting up**: needs decomposition into multiple deliverables, spans multiple sessions → suggest build/large
-- **plan/large drifting down**: first task is obvious, roadmap has only 1-2 items → suggest plan/medium or start building
-
-On confirmation: `temper task move <slug> --mode <new> --effort <new>`
-
-### Mode + Effort at Create Time
-
-When creating a task without `--mode`/`--effort`, ask briefly: "What mode (plan/build) and effort (small/medium/large)?" Don't over-analyze — the user usually knows.
-
-Stdin is auto-detected — pipe content directly without flags.
-"#,
-        hash = hash,
-        vault_path = vault_path,
-        context_list = context_list,
-    );
-
-    Ok(content)
+/// Generate all skill files as a map of relative_path → content.
+pub fn generate_skill_files(config: &Config) -> Result<HashMap<String, String>> {
+    let hash = compute_config_hash()?;
+    generate_skill_files_with_hash(config, &hash)
 }
 
-/// Write the generated skill file to `output_path`, creating parent dirs as needed.
-pub fn install(config: &Config, output_path: &Path) -> Result<()> {
-    let content = generate(config)?;
+/// Backward-compatible: returns SKILL.md content for stdout preview.
+pub fn generate(config: &Config) -> Result<String> {
+    let files = generate_skill_files(config)?;
+    Ok(files.get("SKILL.md").cloned().unwrap_or_default())
+}
 
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| {
-            TemperError::Config(format!(
-                "cannot create directories for {}: {}",
-                output_path.display(),
-                e
-            ))
+/// Install skill directory and command wrapper.
+///
+/// 1. Generate all skill files
+/// 2. Write skill files (except command-wrapper.md) into `skill_dir`
+/// 3. Write command-wrapper.md to `~/.claude/commands/temper.md`
+pub fn install(config: &Config, skill_dir: &Path) -> Result<()> {
+    let files = generate_skill_files(config)?;
+
+    // Ensure skill_dir and subdirectories exist
+    for sub in &["workflows", "guidance"] {
+        let dir = skill_dir.join(sub);
+        std::fs::create_dir_all(&dir).map_err(|e| {
+            TemperError::Config(format!("cannot create directory {}: {}", dir.display(), e))
         })?;
     }
 
-    std::fs::write(output_path, &content).map_err(|e| {
-        TemperError::Config(format!(
-            "cannot write skill file to {}: {}",
-            output_path.display(),
-            e
-        ))
-    })?;
+    // Write all files except command-wrapper.md into skill_dir
+    for (rel_path, content) in &files {
+        if rel_path == "command-wrapper.md" {
+            continue;
+        }
+        let dest = skill_dir.join(rel_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                TemperError::Config(format!(
+                    "cannot create parent dir for {}: {}",
+                    dest.display(),
+                    e
+                ))
+            })?;
+        }
+        std::fs::write(&dest, content)
+            .map_err(|e| TemperError::Config(format!("cannot write {}: {}", dest.display(), e)))?;
+    }
+
+    // Write command-wrapper.md to ~/.claude/commands/temper.md
+    if let Some(wrapper_content) = files.get("command-wrapper.md") {
+        let home = dirs::home_dir()
+            .ok_or_else(|| TemperError::Config("cannot determine home directory".to_string()))?;
+        let commands_dir = home.join(".claude/commands");
+        std::fs::create_dir_all(&commands_dir).map_err(|e| {
+            TemperError::Config(format!("cannot create {}: {}", commands_dir.display(), e))
+        })?;
+        let wrapper_path = commands_dir.join("temper.md");
+        std::fs::write(&wrapper_path, wrapper_content).map_err(|e| {
+            TemperError::Config(format!("cannot write {}: {}", wrapper_path.display(), e))
+        })?;
+    }
 
     Ok(())
 }
 
 /// Check skill installation status.
-/// 1. Checks if superpowers plugin is installed (when framework == "superpowers").
-/// 2. Checks if the skill file exists at the configured output path.
-/// 3. If it exists, compares the embedded config hash to detect staleness.
 pub fn check(config: &Config) -> Result<()> {
-    // Check superpowers installation only when relevant
+    // 1. Check superpowers plugin (if framework == "superpowers")
     if config.skill_framework == "superpowers" {
         let superpowers_path = dirs::home_dir()
             .unwrap_or_else(|| std::path::PathBuf::from("~"))
@@ -242,50 +105,187 @@ pub fn check(config: &Config) -> Result<()> {
         }
     }
 
-    // Check skill file
-    let skill_path = &config.skill_output;
-    if !skill_path.exists() {
+    // 2. Check skill directory exists
+    let skill_dir = &config.skill_output;
+    if !skill_dir.exists() {
         output::status_icon(
             false,
-            format!("Skill file: NOT FOUND ({})", skill_path.display()),
+            format!("Skill directory: NOT FOUND ({})", skill_dir.display()),
         );
         output::hint("  Run: temper skill install");
         return Ok(());
     }
 
-    output::status_icon(true, format!("Skill file: {}", skill_path.display()));
+    output::status_icon(true, format!("Skill directory: {}", skill_dir.display()));
 
-    // Check for staleness by comparing hashes
-    let existing = std::fs::read_to_string(skill_path)
-        .map_err(|e| TemperError::Config(format!("cannot read skill file: {}", e)))?;
+    // 3. Check expected files
+    let expected_files = [
+        "SKILL.md",
+        "reference.md",
+        "subagent-guidance.md",
+        "session-lifecycle.md",
+        "workflows/build-small.md",
+        "workflows/build-medium.md",
+        "workflows/build-large.md",
+        "workflows/plan-small.md",
+        "workflows/plan-medium.md",
+        "workflows/plan-large.md",
+    ];
 
-    let embedded_hash = extract_config_hash(&existing);
-
-    // Compute current hash from global config
-    let config_path = config::global_config_path();
-    let config_content = std::fs::read_to_string(&config_path)
-        .map_err(|e| TemperError::Config(format!("cannot read config: {}", e)))?;
-    let current_hash = format!("{:x}", Sha256::digest(config_content.as_bytes()));
-
-    match embedded_hash {
-        Some(h) if h == current_hash => {
-            output::status_icon(true, "Hash: up to date");
+    let mut all_present = true;
+    for file in &expected_files {
+        let path = skill_dir.join(file);
+        if !path.exists() {
+            output::status_icon(false, format!("Missing: {}", file));
+            all_present = false;
         }
-        Some(h) => {
-            output::status_icon(false, "Hash: STALE");
-            output::plain(format!("  Embedded: {}", h));
-            output::plain(format!("  Current:  {}", current_hash));
-            output::hint("  Run: temper skill install");
+    }
+    if all_present {
+        output::status_icon(
+            true,
+            format!("All {} skill files present", expected_files.len()),
+        );
+    }
+
+    // 4. Check config hash staleness in SKILL.md
+    let skill_md_path = skill_dir.join("SKILL.md");
+    if skill_md_path.exists() {
+        let existing = std::fs::read_to_string(&skill_md_path)
+            .map_err(|e| TemperError::Config(format!("cannot read SKILL.md: {}", e)))?;
+
+        let embedded_hash = extract_config_hash(&existing);
+        let current_hash = compute_config_hash()?;
+
+        match embedded_hash {
+            Some(h) if h == current_hash => {
+                output::status_icon(true, "Hash: up to date");
+            }
+            Some(h) => {
+                output::status_icon(false, "Hash: STALE");
+                output::plain(format!("  Embedded: {}", h));
+                output::plain(format!("  Current:  {}", current_hash));
+                output::hint("  Run: temper skill install");
+            }
+            None => {
+                output::warning("Hash: UNKNOWN (no config-hash comment found)");
+            }
         }
-        None => {
-            output::warning("Hash: UNKNOWN (no config-hash comment found)");
-        }
+    }
+
+    // 5. Check command wrapper at ~/.claude/commands/temper.md
+    let wrapper_path = dirs::home_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("~"))
+        .join(".claude/commands/temper.md");
+
+    if wrapper_path.exists() {
+        output::status_icon(true, format!("Command wrapper: {}", wrapper_path.display()));
+    } else {
+        output::status_icon(
+            false,
+            format!("Command wrapper: NOT FOUND ({})", wrapper_path.display()),
+        );
+        output::hint("  Run: temper skill install");
     }
 
     Ok(())
 }
 
-fn extract_config_hash(content: &str) -> Option<String> {
+// ── Internal helpers ─────────────────────────────────────────────────────────
+
+/// Generate all skill files with a pre-computed config hash (for testability).
+pub fn generate_skill_files_with_hash(
+    config: &Config,
+    hash: &str,
+) -> Result<HashMap<String, String>> {
+    let vault_path = config.vault_root.display().to_string();
+    let context_list = format_context_list(&config.contexts);
+
+    let skill_template = SkillTemplate {
+        config_hash: hash,
+        vault_path: &vault_path,
+        context_list: &context_list,
+    };
+
+    let wrapper_template = CommandWrapperTemplate { config_hash: hash };
+
+    let mut files = HashMap::new();
+
+    files.insert(
+        "SKILL.md".to_string(),
+        skill_template
+            .render()
+            .map_err(|e| TemperError::Config(format!("template render error: {}", e)))?,
+    );
+
+    files.insert(
+        "command-wrapper.md".to_string(),
+        wrapper_template
+            .render()
+            .map_err(|e| TemperError::Config(format!("template render error: {}", e)))?,
+    );
+
+    files.insert("reference.md".to_string(), REFERENCE_MD.to_string());
+    files.insert(
+        "subagent-guidance.md".to_string(),
+        SUBAGENT_GUIDANCE_MD.to_string(),
+    );
+    files.insert(
+        "session-lifecycle.md".to_string(),
+        SESSION_LIFECYCLE_MD.to_string(),
+    );
+
+    files.insert(
+        "workflows/build-small.md".to_string(),
+        WF_BUILD_SMALL.to_string(),
+    );
+    files.insert(
+        "workflows/build-medium.md".to_string(),
+        WF_BUILD_MEDIUM.to_string(),
+    );
+    files.insert(
+        "workflows/build-large.md".to_string(),
+        WF_BUILD_LARGE.to_string(),
+    );
+    files.insert(
+        "workflows/plan-small.md".to_string(),
+        WF_PLAN_SMALL.to_string(),
+    );
+    files.insert(
+        "workflows/plan-medium.md".to_string(),
+        WF_PLAN_MEDIUM.to_string(),
+    );
+    files.insert(
+        "workflows/plan-large.md".to_string(),
+        WF_PLAN_LARGE.to_string(),
+    );
+
+    Ok(files)
+}
+
+/// Compute SHA256 hash of the global config file.
+fn compute_config_hash() -> Result<String> {
+    let config_path = config::global_config_path();
+    let config_content = std::fs::read_to_string(&config_path)
+        .map_err(|e| TemperError::Config(format!("cannot read config: {}", e)))?;
+    Ok(format!("{:x}", Sha256::digest(config_content.as_bytes())))
+}
+
+/// Format contexts as sorted markdown list items.
+pub fn format_context_list(contexts: &[String]) -> String {
+    if contexts.is_empty() {
+        return "(no contexts configured)".to_string();
+    }
+    let mut sorted = contexts.to_vec();
+    sorted.sort();
+    sorted
+        .iter()
+        .map(|ctx| format!("- `{ctx}`"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Extract the config hash from a `<!-- config-hash: ... -->` comment.
+pub fn extract_config_hash(content: &str) -> Option<String> {
     for line in content.lines() {
         if let Some(rest) = line.strip_prefix("<!-- config-hash: ") {
             if let Some(hash) = rest.strip_suffix(" -->") {
@@ -294,4 +294,94 @@ fn extract_config_hash(content: &str) -> Option<String> {
         }
     }
     None
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use std::path::PathBuf;
+
+    fn test_config() -> Config {
+        Config {
+            vault_root: PathBuf::from("/tmp/test-vault"),
+            state_dir: PathBuf::from("/tmp/test-vault/.temper"),
+            contexts: vec!["alpha".to_string(), "beta".to_string()],
+            skill_output: PathBuf::from("/tmp/test-skill-output"),
+            skill_framework: "superpowers".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_generate_skill_files_contains_expected_keys() {
+        let config = test_config();
+        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+
+        assert!(files.contains_key("SKILL.md"));
+        assert!(files.contains_key("reference.md"));
+        assert!(files.contains_key("subagent-guidance.md"));
+        assert!(files.contains_key("session-lifecycle.md"));
+        assert!(files.contains_key("workflows/build-small.md"));
+        assert!(files.contains_key("workflows/build-medium.md"));
+        assert!(files.contains_key("workflows/build-large.md"));
+        assert!(files.contains_key("workflows/plan-small.md"));
+        assert!(files.contains_key("workflows/plan-medium.md"));
+        assert!(files.contains_key("workflows/plan-large.md"));
+        assert!(files.contains_key("command-wrapper.md"));
+    }
+
+    #[test]
+    fn test_generate_skill_md_contains_vault_and_contexts() {
+        let config = test_config();
+        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let skill_md = &files["SKILL.md"];
+
+        assert!(skill_md.contains("/tmp/test-vault"));
+        assert!(skill_md.contains("alpha"));
+        assert!(skill_md.contains("beta"));
+        assert!(skill_md.contains("config-hash: testhash"));
+    }
+
+    #[test]
+    fn test_generate_command_wrapper_contains_hash() {
+        let config = test_config();
+        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let wrapper = &files["command-wrapper.md"];
+
+        assert!(wrapper.contains("config-hash: testhash"));
+        assert!(wrapper.contains("Invoke the temper skill"));
+    }
+
+    #[test]
+    fn test_format_context_list_sorted() {
+        let contexts = vec![
+            "zebra".to_string(),
+            "alpha".to_string(),
+            "middle".to_string(),
+        ];
+        let result = format_context_list(&contexts);
+        assert!(result.starts_with("- `alpha`"));
+        assert!(result.contains("- `middle`"));
+        assert!(result.ends_with("- `zebra`"));
+    }
+
+    #[test]
+    fn test_format_context_list_empty() {
+        let result = format_context_list(&[]);
+        assert_eq!(result, "(no contexts configured)");
+    }
+
+    #[test]
+    fn test_extract_config_hash_found() {
+        let content = "<!-- config-hash: abc123 -->\n---\nname: temper\n---";
+        assert_eq!(extract_config_hash(content), Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn test_extract_config_hash_not_found() {
+        let content = "---\nname: temper\n---";
+        assert_eq!(extract_config_hash(content), None);
+    }
 }

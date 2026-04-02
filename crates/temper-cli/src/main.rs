@@ -310,25 +310,16 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     print!("{}", content);
                     Ok(())
                 }
-                SkillAction::Install {
-                    global: _,
-                    context,
-                    path,
-                } => {
-                    let output_path = if let Some(p) = path {
+                SkillAction::Install { path } => {
+                    let skill_dir = if let Some(p) = path {
                         std::path::PathBuf::from(p)
-                    } else if let Some(ctx) = context {
-                        temper_cli::config::expand_tilde(&format!(
-                            "{}/.claude/commands/temper.md",
-                            ctx
-                        ))
                     } else {
                         config.skill_output.clone()
                     };
-                    temper_cli::commands::skill::install(&config, &output_path)?;
+                    temper_cli::commands::skill::install(&config, &skill_dir)?;
                     temper_cli::output::success(format!(
                         "Skill installed: {}",
-                        output_path.display()
+                        skill_dir.display()
                     ));
                     Ok(())
                 }
