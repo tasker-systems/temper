@@ -14,7 +14,10 @@ use temper_api::state::{AppState, JwksKeyStore};
 #[tokio::main]
 async fn main() -> Result<(), vercel_runtime::Error> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
+        .json()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     let config = ApiConfig::from_env().expect("Failed to load config from environment");
