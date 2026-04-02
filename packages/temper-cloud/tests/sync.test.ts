@@ -72,7 +72,7 @@ describe("SyncStatusBodySchema", () => {
 describe("SyncCompleteBodySchema", () => {
   it("accepts valid request body", () => {
     const body = {
-      client_id: "device-abc",
+      device_id: "device-abc",
       merged_resources: [
         { resource_id: "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11", content_hash: "sha256:abc" },
       ],
@@ -82,13 +82,13 @@ describe("SyncCompleteBodySchema", () => {
   });
 
   it("accepts body with empty merged_resources", () => {
-    const body = { client_id: "device-abc", merged_resources: [] };
+    const body = { device_id: "device-abc", merged_resources: [] };
     const result = SyncCompleteBodySchema.safeParse(body);
     expect(result.success).toBe(true);
   });
 
   it("defaults merged_resources when omitted", () => {
-    const body = { client_id: "device-abc" };
+    const body = { device_id: "device-abc" };
     const result = SyncCompleteBodySchema.safeParse(body);
     expect(result.success).toBe(true);
     if (result.success) {
@@ -96,14 +96,14 @@ describe("SyncCompleteBodySchema", () => {
     }
   });
 
-  it("rejects missing client_id", () => {
+  it("rejects missing device_id", () => {
     const result = SyncCompleteBodySchema.safeParse({ merged_resources: [] });
     expect(result.success).toBe(false);
   });
 
   it("rejects invalid UUID in resource_id", () => {
     const body = {
-      client_id: "device-abc",
+      device_id: "device-abc",
       merged_resources: [{ resource_id: "not-a-uuid", content_hash: "abc" }],
     };
     const result = SyncCompleteBodySchema.safeParse(body);

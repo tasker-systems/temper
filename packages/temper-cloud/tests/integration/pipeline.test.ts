@@ -7,6 +7,7 @@ import { EMBEDDING_DIM, embedTexts } from "../../src/workflow/embed.js";
 import { extractText } from "../../src/workflow/extract.js";
 import {
   buildStatusUpdateQuery,
+  buildStoreChunksQueries,
   buildStoreChunksQuery,
   buildVersionBumpQuery,
   type ChunkRow,
@@ -176,13 +177,21 @@ describe("database storage", () => {
       embedding: embeddings[i],
     }));
 
-    // Store to database
-    const { sql: insertSql, params } = buildStoreChunksQuery(rows);
-    await sql.unsafe(insertSql, params);
+    // Store to database — buildStoreChunksQueries returns two queries:
+    // 1) kb_chunks (metadata + embedding), 2) kb_chunk_content (content text)
+    const storeQueries = buildStoreChunksQueries(rows);
+    for (const { sql: insertSql, params } of storeQueries) {
+      await sql.unsafe(insertSql, params);
+    }
 
-    // Verify rows
-    const stored =
-      await sql`SELECT * FROM kb_chunks WHERE resource_id = ${resource.id} ORDER BY chunk_index`;
+    // Verify rows — content lives in kb_chunk_content, so join it in
+    const stored = await sql`
+      SELECT c.*, cc.content
+      FROM kb_chunks c
+      LEFT JOIN kb_chunk_content cc ON cc.chunk_id = c.id
+      WHERE c.resource_id = ${resource.id}
+      ORDER BY c.chunk_index
+    `;
 
     expect(stored.length).toBe(chunks.length);
     for (let i = 0; i < stored.length; i++) {
