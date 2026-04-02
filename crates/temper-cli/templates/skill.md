@@ -31,16 +31,23 @@ User-created guidance files. Read and apply any files found here.
 
 ## On Task Start
 
-1. Read the task content — extract mode and effort
-2. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
-3. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
-4. Check for `guidance/fundamentals.md`:
+> **CLI sequence**: There is no `task start` command. To start a task:
+> 1. `temper task show <slug>` — read the task content
+> 2. `temper task move <slug> --stage in-progress` — mark it active
+>
+> Stages are: `backlog`, `in-progress`, `done`, `cancelled` (not "active").
+
+1. Read the task content via `temper task show <slug>` — extract mode and effort
+2. Move the task to in-progress: `temper task move <slug> --stage in-progress`
+3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
+4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
+5. Check for `guidance/fundamentals.md`:
    - If it exists, read it and apply its principles
    - If it doesn't, offer: "This context has no project fundamentals. Want to set them up? (`/temper init`)"
-5. Check auto-memory for user plugin preferences (skills they've said they rely on)
-6. Scan for installed skills: check `~/.claude/skills/` and plugins cache
-7. Ask: "I found [list]. Want subagents to use any of these? Any other quality gates?"
-8. Read `workflows/{mode}-{effort}.md` and follow it
+6. Check auto-memory for user plugin preferences (skills they've said they rely on)
+7. Scan for installed skills: check `~/.claude/skills/` and plugins cache
+8. Ask: "I found [list]. Want subagents to use any of these? Any other quality gates?"
+9. Read `workflows/{mode}-{effort}.md` and follow it
 
 ## On Other Commands
 

@@ -7,6 +7,6 @@
 
 | ID | Time | T | Title | Read |
 |----|------|---|-------|------|
-| #20638 | 11:34 AM | 🟣 | HttpClient Token Override for Test Authentication | ~399 |
-| #20490 | 8:13 AM | 🔄 | Updated IngestClient HTTP calls to support method and path logging | ~412 |
+| #20713 | 4:37 PM | 🔴 | Removed task start command from source reference.md file | ~245 |
+| #20712 | " | 🔵 | Temper skill generation uses Askama templates and static file inclusion | ~352 |
 </claude-mem-context>

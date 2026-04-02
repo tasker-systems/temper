@@ -18,7 +18,6 @@ any indirect invocation method.
 | task move | `temper task move <slug> [--stage <stage>] [--mode <mode>] [--effort <effort>]` |
 | task done | `temper task done <slug>` |
 | task show | `temper task show <slug>` |
-| task start | `temper task start <slug>` |
 | goal list | `temper goal list [--context <ctx>]` |
 | note create | `temper note create "<title>" [--context <ctx>] [--type <doctype>]` |
 | research save | `temper research save "<title>" [--task <slug>]` |
