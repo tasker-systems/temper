@@ -103,6 +103,7 @@ impl HttpClient {
         let span = tracing::debug_span!(
             "http_request",
             request = %api_req,
+            has_auth = api_req.has_auth,
             status = tracing::field::Empty,
             latency_ms = tracing::field::Empty,
         );
