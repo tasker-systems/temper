@@ -113,7 +113,6 @@ struct ApiRequest<'a> {
     method: &'a reqwest::Method,
     path: &'a str,
     has_auth: bool,
-    has_body: bool,
 }
 
 impl fmt::Display for ApiRequest {
