@@ -109,6 +109,8 @@ pub async fn require_auth(
     // 5. Resolve (or auto-provision) the profile.
     let profile = profile_service::resolve_from_claims(&state.pool, &claims).await?;
 
+    tracing::Span::current().record("profile_id", tracing::field::display(profile.id));
+
     // 6. Optionally capture X-Temper-Device-Id.
     let device_id = request
         .headers()
