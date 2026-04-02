@@ -1,0 +1,11 @@
+[package]
+name = "temper-mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server for agent access to the temper knowledge base"
+
+[dependencies]
+temper-core = { path = "../temper-core" }
+
+[package.metadata.cargo-machete]
+ignored = ["temper-core"]

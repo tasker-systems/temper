@@ -1,0 +1,55 @@
+# =============================================================================
+# Temper — cargo-make Root Task Definitions
+# =============================================================================
+#
+# Unified task runner for the temper workspace.
+#
+# Quick Start:
+#   cargo make check       Run all quality checks
+#   cargo make test        Run all tests (unit only)
+#   cargo make test-db     Run tests with database (requires Docker)
+#   cargo make test-all    Run all test tiers
+#   cargo make fix         Auto-fix all issues
+#   cargo make build       Build everything
+#   cargo make audit       Security audit
+#   cargo make run         Run temper-api locally
+#
+# Docker:
+#   cargo make docker-up   Start PostgreSQL
+#   cargo make docker-down Stop PostgreSQL
+#
+# See: docs/superpowers/specs/2026-03-28-cargo-make-tooling-and-security-audit-design.md
+
+extend = "./tools/cargo-make/main.toml"
+
+[config]
+default_to_workspace = false
+skip_core_tasks = true
+
+[tasks.default]
+description = "Default: show available tasks"
+script = '''
+echo "Temper — cargo-make Tasks"
+echo "========================="
+echo ""
+echo "Quality:"
+echo "  cargo make check       Run all quality checks (Rust + TypeScript)"
+echo "  cargo make fix         Auto-fix formatting and lint issues"
+echo "  cargo make audit       Security audit on dependencies"
+echo ""
+echo "Testing:"
+echo "  cargo make test        Rust unit tests (no feature flags)"
+echo "  cargo make test-db     + database integration tests (requires Docker Postgres)"
+echo "  cargo make test-all    All tests: Rust + TypeScript + integration"
+echo "  cargo make ts-test     TypeScript unit tests only"
+echo ""
+echo "Build & Run:"
+echo "  cargo make build       Build all workspace crates"
+echo "  cargo make run         Run temper-api server locally"
+echo ""
+echo "Docker:"
+echo "  cargo make docker-up   Start PostgreSQL"
+echo "  cargo make docker-down Stop PostgreSQL"
+echo ""
+echo "Run 'cargo make --list-all-steps' for all tasks"
+'''

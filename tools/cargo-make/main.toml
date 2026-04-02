@@ -1,0 +1,146 @@
+# =============================================================================
+# Temper — Workspace-Level cargo-make Tasks
+# =============================================================================
+# Composite tasks that operate across the entire workspace.
+# Extended by the root Makefile.toml.
+
+extend = "./base-tasks.toml"
+
+# =============================================================================
+# Composite Tasks
+# =============================================================================
+
+[tasks.check]
+description = "Run all quality checks (Rust + TypeScript)"
+dependencies = ["rust-fmt-check", "rust-clippy", "rust-docs", "rust-machete", "ts-check"]
+
+[tasks.test]
+description = "Run tests (unit tests, no feature flags)"
+command = "cargo"
+args = ["nextest", "run", "--workspace"]
+
+[tasks.test-db]
+description = "Run tests including database integration tests (requires Docker Postgres)"
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--features", "test-db"]
+
+[tasks.test-all]
+description = "Run all test tiers including embedder and TypeScript tests"
+dependencies = ["test-all-rust", "ts-test", "ts-test-integration"]
+
+[tasks.test-e2e]
+description = "Run E2E tests only (requires Docker Postgres)"
+command = "cargo"
+args = ["nextest", "run", "--manifest-path", "tests/e2e/Cargo.toml", "--features", "test-db"]
+
+[tasks.test-all-rust]
+description = "Run all Rust test tiers"
+command = "cargo"
+args = ["nextest", "run", "--workspace", "--features", "test-db,test-embed"]
+
+[tasks.fix]
+description = "Auto-fix formatting and lint issues (Rust + TypeScript)"
+dependencies = ["rust-fmt-fix", "rust-clippy-fix", "ts-fix"]
+
+[tasks.build]
+description = "Build all workspace crates"
+command = "cargo"
+args = ["build", "--workspace", "--all-features"]
+
+[tasks.audit]
+description = "Run security audit on dependencies"
+command = "cargo"
+args = ["audit"]
+
+[tasks.run]
+description = "Run the temper-api server locally"
+command = "cargo"
+args = ["run", "-p", "temper-api"]
+
+# =============================================================================
+# Sub-Tasks
+# =============================================================================
+
+[tasks.rust-fmt-check]
+description = "Check Rust formatting"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.rust-fmt-fix]
+description = "Fix Rust formatting"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.rust-clippy]
+description = "Run Clippy lints"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+[tasks.rust-clippy-fix]
+description = "Fix Clippy issues"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--fix", "--allow-dirty", "--allow-staged"]
+
+[tasks.rust-docs]
+description = "Check documentation builds"
+command = "cargo"
+args = ["doc", "--workspace", "--no-deps", "--document-private-items"]
+
+[tasks.rust-machete]
+description = "Check for unused Cargo dependencies"
+command = "cargo"
+args = ["machete", "--with-metadata"]
+
+# =============================================================================
+# TypeScript Tasks (packages/temper-cloud)
+# =============================================================================
+
+[tasks.ts-check]
+description = "Run TypeScript quality checks (typecheck + biome)"
+dependencies = ["ts-typecheck", "ts-lint"]
+
+[tasks.ts-typecheck]
+description = "TypeScript type checking"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "typecheck"]
+
+[tasks.ts-lint]
+description = "TypeScript lint and format check (biome)"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "check"]
+
+[tasks.ts-fix]
+description = "Auto-fix TypeScript formatting and lint issues"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "check:fix"]
+
+[tasks.ts-test]
+description = "Run TypeScript unit tests"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "test"]
+
+[tasks.ts-test-integration]
+description = "Run TypeScript integration tests (requires Docker Postgres)"
+cwd = "packages/temper-cloud"
+command = "bun"
+args = ["run", "test:integration"]
+
+# =============================================================================
+# Docker Tasks
+# =============================================================================
+
+[tasks.docker-up]
+description = "Start PostgreSQL development database"
+script = ["docker compose up -d"]
+
+[tasks.docker-down]
+description = "Stop PostgreSQL development database"
+script = ["docker compose down"]
+
+[tasks.docker-down-volumes]
+description = "Stop PostgreSQL and remove data volumes"
+script = ["docker compose down -v"]

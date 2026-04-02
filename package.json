@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "workspaces": ["packages/temper-cloud"],
+  "devDependencies": {
+    "@vercel/blob": "^1",
+    "onnxruntime-common": "^1.24",
+    "onnxruntime-node": "^1.24",
+    "typescript": "^5.8"
+  }
+}

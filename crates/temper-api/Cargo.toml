@@ -1,0 +1,38 @@
+[package]
+name = "temper-api"
+version = "0.1.0"
+edition = "2021"
+description = "Axum HTTP server implementing the temper cloud API"
+
+[[bin]]
+name = "temper-api"
+path = "src/main.rs"
+
+[dependencies]
+temper-core = { path = "../temper-core", features = ["web-api"] }
+axum = { version = "0.8", features = ["json", "query"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "macros", "migrate"] }
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "decompression-gzip"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+utoipa = { version = "5", features = ["axum_extras", "uuid", "chrono"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
+
+[features]
+test-db = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migrate"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "v7", "serde"] }

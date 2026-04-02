@@ -3,3 +3,6 @@
 *.swo
 .DS_Store
 .superpowers/
+.env
+.vercel
+node_modules

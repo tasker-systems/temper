@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "../..",
+    "declaration": false,
+    "sourceMap": false,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@vercel/blob": ["./node_modules/@vercel/blob"],
+      "jose": ["./node_modules/jose"],
+      "@neondatabase/serverless": ["./node_modules/@neondatabase/serverless"]
+    }
+  },
+  "include": ["src/**/*", "../../api/**/*.ts"],
+  "exclude": ["node_modules", "dist", "tests"]
+}

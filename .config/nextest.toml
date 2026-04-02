@@ -1,0 +1,8 @@
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 2 }
+status-level = "skip"
+final-status-level = "flaky"
+
+[profile.ci]
+retries = 1
+fail-fast = false

@@ -1,0 +1,40 @@
+{
+  "name": "temper-cloud",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit && tsc --noEmit --project tsconfig.api.json",
+    "format": "biome format --write",
+    "format:check": "biome format",
+    "lint": "biome lint",
+    "lint:fix": "biome lint --fix",
+    "check": "biome check",
+    "check:fix": "biome check --fix"
+  },
+  "dependencies": {
+    "@huggingface/hub": "^2.11.0",
+    "@huggingface/transformers": "^3.8.1",
+    "@kreuzberg/node": "latest",
+    "@neondatabase/serverless": "^1",
+    "@vercel/blob": "^1",
+    "jose": "^6",
+    "onnxruntime-common": "^1.24.3",
+    "onnxruntime-node": "^1.24",
+    "workflow": "^0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.4.9",
+    "@types/node": "^22",
+    "docx": "^9.6.1",
+    "pdf-lib": "^1.17.1",
+    "postgres": "^3.4.8",
+    "sharp": "^0.34.5",
+    "typescript": "^5.8",
+    "vitest": "^3"
+  }
+}

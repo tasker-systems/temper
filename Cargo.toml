@@ -1,44 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "tests/e2e"]
+
 [package]
-name = "temper-cli"
+name = "temper-cloud"
 version = "0.1.0"
 edition = "2021"
-description = "Developer workflow tool for agent-assisted development"
+description = "Vercel deployment adapter for temper-api"
 
 [[bin]]
-name = "temper"
-path = "src/main.rs"
+name = "axum"
+path = "api/axum.rs"
 
 [dependencies]
-clap = { version = "4", features = ["derive", "env"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-serde_yaml = "0.9"
-toml = "0.8"
-thiserror = "2"
-pulldown-cmark = "0.13"
+temper-api = { path = "crates/temper-api" }
+vercel_runtime = { version = "2", features = ["axum"] }
+tokio = { version = "1", features = ["full"] }
+tower = "0.5"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anstream = "0.6"
-anstyle = "1"
-chrono = { version = "0.4", features = ["serde"] }
-sha2 = "0.10"
-dirs = "5"
-candle-core = "0.9"
-candle-nn = "0.9"
-candle-transformers = "0.9"
-tokenizers = "0.21"
-hf-hub = "0.5"
-instant-distance = "0.6"
-bincode = "1"
-glob = "0.3"
-regex-lite = "0.1"
-uuid = { version = "1", features = ["v7"] }
-ratatui = "0.29"
-crossterm = "0.28"
-tokio = { version = "1", features = ["rt", "macros", "sync"] }
-
-[features]
-test-embedder = []
-
-[dev-dependencies]
-tempfile = "3"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls"] }

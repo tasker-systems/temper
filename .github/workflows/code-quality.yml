@@ -4,7 +4,8 @@ on:
   workflow_call:
 
 jobs:
-  quality:
+  rust-quality:
+    name: Rust Quality
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -22,21 +23,46 @@ jobs:
         with:
           prefix-key: code-quality
 
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy lints
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Check documentation builds
-        run: cargo doc --no-deps --document-private-items
+        run: cargo doc --workspace --no-deps --document-private-items
         env:
           RUSTDOCFLAGS: -D warnings
 
+      - name: Install cargo-machete
+        run: cargo install cargo-machete --locked
+
+      - name: Check for unused dependencies
+        run: cargo machete --with-metadata
+
       - name: Security audit
-        # Non-blocking — advisory database may have CVSS 4.0 issues
         continue-on-error: true
-        run: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+  typescript-quality:
+    name: TypeScript Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: cd packages/temper-cloud && bun install --frozen-lockfile
+
+      - name: Type check
+        run: cd packages/temper-cloud && bun run typecheck
+
+      - name: Lint and format check
+        run: cd packages/temper-cloud && bun run check

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">
+  <rect width="400" height="200" fill="#f0f0f0"/>
+  <text x="200" y="80" text-anchor="middle" font-family="Arial" font-size="24" fill="#333">
+    Temper Knowledge Base
+  </text>
+  <text x="200" y="120" text-anchor="middle" font-family="Arial" font-size="14" fill="#666">
+    Semantic search and vector embeddings
+  </text>
+  <text x="200" y="150" text-anchor="middle" font-family="Arial" font-size="12" fill="#999">
+    Local-first with cloud sync
+  </text>
+</svg>

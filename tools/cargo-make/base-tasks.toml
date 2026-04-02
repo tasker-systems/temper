@@ -1,0 +1,34 @@
+# =============================================================================
+# Temper — Base cargo-make Task Templates
+# =============================================================================
+# Shared task definitions extended by per-crate Makefile.toml files.
+
+[tasks.base-rust-format-check]
+description = "Check Rust formatting"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[tasks.base-rust-format-fix]
+description = "Fix Rust formatting"
+command = "cargo"
+args = ["fmt", "--all"]
+
+[tasks.base-rust-lint]
+description = "Run Clippy lints"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+
+[tasks.base-rust-lint-fix]
+description = "Fix Clippy issues"
+command = "cargo"
+args = ["clippy", "--all-targets", "--all-features", "--fix", "--allow-dirty", "--allow-staged"]
+
+[tasks.base-rust-test]
+description = "Run tests"
+command = "cargo"
+args = ["nextest", "run", "--workspace"]
+
+[tasks.base-rust-docs]
+description = "Check documentation builds"
+command = "cargo"
+args = ["doc", "--workspace", "--no-deps", "--document-private-items"]

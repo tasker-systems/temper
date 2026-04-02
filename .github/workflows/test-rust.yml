@@ -2,11 +2,12 @@ name: Rust Tests
 
 # =============================================================================
 # Test tier notes:
-#   cargo test --locked                          -> Default tests only
-#   cargo test --locked --features test-embedder -> + HF model embedding tests
+#   cargo nextest run --workspace                         -> Unit tests only
+#   cargo nextest run --workspace --features test-embed   -> + embedding tests
+#   cargo nextest run --workspace --features test-db      -> + DB integration tests
 #
-# The test-embedder tier downloads the all-MiniLM-L6-v2 model from HuggingFace
-# and runs embedding/indexing tests. Excluded from CI due to download cost.
+# DB integration and embedding tiers are excluded from CI.
+# DB tests require Docker Postgres; embedding tests download HF models.
 # =============================================================================
 
 on:
@@ -30,5 +31,8 @@ jobs:
         with:
           prefix-key: test
 
-      - name: Run tests
-        run: cargo test --locked
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run unit tests
+        run: cargo nextest run --workspace --locked
