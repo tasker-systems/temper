@@ -8,6 +8,8 @@ use reqwest::{
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
+use tracing::Instrument;
+
 use crate::error::{ClientError, Result};
 
 /// Wraps a `reqwest::Client` with base URL and optional device identity.
@@ -107,37 +109,40 @@ impl HttpClient {
             status = tracing::field::Empty,
             latency_ms = tracing::field::Empty,
         );
-        let _guard = span.enter();
 
-        let req = if let Some(tok) = token {
-            let value = HeaderValue::from_str(&format!("Bearer {tok}"))
-                .map_err(|e| ClientError::Other(format!("invalid token header: {e}")))?;
-            req.header(AUTHORIZATION, value)
-        } else {
-            req
-        };
+        async move {
+            let req = if let Some(tok) = token {
+                let value = HeaderValue::from_str(&format!("Bearer {tok}"))
+                    .map_err(|e| ClientError::Other(format!("invalid token header: {e}")))?;
+                req.header(AUTHORIZATION, value)
+            } else {
+                req
+            };
 
-        let start = Instant::now();
-        let resp = req.send().await?;
-        let status = resp.status();
-        let latency_ms = start.elapsed().as_millis() as u64;
+            let start = Instant::now();
+            let resp = req.send().await?;
+            let status = resp.status();
+            let latency_ms = start.elapsed().as_millis() as u64;
 
-        span.record("status", status.as_u16());
-        span.record("latency_ms", latency_ms);
+            tracing::Span::current().record("status", status.as_u16());
+            tracing::Span::current().record("latency_ms", latency_ms);
 
-        if status.is_success() {
-            return Ok(resp);
+            if status.is_success() {
+                return Ok(resp);
+            }
+
+            let body_text = resp.text().await.unwrap_or_default();
+            let err = map_status_to_error(status, &body_text);
+            tracing::warn!(
+                status = status.as_u16(),
+                latency_ms,
+                error = %err,
+                "request failed",
+            );
+            Err(err)
         }
-
-        let body_text = resp.text().await.unwrap_or_default();
-        let err = map_status_to_error(status, &body_text);
-        tracing::warn!(
-            status = status.as_u16(),
-            latency_ms,
-            error = %err,
-            "request failed",
-        );
-        Err(err)
+        .instrument(span)
+        .await
     }
 
     /// Send a request and deserialize the JSON body on success.
