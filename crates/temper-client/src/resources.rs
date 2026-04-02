@@ -1,5 +1,6 @@
 //! Typed sub-client for the `/api/resources` endpoints.
 
+use reqwest::Method;
 use uuid::Uuid;
 
 use crate::auth;
@@ -30,44 +31,57 @@ impl<'a> ResourceClient<'a> {
     pub async fn list(&self, params: &ResourceListParams) -> Result<Vec<ResourceRow>> {
         let token = auth::current_token()?;
         let req = self.http.get("/api/resources").query(params);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::GET, "/api/resources", req, Some(&token))
+            .await
     }
 
     /// Get a single resource by ID.
     pub async fn get(&self, id: Uuid) -> Result<ResourceRow> {
         let token = auth::current_token()?;
-        let req = self.http.get(&format!("/api/resources/{id}"));
-        self.http.send_json(req, Some(&token)).await
+        let path = format!("/api/resources/{id}");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
     }
 
     /// Create a new resource.
     pub async fn create(&self, request: &ResourceCreateRequest) -> Result<ResourceRow> {
         let token = auth::current_token()?;
         let req = self.http.post("/api/resources").json(request);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::POST, "/api/resources", req, Some(&token))
+            .await
     }
 
     /// Update an existing resource.
     pub async fn update(&self, id: Uuid, request: &ResourceUpdateRequest) -> Result<ResourceRow> {
         let token = auth::current_token()?;
-        let req = self
-            .http
-            .patch(&format!("/api/resources/{id}"))
-            .json(request);
-        self.http.send_json(req, Some(&token)).await
+        let path = format!("/api/resources/{id}");
+        let req = self.http.patch(&path).json(request);
+        self.http
+            .send_json(&Method::PATCH, &path, req, Some(&token))
+            .await
     }
 
     /// Delete a resource.
     pub async fn delete(&self, id: Uuid) -> Result<DeleteResponse> {
         let token = auth::current_token()?;
-        let req = self.http.delete(&format!("/api/resources/{id}"));
-        self.http.send_json(req, Some(&token)).await
+        let path = format!("/api/resources/{id}");
+        let req = self.http.delete(&path);
+        self.http
+            .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
     }
 
     /// Get the reconstituted markdown content for a resource.
     pub async fn content(&self, id: Uuid) -> Result<ContentResponse> {
         let token = auth::current_token()?;
-        let req = self.http.get(&format!("/api/resources/{id}/content"));
-        self.http.send_json(req, Some(&token)).await
+        let path = format!("/api/resources/{id}/content");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
     }
 }

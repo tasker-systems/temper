@@ -3,6 +3,7 @@
 //! Sends a fully-processed payload (content + chunks + embeddings) as JSON.
 //! The CLI handles extract → chunk → embed locally.
 
+use reqwest::Method;
 use uuid::Uuid;
 
 use crate::auth;
@@ -31,13 +32,18 @@ impl<'a> IngestClient<'a> {
     pub async fn create(&self, payload: &IngestPayload) -> Result<ResourceRow> {
         let token = auth::current_token()?;
         let req = self.http.post("/api/ingest").json(payload);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::POST, "/api/ingest", req, Some(&token))
+            .await
     }
 
     /// PUT /api/ingest/:id — update resource content with new chunks.
     pub async fn update(&self, id: Uuid, payload: &IngestPayload) -> Result<ResourceRow> {
         let token = auth::current_token()?;
-        let req = self.http.put(&format!("/api/ingest/{id}")).json(payload);
-        self.http.send_json(req, Some(&token)).await
+        let path = format!("/api/ingest/{id}");
+        let req = self.http.put(&path).json(payload);
+        self.http
+            .send_json(&Method::PUT, &path, req, Some(&token))
+            .await
     }
 }

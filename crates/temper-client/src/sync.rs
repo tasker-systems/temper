@@ -2,6 +2,8 @@
 //!
 //! Provides typed methods for computing sync diffs and completing sync rounds.
 
+use reqwest::Method;
+
 use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
@@ -29,14 +31,18 @@ impl<'a> SyncClient<'a> {
     pub async fn status(&self, request: &SyncStatusRequest) -> Result<SyncStatusResponse> {
         let token = auth::current_token()?;
         let req = self.http.post("/api/sync/status").json(request);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::POST, "/api/sync/status", req, Some(&token))
+            .await
     }
 
     /// POST /api/sync/complete — finalize a sync round, update device state.
     pub async fn complete(&self, request: &SyncCompleteRequest) -> Result<SyncCompleteResponse> {
         let token = auth::current_token()?;
         let req = self.http.post("/api/sync/complete").json(request);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::POST, "/api/sync/complete", req, Some(&token))
+            .await
     }
 }
 

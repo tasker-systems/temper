@@ -1,5 +1,7 @@
 //! Typed sub-client for the `/api/search` endpoint.
 
+use reqwest::Method;
+
 use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
@@ -37,6 +39,8 @@ impl<'a> SearchClient<'a> {
             limit,
         };
         let req = self.http.post("/api/search").json(&params);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::POST, "/api/search", req, Some(&token))
+            .await
     }
 }

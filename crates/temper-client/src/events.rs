@@ -1,5 +1,7 @@
 //! Typed sub-client for the `/api/events` endpoint.
 
+use reqwest::Method;
+
 use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
@@ -25,6 +27,8 @@ impl<'a> EventClient<'a> {
     pub async fn list(&self, params: &EventListParams) -> Result<Vec<EventRow>> {
         let token = auth::current_token()?;
         let req = self.http.get("/api/events").query(params);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::GET, "/api/events", req, Some(&token))
+            .await
     }
 }

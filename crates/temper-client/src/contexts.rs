@@ -1,5 +1,6 @@
 //! Typed sub-client for the `/api/contexts` endpoints.
 
+use reqwest::Method;
 use uuid::Uuid;
 
 use crate::auth;
@@ -27,14 +28,19 @@ impl<'a> ContextClient<'a> {
     pub async fn list(&self) -> Result<Vec<ContextRow>> {
         let token = auth::current_token()?;
         let req = self.http.get("/api/contexts");
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::GET, "/api/contexts", req, Some(&token))
+            .await
     }
 
     /// Get a single context by ID.
     pub async fn get(&self, id: Uuid) -> Result<ContextRow> {
         let token = auth::current_token()?;
-        let req = self.http.get(&format!("/api/contexts/{id}"));
-        self.http.send_json(req, Some(&token)).await
+        let path = format!("/api/contexts/{id}");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
     }
 
     /// Create a new context.
@@ -44,6 +50,8 @@ impl<'a> ContextClient<'a> {
             name: name.to_owned(),
         };
         let req = self.http.post("/api/contexts").json(&body);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::POST, "/api/contexts", req, Some(&token))
+            .await
     }
 }

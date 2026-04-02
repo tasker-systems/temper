@@ -2,6 +2,7 @@
 //!
 //! Uploads file content to the TypeScript upload endpoint (Vercel Blob).
 
+use reqwest::Method;
 use uuid::Uuid;
 
 use crate::auth;
@@ -44,6 +45,8 @@ impl<'a> UploadClient<'a> {
                 reqwest::multipart::Part::bytes(content).file_name(filename.to_string()),
             );
         let req = self.http.post("/api/upload").multipart(form);
-        self.http.send_json(req, Some(&token)).await
+        self.http
+            .send_json(&Method::POST, "/api/upload", req, Some(&token))
+            .await
     }
 }
