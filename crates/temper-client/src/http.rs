@@ -21,6 +21,7 @@ pub struct HttpClient {
     inner: Client,
     base_url: String,
     device_id: Option<String>,
+    token_override: Option<String>,
 }
 
 /// Describes an outgoing HTTP request for structured logging.
@@ -50,7 +51,31 @@ impl HttpClient {
             inner,
             base_url: base_url.trim_end_matches('/').to_owned(),
             device_id,
+            token_override: None,
         }
+    }
+
+    /// Construct an `HttpClient` with a fixed token that bypasses `auth.json`.
+    ///
+    /// Intended for testing and scripting contexts where reading from the
+    /// filesystem is undesirable.
+    pub fn with_token_override(base_url: &str, device_id: Option<String>, token: String) -> Self {
+        Self {
+            token_override: Some(token),
+            ..Self::new(base_url, device_id)
+        }
+    }
+
+    /// Return the token to use for authenticated requests.
+    ///
+    /// Returns the token override if one was set at construction time;
+    /// otherwise falls back to [`crate::auth::current_token`], which reads
+    /// `~/.config/temper/auth.json`.
+    pub fn resolve_token(&self) -> Result<String> {
+        if let Some(tok) = &self.token_override {
+            return Ok(tok.clone());
+        }
+        crate::auth::current_token()
     }
 
     fn url(&self, path: &str) -> String {
@@ -325,5 +350,34 @@ mod tests {
         let client = HttpClient::new("https://api.example.com/", None);
         let url = client.url("/v1/tasks");
         assert_eq!(url, "https://api.example.com/v1/tasks");
+    }
+
+    #[test]
+    fn resolve_token_returns_override_when_set() {
+        let token = "test-token-abc123".to_owned();
+        let client =
+            HttpClient::with_token_override("https://api.example.com", None, token.clone());
+        let result = client.resolve_token();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), token);
+    }
+
+    #[test]
+    fn resolve_token_without_override_falls_back_to_auth() {
+        // When no override is set, resolve_token delegates to current_token().
+        // Both must return the same result regardless of whether auth.json exists.
+        let client = HttpClient::new("https://api.example.com", None);
+        let from_client = client.resolve_token();
+        let from_auth = crate::auth::current_token();
+        match (from_client, from_auth) {
+            (Ok(a), Ok(b)) => assert_eq!(
+                a, b,
+                "resolve_token must return the same token as current_token"
+            ),
+            (Err(_), Err(_)) => {} // both failed — fallback path exercised correctly
+            (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
+                panic!("resolve_token and current_token must agree when no override is set")
+            }
+        }
     }
 }
