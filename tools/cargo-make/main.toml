@@ -36,7 +36,7 @@ args = ["nextest", "run", "--manifest-path", "tests/e2e/Cargo.toml", "--features
 [tasks.test-all-rust]
 description = "Run all Rust test tiers"
 command = "cargo"
-args = ["nextest", "run", "--workspace", "--features", "test-db,test-embedder"]
+args = ["nextest", "run", "--workspace", "--features", "test-db,test-embed"]
 
 [tasks.fix]
 description = "Auto-fix formatting and lint issues (Rust + TypeScript)"
