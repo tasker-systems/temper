@@ -1,4 +1,5 @@
-use std::time::Duration;
+use std::fmt;
+use std::time::{Duration, Instant};
 
 use reqwest::{
     header::{HeaderValue, AUTHORIZATION},
@@ -18,6 +19,22 @@ pub struct HttpClient {
     inner: Client,
     base_url: String,
     device_id: Option<String>,
+}
+
+/// Describes an outgoing HTTP request for structured logging.
+///
+/// Constructed inside [`HttpClient::send`] from method and path parameters.
+/// Never contains sensitive data (tokens, bodies).
+struct ApiRequest<'a> {
+    method: &'a reqwest::Method,
+    path: &'a str,
+    has_auth: bool,
+}
+
+impl fmt::Display for ApiRequest<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.method, self.path)
+    }
 }
 
 impl HttpClient {
@@ -68,8 +85,29 @@ impl HttpClient {
 
     /// Send a request, injecting `Bearer` auth if `token` is provided.
     ///
-    /// Maps HTTP error status codes to typed [`ClientError`] variants.
-    pub async fn send(&self, req: RequestBuilder, token: Option<&str>) -> Result<Response> {
+    /// `method` and `path` are for observability only — they describe the
+    /// request for structured logging. They must match the `RequestBuilder`
+    /// but are not validated against it.
+    pub async fn send(
+        &self,
+        method: &reqwest::Method,
+        path: &str,
+        req: RequestBuilder,
+        token: Option<&str>,
+    ) -> Result<Response> {
+        let api_req = ApiRequest {
+            method,
+            path,
+            has_auth: token.is_some(),
+        };
+        let span = tracing::debug_span!(
+            "http_request",
+            request = %api_req,
+            status = tracing::field::Empty,
+            latency_ms = tracing::field::Empty,
+        );
+        let _guard = span.enter();
+
         let req = if let Some(tok) = token {
             let value = HeaderValue::from_str(&format!("Bearer {tok}"))
                 .map_err(|e| ClientError::Other(format!("invalid token header: {e}")))?;
@@ -78,24 +116,38 @@ impl HttpClient {
             req
         };
 
+        let start = Instant::now();
         let resp = req.send().await?;
         let status = resp.status();
+        let latency_ms = start.elapsed().as_millis() as u64;
+
+        span.record("status", status.as_u16());
+        span.record("latency_ms", latency_ms);
 
         if status.is_success() {
             return Ok(resp);
         }
 
         let body_text = resp.text().await.unwrap_or_default();
-        Err(map_status_to_error(status, &body_text))
+        let err = map_status_to_error(status, &body_text);
+        tracing::warn!(
+            status = status.as_u16(),
+            latency_ms,
+            error = %err,
+            "request failed",
+        );
+        Err(err)
     }
 
     /// Send a request and deserialize the JSON body on success.
     pub async fn send_json<T: DeserializeOwned>(
         &self,
+        method: &reqwest::Method,
+        path: &str,
         req: RequestBuilder,
         token: Option<&str>,
     ) -> Result<T> {
-        let resp = self.send(req, token).await?;
+        let resp = self.send(method, path, req, token).await?;
         let bytes = resp.bytes().await?;
         let value: T = serde_json::from_slice(&bytes)?;
         Ok(value)
@@ -240,6 +292,26 @@ mod tests {
     fn test_422_maps_to_server_error_with_unexpected_status_message() {
         let err = map_status_to_error(status(422), "{}");
         assert!(matches!(err, ClientError::Server { status: 422, .. }));
+    }
+
+    #[test]
+    fn test_api_request_display_formats_method_and_path() {
+        let req = ApiRequest {
+            method: &reqwest::Method::GET,
+            path: "/api/resources",
+            has_auth: true,
+        };
+        assert_eq!(req.to_string(), "GET /api/resources");
+    }
+
+    #[test]
+    fn test_api_request_display_post() {
+        let req = ApiRequest {
+            method: &reqwest::Method::POST,
+            path: "/api/ingest",
+            has_auth: true,
+        };
+        assert_eq!(req.to_string(), "POST /api/ingest");
     }
 
     #[test]
