@@ -1,7 +1,9 @@
 use axum::Router;
+use std::time::Duration;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::decompression::RequestDecompressionLayer;
-use tower_http::trace::TraceLayer;
+use tower_http::trace::{DefaultOnFailure, TraceLayer};
+use tracing::Span;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -65,7 +67,28 @@ pub fn create_app(state: AppState) -> Router {
 
     app.fallback(fallback_handler)
         .layer(RequestDecompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
+        .layer(
+            TraceLayer::new_for_http()
+                .make_span_with(|request: &axum::extract::Request| {
+                    tracing::info_span!(
+                        "http_request",
+                        method = %request.method(),
+                        path = %request.uri().path(),
+                        version = ?request.version(),
+                        profile_id = tracing::field::Empty,
+                    )
+                })
+                .on_response(
+                    |response: &axum::response::Response, latency: Duration, _span: &Span| {
+                        tracing::info!(
+                            status = response.status().as_u16(),
+                            latency_ms = latency.as_millis() as u64,
+                            "response",
+                        );
+                    },
+                )
+                .on_failure(DefaultOnFailure::new().level(tracing::Level::ERROR)),
+        )
         .layer(cors)
         .with_state(state)
 }
