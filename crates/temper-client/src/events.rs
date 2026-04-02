@@ -2,7 +2,6 @@
 
 use reqwest::Method;
 
-use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::api::{EventListParams, EventRow};
@@ -25,7 +24,7 @@ impl<'a> EventClient<'a> {
 
     /// List events, optionally filtered by resource or event type.
     pub async fn list(&self, params: &EventListParams) -> Result<Vec<EventRow>> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.get("/api/events").query(params);
         self.http
             .send_json(&Method::GET, "/api/events", req, Some(&token))

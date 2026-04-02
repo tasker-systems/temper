@@ -4,7 +4,6 @@
 
 use reqwest::Method;
 
-use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::{
@@ -29,7 +28,7 @@ impl<'a> SyncClient<'a> {
 
     /// POST /api/sync/status — compute diff between local manifest and server state.
     pub async fn status(&self, request: &SyncStatusRequest) -> Result<SyncStatusResponse> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.post("/api/sync/status").json(request);
         self.http
             .send_json(&Method::POST, "/api/sync/status", req, Some(&token))
@@ -38,7 +37,7 @@ impl<'a> SyncClient<'a> {
 
     /// POST /api/sync/complete — finalize a sync round, update device state.
     pub async fn complete(&self, request: &SyncCompleteRequest) -> Result<SyncCompleteResponse> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.post("/api/sync/complete").json(request);
         self.http
             .send_json(&Method::POST, "/api/sync/complete", req, Some(&token))

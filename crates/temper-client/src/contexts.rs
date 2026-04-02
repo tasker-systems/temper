@@ -3,7 +3,6 @@
 use reqwest::Method;
 use uuid::Uuid;
 
-use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::context::{ContextCreateRequest, ContextRow};
@@ -26,7 +25,7 @@ impl<'a> ContextClient<'a> {
 
     /// List all visible contexts.
     pub async fn list(&self) -> Result<Vec<ContextRow>> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.get("/api/contexts");
         self.http
             .send_json(&Method::GET, "/api/contexts", req, Some(&token))
@@ -35,7 +34,7 @@ impl<'a> ContextClient<'a> {
 
     /// Get a single context by ID.
     pub async fn get(&self, id: Uuid) -> Result<ContextRow> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let path = format!("/api/contexts/{id}");
         let req = self.http.get(&path);
         self.http
@@ -45,7 +44,7 @@ impl<'a> ContextClient<'a> {
 
     /// Create a new context.
     pub async fn create(&self, name: &str) -> Result<ContextRow> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let body = ContextCreateRequest {
             name: name.to_owned(),
         };

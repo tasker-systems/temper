@@ -2,7 +2,6 @@
 
 use reqwest::Method;
 
-use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::api::{SearchParams, SearchResultRow};
@@ -31,7 +30,7 @@ impl<'a> SearchClient<'a> {
         doc_type: Option<String>,
         limit: Option<i64>,
     ) -> Result<Vec<SearchResultRow>> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let params = SearchParams {
             embedding,
             context_name,

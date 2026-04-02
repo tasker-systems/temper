@@ -5,7 +5,6 @@
 use reqwest::Method;
 use uuid::Uuid;
 
-use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::upload::UploadResponse;
@@ -37,7 +36,7 @@ impl<'a> UploadClient<'a> {
         content: Vec<u8>,
         filename: &str,
     ) -> Result<UploadResponse> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let form = reqwest::multipart::Form::new()
             .text("resource_id", resource_id.to_string())
             .part(

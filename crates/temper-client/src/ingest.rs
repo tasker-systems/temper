@@ -6,7 +6,6 @@
 use reqwest::Method;
 use uuid::Uuid;
 
-use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::ingest::IngestPayload;
@@ -30,7 +29,7 @@ impl<'a> IngestClient<'a> {
 
     /// POST /api/ingest — create resource with pre-processed chunks.
     pub async fn create(&self, payload: &IngestPayload) -> Result<ResourceRow> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.post("/api/ingest").json(payload);
         self.http
             .send_json(&Method::POST, "/api/ingest", req, Some(&token))
@@ -39,7 +38,7 @@ impl<'a> IngestClient<'a> {
 
     /// PUT /api/ingest/:id — update resource content with new chunks.
     pub async fn update(&self, id: Uuid, payload: &IngestPayload) -> Result<ResourceRow> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let path = format!("/api/ingest/{id}");
         let req = self.http.put(&path).json(payload);
         self.http

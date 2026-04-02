@@ -2,7 +2,6 @@
 
 use reqwest::Method;
 
-use crate::auth;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::api::ProfileUpdateRequest;
@@ -26,7 +25,7 @@ impl<'a> ProfileClient<'a> {
 
     /// Get the authenticated user's profile.
     pub async fn get(&self) -> Result<Profile> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.get("/api/profile");
         self.http
             .send_json(&Method::GET, "/api/profile", req, Some(&token))
@@ -35,7 +34,7 @@ impl<'a> ProfileClient<'a> {
 
     /// Update the authenticated user's profile.
     pub async fn update(&self, request: &ProfileUpdateRequest) -> Result<Profile> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.patch("/api/profile").json(request);
         self.http
             .send_json(&Method::PATCH, "/api/profile", req, Some(&token))
@@ -44,7 +43,7 @@ impl<'a> ProfileClient<'a> {
 
     /// List external auth provider links for the authenticated user.
     pub async fn auth_links(&self) -> Result<Vec<ProfileAuthLink>> {
-        let token = auth::current_token()?;
+        let token = self.http.resolve_token()?;
         let req = self.http.get("/api/profile/auth-links");
         self.http
             .send_json(&Method::GET, "/api/profile/auth-links", req, Some(&token))
