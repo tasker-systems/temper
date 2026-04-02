@@ -42,3 +42,17 @@ pub struct ResearchTemplate<'a> {
     pub project: &'a str,
     pub slug: &'a str,
 }
+
+#[derive(Template)]
+#[template(path = "skill.md")]
+pub struct SkillTemplate<'a> {
+    pub config_hash: &'a str,
+    pub vault_path: &'a str,
+    pub context_list: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "command-wrapper.md")]
+pub struct CommandWrapperTemplate<'a> {
+    pub config_hash: &'a str,
+}
