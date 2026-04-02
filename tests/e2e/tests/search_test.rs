@@ -33,5 +33,5 @@ async fn search_returns_results(pool: sqlx::PgPool) {
     // At minimum we verify the search pipeline doesn't error.
     // If no embeddings are stored, results may be empty — that's OK.
     // The important thing is the API accepted the request and returned 200.
-    assert!(results.len() >= 0); // Pipeline works
+    let _ = &results; // Pipeline works — search accepted the request and returned 200
 }
