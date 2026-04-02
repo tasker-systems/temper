@@ -42,11 +42,30 @@ impl IntoResponse for ApiError {
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
+
+        let message = self.to_string();
+        let status_code = status.as_u16();
+
+        match &self {
+            ApiError::NotFound => {
+                tracing::debug!(status_code, error_code = code, %message, "not found");
+            }
+            ApiError::Conflict(_) => {
+                tracing::info!(status_code, error_code = code, %message, "conflict");
+            }
+            ApiError::Unauthorized(_) | ApiError::Forbidden => {
+                tracing::warn!(status_code, error_code = code, %message, "auth error");
+            }
+            ApiError::BadRequest(_) => {
+                tracing::warn!(status_code, error_code = code, %message, "bad request");
+            }
+            ApiError::Internal(_) => {
+                tracing::error!(status_code, error_code = code, %message, "internal error");
+            }
+        }
+
         let body = ErrorBody {
-            error: ErrorDetail {
-                code,
-                message: self.to_string(),
-            },
+            error: ErrorDetail { code, message },
         };
         (status, axum::Json(body)).into_response()
     }
