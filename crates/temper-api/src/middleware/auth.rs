@@ -83,18 +83,35 @@ pub async fn require_auth(
             ApiError::Unauthorized("Invalid or expired token".to_string())
         })?;
 
-    // 4. Resolve email — present in token claims (custom Auth0 Action) or
-    //    fetched from the OIDC /userinfo endpoint as a fallback.
+    // 4. Resolve email — present in token claims (custom Auth0 Action),
+    //    cached in kb_profile_auth_links from a prior login, or fetched
+    //    from the OIDC /userinfo endpoint as a last resort.
     let (email, email_verified) = match token_data.claims.email {
         Some(email) => (email, token_data.claims.email_verified),
-        None => fetch_email_from_userinfo(&state.config.auth_issuer, &token)
-            .await
-            .map_err(|e| {
-                tracing::warn!("Failed to fetch email from userinfo: {e}");
-                ApiError::Unauthorized(
-                    "Token missing email claim and userinfo lookup failed".to_string(),
-                )
-            })?,
+        None => {
+            // Check the DB for a previously resolved email before hitting userinfo.
+            let cached = lookup_cached_email(
+                &state.pool,
+                &state.config.auth_provider_name,
+                &token_data.claims.sub,
+            )
+            .await;
+
+            match cached {
+                Some((email, _)) => {
+                    tracing::debug!("resolved email from cached auth link");
+                    (email, Some(true))
+                }
+                None => fetch_email_from_userinfo(&state.config.auth_issuer, &token)
+                    .await
+                    .map_err(|e| {
+                        tracing::warn!("Failed to fetch email from userinfo: {e}");
+                        ApiError::Unauthorized(
+                            "Token missing email claim and userinfo lookup failed".to_string(),
+                        )
+                    })?,
+            }
+        }
     };
 
     let claims = AuthClaims {
@@ -129,6 +146,27 @@ pub async fn require_auth(
 
     // 8. Continue.
     Ok(next.run(request).await)
+}
+
+/// Look up the email for a known auth link in the database.
+///
+/// Returns `Some((email, email_verified_placeholder))` if the user has logged
+/// in before and we cached their email in `kb_profile_auth_links`.
+async fn lookup_cached_email(
+    pool: &sqlx::PgPool,
+    provider: &str,
+    external_user_id: &str,
+) -> Option<(String, Option<bool>)> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT email FROM kb_profile_auth_links WHERE auth_provider = $1 AND auth_provider_user_id = $2",
+    )
+    .bind(provider)
+    .bind(external_user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()?;
+
+    row.map(|(email,)| (email, Some(true)))
 }
 
 /// OIDC userinfo response (subset of fields we need).
