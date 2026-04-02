@@ -7,6 +7,9 @@ publish = false
 [features]
 test-db = []
 
+[package.metadata.cargo-machete]
+ignored = ["base64", "rmp-serde", "serde_json"]
+
 [dev-dependencies]
 temper-api = { path = "../../crates/temper-api" }
 temper-cli = { path = "../../crates/temper-cli" }

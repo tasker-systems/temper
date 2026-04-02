@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Shared e2e test infrastructure.
 //!
 //! `E2eTestApp` starts an in-process Axum server backed by an isolated

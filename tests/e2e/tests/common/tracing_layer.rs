@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! A test `tracing::Layer` that captures events and span data for assertions.
 
 use std::collections::HashMap;
