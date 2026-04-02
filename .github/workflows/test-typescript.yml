@@ -1,0 +1,23 @@
+name: TypeScript Tests
+
+on:
+  workflow_call:
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: cd packages/temper-cloud && bun install --frozen-lockfile
+
+      - name: Run tests
+        run: cd packages/temper-cloud && bun run test

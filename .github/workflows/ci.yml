@@ -16,10 +16,13 @@ jobs:
   test-rust:
     uses: ./.github/workflows/test-rust.yml
 
+  test-typescript:
+    uses: ./.github/workflows/test-typescript.yml
+
   # ==========================================================================
   # Stage 2: CI Success Gate
   # All jobs must pass for CI to succeed (used as branch protection rule)
   # ==========================================================================
   ci-success:
-    needs: [code-quality, test-rust]
+    needs: [code-quality, test-rust, test-typescript]
     uses: ./.github/workflows/ci-success.yml
