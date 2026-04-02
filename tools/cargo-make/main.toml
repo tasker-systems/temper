@@ -28,6 +28,11 @@ args = ["nextest", "run", "--workspace", "--features", "test-db"]
 description = "Run all test tiers including embedder and TypeScript tests"
 dependencies = ["test-all-rust", "ts-test", "ts-test-integration"]
 
+[tasks.test-e2e]
+description = "Run E2E tests only (requires Docker Postgres)"
+command = "cargo"
+args = ["nextest", "run", "--manifest-path", "tests/e2e/Cargo.toml", "--features", "test-db"]
+
 [tasks.test-all-rust]
 description = "Run all Rust test tiers"
 command = "cargo"
