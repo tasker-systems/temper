@@ -48,23 +48,19 @@ impl Visit for FieldCollector {
     }
 
     fn record_str(&mut self, field: &Field, value: &str) {
-        self.0
-            .insert(field.name().to_string(), value.to_string());
+        self.0.insert(field.name().to_string(), value.to_string());
     }
 
     fn record_u64(&mut self, field: &Field, value: u64) {
-        self.0
-            .insert(field.name().to_string(), value.to_string());
+        self.0.insert(field.name().to_string(), value.to_string());
     }
 
     fn record_i64(&mut self, field: &Field, value: i64) {
-        self.0
-            .insert(field.name().to_string(), value.to_string());
+        self.0.insert(field.name().to_string(), value.to_string());
     }
 
     fn record_bool(&mut self, field: &Field, value: bool) {
-        self.0
-            .insert(field.name().to_string(), value.to_string());
+        self.0.insert(field.name().to_string(), value.to_string());
     }
 }
 
@@ -72,12 +68,7 @@ impl<S> Layer<S> for TestTracingLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
 {
-    fn on_new_span(
-        &self,
-        attrs: &span::Attributes<'_>,
-        id: &Id,
-        ctx: Context<'_, S>,
-    ) {
+    fn on_new_span(&self, attrs: &span::Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
         let mut fields = FieldCollector(HashMap::new());
         attrs.record(&mut fields);
         if let Some(span) = ctx.span(id) {

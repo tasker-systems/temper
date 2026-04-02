@@ -221,7 +221,9 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
     let addr = listener.local_addr().expect("Failed to get local addr");
 
     tokio::spawn(async move {
-        axum::serve(listener, app).await.expect("Test server failed");
+        axum::serve(listener, app)
+            .await
+            .expect("Test server failed");
     });
 
     // --- Config + client setup (no disk reads) ---
