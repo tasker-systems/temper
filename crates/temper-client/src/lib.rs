@@ -42,6 +42,14 @@ impl TemperClient {
         }
     }
 
+    /// Create a new client with a pre-set token (bypasses `auth.json`).
+    pub fn with_token(base_url: &str, device_id: Option<String>, token: String) -> Self {
+        Self {
+            http: http::HttpClient::with_token_override(base_url, device_id, token),
+            oauth_config: None,
+        }
+    }
+
     /// Attach OAuth configuration for login and token refresh.
     pub fn with_oauth(mut self, config: login::OAuthConfig) -> Self {
         self.oauth_config = Some(config);

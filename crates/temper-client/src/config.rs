@@ -54,6 +54,34 @@ pub fn oauth_config(config: &TemperConfig) -> crate::error::Result<crate::login:
     })
 }
 
+/// Build client from explicit config and optional stored auth (no disk reads).
+///
+/// When `auth` is provided, the access token is set as a token override on the
+/// underlying `HttpClient`, bypassing `auth.json` reads in all sub-clients.
+pub fn build_client_from(
+    config: &TemperConfig,
+    auth: Option<&crate::auth::StoredAuth>,
+) -> crate::error::Result<crate::TemperClient> {
+    let url = api_url(config);
+    let device_id = auth.and_then(|a| a.device_id.clone());
+
+    let client = if let Some(auth) = auth {
+        crate::TemperClient::with_token(&url, device_id, auth.access_token.clone())
+    } else {
+        crate::TemperClient::new(&url, device_id)
+    };
+
+    let client = match oauth_config(config) {
+        Ok(oauth) => client.with_oauth(oauth),
+        Err(e) => {
+            tracing::debug!("OAuth config not available: {e}");
+            client
+        }
+    };
+
+    Ok(client)
+}
+
 /// Convenience: load config and build a fully-configured [`TemperClient`](crate::TemperClient).
 ///
 /// Reads `~/.config/temper/config.toml`, resolves the API URL (with env-var
@@ -61,26 +89,8 @@ pub fn oauth_config(config: &TemperConfig) -> crate::error::Result<crate::login:
 /// config when a provider is configured.
 pub fn build_client() -> crate::error::Result<crate::TemperClient> {
     let config = load_cloud_config()?;
-    let url = api_url(&config);
-    let device_id = load_device_id();
-    let mut client = crate::TemperClient::new(&url, device_id);
-    match oauth_config(&config) {
-        Ok(oauth) => {
-            client = client.with_oauth(oauth);
-        }
-        Err(e) => {
-            tracing::debug!("OAuth config not available: {e}");
-        }
-    }
-    Ok(client)
-}
-
-/// Load the device UUID from auth.json's `device_id` field.
-///
-/// Returns `None` if not authenticated or if the stored auth predates
-/// the device_id field.
-fn load_device_id() -> Option<String> {
-    crate::auth::load_device_id()
+    let auth = crate::auth::load_auth().ok().flatten();
+    build_client_from(&config, auth.as_ref())
 }
 
 // ---------------------------------------------------------------------------
@@ -287,5 +297,28 @@ scopes        = ["openid", "profile"]
         std::env::remove_var("TEMPER_API_URL");
         let result = build_client();
         assert!(result.is_ok(), "build_client failed: {:?}", result.err());
+    }
+
+    // --- build_client_from ---
+
+    #[test]
+    fn build_client_from_uses_config_api_url() {
+        let config = TemperConfig {
+            cloud: CloudSection {
+                api_url: "https://test.example.com".to_string(),
+            },
+            ..TemperConfig::default()
+        };
+        let auth = crate::auth::StoredAuth {
+            provider: "test".to_string(),
+            access_token: "test-token".to_string(),
+            refresh_token: None,
+            expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            profile_id: None,
+            device_id: Some("test-device".to_string()),
+        };
+        let client = build_client_from(&config, Some(&auth)).unwrap();
+        // Client was constructed without reading disk — verify it exists
+        assert!(format!("{:?}", client).contains("test.example.com"));
     }
 }
