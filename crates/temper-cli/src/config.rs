@@ -84,6 +84,20 @@ pub fn resolve_vault(cli_vault: Option<&str>) -> Result<PathBuf> {
     Ok(expand_tilde(&global.vault.path))
 }
 
+/// Build Config from an explicit TemperConfig + vault override (no disk reads).
+pub fn load_from(global: &TemperConfig, cli_vault: Option<&str>) -> Config {
+    let vault_root = cli_vault
+        .map(expand_tilde)
+        .unwrap_or_else(|| expand_tilde(&global.vault.path));
+    Config {
+        state_dir: vault_root.join(".temper"),
+        vault_root,
+        contexts: global.sync.subscriptions.contexts.clone(),
+        skill_output: expand_tilde(&global.skill.output),
+        skill_framework: global.skill.framework.clone(),
+    }
+}
+
 /// Resolve vault + build Config from global config.
 pub fn load(cli_vault: Option<&str>) -> Result<Config> {
     let global = load_global_config()?;

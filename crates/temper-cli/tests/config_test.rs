@@ -1,4 +1,5 @@
 use std::fs;
+use temper_core::types::config::{SkillConfig, TemperConfig};
 use tempfile::TempDir;
 
 #[test]
@@ -48,6 +49,50 @@ fn test_safe_write_validates_toml() {
     assert!(result.is_ok());
     let content = fs::read_to_string(&path).unwrap();
     assert!(content.contains("journal"));
+}
+
+#[test]
+fn test_load_from_uses_explicit_config() {
+    let dir = TempDir::new().unwrap();
+    let vault_dir = dir.path().join("vault");
+    fs::create_dir_all(vault_dir.join(".temper")).unwrap();
+
+    let mut config = TemperConfig::default();
+    config.vault.path = vault_dir.to_str().unwrap().to_string();
+    config.sync.subscriptions.contexts = vec!["myctx".to_string(), "otherctx".to_string()];
+    config.skill = SkillConfig {
+        output: vault_dir.join("skills").to_str().unwrap().to_string(),
+        framework: "custom-framework".to_string(),
+    };
+
+    let result = temper_cli::config::load_from(&config, None);
+
+    assert_eq!(result.vault_root, vault_dir);
+    assert_eq!(
+        result.contexts,
+        vec!["myctx".to_string(), "otherctx".to_string()]
+    );
+    assert_eq!(result.skill_framework, "custom-framework");
+}
+
+#[test]
+fn test_load_from_cli_vault_overrides_config() {
+    let dir = TempDir::new().unwrap();
+    let override_vault = dir.path().join("override-vault");
+    fs::create_dir_all(override_vault.join(".temper")).unwrap();
+
+    let config = TemperConfig::default(); // vault.path = "~/vault"
+
+    let result = temper_cli::config::load_from(&config, Some(override_vault.to_str().unwrap()));
+
+    assert_eq!(result.vault_root, override_vault);
+    // Ensure it did NOT use the default ~/vault path
+    assert_ne!(
+        result.vault_root.to_str().unwrap(),
+        temper_cli::config::expand_tilde("~/vault")
+            .to_str()
+            .unwrap()
+    );
 }
 
 #[test]
