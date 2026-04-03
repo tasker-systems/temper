@@ -1,21 +1,29 @@
 <script>
-	import '../app.css';
+  import '../app.css';
+  import Nav from '$lib/components/landing/Nav.svelte';
 
-	let { children } = $props();
+  let { children } = $props();
 </script>
 
-<div class="min-h-screen bg-chalk text-ink font-sans">
-	<header class="border-b border-temper-200 px-6 py-4">
-		<nav class="mx-auto flex max-w-6xl items-center justify-between">
-			<a href="/" class="text-xl font-semibold text-temper-700">temper</a>
-			<div class="flex gap-6 text-sm">
-				<a href="/docs" class="text-temper-600 hover:text-temper-800">Docs</a>
-				<a href="/dashboard" class="text-temper-600 hover:text-temper-800">Dashboard</a>
-			</div>
-		</nav>
-	</header>
+<svelte:head>
+  <title>temper — clarify your intention</title>
+  <meta name="description" content="CLI-first knowledge base with semantic search, frontmatter-driven structure, and cloud sync." />
+</svelte:head>
 
-	<main>
-		{@render children()}
-	</main>
+<div class="app">
+  <Nav />
+  <main>
+    {@render children()}
+  </main>
 </div>
+
+<style>
+  .app {
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--serif);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+</style>
