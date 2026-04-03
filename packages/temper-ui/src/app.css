@@ -19,3 +19,17 @@
 	--font-sans: "Inter", "system-ui", "sans-serif";
 	--font-mono: "JetBrains Mono", "Fira Code", "monospace";
 }
+
+:root {
+  --bg: #0a0a0f;
+  --text: #e8e4df;
+  --text-mid: rgba(255, 255, 255, 0.65);
+  --text-dim: rgba(255, 255, 255, 0.45);
+  --blue: #7eb8da;
+  --blue-dim: rgba(126, 184, 218, 0.4);
+  --blue-border: rgba(126, 184, 218, 0.5);
+  --blue-border-dim: rgba(126, 184, 218, 0.25);
+  --rule: rgba(255, 255, 255, 0.06);
+  --mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --serif: 'Georgia', 'Times New Roman', serif;
+}
