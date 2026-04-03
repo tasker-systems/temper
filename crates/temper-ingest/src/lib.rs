@@ -7,6 +7,7 @@
 pub mod chunk;
 pub mod error;
 pub mod extract;
+pub mod merge;
 
 #[cfg(feature = "embed")]
 pub mod embed;
