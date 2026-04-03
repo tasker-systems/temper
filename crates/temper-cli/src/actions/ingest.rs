@@ -494,13 +494,19 @@ pub fn write_vault_file_and_register(
     let device_id_str = crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id_str)?;
 
-    let content_hash = compute_content_hash(&vault_content);
+    let content_hash = compute_content_hash(content);
     let remote_hash = resource.content_hash.clone().unwrap_or_default();
     let rel_path = vault_path
         .strip_prefix(vault_root)
         .unwrap_or(&vault_path)
         .to_string_lossy()
         .to_string();
+
+    let mtime_secs = std::fs::metadata(&vault_path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
 
     manifest.entries.insert(
         resource.id,
@@ -510,6 +516,7 @@ pub fn write_vault_file_and_register(
             remote_hash,
             synced_at: chrono::Utc::now(),
             state: temper_core::types::ManifestEntryState::Clean,
+            mtime_secs,
         },
     );
     crate::manifest_io::save_manifest(&temper_dir, &manifest)?;

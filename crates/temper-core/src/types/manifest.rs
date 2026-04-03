@@ -25,7 +25,7 @@ pub enum ManifestEntryState {
 pub struct ManifestEntry {
     /// Relative path within the vault (e.g., "temper/tickets/r5-indexing.md")
     pub path: String,
-    /// SHA-256 hash of the local file content at last manifest update
+    /// SHA-256 hash of the local file body (frontmatter stripped) at last manifest update
     pub content_hash: String,
     /// SHA-256 hash of the remote content at last sync
     pub remote_hash: String,
@@ -33,6 +33,10 @@ pub struct ManifestEntry {
     pub synced_at: DateTime<Utc>,
     /// Current sync state
     pub state: ManifestEntryState,
+    /// File mtime (seconds since epoch) at last manifest update.
+    /// Used to skip rehashing unchanged files.
+    #[serde(default)]
+    pub mtime_secs: Option<i64>,
 }
 
 /// The local manifest — `<vault>/.temper/manifest.json`.
@@ -102,6 +106,7 @@ mod tests {
                 remote_hash: "sha256:abc123".to_string(),
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
+                mtime_secs: None,
             },
         );
         let json = serde_json::to_string_pretty(&manifest).unwrap();
