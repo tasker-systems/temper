@@ -137,8 +137,11 @@ args = ["run", "test:integration"]
 description = "Generate TypeScript types from temper-core Rust structs via ts-rs"
 script = [
     "mkdir -p ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated",
-    "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-core --features typescript 2>&1 || true",
-    "echo 'TypeScript types generated in packages/temper-ui/src/lib/types/generated/'"
+    "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-core --features typescript",
+    "generated=$(ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts 2>/dev/null | wc -l | tr -d ' ')",
+    "if [ \"$generated\" -eq 0 ]; then echo 'ERROR: No TypeScript files were generated'; exit 1; fi",
+    "echo \"TypeScript types generated: $generated file(s) in packages/temper-ui/src/lib/types/generated/\"",
+    "ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts"
 ]
 
 # =============================================================================

@@ -35,8 +35,10 @@ pub struct ResourceListParams {
     /// Filter by context ID.
     pub kb_context_id: Option<Uuid>,
     /// Maximum results to return (default 50, max 200).
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub limit: Option<i64>,
     /// Offset for pagination.
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
 }
 
