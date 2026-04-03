@@ -1,6 +1,6 @@
 {
   "private": true,
-  "workspaces": ["packages/temper-cloud"],
+  "workspaces": ["packages/temper-cloud", "packages/temper-ui"],
   "devDependencies": {
     "@vercel/blob": "^1",
     "onnxruntime-common": "^1.24",
