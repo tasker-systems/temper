@@ -8,6 +8,7 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::actions::ingest;
+use crate::actions::progress::SyncProgress;
 use crate::error::{Result, TemperError};
 use temper_core::types::{
     Manifest, ManifestEntryState, MergedResource, SyncCompleteRequest, SyncContextEntries,
@@ -163,6 +164,99 @@ pub fn extract_resource_id(uri: &str) -> Result<Uuid> {
         .ok_or_else(|| TemperError::Config(format!("no UUID segment in URI: {uri}")))?;
     Uuid::parse_str(uuid_str)
         .map_err(|e| TemperError::Config(format!("invalid UUID in URI {uri}: {e}")))
+}
+
+// ---------------------------------------------------------------------------
+// Vault scanning
+// ---------------------------------------------------------------------------
+
+/// Scan the vault directory for untracked markdown files.
+pub fn scan_vault_for_untracked(
+    manifest: &mut temper_core::types::Manifest,
+    vault_root: &Path,
+    progress: &dyn SyncProgress,
+) -> Result<usize> {
+    let known_paths: std::collections::HashSet<String> =
+        manifest.entries.values().map(|e| e.path.clone()).collect();
+
+    let mut found = 0;
+
+    for entry in ignore::WalkBuilder::new(vault_root)
+        .hidden(true)
+        .build()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+
+        if path.starts_with(vault_root.join(".temper")) {
+            continue;
+        }
+
+        let rel_path = path
+            .strip_prefix(vault_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        if known_paths.contains(&rel_path) {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(path)?;
+        let fm = ingest::parse_source_frontmatter(&content);
+
+        let fm_context = fm.as_ref().and_then(|f| f.context.as_deref());
+        let fm_doc_type = fm.as_ref().and_then(|f| f.doc_type.as_deref());
+
+        let (context, doc_type) =
+            match ingest::infer_context_and_doctype(vault_root, path, fm_context, fm_doc_type) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    progress.scan_skipped(&rel_path, &e.to_string());
+                    continue;
+                }
+            };
+
+        let resource_id = Uuid::now_v7();
+        if fm.is_none() {
+            let frontmatter = ingest::build_frontmatter(
+                resource_id,
+                &ingest::title_from_path(path),
+                &context,
+                &doc_type,
+                None,
+                None,
+            );
+            let new_content = format!("{frontmatter}{content}");
+            std::fs::write(path, &new_content)?;
+        }
+
+        let full_content = std::fs::read_to_string(path)?;
+        let body = strip_frontmatter(&full_content);
+        let content_hash = ingest::compute_content_hash(body);
+        let mtime = file_mtime_secs(path).ok();
+
+        manifest.entries.insert(
+            resource_id,
+            temper_core::types::ManifestEntry {
+                path: rel_path.clone(),
+                content_hash,
+                remote_hash: String::new(),
+                synced_at: chrono::Utc::now(),
+                state: temper_core::types::ManifestEntryState::Pending,
+                mtime_secs: mtime,
+            },
+        );
+
+        progress.scan_found(&rel_path, &context, &doc_type);
+        found += 1;
+    }
+
+    Ok(found)
 }
 
 // ---------------------------------------------------------------------------
@@ -744,6 +838,84 @@ mod tests {
             manifest.entries[&id].mtime_secs.is_some(),
             "mtime should be recorded"
         );
+    }
+
+    // --- scan_vault_for_untracked ---
+
+    #[test]
+    fn scan_vault_discovers_untracked_files() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let file_dir = vault.join("temper/research");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(
+            file_dir.join("new-discovery.md"),
+            "# New Discovery\n\nSome content.",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 1);
+        assert_eq!(manifest.entries.len(), 1);
+    }
+
+    #[test]
+    fn scan_vault_skips_files_already_in_manifest() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let file_dir = vault.join("temper/research");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(file_dir.join("existing.md"), "# Existing\n\nContent.").unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let id = Uuid::now_v7();
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "temper/research/existing.md".to_string(),
+                content_hash: "somehash".to_string(),
+                remote_hash: "somehash".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 0);
+    }
+
+    #[test]
+    fn scan_vault_skips_unmappable_files() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        fs::write(vault.join("orphan.md"), "# Orphan").unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 0);
+    }
+
+    #[test]
+    fn scan_vault_respects_frontmatter_override() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let file_dir = vault.join("temper/research");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(
+            file_dir.join("overridden.md"),
+            "---\ncontext: custom\ndoc_type: session\n---\n\n# Overridden\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 1);
     }
 
     #[test]

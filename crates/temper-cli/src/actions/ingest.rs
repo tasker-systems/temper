@@ -525,6 +525,60 @@ pub fn write_vault_file_and_register(
 }
 
 // ---------------------------------------------------------------------------
+// Vault path inference
+// ---------------------------------------------------------------------------
+
+/// Infer context and doc_type for a vault file.
+///
+/// Uses frontmatter overrides if provided, otherwise infers from the file's
+/// position in the vault directory hierarchy: `{vault}/{context}/{doc_type}/{slug}.md`.
+pub fn infer_context_and_doctype(
+    vault_root: &Path,
+    file_path: &Path,
+    fm_context: Option<&str>,
+    fm_doc_type: Option<&str>,
+) -> Result<(String, String)> {
+    let rel = file_path.strip_prefix(vault_root).map_err(|_| {
+        TemperError::Config(format!(
+            "file {} is not inside vault {}",
+            file_path.display(),
+            vault_root.display()
+        ))
+    })?;
+
+    let parts: Vec<&str> = rel
+        .components()
+        .filter_map(|c| c.as_os_str().to_str())
+        .collect();
+
+    let dir_context = parts.first().copied();
+    let dir_doc_type = if parts.len() >= 3 {
+        Some(parts[1])
+    } else {
+        None
+    };
+
+    let context = fm_context
+        .or(dir_context)
+        .ok_or_else(|| {
+            TemperError::Config(format!("cannot infer context for {}", file_path.display()))
+        })?
+        .to_string();
+
+    let doc_type = fm_doc_type
+        .or(dir_doc_type)
+        .ok_or_else(|| {
+            TemperError::Config(format!(
+            "cannot infer doc_type for {} (file must be at {{context}}/{{doc_type}}/{{slug}}.md)",
+            file_path.display()
+        ))
+        })?
+        .to_string();
+
+    Ok((context, doc_type))
+}
+
+// ---------------------------------------------------------------------------
 // URI parsing
 // ---------------------------------------------------------------------------
 
@@ -779,6 +833,36 @@ created: 2026-03-23
         let content = "---\ntype: task\n---\nBody text";
         let body = strip_frontmatter(content);
         assert_eq!(body, "Body text");
+    }
+
+    // --- infer_context_and_doctype ---
+
+    #[test]
+    fn infer_context_doctype_from_path() {
+        let vault = Path::new("/vault");
+        let file = Path::new("/vault/temper/research/my-notes.md");
+        let (ctx, dt) = infer_context_and_doctype(vault, file, None, None).unwrap();
+        assert_eq!(ctx, "temper");
+        assert_eq!(dt, "research");
+    }
+
+    #[test]
+    fn infer_context_doctype_frontmatter_override() {
+        let vault = Path::new("/vault");
+        let file = Path::new("/vault/temper/research/my-notes.md");
+        let (ctx, dt) =
+            infer_context_and_doctype(vault, file, Some("custom-context"), Some("session"))
+                .unwrap();
+        assert_eq!(ctx, "custom-context");
+        assert_eq!(dt, "session");
+    }
+
+    #[test]
+    fn infer_context_doctype_rejects_shallow() {
+        let vault = Path::new("/vault");
+        let file = Path::new("/vault/orphan.md");
+        let result = infer_context_and_doctype(vault, file, None, None);
+        assert!(result.is_err());
     }
 
     // --- derive_context_from_uri ---
