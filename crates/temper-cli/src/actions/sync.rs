@@ -11,9 +11,9 @@ use crate::actions::ingest;
 use crate::actions::progress::SyncProgress;
 use crate::error::{Result, TemperError};
 use temper_core::types::{
-    Manifest, ManifestEntryState, MergedResource, SyncCompleteRequest, SyncContextEntries,
-    SyncManifestEntry, SyncPullItem, SyncPushItem, SyncRemovedItem, SyncStatusRequest,
-    SyncStatusResponse,
+    Manifest, ManifestEntryState, MergeResult, MergedResource, PushKind, SyncCompleteRequest,
+    SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem, SyncPushItem,
+    SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -27,6 +27,9 @@ pub struct SyncResult {
     pub pull_count: usize,
     pub conflict_count: usize,
     pub removed_count: usize,
+    pub scan_count: usize,
+    pub merge_auto_count: usize,
+    pub merge_conflict_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -140,6 +143,16 @@ pub fn strip_frontmatter(content: &str) -> &str {
         }
     }
     content
+}
+
+/// Extract the frontmatter block (including delimiters) from file content.
+fn extract_frontmatter_block(content: &str) -> &str {
+    if let Some(after_open) = content.strip_prefix("---\n") {
+        if let Some(end) = after_open.find("\n---\n") {
+            return &content[..4 + end + 5]; // "---\n" + content + "\n---\n"
+        }
+    }
+    ""
 }
 
 /// Parse a kb:// URI into (context, doc_type).
@@ -263,7 +276,7 @@ pub fn scan_vault_for_untracked(
 // Orchestration (async, uses client + manifest)
 // ---------------------------------------------------------------------------
 
-/// Run the full 10-step sync orchestration.
+/// Run the full sync orchestration.
 ///
 /// Called from `sync_cmd.rs` with a single tokio runtime. The command handles
 /// manifest load/save and output formatting.
@@ -272,11 +285,16 @@ pub async fn sync_orchestration(
     manifest: &mut Manifest,
     vault_root: &Path,
     context_filter: &[String],
+    progress: &dyn SyncProgress,
 ) -> Result<SyncResult> {
-    // Step 1: Rehash manifest
+    // Step 1: Scan vault for untracked files
+    let scan_count = scan_vault_for_untracked(manifest, vault_root, progress)?;
+    progress.phase_summary("scan", scan_count);
+
+    // Step 2: Rehash manifest
     rehash_manifest(manifest, vault_root)?;
 
-    // Step 2: Request diff
+    // Step 3: Request diff
     let request = build_status_request(manifest, context_filter);
     let diff = client
         .sync()
@@ -286,32 +304,61 @@ pub async fn sync_orchestration(
 
     let push_count = diff.to_push.len();
     let pull_count = diff.to_pull.len();
-    let conflict_count = diff.conflicts.len();
     let removed_count = diff.removed.len();
 
-    // Step 3: Push
+    // Step 4: Push
     for item in &diff.to_push {
+        let kind = if item.resource_id.is_some() {
+            PushKind::Modified
+        } else {
+            PushKind::New
+        };
+        if let Some(entry) = item
+            .resource_id
+            .and_then(|id| manifest.entries.get(&id))
+            .or_else(|| {
+                extract_resource_id(&item.uri)
+                    .ok()
+                    .and_then(|id| manifest.entries.get(&id))
+            })
+        {
+            progress.push_start(&entry.path, kind);
+        }
         push_resource(client, manifest, vault_root, item).await?;
     }
+    progress.phase_summary("push", push_count);
 
-    // Step 4: Pull
+    // Step 5: Pull
     for item in &diff.to_pull {
+        progress.pull_start(&item.uri);
         pull_resource(client, manifest, vault_root, item).await?;
-    }
-
-    // Step 5: Handle conflicts (I6a: mark in manifest, skip)
-    for item in &diff.conflicts {
-        if let Some(entry) = manifest.entries.get_mut(&item.resource_id) {
-            entry.state = ManifestEntryState::Conflict;
+        if let Some(entry) = manifest.entries.get(&item.resource_id) {
+            progress.pull_done(&entry.path);
         }
     }
+    progress.phase_summary("pull", pull_count);
 
-    // Step 6: Handle removed
+    // Step 6-7: Merge conflicts and push merged
+    let mut merge_auto_count = 0;
+    let mut merge_conflict_count = 0;
+    for item in &diff.conflicts {
+        let merge_result =
+            merge_and_push_resource(client, manifest, vault_root, item, progress).await?;
+        match merge_result {
+            MergeResult::AutoMerged { .. } => merge_auto_count += 1,
+            MergeResult::ConflictAnnotated { .. } => merge_conflict_count += 1,
+        }
+    }
+    let conflict_count = diff.conflicts.len();
+    progress.phase_summary("merge", conflict_count);
+
+    // Step 8: Handle removed
     for item in &diff.removed {
         remove_resource(manifest, vault_root, item)?;
     }
+    progress.phase_summary("remove", removed_count);
 
-    // Step 7: Complete
+    // Step 9: Complete
     let complete_req = build_complete_request(&manifest.device_id, vec![]);
     let complete_resp = client
         .sync()
@@ -319,7 +366,7 @@ pub async fn sync_orchestration(
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
-    // Step 8: Update manifest timestamp
+    // Step 10: Update manifest timestamp
     manifest.last_sync = Some(complete_resp.last_sync_at);
 
     Ok(SyncResult {
@@ -327,6 +374,9 @@ pub async fn sync_orchestration(
         pull_count,
         conflict_count,
         removed_count,
+        scan_count,
+        merge_auto_count,
+        merge_conflict_count,
     })
 }
 
@@ -336,7 +386,9 @@ pub async fn sync_status_check(
     manifest: &mut Manifest,
     vault_root: &Path,
     context_filter: &[String],
+    progress: &dyn SyncProgress,
 ) -> Result<SyncStatusResponse> {
+    scan_vault_for_untracked(manifest, vault_root, progress)?;
     rehash_manifest(manifest, vault_root)?;
 
     let request = build_status_request(manifest, context_filter);
@@ -486,6 +538,98 @@ fn remove_resource(
     }
     manifest.entries.remove(&item.resource_id);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Merge + Push
+// ---------------------------------------------------------------------------
+
+/// Merge a conflicting resource: fetch remote, run merge pipeline, write back, push.
+async fn merge_and_push_resource(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncConflictItem,
+    progress: &dyn SyncProgress,
+) -> Result<MergeResult> {
+    let entry = manifest.entries.get(&item.resource_id).ok_or_else(|| {
+        TemperError::NotFound(format!("manifest entry not found: {}", item.resource_id))
+    })?;
+
+    let file_path = vault_root.join(&entry.path);
+    if !file_path.exists() {
+        return Err(TemperError::NotFound(format!(
+            "vault file not found: {}",
+            file_path.display()
+        )));
+    }
+
+    // 1. Read local file, strip frontmatter
+    let local_content = std::fs::read_to_string(&file_path)?;
+    let frontmatter_block = extract_frontmatter_block(&local_content);
+    let local_body = strip_frontmatter(&local_content);
+
+    // 2. Fetch remote content
+    let content_response = client
+        .resources()
+        .content(item.resource_id)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+    let remote_body = &content_response.markdown;
+
+    // 3. Run merge pipeline
+    let merge_result = temper_ingest::merge::attempt_merge(local_body, remote_body);
+
+    // 4. Report merge result to progress
+    progress.merge_result(&entry.path, &merge_result);
+
+    // 5. Get merged content and write back (preserve frontmatter block)
+    let merged_body = match &merge_result {
+        MergeResult::AutoMerged { content, .. } => content.as_str(),
+        MergeResult::ConflictAnnotated { content, .. } => content.as_str(),
+    };
+
+    let new_file_content = format!("{frontmatter_block}{merged_body}");
+    std::fs::write(&file_path, &new_file_content)?;
+
+    // 6. Build ingest payload with strip_frontmatter on merged file
+    let parts: Vec<&str> = entry.path.split('/').collect();
+    let context = parts.first().copied().unwrap_or("default");
+    let doc_type = if parts.len() > 1 {
+        parts[1]
+    } else {
+        "resource"
+    };
+    let title = ingest::title_from_path(&file_path);
+
+    let payload = ingest::build_ingest_payload(
+        merged_body,
+        &title,
+        context,
+        doc_type,
+        "imported",
+        "text/markdown",
+        None,
+    )?;
+
+    // 7. Push via update
+    let resource = client
+        .ingest()
+        .update(item.resource_id, &payload)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+
+    // 8. Update manifest entry
+    if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
+        e.content_hash = ingest::compute_content_hash(merged_body);
+        e.remote_hash = resource.content_hash.unwrap_or_default();
+        e.state = ManifestEntryState::Clean;
+        e.synced_at = chrono::Utc::now();
+        e.mtime_secs = file_mtime_secs(&file_path).ok();
+    }
+
+    // 9. Return the MergeResult
+    Ok(merge_result)
 }
 
 // ---------------------------------------------------------------------------
@@ -937,5 +1081,21 @@ mod tests {
         let manifest: Manifest = serde_json::from_str(json).unwrap();
         let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
         assert_eq!(manifest.entries[&id].mtime_secs, None);
+    }
+
+    // --- extract_frontmatter_block ---
+
+    #[test]
+    fn extract_frontmatter_block_returns_block() {
+        let content = "---\ntitle: Test\ncontext: temper\n---\n\n# Body\n";
+        let block = extract_frontmatter_block(content);
+        assert_eq!(block, "---\ntitle: Test\ncontext: temper\n---\n");
+    }
+
+    #[test]
+    fn extract_frontmatter_block_returns_empty_for_no_frontmatter() {
+        let content = "# No frontmatter\n";
+        let block = extract_frontmatter_block(content);
+        assert_eq!(block, "");
     }
 }

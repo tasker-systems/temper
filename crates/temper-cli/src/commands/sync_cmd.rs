@@ -4,6 +4,7 @@
 //! - `temper sync run` — full sync cycle (push, pull, remove, complete)
 //! - `temper sync status` — dry-run diff (no changes)
 
+use crate::actions::progress::TerminalProgress;
 use crate::actions::{runtime, sync as sync_actions};
 use crate::error::Result;
 use crate::format::OutputFormat;
@@ -23,8 +24,10 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
     // Ensure profile exists before hitting sync endpoints
     rt.block_on(runtime::ensure_profile(&client))?;
 
+    let progress = TerminalProgress::new();
     let result = rt.block_on(async {
-        sync_actions::sync_orchestration(&client, &mut manifest, &vault_root, contexts).await
+        sync_actions::sync_orchestration(&client, &mut manifest, &vault_root, contexts, &progress)
+            .await
     })?;
 
     // Save manifest after successful sync
@@ -33,13 +36,19 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
     if fmt == OutputFormat::Json {
         let event = serde_json::json!({
             "event": "sync_complete",
+            "scanned": result.scan_count,
             "pushed": result.push_count,
             "pulled": result.pull_count,
             "conflicts": result.conflict_count,
+            "merge_auto": result.merge_auto_count,
+            "merge_conflict": result.merge_conflict_count,
             "removed": result.removed_count,
         });
         output::plain(event);
     } else {
+        if result.scan_count > 0 {
+            output::plain(format!("  + Scan    {} new files", result.scan_count));
+        }
         output::plain(format!(
             "  \u{2191} Push    {} resources",
             result.push_count
@@ -50,8 +59,8 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
         ));
         if result.conflict_count > 0 {
             output::plain(format!(
-                "  \u{2717} Conflict {} resources (skipped)",
-                result.conflict_count
+                "  \u{21c5} Merge   {} resources ({} auto, {} conflict)",
+                result.conflict_count, result.merge_auto_count, result.merge_conflict_count,
             ));
         }
         if result.removed_count > 0 {
@@ -61,10 +70,10 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
             ));
         }
         let total = result.push_count + result.pull_count + result.removed_count;
-        if result.conflict_count > 0 {
+        if result.merge_conflict_count > 0 {
             output::success(format!(
-                "Sync complete ({total} resources, {} conflicts)",
-                result.conflict_count
+                "Sync complete ({total} resources, {} merge conflict(s))",
+                result.merge_conflict_count
             ));
         } else {
             output::success(format!("Sync complete ({total} resources)"));
@@ -85,8 +94,10 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
 
     let (rt, client) = runtime::build_runtime_and_client()?;
 
+    let progress = TerminalProgress::new();
     let diff = rt.block_on(async {
-        sync_actions::sync_status_check(&client, &mut manifest, &vault_root, contexts).await
+        sync_actions::sync_status_check(&client, &mut manifest, &vault_root, contexts, &progress)
+            .await
     })?;
 
     if fmt == OutputFormat::Json {
