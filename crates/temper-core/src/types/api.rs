@@ -16,6 +16,8 @@ pub struct HealthResponse {
 }
 
 /// Row type matching the `kb_events` table.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "event.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct EventRow {
@@ -58,6 +60,8 @@ pub struct SearchParams {
 }
 
 /// A single search result.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct SearchResultRow {

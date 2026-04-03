@@ -7,6 +7,8 @@ use super::team::TeamRole;
 /// Invitation status — lifecycle of a team invitation.
 ///
 /// Maps directly to the `invitation_status` Postgres enum.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "invitation_status", rename_all = "snake_case")]
 pub enum InvitationStatus {
@@ -28,6 +30,8 @@ pub enum InvitationStatus {
 /// - One pending invite per email per team
 /// - 7-day default expiry, checked at acceptance time
 /// - Acceptance is idempotent
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "invitation.ts"))]
 #[derive(Debug, Clone, FromRow)]
 pub struct TeamInvitation {
     pub id: Uuid,

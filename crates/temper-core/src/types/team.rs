@@ -7,6 +7,8 @@ use uuid::Uuid;
 /// Maps directly to the `team_role` Postgres enum. Four roles is small enough
 /// that explicit matching in SQL functions and Rust logic is clearer than a
 /// join-table permission model.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "team_role", rename_all = "snake_case")]
 pub enum TeamRole {
@@ -21,6 +23,8 @@ pub enum TeamRole {
 /// Teams are fully owned by temper, not delegated to the auth provider.
 /// This means the team model survives auth provider swaps. A team must
 /// always have exactly one owner. Soft-deleted via `is_active = false`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[derive(Debug, Clone, FromRow)]
 pub struct Team {
     pub id: Uuid,
@@ -35,6 +39,8 @@ pub struct Team {
 }
 
 /// A profile's membership in a team with a specific role.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "team.ts"))]
 #[derive(Debug, Clone, FromRow)]
 pub struct TeamMember {
     pub id: Uuid,

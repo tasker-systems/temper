@@ -7,6 +7,8 @@ use super::auth::AuthenticatedProfile;
 /// Access level for a resource within a team scope.
 ///
 /// Maps directly to the `access_level` Postgres enum.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "access_level", rename_all = "snake_case")]
 pub enum AccessLevel {

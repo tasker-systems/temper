@@ -6,6 +6,8 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 /// Row type matching the `kb_resources` table.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ResourceRow {
@@ -25,6 +27,8 @@ pub struct ResourceRow {
 }
 
 /// Query parameters for listing visible resources.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct ResourceListParams {
@@ -66,6 +70,8 @@ pub struct ContentChunk {
 }
 
 /// Response body for resource content.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ContentResponse {

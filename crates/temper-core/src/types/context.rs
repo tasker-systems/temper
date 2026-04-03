@@ -6,6 +6,8 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 /// Response row for context endpoints.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ContextRow {

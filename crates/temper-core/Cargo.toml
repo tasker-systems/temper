@@ -16,7 +16,9 @@ rmp-serde = "1"
 base64 = "0.22"
 dirs = "5"
 uuid = { version = "1", features = ["v7", "serde"] }
+ts-rs = { version = "10", optional = true, features = ["chrono-impl", "uuid-impl", "serde-json-impl"] }
 utoipa = { version = "5", optional = true }
 
 [features]
 web-api = ["utoipa"]
+typescript = ["ts-rs"]
