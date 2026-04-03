@@ -85,7 +85,7 @@ pub fn save(
         note_type: "research".to_string(),
         title: title.to_string(),
         path: relative_str.to_string(),
-        project: context_name.to_string(),
+        context: context_name.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");

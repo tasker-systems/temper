@@ -2,7 +2,7 @@
 id: "{{id}}"
 type: session
 date: {{date}}
-project: ""
+context: ""
 ---
 
 # Session: {{title}}

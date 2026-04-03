@@ -13,10 +13,12 @@ use crate::vault;
 
 /// Create or update today's session note.
 ///
-/// Path: `<vault_root>/<context>/session/<date> — <title>.md`
+/// Path: `<vault_root>/<context>/session/<date> — <slug>.md`
 ///
-/// - If `context` is None, falls back to "general"
+/// - If `context` is None and `task` is provided, infers context from the task
+/// - If `context` is None and no task, falls back to "general"
 /// - `title` defaults to today's date if omitted
+/// - The filename uses a slugified version of the title
 /// - If the file already exists and `stdin_content` is None: no-op (idempotent)
 /// - If the file already exists and `stdin_content` is Some: replace body, preserve frontmatter
 /// - If `task` is provided, links the session to the task (updates sessions list in task frontmatter)
@@ -32,13 +34,28 @@ pub fn save(
 ) -> Result<()> {
     let today = Local::now().format("%Y-%m-%d").to_string();
 
-    let context_name = context.unwrap_or("general");
+    // Infer context from task if not explicitly provided
+    let inferred_context = if context.is_none() {
+        task.and_then(|slug| {
+            crate::actions::task::find_task(config, slug, None)
+                .ok()
+                .flatten()
+                .map(|info| info.context)
+        })
+    } else {
+        None
+    };
+    let context_name = context
+        .map(String::from)
+        .or(inferred_context)
+        .unwrap_or_else(|| "general".to_string());
 
     let note_title = title.unwrap_or(&today);
 
-    // Build path: <vault_root>/<context>/session/<date> — <title>.md
-    let filename = format!("{today} \u{2014} {note_title}.md");
-    let session_dir = config.doc_type_dir(context_name, "session");
+    // Build path: <vault_root>/<context>/session/<date> — <slug>.md
+    let slug = vault::slugify(note_title);
+    let filename = format!("{today} \u{2014} {slug}.md");
+    let session_dir = config.doc_type_dir(&context_name, "session");
     let note_path = session_dir.join(&filename);
 
     if note_path.exists() {
@@ -66,8 +83,8 @@ pub fn save(
         .render()
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
-    // Set project field in frontmatter
-    let content = vault::set_frontmatter_field(&content, "project", context_name);
+    // Set context field in frontmatter
+    let content = vault::set_frontmatter_field(&content, "context", &context_name);
 
     // If stdin content was piped, replace the template body
     let content = if let Some(body) = stdin_content {
@@ -89,13 +106,13 @@ pub fn save(
         #[derive(Serialize)]
         struct SessionCreated<'a> {
             title: &'a str,
-            project: &'a str,
+            context: &'a str,
             path: &'a str,
             date: &'a str,
         }
         let info = SessionCreated {
             title: note_title,
-            project: context_name,
+            context: &context_name,
             path: &relative_str,
             date: &today,
         };
@@ -109,7 +126,7 @@ pub fn save(
         note_type: "session".to_string(),
         title: note_title.to_string(),
         path: relative_str.to_string(),
-        project: context_name.to_string(),
+        context: context_name.clone(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -240,7 +257,7 @@ pub fn list(config: &Config, context: Option<&str>, format: &str) -> Result<()> 
     for entry in &entries {
         output::plain(format!(
             "{:<12} {:<20} {}",
-            entry.date, entry.project, entry.title
+            entry.date, entry.context, entry.title
         ));
     }
 
@@ -250,26 +267,26 @@ pub fn list(config: &Config, context: Option<&str>, format: &str) -> Result<()> 
 #[derive(Serialize)]
 struct SessionEntry {
     date: String,
-    project: String,
+    context: String,
     title: String,
 }
 
 fn collect_sessions(
     dir: &std::path::Path,
-    project: &str,
+    context: &str,
     entries: &mut Vec<SessionEntry>,
 ) -> Result<()> {
     for file_entry in std::fs::read_dir(dir)? {
         let file_entry = file_entry?;
         let path = file_entry.path();
         if path.extension().is_some_and(|e| e == "md") {
-            add_session_entry(&path, project, entries);
+            add_session_entry(&path, context, entries);
         }
     }
     Ok(())
 }
 
-fn add_session_entry(path: &std::path::Path, project: &str, entries: &mut Vec<SessionEntry>) {
+fn add_session_entry(path: &std::path::Path, context: &str, entries: &mut Vec<SessionEntry>) {
     let stem = path
         .file_stem()
         .unwrap_or_default()
@@ -290,7 +307,7 @@ fn add_session_entry(path: &std::path::Path, project: &str, entries: &mut Vec<Se
 
     entries.push(SessionEntry {
         date,
-        project: project.to_string(),
+        context: context.to_string(),
         title,
     });
 }
@@ -320,6 +337,7 @@ fn extract_date_from_stem(stem: &str) -> Option<String> {
 #[allow(dead_code)]
 pub fn session_path(config: &Config, context: &str, title: &str) -> PathBuf {
     let today = Local::now().format("%Y-%m-%d").to_string();
-    let filename = format!("{today} \u{2014} {title}.md");
+    let slug = vault::slugify(title);
+    let filename = format!("{today} \u{2014} {slug}.md");
     config.doc_type_dir(context, "session").join(filename)
 }
