@@ -18,6 +18,7 @@ pub mod event;
 pub mod ingest;
 pub mod invitation;
 pub mod manifest;
+pub mod merge;
 pub mod ownership;
 pub mod profile;
 pub mod resource;
@@ -47,6 +48,7 @@ pub use event::{EventQuery, EventResponse};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
 pub use manifest::{Manifest, ManifestEntry, ManifestEntryState};
+pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
 pub use resource::{
