@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /resources
+Disallow: /settings
+Sitemap: https://temperkb.io/sitemap.xml
