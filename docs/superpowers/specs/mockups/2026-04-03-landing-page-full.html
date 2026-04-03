@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>temper — Full Page Mockup</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  :root {
+    --bg: #0a0a0f;
+    --text: #e8e4df;
+    --text-dim: rgba(255,255,255,0.45);
+    --text-mid: rgba(255,255,255,0.65);
+    --blue: #7eb8da;
+    --blue-dim: rgba(126,184,218,0.4);
+    --blue-border: rgba(126,184,218,0.5);
+    --blue-border-dim: rgba(126,184,218,0.25);
+    --rule: rgba(255,255,255,0.06);
+    --mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --serif: 'Georgia', 'Times New Roman', serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--serif);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Nav */
+  .nav {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    padding: 1.2rem 2.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background 0.3s, border-color 0.3s;
+    border-bottom: 1px solid transparent;
+  }
+
+  .nav.scrolled {
+    background: rgba(10, 10, 15, 0.95);
+    border-bottom-color: var(--rule);
+    backdrop-filter: blur(12px);
+  }
+
+  .nav-logo {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    color: var(--blue);
+    text-decoration: none;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 1.5rem;
+    align-items: center;
+  }
+
+  .nav-links a {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--text-dim);
+    text-decoration: none;
+    letter-spacing: 0.05em;
+    transition: color 0.2s;
+  }
+
+  .nav-links a:hover { color: var(--text); }
+
+  .nav-links .cta {
+    padding: 0.4rem 1rem;
+    border: 1px solid var(--blue-border-dim);
+    color: var(--blue);
+    transition: border-color 0.2s, color 0.2s;
+  }
+
+  .nav-links .cta:hover {
+    border-color: var(--blue);
+    color: var(--text);
+  }
+
+  /* Hero */
+  .hero {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    padding: 6rem 2.5rem 4rem;
+  }
+
+  .hero h1 {
+    font-size: clamp(2.4rem, 5vw, 3.8rem);
+    font-weight: 300;
+    line-height: 1.2;
+    margin-bottom: 1.5rem;
+    letter-spacing: 0.02em;
+  }
+
+  .hero h1 em {
+    color: var(--blue);
+    font-style: italic;
+  }
+
+  .hero .tagline {
+    font-size: 1.1rem;
+    color: var(--text-dim);
+    font-style: italic;
+    max-width: 36em;
+    margin-bottom: 3rem;
+  }
+
+  .hero-ctas {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 4rem;
+  }
+
+  .hero-ctas a {
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    padding: 0.6rem 1.5rem;
+    text-decoration: none;
+    letter-spacing: 0.05em;
+    transition: all 0.2s;
+  }
+
+  .hero-ctas .primary {
+    border: 1px solid var(--blue-border);
+    color: var(--blue);
+  }
+
+  .hero-ctas .primary:hover {
+    background: rgba(126,184,218,0.1);
+  }
+
+  .hero-ctas .secondary {
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--text-dim);
+  }
+
+  .hero-ctas .secondary:hover {
+    border-color: rgba(255,255,255,0.25);
+    color: var(--text-mid);
+  }
+
+  /* CLI Preview */
+  .cli-preview {
+    width: 100%;
+    max-width: 620px;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 1.2rem 1.5rem;
+    font-family: var(--mono);
+    font-size: 0.8rem;
+    text-align: left;
+  }
+
+  .cli-prompt {
+    color: var(--text-mid);
+    margin-bottom: 0.8rem;
+  }
+
+  .cli-prompt .cmd { color: var(--blue); }
+  .cli-prompt .flag { color: rgba(255,255,255,0.3); }
+
+  .cli-results {
+    font-size: 0.7rem;
+    color: var(--text-dim);
+  }
+
+  .cli-result {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.04);
+  }
+
+  .cli-result:last-child { border-bottom: none; }
+  .cli-score { color: var(--blue-dim); }
+
+  /* Sections */
+  .section {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 5rem 2.5rem;
+  }
+
+  .section-divider {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 0 2.5rem;
+  }
+
+  .section-divider hr {
+    border: none;
+    border-top: 1px solid var(--rule);
+  }
+
+  .section-inner {
+    border-left: 2px solid var(--blue-border);
+    padding-left: 2rem;
+  }
+
+  .section-label {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--blue);
+    margin-bottom: 1.2rem;
+  }
+
+  .section h2 {
+    font-size: 1.6rem;
+    font-weight: 300;
+    margin-bottom: 1rem;
+    line-height: 1.3;
+  }
+
+  .section h2 em {
+    color: var(--blue);
+    font-style: italic;
+  }
+
+  .section p {
+    font-size: 1rem;
+    color: var(--text-mid);
+    line-height: 1.8;
+    margin-bottom: 1rem;
+  }
+
+  .section p strong {
+    color: var(--text);
+    font-weight: 400;
+  }
+
+  /* Workflow steps */
+  .workflow {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+    margin-top: 1.5rem;
+  }
+
+  .workflow-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 1.2rem;
+  }
+
+  .workflow-cmd {
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    padding: 0.4rem 0.8rem;
+    border: 1px solid rgba(255,255,255,0.1);
+    color: var(--blue);
+    white-space: nowrap;
+    min-width: 140px;
+  }
+
+  .workflow-desc {
+    font-size: 0.9rem;
+    color: var(--text-dim);
+    padding-top: 0.3rem;
+  }
+
+  /* Concept cards */
+  .concepts {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-top: 1.5rem;
+  }
+
+  .concept {
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 1.2rem;
+    transition: border-color 0.2s;
+  }
+
+  .concept:hover {
+    border-color: var(--blue-border-dim);
+  }
+
+  .concept-name {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--blue);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    margin-bottom: 0.5rem;
+  }
+
+  .concept p {
+    font-size: 0.85rem;
+    color: var(--text-dim);
+    line-height: 1.6;
+    margin-bottom: 0;
+  }
+
+  /* Agent section */
+  .agent-demo {
+    margin-top: 1.5rem;
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    padding: 1.2rem 1.5rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+  }
+
+  .agent-comment { color: rgba(255,255,255,0.25); }
+  .agent-cmd { color: var(--text-mid); margin-top: 0.5rem; }
+  .agent-cmd .cmd { color: var(--blue); }
+  .agent-output { color: var(--text-dim); font-size: 0.7rem; margin-top: 0.5rem; line-height: 1.8; }
+
+  /* Cloud section */
+  .cloud-features {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin-top: 1.5rem;
+  }
+
+  .cloud-feature {
+    display: flex;
+    gap: 1rem;
+    align-items: baseline;
+  }
+
+  .cloud-feature .dot {
+    width: 4px;
+    height: 4px;
+    background: var(--blue);
+    border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 0.5rem;
+  }
+
+  .cloud-feature span {
+    font-size: 0.95rem;
+    color: var(--text-mid);
+  }
+
+  /* Footer */
+  .footer {
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 4rem 2.5rem;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .footer-logo {
+    font-family: var(--mono);
+    font-size: 0.7rem;
+    color: var(--blue-dim);
+    letter-spacing: 0.1em;
+  }
+
+  .footer-links {
+    display: flex;
+    gap: 1.5rem;
+  }
+
+  .footer-links a {
+    font-family: var(--mono);
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.25);
+    text-decoration: none;
+    letter-spacing: 0.05em;
+    transition: color 0.2s;
+  }
+
+  .footer-links a:hover { color: var(--text-dim); }
+</style>
+</head>
+<body>
+
+<!-- Nav -->
+<nav class="nav" id="nav">
+  <a href="/" class="nav-logo">temper</a>
+  <div class="nav-links">
+    <a href="https://github.com/tasker-systems/temper">GitHub</a>
+    <a href="/docs" class="cta">Get Started</a>
+  </div>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <h1>Clarify your <em>intention</em></h1>
+  <p class="tagline">
+    Everything resolves to markdown. The throughline is always visible.
+    The system gets out of the way.
+  </p>
+  <div class="hero-ctas">
+    <a href="/docs/getting-started" class="primary">Get Started</a>
+    <a href="https://github.com/tasker-systems/temper" class="secondary">View on GitHub</a>
+  </div>
+  <div class="cli-preview">
+    <div class="cli-prompt">
+      <span class="flag">$</span> <span class="cmd">temper search</span> "authentication decisions" <span class="flag">--context backend</span>
+    </div>
+    <div class="cli-results">
+      <div class="cli-result"><span>decision/api-auth-strategy.md</span><span class="cli-score">0.94</span></div>
+      <div class="cli-result"><span>research/oauth-provider-comparison.md</span><span class="cli-score">0.87</span></div>
+      <div class="cli-result"><span>session/2026-03-28-auth-implementation.md</span><span class="cli-score">0.82</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- The Premise -->
+<div class="section-divider"><hr></div>
+<section class="section">
+  <div class="section-inner">
+    <div class="section-label">The premise</div>
+    <h2>Knowledge work deserves <em>structure</em></h2>
+    <p>
+      Code is an expression of intent. So are specifications, plans, and decisions.
+      But the context behind them — the <strong>why</strong>, the alternatives considered,
+      the constraints that shaped the choice — scatters across conversations, documents,
+      and memory.
+    </p>
+    <p>
+      Temper gives that context a home. Every goal, task, session, research thread,
+      and decision lives as <strong>markdown with frontmatter</strong> in your vault.
+      The frontmatter carries the throughline. The content carries the thinking.
+    </p>
+  </div>
+</section>
+
+<!-- How It Works -->
+<div class="section-divider"><hr></div>
+<section class="section">
+  <div class="section-inner">
+    <div class="section-label">How it works</div>
+    <h2>Write markdown. Let temper do the <em>rest</em>.</h2>
+    <div class="workflow">
+      <div class="workflow-step">
+        <span class="workflow-cmd">temper init</span>
+        <span class="workflow-desc">Create a vault — a directory of markdown files with a temper.toml config</span>
+      </div>
+      <div class="workflow-step">
+        <span class="workflow-cmd">temper add</span>
+        <span class="workflow-desc">Write markdown with frontmatter. Temper infers context, doc type, and relationships.</span>
+      </div>
+      <div class="workflow-step">
+        <span class="workflow-cmd">temper search</span>
+        <span class="workflow-desc">Semantic search across your vault. Find decisions by meaning, not just keywords.</span>
+      </div>
+      <div class="workflow-step">
+        <span class="workflow-cmd">temper sync</span>
+        <span class="workflow-desc">Push to the cloud. Pull to another machine. Your vault follows you.</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- What Temper Tracks -->
+<div class="section-divider"><hr></div>
+<section class="section">
+  <div class="section-inner">
+    <div class="section-label">What temper tracks</div>
+    <h2>The vocabulary of <em>structured</em> knowledge work</h2>
+    <p>
+      Every file in your vault has a doc type that temper understands.
+      These aren't arbitrary tags — they're the building blocks of how
+      work actually progresses.
+    </p>
+    <div class="concepts">
+      <div class="concept">
+        <div class="concept-name">Goals</div>
+        <p>The outcome you're working toward. Tasks and sessions roll up to goals.</p>
+      </div>
+      <div class="concept">
+        <div class="concept-name">Tasks</div>
+        <p>Discrete units of work with mode (plan/build) and effort (small/medium/large).</p>
+      </div>
+      <div class="concept">
+        <div class="concept-name">Sessions</div>
+        <p>What happened in a working session — decisions made, context discovered, next steps.</p>
+      </div>
+      <div class="concept">
+        <div class="concept-name">Research</div>
+        <p>Investigation and analysis. Design explorations, comparisons, architectural options.</p>
+      </div>
+      <div class="concept">
+        <div class="concept-name">Decisions</div>
+        <p>The choice, the alternatives, the constraints. Captured so you never re-litigate.</p>
+      </div>
+      <div class="concept">
+        <div class="concept-name">Concepts</div>
+        <p>Domain knowledge. The vocabulary of your project that humans and agents share.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- For Humans and Agents -->
+<div class="section-divider"><hr></div>
+<section class="section">
+  <div class="section-inner">
+    <div class="section-label">For humans and agents</div>
+    <h2>Context that's always <em>ready to hand</em></h2>
+    <p>
+      Agentic tools like Claude Code and Cursor are powerful — but only when
+      they have context. Temper gives agents the same throughline that humans
+      carry in their heads: what we're building, why, what we've decided, and
+      what's deferred.
+    </p>
+    <div class="agent-demo">
+      <div class="agent-comment"># Start a session with full project context</div>
+      <div class="agent-cmd"><span class="flag">$</span> <span class="cmd">temper warmup</span></div>
+      <div class="agent-output">
+        Loading context: backend<br>
+        3 active goals, 2 in-progress tasks<br>
+        12 recent sessions, 8 decisions, 41 concepts<br>
+        Ready. Your agent has the throughline.
+      </div>
+    </div>
+    <p style="margin-top: 1.5rem;">
+      Subscribe to contexts across projects. Everything arrives as markdown
+      in your vault — no special tooling, no vendor lock-in. If it can read
+      files, it can use temper.
+    </p>
+  </div>
+</section>
+
+<!-- Temper Cloud -->
+<div class="section-divider"><hr></div>
+<section class="section">
+  <div class="section-inner">
+    <div class="section-label">Temper Cloud</div>
+    <h2>Your vault, <em>everywhere</em></h2>
+    <p>
+      Work on your laptop. Pick up on your desktop. Let a cloud agent
+      contribute while you sleep. Temper Cloud syncs your vault across
+      machines and team members with semantic search built in.
+    </p>
+    <div class="cloud-features">
+      <div class="cloud-feature"><div class="dot"></div><span>Cross-machine sync with conflict resolution</span></div>
+      <div class="cloud-feature"><div class="dot"></div><span>Semantic search powered by pgvector embeddings</span></div>
+      <div class="cloud-feature"><div class="dot"></div><span>Team contexts with granular access control</span></div>
+      <div class="cloud-feature"><div class="dot"></div><span>Knowledge graph connecting your resources</span></div>
+      <div class="cloud-feature"><div class="dot"></div><span>Self-host or use temperkb.io — same protocol, your choice</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer class="footer">
+  <div class="footer-logo">temper</div>
+  <div class="footer-links">
+    <a href="https://github.com/tasker-systems/temper">GitHub</a>
+    <a href="/docs">Docs</a>
+    <a href="#">MIT License</a>
+  </div>
+</footer>
+
+<script>
+  const nav = document.getElementById('nav');
+  window.addEventListener('scroll', () => {
+    nav.classList.toggle('scrolled', window.scrollY > 40);
+  });
+</script>
+</body>
+</html>

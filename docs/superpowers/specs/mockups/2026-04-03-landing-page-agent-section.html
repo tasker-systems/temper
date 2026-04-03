@@ -1,0 +1,167 @@
+<h2>Agent Workflow Section</h2>
+<p class="subtitle">How should we show the agentic experience — temper inside a coding session?</p>
+
+<div class="cards">
+
+  <!-- Option A: Conversation transcript -->
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background: #0a0a0f; color: #e8e4df; padding: 2rem; font-family: 'JetBrains Mono', monospace; min-height: 400px; font-size: 0.7rem; line-height: 1.8;">
+        <!-- Session mock -->
+        <div style="border: 1px solid rgba(255,255,255,0.06); padding: 1.2rem; margin-bottom: 0;">
+          <!-- User input -->
+          <div style="margin-bottom: 1.2rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem;">
+              <span style="color: rgba(126,184,218,0.6); font-size: 0.6rem;">you</span>
+            </div>
+            <div style="color: rgba(255,255,255,0.7); padding-left: 0rem;">
+              /temper task start api-v2-migration
+            </div>
+          </div>
+
+          <!-- Agent response -->
+          <div style="border-top: 1px solid rgba(255,255,255,0.04); padding-top: 1rem; margin-bottom: 1.2rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.6rem;">
+              <span style="color: rgba(126,184,218,0.6); font-size: 0.6rem;">agent</span>
+            </div>
+            <div style="color: rgba(255,255,255,0.5); padding-left: 0rem; font-family: Georgia, serif; font-size: 0.8rem; line-height: 1.7;">
+              <div style="margin-bottom: 0.6rem;">Loading task context...</div>
+              <div style="font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: rgba(255,255,255,0.35); margin-bottom: 0.8rem; padding: 0.6rem; background: rgba(255,255,255,0.02); border-left: 2px solid rgba(126,184,218,0.3);">
+                Goal: api-v2-migration (3 tasks, 2 complete)<br>
+                Prior sessions: 4 (last: Mar 28 — auth middleware)<br>
+                Key decisions: REST over GraphQL, JWT rotation<br>
+                Deferred: rate limiting, webhook signatures
+              </div>
+              <div style="color: rgba(255,255,255,0.55);">
+                This is a <span style="color: #7eb8da;">build/medium</span> task. Based on prior sessions, you've completed the auth middleware and route migration. The remaining work is the client SDK update.
+              </div>
+              <div style="color: rgba(255,255,255,0.55); margin-top: 0.5rem;">
+                I've read the research doc and the two deferred decisions. Ready to plan the implementation.
+              </div>
+            </div>
+          </div>
+
+          <!-- User follow-up -->
+          <div style="border-top: 1px solid rgba(255,255,255,0.04); padding-top: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem;">
+              <span style="color: rgba(126,184,218,0.6); font-size: 0.6rem;">you</span>
+            </div>
+            <div style="color: rgba(255,255,255,0.7); padding-left: 0rem;">
+              let's start with the client SDK
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A: Conversation Transcript</h3>
+      <p>A mock agent session showing the back-and-forth: user invokes the skill, agent loads context and summarizes the throughline (goal progress, prior sessions, key decisions, deferred work), user gives direction. Shows the <em>dialogue</em> — how temper makes agents contextually aware.</p>
+    </div>
+  </div>
+
+  <!-- Option B: Terminal-style with richer output -->
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background: #0a0a0f; color: #e8e4df; padding: 2rem; font-family: 'JetBrains Mono', monospace; min-height: 400px; font-size: 0.7rem; line-height: 1.8;">
+        <div style="border: 1px solid rgba(255,255,255,0.06); padding: 1.2rem;">
+          <!-- Prompt line -->
+          <div style="color: rgba(255,255,255,0.4); margin-bottom: 0.3rem; font-size: 0.6rem;">
+            <span style="color: rgba(126,184,218,0.5);">~/project</span> <span style="color: rgba(255,255,255,0.2);">$</span>
+          </div>
+          <div style="color: rgba(255,255,255,0.7); margin-bottom: 1.2rem;">
+            <span style="color: #7eb8da;">/temper</span> task start api-v2-migration
+          </div>
+
+          <!-- Output -->
+          <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.8rem; font-size: 0.65rem;">
+            ── task ──────────────────────────────────
+          </div>
+          <div style="padding-left: 0.5rem; margin-bottom: 1rem;">
+            <div style="display: flex; gap: 2rem; font-size: 0.65rem; margin-bottom: 0.3rem;">
+              <span><span style="color: rgba(126,184,218,0.5);">goal</span> <span style="color: rgba(255,255,255,0.6);">api-v2-migration</span></span>
+              <span><span style="color: rgba(126,184,218,0.5);">mode</span> <span style="color: rgba(255,255,255,0.6);">build</span></span>
+              <span><span style="color: rgba(126,184,218,0.5);">effort</span> <span style="color: rgba(255,255,255,0.6);">medium</span></span>
+            </div>
+            <div style="font-size: 0.65rem; color: rgba(255,255,255,0.4);">
+              Client SDK update for v2 endpoints
+            </div>
+          </div>
+
+          <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.8rem; font-size: 0.65rem;">
+            ── throughline ────────────────────────────
+          </div>
+          <div style="padding-left: 0.5rem; margin-bottom: 1rem; font-size: 0.65rem;">
+            <div style="color: rgba(255,255,255,0.5); margin-bottom: 0.2rem;">
+              <span style="color: rgba(126,184,218,0.4);">4 sessions</span> · last: auth middleware (Mar 28)
+            </div>
+            <div style="color: rgba(255,255,255,0.5); margin-bottom: 0.2rem;">
+              <span style="color: rgba(126,184,218,0.4);">2 decisions</span> · REST over GraphQL, JWT rotation strategy
+            </div>
+            <div style="color: rgba(255,255,255,0.5); margin-bottom: 0.2rem;">
+              <span style="color: rgba(126,184,218,0.4);">deferred</span> · rate limiting, webhook signatures
+            </div>
+            <div style="color: rgba(255,255,255,0.5);">
+              <span style="color: rgba(126,184,218,0.4);">3 concepts</span> · loaded to agent context
+            </div>
+          </div>
+
+          <div style="color: rgba(255,255,255,0.35); margin-bottom: 0.8rem; font-size: 0.65rem;">
+            ── ready ──────────────────────────────────
+          </div>
+          <div style="padding-left: 0.5rem; font-size: 0.65rem;">
+            <div style="color: rgba(255,255,255,0.5);">
+              Research doc, prior decisions, and active context loaded.
+            </div>
+            <div style="color: rgba(126,184,218,0.6); margin-top: 0.3rem;">
+              Your agent has the throughline. ▊
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B: Structured CLI Output</h3>
+      <p>Shows <code>/temper task start</code> as a rich terminal output with structured sections (task metadata, throughline summary, ready state). More like a status display than a conversation. Emphasizes the <em>data</em> temper provides — what the agent now knows.</p>
+    </div>
+  </div>
+
+  <!-- Option C: Side-by-side before/after -->
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div style="background: #0a0a0f; color: #e8e4df; padding: 2rem; font-family: 'JetBrains Mono', monospace; min-height: 400px; font-size: 0.65rem; line-height: 1.8;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+          <!-- Without temper -->
+          <div style="border: 1px solid rgba(255,255,255,0.06); padding: 1rem;">
+            <div style="color: rgba(255,255,255,0.25); font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.8rem; text-align: center;">Without temper</div>
+            <div style="margin-bottom: 0.8rem;">
+              <div style="color: rgba(255,255,255,0.3); font-size: 0.6rem; margin-bottom: 0.2rem;">you</div>
+              <div style="color: rgba(255,255,255,0.5);">Continue working on the API migration. Last time we decided to use REST and changed the auth middleware. Check git log for details.</div>
+            </div>
+            <div>
+              <div style="color: rgba(255,255,255,0.3); font-size: 0.6rem; margin-bottom: 0.2rem;">agent</div>
+              <div style="color: rgba(255,255,255,0.4);">Let me check the git history... I see several commits. Which parts are done? What's the overall plan? Are there any constraints I should know about?</div>
+            </div>
+          </div>
+
+          <!-- With temper -->
+          <div style="border: 1px solid rgba(126,184,218,0.2); padding: 1rem;">
+            <div style="color: rgba(126,184,218,0.5); font-size: 0.55rem; text-transform: uppercase; letter-spacing: 0.1em; margin-bottom: 0.8rem; text-align: center;">With temper</div>
+            <div style="margin-bottom: 0.8rem;">
+              <div style="color: rgba(126,184,218,0.4); font-size: 0.6rem; margin-bottom: 0.2rem;">you</div>
+              <div style="color: rgba(255,255,255,0.6);">/temper task start api-v2-migration</div>
+            </div>
+            <div>
+              <div style="color: rgba(126,184,218,0.4); font-size: 0.6rem; margin-bottom: 0.2rem;">agent</div>
+              <div style="color: rgba(255,255,255,0.55);">Goal is 2/3 complete. Last session covered auth middleware. You decided REST over GraphQL and deferred rate limiting. The remaining task is the client SDK. Ready to plan.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C: Before / After Comparison</h3>
+      <p>Side-by-side showing the same task pickup <em>without</em> temper (vague prompt, agent floundering for context) vs <em>with</em> temper (one command, agent has the full picture). Makes the value proposition visceral.</p>
+    </div>
+  </div>
+
+</div>
