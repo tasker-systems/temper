@@ -30,6 +30,7 @@ pub struct SyncResult {
     pub scan_count: usize,
     pub merge_auto_count: usize,
     pub merge_conflict_count: usize,
+    pub error_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -307,33 +308,45 @@ pub async fn sync_orchestration(
     let removed_count = diff.removed.len();
 
     // Step 4: Push
+    let mut error_count = 0;
     for item in &diff.to_push {
         let kind = if item.resource_id.is_some() {
             PushKind::Modified
         } else {
             PushKind::New
         };
-        if let Some(entry) = item
-            .resource_id
-            .and_then(|id| manifest.entries.get(&id))
-            .or_else(|| {
-                extract_resource_id(&item.uri)
-                    .ok()
-                    .and_then(|id| manifest.entries.get(&id))
-            })
-        {
-            progress.push_start(&entry.path, kind);
+        let entry_path = resolve_push_entry_path(manifest, item);
+        if let Some(path) = &entry_path {
+            progress.push_start(path, kind);
         }
-        push_resource(client, manifest, vault_root, item).await?;
+        match push_resource(client, manifest, vault_root, item).await {
+            Ok(()) => {
+                if let Some(path) = &entry_path {
+                    progress.push_done(path);
+                }
+            }
+            Err(e) => {
+                let (path, context, doc_type) = push_error_context(manifest, item);
+                progress.push_error(&path, &context, &doc_type, &e.to_string());
+                error_count += 1;
+            }
+        }
     }
     progress.phase_summary("push", push_count);
 
     // Step 5: Pull
     for item in &diff.to_pull {
         progress.pull_start(&item.uri);
-        pull_resource(client, manifest, vault_root, item).await?;
-        if let Some(entry) = manifest.entries.get(&item.resource_id) {
-            progress.pull_done(&entry.path);
+        match pull_resource(client, manifest, vault_root, item).await {
+            Ok(()) => {
+                if let Some(entry) = manifest.entries.get(&item.resource_id) {
+                    progress.pull_done(&entry.path);
+                }
+            }
+            Err(e) => {
+                progress.pull_error(&item.uri, &e.to_string());
+                error_count += 1;
+            }
         }
     }
     progress.phase_summary("pull", pull_count);
@@ -342,11 +355,20 @@ pub async fn sync_orchestration(
     let mut merge_auto_count = 0;
     let mut merge_conflict_count = 0;
     for item in &diff.conflicts {
-        let merge_result =
-            merge_and_push_resource(client, manifest, vault_root, item, progress).await?;
-        match merge_result {
-            MergeResult::AutoMerged { .. } => merge_auto_count += 1,
-            MergeResult::ConflictAnnotated { .. } => merge_conflict_count += 1,
+        match merge_and_push_resource(client, manifest, vault_root, item, progress).await {
+            Ok(merge_result) => match merge_result {
+                MergeResult::AutoMerged { .. } => merge_auto_count += 1,
+                MergeResult::ConflictAnnotated { .. } => merge_conflict_count += 1,
+            },
+            Err(e) => {
+                let path = manifest
+                    .entries
+                    .get(&item.resource_id)
+                    .map(|entry| entry.path.as_str())
+                    .unwrap_or(&item.uri);
+                progress.merge_error(path, &e.to_string());
+                error_count += 1;
+            }
         }
     }
     let conflict_count = diff.conflicts.len();
@@ -377,6 +399,7 @@ pub async fn sync_orchestration(
         scan_count,
         merge_auto_count,
         merge_conflict_count,
+        error_count,
     })
 }
 
@@ -402,6 +425,47 @@ pub async fn sync_status_check(
 // ---------------------------------------------------------------------------
 // Push / Pull / Remove
 // ---------------------------------------------------------------------------
+
+/// Resolve the vault path for a push item (for progress reporting).
+fn resolve_push_entry_path(manifest: &Manifest, item: &SyncPushItem) -> Option<String> {
+    item.resource_id
+        .and_then(|id| manifest.entries.get(&id))
+        .or_else(|| {
+            extract_resource_id(&item.uri)
+                .ok()
+                .and_then(|id| manifest.entries.get(&id))
+        })
+        .map(|entry| entry.path.clone())
+}
+
+/// Extract context info for a push error message.
+fn push_error_context(manifest: &Manifest, item: &SyncPushItem) -> (String, String, String) {
+    let entry = item
+        .resource_id
+        .and_then(|id| manifest.entries.get(&id))
+        .or_else(|| {
+            extract_resource_id(&item.uri)
+                .ok()
+                .and_then(|id| manifest.entries.get(&id))
+        });
+
+    if let Some(entry) = entry {
+        let parts: Vec<&str> = entry.path.split('/').collect();
+        let context = parts.first().copied().unwrap_or("default").to_string();
+        let doc_type = if parts.len() > 1 {
+            parts[1].to_string()
+        } else {
+            "resource".to_string()
+        };
+        (entry.path.clone(), context, doc_type)
+    } else {
+        (
+            item.uri.clone(),
+            "unknown".to_string(),
+            "unknown".to_string(),
+        )
+    }
+}
 
 async fn push_resource(
     client: &temper_client::TemperClient,

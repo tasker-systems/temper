@@ -36,8 +36,17 @@ pub trait SyncProgress {
     /// A pull operation completed.
     fn pull_done(&self, path: &str);
 
+    /// A push operation failed.
+    fn push_error(&self, path: &str, context: &str, doc_type: &str, error: &str);
+
+    /// A pull operation failed.
+    fn pull_error(&self, uri: &str, error: &str);
+
     /// A merge result was produced.
     fn merge_result(&self, path: &str, outcome: &MergeResult);
+
+    /// A merge operation failed.
+    fn merge_error(&self, path: &str, error: &str);
 
     /// Summary for a completed sync phase.
     fn phase_summary(&self, phase: &str, count: usize);
@@ -56,9 +65,12 @@ impl SyncProgress for NoopProgress {
     fn rehash_progress(&self, _processed: usize, _total: usize, _skipped_by_mtime: usize) {}
     fn push_start(&self, _path: &str, _kind: PushKind) {}
     fn push_done(&self, _path: &str) {}
+    fn push_error(&self, _path: &str, _context: &str, _doc_type: &str, _error: &str) {}
     fn pull_start(&self, _path: &str) {}
     fn pull_done(&self, _path: &str) {}
+    fn pull_error(&self, _uri: &str, _error: &str) {}
     fn merge_result(&self, _path: &str, _outcome: &MergeResult) {}
+    fn merge_error(&self, _path: &str, _error: &str) {}
     fn phase_summary(&self, _phase: &str, _count: usize) {}
 }
 
@@ -90,16 +102,30 @@ pub enum ProgressEvent {
     PushDone {
         path: String,
     },
+    PushError {
+        path: String,
+        context: String,
+        doc_type: String,
+        error: String,
+    },
     PullStart {
         path: String,
     },
     PullDone {
         path: String,
     },
+    PullError {
+        uri: String,
+        error: String,
+    },
     MergeResult {
         path: String,
         auto_merged: bool,
         conflict_count: Option<usize>,
+    },
+    MergeError {
+        path: String,
+        error: String,
     },
     PhaseSummary {
         phase: String,
@@ -186,6 +212,18 @@ impl SyncProgress for CollectingProgress {
             });
     }
 
+    fn push_error(&self, path: &str, context: &str, doc_type: &str, error: &str) {
+        self.events
+            .lock()
+            .expect("mutex poisoned")
+            .push(ProgressEvent::PushError {
+                path: path.to_string(),
+                context: context.to_string(),
+                doc_type: doc_type.to_string(),
+                error: error.to_string(),
+            });
+    }
+
     fn pull_start(&self, path: &str) {
         self.events
             .lock()
@@ -204,6 +242,16 @@ impl SyncProgress for CollectingProgress {
             });
     }
 
+    fn pull_error(&self, uri: &str, error: &str) {
+        self.events
+            .lock()
+            .expect("mutex poisoned")
+            .push(ProgressEvent::PullError {
+                uri: uri.to_string(),
+                error: error.to_string(),
+            });
+    }
+
     fn merge_result(&self, path: &str, outcome: &MergeResult) {
         let (auto_merged, conflict_count) = match outcome {
             MergeResult::AutoMerged { .. } => (true, None),
@@ -216,6 +264,16 @@ impl SyncProgress for CollectingProgress {
                 path: path.to_string(),
                 auto_merged,
                 conflict_count,
+            });
+    }
+
+    fn merge_error(&self, path: &str, error: &str) {
+        self.events
+            .lock()
+            .expect("mutex poisoned")
+            .push(ProgressEvent::MergeError {
+                path: path.to_string(),
+                error: error.to_string(),
             });
     }
 
@@ -279,12 +337,22 @@ impl SyncProgress for TerminalProgress {
         output::item(format!("pushed {path}"));
     }
 
+    fn push_error(&self, path: &str, context: &str, doc_type: &str, error: &str) {
+        output::error(format!(
+            "push failed: {path} (context={context}, doc_type={doc_type}): {error}"
+        ));
+    }
+
     fn pull_start(&self, path: &str) {
         output::item(format!("pull {path}"));
     }
 
     fn pull_done(&self, path: &str) {
         output::item(format!("pulled {path}"));
+    }
+
+    fn pull_error(&self, uri: &str, error: &str) {
+        output::error(format!("pull failed: {uri}: {error}"));
     }
 
     fn merge_result(&self, path: &str, outcome: &MergeResult) {
@@ -298,6 +366,10 @@ impl SyncProgress for TerminalProgress {
                 ));
             }
         }
+    }
+
+    fn merge_error(&self, path: &str, error: &str) {
+        output::error(format!("merge failed: {path}: {error}"));
     }
 
     fn phase_summary(&self, phase: &str, count: usize) {
@@ -322,8 +394,11 @@ mod tests {
         p.rehash_progress(1, 10, 3);
         p.push_start("c.md", PushKind::New);
         p.push_done("c.md");
+        p.push_error("c.md", "temper", "task", "API error: not found");
         p.pull_start("d.md");
         p.pull_done("d.md");
+        p.pull_error("kb://temper/task/xyz", "API error: not found");
+        p.merge_error("e.md", "merge failed");
         p.merge_result(
             "e.md",
             &MergeResult::AutoMerged {

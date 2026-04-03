@@ -43,6 +43,7 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
             "merge_auto": result.merge_auto_count,
             "merge_conflict": result.merge_conflict_count,
             "removed": result.removed_count,
+            "errors": result.error_count,
         });
         output::plain(event);
     } else {
@@ -69,8 +70,19 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
                 result.removed_count
             ));
         }
+        if result.error_count > 0 {
+            output::error(format!(
+                "  ! Errors  {} resources failed",
+                result.error_count
+            ));
+        }
         let total = result.push_count + result.pull_count + result.removed_count;
-        if result.merge_conflict_count > 0 {
+        if result.error_count > 0 {
+            output::warning(format!(
+                "Sync complete ({total} resources, {} error(s))",
+                result.error_count
+            ));
+        } else if result.merge_conflict_count > 0 {
             output::success(format!(
                 "Sync complete ({total} resources, {} merge conflict(s))",
                 result.merge_conflict_count

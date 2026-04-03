@@ -9,4 +9,12 @@
 |----|------|---|-------|------|
 | #20791 | 8:57 PM | 🟣 | TypeScript Type Generation from Rust Types via ts_rs | ~528 |
 | #20751 | 8:40 PM | 🔵 | Complete Domain Type Inventory for TypeScript Generation | ~747 |
+
+### Apr 3, 2026
+
+| ID | Time | T | Title | Read |
+|----|------|---|-------|------|
+| #20881 | 11:00 AM | 🟣 | Add merge types to temper-core for I6b sync features | ~408 |
+| #20880 | 10:59 AM | 🟣 | Added merge types for I6b auto-merge functionality | ~340 |
+| #20879 | " | 🟣 | Added merge type definitions to temper-core | ~490 |
 </claude-mem-context>
