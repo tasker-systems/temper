@@ -3,10 +3,10 @@ use crate::discovery::Event;
 use crate::error::{Result, TemperError};
 use crate::output;
 
-/// Extract the project/context field from any Event variant.
-pub fn event_project(event: &Event) -> &str {
+/// Extract the context field from any Event variant.
+pub fn event_context(event: &Event) -> &str {
     match event {
-        Event::NoteCreate { project, .. } => project,
+        Event::NoteCreate { context, .. } => context,
         Event::TaskCreate { context, .. }
         | Event::TaskMove { context, .. }
         | Event::TaskDone { context, .. }
@@ -37,7 +37,7 @@ pub fn load_events(config: &Config, project: Option<&str>, limit: usize) -> Resu
 
     // Filter by project if specified
     if let Some(p) = project {
-        events.retain(|e| event_project(e) == p);
+        events.retain(|e| event_context(e) == p);
     }
 
     events.truncate(limit);
@@ -51,9 +51,9 @@ fn format_event(event: &Event) -> String {
             ts,
             note_type,
             title,
-            project,
+            context,
             ..
-        } => format!("{ts}  {project:<12}  note_create     {note_type}: {title}"),
+        } => format!("{ts}  {context:<12}  note_create     {note_type}: {title}"),
         Event::TaskCreate {
             ts,
             context,

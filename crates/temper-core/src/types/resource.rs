@@ -6,6 +6,8 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 /// Row type matching the `kb_resources` table.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ResourceRow {
@@ -25,14 +27,18 @@ pub struct ResourceRow {
 }
 
 /// Query parameters for listing visible resources.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 pub struct ResourceListParams {
     /// Filter by context ID.
     pub kb_context_id: Option<Uuid>,
     /// Maximum results to return (default 50, max 200).
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub limit: Option<i64>,
     /// Offset for pagination.
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
 }
 
@@ -66,6 +72,8 @@ pub struct ContentChunk {
 }
 
 /// Response body for resource content.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ContentResponse {

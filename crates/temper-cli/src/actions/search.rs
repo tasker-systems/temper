@@ -154,6 +154,7 @@ mod tests {
                 remote_hash: "sha256:abc".to_string(),
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
+                mtime_secs: None,
             },
         );
         manifest

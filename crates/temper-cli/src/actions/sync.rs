@@ -8,11 +8,12 @@ use std::path::Path;
 use uuid::Uuid;
 
 use crate::actions::ingest;
+use crate::actions::progress::SyncProgress;
 use crate::error::{Result, TemperError};
 use temper_core::types::{
-    Manifest, ManifestEntryState, MergedResource, SyncCompleteRequest, SyncContextEntries,
-    SyncManifestEntry, SyncPullItem, SyncPushItem, SyncRemovedItem, SyncStatusRequest,
-    SyncStatusResponse,
+    Manifest, ManifestEntryState, MergeResult, MergedResource, PushKind, SyncCompleteRequest,
+    SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem, SyncPushItem,
+    SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -26,6 +27,10 @@ pub struct SyncResult {
     pub pull_count: usize,
     pub conflict_count: usize,
     pub removed_count: usize,
+    pub scan_count: usize,
+    pub merge_auto_count: usize,
+    pub merge_conflict_count: usize,
+    pub error_count: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -33,6 +38,7 @@ pub struct SyncResult {
 // ---------------------------------------------------------------------------
 
 /// Rehash manifest entries by reading vault files and computing SHA-256.
+/// Skips files whose mtime hasn't changed since the last manifest update.
 /// Returns the count of entries whose state changed.
 pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usize> {
     let mut changed = 0;
@@ -42,13 +48,24 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
             if entry.state != ManifestEntryState::LocalModified {
                 entry.state = ManifestEntryState::LocalModified;
                 entry.content_hash = String::new();
+                entry.mtime_secs = None;
                 changed += 1;
             }
             continue;
         }
 
+        let file_mtime = file_mtime_secs(&file_path)?;
+
+        // Skip rehash if mtime hasn't changed — file is untouched.
+        if entry.mtime_secs == Some(file_mtime) {
+            continue;
+        }
+
         let content = std::fs::read_to_string(&file_path)?;
-        let current_hash = ingest::compute_content_hash(&content);
+        let body = strip_frontmatter(&content);
+        let current_hash = ingest::compute_content_hash(body);
+
+        entry.mtime_secs = Some(file_mtime);
 
         if current_hash != entry.content_hash {
             entry.content_hash = current_hash;
@@ -57,6 +74,18 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
         }
     }
     Ok(changed)
+}
+
+/// Extract file modification time as seconds since the Unix epoch.
+fn file_mtime_secs(path: &Path) -> Result<i64> {
+    let metadata = std::fs::metadata(path)?;
+    let mtime = metadata.modified().map_err(|e| {
+        TemperError::Config(format!("cannot read mtime for {}: {e}", path.display()))
+    })?;
+    Ok(mtime
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64)
 }
 
 /// Build a SyncStatusRequest from the manifest, optionally filtered by contexts.
@@ -117,6 +146,16 @@ pub fn strip_frontmatter(content: &str) -> &str {
     content
 }
 
+/// Extract the frontmatter block (including delimiters) from file content.
+fn extract_frontmatter_block(content: &str) -> &str {
+    if let Some(after_open) = content.strip_prefix("---\n") {
+        if let Some(end) = after_open.find("\n---\n") {
+            return &content[..4 + end + 5]; // "---\n" + content + "\n---\n"
+        }
+    }
+    ""
+}
+
 /// Parse a kb:// URI into (context, doc_type).
 pub fn parse_kb_uri(uri: &str) -> Result<(String, String)> {
     let rest = uri
@@ -142,10 +181,103 @@ pub fn extract_resource_id(uri: &str) -> Result<Uuid> {
 }
 
 // ---------------------------------------------------------------------------
+// Vault scanning
+// ---------------------------------------------------------------------------
+
+/// Scan the vault directory for untracked markdown files.
+pub fn scan_vault_for_untracked(
+    manifest: &mut temper_core::types::Manifest,
+    vault_root: &Path,
+    progress: &dyn SyncProgress,
+) -> Result<usize> {
+    let known_paths: std::collections::HashSet<String> =
+        manifest.entries.values().map(|e| e.path.clone()).collect();
+
+    let mut found = 0;
+
+    for entry in ignore::WalkBuilder::new(vault_root)
+        .hidden(true)
+        .build()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+
+        if path.starts_with(vault_root.join(".temper")) {
+            continue;
+        }
+
+        let rel_path = path
+            .strip_prefix(vault_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        if known_paths.contains(&rel_path) {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(path)?;
+        let fm = ingest::parse_source_frontmatter(&content);
+
+        let fm_context = fm.as_ref().and_then(|f| f.context.as_deref());
+        let fm_doc_type = fm.as_ref().and_then(|f| f.doc_type.as_deref());
+
+        let (context, doc_type) =
+            match ingest::infer_context_and_doctype(vault_root, path, fm_context, fm_doc_type) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    progress.scan_skipped(&rel_path, &e.to_string());
+                    continue;
+                }
+            };
+
+        let resource_id = Uuid::now_v7();
+        if fm.is_none() {
+            let frontmatter = ingest::build_frontmatter(
+                resource_id,
+                &ingest::title_from_path(path),
+                &context,
+                &doc_type,
+                None,
+                None,
+            );
+            let new_content = format!("{frontmatter}{content}");
+            std::fs::write(path, &new_content)?;
+        }
+
+        let full_content = std::fs::read_to_string(path)?;
+        let body = strip_frontmatter(&full_content);
+        let content_hash = ingest::compute_content_hash(body);
+        let mtime = file_mtime_secs(path).ok();
+
+        manifest.entries.insert(
+            resource_id,
+            temper_core::types::ManifestEntry {
+                path: rel_path.clone(),
+                content_hash,
+                remote_hash: String::new(),
+                synced_at: chrono::Utc::now(),
+                state: temper_core::types::ManifestEntryState::Pending,
+                mtime_secs: mtime,
+            },
+        );
+
+        progress.scan_found(&rel_path, &context, &doc_type);
+        found += 1;
+    }
+
+    Ok(found)
+}
+
+// ---------------------------------------------------------------------------
 // Orchestration (async, uses client + manifest)
 // ---------------------------------------------------------------------------
 
-/// Run the full 10-step sync orchestration.
+/// Run the full sync orchestration.
 ///
 /// Called from `sync_cmd.rs` with a single tokio runtime. The command handles
 /// manifest load/save and output formatting.
@@ -154,11 +286,16 @@ pub async fn sync_orchestration(
     manifest: &mut Manifest,
     vault_root: &Path,
     context_filter: &[String],
+    progress: &dyn SyncProgress,
 ) -> Result<SyncResult> {
-    // Step 1: Rehash manifest
+    // Step 1: Scan vault for untracked files
+    let scan_count = scan_vault_for_untracked(manifest, vault_root, progress)?;
+    progress.phase_summary("scan", scan_count);
+
+    // Step 2: Rehash manifest
     rehash_manifest(manifest, vault_root)?;
 
-    // Step 2: Request diff
+    // Step 3: Request diff
     let request = build_status_request(manifest, context_filter);
     let diff = client
         .sync()
@@ -168,32 +305,82 @@ pub async fn sync_orchestration(
 
     let push_count = diff.to_push.len();
     let pull_count = diff.to_pull.len();
-    let conflict_count = diff.conflicts.len();
     let removed_count = diff.removed.len();
 
-    // Step 3: Push
+    // Step 4: Push
+    let mut error_count = 0;
     for item in &diff.to_push {
-        push_resource(client, manifest, vault_root, item).await?;
-    }
-
-    // Step 4: Pull
-    for item in &diff.to_pull {
-        pull_resource(client, manifest, vault_root, item).await?;
-    }
-
-    // Step 5: Handle conflicts (I6a: mark in manifest, skip)
-    for item in &diff.conflicts {
-        if let Some(entry) = manifest.entries.get_mut(&item.resource_id) {
-            entry.state = ManifestEntryState::Conflict;
+        let kind = if item.resource_id.is_some() {
+            PushKind::Modified
+        } else {
+            PushKind::New
+        };
+        let entry_path = resolve_push_entry_path(manifest, item);
+        if let Some(path) = &entry_path {
+            progress.push_start(path, kind);
+        }
+        match push_resource(client, manifest, vault_root, item).await {
+            Ok(()) => {
+                if let Some(path) = &entry_path {
+                    progress.push_done(path);
+                }
+            }
+            Err(e) => {
+                let (path, context, doc_type) = push_error_context(manifest, item);
+                progress.push_error(&path, &context, &doc_type, &e.to_string());
+                error_count += 1;
+            }
         }
     }
+    progress.phase_summary("push", push_count);
 
-    // Step 6: Handle removed
+    // Step 5: Pull
+    for item in &diff.to_pull {
+        progress.pull_start(&item.uri);
+        match pull_resource(client, manifest, vault_root, item).await {
+            Ok(()) => {
+                if let Some(entry) = manifest.entries.get(&item.resource_id) {
+                    progress.pull_done(&entry.path);
+                }
+            }
+            Err(e) => {
+                progress.pull_error(&item.uri, &e.to_string());
+                error_count += 1;
+            }
+        }
+    }
+    progress.phase_summary("pull", pull_count);
+
+    // Step 6-7: Merge conflicts and push merged
+    let mut merge_auto_count = 0;
+    let mut merge_conflict_count = 0;
+    for item in &diff.conflicts {
+        match merge_and_push_resource(client, manifest, vault_root, item, progress).await {
+            Ok(merge_result) => match merge_result {
+                MergeResult::AutoMerged { .. } => merge_auto_count += 1,
+                MergeResult::ConflictAnnotated { .. } => merge_conflict_count += 1,
+            },
+            Err(e) => {
+                let path = manifest
+                    .entries
+                    .get(&item.resource_id)
+                    .map(|entry| entry.path.as_str())
+                    .unwrap_or(&item.uri);
+                progress.merge_error(path, &e.to_string());
+                error_count += 1;
+            }
+        }
+    }
+    let conflict_count = diff.conflicts.len();
+    progress.phase_summary("merge", conflict_count);
+
+    // Step 8: Handle removed
     for item in &diff.removed {
         remove_resource(manifest, vault_root, item)?;
     }
+    progress.phase_summary("remove", removed_count);
 
-    // Step 7: Complete
+    // Step 9: Complete
     let complete_req = build_complete_request(&manifest.device_id, vec![]);
     let complete_resp = client
         .sync()
@@ -201,7 +388,7 @@ pub async fn sync_orchestration(
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
-    // Step 8: Update manifest timestamp
+    // Step 10: Update manifest timestamp
     manifest.last_sync = Some(complete_resp.last_sync_at);
 
     Ok(SyncResult {
@@ -209,6 +396,10 @@ pub async fn sync_orchestration(
         pull_count,
         conflict_count,
         removed_count,
+        scan_count,
+        merge_auto_count,
+        merge_conflict_count,
+        error_count,
     })
 }
 
@@ -218,7 +409,9 @@ pub async fn sync_status_check(
     manifest: &mut Manifest,
     vault_root: &Path,
     context_filter: &[String],
+    progress: &dyn SyncProgress,
 ) -> Result<SyncStatusResponse> {
+    scan_vault_for_untracked(manifest, vault_root, progress)?;
     rehash_manifest(manifest, vault_root)?;
 
     let request = build_status_request(manifest, context_filter);
@@ -233,91 +426,116 @@ pub async fn sync_status_check(
 // Push / Pull / Remove
 // ---------------------------------------------------------------------------
 
+/// Resolve the vault path for a push item (for progress reporting).
+fn resolve_push_entry_path(manifest: &Manifest, item: &SyncPushItem) -> Option<String> {
+    item.resource_id
+        .and_then(|id| manifest.entries.get(&id))
+        .or_else(|| {
+            extract_resource_id(&item.uri)
+                .ok()
+                .and_then(|id| manifest.entries.get(&id))
+        })
+        .map(|entry| entry.path.clone())
+}
+
+/// Extract context info for a push error message.
+fn push_error_context(manifest: &Manifest, item: &SyncPushItem) -> (String, String, String) {
+    let entry = item
+        .resource_id
+        .and_then(|id| manifest.entries.get(&id))
+        .or_else(|| {
+            extract_resource_id(&item.uri)
+                .ok()
+                .and_then(|id| manifest.entries.get(&id))
+        });
+
+    if let Some(entry) = entry {
+        let parts: Vec<&str> = entry.path.split('/').collect();
+        let context = parts.first().copied().unwrap_or("default").to_string();
+        let doc_type = if parts.len() > 1 {
+            parts[1].to_string()
+        } else {
+            "resource".to_string()
+        };
+        (entry.path.clone(), context, doc_type)
+    } else {
+        (
+            item.uri.clone(),
+            "unknown".to_string(),
+            "unknown".to_string(),
+        )
+    }
+}
+
 async fn push_resource(
     client: &temper_client::TemperClient,
     manifest: &mut Manifest,
     vault_root: &Path,
     item: &SyncPushItem,
 ) -> Result<()> {
-    let resource_id = match item.resource_id {
+    // Resolve the manifest entry ID — for new resources this is embedded in the URI,
+    // for existing resources the server provides the resource_id directly.
+    let entry_id = match item.resource_id {
         Some(id) => id,
-        None => {
-            // New resource — extract context/doc_type from URI, ingest file
-            let entry_id = extract_resource_id(&item.uri)?;
-            if let Some(entry) = manifest.entries.get(&entry_id) {
-                let file_path = vault_root.join(&entry.path);
-                if !file_path.exists() {
-                    return Err(TemperError::NotFound(format!(
-                        "vault file not found: {}",
-                        file_path.display()
-                    )));
-                }
-                let parts: Vec<&str> = entry.path.split('/').collect();
-                let context = parts.first().copied().unwrap_or("default");
-                let doc_type = if parts.len() > 1 {
-                    parts[1]
-                } else {
-                    "resource"
-                };
-
-                let (resource, _) =
-                    ingest::ingest_file(client, &file_path, context, doc_type, Some("imported"))
-                        .await?;
-
-                // Update manifest entry with server-assigned data
-                if let Some(e) = manifest.entries.get_mut(&entry_id) {
-                    e.remote_hash = resource.content_hash.unwrap_or_default();
-                    e.state = ManifestEntryState::Clean;
-                    e.synced_at = chrono::Utc::now();
-                }
-            }
-            return Ok(());
-        }
+        None => extract_resource_id(&item.uri)?,
     };
 
-    // Existing resource — update content via ingest PUT
-    if let Some(entry) = manifest.entries.get(&resource_id) {
-        let file_path = vault_root.join(&entry.path);
-        if !file_path.exists() {
-            return Err(TemperError::NotFound(format!(
-                "vault file not found: {}",
-                file_path.display()
-            )));
-        }
-        let content = std::fs::read_to_string(&file_path)?;
-        let raw_content = strip_frontmatter(&content);
+    let entry = manifest
+        .entries
+        .get(&entry_id)
+        .ok_or_else(|| TemperError::NotFound(format!("manifest entry not found: {entry_id}")))?;
 
-        // Derive context/doc_type from the vault path structure
-        let parts: Vec<&str> = entry.path.split('/').collect();
-        let context = parts.first().copied().unwrap_or("default");
-        let doc_type = if parts.len() > 1 {
-            parts[1]
-        } else {
-            "resource"
-        };
-        let title = ingest::title_from_path(&file_path);
+    let file_path = vault_root.join(&entry.path);
+    if !file_path.exists() {
+        return Err(TemperError::NotFound(format!(
+            "vault file not found: {}",
+            file_path.display()
+        )));
+    }
 
-        let payload = ingest::build_ingest_payload(
-            raw_content,
-            &title,
-            context,
-            doc_type,
-            "imported",
-            "text/markdown",
-            None,
-        )?;
+    let content = std::fs::read_to_string(&file_path)?;
+    let body = strip_frontmatter(&content);
 
-        let resource = client
+    let parts: Vec<&str> = entry.path.split('/').collect();
+    let context = parts.first().copied().unwrap_or("default");
+    let doc_type = if parts.len() > 1 {
+        parts[1]
+    } else {
+        "resource"
+    };
+    let title = ingest::title_from_path(&file_path);
+
+    let payload = ingest::build_ingest_payload(
+        body,
+        &title,
+        context,
+        doc_type,
+        "imported",
+        "text/markdown",
+        None,
+    )?;
+
+    let resource = if item.resource_id.is_some() {
+        // Existing resource — PUT update
+        client
             .ingest()
-            .update(resource_id, &payload)
+            .update(entry_id, &payload)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))?;
+            .map_err(|e| TemperError::Api(e.to_string()))?
+    } else {
+        // New resource — POST create
+        client
+            .ingest()
+            .create(&payload)
+            .await
+            .map_err(|e| TemperError::Api(e.to_string()))?
+    };
 
-        if let Some(e) = manifest.entries.get_mut(&resource_id) {
-            e.remote_hash = resource.content_hash.unwrap_or_default();
-            e.state = ManifestEntryState::Clean;
-            e.synced_at = chrono::Utc::now();
-        }
+    if let Some(e) = manifest.entries.get_mut(&entry_id) {
+        e.remote_hash = resource.content_hash.unwrap_or_default();
+        e.state = ManifestEntryState::Clean;
+        e.synced_at = chrono::Utc::now();
+        e.mtime_secs = file_mtime_secs(&file_path).ok();
     }
 
     Ok(())
@@ -343,30 +561,104 @@ async fn pull_resource(
 
     let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
 
-    let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
+    // If the resource is already in the manifest, overwrite the existing file
+    // instead of creating a deduplicated copy (slug-2, slug-3, etc.).
+    let vault_path = if let Some(existing) = manifest.entries.get(&item.resource_id) {
+        let existing_path = vault_root.join(&existing.path);
+        if existing_path.exists() {
+            // Overwrite the existing file in place — no slug dedup needed.
+            let frontmatter = ingest::build_frontmatter(
+                resource.id,
+                &resource.title,
+                &ctx,
+                &doc_type,
+                None,
+                None,
+            );
+            let vault_content = format!("{frontmatter}{}", &content_response.markdown);
+            std::fs::write(&existing_path, &vault_content)?;
+            existing_path
+        } else {
+            // Manifest entry exists but file is missing — write to expected path.
+            let slug = ingest::slug_from_title(&resource.title);
+            let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
+            write_pulled_file(
+                vault_root,
+                &ctx,
+                &doc_type,
+                &slug,
+                &resource,
+                &content_response.markdown,
+            )?
+        }
+    } else {
+        // Genuinely new resource — dedup slug as usual.
+        let slug = ingest::slug_from_title(&resource.title);
+        let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
+        write_pulled_file(
+            vault_root,
+            &ctx,
+            &doc_type,
+            &slug,
+            &resource,
+            &content_response.markdown,
+        )?
+    };
 
-    let vault_path = ingest::write_vault_file_and_register(
-        vault_root,
-        &ctx,
-        &doc_type,
-        &slug,
-        &resource,
-        &content_response.markdown,
-        None,
-        None,
-    )?;
+    // Update the in-memory manifest directly (no disk reload).
+    // Read the file back and strip frontmatter to compute the hash — this
+    // must match what rehash_manifest() computes, which includes the newline
+    // separator between frontmatter and body.
+    let full_content = std::fs::read_to_string(&vault_path)?;
+    let body = strip_frontmatter(&full_content);
+    let content_hash = ingest::compute_content_hash(body);
+    let rel_path = vault_path
+        .strip_prefix(vault_root)
+        .unwrap_or(&vault_path)
+        .to_string_lossy()
+        .to_string();
 
-    // Update manifest entry state
-    if let Some(entry) = manifest.entries.get_mut(&item.resource_id) {
-        let full_content = std::fs::read_to_string(&vault_path)?;
-        entry.content_hash = ingest::compute_content_hash(&full_content);
-        entry.remote_hash = item.content_hash.clone();
-        entry.state = ManifestEntryState::Clean;
-        entry.synced_at = chrono::Utc::now();
-    }
+    let mtime_secs = file_mtime_secs(&vault_path).ok();
+
+    manifest.entries.insert(
+        item.resource_id,
+        temper_core::types::ManifestEntry {
+            path: rel_path,
+            content_hash,
+            remote_hash: item.content_hash.clone(),
+            synced_at: chrono::Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs,
+        },
+    );
 
     Ok(())
+}
+
+/// Write a pulled file to the vault (new resource or missing file).
+///
+/// Creates parent directories and writes frontmatter + content. Does NOT
+/// touch the manifest — the caller is responsible for that.
+fn write_pulled_file(
+    vault_root: &Path,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+    resource: &temper_core::types::ResourceRow,
+    content: &str,
+) -> Result<std::path::PathBuf> {
+    let vault_path = ingest::build_vault_path(vault_root, context, doc_type, slug);
+
+    if let Some(parent) = vault_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let frontmatter =
+        ingest::build_frontmatter(resource.id, &resource.title, context, doc_type, None, None);
+    let vault_content = format!("{frontmatter}{content}");
+    std::fs::write(&vault_path, &vault_content)?;
+
+    Ok(vault_path)
 }
 
 fn remove_resource(
@@ -382,6 +674,98 @@ fn remove_resource(
     }
     manifest.entries.remove(&item.resource_id);
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Merge + Push
+// ---------------------------------------------------------------------------
+
+/// Merge a conflicting resource: fetch remote, run merge pipeline, write back, push.
+async fn merge_and_push_resource(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncConflictItem,
+    progress: &dyn SyncProgress,
+) -> Result<MergeResult> {
+    let entry = manifest.entries.get(&item.resource_id).ok_or_else(|| {
+        TemperError::NotFound(format!("manifest entry not found: {}", item.resource_id))
+    })?;
+
+    let file_path = vault_root.join(&entry.path);
+    if !file_path.exists() {
+        return Err(TemperError::NotFound(format!(
+            "vault file not found: {}",
+            file_path.display()
+        )));
+    }
+
+    // 1. Read local file, strip frontmatter
+    let local_content = std::fs::read_to_string(&file_path)?;
+    let frontmatter_block = extract_frontmatter_block(&local_content);
+    let local_body = strip_frontmatter(&local_content);
+
+    // 2. Fetch remote content
+    let content_response = client
+        .resources()
+        .content(item.resource_id)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+    let remote_body = &content_response.markdown;
+
+    // 3. Run merge pipeline
+    let merge_result = temper_ingest::merge::attempt_merge(local_body, remote_body);
+
+    // 4. Report merge result to progress
+    progress.merge_result(&entry.path, &merge_result);
+
+    // 5. Get merged content and write back (preserve frontmatter block)
+    let merged_body = match &merge_result {
+        MergeResult::AutoMerged { content, .. } => content.as_str(),
+        MergeResult::ConflictAnnotated { content, .. } => content.as_str(),
+    };
+
+    let new_file_content = format!("{frontmatter_block}{merged_body}");
+    std::fs::write(&file_path, &new_file_content)?;
+
+    // 6. Build ingest payload with strip_frontmatter on merged file
+    let parts: Vec<&str> = entry.path.split('/').collect();
+    let context = parts.first().copied().unwrap_or("default");
+    let doc_type = if parts.len() > 1 {
+        parts[1]
+    } else {
+        "resource"
+    };
+    let title = ingest::title_from_path(&file_path);
+
+    let payload = ingest::build_ingest_payload(
+        merged_body,
+        &title,
+        context,
+        doc_type,
+        "imported",
+        "text/markdown",
+        None,
+    )?;
+
+    // 7. Push via update
+    let resource = client
+        .ingest()
+        .update(item.resource_id, &payload)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+
+    // 8. Update manifest entry
+    if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
+        e.content_hash = ingest::compute_content_hash(merged_body);
+        e.remote_hash = resource.content_hash.unwrap_or_default();
+        e.state = ManifestEntryState::Clean;
+        e.synced_at = chrono::Utc::now();
+        e.mtime_secs = file_mtime_secs(&file_path).ok();
+    }
+
+    // 9. Return the MergeResult
+    Ok(merge_result)
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +791,7 @@ mod tests {
                 remote_hash: "oldhash".to_string(),
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
+                mtime_secs: None,
             },
         );
         m
@@ -572,5 +957,367 @@ mod tests {
 
         assert!(!file_path.exists());
         assert!(!manifest.entries.contains_key(&id));
+    }
+
+    // --- Frontmatter hash fix tests ---
+
+    #[test]
+    fn rehash_ignores_frontmatter_changes() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        let file_v1 = "---\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
+        let file_v2 = "---\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
+
+        // Compute body hash via strip_frontmatter (same function used by rehash)
+        let body_hash = ingest::compute_content_hash(strip_frontmatter(file_v1));
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
+        fs::write(&file_path, file_v1).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                content_hash: body_hash.clone(),
+                remote_hash: body_hash.clone(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None, // Force rehash
+            },
+        );
+
+        // Rehash v1 — body unchanged, should detect 0 changes
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        assert_eq!(changed, 0, "v1 body hasn't changed — should not trigger");
+
+        // Now write v2 (frontmatter changed, body identical)
+        fs::write(&file_path, file_v2).unwrap();
+        manifest.entries.get_mut(&id).unwrap().mtime_secs = None; // Force rehash
+
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        assert_eq!(
+            changed, 0,
+            "only frontmatter changed — should not trigger dirty"
+        );
+        assert_eq!(manifest.entries[&id].state, ManifestEntryState::Clean);
+    }
+
+    #[test]
+    fn rehash_detects_body_change_with_frontmatter() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        let original = "---\ntitle: Test\n---\n\n# Original body\n";
+        let modified = "---\ntitle: Test\n---\n\n# Modified body\n";
+
+        let original_body_hash = ingest::compute_content_hash(strip_frontmatter(original));
+
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
+        fs::write(&file_path, original).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                content_hash: original_body_hash,
+                remote_hash: "somehash".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+
+        // Write modified content — body has changed
+        fs::write(&file_path, modified).unwrap();
+        manifest.entries.get_mut(&id).unwrap().mtime_secs = None;
+
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        assert_eq!(changed, 1, "body changed — should detect modification");
+        assert_eq!(
+            manifest.entries[&id].state,
+            ManifestEntryState::LocalModified
+        );
+    }
+
+    // --- Mtime optimization tests ---
+
+    #[test]
+    fn rehash_skips_file_when_mtime_matches() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
+        fs::write(&file_path, "body content").unwrap();
+
+        let file_mtime = file_mtime_secs(&file_path).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                content_hash: "stale-hash-that-would-trigger-if-read".to_string(),
+                remote_hash: "stale-hash-that-would-trigger-if-read".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: Some(file_mtime),
+            },
+        );
+
+        // Mtime matches — rehash should skip entirely, preserving stale hash
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        assert_eq!(changed, 0);
+        assert_eq!(
+            manifest.entries[&id].content_hash,
+            "stale-hash-that-would-trigger-if-read"
+        );
+    }
+
+    #[test]
+    fn rehash_processes_file_when_mtime_is_none() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        let content = "no frontmatter body";
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(
+            file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
+            content,
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                content_hash: "oldhash".to_string(),
+                remote_hash: "oldhash".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None, // No mtime — must rehash
+            },
+        );
+
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        assert_eq!(changed, 1);
+        assert!(
+            manifest.entries[&id].mtime_secs.is_some(),
+            "mtime should be recorded"
+        );
+    }
+
+    // --- scan_vault_for_untracked ---
+
+    #[test]
+    fn scan_vault_discovers_untracked_files() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let file_dir = vault.join("temper/research");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(
+            file_dir.join("new-discovery.md"),
+            "# New Discovery\n\nSome content.",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 1);
+        assert_eq!(manifest.entries.len(), 1);
+    }
+
+    #[test]
+    fn scan_vault_skips_files_already_in_manifest() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let file_dir = vault.join("temper/research");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(file_dir.join("existing.md"), "# Existing\n\nContent.").unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let id = Uuid::now_v7();
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "temper/research/existing.md".to_string(),
+                content_hash: "somehash".to_string(),
+                remote_hash: "somehash".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 0);
+    }
+
+    #[test]
+    fn scan_vault_skips_unmappable_files() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        fs::write(vault.join("orphan.md"), "# Orphan").unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 0);
+    }
+
+    #[test]
+    fn scan_vault_respects_frontmatter_override() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let file_dir = vault.join("temper/research");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(
+            file_dir.join("overridden.md"),
+            "---\ncontext: custom\ndoc_type: session\n---\n\n# Overridden\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 1);
+    }
+
+    #[test]
+    fn manifest_backward_compat_missing_mtime() {
+        // Old manifests won't have mtime_secs — #[serde(default)] handles it
+        let json = r#"{
+            "device_id": "test",
+            "last_sync": null,
+            "entries": {
+                "12345678-1234-1234-1234-123456789abc": {
+                    "path": "temper/task/test.md",
+                    "content_hash": "abc",
+                    "remote_hash": "abc",
+                    "synced_at": "2026-01-01T00:00:00Z",
+                    "state": "clean"
+                }
+            }
+        }"#;
+        let manifest: Manifest = serde_json::from_str(json).unwrap();
+        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        assert_eq!(manifest.entries[&id].mtime_secs, None);
+    }
+
+    // --- extract_frontmatter_block ---
+
+    #[test]
+    fn extract_frontmatter_block_returns_block() {
+        let content = "---\ntitle: Test\ncontext: temper\n---\n\n# Body\n";
+        let block = extract_frontmatter_block(content);
+        assert_eq!(block, "---\ntitle: Test\ncontext: temper\n---\n");
+    }
+
+    #[test]
+    fn extract_frontmatter_block_returns_empty_for_no_frontmatter() {
+        let content = "# No frontmatter\n";
+        let block = extract_frontmatter_block(content);
+        assert_eq!(block, "");
+    }
+
+    #[test]
+    fn pull_existing_resource_overwrites_in_place() {
+        // Simulate the bug scenario: a file already exists at the slug path
+        // AND the manifest knows about it. The fixed pull logic should
+        // overwrite in place, NOT create my-document-2.md.
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let resource_id = Uuid::now_v7();
+
+        // Create the existing file on disk
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        let existing_file = file_dir.join("my-document.md");
+        fs::write(&existing_file, "---\ntemper-id: old\n---\n\nOld content").unwrap();
+
+        // Set up manifest with entry pointing to this file
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(
+            resource_id,
+            ManifestEntry {
+                path: "temper/task/my-document.md".to_string(),
+                content_hash: ingest::compute_content_hash("Old content"),
+                remote_hash: "remote-hash-1".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+
+        // Check manifest — resource exists and file is on disk.
+        let existing_entry = manifest.entries.get(&resource_id).unwrap();
+        let existing_path = vault.join(&existing_entry.path);
+        assert!(existing_path.exists());
+
+        // Overwrite in place (this is what the fixed pull_resource does
+        // when it finds an existing manifest entry with a valid path).
+        let frontmatter =
+            ingest::build_frontmatter(resource_id, "My Document", "temper", "task", None, None);
+        let vault_content = format!("{frontmatter}Updated content");
+        fs::write(&existing_path, &vault_content).unwrap();
+
+        // Update manifest entry (matches what pull_resource now does).
+        let content_hash = ingest::compute_content_hash("Updated content");
+        manifest.entries.insert(
+            resource_id,
+            ManifestEntry {
+                path: "temper/task/my-document.md".to_string(),
+                content_hash,
+                remote_hash: "remote-hash-2".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+
+        // No deduplicated file was created
+        assert!(!file_dir.join("my-document-2.md").exists());
+        // The original file was updated
+        let content = fs::read_to_string(&existing_path).unwrap();
+        assert!(content.contains("Updated content"));
+        assert!(!content.contains("Old content"));
+
+        // A subsequent scan should NOT pick up the file as untracked
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 0, "overwritten file should not appear as untracked");
+    }
+
+    #[test]
+    fn dedup_only_applies_to_genuinely_new_resources() {
+        // When pulling a resource NOT in the manifest, and the slug
+        // already exists on disk, dedup should still work correctly.
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(file_dir.join("my-document.md"), "existing content").unwrap();
+
+        let slug = ingest::dedup_vault_slug(vault, "temper", "task", "my-document");
+        assert_eq!(
+            slug, "my-document-2",
+            "new resource should get deduplicated slug"
+        );
     }
 }

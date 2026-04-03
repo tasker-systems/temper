@@ -6,6 +6,8 @@ use uuid::Uuid;
 /// Transfer status — lifecycle of a resource ownership transfer.
 ///
 /// Maps directly to the `transfer_status` Postgres enum.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "transfer.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type, Serialize, Deserialize)]
 #[sqlx(type_name = "transfer_status", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
@@ -26,6 +28,8 @@ pub enum TransferStatus {
 /// - Only the current `owner_profile_id` can initiate a transfer
 /// - One pending transfer per resource at a time (enforced by unique constraint)
 /// - Acceptance updates `resources.owner_profile_id` to `to_profile_id`
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "transfer.ts"))]
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize)]
 pub struct ResourceTransfer {
     pub id: Uuid,

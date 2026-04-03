@@ -29,7 +29,7 @@ fn test_append_and_read_event() {
         note_type: "session".to_string(),
         title: "Test".to_string(),
         path: "sessions/test.md".to_string(),
-        project: "myapp".to_string(),
+        context: "myapp".to_string(),
     };
     temper_cli::discovery::append_event(&state_dir, &event).unwrap();
 
@@ -57,7 +57,7 @@ fn test_events_list_returns_recent_events() {
 }
 
 #[test]
-fn test_events_filter_by_project() {
+fn test_events_filter_by_context() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir, vec!["myapp", "other"]);
 
@@ -69,10 +69,7 @@ fn test_events_filter_by_project() {
     let myapp_events =
         temper_cli::commands::events::load_events(&config, Some("myapp"), 20).unwrap();
     for event in &myapp_events {
-        let project = temper_cli::commands::events::event_project(event);
-        assert_eq!(
-            project, "myapp",
-            "filtered events should only be from myapp"
-        );
+        let ctx = temper_cli::commands::events::event_context(event);
+        assert_eq!(ctx, "myapp", "filtered events should only be from myapp");
     }
 }

@@ -85,7 +85,7 @@ pub fn create(
         note_type: note_type.to_string(),
         title: title.to_string(),
         path: relative_str.to_string(),
-        project: project.unwrap_or("").to_string(),
+        context: project.unwrap_or("").to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");

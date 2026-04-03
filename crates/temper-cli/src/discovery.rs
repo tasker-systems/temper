@@ -11,7 +11,7 @@ pub enum Event {
         note_type: String,
         title: String,
         path: String,
-        project: String,
+        context: String,
     },
     #[serde(rename = "task_create")]
     TaskCreate {

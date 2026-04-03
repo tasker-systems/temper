@@ -13,6 +13,8 @@ use uuid::Uuid;
 ///
 /// Auto-provisioned on first authenticated request. Soft-deleted via
 /// `is_active = false` for referential integrity and GDPR compliance.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "profile.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct Profile {
@@ -33,6 +35,8 @@ pub struct Profile {
 /// same email). Identity reconciliation: when a new provider identity arrives
 /// with an email matching an existing link, it auto-links to the same profile.
 /// One link is marked `is_default` as the primary identity.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "profile.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ProfileAuthLink {
