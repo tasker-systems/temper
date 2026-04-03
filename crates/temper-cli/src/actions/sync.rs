@@ -561,32 +561,104 @@ async fn pull_resource(
 
     let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
 
-    let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
+    // If the resource is already in the manifest, overwrite the existing file
+    // instead of creating a deduplicated copy (slug-2, slug-3, etc.).
+    let vault_path = if let Some(existing) = manifest.entries.get(&item.resource_id) {
+        let existing_path = vault_root.join(&existing.path);
+        if existing_path.exists() {
+            // Overwrite the existing file in place — no slug dedup needed.
+            let frontmatter = ingest::build_frontmatter(
+                resource.id,
+                &resource.title,
+                &ctx,
+                &doc_type,
+                None,
+                None,
+            );
+            let vault_content = format!("{frontmatter}{}", &content_response.markdown);
+            std::fs::write(&existing_path, &vault_content)?;
+            existing_path
+        } else {
+            // Manifest entry exists but file is missing — write to expected path.
+            let slug = ingest::slug_from_title(&resource.title);
+            let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
+            write_pulled_file(
+                vault_root,
+                &ctx,
+                &doc_type,
+                &slug,
+                &resource,
+                &content_response.markdown,
+            )?
+        }
+    } else {
+        // Genuinely new resource — dedup slug as usual.
+        let slug = ingest::slug_from_title(&resource.title);
+        let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
+        write_pulled_file(
+            vault_root,
+            &ctx,
+            &doc_type,
+            &slug,
+            &resource,
+            &content_response.markdown,
+        )?
+    };
 
-    let vault_path = ingest::write_vault_file_and_register(
-        vault_root,
-        &ctx,
-        &doc_type,
-        &slug,
-        &resource,
-        &content_response.markdown,
-        None,
-        None,
-    )?;
+    // Update the in-memory manifest directly (no disk reload).
+    // Read the file back and strip frontmatter to compute the hash — this
+    // must match what rehash_manifest() computes, which includes the newline
+    // separator between frontmatter and body.
+    let full_content = std::fs::read_to_string(&vault_path)?;
+    let body = strip_frontmatter(&full_content);
+    let content_hash = ingest::compute_content_hash(body);
+    let rel_path = vault_path
+        .strip_prefix(vault_root)
+        .unwrap_or(&vault_path)
+        .to_string_lossy()
+        .to_string();
 
-    // Update manifest entry state
-    if let Some(entry) = manifest.entries.get_mut(&item.resource_id) {
-        let full_content = std::fs::read_to_string(&vault_path)?;
-        let body = strip_frontmatter(&full_content);
-        entry.content_hash = ingest::compute_content_hash(body);
-        entry.remote_hash = item.content_hash.clone();
-        entry.state = ManifestEntryState::Clean;
-        entry.synced_at = chrono::Utc::now();
-        entry.mtime_secs = file_mtime_secs(&vault_path).ok();
-    }
+    let mtime_secs = file_mtime_secs(&vault_path).ok();
+
+    manifest.entries.insert(
+        item.resource_id,
+        temper_core::types::ManifestEntry {
+            path: rel_path,
+            content_hash,
+            remote_hash: item.content_hash.clone(),
+            synced_at: chrono::Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs,
+        },
+    );
 
     Ok(())
+}
+
+/// Write a pulled file to the vault (new resource or missing file).
+///
+/// Creates parent directories and writes frontmatter + content. Does NOT
+/// touch the manifest — the caller is responsible for that.
+fn write_pulled_file(
+    vault_root: &Path,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+    resource: &temper_core::types::ResourceRow,
+    content: &str,
+) -> Result<std::path::PathBuf> {
+    let vault_path = ingest::build_vault_path(vault_root, context, doc_type, slug);
+
+    if let Some(parent) = vault_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let frontmatter =
+        ingest::build_frontmatter(resource.id, &resource.title, context, doc_type, None, None);
+    let vault_content = format!("{frontmatter}{content}");
+    std::fs::write(&vault_path, &vault_content)?;
+
+    Ok(vault_path)
 }
 
 fn remove_resource(
@@ -1161,5 +1233,91 @@ mod tests {
         let content = "# No frontmatter\n";
         let block = extract_frontmatter_block(content);
         assert_eq!(block, "");
+    }
+
+    #[test]
+    fn pull_existing_resource_overwrites_in_place() {
+        // Simulate the bug scenario: a file already exists at the slug path
+        // AND the manifest knows about it. The fixed pull logic should
+        // overwrite in place, NOT create my-document-2.md.
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let resource_id = Uuid::now_v7();
+
+        // Create the existing file on disk
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        let existing_file = file_dir.join("my-document.md");
+        fs::write(&existing_file, "---\ntemper-id: old\n---\n\nOld content").unwrap();
+
+        // Set up manifest with entry pointing to this file
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(
+            resource_id,
+            ManifestEntry {
+                path: "temper/task/my-document.md".to_string(),
+                content_hash: ingest::compute_content_hash("Old content"),
+                remote_hash: "remote-hash-1".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+
+        // Check manifest — resource exists and file is on disk.
+        let existing_entry = manifest.entries.get(&resource_id).unwrap();
+        let existing_path = vault.join(&existing_entry.path);
+        assert!(existing_path.exists());
+
+        // Overwrite in place (this is what the fixed pull_resource does
+        // when it finds an existing manifest entry with a valid path).
+        let frontmatter =
+            ingest::build_frontmatter(resource_id, "My Document", "temper", "task", None, None);
+        let vault_content = format!("{frontmatter}Updated content");
+        fs::write(&existing_path, &vault_content).unwrap();
+
+        // Update manifest entry (matches what pull_resource now does).
+        let content_hash = ingest::compute_content_hash("Updated content");
+        manifest.entries.insert(
+            resource_id,
+            ManifestEntry {
+                path: "temper/task/my-document.md".to_string(),
+                content_hash,
+                remote_hash: "remote-hash-2".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+
+        // No deduplicated file was created
+        assert!(!file_dir.join("my-document-2.md").exists());
+        // The original file was updated
+        let content = fs::read_to_string(&existing_path).unwrap();
+        assert!(content.contains("Updated content"));
+        assert!(!content.contains("Old content"));
+
+        // A subsequent scan should NOT pick up the file as untracked
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 0, "overwritten file should not appear as untracked");
+    }
+
+    #[test]
+    fn dedup_only_applies_to_genuinely_new_resources() {
+        // When pulling a resource NOT in the manifest, and the slug
+        // already exists on disk, dedup should still work correctly.
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(file_dir.join("my-document.md"), "existing content").unwrap();
+
+        let slug = ingest::dedup_vault_slug(vault, "temper", "task", "my-document");
+        assert_eq!(
+            slug, "my-document-2",
+            "new resource should get deduplicated slug"
+        );
     }
 }
