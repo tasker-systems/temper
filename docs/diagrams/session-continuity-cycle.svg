@@ -8,10 +8,8 @@
     </marker>
   </defs>
 
-  <!-- Background -->
   <rect width="700" height="420" rx="8" fill="#fafafa" stroke="#e0e0e0" stroke-width="1"/>
 
-  <!-- Title -->
   <text x="350" y="32" text-anchor="middle" font-size="16" font-weight="600" fill="#1a1a1a">Session Continuity Cycle</text>
   <text x="350" y="50" text-anchor="middle" font-size="11" fill="#888">Each session builds on the last — context compounds over time</text>
 
@@ -19,24 +17,22 @@
   <rect x="30" y="80" width="170" height="140" rx="8" fill="#f8fafc" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="4,3" />
   <text x="115" y="105" text-anchor="middle" font-size="12" font-weight="500" fill="#94a3b8">Previous Session</text>
   <text x="115" y="130" text-anchor="middle" font-size="10" fill="#94a3b8">Decisions made</text>
-  <text x="115" y="148" text-anchor="middle" font-size="10" fill="#94a3b8">Tickets updated</text>
+  <text x="115" y="148" text-anchor="middle" font-size="10" fill="#94a3b8">Tasks updated</text>
   <text x="115" y="166" text-anchor="middle" font-size="10" fill="#94a3b8">Session note saved</text>
   <text x="115" y="184" text-anchor="middle" font-size="10" fill="#94a3b8">Next steps recorded</text>
   <text x="115" y="206" text-anchor="middle" font-size="10" font-weight="500" fill="#64748b">session save</text>
 
-  <!-- Arrow: Previous -> Vault -->
   <line x1="200" y1="150" x2="238" y2="150" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#cyc-arrow)" />
 
   <!-- Central Vault -->
   <rect x="245" y="75" width="210" height="155" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="2" />
   <text x="350" y="100" text-anchor="middle" font-size="13" font-weight="600" fill="#1e40af">Vault</text>
   <line x1="270" y1="110" x2="430" y2="110" stroke="#93c5fd" stroke-width="1" />
-  <text x="350" y="130" text-anchor="middle" font-size="10" fill="#2563eb">Milestones (vision)</text>
-  <text x="350" y="148" text-anchor="middle" font-size="10" fill="#2563eb">Tickets (in-progress)</text>
+  <text x="350" y="130" text-anchor="middle" font-size="10" fill="#2563eb">Goals (vision)</text>
+  <text x="350" y="148" text-anchor="middle" font-size="10" fill="#2563eb">Tasks (active)</text>
   <text x="350" y="166" text-anchor="middle" font-size="10" fill="#2563eb">Session notes (history)</text>
-  <text x="350" y="184" text-anchor="middle" font-size="10" fill="#2563eb">Research + specs</text>
+  <text x="350" y="184" text-anchor="middle" font-size="10" fill="#2563eb">Decisions + research</text>
   <text x="350" y="202" text-anchor="middle" font-size="10" fill="#2563eb">Search index (vectors)</text>
-  <text x="350" y="218" text-anchor="middle" font-size="10" fill="#64748b">temper index</text>
 
   <!-- Arrow: Vault -> Warmup -->
   <line x1="350" y1="230" x2="350" y2="265" stroke="#2563eb" stroke-width="2" marker-end="url(#cyc-arrow-accent)" />
@@ -46,19 +42,17 @@
   <text x="350" y="293" text-anchor="middle" font-size="12" fill="white" font-weight="500">1. temper warmup</text>
   <text x="350" y="303" text-anchor="middle" font-size="9" fill="#bfdbfe">Inject context into new session</text>
 
-  <!-- Arrow down -->
   <line x1="350" y1="310" x2="350" y2="330" stroke="#555" stroke-width="1.5" marker-end="url(#cyc-arrow)" />
 
   <!-- Step 2: Work -->
   <rect x="240" y="333" width="220" height="35" rx="6" fill="#dcfce7" stroke="#86efac" stroke-width="1.5" />
-  <text x="350" y="354" text-anchor="middle" font-size="12" fill="#166534" font-weight="500">2. Work (scope-routed)</text>
+  <text x="350" y="354" text-anchor="middle" font-size="12" fill="#166534" font-weight="500">2. Work (build or plan)</text>
 
-  <!-- Arrow down -->
   <line x1="350" y1="368" x2="350" y2="383" stroke="#555" stroke-width="1.5" marker-end="url(#cyc-arrow)" />
 
   <!-- Step 3: Record -->
   <rect x="240" y="386" width="220" height="25" rx="6" fill="#fef3c7" stroke="#fcd34d" stroke-width="1.5" />
-  <text x="350" y="403" text-anchor="middle" font-size="12" fill="#92400e" font-weight="500">3. session save + ticket update</text>
+  <text x="350" y="403" text-anchor="middle" font-size="12" fill="#92400e" font-weight="500">3. session save + task update</text>
 
   <!-- Return arrow back to vault -->
   <path d="M 460 398 Q 530 398 530 250 Q 530 152 455 152" fill="none" stroke="#2563eb" stroke-width="2" marker-end="url(#cyc-arrow-accent)" />

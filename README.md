@@ -2,57 +2,61 @@
 
 **/ˈtempər/** — *to make stronger and more resilient through a deliberate process*
 
-Developer workflow tool for agent-assisted development. Semantic search across projects, session-based checkpointing, local ticket/milestone tracking, and Claude Code skill generation — all backed by a markdown vault with YAML frontmatter.
+A knowledge base for builders. Temper gives your work a throughline — the connective thread across sessions, decisions, and evolving understanding that turns scattered context into a navigable history. Everything resolves to markdown. The system gets out of the way.
+
+<p align="center">
+  <a href="https://temperkb.io">temperkb.io</a> · <a href="https://temperkb.io/builders">For builders</a> · <a href="https://temperkb.io/agents">For agents</a>
+</p>
 
 ## The Problem
 
-AI coding agents are powerful but forgetful. Every session starts blank — no memory of yesterday's decisions, no awareness of in-flight work, no sense of what matters next. The industry is starting to call this [context rot](https://www.understandingai.org/p/context-rot-the-emerging-challenge): the progressive degradation of an agent's understanding as work spans sessions, branches, and projects.
+AI coding agents are powerful but forgetful. Every session starts blank — no memory of yesterday's decisions, no awareness of in-flight work, no sense of what matters next. The industry calls this [context rot](https://www.understandingai.org/p/context-rot-the-emerging-challenge): the progressive degradation of an agent's understanding as work spans sessions.
 
 <p align="center">
-  <img src="docs/diagrams/context-rot.svg" alt="Context Rot: without a knowledge base, understanding degrades; with one, it compounds" width="720" />
+  <img src="docs/diagrams/context-rot.svg" alt="Context rot: without a knowledge base, understanding degrades; with one, it compounds" width="720" />
 </p>
 
-Developers compensate by re-explaining context, copy-pasting old chat logs, and manually steering agents through workflows that the agent should already understand. Frameworks like [superpowers](https://github.com/obra/superpowers), [speckit](https://github.com/github/spec-kit), [OpenSpec](https://github.com/Fission-AI/OpenSpec), and [GSD](https://thenewstack.io/beating-the-rot-and-getting-stuff-done/) are all working on parts of this — organizing specifications, plans, and workflows to give agents better footing. But the artifacts these frameworks produce are only as useful as they are **coherent, evolving, organized, and findable**.
+Developers compensate by re-explaining context, pasting old chat logs, and manually steering agents through decisions the agent should already know about. This tax grows with every session.
 
-The deeper issue is one of **throughline**. Knowing what's been done, what's up next, what decisions have been made and which are still open — this is the connective tissue that turns a pile of specs and tickets into a navigable development history. Without it, each session reinvents context from scratch. With it, sessions build on each other in a virtuous cycle: work concludes with explicit guidance on where it ended, what the next session should consider, and which open threads remain.
+The deeper issue isn't memory — it's **throughline**. Knowing what's been done, what's up next, what decisions have been made and which are still open. This is the connective tissue that turns a pile of documents into a navigable development history. Without it, each session reinvents context from scratch. With it, sessions build on each other.
 
-## Throughline: The Missing Layer
+## Throughline
 
-Temper is a local-first knowledge base that embeds **throughline** directly into the development process — not a ticketing system competing with Linear or GitHub Issues, but a way of organizing sessions into a coherent narrative that agents can read, write, and build on.
-
-Milestones hold the project vision. Tickets carry the immediate work. Session notes capture what happened, what changed, and what comes next. Each layer provides context for the layer below, and each session's conclusions feed back up — refining the roadmap, sharpening the vision. The result is a living development history, not a pile of disconnected artifacts.
+Temper embeds throughline directly into how you work. Goals hold the vision. Tasks carry the work. Sessions record what happened. Each layer provides context for the layer below, and each session's conclusions feed back up — refining the goals, sharpening the path forward.
 
 <p align="center">
-  <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from project vision through milestones and tickets down to sessions" width="700" />
+  <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from goals through tasks down to sessions" width="700" />
 </p>
+
+This isn't a ticketing system competing with Linear. It's a structured vault of markdown files where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.
 
 ## Session Continuity
 
-Every new session starts with `temper warmup`, which injects in-progress tickets, recent session summaries, and the last session's full content via a Claude Code startup hook. The agent resumes where you left off instead of starting from scratch.
+Every new session starts with `temper warmup`, which injects active tasks, recent session summaries, and the last session's full content. The agent resumes where you left off instead of starting from scratch.
 
-At the end of each session, `temper session save` captures what happened — decisions made, tickets updated, next steps identified — and writes it back to the vault. The next session reads it. Context compounds instead of decaying.
-
-<p align="center">
-  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session Continuity Cycle: warmup, work, save — each session feeds back into the vault" width="700" />
-</p>
-
-## Adaptive Workflow
-
-Not every task deserves the same process. A one-line typo fix shouldn't get the same brainstorm-design-plan-implement ceremony as a new authentication system. Every ticket carries a `scope` — `patch`, `feature`, or `epic` — that controls how much ceremony the agent applies.
+At the end of each session, `temper session save` captures what happened — decisions made, tasks updated, next steps identified — and writes it back to the vault. The next session reads it. Context compounds instead of decaying.
 
 <p align="center">
-  <img src="docs/diagrams/scope-routing.svg" alt="Scope Routing: patch gets direct implementation, feature gets the full pipeline, epic produces a roadmap" width="700" />
+  <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the vault" width="700" />
 </p>
 
-A patch gets direct implementation. A feature gets the full design pipeline. An epic produces a strategic roadmap, not code. Scope can shift within a session — so long as the information is carried forward and the evolving decisions are tracked.
+## Goals and Tasks
 
-## What's Under the Hood
+Temper gives you two building blocks:
 
-**A markdown vault as institutional memory.** Tickets, milestones, session notes, and research live in plain markdown files with YAML frontmatter — human-readable, git-trackable, and natively understood by language models.
+**Goals** are the outcomes you're working toward. A goal holds the vision and purpose of a feature, a product, a body of work. Tasks and sessions roll up to goals.
 
-**Semantic search across everything.** Temper embeds your vault using local ML models and builds an HNSW index for fast similarity search. Ask for "error handling patterns" and get relevant results across all your indexed content — no keyword guessing.
+**Tasks** are units of work toward a goal. Every task has a **mode** — `build` or `plan` — and an expected **effort** — `small`, `medium`, or `large`. Your workflow preferences (set during `temper init`) shape how these translate into process — temper carries the throughline regardless of what tools and ceremonies you prefer.
 
-**A generated skill file that teaches the agent your workflow.** `temper skill install` produces a Claude Code skill documenting your vault structure, available commands, and scope-routing logic. The agent doesn't need to be told how to use Temper — the skill makes it a first-class capability.
+## For Humans and Agents
+
+Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach the vault three ways:
+
+- **CLI** — `temper warmup`, `temper search`, `temper session save`. Claude Code hooks call `temper warmup` automatically at session start.
+- **MCP Server** — vault operations exposed as structured tools. Agents query, read, and write through the Model Context Protocol.
+- **Skill File** — `temper skill install` generates a Claude Code skill that teaches the agent your vault's structure and workflow conventions.
+
+If it can read files, it can use temper.
 
 ## Installation
 
@@ -65,66 +69,39 @@ Or build from source:
 ```bash
 git clone https://github.com/tasker-systems/temper.git
 cd temper
-cargo install --path .
+cargo install --path crates/temper-cli
 ```
 
 ## Quick Start
 
 ```bash
-# Initialize a vault
-temper init ~/vaults/work
+# Initialize a vault — temper asks how you work
+temper init
 
-# Add your projects
-temper project add --name myapp --path ~/projects/myapp
+# Add a context for your project
+temper context add myapp
 
-# Build the search index (downloads embedding model on first run)
-temper index
+# Import your docs — temper extracts markdown and indexes it
+temper import --context myapp --dir ~/projects/myapp/docs
 
-# Search across all indexed content
-temper search "error handling patterns"
-
-# Create a milestone and ticket
-temper milestone create --title "v0.1" --project myapp
-temper ticket create --title "Add authentication" --project myapp --scope feature
-
-# Save a session note
-temper session save "Implemented auth flow"
+# Search across your vault
+temper search "authentication decisions"
 
 # Generate and install the Claude Code skill
 temper skill install
+
+# Save a session
+temper session save "Implemented auth flow, chose JWT rotation"
 ```
 
-## Scope Details
+## The Vault
 
-| Scope | Nature | Ceremony | Output |
-|-------|--------|----------|--------|
-| `patch` | Tactical | None — just do it | Delivered code |
-| `feature` | Deliberate | Full design pipeline | Delivered code with design artifact |
-| `epic` | Strategic | Deep discovery + roadmapping | Living milestone roadmap + first actionable ticket |
+The vault is a directory of markdown files with YAML frontmatter. This is deliberate:
 
-### Patch Workflow
-
-Direct implementation. No spec, no plan, no brainstorming.
-
-<p align="center">
-  <img src="docs/diagrams/patch-workflow.svg" alt="Patch Workflow" width="500" />
-</p>
-
-### Feature Workflow
-
-Full superpowers pipeline: brainstorm, design, plan, implement, finish.
-
-<p align="center">
-  <img src="docs/diagrams/feature-workflow.svg" alt="Feature Workflow" width="500" />
-</p>
-
-### Epic Workflow
-
-Strategic planning. The output is a milestone roadmap, not delivered code. Each subsequent session works one ticket from the roadmap, learns, evolves the roadmap, and creates the next ticket.
-
-<p align="center">
-  <img src="docs/diagrams/epic-workflow.svg" alt="Epic Workflow" width="500" />
-</p>
+- **Human-readable.** Browse your vault in any editor, in Obsidian, or on GitHub. No proprietary formats.
+- **Version-controllable.** Git tracks changes. Diffs are readable. History is auditable.
+- **AI-native.** Language models understand markdown and YAML frontmatter natively. No parsing overhead.
+- **Portable.** The knowledge base is the unit of value, not the tool.
 
 ## Commands
 
@@ -132,117 +109,73 @@ Strategic planning. The output is a milestone roadmap, not delivered code. Each 
 
 | Command | Description |
 |---------|-------------|
-| `temper init [path]` | Initialize a new vault |
+| `temper init` | Initialize a new vault |
 | `temper check` | Verify vault integrity and tool health |
-| `temper status` | Vault overview with index stats |
-| `temper events [--project <p>]` | Show recent vault events |
-| `temper warmup [--project <p>]` | Context primer for new sessions |
-| `temper normalize [--project <p>]` | Repair vault structure drift |
+| `temper status` | Vault overview |
+| `temper events` | Show recent vault events |
+| `temper warmup` | Context primer for new sessions |
+| `temper normalize` | Repair vault structure drift |
 
 ### Search
 
 | Command | Description |
 |---------|-------------|
-| `temper search <query>` | Semantic search across indexed content |
-| `temper context <topic> [--depth N]` | Show topic with related context graph |
-| `temper index` | Build/rebuild semantic search index |
+| `temper search <query>` | Semantic search across the knowledge base |
+| `temper context <name>` | Show topic with related context |
 
-### Notes and Sessions
+### Content
 
 | Command | Description |
 |---------|-------------|
 | `temper note create <type> <title>` | Create note from template |
-| `temper session save [title]` | Create/update today's session note |
+| `temper session save [title]` | Create/update session note |
 | `temper session list` | List recent sessions |
-| `temper research save <title>` | Create high-fidelity research note |
+| `temper research save <title>` | Create research note |
+| `temper import <path>` | Import a file into the vault (managed, frontmatter, sync-ready) |
+| `temper add <path>` | Add a file to the cloud (searchable, pullable, not vault-managed) |
 
-### Tickets and Milestones
-
-| Command | Description |
-|---------|-------------|
-| `temper ticket create --title <t> [--scope patch\|feature\|epic]` | Create a ticket |
-| `temper ticket move <slug> [--stage <s>] [--scope <sc>]` | Move ticket stage or update scope |
-| `temper ticket done <slug>` | Mark ticket as done |
-| `temper ticket show <slug>` | Show ticket content |
-| `temper ticket list [--project <p>]` | List tickets |
-| `temper milestone create --title <t>` | Create a milestone |
-| `temper milestone list` | Roadmap view |
-
-### Projects and Skills
+### Goals and Tasks
 
 | Command | Description |
 |---------|-------------|
-| `temper project add --name <n> --path <p>` | Add project to config |
-| `temper project list` | List configured projects |
+| `temper task create --title <t>` | Create a task |
+| `temper task list` | List tasks |
+| `temper goal create --title <t>` | Create a goal |
+| `temper goal list` | List goals |
+
+### Contexts and Skills
+
+| Command | Description |
+|---------|-------------|
+| `temper context add <name>` | Add a context |
+| `temper context list` | List contexts |
 | `temper skill generate` | Preview generated Claude Code skill |
 | `temper skill install` | Install skill file |
-| `temper skill check` | Verify skill is current |
 
-## Ticket Lifecycle
+### Cloud
 
-Tickets use four stages: `backlog` → `in-progress` → `done` (or `cancelled`).
+| Command | Description |
+|---------|-------------|
+| `temper auth` | Authenticate with temper cloud |
+| `temper sync` | Sync local vault with temper cloud |
+| `temper pull <resource>` | Pull a resource from the cloud |
+| `temper remove <resource>` | Remove a resource from the cloud |
+
+## Semantic Search
+
+Temper embeds your vault content using all-MiniLM-L6-v2 (via Candle, no Python required) and stores vectors for fast approximate nearest-neighbor search. Indexing is incremental — only changed files are re-embedded.
 
 ```bash
-temper ticket create --title "Fix auth bug" --scope patch
-temper ticket move fix-auth-bug --stage in-progress
-temper ticket done fix-auth-bug --branch feat/auth --pr https://github.com/org/repo/pull/1
+temper search "design patterns" --limit 5
 ```
-
-Session notes can link to tickets, optionally transitioning their stage:
-
-```bash
-temper session save "Fixed the auth bug" --ticket fix-auth-bug --state done
-```
-
-## Configuration
-
-Temper uses `temper.toml` at the vault root:
-
-```toml
-[vault]
-sessions = "sessions"
-tickets = "tickets"
-milestones = "milestones"
-templates = "templates"
-state_dir = ".temper"
-
-[index]
-include = ["docs", "notes"]
-exclude = [".git", "archive"]
-sources = ["~/projects/other-repo/docs"]
-
-[embedder]
-model = "all-MiniLM-L6-v2"
-cache_dir = "~/.cache/temper/models"
-
-[projects.myapp]
-repo = "org/myapp"
-path = "~/projects/myapp"
-
-[skill]
-output = "~/.claude/commands/temper.md"
-framework = "superpowers"
-```
-
-### Vault Resolution
-
-Temper finds your vault using this chain:
-
-1. `--vault <path>` CLI flag
-2. `TEMPER_VAULT` environment variable
-3. Walk up from CWD looking for `temper.toml`
-4. `~/.config/temper/config.toml` default vault
 
 ## Claude Code Integration
 
 Temper generates a Claude Code skill file tailored to your vault:
 
 ```bash
-temper skill install           # Install globally
-temper skill install --project ~/projects/myapp  # Project-scoped
+temper skill install
 ```
-
-The generated skill integrates with the [superpowers](https://github.com/anthropics/claude-code-plugins) workflow and uses scope-based routing to match process intensity to task complexity.
 
 ### Session Pre-Warming
 
@@ -255,40 +188,38 @@ To automatically prime new Claude Code sessions with recent context, add a `Sess
       "matcher": "startup",
       "hooks": [{
         "type": "command",
-        "command": "temper warmup --project <your-project>"
+        "command": "temper warmup --context myapp"
       }]
     }]
   }
 }
 ```
 
-This runs `temper warmup` on every new session, injecting:
-- In-progress tickets with scope labels
-- Last 3 session summaries
-- Full content of the most recent session note
-- Last 15 project events (ticket/milestone activity)
+This runs `temper warmup` on every new session, injecting active tasks, recent sessions, open decisions, and project events.
 
-## Semantic Search
+## Temper Cloud
 
-Temper embeds your vault content using all-MiniLM-L6-v2 (via Candle, no Python required) and stores vectors in an HNSW index for fast approximate nearest-neighbor search. Indexing is incremental — only changed files are re-embedded.
+Temper is local-first and will remain functional locally throughout. **Temper Cloud** extends the model to multi-machine and multi-agent access.
 
-```bash
-temper index                   # Build/update index
-temper search "design patterns" --limit 5
-temper context "Authentication" --depth 2
-```
+<p align="center">
+  <img src="docs/diagrams/dual-authority-model.svg" alt="Dual authority model: git owns content, Postgres owns state, temper reconciles" width="700" />
+</p>
 
-## Roadmap
+Git and Postgres are both authoritative, for different things. Git owns document content, prose, and version history. Postgres owns structured metadata, lifecycle state, and search vectors. Temper is the intervention layer that reconciles between them.
 
-Temper is local-first today. **Temper Cloud** is in active design — a cloud-native extension where Postgres owns structured metadata and lifecycle state, git owns document content and history, and temper is the intervention layer that reconciles between them. The cloud layer adds multi-machine access, pg_vector-backed search, and an MCP server for direct agent integration. The guiding constraint is continuity: temper continues to function locally throughout, and the knowledge base — not the tool — is the unit of value.
+What cloud adds:
 
-See **[VISION.md](VISION.md)** for the full design philosophy, throughline concept, and Temper Cloud architecture.
+- **Cross-machine sync** with conflict resolution
+- **Semantic search** powered by pgvector embeddings
+- **MCP server** for direct agent integration
+- **Team contexts** with granular access control
+- **Self-host or use temperkb.io** — same protocol, your choice
 
 ## Related Work
 
 Temper draws on ideas from several projects working on adjacent problems:
 
-- [superpowers](https://github.com/obra/superpowers) — Structured workflow stages (brainstorm, design, plan, implement) for agent-assisted development
+- [superpowers](https://github.com/obra/superpowers) — Structured workflow stages for agent-assisted development
 - [speckit](https://github.com/github/spec-kit) — Specification-driven development with AI
 - [OpenSpec](https://github.com/Fission-AI/OpenSpec) — Open standard for AI-friendly project specifications
 - [GSD](https://thenewstack.io/beating-the-rot-and-getting-stuff-done/) — Framework for managing context rot in agent workflows

@@ -11,6 +11,8 @@
 <nav class="nav" class:scrolled>
   <a href="/" class="nav-logo">temper</a>
   <div class="nav-links">
+    <a href="/builders">Builders</a>
+    <a href="/agents">Agents</a>
     <a href="https://github.com/tasker-systems/temper">GitHub</a>
     <a href="/docs" class="cta">Get Started</a>
   </div>
