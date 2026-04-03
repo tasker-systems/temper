@@ -130,6 +130,18 @@ command = "bun"
 args = ["run", "test:integration"]
 
 # =============================================================================
+# Code Generation Tasks
+# =============================================================================
+
+[tasks.generate-ts-types]
+description = "Generate TypeScript types from temper-core Rust structs via ts-rs"
+script = [
+    "mkdir -p ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated",
+    "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-core --features typescript 2>&1 || true",
+    "echo 'TypeScript types generated in packages/temper-ui/src/lib/types/generated/'"
+]
+
+# =============================================================================
 # Docker Tasks
 # =============================================================================
 
