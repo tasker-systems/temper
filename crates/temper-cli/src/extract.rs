@@ -6,7 +6,8 @@ use crate::error::{Result, TemperError};
 
 pub use temper_ingest::extract::ExtractionResult;
 
-pub fn extract_to_markdown(path: &Path) -> Result<ExtractionResult> {
+pub async fn extract_to_markdown(path: &Path) -> Result<ExtractionResult> {
     temper_ingest::extract::extract_to_markdown(path)
+        .await
         .map_err(|e| TemperError::Extraction(e.to_string()))
 }

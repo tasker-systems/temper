@@ -84,7 +84,7 @@
   <p>
     The vault is a directory on your machine. Browse it in any editor,
     in Obsidian, or on GitHub. No database, no proprietary format.
-    Import existing docs with <span class="cmd-inline">temper import</span> —
+    Import existing docs with <span class="cmd-inline">temper add</span> —
     temper extracts markdown and adds the frontmatter structure.
   </p>
 </Section>

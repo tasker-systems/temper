@@ -12,7 +12,7 @@ pub struct ExtractionResult {
 }
 
 /// Extract a file to markdown text.
-pub fn extract_to_markdown(path: &Path) -> Result<ExtractionResult> {
+pub async fn extract_to_markdown(path: &Path) -> Result<ExtractionResult> {
     let extension = path
         .extension()
         .and_then(|e| e.to_str())
@@ -28,16 +28,30 @@ pub fn extract_to_markdown(path: &Path) -> Result<ExtractionResult> {
             content: std::fs::read_to_string(path)?,
             mime_type: "text/plain".to_string(),
         }),
-        _ => extract_with_kreuzberg(path),
+        "html" | "htm" => {
+            let html = std::fs::read_to_string(path)?;
+            let result = html_to_markdown_rs::convert(&html, None).map_err(|e| {
+                EmbedError::Extraction(format!(
+                    "failed to convert HTML '{}': {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+            Ok(ExtractionResult {
+                content: result.content.unwrap_or_default(),
+                mime_type: "text/markdown".to_string(),
+            })
+        }
+        _ => extract_with_kreuzberg(path).await,
     }
 }
 
 #[cfg(feature = "extract")]
-fn extract_with_kreuzberg(path: &Path) -> Result<ExtractionResult> {
-    use kreuzberg::{extract_file_sync, ExtractionConfig};
+async fn extract_with_kreuzberg(path: &Path) -> Result<ExtractionResult> {
+    use kreuzberg::{extract_file, ExtractionConfig};
 
     let config = ExtractionConfig::default();
-    let result = extract_file_sync(path, None, &config).map_err(|e| {
+    let result = extract_file(path, None, &config).await.map_err(|e| {
         EmbedError::Extraction(format!("failed to extract '{}': {}", path.display(), e))
     })?;
 
@@ -48,7 +62,7 @@ fn extract_with_kreuzberg(path: &Path) -> Result<ExtractionResult> {
 }
 
 #[cfg(not(feature = "extract"))]
-fn extract_with_kreuzberg(path: &Path) -> Result<ExtractionResult> {
+async fn extract_with_kreuzberg(path: &Path) -> Result<ExtractionResult> {
     Err(EmbedError::Extraction(format!(
         "cannot extract '{}': the 'extract' feature is required for non-text files",
         path.display()
@@ -61,28 +75,47 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_extract_markdown() {
+    #[tokio::test]
+    async fn test_extract_markdown() {
         let mut f = NamedTempFile::with_suffix(".md").unwrap();
         writeln!(f, "# Hello").unwrap();
-        let r = extract_to_markdown(f.path()).unwrap();
+        let r = extract_to_markdown(f.path()).await.unwrap();
         assert!(r.content.contains("# Hello"));
         assert_eq!(r.mime_type, "text/markdown");
     }
 
-    #[test]
-    fn test_extract_plain_text() {
+    #[tokio::test]
+    async fn test_extract_plain_text() {
         let mut f = NamedTempFile::with_suffix(".txt").unwrap();
         writeln!(f, "Hello").unwrap();
-        let r = extract_to_markdown(f.path()).unwrap();
+        let r = extract_to_markdown(f.path()).await.unwrap();
         assert!(r.content.contains("Hello"));
         assert_eq!(r.mime_type, "text/plain");
     }
 
-    #[test]
+    #[tokio::test]
+    async fn test_extract_html() {
+        let mut f = NamedTempFile::with_suffix(".html").unwrap();
+        write!(
+            f,
+            "<html><body><h1>Title</h1><p>Hello world</p></body></html>"
+        )
+        .unwrap();
+        let r = extract_to_markdown(f.path()).await.unwrap();
+        assert!(
+            r.content.contains("# Title"),
+            "expected markdown heading, got: {}",
+            r.content
+        );
+        assert!(r.content.contains("Hello world"));
+        assert!(!r.content.contains("<h1>"));
+        assert_eq!(r.mime_type, "text/markdown");
+    }
+
+    #[tokio::test]
     #[cfg(not(feature = "extract"))]
-    fn test_non_text_without_feature() {
+    async fn test_non_text_without_feature() {
         let f = NamedTempFile::with_suffix(".pdf").unwrap();
-        assert!(extract_to_markdown(f.path()).is_err());
+        assert!(extract_to_markdown(f.path()).await.is_err());
     }
 }

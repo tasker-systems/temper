@@ -102,32 +102,11 @@ pub enum Commands {
         action: AuthAction,
     },
 
-    /// Add a file to the cloud (fire-and-forget, searchable, pullable)
+    /// Add a file, URL, or directory to the vault
     Add {
-        /// File or directory path to add
+        /// File path, directory path, URL, or resource UUID (for promotion)
         path: String,
         /// Add all files in a directory
-        #[arg(long)]
-        dir: bool,
-        /// Context name
-        #[arg(long)]
-        context: String,
-        /// Doc type (default: "resource")
-        #[arg(long, default_value = "resource")]
-        doc_type: String,
-        /// Output format (text or json)
-        #[arg(long, default_value = "text")]
-        format: String,
-        /// Override size guardrails for directory mode
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Import a file into the vault (managed, frontmatter, sync-ready)
-    Import {
-        /// File path, directory path, or resource UUID (for promotion)
-        path: String,
-        /// Import all files in a directory
         #[arg(long)]
         dir: bool,
         /// Context name (required for file imports, unless --doc-type auto)
@@ -142,7 +121,7 @@ pub enum Commands {
         /// Override size guardrails
         #[arg(long)]
         force: bool,
-        /// Preview what would be imported without uploading
+        /// Preview what would be added without uploading
         #[arg(long)]
         dry_run: bool,
         /// Regex pattern to exclude files (matched against filename)

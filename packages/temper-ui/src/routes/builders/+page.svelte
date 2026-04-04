@@ -176,7 +176,7 @@
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper context</span> add myapp</div>
     <div class="cli-spacer"></div>
     <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Import your docs — temper extracts markdown and indexes it</span></div>
-    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper import</span> <span class="flag">--context</span> myapp <span class="flag">--dir</span> ~/projects/myapp/docs</div>
+    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper add</span> <span class="flag">--context</span> myapp <span class="flag">--dir</span> ~/projects/myapp/docs</div>
     <div class="cli-spacer"></div>
     <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Generate the Claude Code skill — teaches the agent your vault</span></div>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper skill install</span></div>

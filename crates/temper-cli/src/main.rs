@@ -333,17 +333,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             doc_type,
             format,
             force,
-        } => commands::add::run(&path, dir, &context, &doc_type, &format, force),
-        Commands::Import {
-            path,
-            dir,
-            context,
-            doc_type,
-            format,
-            force,
             dry_run,
             ignore,
-        } => commands::import_cmd::run(
+        } => commands::add::run(
             &path,
             dir,
             context.as_deref(),
