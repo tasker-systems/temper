@@ -84,7 +84,7 @@ pub fn save(
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
     // Set context field in frontmatter
-    let content = vault::set_frontmatter_field(&content, "context", &context_name);
+    let content = vault::set_frontmatter_field(&content, "temper-context", &context_name);
 
     // If stdin content was piped, replace the template body
     let content = if let Some(body) = stdin_content {
@@ -154,7 +154,8 @@ fn link_session_to_task(
     // Extract the session's id from its frontmatter
     let session_content = std::fs::read_to_string(session_path)?;
     let session_id = if let Some(fm) = vault::parse_frontmatter(&session_content) {
-        fm.get("id")
+        fm.get("temper-id")
+            .or_else(|| fm.get("id"))
             .and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or_default()
@@ -202,7 +203,8 @@ fn link_session_to_task(
         if output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !branch.is_empty() && branch != "HEAD" {
-                task_content = vault::set_frontmatter_field(&task_content, "branch", &branch);
+                task_content =
+                    vault::set_frontmatter_field(&task_content, "temper-branch", &branch);
             }
         }
     }
@@ -210,7 +212,7 @@ fn link_session_to_task(
     // Optionally update the task stage
     if let Some(s) = state {
         vault::validate_stage(s)?;
-        task_content = vault::set_frontmatter_field(&task_content, "stage", s);
+        task_content = vault::set_frontmatter_field(&task_content, "temper-stage", s);
     }
 
     std::fs::write(&task_path, &task_content)?;
