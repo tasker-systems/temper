@@ -6,6 +6,7 @@
 
 use crate::error::{Result, TemperError};
 use jsonschema::{Resource, Validator};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
@@ -30,7 +31,7 @@ const BASE_SCHEMA_URI: &str = "https://temperkb.io/schemas/base.schema.json";
 // ---------------------------------------------------------------------------
 
 /// A single validation finding about a frontmatter field.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ValidationIssue {
     /// JSON Pointer / field path, e.g. `"temper-stage"` or `"/properties/title"`.
     pub path: String,
@@ -41,7 +42,7 @@ pub struct ValidationIssue {
 }
 
 /// Aggregated validation result for a single file.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ValidationResult {
     /// Vault-relative or absolute path of the file.
     pub file_path: String,

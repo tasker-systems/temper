@@ -1,3 +1,4 @@
+pub mod doctor;
 pub mod goal;
 pub mod ingest;
 pub mod normalize;
