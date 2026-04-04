@@ -22,7 +22,10 @@ use std::borrow::Cow;
 
 /// Resolve a context name, falling back to "default" with a warning if the
 /// context directory doesn't exist in the vault.
-pub fn resolve_context_with_fallback<'a>(config: &crate::config::Config, context: &'a str) -> Cow<'a, str> {
+pub fn resolve_context_with_fallback<'a>(
+    config: &crate::config::Config,
+    context: &'a str,
+) -> Cow<'a, str> {
     let ctx_dir = config.vault_root.join(context);
     if ctx_dir.exists() {
         Cow::Borrowed(context)
