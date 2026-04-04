@@ -163,6 +163,23 @@ fn detect_doc_type(fm: &serde_yaml::Value, dir_doc_type: &str) -> Option<String>
     Some(dir_doc_type.to_string())
 }
 
+/// Report from an auto-fix run.
+#[derive(Debug, Clone, Serialize)]
+pub struct FixReport {
+    pub files_modified: u32,
+    pub fields_renamed: u32,
+    pub fields_backfilled: u32,
+}
+
+/// Auto-fix issues in the vault (stub — full implementation in Task 7).
+pub fn fix(_config: &Config, _context_filter: Option<&str>, _dry_run: bool) -> Result<FixReport> {
+    Ok(FixReport {
+        files_modified: 0,
+        fields_renamed: 0,
+        fields_backfilled: 0,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
