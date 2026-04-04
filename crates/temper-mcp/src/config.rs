@@ -3,11 +3,11 @@ use std::env;
 /// Configuration specific to the MCP server deployment.
 #[derive(Debug, Clone)]
 pub struct McpConfig {
-    /// Public base URL of this MCP server, e.g. "https://temperkb.io".
+    /// Public base URL of this MCP server, e.g. `https://temperkb.io`.
     /// Used in WWW-Authenticate headers and oauth-protected-resource responses.
     pub mcp_base_url: String,
 
-    /// Auth0 domain (issuer), e.g. "https://your-tenant.auth0.com/".
+    /// Auth0 domain (issuer), e.g. `https://your-tenant.auth0.com/`.
     /// Reuses AUTH_ISSUER — no new env var needed.
     pub auth0_domain: String,
 
