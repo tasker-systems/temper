@@ -34,6 +34,7 @@ pub struct EventRow {
 /// Query parameters for listing events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct EventListParams {
     /// Filter by resource ID.
     pub resource_id: Option<Uuid>,

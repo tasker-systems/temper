@@ -7,6 +7,7 @@
 pub mod config;
 pub mod discovery;
 pub mod middleware;
+pub mod resources;
 pub mod router;
 pub mod service;
 pub mod tools;

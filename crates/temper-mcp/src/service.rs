@@ -6,7 +6,10 @@
 
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ServerCapabilities, ServerInfo},
+    model::{
+        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+        ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
+    },
     tool, tool_handler, tool_router,
 };
 use std::sync::Arc;
@@ -112,20 +115,80 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         tools::contexts::get_context(self, input).await
     }
+
+    #[tool(description = "Create a new context (workspace) in the knowledge base.")]
+    async fn create_context(
+        &self,
+        Parameters(input): Parameters<temper_core::types::context::ContextCreateRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::contexts::create_context(self, input).await
+    }
+
+    #[tool(
+        description = "Update a resource's title, slug, or mimetype. Only the fields provided will be changed."
+    )]
+    async fn update_resource(
+        &self,
+        Parameters(input): Parameters<tools::resources::UpdateResourceInput>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::resources::update_resource(self, input).await
+    }
+
+    #[tool(
+        description = "Soft-delete a resource by ID. The resource is deactivated, not permanently removed."
+    )]
+    async fn delete_resource(
+        &self,
+        Parameters(input): Parameters<tools::resources::DeleteResourceInput>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::resources::delete_resource(self, input).await
+    }
+
+    #[tool(
+        description = "Get the full markdown content of a resource. Returns the reconstituted document."
+    )]
+    async fn get_resource_content(
+        &self,
+        Parameters(input): Parameters<tools::resources::GetResourceContentInput>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::resources::get_resource_content(self, input).await
+    }
+
+    #[tool(
+        description = "List events in the knowledge base. Useful for auditing and debugging. Optionally filter by resource ID or event type."
+    )]
+    async fn list_events(
+        &self,
+        Parameters(input): Parameters<temper_core::types::api::EventListParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::events::list_events(self, input).await
+    }
+
+    #[tool(
+        description = "Get the authenticated user's profile, including display name, email, and preferences."
+    )]
+    async fn get_profile(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::profiles::get_profile(self).await
+    }
 }
 
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(
-                rmcp::model::Implementation::new("temper-mcp", env!("CARGO_PKG_VERSION"))
-                    .with_title("Temper Knowledge Base"),
-            )
-            .with_instructions(
-                "Access and manage your Temper knowledge base. \
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
+        .with_server_info(
+            rmcp::model::Implementation::new("temper-mcp", env!("CARGO_PKG_VERSION"))
+                .with_title("Temper Knowledge Base"),
+        )
+        .with_instructions(
+            "Access and manage your Temper knowledge base. \
                  Search notes, list resources, create new content, and explore contexts.",
-            )
+        )
     }
 
     async fn initialize(
@@ -162,5 +225,33 @@ impl rmcp::ServerHandler for TemperMcpService {
         }
 
         Ok(self.get_info())
+    }
+
+    // ── Resources protocol ────────────────────────────────────────────
+
+    async fn list_resources(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        let profile = self.require_profile().await?;
+        crate::resources::list_resources(&self.api_state, &profile, request).await
+    }
+
+    async fn list_resource_templates(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
+        crate::resources::list_resource_templates(request).await
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        let profile = self.require_profile().await?;
+        crate::resources::read_resource(&self.api_state, &profile, request).await
     }
 }

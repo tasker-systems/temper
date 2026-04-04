@@ -5,6 +5,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_core::types::context::ContextCreateRequest;
+
 use crate::service::TemperMcpService;
 
 /// MCP input for get_context.
@@ -42,6 +44,25 @@ pub async fn get_context(
     )
     .await
     .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get context: {e}"), None))?;
+
+    let text = serde_json::to_string_pretty(&row).unwrap_or_else(|_| "{}".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
+}
+
+pub async fn create_context(
+    svc: &TemperMcpService,
+    input: ContextCreateRequest,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+
+    let row =
+        temper_api::services::context_service::create(&svc.api_state.pool, profile.id, &input.name)
+            .await
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("Failed to create context: {e}"), None)
+            })?;
 
     let text = serde_json::to_string_pretty(&row).unwrap_or_else(|_| "{}".to_string());
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
