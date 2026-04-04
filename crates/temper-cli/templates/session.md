@@ -1,8 +1,8 @@
 ---
-id: "{{ id }}"
-type: session
+temper-id: "{{ id }}"
+temper-type: session
 date: {{ date }}
-project: ""
+temper-context: ""
 ---
 
 # Session: {{ title }}

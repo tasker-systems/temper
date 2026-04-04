@@ -1,8 +1,8 @@
 ---
-id: "{{ id }}"
-type: research
+temper-id: "{{ id }}"
+temper-type: research
 date: {{ date }}
-project: "{{ project }}"
+temper-context: "{{ project }}"
 title: "{{ title }}"
 slug: "{{ slug }}"
 ---
