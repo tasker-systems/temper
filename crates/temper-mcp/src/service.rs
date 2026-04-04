@@ -6,7 +6,11 @@
 
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ServerCapabilities, ServerInfo},
+    model::{
+        CallToolResult, ListResourceTemplatesResult, ListResourcesResult,
+        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult,
+        ServerCapabilities, ServerInfo,
+    },
     tool, tool_handler, tool_router,
 };
 use std::sync::Arc;
@@ -166,7 +170,12 @@ impl TemperMcpService {
 #[tool_handler]
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerInfo::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .build(),
+        )
             .with_server_info(
                 rmcp::model::Implementation::new("temper-mcp", env!("CARGO_PKG_VERSION"))
                     .with_title("Temper Knowledge Base"),
@@ -211,5 +220,33 @@ impl rmcp::ServerHandler for TemperMcpService {
         }
 
         Ok(self.get_info())
+    }
+
+    // ── Resources protocol ────────────────────────────────────────────
+
+    async fn list_resources(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        let profile = self.require_profile().await?;
+        crate::resources::list_resources(&self.api_state, &profile, request).await
+    }
+
+    async fn list_resource_templates(
+        &self,
+        request: Option<PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
+        crate::resources::list_resource_templates(request).await
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        let profile = self.require_profile().await?;
+        crate::resources::read_resource(&self.api_state, &profile, request).await
     }
 }
