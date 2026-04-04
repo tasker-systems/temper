@@ -1,7 +1,7 @@
 //! Shared business logic for cloud ingest operations (add, import, pull).
 //!
 //! This module holds the domain logic that was previously duplicated across
-//! `commands::add`, `commands::import_cmd`, and `commands::pull`. Command
+//! `commands::add` and `commands::pull`. Command
 //! modules are now thin wrappers that call into these functions.
 
 use std::path::{Path, PathBuf};
