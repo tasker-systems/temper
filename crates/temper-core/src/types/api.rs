@@ -48,6 +48,7 @@ pub struct EventListParams {
 /// Request body for POST /api/search.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct SearchParams {
     /// Pre-computed 768-dim embedding vector.
     pub embedding: Vec<f32>,
@@ -64,6 +65,7 @@ pub struct SearchParams {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct SearchResultRow {
     pub resource_id: Uuid,
     pub title: String,

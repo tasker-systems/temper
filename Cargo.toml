@@ -12,8 +12,13 @@ description = "Vercel deployment adapter for temper-api"
 name = "axum"
 path = "api/axum.rs"
 
+[[bin]]
+name = "mcp"
+path = "api/mcp.rs"
+
 [dependencies]
 temper-api = { path = "crates/temper-api" }
+temper-mcp = { path = "crates/temper-mcp" }
 vercel_runtime = { version = "2", features = ["axum"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
