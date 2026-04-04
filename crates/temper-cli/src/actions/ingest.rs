@@ -183,6 +183,8 @@ pub fn build_ingest_payload(
         mimetype: mime_type.to_owned(),
         content: content.to_owned(),
         metadata,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed,
     })
 }
@@ -512,8 +514,12 @@ pub fn write_vault_file_and_register(
         resource.id,
         temper_core::types::ManifestEntry {
             path: rel_path,
-            content_hash,
-            remote_hash,
+            body_hash: content_hash,
+            remote_body_hash: remote_hash,
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
             synced_at: chrono::Utc::now(),
             state: temper_core::types::ManifestEntryState::Clean,
             mtime_secs,

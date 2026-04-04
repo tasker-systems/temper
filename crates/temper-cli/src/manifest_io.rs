@@ -73,8 +73,12 @@ mod tests {
             id,
             ManifestEntry {
                 path: "temper/notes/test.md".to_string(),
-                content_hash: "sha256:deadbeef".to_string(),
-                remote_hash: "sha256:deadbeef".to_string(),
+                body_hash: "sha256:deadbeef".to_string(),
+                remote_body_hash: "sha256:deadbeef".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
@@ -87,7 +91,7 @@ mod tests {
         assert_eq!(loaded.entries.len(), 1);
         let entry = loaded.entries.get(&id).unwrap();
         assert_eq!(entry.path, "temper/notes/test.md");
-        assert_eq!(entry.content_hash, "sha256:deadbeef");
+        assert_eq!(entry.body_hash, "sha256:deadbeef");
         assert_eq!(entry.state, ManifestEntryState::Clean);
     }
 }
