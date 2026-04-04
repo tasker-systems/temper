@@ -1,4 +1,4 @@
-//! Shared business logic for cloud ingest operations (add, import, pull).
+//! Shared business logic for cloud ingest operations (add and pull).
 //!
 //! This module holds the domain logic that was previously duplicated across
 //! `commands::add` and `commands::pull`. Command
