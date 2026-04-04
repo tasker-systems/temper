@@ -14,7 +14,10 @@ pub fn run(config: &Config, context: Option<&str>, format: &str) -> Result<()> {
     }
 
     if report.total_issues == 0 {
-        output::success(format!("{} files checked — no issues found", report.files_checked));
+        output::success(format!(
+            "{} files checked — no issues found",
+            report.files_checked
+        ));
         return Ok(());
     }
 
@@ -30,7 +33,10 @@ pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<
 
     if report.auto_fixable == 0 {
         if report.total_issues == 0 {
-            output::success(format!("{} files checked — no issues found", report.files_checked));
+            output::success(format!(
+                "{} files checked — no issues found",
+                report.files_checked
+            ));
         } else {
             output::warning(format!(
                 "{} issues found but none are auto-fixable. Run `temper doctor` for details.",
@@ -45,7 +51,8 @@ pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<
     if dry_run {
         output::dim(format!(
             "Dry run: would fix {} issues across {} files",
-            fixed.fields_renamed + fixed.fields_backfilled, fixed.files_modified,
+            fixed.fields_renamed + fixed.fields_backfilled,
+            fixed.files_modified,
         ));
     } else {
         output::success(format!(
@@ -71,7 +78,11 @@ fn print_issues(report: &doctor::DoctorReport) {
         }
         output::header(&result.file_path);
         for issue in &result.issues {
-            let fixable_tag = if issue.auto_fixable { " [auto-fixable]" } else { "" };
+            let fixable_tag = if issue.auto_fixable {
+                " [auto-fixable]"
+            } else {
+                ""
+            };
             let path_tag = if issue.path.is_empty() {
                 String::new()
             } else {
@@ -89,12 +100,18 @@ fn print_issues(report: &doctor::DoctorReport) {
 
 fn print_summary(report: &doctor::DoctorReport) {
     output::label("Checked", report.files_checked);
-    output::label("Issues", format!(
-        "{} ({} auto-fixable, {} manual)",
-        report.total_issues, report.auto_fixable,
-        report.total_issues - report.auto_fixable,
-    ));
+    output::label(
+        "Issues",
+        format!(
+            "{} ({} auto-fixable, {} manual)",
+            report.total_issues,
+            report.auto_fixable,
+            report.total_issues - report.auto_fixable,
+        ),
+    );
     if report.auto_fixable > 0 {
-        output::hint("Run `temper doctor fix` to auto-fix, or `temper doctor fix --dry-run` to preview.");
+        output::hint(
+            "Run `temper doctor fix` to auto-fix, or `temper doctor fix --dry-run` to preview.",
+        );
     }
 }
