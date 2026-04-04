@@ -4,6 +4,8 @@
   "installCommand": "cd packages/temper-cloud && bun install",
   "routes": [
     { "handle": "filesystem" },
+    { "src": "/mcp", "dest": "/api/mcp" },
+    { "src": "/.well-known/(.*)", "dest": "/api/mcp" },
     { "src": "/(.*)", "dest": "/api/axum" }
   ]
 }
