@@ -135,10 +135,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "no context specified — use --context <name>".into(),
                         )
                     })?;
+                    let context = temper_cli::commands::resolve_context_with_fallback(&config, context);
                     let title = title.expect("title required when not using --show-template");
                     temper_cli::commands::task::create(
                         &config,
-                        context,
+                        &context,
                         &title,
                         goal.as_deref(),
                         mode.as_deref(),
@@ -225,9 +226,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "no context specified — use --context <name>".into(),
                         )
                     })?;
+                    let context = temper_cli::commands::resolve_context_with_fallback(&config, context);
                     temper_cli::commands::goal::create(
                         &config,
-                        context,
+                        &context,
                         &title,
                         slug.as_deref(),
                         &format,
@@ -240,7 +242,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "no context specified — use --context <name>".into(),
                         )
                     })?;
-                    temper_cli::commands::goal::list(&config, context, &format)
+                    let context = temper_cli::commands::resolve_context_with_fallback(&config, context);
+                    temper_cli::commands::goal::list(&config, &context, &format)
                 }
                 GoalAction::Update {
                     slug,
