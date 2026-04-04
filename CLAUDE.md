@@ -16,7 +16,7 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 - **temper-api** — Axum HTTP server. Handlers in `src/handlers/`, services in `src/services/`, JWT auth middleware in `src/middleware/`. Uses utoipa for OpenAPI spec generation.
 - **temper-client** — Auth-aware HTTP client for the cloud API. Handles Auth0 PKCE device flow, token caching, and all API calls.
 - **temper-ingest** — Embedding (ort/ONNX with all-MiniLM-L6-v2) and document extraction (kreuzberg). Both behind feature flags: `embed`, `extract`.
-- **temper-mcp** — MCP server for agent access (early stage).
+- **temper-mcp** — Remote MCP server (Streamable HTTP via rmcp). Deployed as a Vercel serverless function alongside temper-api. Auth0 JWT validation, OAuth discovery endpoints (RFC 8414/9728). Tools delegate to temper-api services for DB access. Config in `src/config.rs`, tools in `src/tools/`.
 
 ### TypeScript Packages (packages/)
 - **temper-cloud** — Vercel serverless functions: file upload (Vercel Blob), background processing workflows, document extraction. Uses Neon serverless Postgres, Vitest, Biome.
@@ -24,6 +24,7 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 
 ### Deployment Glue (api/)
 - `api/axum.rs` — Vercel runtime adapter that wraps the Axum app as a Vercel Function.
+- `api/mcp.rs` — Vercel runtime adapter for the MCP server (same pattern as axum.rs).
 - `api/auth/`, `api/workflows/` — Vercel serverless endpoints (TypeScript).
 
 ### Database
@@ -100,6 +101,7 @@ Rust crates use feature flags to gate heavy dependencies:
 - `embed` / `extract` — gates ONNX and kreuzberg dependencies (temper-ingest)
 - `web-api` — enables utoipa OpenAPI derives (temper-core)
 - `typescript` — enables ts-rs type generation (temper-core)
+- `mcp` — enables schemars JsonSchema derives for MCP tool parameters (temper-core)
 
 ## Key Patterns
 

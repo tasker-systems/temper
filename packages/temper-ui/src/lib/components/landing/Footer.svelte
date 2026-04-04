@@ -10,9 +10,7 @@
     <a href="/how-it-works">How it works</a>
     <a href="/builders">Builders</a>
     <a href="/agents">Agents</a>
-    <a href="https://github.com/tasker-systems/temper">GitHub</a>
     <a href="/docs">Docs</a>
-    <a href="https://github.com/tasker-systems/temper/blob/main/LICENSE">MIT License</a>
   </div>
 </footer>
 

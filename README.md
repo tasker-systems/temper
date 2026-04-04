@@ -213,6 +213,35 @@ What cloud adds:
 - **Team contexts** with granular access control
 - **Self-host or use temperkb.io** — same protocol, your choice
 
+### MCP Server
+
+The remote MCP server exposes vault operations as structured tools over [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http). Agents authenticate via Auth0 using the standard OAuth 2.1 + PKCE flow — the server advertises Auth0's endpoints through RFC 8414 / RFC 9728 discovery so MCP clients handle the flow automatically.
+
+**Available tools:**
+
+| Tool | Description |
+|------|-------------|
+| `list_resources` | List resources, optionally filtered by context |
+| `get_resource` | Get a resource by ID, optionally with full content |
+| `create_resource` | Create a new resource in a context |
+| `search` | Semantic vector search across the knowledge base |
+| `list_contexts` | List available contexts (workspaces) |
+| `get_context` | Get details of a specific context |
+
+**Connect from Claude Desktop or Claude Code:**
+
+```json
+{
+  "mcpServers": {
+    "temper": {
+      "url": "https://temperkb.io/mcp"
+    }
+  }
+}
+```
+
+The client handles OAuth automatically — you'll be prompted to log in on first connection.
+
 ## Related Work
 
 Temper draws on ideas from several projects working on adjacent problems:
