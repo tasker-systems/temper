@@ -24,6 +24,12 @@ pub struct IngestPayload {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    /// Managed frontmatter (temper-* fields) as JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_meta: Option<serde_json::Value>,
+    /// Open frontmatter (user-owned fields) as JSON.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_meta: Option<serde_json::Value>,
     /// Base64-encoded MessagePack of `Vec<PackedChunk>`.
     pub chunks_packed: String,
 }
@@ -132,6 +138,8 @@ mod tests {
             mimetype: "text/markdown".to_owned(),
             content: "# Test".to_owned(),
             metadata: None,
+            managed_meta: Some(serde_json::json!({"temper-stage": "backlog"})),
+            open_meta: Some(serde_json::json!({"tags": ["rust"]})),
             chunks_packed: pack_chunks(&sample_chunks()).unwrap(),
         };
 
@@ -139,6 +147,14 @@ mod tests {
         let deserialized: IngestPayload = serde_json::from_str(&json).unwrap();
         assert_eq!(deserialized.title, "Test");
         assert_eq!(deserialized.context_name, "ctx");
+        assert_eq!(
+            deserialized.managed_meta,
+            Some(serde_json::json!({"temper-stage": "backlog"}))
+        );
+        assert_eq!(
+            deserialized.open_meta,
+            Some(serde_json::json!({"tags": ["rust"]}))
+        );
 
         let chunks = unpack_chunks(&deserialized.chunks_packed).unwrap();
         assert_eq!(chunks.len(), 2);
