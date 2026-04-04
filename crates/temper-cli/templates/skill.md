@@ -102,9 +102,17 @@ User-created guidance files. Read and apply any files found here.
 5. List goals in context: `temper goal list --context <ctx>`
    - If goals exist, ask: "Link to a goal? [list] or (none)"
 6. Ask: "Any specific acceptance criteria or outcomes?" (optional — user can skip)
-7. Create the task:
+7. Create the task (pipe the problem statement and acceptance criteria via stdin):
    ```bash
-   temper task create --title "<title>" --context <ctx> --mode <mode> --effort <effort> [--goal <slug>]
+   cat <<'EOF' | temper task create --title "<title>" --context <ctx> --mode <mode> --effort <effort> [--goal <slug>]
+   # <title>
+
+   <problem statement from step 2>
+
+   ## Acceptance Criteria
+
+   <criteria from step 6, or omit section if skipped>
+   EOF
    ```
 8. Ask: "Task created. Want to start working on it now?"
    - If yes: pivot to **On Task Start** with the new slug

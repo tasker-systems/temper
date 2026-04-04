@@ -141,10 +141,22 @@ fn test_skill_generate_includes_new_routing() {
     let config = test_config_with_global(&dir);
 
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("## On Task Resume"), "should contain task resume section");
-    assert!(content.contains("## On Session Start"), "should contain session start section");
-    assert!(content.contains("## On Task Create"), "should contain task create section");
-    assert!(content.contains("## Command Routing"), "should contain routing table");
+    assert!(
+        content.contains("## On Task Resume"),
+        "should contain task resume section"
+    );
+    assert!(
+        content.contains("## On Session Start"),
+        "should contain session start section"
+    );
+    assert!(
+        content.contains("## On Task Create"),
+        "should contain task create section"
+    );
+    assert!(
+        content.contains("## Command Routing"),
+        "should contain routing table"
+    );
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
