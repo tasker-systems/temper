@@ -81,7 +81,9 @@ pub fn parse_source_frontmatter(content: &str) -> Option<ParsedFrontmatter> {
 
     Some(ParsedFrontmatter {
         title: s("title"),
-        doc_type: s("temper-type").or_else(|| s("doc_type")).or_else(|| s("type")),
+        doc_type: s("temper-type")
+            .or_else(|| s("doc_type"))
+            .or_else(|| s("type")),
         context: s("temper-context").or_else(|| s("context")),
         slug: s("slug"),
         date: s("date")

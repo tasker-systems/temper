@@ -239,8 +239,7 @@ fn process_file(
     if doc_type == "task" {
         if let Some(ref v) = fm {
             // Check if effort key exists at all (null counts as existing)
-            let has_effort_key =
-                v.get("temper-effort").is_some() || v.get("effort").is_some();
+            let has_effort_key = v.get("temper-effort").is_some() || v.get("effort").is_some();
             if !has_effort_key {
                 // Insert temper-effort: null after the temper-stage: (or stage:) line
                 let mut new_lines = Vec::new();

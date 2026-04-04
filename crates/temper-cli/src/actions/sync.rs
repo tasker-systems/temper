@@ -66,12 +66,12 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
         let current_hash = ingest::compute_content_hash(body);
 
         // Compute frontmatter tier hashes
-        let (managed_hash, open_hash) =
-            if let Some(fm) = crate::vault::parse_frontmatter(&content) {
-                temper_core::schema::compute_frontmatter_hashes(&fm)
-            } else {
-                (String::new(), String::new())
-            };
+        let (managed_hash, open_hash) = if let Some(fm) = crate::vault::parse_frontmatter(&content)
+        {
+            temper_core::schema::compute_frontmatter_hashes(&fm)
+        } else {
+            (String::new(), String::new())
+        };
 
         entry.mtime_secs = Some(file_mtime);
 
@@ -538,13 +538,12 @@ async fn push_resource(
     let body = strip_frontmatter(&content);
 
     // Parse frontmatter and split into managed/open tiers
-    let (managed_meta, open_meta) =
-        if let Some(fm) = crate::vault::parse_frontmatter(&content) {
-            let (m, o) = split_frontmatter_tiers(&fm);
-            (Some(m), Some(o))
-        } else {
-            (None, None)
-        };
+    let (managed_meta, open_meta) = if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+        let (m, o) = split_frontmatter_tiers(&fm);
+        (Some(m), Some(o))
+    } else {
+        (None, None)
+    };
 
     let parts: Vec<&str> = entry.path.split('/').collect();
     let context = parts.first().copied().unwrap_or("default");

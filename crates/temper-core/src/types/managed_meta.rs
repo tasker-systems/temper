@@ -124,13 +124,25 @@ mod tests {
 
         // Verify temper-* keys are present
         assert!(json.contains("\"temper-type\""), "missing temper-type key");
-        assert!(json.contains("\"temper-stage\""), "missing temper-stage key");
+        assert!(
+            json.contains("\"temper-stage\""),
+            "missing temper-stage key"
+        );
         assert!(json.contains("\"temper-seq\""), "missing temper-seq key");
 
         // Verify None fields are absent
-        assert!(!json.contains("temper-mode"), "temper-mode should be absent");
-        assert!(!json.contains("temper-goal"), "temper-goal should be absent");
-        assert!(!json.contains("temper-branch"), "temper-branch should be absent");
+        assert!(
+            !json.contains("temper-mode"),
+            "temper-mode should be absent"
+        );
+        assert!(
+            !json.contains("temper-goal"),
+            "temper-goal should be absent"
+        );
+        assert!(
+            !json.contains("temper-branch"),
+            "temper-branch should be absent"
+        );
 
         // Verify roundtrip
         let parsed: ManagedMeta = serde_json::from_str(&json).unwrap();

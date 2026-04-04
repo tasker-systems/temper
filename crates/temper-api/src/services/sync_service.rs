@@ -22,9 +22,15 @@ struct DiffRow {
     resource_id: Option<Uuid>,
     kb_uri: String,
     body_hash: String,
-    #[expect(dead_code, reason = "returned by SQL; will be used for three-tier sync")]
+    #[expect(
+        dead_code,
+        reason = "returned by SQL; will be used for three-tier sync"
+    )]
     managed_hash: String,
-    #[expect(dead_code, reason = "returned by SQL; will be used for three-tier sync")]
+    #[expect(
+        dead_code,
+        reason = "returned by SQL; will be used for three-tier sync"
+    )]
     open_hash: String,
     #[expect(dead_code, reason = "returned by SQL but not used in categorization")]
     updated: Option<DateTime<Utc>>,

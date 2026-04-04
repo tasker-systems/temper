@@ -149,8 +149,14 @@ pub async fn ingest(
 
     // 5. Compute meta hashes
     let empty_json = serde_json::json!({});
-    let managed_meta = payload.managed_meta.clone().unwrap_or_else(|| empty_json.clone());
-    let open_meta = payload.open_meta.clone().unwrap_or_else(|| empty_json.clone());
+    let managed_meta = payload
+        .managed_meta
+        .clone()
+        .unwrap_or_else(|| empty_json.clone());
+    let open_meta = payload
+        .open_meta
+        .clone()
+        .unwrap_or_else(|| empty_json.clone());
     let managed_hash = hash_json_value(&managed_meta);
     let open_hash = hash_json_value(&open_meta);
 
@@ -242,8 +248,14 @@ pub async fn update(
 
     // Compute meta hashes
     let empty_json = serde_json::json!({});
-    let managed_meta = payload.managed_meta.clone().unwrap_or_else(|| empty_json.clone());
-    let open_meta = payload.open_meta.clone().unwrap_or_else(|| empty_json.clone());
+    let managed_meta = payload
+        .managed_meta
+        .clone()
+        .unwrap_or_else(|| empty_json.clone());
+    let open_meta = payload
+        .open_meta
+        .clone()
+        .unwrap_or_else(|| empty_json.clone());
     let managed_hash = hash_json_value(&managed_meta);
     let open_hash = hash_json_value(&open_meta);
 
