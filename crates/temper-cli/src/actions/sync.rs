@@ -826,7 +826,6 @@ pub async fn sync_refresh(
 
     let mut matched = 0;
     let mut added = 0;
-    let pending_preserved;
 
     // Build a content-hash index for de-duplication:
     // (context, doc_type, content_hash) -> manifest entry UUID
@@ -904,7 +903,7 @@ pub async fn sync_refresh(
         .count();
 
     // Count preserved Pending entries (were already Pending before refresh)
-    pending_preserved = manifest
+    let pending_preserved = manifest
         .entries
         .iter()
         .filter(|(id, entry)| {

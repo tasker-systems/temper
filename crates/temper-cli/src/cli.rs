@@ -326,6 +326,15 @@ pub enum SessionAction {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    /// Show a session's raw markdown content
+    Show {
+        /// Session title slug or date-slug suffix (e.g. "fix-temper-init" or "2026-04-04-fix-temper-init")
+        slug: String,
+        #[arg(long)]
+        context: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]

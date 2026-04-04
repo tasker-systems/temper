@@ -45,7 +45,7 @@ User-created guidance files. Read and apply any files found here.
    - If it exists, read it and apply its principles
    - If it doesn't, offer: "This context has no project fundamentals. Want to set them up? (`/temper init`)"
 6. Check auto-memory for user plugin preferences (skills they've said they rely on)
-7. Scan for installed skills: check `~/.claude/skills/` and plugins cache
+7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 8. Ask: "I found [list]. Want subagents to use any of these? Any other quality gates?"
 9. Read `workflows/{mode}-{effort}.md` and follow it
 
@@ -54,16 +54,18 @@ User-created guidance files. Read and apply any files found here.
 > **CLI sequence**: To resume a task from a previous session:
 > 1. `temper task show <slug>` — reload the task content
 > 2. `temper session list --context <ctx>` — find the most recent session
-> 3. Read the last session's "Next Steps" section
+> 3. `temper session show <title-slug> --context <ctx>` — read the session's "Next Steps"
 > 4. Continue from the workflow file for this task's mode/effort
 
 1. Read the task content via `temper task show <slug>` — extract mode, effort, and context
 2. List recent sessions: `temper session list --context <ctx>`
-3. Read the most recent session note linked to this task — look for "Next Steps"
+3. Read the most recent session note: `temper session show <title-slug> --context <ctx>`
+   - The slug is the title column from `session list` output
+   - Supports partial matching — a unique substring of the slug is enough
 4. If the task is not already in-progress, move it: `temper task move <slug> --stage in-progress`
 5. Check for `guidance/fundamentals.md` — read if it exists
 6. Check auto-memory for user plugin preferences
-7. Scan for installed skills: check `~/.claude/skills/` and plugins cache
+7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 8. Ask: "Resuming from last session. Found these skills: [list]. Want subagents to use any? Any other quality gates?"
 9. Read `workflows/{mode}-{effort}.md` and continue from where the last session left off
 
@@ -79,7 +81,7 @@ User-created guidance files. Read and apply any files found here.
    - If new: continue as open session
 4. Check for `guidance/fundamentals.md` — read if it exists
 5. Check auto-memory for user plugin preferences
-6. Scan for installed skills
+6. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 7. Proceed with the user's request. At session end, save via:
    ```bash
    cat <<'EOF' | temper session save "<title>" --context <ctx> --state done
