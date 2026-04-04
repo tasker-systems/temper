@@ -34,22 +34,16 @@ pub async fn list_resources(
         temper_api::services::resource_service::list_visible(&state.pool, profile.id, params)
             .await
             .map_err(|e| {
-                rmcp::ErrorData::internal_error(
-                    format!("Failed to list resources: {e}"),
-                    None,
-                )
+                rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
             })?;
 
     let resources = rows
         .into_iter()
         .map(|r| {
-            RawResource::new(
-                format!("temper://resources/{}", r.id),
-                &r.title,
-            )
-            .with_description(format!("Origin: {}", r.origin_uri))
-            .with_mime_type("text/markdown")
-            .no_annotation()
+            RawResource::new(format!("temper://resources/{}", r.id), &r.title)
+                .with_description(format!("Origin: {}", r.origin_uri))
+                .with_mime_type("text/markdown")
+                .no_annotation()
         })
         .collect();
 
@@ -65,32 +59,21 @@ pub async fn list_resource_templates(
     _request: Option<PaginatedRequestParams>,
 ) -> Result<ListResourceTemplatesResult, rmcp::ErrorData> {
     let templates = vec![
-        RawResourceTemplate::new(
-            "temper://resources/{id}",
-            "Resource by ID",
-        )
-        .with_description(
-            "Retrieve a knowledge base resource by UUID. \
+        RawResourceTemplate::new("temper://resources/{id}", "Resource by ID")
+            .with_description(
+                "Retrieve a knowledge base resource by UUID. \
              Returns metadata and full markdown content.",
-        )
-        .with_mime_type("text/markdown")
-        .no_annotation(),
-        RawResourceTemplate::new(
-            "temper://resources/{id}/content",
-            "Resource content",
-        )
-        .with_description("Retrieve only the raw markdown content of a resource.")
-        .with_mime_type("text/markdown")
-        .no_annotation(),
-        RawResourceTemplate::new(
-            "temper://contexts/{name}/resources",
-            "Resources in context",
-        )
-        .with_description(
-            "List all resources belonging to a named context (workspace).",
-        )
-        .with_mime_type("application/json")
-        .no_annotation(),
+            )
+            .with_mime_type("text/markdown")
+            .no_annotation(),
+        RawResourceTemplate::new("temper://resources/{id}/content", "Resource content")
+            .with_description("Retrieve only the raw markdown content of a resource.")
+            .with_mime_type("text/markdown")
+            .no_annotation(),
+        RawResourceTemplate::new("temper://contexts/{name}/resources", "Resources in context")
+            .with_description("List all resources belonging to a named context (workspace).")
+            .with_mime_type("application/json")
+            .no_annotation(),
     ];
 
     Ok(ListResourceTemplatesResult {
@@ -129,9 +112,10 @@ pub async fn read_resource(
                     )
                 })?;
 
-        return Ok(ReadResourceResult::new(vec![
-            ResourceContents::text(markdown, uri).with_mime_type("text/markdown"),
-        ]));
+        return Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            markdown, uri,
+        )
+        .with_mime_type("text/markdown")]));
     }
 
     // temper://resources/{id}
@@ -139,15 +123,11 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let row =
-            temper_api::services::resource_service::get_visible(&state.pool, profile.id, id)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to read resource: {e}"),
-                        None,
-                    )
-                })?;
+        let row = temper_api::services::resource_service::get_visible(&state.pool, profile.id, id)
+            .await
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
+            })?;
 
         let markdown =
             temper_api::services::resource_service::get_content(&state.pool, profile.id, id)
@@ -172,18 +152,15 @@ pub async fn read_resource(
         .strip_prefix("temper://contexts/")
         .and_then(|rest| rest.strip_suffix("/resources"))
     {
-        let context = temper_api::services::context_service::resolve_by_name(
-            &state.pool,
-            profile.id,
-            name,
-        )
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(
-                format!("Failed to resolve context '{name}': {e}"),
-                None,
-            )
-        })?;
+        let context =
+            temper_api::services::context_service::resolve_by_name(&state.pool, profile.id, name)
+                .await
+                .map_err(|e| {
+                    rmcp::ErrorData::internal_error(
+                        format!("Failed to resolve context '{name}': {e}"),
+                        None,
+                    )
+                })?;
 
         let params = temper_core::types::resource::ResourceListParams {
             kb_context_id: Some(context.id),
@@ -191,23 +168,21 @@ pub async fn read_resource(
             offset: None,
         };
 
-        let rows = temper_api::services::resource_service::list_visible(
-            &state.pool,
-            profile.id,
-            params,
-        )
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(
-                format!("Failed to list resources in context: {e}"),
-                None,
-            )
-        })?;
+        let rows =
+            temper_api::services::resource_service::list_visible(&state.pool, profile.id, params)
+                .await
+                .map_err(|e| {
+                    rmcp::ErrorData::internal_error(
+                        format!("Failed to list resources in context: {e}"),
+                        None,
+                    )
+                })?;
 
         let json = serde_json::to_string_pretty(&rows).unwrap_or_default();
-        return Ok(ReadResourceResult::new(vec![
-            ResourceContents::text(json, uri).with_mime_type("application/json"),
-        ]));
+        return Ok(ReadResourceResult::new(vec![ResourceContents::text(
+            json, uri,
+        )
+        .with_mime_type("application/json")]));
     }
 
     Err(rmcp::ErrorData::invalid_params(

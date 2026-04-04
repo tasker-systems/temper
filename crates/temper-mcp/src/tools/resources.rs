@@ -169,12 +169,11 @@ pub async fn get_resource_content(
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
 
-    let markdown =
-        temper_api::services::resource_service::get_content(pool, profile.id, input.id)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
-            })?;
+    let markdown = temper_api::services::resource_service::get_content(pool, profile.id, input.id)
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
+        })?;
 
     let response = ContentResponse {
         resource_id: input.id,

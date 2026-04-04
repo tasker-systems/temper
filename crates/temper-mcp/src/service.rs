@@ -7,9 +7,8 @@
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolResult, ListResourceTemplatesResult, ListResourcesResult,
-        PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResult,
-        ServerCapabilities, ServerInfo,
+        CallToolResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
+        ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
     },
     tool, tool_handler, tool_router,
 };
@@ -135,7 +134,9 @@ impl TemperMcpService {
         tools::resources::update_resource(self, input).await
     }
 
-    #[tool(description = "Soft-delete a resource by ID. The resource is deactivated, not permanently removed.")]
+    #[tool(
+        description = "Soft-delete a resource by ID. The resource is deactivated, not permanently removed."
+    )]
     async fn delete_resource(
         &self,
         Parameters(input): Parameters<tools::resources::DeleteResourceInput>,
@@ -153,7 +154,9 @@ impl TemperMcpService {
         tools::resources::get_resource_content(self, input).await
     }
 
-    #[tool(description = "List events in the knowledge base. Useful for auditing and debugging. Optionally filter by resource ID or event type.")]
+    #[tool(
+        description = "List events in the knowledge base. Useful for auditing and debugging. Optionally filter by resource ID or event type."
+    )]
     async fn list_events(
         &self,
         Parameters(input): Parameters<temper_core::types::api::EventListParams>,
@@ -161,7 +164,9 @@ impl TemperMcpService {
         tools::events::list_events(self, input).await
     }
 
-    #[tool(description = "Get the authenticated user's profile, including display name, email, and preferences.")]
+    #[tool(
+        description = "Get the authenticated user's profile, including display name, email, and preferences."
+    )]
     async fn get_profile(&self) -> Result<CallToolResult, rmcp::ErrorData> {
         tools::profiles::get_profile(self).await
     }
@@ -176,14 +181,14 @@ impl rmcp::ServerHandler for TemperMcpService {
                 .enable_resources()
                 .build(),
         )
-            .with_server_info(
-                rmcp::model::Implementation::new("temper-mcp", env!("CARGO_PKG_VERSION"))
-                    .with_title("Temper Knowledge Base"),
-            )
-            .with_instructions(
-                "Access and manage your Temper knowledge base. \
+        .with_server_info(
+            rmcp::model::Implementation::new("temper-mcp", env!("CARGO_PKG_VERSION"))
+                .with_title("Temper Knowledge Base"),
+        )
+        .with_instructions(
+            "Access and manage your Temper knowledge base. \
                  Search notes, list resources, create new content, and explore contexts.",
-            )
+        )
     }
 
     async fn initialize(
