@@ -18,8 +18,6 @@ pub struct ResourceRow {
     pub origin_uri: String,
     pub title: String,
     pub slug: Option<String>,
-    pub content_hash: Option<String>,
-    pub mimetype: Option<String>,
     pub originator_profile_id: Uuid,
     pub owner_profile_id: Uuid,
     pub is_active: bool,
@@ -54,7 +52,6 @@ pub struct ResourceCreateRequest {
     pub origin_uri: String,
     pub title: String,
     pub slug: Option<String>,
-    pub mimetype: Option<String>,
 }
 
 /// Request body for updating a resource.
@@ -63,7 +60,6 @@ pub struct ResourceCreateRequest {
 pub struct ResourceUpdateRequest {
     pub title: Option<String>,
     pub slug: Option<String>,
-    pub mimetype: Option<String>,
 }
 
 /// Chunk used to reconstitute markdown content.

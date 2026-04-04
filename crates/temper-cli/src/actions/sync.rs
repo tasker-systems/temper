@@ -519,7 +519,7 @@ async fn push_resource(
         None,
     )?;
 
-    let resource = if item.resource_id.is_some() {
+    let _resource = if item.resource_id.is_some() {
         // Existing resource — PUT update
         client
             .ingest()
@@ -536,7 +536,8 @@ async fn push_resource(
     };
 
     if let Some(e) = manifest.entries.get_mut(&entry_id) {
-        e.remote_body_hash = resource.content_hash.unwrap_or_default();
+        // After push, server body_hash matches what we sent
+        e.remote_body_hash = payload.content_hash.clone();
         e.state = ManifestEntryState::Clean;
         e.synced_at = chrono::Utc::now();
         e.mtime_secs = file_mtime_secs(&file_path).ok();
@@ -757,7 +758,7 @@ async fn merge_and_push_resource(
     )?;
 
     // 7. Push via update
-    let resource = client
+    let _resource = client
         .ingest()
         .update(item.resource_id, &payload)
         .await
@@ -766,7 +767,8 @@ async fn merge_and_push_resource(
     // 8. Update manifest entry
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
         e.body_hash = ingest::compute_content_hash(merged_body);
-        e.remote_body_hash = resource.content_hash.unwrap_or_default();
+        // After push, server body_hash matches what we sent
+        e.remote_body_hash = payload.content_hash.clone();
         e.state = ManifestEntryState::Clean;
         e.synced_at = chrono::Utc::now();
         e.mtime_secs = file_mtime_secs(&file_path).ok();

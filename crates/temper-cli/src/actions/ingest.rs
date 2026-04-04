@@ -497,7 +497,8 @@ pub fn write_vault_file_and_register(
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id_str)?;
 
     let content_hash = compute_content_hash(content);
-    let remote_hash = resource.content_hash.clone().unwrap_or_default();
+    // After ingest, server body_hash matches our local content_hash
+    let remote_hash = content_hash.clone();
     let rel_path = vault_path
         .strip_prefix(vault_root)
         .unwrap_or(&vault_path)

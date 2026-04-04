@@ -56,8 +56,9 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
 
                 // Update manifest entry.
                 let content_hash = ingest::compute_content_hash(&full_content);
-                entry.body_hash = content_hash;
-                entry.remote_body_hash = resource.content_hash.unwrap_or_default();
+                entry.body_hash = content_hash.clone();
+                // After pull, local content matches server — hashes are identical
+                entry.remote_body_hash = content_hash;
                 entry.synced_at = chrono::Utc::now();
                 entry.state = temper_core::types::ManifestEntryState::Clean;
                 crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
