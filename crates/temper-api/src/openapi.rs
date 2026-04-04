@@ -22,6 +22,7 @@ use temper_core::types::resource::{
         crate::handlers::profiles::list_auth_links,
         crate::handlers::events::list,
         crate::handlers::search::search,
+        crate::handlers::meta::update_meta,
     ),
     components(schemas(
         HealthResponse,
@@ -33,6 +34,8 @@ use temper_core::types::resource::{
         ProfileUpdateRequest,
         EventRow,
         SearchResultRow,
+        temper_core::types::managed_meta::MetaUpdatePayload,
+        temper_core::types::managed_meta::ManagedMeta,
         ErrorBody,
         ErrorDetail,
         temper_core::types::Profile,
@@ -45,6 +48,7 @@ use temper_core::types::resource::{
         (name = "Profile", description = "Authenticated user profile"),
         (name = "Events", description = "Activity event log"),
         (name = "Search", description = "Semantic and keyword search"),
+        (name = "Meta", description = "Resource frontmatter metadata management"),
     ),
     info(
         title = "Temper Cloud API",

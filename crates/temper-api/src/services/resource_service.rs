@@ -23,7 +23,7 @@ pub async fn list_visible(
             r#"
             WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
             SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                   r.slug, r.content_hash, r.mimetype,
+                   r.slug,
                    r.originator_profile_id, r.owner_profile_id, r.is_active,
                    r.created, r.updated
               FROM kb_resources r
@@ -45,7 +45,7 @@ pub async fn list_visible(
             r#"
             WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
             SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                   r.slug, r.content_hash, r.mimetype,
+                   r.slug,
                    r.originator_profile_id, r.owner_profile_id, r.is_active,
                    r.created, r.updated
               FROM kb_resources r
@@ -75,7 +75,7 @@ pub async fn get_visible(
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
         SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug, r.content_hash, r.mimetype,
+               r.slug,
                r.originator_profile_id, r.owner_profile_id, r.is_active,
                r.created, r.updated
           FROM kb_resources r
@@ -135,9 +135,9 @@ pub async fn create(
     sqlx::query(
         r#"
         INSERT INTO kb_resources
-            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, mimetype,
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
              originator_profile_id, owner_profile_id, is_active, created, updated)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, true, now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())
         "#,
     )
     .bind(id)
@@ -146,7 +146,6 @@ pub async fn create(
     .bind(&req.origin_uri)
     .bind(&req.title)
     .bind(&req.slug)
-    .bind(&req.mimetype)
     .bind(profile_id)
     .execute(pool)
     .await?;
@@ -175,22 +174,19 @@ pub async fn update(
 
     let new_title = req.title.as_deref().unwrap_or(&current.title);
     let new_slug = req.slug.as_deref().or(current.slug.as_deref());
-    let new_mimetype = req.mimetype.as_deref().or(current.mimetype.as_deref());
 
     sqlx::query(
         r#"
         UPDATE kb_resources
            SET title    = $1,
                slug     = $2,
-               mimetype = $3,
                updated  = now()
-         WHERE id = $4
+         WHERE id = $3
            AND is_active = true
         "#,
     )
     .bind(new_title)
     .bind(new_slug)
-    .bind(new_mimetype)
     .bind(resource_id)
     .execute(pool)
     .await?;

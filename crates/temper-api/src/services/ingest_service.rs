@@ -2,6 +2,7 @@
 //! embeddings) and writes resource + chunks to the database in a single
 //! transaction.
 
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -11,6 +12,43 @@ use crate::services::search_service::format_embedding;
 
 use temper_core::types::ingest::{unpack_chunks, IngestPayload, PackedChunk};
 use temper_core::types::resource::ResourceRow;
+
+/// Compute a `sha256:<hex>` hash of a JSON value (canonical form).
+pub fn hash_json_value(value: &serde_json::Value) -> String {
+    let serialized = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+    let mut hasher = Sha256::new();
+    hasher.update(serialized.as_bytes());
+    format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+/// Insert an event into kb_events.
+pub async fn insert_event(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    profile_id: Uuid,
+    device_id: &str,
+    context_id: Option<Uuid>,
+    resource_id: Option<Uuid>,
+    event_type: &str,
+    payload: &serde_json::Value,
+) -> ApiResult<()> {
+    let event_id = Uuid::now_v7();
+    sqlx::query(
+        r#"
+        INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, resource_id, event_type, payload, created)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        "#,
+    )
+    .bind(event_id)
+    .bind(profile_id)
+    .bind(device_id)
+    .bind(context_id)
+    .bind(resource_id)
+    .bind(event_type)
+    .bind(payload)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
 
 /// Resolve doc_type name to UUID from kb_doc_types.
 async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
@@ -23,28 +61,29 @@ async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
         .ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type: '{name}'")))
 }
 
-/// Check for content-hash dedup — returns existing resource if hash matches.
-async fn find_by_content_hash(
+/// Check for body-hash dedup — returns existing resource if hash matches.
+async fn find_by_body_hash(
     pool: &PgPool,
     profile_id: Uuid,
-    content_hash: &str,
+    body_hash: &str,
 ) -> ApiResult<Option<ResourceRow>> {
     let row = sqlx::query_as::<_, ResourceRow>(
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
         SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug, r.content_hash, r.mimetype,
+               r.slug,
                r.originator_profile_id, r.owner_profile_id, r.is_active,
                r.created, r.updated
           FROM kb_resources r
           JOIN visible v ON v.resource_id = r.id
-         WHERE r.content_hash = $2
+          JOIN kb_resource_manifests m ON m.resource_id = r.id
+         WHERE m.body_hash = $2
            AND r.is_active = true
          LIMIT 1
         "#,
     )
     .bind(profile_id)
-    .bind(content_hash)
+    .bind(body_hash)
     .fetch_optional(pool)
     .await?;
 
@@ -99,8 +138,8 @@ pub async fn ingest(
     // 2. Resolve doc_type
     let doc_type_id = resolve_doc_type(pool, &payload.doc_type_name).await?;
 
-    // 3. Content-hash dedup
-    if let Some(existing) = find_by_content_hash(pool, profile_id, &payload.content_hash).await? {
+    // 3. Body-hash dedup
+    if let Some(existing) = find_by_body_hash(pool, profile_id, &payload.content_hash).await? {
         return Ok(existing);
     }
 
@@ -108,7 +147,14 @@ pub async fn ingest(
     let chunks = unpack_chunks(&payload.chunks_packed)
         .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
 
-    // 5. Insert resource + chunks in a transaction
+    // 5. Compute meta hashes
+    let empty_json = serde_json::json!({});
+    let managed_meta = payload.managed_meta.clone().unwrap_or_else(|| empty_json.clone());
+    let open_meta = payload.open_meta.clone().unwrap_or_else(|| empty_json.clone());
+    let managed_hash = hash_json_value(&managed_meta);
+    let open_hash = hash_json_value(&open_meta);
+
+    // 6. Insert resource + manifest + chunks in a transaction
     let mut tx = pool.begin().await?;
 
     let resource_id = Uuid::now_v7();
@@ -116,13 +162,12 @@ pub async fn ingest(
         r#"
         INSERT INTO kb_resources (
             id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
-            content_hash, mimetype, resource_mode,
             originator_profile_id, owner_profile_id,
             created, updated
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10, now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $7, now(), now())
         RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
-                  slug, content_hash, mimetype,
+                  slug,
                   originator_profile_id, owner_profile_id, is_active,
                   created, updated
         "#,
@@ -133,15 +178,40 @@ pub async fn ingest(
     .bind(&payload.origin_uri)
     .bind(&payload.title)
     .bind(&payload.slug)
-    .bind(&payload.content_hash)
-    .bind(&payload.mimetype)
-    .bind(&payload.resource_mode)
     .bind(profile_id)
     .fetch_one(&mut *tx)
     .await?;
 
-    // 6. Insert chunks with embeddings
+    // Insert manifest row
+    sqlx::query(
+        r#"
+        INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
+        VALUES ($1, $2, $3, $4, $5, $6, now())
+        "#,
+    )
+    .bind(resource_id)
+    .bind(&payload.content_hash)
+    .bind(&managed_meta)
+    .bind(&open_meta)
+    .bind(&managed_hash)
+    .bind(&open_hash)
+    .execute(&mut *tx)
+    .await?;
+
+    // 7. Insert chunks with embeddings
     insert_chunks(&mut tx, resource_id, &chunks).await?;
+
+    // 8. Insert event
+    insert_event(
+        &mut tx,
+        profile_id,
+        "api",
+        Some(context.id),
+        Some(resource_id),
+        "resource.created",
+        &serde_json::json!({"body_hash": &payload.content_hash}),
+    )
+    .await?;
 
     tx.commit().await?;
 
@@ -170,23 +240,48 @@ pub async fn update(
     let chunks = unpack_chunks(&payload.chunks_packed)
         .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
 
+    // Compute meta hashes
+    let empty_json = serde_json::json!({});
+    let managed_meta = payload.managed_meta.clone().unwrap_or_else(|| empty_json.clone());
+    let open_meta = payload.open_meta.clone().unwrap_or_else(|| empty_json.clone());
+    let managed_hash = hash_json_value(&managed_meta);
+    let open_hash = hash_json_value(&open_meta);
+
     let mut tx = pool.begin().await?;
 
-    // Update resource metadata
+    // Update resource timestamp
     let resource = sqlx::query_as::<_, ResourceRow>(
         r#"
         UPDATE kb_resources
-        SET content_hash = $1, updated = now()
-        WHERE id = $2
+        SET updated = now()
+        WHERE id = $1
         RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
-                  slug, content_hash, mimetype,
+                  slug,
                   originator_profile_id, owner_profile_id, is_active,
                   created, updated
         "#,
     )
-    .bind(&payload.content_hash)
     .bind(resource_id)
     .fetch_one(&mut *tx)
+    .await?;
+
+    // Upsert manifest row
+    sqlx::query(
+        r#"
+        INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
+        VALUES ($1, $2, $3, $4, $5, $6, now())
+        ON CONFLICT (resource_id)
+        DO UPDATE SET body_hash = $2, managed_meta = $3, open_meta = $4,
+                      managed_hash = $5, open_hash = $6, updated = now()
+        "#,
+    )
+    .bind(resource_id)
+    .bind(&payload.content_hash)
+    .bind(&managed_meta)
+    .bind(&open_meta)
+    .bind(&managed_hash)
+    .bind(&open_hash)
+    .execute(&mut *tx)
     .await?;
 
     // Version-bump old chunks
@@ -228,6 +323,18 @@ pub async fn update(
             .execute(&mut *tx)
             .await?;
     }
+
+    // Insert event
+    insert_event(
+        &mut tx,
+        profile_id,
+        "api",
+        Some(resource.kb_context_id),
+        Some(resource_id),
+        "resource.modified",
+        &serde_json::json!({"body_hash": &payload.content_hash}),
+    )
+    .await?;
 
     tx.commit().await?;
 
