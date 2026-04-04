@@ -37,6 +37,8 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: "# E2E Test\n\nThis is a test document for e2e testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 

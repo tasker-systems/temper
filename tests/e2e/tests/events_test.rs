@@ -66,6 +66,8 @@ async fn events_appear_after_resource_creation(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: "# E2E Events Test\n\nThis document is used for events e2e testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 

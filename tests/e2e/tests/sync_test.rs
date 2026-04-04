@@ -61,6 +61,8 @@ async fn sync_status_detects_server_resource(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: "# Sync Test\n\nContent for sync testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -126,6 +128,8 @@ async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: "# Match\n\nSame on both sides.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -227,6 +231,8 @@ async fn sync_complete_updates_content_hash(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: "# Complete\n\nFor sync complete testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -313,6 +319,8 @@ async fn sync_manifest_returns_resources(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: "# Manifest Test\n\nContent for manifest testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -380,6 +388,8 @@ async fn sync_manifest_excludes_inactive(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: "# Will Be Deleted".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 

@@ -44,6 +44,8 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         mimetype: "text/markdown".to_string(),
         content: chunk_content.to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&chunks).expect("encode chunks"),
     };
 
