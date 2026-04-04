@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://temperkb.io/schemas/base.schema.json",
+  "type": "object",
+  "properties": {
+    "temper-id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+      "description": "UUIDv7 unique identifier"
+    },
+    "temper-type": {
+      "type": "string",
+      "enum": ["task", "goal", "session", "research", "decision", "concept"],
+      "description": "Document type"
+    },
+    "temper-context": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "Context (project) scope"
+    },
+    "temper-created": {
+      "type": "string",
+      "description": "RFC3339 creation timestamp"
+    },
+    "temper-updated": {
+      "type": "string",
+      "description": "RFC3339 last update timestamp"
+    },
+    "temper-source": {
+      "type": "string",
+      "description": "Original ingestion source path or URL"
+    },
+    "temper-legacy-id": {
+      "type": "string",
+      "description": "Previous UUID from migration"
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Display name"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Obsidian-compatible tags"
+    },
+    "aliases": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Obsidian-compatible alternative names"
+    },
+    "relates_to": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Related resources (UUIDs, slugs, or context/type/slug paths)"
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Dependencies (UUIDs, slugs, or context/type/slug paths)"
+    },
+    "extends": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Resources this extends"
+    },
+    "references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Referenced resources or external URIs"
+    },
+    "preceded_by": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Resources that precede this in sequence"
+    },
+    "derived_from": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "array", "items": { "type": "string" } }
+      ],
+      "description": "Source resources this was derived from"
+    }
+  },
+  "required": ["temper-id", "temper-type", "temper-context", "temper-created", "title"],
+  "additionalProperties": true
+}

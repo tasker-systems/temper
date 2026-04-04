@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://temperkb.io/schemas/research.schema.json",
+  "allOf": [
+    { "$ref": "base.schema.json" }
+  ],
+  "properties": {
+    "temper-type": { "const": "research" },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "URL-safe identifier"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Research date (YYYY-MM-DD)"
+    }
+  },
+  "required": ["slug", "date"],
+  "additionalProperties": true
+}

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://temperkb.io/schemas/task.schema.json",
+  "allOf": [
+    { "$ref": "base.schema.json" }
+  ],
+  "properties": {
+    "temper-type": { "const": "task" },
+    "temper-stage": {
+      "type": "string",
+      "enum": ["backlog", "in-progress", "done", "cancelled"],
+      "description": "Task workflow stage"
+    },
+    "temper-mode": {
+      "type": ["string", "null"],
+      "enum": ["plan", "build", null],
+      "description": "Work type"
+    },
+    "temper-effort": {
+      "type": ["string", "null"],
+      "enum": ["small", "medium", "large", null],
+      "description": "Work size estimate"
+    },
+    "temper-goal": {
+      "type": ["string", "null"],
+      "description": "Parent goal slug"
+    },
+    "temper-seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Ordering within goal"
+    },
+    "temper-branch": {
+      "type": ["string", "null"],
+      "description": "Git branch name"
+    },
+    "temper-pr": {
+      "type": ["string", "null"],
+      "description": "Pull request URL or identifier"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "URL-safe identifier"
+    }
+  },
+  "required": ["temper-stage", "slug"],
+  "additionalProperties": true
+}
