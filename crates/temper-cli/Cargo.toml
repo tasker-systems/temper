@@ -39,4 +39,7 @@ default = ["extract", "embed"]
 extract = ["temper-ingest/extract"]
 embed = ["temper-ingest/embed"]
 
+[package.metadata.cargo-machete]
+ignored = ["indicatif"]
+
 [dev-dependencies]

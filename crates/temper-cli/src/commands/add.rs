@@ -394,12 +394,7 @@ fn promote_resource(
 // URL add
 // ---------------------------------------------------------------------------
 
-fn run_url(
-    url: &str,
-    context: &str,
-    doc_type: &str,
-    format: &str,
-) -> crate::error::Result<()> {
+fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::error::Result<()> {
     let fmt = OutputFormat::parse(format);
 
     if fmt == OutputFormat::Text {
@@ -808,9 +803,7 @@ fn run_directory(
         } else {
             String::new()
         };
-        output::success(format!(
-            "{added} added, {failed} failed{skip_msg}{detail}"
-        ));
+        output::success(format!("{added} added, {failed} failed{skip_msg}{detail}"));
     }
 
     Ok(())
@@ -1178,9 +1171,15 @@ mod tests {
             .collect();
 
         assert!(names.contains(&"top.md"), "top.md not found in {names:?}");
-        assert!(names.contains(&"inner.md"), "inner.md not found in {names:?}");
+        assert!(
+            names.contains(&"inner.md"),
+            "inner.md not found in {names:?}"
+        );
         assert!(!names.contains(&"deep.md"), "deep.md should be excluded");
-        assert!(!names.contains(&"too_deep.md"), "too_deep.md should be excluded");
+        assert!(
+            !names.contains(&"too_deep.md"),
+            "too_deep.md should be excluded"
+        );
     }
 
     #[test]
@@ -1207,7 +1206,10 @@ mod tests {
         assert!(names.contains(&"doc.md"), "doc.md should be included");
         assert!(names.contains(&"notes.txt"), "notes.txt should be included");
         assert!(names.contains(&"page.html"), "page.html should be included");
-        assert!(!names.contains(&"image.png"), "image.png should be excluded");
+        assert!(
+            !names.contains(&"image.png"),
+            "image.png should be excluded"
+        );
         assert!(!names.contains(&"data.csv"), "data.csv should be excluded");
     }
 

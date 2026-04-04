@@ -85,8 +85,8 @@ temper init
 # Add a context for your project
 temper context add myapp
 
-# Import your docs — temper extracts markdown and indexes it
-temper import --context myapp --dir ~/projects/myapp/docs
+# Add your docs — temper extracts markdown and indexes it
+temper add --context myapp --dir ~/projects/myapp/docs
 
 # Search across your vault
 temper search "authentication decisions"
@@ -135,8 +135,7 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper session save [title]` | Create/update session note |
 | `temper session list` | List recent sessions |
 | `temper research save <title>` | Create research note |
-| `temper import <path>` | Import a file into the vault (managed, frontmatter, sync-ready) |
-| `temper add <path>` | Add a file to the cloud (searchable, pullable, not vault-managed) |
+| `temper add <path>` | Add a file, URL, or directory to the vault (managed, frontmatter, sync-ready) |
 
 ### Goals and Tasks
 
