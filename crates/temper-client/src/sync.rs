@@ -7,7 +7,8 @@ use reqwest::Method;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::{
-    SyncCompleteRequest, SyncCompleteResponse, SyncStatusRequest, SyncStatusResponse,
+    SyncCompleteRequest, SyncCompleteResponse, SyncManifestResponse, SyncStatusRequest,
+    SyncStatusResponse,
 };
 
 /// Sub-client for sync operations.
@@ -41,6 +42,15 @@ impl<'a> SyncClient<'a> {
         let req = self.http.post("/api/sync/complete").json(request);
         self.http
             .send_json(&Method::POST, "/api/sync/complete", req, Some(&token))
+            .await
+    }
+
+    /// GET /api/sync/manifest — fetch all resource metadata for manifest recovery.
+    pub async fn manifest(&self) -> Result<SyncManifestResponse> {
+        let token = self.http.resolve_token()?;
+        let req = self.http.get("/api/sync/manifest");
+        self.http
+            .send_json(&Method::GET, "/api/sync/manifest", req, Some(&token))
             .await
     }
 }

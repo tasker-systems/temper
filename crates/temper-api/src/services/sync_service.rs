@@ -11,8 +11,9 @@ use uuid::Uuid;
 use crate::error::ApiResult;
 
 use temper_core::types::sync::{
-    SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem, SyncPullItem, SyncPushItem,
-    SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
+    SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem, SyncManifestItem,
+    SyncManifestResponse, SyncPullItem, SyncPushItem, SyncRemovedItem, SyncStatusRequest,
+    SyncStatusResponse,
 };
 
 /// Raw row from sync_diff_for_device().
@@ -164,6 +165,62 @@ pub async fn complete_sync_round(
         last_sync_at: Utc::now(),
         updated_count,
     })
+}
+
+/// Raw row from the manifest query.
+#[derive(Debug, sqlx::FromRow)]
+struct ManifestRow {
+    resource_id: Uuid,
+    context_name: String,
+    doc_type_name: String,
+    slug: String,
+    content_hash: String,
+}
+
+/// Fetch all active resources for a profile — metadata only, no content.
+/// Used by `GET /api/sync/manifest` for manifest recovery (refresh/reset).
+pub async fn fetch_manifest(
+    pool: &PgPool,
+    profile_id: Uuid,
+) -> ApiResult<SyncManifestResponse> {
+    let rows = sqlx::query_as::<_, ManifestRow>(
+        r#"
+        SELECT r.id AS resource_id,
+               c.name AS context_name,
+               d.name AS doc_type_name,
+               COALESCE(r.slug, '') AS slug,
+               COALESCE(r.content_hash, '') AS content_hash
+          FROM kb_resources r
+          JOIN kb_contexts c ON c.id = r.kb_context_id
+          JOIN kb_doc_types d ON d.id = r.kb_doc_type_id
+         WHERE r.owner_profile_id = $1
+           AND r.is_active = true
+         ORDER BY c.name, d.name, r.slug
+        "#,
+    )
+    .bind(profile_id)
+    .fetch_all(pool)
+    .await?;
+
+    let items = rows
+        .into_iter()
+        .map(|row| {
+            let uri = format!(
+                "kb://{}/{}/{}",
+                row.context_name, row.doc_type_name, row.resource_id
+            );
+            SyncManifestItem {
+                resource_id: row.resource_id,
+                context: row.context_name,
+                doc_type: row.doc_type_name,
+                slug: row.slug,
+                content_hash: row.content_hash,
+                uri,
+            }
+        })
+        .collect();
+
+    Ok(SyncManifestResponse { items })
 }
 
 #[cfg(test)]

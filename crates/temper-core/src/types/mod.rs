@@ -57,8 +57,8 @@ pub use resource::{
 };
 pub use sync::{
     MergedResource, ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
-    SyncContextEntries, SyncManifestEntry, SyncPullItem, SyncPushItem, SyncRemovedItem,
-    SyncResolveRequest, SyncStatusRequest, SyncStatusResponse,
+    SyncContextEntries, SyncManifestEntry, SyncManifestItem, SyncManifestResponse, SyncPullItem,
+    SyncPushItem, SyncRemovedItem, SyncResolveRequest, SyncStatusRequest, SyncStatusResponse,
 };
 pub use team::{Team, TeamMember, TeamRole};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};

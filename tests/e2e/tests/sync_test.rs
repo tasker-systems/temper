@@ -254,3 +254,158 @@ async fn sync_complete_updates_content_hash(pool: sqlx::PgPool) {
 
     assert_eq!(resp.updated_count, 1);
 }
+
+/// GET /api/sync/manifest — empty vault returns empty manifest.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sync_manifest_empty(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    let resp = app
+        .client
+        .sync()
+        .manifest()
+        .await
+        .expect("sync manifest failed");
+
+    // New profile with no resources — manifest should be empty.
+    // (Seed resource belongs to system profile, not this test user.)
+    assert!(
+        resp.items.is_empty(),
+        "expected empty manifest for new profile, got {} items",
+        resp.items.len()
+    );
+}
+
+/// GET /api/sync/manifest — returns ingested resources with correct metadata.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sync_manifest_returns_resources(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("mfst-res")
+        .await
+        .expect("context create failed");
+
+    let content_hash =
+        "mfstres000000000000000000000000000000000000000000000000000000000".to_string();
+
+    let payload = IngestPayload {
+        title: "Manifest Res Doc".to_string(),
+        origin_uri: "test://e2e/mfst-res".to_string(),
+        context_name: "mfst-res".to_string(),
+        doc_type_name: "research".to_string(),
+        resource_mode: "imported".to_string(),
+        content_hash: content_hash.clone(),
+        slug: "mfst-res-doc".to_string(),
+        mimetype: "text/markdown".to_string(),
+        content: "# Manifest Test\n\nContent for manifest testing.".to_string(),
+        metadata: None,
+        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+    };
+
+    let resource = app
+        .client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("ingest failed");
+
+    let resp = app
+        .client
+        .sync()
+        .manifest()
+        .await
+        .expect("sync manifest failed");
+
+    assert!(
+        !resp.items.is_empty(),
+        "expected at least one item in manifest"
+    );
+
+    let item = resp
+        .items
+        .iter()
+        .find(|i| i.resource_id == resource.id)
+        .expect("expected ingested resource in manifest");
+
+    assert_eq!(item.context, "mfst-res");
+    assert_eq!(item.doc_type, "research");
+    assert_eq!(item.slug, "mfst-res-doc");
+    assert_eq!(item.content_hash, content_hash);
+    assert!(
+        item.uri.contains(&resource.id.to_string()),
+        "URI should contain resource ID"
+    );
+}
+
+/// GET /api/sync/manifest — inactive resources are excluded.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sync_manifest_excludes_inactive(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("manifest-inactive")
+        .await
+        .expect("context create failed");
+
+    let payload = IngestPayload {
+        title: "Will Be Deleted".to_string(),
+        origin_uri: "test://e2e/sync-manifest-inactive".to_string(),
+        context_name: "manifest-inactive".to_string(),
+        doc_type_name: "research".to_string(),
+        resource_mode: "imported".to_string(),
+        content_hash: "inactive00000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+        slug: "will-be-deleted".to_string(),
+        mimetype: "text/markdown".to_string(),
+        content: "# Will Be Deleted".to_string(),
+        metadata: None,
+        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+    };
+
+    let resource = app
+        .client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("ingest failed");
+
+    // Delete the resource (soft delete — sets is_active=false)
+    app.client
+        .resources()
+        .delete(resource.id)
+        .await
+        .expect("delete failed");
+
+    let resp = app
+        .client
+        .sync()
+        .manifest()
+        .await
+        .expect("sync manifest failed");
+
+    assert!(
+        !resp.items.iter().any(|i| i.resource_id == resource.id),
+        "deleted resource should not appear in manifest"
+    );
+}

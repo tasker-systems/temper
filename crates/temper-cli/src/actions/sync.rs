@@ -769,6 +769,349 @@ async fn merge_and_push_resource(
 }
 
 // ---------------------------------------------------------------------------
+// Manifest refresh / reset
+// ---------------------------------------------------------------------------
+
+/// Result of a `sync refresh` operation.
+#[derive(Debug)]
+pub struct RefreshResult {
+    pub matched: usize,
+    pub added: usize,
+    pub orphaned: usize,
+    pub pending_preserved: usize,
+}
+
+/// Result of a `sync reset` operation.
+#[derive(Debug)]
+pub struct ResetResult {
+    pub matched_by_id: usize,
+    pub matched_by_hash: usize,
+    pub unmatched_local: usize,
+    pub unmatched_remote: usize,
+}
+
+/// Back up manifest.json before a destructive reset.
+pub fn backup_manifest(temper_dir: &Path) -> Result<()> {
+    let manifest_path = temper_dir.join("manifest.json");
+    if manifest_path.exists() {
+        let backup_name = format!(
+            "manifest.backup.{}.json",
+            chrono::Utc::now().format("%Y%m%dT%H%M%S")
+        );
+        let backup_path = temper_dir.join(backup_name);
+        std::fs::copy(&manifest_path, &backup_path)?;
+    }
+    Ok(())
+}
+
+/// Refresh: fetch server manifest and interleave into local manifest.
+///
+/// - De-duplicate by resource UUID (server wins for matching IDs)
+/// - De-duplicate by content hash within same context/doc_type
+/// - Preserve local-only Pending entries that haven't been pushed yet
+/// - Update remote_hash for all matched entries
+pub async fn sync_refresh(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+) -> Result<RefreshResult> {
+    // Rehash local manifest first so content_hash values are current
+    rehash_manifest(manifest, vault_root)?;
+
+    let server = client
+        .sync()
+        .manifest()
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+
+    let mut matched = 0;
+    let mut added = 0;
+    let pending_preserved;
+
+    // Build a content-hash index for de-duplication:
+    // (context, doc_type, content_hash) -> manifest entry UUID
+    let mut hash_index: std::collections::HashMap<(String, String, String), Uuid> =
+        std::collections::HashMap::new();
+    for (id, entry) in &manifest.entries {
+        if !entry.content_hash.is_empty() {
+            let parts: Vec<&str> = entry.path.split('/').collect();
+            let ctx = parts.first().copied().unwrap_or("default").to_string();
+            let doc_type = if parts.len() > 1 {
+                parts[1].to_string()
+            } else {
+                "resource".to_string()
+            };
+            hash_index.insert((ctx, doc_type, entry.content_hash.clone()), *id);
+        }
+    }
+
+    // Track which server items were matched
+    let mut matched_server_ids: std::collections::HashSet<Uuid> =
+        std::collections::HashSet::new();
+
+    for item in &server.items {
+        if manifest.entries.contains_key(&item.resource_id) {
+            // UUID match — update remote_hash
+            if let Some(entry) = manifest.entries.get_mut(&item.resource_id) {
+                entry.remote_hash = item.content_hash.clone();
+                if entry.content_hash == item.content_hash {
+                    entry.state = ManifestEntryState::Clean;
+                }
+            }
+            matched += 1;
+            matched_server_ids.insert(item.resource_id);
+        } else {
+            // Check content hash dedup
+            let key = (
+                item.context.clone(),
+                item.doc_type.clone(),
+                item.content_hash.clone(),
+            );
+            if let Some(&existing_id) = hash_index.get(&key) {
+                // Content match — migrate the manifest entry to the server's resource_id
+                if let Some(entry) = manifest.entries.remove(&existing_id) {
+                    let mut updated = entry;
+                    updated.remote_hash = item.content_hash.clone();
+                    updated.state = ManifestEntryState::Clean;
+                    manifest.entries.insert(item.resource_id, updated);
+                }
+                matched += 1;
+                matched_server_ids.insert(item.resource_id);
+            } else {
+                // Genuinely new from server — add as Pending (to pull on next sync)
+                manifest.entries.insert(
+                    item.resource_id,
+                    temper_core::types::ManifestEntry {
+                        path: format!("{}/{}/{}.md", item.context, item.doc_type, item.slug),
+                        content_hash: String::new(),
+                        remote_hash: item.content_hash.clone(),
+                        synced_at: chrono::Utc::now(),
+                        state: ManifestEntryState::Pending,
+                        mtime_secs: None,
+                    },
+                );
+                added += 1;
+            }
+        }
+    }
+
+    // Count orphaned entries (local entries with no server match, excluding Pending)
+    let orphaned = manifest
+        .entries
+        .iter()
+        .filter(|(id, entry)| {
+            !matched_server_ids.contains(id) && entry.state != ManifestEntryState::Pending
+        })
+        .count();
+
+    // Count preserved Pending entries (were already Pending before refresh)
+    pending_preserved = manifest
+        .entries
+        .iter()
+        .filter(|(id, entry)| {
+            !matched_server_ids.contains(id) && entry.state == ManifestEntryState::Pending
+        })
+        .count();
+
+    Ok(RefreshResult {
+        matched,
+        added,
+        orphaned,
+        pending_preserved,
+    })
+}
+
+/// Reset: rebuild manifest from scratch using server manifest + vault scan.
+///
+/// 1. Pull full resource list from server
+/// 2. Keep only device_id from current manifest
+/// 3. Walk vault files, match to server by temper-id frontmatter or content hash
+/// 4. Rebuild all local content hashes
+/// 5. Mark unmatched local files as Pending (new)
+/// 6. Mark unmatched server resources for pull (Pending with empty content_hash)
+pub async fn sync_reset(
+    client: &temper_client::TemperClient,
+    old_manifest: &Manifest,
+    vault_root: &Path,
+) -> Result<(Manifest, ResetResult)> {
+    let server = client
+        .sync()
+        .manifest()
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+
+    let mut new_manifest = Manifest::new(old_manifest.device_id.clone());
+    let mut matched_by_id = 0;
+    let mut matched_by_hash = 0;
+
+    // Build server index by resource_id
+    let server_by_id: std::collections::HashMap<Uuid, &temper_core::types::SyncManifestItem> =
+        server.items.iter().map(|i| (i.resource_id, i)).collect();
+
+    // Build server index by content_hash for fallback matching
+    // Key: (context, doc_type, content_hash) -> server item
+    let mut server_by_hash: std::collections::HashMap<
+        (String, String, String),
+        &temper_core::types::SyncManifestItem,
+    > = std::collections::HashMap::new();
+    for item in &server.items {
+        if !item.content_hash.is_empty() {
+            server_by_hash.insert(
+                (
+                    item.context.clone(),
+                    item.doc_type.clone(),
+                    item.content_hash.clone(),
+                ),
+                item,
+            );
+        }
+    }
+
+    // Track which server resources have been matched
+    let mut matched_server_ids: std::collections::HashSet<Uuid> =
+        std::collections::HashSet::new();
+
+    // Walk vault files
+    for entry in ignore::WalkBuilder::new(vault_root)
+        .hidden(true)
+        .build()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+
+        if path.starts_with(vault_root.join(".temper")) {
+            continue;
+        }
+
+        let rel_path = path
+            .strip_prefix(vault_root)
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string();
+
+        let content = std::fs::read_to_string(path)?;
+        let body = strip_frontmatter(&content);
+        let content_hash = ingest::compute_content_hash(body);
+        let mtime = file_mtime_secs(path).ok();
+
+        let fm = ingest::parse_source_frontmatter(&content);
+
+        // Try matching by temper-id frontmatter first
+        let temper_id = fm
+            .as_ref()
+            .and_then(|f| f.legacy_id.as_deref())
+            .and_then(|id| Uuid::parse_str(id).ok());
+
+        if let Some(tid) = temper_id {
+            if let Some(server_item) = server_by_id.get(&tid) {
+                // Match by temper-id
+                new_manifest.entries.insert(
+                    tid,
+                    temper_core::types::ManifestEntry {
+                        path: rel_path,
+                        content_hash,
+                        remote_hash: server_item.content_hash.clone(),
+                        synced_at: chrono::Utc::now(),
+                        state: ManifestEntryState::Clean,
+                        mtime_secs: mtime,
+                    },
+                );
+                matched_by_id += 1;
+                matched_server_ids.insert(tid);
+                continue;
+            }
+        }
+
+        // Try matching by content hash
+        let fm_context = fm.as_ref().and_then(|f| f.context.as_deref());
+        let fm_doc_type = fm.as_ref().and_then(|f| f.doc_type.as_deref());
+
+        let (ctx, doc_type) =
+            match ingest::infer_context_and_doctype(vault_root, path, fm_context, fm_doc_type) {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+
+        let hash_key = (ctx, doc_type, content_hash.clone());
+        if let Some(server_item) = server_by_hash.get(&hash_key) {
+            if !matched_server_ids.contains(&server_item.resource_id) {
+                new_manifest.entries.insert(
+                    server_item.resource_id,
+                    temper_core::types::ManifestEntry {
+                        path: rel_path,
+                        content_hash,
+                        remote_hash: server_item.content_hash.clone(),
+                        synced_at: chrono::Utc::now(),
+                        state: ManifestEntryState::Clean,
+                        mtime_secs: mtime,
+                    },
+                );
+                matched_by_hash += 1;
+                matched_server_ids.insert(server_item.resource_id);
+                continue;
+            }
+        }
+
+        // Unmatched local file — mark as Pending (new, will push on next sync)
+        let resource_id = Uuid::now_v7();
+        new_manifest.entries.insert(
+            resource_id,
+            temper_core::types::ManifestEntry {
+                path: rel_path,
+                content_hash,
+                remote_hash: String::new(),
+                synced_at: chrono::Utc::now(),
+                state: ManifestEntryState::Pending,
+                mtime_secs: mtime,
+            },
+        );
+    }
+
+    // Unmatched server resources — add as Pending entries (will pull on next sync)
+    let unmatched_remote = server
+        .items
+        .iter()
+        .filter(|item| !matched_server_ids.contains(&item.resource_id))
+        .count();
+
+    for item in &server.items {
+        if !matched_server_ids.contains(&item.resource_id) {
+            new_manifest.entries.insert(
+                item.resource_id,
+                temper_core::types::ManifestEntry {
+                    path: format!("{}/{}/{}.md", item.context, item.doc_type, item.slug),
+                    content_hash: String::new(),
+                    remote_hash: item.content_hash.clone(),
+                    synced_at: chrono::Utc::now(),
+                    state: ManifestEntryState::Pending,
+                    mtime_secs: None,
+                },
+            );
+        }
+    }
+
+    let unmatched_local = new_manifest
+        .entries
+        .values()
+        .filter(|e| e.state == ManifestEntryState::Pending && e.remote_hash.is_empty())
+        .count();
+
+    Ok((
+        new_manifest,
+        ResetResult {
+            matched_by_id,
+            matched_by_hash,
+            unmatched_local,
+            unmatched_remote,
+        },
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
