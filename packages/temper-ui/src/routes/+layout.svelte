@@ -7,7 +7,7 @@
 
 <svelte:head>
   <title>temper — clarify your intention</title>
-  <meta name="description" content="CLI-first knowledge base with semantic search, frontmatter-driven structure, and cloud sync." />
+  <meta name="description" content="A knowledge base for builders. Know what was decided, what's deferred, and what comes next. Every session builds on the last. Temper your context." />
 </svelte:head>
 
 <div class="app">

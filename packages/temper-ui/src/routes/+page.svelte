@@ -3,6 +3,7 @@
   import Section from '$lib/components/landing/Section.svelte';
   import CliBlock from '$lib/components/landing/CliBlock.svelte';
   import AgentTranscript from '$lib/components/landing/AgentTranscript.svelte';
+  import Footer from '$lib/components/landing/Footer.svelte';
 </script>
 
 <Hero />
@@ -29,11 +30,11 @@
   <div class="workflow">
     <div class="workflow-step">
       <span class="workflow-cmd">temper init</span>
-      <span class="workflow-desc">Create a vault — a directory of markdown files with a temper.toml config</span>
+      <span class="workflow-desc">Create a vault and tell temper how you work — your tools, your conventions, your rhythm.</span>
     </div>
     <div class="workflow-step">
-      <span class="workflow-cmd">temper add</span>
-      <span class="workflow-desc">Write markdown with frontmatter. Temper infers context, doc type, and relationships.</span>
+      <span class="workflow-cmd">temper import</span>
+      <span class="workflow-desc">Bring in your docs. Temper extracts markdown, adds frontmatter, and makes everything searchable.</span>
     </div>
     <div class="workflow-step">
       <span class="workflow-cmd">temper search</span>
@@ -116,150 +117,21 @@
   </div>
 </Section>
 
-<!-- Footer -->
-<footer class="footer">
-  <div class="footer-logo">temper</div>
-  <div class="footer-links">
-    <a href="https://github.com/tasker-systems/temper">GitHub</a>
-    <a href="/docs">Docs</a>
-    <a href="https://github.com/tasker-systems/temper/blob/main/LICENSE">MIT License</a>
-  </div>
-</footer>
+<Footer />
 
 <style>
-  /* Workflow steps */
-  .workflow {
-    display: flex;
-    flex-direction: column;
-    gap: 1.2rem;
-    margin-top: 1.5rem;
-  }
-
-  .workflow-step {
-    display: flex;
-    align-items: flex-start;
-    gap: 1.2rem;
-  }
-
-  .workflow-cmd {
-    font-family: var(--mono);
-    font-size: 0.75rem;
-    padding: 0.4rem 0.8rem;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: var(--blue);
-    white-space: nowrap;
-    min-width: 140px;
-  }
-
-  .workflow-desc {
-    font-family: var(--serif);
-    font-size: 0.9rem;
-    color: var(--text-dim);
-    padding-top: 0.3rem;
-    line-height: 1.7;
-  }
-
-  /* Concept cards */
-  .concepts {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-    gap: 1rem;
-    margin-top: 1.5rem;
-  }
-
-  .concept {
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    padding: 1.2rem;
-    transition: border-color 0.2s;
-  }
-
-  .concept:hover {
-    border-color: var(--blue-border-dim);
-  }
-
-  .concept-name {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    color: var(--blue);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 0.5rem;
-  }
-
-  .concept :global(p) {
-    font-size: 0.85rem;
-    color: var(--text-dim);
-    line-height: 1.6;
-    margin-bottom: 0;
-  }
-
-  /* After transcript spacing */
-  .after-transcript {
-    margin-top: 1.5rem;
-  }
-
-  /* Cloud features */
-  .cloud-features {
-    display: flex;
-    flex-direction: column;
-    gap: 0.8rem;
-    margin-top: 1.5rem;
-  }
-
-  .cloud-feature {
-    display: flex;
-    gap: 1rem;
-    align-items: baseline;
-  }
-
-  .dot {
-    width: 4px;
-    height: 4px;
-    background: var(--blue);
-    border-radius: 50%;
-    flex-shrink: 0;
-    margin-top: 0.5rem;
-  }
-
-  .cloud-feature span {
-    font-family: var(--serif);
-    font-size: 0.95rem;
-    color: var(--text-mid);
-  }
-
-  /* Footer */
-  .footer {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 4rem 2.5rem;
-    border-top: 1px solid var(--rule);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-  }
-
-  .footer-logo {
-    font-family: var(--mono);
-    font-size: 0.7rem;
-    color: var(--blue-dim);
-    letter-spacing: 0.1em;
-  }
-
-  .footer-links {
-    display: flex;
-    gap: 1.5rem;
-  }
-
-  .footer-links a {
-    font-family: var(--mono);
-    font-size: 0.65rem;
-    color: rgba(255, 255, 255, 0.25);
-    text-decoration: none;
-    letter-spacing: 0.05em;
-    transition: color 0.2s;
-  }
-
-  .footer-links a:hover {
-    color: var(--text-dim);
-  }
+  .workflow { display: flex; flex-direction: column; gap: 1.2rem; margin-top: 1.5rem; }
+  .workflow-step { display: flex; align-items: flex-start; gap: 1.2rem; }
+  .workflow-cmd { font-family: var(--mono); font-size: 0.75rem; padding: 0.4rem 0.8rem; border: 1px solid rgba(255, 255, 255, 0.1); color: var(--blue); white-space: nowrap; min-width: 140px; }
+  .workflow-desc { font-family: var(--serif); font-size: 0.9rem; color: var(--text-dim); padding-top: 0.3rem; line-height: 1.7; }
+  .concepts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
+  .concept { border: 1px solid rgba(255, 255, 255, 0.06); padding: 1.2rem; transition: border-color 0.2s; }
+  .concept:hover { border-color: var(--blue-border-dim); }
+  .concept-name { font-family: var(--mono); font-size: 0.7rem; color: var(--blue); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
+  .concept :global(p) { font-size: 0.85rem; color: var(--text-dim); line-height: 1.6; margin-bottom: 0; }
+  .after-transcript { margin-top: 1.5rem; }
+  .cloud-features { display: flex; flex-direction: column; gap: 0.8rem; margin-top: 1.5rem; }
+  .cloud-feature { display: flex; gap: 1rem; align-items: baseline; }
+  .dot { width: 4px; height: 4px; background: var(--blue); border-radius: 50%; flex-shrink: 0; margin-top: 0.5rem; }
+  .cloud-feature span { font-family: var(--serif); font-size: 0.95rem; color: var(--text-mid); }
 </style>

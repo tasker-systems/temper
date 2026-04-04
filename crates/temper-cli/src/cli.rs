@@ -418,4 +418,16 @@ pub enum SyncAction {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    /// Refresh manifest from server (non-destructive interleave)
+    Refresh {
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Reset manifest from scratch (backup + full rebuild)
+    Reset {
+        /// Output format
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }

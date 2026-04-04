@@ -5,8 +5,9 @@
 <section class="hero">
   <h1>Clarify your <em>intention</em></h1>
   <p class="tagline">
-    Everything resolves to markdown. The throughline is always visible.
-    The system gets out of the way.
+    Know what was decided, what's deferred, and what comes next.
+    Every session builds on the last.
+    <span class="tagline-brand">temper</span> your context.
   </p>
   <div class="hero-ctas">
     <a href="/docs" class="primary">Get Started</a>
@@ -60,6 +61,14 @@
     max-width: 36em;
     margin-bottom: 3rem;
     line-height: 1.7;
+  }
+
+  .tagline-brand {
+    color: var(--blue);
+    font-style: normal;
+    font-family: var(--mono);
+    font-size: 1rem;
+    letter-spacing: 0.05em;
   }
 
   .hero-ctas {

@@ -1,6 +1,7 @@
 <script>
   import Section from '$lib/components/landing/Section.svelte';
   import CliBlock from '$lib/components/landing/CliBlock.svelte';
+  import Footer from '$lib/components/landing/Footer.svelte';
 </script>
 
 <svelte:head>
@@ -50,7 +51,6 @@
   </div>
 </section>
 
-<!-- The problem -->
 <Section label="The problem">
   <h2>The <em>blank</em> session</h2>
   <p>You're three sessions into a feature. On Tuesday you chose JWT rotation over session tokens. Wednesday you explored two caching approaches and picked the one with simpler invalidation. Now it's Friday, and the agent has no idea any of that happened.</p>
@@ -190,14 +190,7 @@
   <p>Temper also works as a <a href="/agents">direct context layer for agents</a> — through the CLI, MCP server, and generated skill files. If your agent can read files, it can use temper.</p>
 </div>
 
-<footer class="footer">
-  <div class="footer-logo">temper</div>
-  <div class="footer-links">
-    <a href="https://github.com/tasker-systems/temper">GitHub</a>
-    <a href="/docs">Docs</a>
-    <a href="https://github.com/tasker-systems/temper/blob/main/LICENSE">MIT License</a>
-  </div>
-</footer>
+<Footer />
 
 <style>
   .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 6rem 2.5rem 4rem; }
@@ -277,11 +270,6 @@
   .cross-sell p { font-family: var(--serif); font-size: 0.95rem; color: var(--text-dim); font-style: italic; text-align: center; line-height: 1.8; }
   .cross-sell a { color: var(--blue); text-decoration: none; transition: color 0.2s; }
   .cross-sell a:hover { color: var(--text); }
-  .footer { max-width: 800px; margin: 0 auto; padding: 4rem 2.5rem; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: center; }
-  .footer-logo { font-family: var(--mono); font-size: 0.7rem; color: var(--blue-dim); letter-spacing: 0.1em; }
-  .footer-links { display: flex; gap: 1.5rem; }
-  .footer-links a { font-family: var(--mono); font-size: 0.65rem; color: rgba(255, 255, 255, 0.25); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
-  .footer-links a:hover { color: var(--text-dim); }
   @media (max-width: 640px) {
     .rot-comparison, .building-blocks { grid-template-columns: 1fr; }
     .warmup-line { flex-direction: column; gap: 0.2rem; }

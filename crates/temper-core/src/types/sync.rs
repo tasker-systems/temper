@@ -93,6 +93,27 @@ pub struct SyncCompleteResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Manifest endpoint (GET /api/sync/manifest)
+// ---------------------------------------------------------------------------
+
+/// A single resource entry in the server manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncManifestItem {
+    pub resource_id: Uuid,
+    pub context: String,
+    pub doc_type: String,
+    pub slug: String,
+    pub content_hash: String,
+    pub uri: String,
+}
+
+/// Response body for `GET /api/sync/manifest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncManifestResponse {
+    pub items: Vec<SyncManifestItem>,
+}
+
+// ---------------------------------------------------------------------------
 // Resolve endpoint (I6c — placeholder types)
 // ---------------------------------------------------------------------------
 
@@ -189,6 +210,25 @@ mod tests {
             serde_json::to_string(&ResolutionType::Merged).unwrap(),
             "\"merged\""
         );
+    }
+
+    #[test]
+    fn sync_manifest_response_serde_roundtrip() {
+        let resp = SyncManifestResponse {
+            items: vec![SyncManifestItem {
+                resource_id: Uuid::nil(),
+                context: "temper".to_string(),
+                doc_type: "task".to_string(),
+                slug: "my-task".to_string(),
+                content_hash: "sha256:abc".to_string(),
+                uri: "kb://temper/task/00000000-0000-0000-0000-000000000000".to_string(),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: SyncManifestResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.items.len(), 1);
+        assert_eq!(parsed.items[0].context, "temper");
+        assert_eq!(parsed.items[0].slug, "my-task");
     }
 
     #[test]

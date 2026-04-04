@@ -358,6 +358,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         Commands::Sync { action } => match action {
             SyncAction::Run { context, format } => commands::sync_cmd::run(&context, &format),
             SyncAction::Status { context, format } => commands::sync_cmd::status(&context, &format),
+            SyncAction::Refresh { format } => commands::sync_cmd::refresh(&format),
+            SyncAction::Reset { format } => commands::sync_cmd::reset(&format),
         },
         Commands::Search {
             query,

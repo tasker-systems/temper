@@ -7,7 +7,8 @@ use crate::services::sync_service;
 use crate::state::AppState;
 
 use temper_core::types::sync::{
-    SyncCompleteRequest, SyncCompleteResponse, SyncStatusRequest, SyncStatusResponse,
+    SyncCompleteRequest, SyncCompleteResponse, SyncManifestResponse, SyncStatusRequest,
+    SyncStatusResponse,
 };
 
 pub async fn status(
@@ -26,6 +27,15 @@ pub async fn complete(
     Json(body): Json<SyncCompleteRequest>,
 ) -> ApiResult<Json<SyncCompleteResponse>> {
     sync_service::complete_sync_round(&state.pool, auth.0.profile.id, body)
+        .await
+        .map(Json)
+}
+
+pub async fn manifest(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<SyncManifestResponse>> {
+    sync_service::fetch_manifest(&state.pool, auth.0.profile.id)
         .await
         .map(Json)
 }

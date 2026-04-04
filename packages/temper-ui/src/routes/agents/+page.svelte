@@ -1,6 +1,7 @@
 <script>
   import Section from '$lib/components/landing/Section.svelte';
   import CliBlock from '$lib/components/landing/CliBlock.svelte';
+  import Footer from '$lib/components/landing/Footer.svelte';
 </script>
 
 <svelte:head>
@@ -76,15 +77,15 @@
     <div class="config-file">
       <div class="config-comment">// .claude/settings.local.json</div>
       <div class="config-line">{'{'}</div>
-      <div class="config-line">  <span class="config-key">"hooks"</span>: {'{'}</div>
-      <div class="config-line">    <span class="config-key">"SessionStart"</span>: [{'{'}</div>
-      <div class="config-line">      <span class="config-key">"matcher"</span>: <span class="config-val">"startup"</span>,</div>
-      <div class="config-line">      <span class="config-key">"hooks"</span>: [{'{'}</div>
-      <div class="config-line">        <span class="config-key">"type"</span>: <span class="config-val">"command"</span>,</div>
-      <div class="config-line">        <span class="config-key">"command"</span>: <span class="config-val">"temper warmup --context myapp"</span></div>
-      <div class="config-line">      {'}'}]</div>
-      <div class="config-line">    {'}'}]</div>
-      <div class="config-line">  {'}'}</div>
+      <div class="config-line" style="padding-left: 2ch"><span class="config-key">"hooks"</span>: {'{'}</div>
+      <div class="config-line" style="padding-left: 4ch"><span class="config-key">"SessionStart"</span>: [{'{'}</div>
+      <div class="config-line" style="padding-left: 6ch"><span class="config-key">"matcher"</span>: <span class="config-val">"startup"</span>,</div>
+      <div class="config-line" style="padding-left: 6ch"><span class="config-key">"hooks"</span>: [{'{'}</div>
+      <div class="config-line" style="padding-left: 8ch"><span class="config-key">"type"</span>: <span class="config-val">"command"</span>,</div>
+      <div class="config-line" style="padding-left: 8ch"><span class="config-key">"command"</span>: <span class="config-val">"temper warmup --context myapp"</span></div>
+      <div class="config-line" style="padding-left: 6ch">{'}'}]</div>
+      <div class="config-line" style="padding-left: 4ch">{'}'}]</div>
+      <div class="config-line" style="padding-left: 2ch">{'}'}</div>
       <div class="config-line">{'}'}</div>
     </div>
   </CliBlock>
@@ -161,14 +162,7 @@
   <p>Agents work best when <a href="/builders">humans temper the context</a>. Temper's session-over-session workflow gives builders and agents the same throughline — what we're building, why, what's decided, and what comes next.</p>
 </div>
 
-<footer class="footer">
-  <div class="footer-logo">temper</div>
-  <div class="footer-links">
-    <a href="https://github.com/tasker-systems/temper">GitHub</a>
-    <a href="/docs">Docs</a>
-    <a href="https://github.com/tasker-systems/temper/blob/main/LICENSE">MIT License</a>
-  </div>
-</footer>
+<Footer />
 
 <style>
   .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 6rem 2.5rem 4rem; }
@@ -227,11 +221,6 @@
   .cross-sell p { font-family: var(--serif); font-size: 0.95rem; color: var(--text-dim); font-style: italic; text-align: center; line-height: 1.8; }
   .cross-sell a { color: var(--blue); text-decoration: none; transition: color 0.2s; }
   .cross-sell a:hover { color: var(--text); }
-  .footer { max-width: 800px; margin: 0 auto; padding: 4rem 2.5rem; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: center; }
-  .footer-logo { font-family: var(--mono); font-size: 0.7rem; color: var(--blue-dim); letter-spacing: 0.1em; }
-  .footer-links { display: flex; gap: 1.5rem; }
-  .footer-links a { font-family: var(--mono); font-size: 0.65rem; color: rgba(255, 255, 255, 0.25); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
-  .footer-links a:hover { color: var(--text-dim); }
   @media (max-width: 640px) {
     .pathway { grid-template-columns: 1fr; }
     .pathway-icon { grid-row: auto; text-align: left; }
