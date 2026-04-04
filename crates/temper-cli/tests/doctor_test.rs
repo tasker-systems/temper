@@ -262,3 +262,63 @@ fn test_doctor_no_frontmatter_reports_issue() {
         .any(|i| i.message.contains("No YAML frontmatter"));
     assert!(has_fm_issue, "should report missing frontmatter");
 }
+
+#[test]
+fn test_doctor_fix_renames_legacy_fields() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    write_vault_file(
+        &dir,
+        "temper/task/old-task.md",
+        "---\nid: \"019d5616-8e3c-7432-9867-222b36e46ea1\"\ntype: task\ncontext: temper\nstage: backlog\ntitle: \"Old task\"\nslug: old-task\ncreated: \"2026-04-03T21:23:32.026022-04:00\"\n---\n\n# Old task\n\nSome content here.\n",
+    );
+
+    let result = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
+    assert!(result.fields_renamed > 0, "Should have renamed fields");
+    assert_eq!(result.files_modified, 1);
+
+    let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
+    assert!(content.contains("temper-id:"), "got:\n{content}");
+    assert!(content.contains("temper-type:"));
+    assert!(content.contains("temper-context:"));
+    assert!(content.contains("temper-stage:"));
+    assert!(content.contains("temper-created:"));
+    assert!(!content.contains("\nid:"), "bare 'id:' should be gone");
+    assert!(!content.contains("\ntype:"));
+    assert!(content.contains("Some content here."), "body preserved");
+}
+
+#[test]
+fn test_doctor_fix_dry_run_does_not_modify() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    let original = "---\nid: \"019d5616-8e3c-7432-9867-222b36e46ea1\"\ntype: task\ncontext: temper\nstage: backlog\ntitle: \"Old task\"\nslug: old-task\ncreated: \"2026-04-03T21:23:32.026022-04:00\"\n---\n\n# Old task\n";
+
+    write_vault_file(&dir, "temper/task/old-task.md", original);
+
+    let result = temper_cli::actions::doctor::fix(&config, None, true).unwrap();
+    assert!(result.fields_renamed > 0);
+
+    let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
+    assert_eq!(content, original, "Dry run should not modify file");
+}
+
+#[test]
+fn test_doctor_fix_backfills_temper_created_from_date() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    write_vault_file(
+        &dir,
+        "temper/session/my-session.md",
+        "---\ntemper-id: \"019d5977-f476-7e41-b4aa-fc4bd2b24426\"\ntemper-type: session\ntemper-context: temper\ntitle: \"My session\"\ndate: \"2026-04-04\"\n---\n\n## Goal\n",
+    );
+
+    let result = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
+    assert!(result.fields_backfilled > 0);
+
+    let content = fs::read_to_string(dir.path().join("temper/session/my-session.md")).unwrap();
+    assert!(content.contains("temper-created:"), "got:\n{content}");
+}

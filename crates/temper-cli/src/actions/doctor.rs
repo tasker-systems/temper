@@ -171,13 +171,164 @@ pub struct FixReport {
     pub fields_backfilled: u32,
 }
 
-/// Auto-fix issues in the vault (stub — full implementation in Task 7).
-pub fn fix(_config: &Config, _context_filter: Option<&str>, _dry_run: bool) -> Result<FixReport> {
-    Ok(FixReport {
+/// Legacy field rename map: (old_name, new_name)
+const LEGACY_FIELD_MAP: &[(&str, &str)] = &[
+    ("id", "temper-id"),
+    ("type", "temper-type"),
+    ("doc_type", "temper-type"),
+    ("context", "temper-context"),
+    ("project", "temper-context"),
+    ("ingestion_source", "temper-source"),
+    ("created", "temper-created"),
+    ("updated", "temper-updated"),
+    ("stage", "temper-stage"),
+    ("mode", "temper-mode"),
+    ("effort", "temper-effort"),
+    ("goal", "temper-goal"),
+    ("seq", "temper-seq"),
+    ("branch", "temper-branch"),
+    ("pr", "temper-pr"),
+    ("status", "temper-status"),
+    ("legacy_id", "temper-legacy-id"),
+];
+
+/// Auto-fix issues in the vault: rename legacy fields, backfill missing temper-created, backfill
+/// missing temper-id.
+pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Result<FixReport> {
+    let mut report = FixReport {
         files_modified: 0,
         fields_renamed: 0,
         fields_backfilled: 0,
-    })
+    };
+
+    let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
+        vec![ctx.to_string()]
+    } else {
+        config.contexts.clone()
+    };
+
+    // Walk standard entity doc type directories
+    for doc_type in ENTITY_DOC_TYPES {
+        for ctx in &contexts_to_scan {
+            let dir = config.doc_type_dir(ctx, doc_type);
+            if !dir.is_dir() {
+                continue;
+            }
+            fix_directory(&dir, dry_run, &mut report)?;
+        }
+    }
+
+    // Walk research directory: {vault_root}/research/{context}/
+    let research_root = config.vault_root.join("research");
+    if research_root.is_dir() {
+        for ctx in &contexts_to_scan {
+            let dir = research_root.join(ctx);
+            if !dir.is_dir() {
+                continue;
+            }
+            fix_directory(&dir, dry_run, &mut report)?;
+        }
+    }
+
+    Ok(report)
+}
+
+/// Fix all `.md` files in `dir`.
+fn fix_directory(dir: &Path, dry_run: bool, report: &mut FixReport) -> Result<()> {
+    let md_files: Vec<_> = fs::read_dir(dir)?
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
+        .collect();
+
+    for file_path in md_files {
+        fix_file(&file_path, dry_run, report)?;
+    }
+
+    Ok(())
+}
+
+/// Apply auto-fixes to a single file and update the report.
+fn fix_file(file_path: &Path, dry_run: bool, report: &mut FixReport) -> Result<()> {
+    let original = fs::read_to_string(file_path)?;
+
+    // Step 1: Parse frontmatter — skip files with none
+    let Some(_) = vault::parse_frontmatter(&original) else {
+        return Ok(());
+    };
+
+    let mut content = original.clone();
+    let mut fields_renamed: u32 = 0;
+    let mut fields_backfilled: u32 = 0;
+
+    // Step 2: Rename legacy fields
+    for (old_key, new_key) in LEGACY_FIELD_MAP {
+        let fm = vault::parse_frontmatter(&content);
+        let Some(ref fm) = fm else { continue };
+
+        let has_old = fm.get(*old_key).is_some();
+        let has_new = fm.get(*new_key).is_some();
+
+        if has_old && !has_new {
+            // Rename old → new
+            content = vault::rename_frontmatter_field(&content, old_key, new_key);
+            fields_renamed += 1;
+        } else if has_old && has_new {
+            // Both exist — drop the old, keep the new
+            content = vault::remove_frontmatter_field(&content, old_key);
+            fields_renamed += 1;
+        }
+    }
+
+    // Step 3: Re-parse. If temper-created is missing but date exists → backfill
+    {
+        let fm = vault::parse_frontmatter(&content);
+        if let Some(ref fm) = fm {
+            let has_created = fm.get("temper-created").is_some();
+            let date_val = fm
+                .get("date")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            if !has_created {
+                if let Some(date_str) = date_val {
+                    let ts_value = format!("\"{}T00:00:00Z\"", date_str);
+                    content =
+                        vault::insert_frontmatter_field(&content, "temper-created", &ts_value);
+                    fields_backfilled += 1;
+                }
+            }
+        }
+    }
+
+    // Step 4: Re-parse. If temper-id is missing → insert new UUIDv7
+    {
+        let fm = vault::parse_frontmatter(&content);
+        if let Some(ref fm) = fm {
+            if fm.get("temper-id").is_none() {
+                let new_id = crate::ids::generate_id();
+                content = vault::insert_frontmatter_field(
+                    &content,
+                    "temper-id",
+                    &format!("\"{new_id}\""),
+                );
+                fields_backfilled += 1;
+            }
+        }
+    }
+
+    // Step 5: Write back if changed and not dry_run
+    if content != original {
+        report.fields_renamed += fields_renamed;
+        report.fields_backfilled += fields_backfilled;
+        report.files_modified += 1;
+
+        if !dry_run {
+            fs::write(file_path, &content)?;
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
