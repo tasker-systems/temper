@@ -65,10 +65,23 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
         let body = strip_frontmatter(&content);
         let current_hash = ingest::compute_content_hash(body);
 
+        // Compute frontmatter tier hashes
+        let (managed_hash, open_hash) =
+            if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+                temper_core::schema::compute_frontmatter_hashes(&fm)
+            } else {
+                (String::new(), String::new())
+            };
+
         entry.mtime_secs = Some(file_mtime);
 
-        if current_hash != entry.body_hash {
+        if current_hash != entry.body_hash
+            || managed_hash != entry.managed_hash
+            || open_hash != entry.open_hash
+        {
             entry.body_hash = current_hash;
+            entry.managed_hash = managed_hash;
+            entry.open_hash = open_hash;
             entry.state = ManifestEntryState::LocalModified;
             changed += 1;
         }
@@ -134,6 +147,30 @@ pub fn build_complete_request(device_id: &str, merged: Vec<MergedResource>) -> S
         device_id: device_id.to_string(),
         merged_resources: merged,
     }
+}
+
+/// Split parsed frontmatter into managed (temper-* + title + slug) and open tiers.
+fn split_frontmatter_tiers(fm: &serde_yaml::Value) -> (serde_json::Value, serde_json::Value) {
+    let Some(mapping) = fm.as_mapping() else {
+        return (serde_json::json!({}), serde_json::json!({}));
+    };
+    let mut managed = serde_json::Map::new();
+    let mut open = serde_json::Map::new();
+    for (key, value) in mapping {
+        let Some(key_str) = key.as_str() else {
+            continue;
+        };
+        let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+        if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
+            managed.insert(key_str.to_string(), json_value);
+        } else {
+            open.insert(key_str.to_string(), json_value);
+        }
+    }
+    (
+        serde_json::Value::Object(managed),
+        serde_json::Value::Object(open),
+    )
 }
 
 /// Strip YAML frontmatter from vault file content.
@@ -500,6 +537,15 @@ async fn push_resource(
     let content = std::fs::read_to_string(&file_path)?;
     let body = strip_frontmatter(&content);
 
+    // Parse frontmatter and split into managed/open tiers
+    let (managed_meta, open_meta) =
+        if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+            let (m, o) = split_frontmatter_tiers(&fm);
+            (Some(m), Some(o))
+        } else {
+            (None, None)
+        };
+
     let parts: Vec<&str> = entry.path.split('/').collect();
     let context = parts.first().copied().unwrap_or("default");
     let doc_type = if parts.len() > 1 {
@@ -509,7 +555,7 @@ async fn push_resource(
     };
     let title = ingest::title_from_path(&file_path);
 
-    let payload = ingest::build_ingest_payload(
+    let mut payload = ingest::build_ingest_payload(
         body,
         &title,
         context,
@@ -518,6 +564,8 @@ async fn push_resource(
         "text/markdown",
         None,
     )?;
+    payload.managed_meta = managed_meta;
+    payload.open_meta = open_meta;
 
     let _resource = if item.resource_id.is_some() {
         // Existing resource — PUT update
@@ -1336,7 +1384,7 @@ mod tests {
     // --- Frontmatter hash fix tests ---
 
     #[test]
-    fn rehash_ignores_frontmatter_changes() {
+    fn rehash_detects_frontmatter_changes() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
         let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
@@ -1344,8 +1392,12 @@ mod tests {
         let file_v1 = "---\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
         let file_v2 = "---\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
 
-        // Compute body hash via strip_frontmatter (same function used by rehash)
+        // Compute hashes for v1
         let body_hash = ingest::compute_content_hash(strip_frontmatter(file_v1));
+        let fm_v1 = crate::vault::parse_frontmatter(file_v1).unwrap();
+        let (managed_hash_v1, open_hash_v1) =
+            temper_core::schema::compute_frontmatter_hashes(&fm_v1);
+
         let file_dir = vault.join("temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
@@ -1358,19 +1410,19 @@ mod tests {
                 path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: body_hash.clone(),
                 remote_body_hash: body_hash.clone(),
-                managed_hash: String::new(),
-                open_hash: String::new(),
-                remote_managed_hash: String::new(),
-                remote_open_hash: String::new(),
+                managed_hash: managed_hash_v1.clone(),
+                open_hash: open_hash_v1.clone(),
+                remote_managed_hash: managed_hash_v1,
+                remote_open_hash: open_hash_v1,
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None, // Force rehash
             },
         );
 
-        // Rehash v1 — body unchanged, should detect 0 changes
+        // Rehash v1 — nothing changed, should detect 0 changes
         let changed = rehash_manifest(&mut manifest, vault).unwrap();
-        assert_eq!(changed, 0, "v1 body hasn't changed — should not trigger");
+        assert_eq!(changed, 0, "v1 unchanged — should not trigger");
 
         // Now write v2 (frontmatter changed, body identical)
         fs::write(&file_path, file_v2).unwrap();
@@ -1378,10 +1430,13 @@ mod tests {
 
         let changed = rehash_manifest(&mut manifest, vault).unwrap();
         assert_eq!(
-            changed, 0,
-            "only frontmatter changed — should not trigger dirty"
+            changed, 1,
+            "frontmatter changed — should trigger dirty with three-tier hashing"
         );
-        assert_eq!(manifest.entries[&id].state, ManifestEntryState::Clean);
+        assert_eq!(
+            manifest.entries[&id].state,
+            ManifestEntryState::LocalModified
+        );
     }
 
     #[test]
