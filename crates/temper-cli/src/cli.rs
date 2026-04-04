@@ -113,7 +113,7 @@ pub enum Commands {
         #[arg(long)]
         context: Option<String>,
         /// Doc type — use "auto" to read from each file's YAML frontmatter
-        #[arg(long, default_value = "resource")]
+        #[arg(long, default_value = "research")]
         doc_type: String,
         /// Output format
         #[arg(long, default_value = "text")]
