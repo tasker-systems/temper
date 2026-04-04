@@ -222,7 +222,12 @@ fn link_session_to_task(
 /// Searches `<context>/session/` dirs for a file whose slug matches the given
 /// `slug_or_suffix`. Matches against the title portion of the filename (after the
 /// em-dash separator) or the full stem (date + title).
-pub fn show(config: &Config, slug_or_suffix: &str, context: Option<&str>, format: &str) -> Result<()> {
+pub fn show(
+    config: &Config,
+    slug_or_suffix: &str,
+    context: Option<&str>,
+    format: &str,
+) -> Result<()> {
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
         vec![ctx.to_string()]
     } else {
@@ -243,7 +248,11 @@ pub fn show(config: &Config, slug_or_suffix: &str, context: Option<&str>, format
             if path.extension().is_none_or(|e| e != "md") {
                 continue;
             }
-            let stem = path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
             let title_slug = if let Some(pos) = stem.find(" \u{2014} ") {
                 stem[pos + " \u{2014} ".len()..].to_string()
             } else {
@@ -251,12 +260,19 @@ pub fn show(config: &Config, slug_or_suffix: &str, context: Option<&str>, format
             };
 
             // Match: exact title slug, or full stem contains the needle
-            if title_slug == needle || vault::slugify(&stem) == needle || title_slug.contains(&needle) {
+            if title_slug == needle
+                || vault::slugify(&stem) == needle
+                || title_slug.contains(&needle)
+            {
                 let date = parse_date_from_file(&path)
                     .or_else(|| extract_date_from_stem(&stem))
                     .unwrap_or_else(|| "unknown".to_string());
                 matches.push((
-                    SessionEntry { date, context: ctx.clone(), title: title_slug },
+                    SessionEntry {
+                        date,
+                        context: ctx.clone(),
+                        title: title_slug,
+                    },
                     path,
                 ));
             }
@@ -264,7 +280,9 @@ pub fn show(config: &Config, slug_or_suffix: &str, context: Option<&str>, format
     }
 
     if matches.is_empty() {
-        return Err(crate::error::TemperError::Vault(format!("session not found: {slug_or_suffix}")));
+        return Err(crate::error::TemperError::Vault(format!(
+            "session not found: {slug_or_suffix}"
+        )));
     }
 
     // Sort by date descending, take the most recent match
@@ -452,16 +470,20 @@ mod tests {
     fn write_session(config: &Config, context: &str, date: &str, slug: &str, body: &str) {
         let dir = config.doc_type_dir(context, "session");
         let filename = format!("{date} \u{2014} {slug}.md");
-        let content = format!(
-            "---\nid: \"test-id\"\ntype: session\ndate: {date}\n---\n\n{body}"
-        );
+        let content = format!("---\nid: \"test-id\"\ntype: session\ndate: {date}\n---\n\n{body}");
         fs::write(dir.join(filename), content).unwrap();
     }
 
     #[test]
     fn show_exact_slug_match() {
         let (_tmp, config) = test_vault();
-        write_session(&config, "temper", "2026-04-04", "my-session", "## Goal\nTest");
+        write_session(
+            &config,
+            "temper",
+            "2026-04-04",
+            "my-session",
+            "## Goal\nTest",
+        );
         let result = show(&config, "my-session", Some("temper"), "text");
         assert!(result.is_ok());
     }
@@ -503,7 +525,13 @@ mod tests {
     #[test]
     fn show_scans_all_contexts_when_none_specified() {
         let (_tmp, config) = test_vault();
-        write_session(&config, "default", "2026-04-04", "cross-context", "## Goal\nHere");
+        write_session(
+            &config,
+            "default",
+            "2026-04-04",
+            "cross-context",
+            "## Goal\nHere",
+        );
         let result = show(&config, "cross-context", None, "text");
         assert!(result.is_ok());
     }

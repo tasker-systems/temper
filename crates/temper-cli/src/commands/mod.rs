@@ -2,6 +2,7 @@ pub mod add;
 pub mod auth;
 pub mod check;
 pub mod context_cmd;
+pub mod doctor;
 pub mod events;
 pub mod goal;
 pub mod init;

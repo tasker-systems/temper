@@ -2,8 +2,8 @@ mod cli;
 
 use clap::Parser;
 use cli::{
-    AuthAction, Cli, Commands, ContextAction, GoalAction, NoteAction, ResearchAction,
-    SessionAction, SkillAction, SyncAction, TaskAction,
+    AuthAction, Cli, Commands, ContextAction, DoctorAction, GoalAction, NoteAction,
+    ResearchAction, SessionAction, SkillAction, SyncAction, TaskAction,
 };
 use temper_cli::commands;
 
@@ -115,12 +115,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     slug,
                     context,
                     format,
-                } => temper_cli::commands::session::show(
-                    &config,
-                    &slug,
-                    context.as_deref(),
-                    &format,
-                ),
+                } => {
+                    temper_cli::commands::session::show(&config, &slug, context.as_deref(), &format)
+                }
             }
         }
         Commands::Task { action } => {
@@ -275,6 +272,22 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             temper_cli::commands::normalize::run(&config, context.as_deref(), dry_run, fix_slugs)?;
+            Ok(())
+        }
+        Commands::Doctor {
+            action,
+            context,
+            format,
+        } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            match action {
+                Some(DoctorAction::Fix { dry_run }) => {
+                    temper_cli::commands::doctor::run_fix(&config, context.as_deref(), dry_run)?;
+                }
+                None => {
+                    temper_cli::commands::doctor::run(&config, context.as_deref(), &format)?;
+                }
+            }
             Ok(())
         }
         Commands::Warmup { context, format } => {

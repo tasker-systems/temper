@@ -78,6 +78,17 @@ pub enum Commands {
         #[arg(long)]
         fix_slugs: bool,
     },
+    /// Validate vault frontmatter and repair drift
+    Doctor {
+        #[command(subcommand)]
+        action: Option<DoctorAction>,
+        /// Filter by context
+        #[arg(long)]
+        context: Option<String>,
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
     /// Context primer for new sessions
     Warmup {
         #[arg(long)]
@@ -417,5 +428,15 @@ pub enum SyncAction {
         /// Output format
         #[arg(long, default_value = "text")]
         format: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DoctorAction {
+    /// Auto-fix issues (rename legacy fields, backfill missing fields)
+    Fix {
+        /// Preview fixes without writing (dry run)
+        #[arg(long)]
+        dry_run: bool,
     },
 }
