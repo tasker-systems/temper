@@ -33,7 +33,7 @@
       <span class="workflow-desc">Create a vault and tell temper how you work — your tools, your conventions, your rhythm.</span>
     </div>
     <div class="workflow-step">
-      <span class="workflow-cmd">temper import</span>
+      <span class="workflow-cmd">temper add</span>
       <span class="workflow-desc">Bring in your docs. Temper extracts markdown, adds frontmatter, and makes everything searchable.</span>
     </div>
     <div class="workflow-step">
