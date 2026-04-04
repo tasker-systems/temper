@@ -1,6 +1,10 @@
-# **Temper**
+<p align="center">
+  <img src="docs/brand-mark.svg" alt="temper" width="200" />
+</p>
 
-**/ˈtempər/** — *to make stronger and more resilient through a deliberate process*
+<p align="center">
+  <strong>/ˈtempər/</strong> — <em>to make stronger and more resilient through a deliberate process</em>
+</p>
 
 A knowledge base for builders. Temper gives your work a throughline — the connective thread across sessions, decisions, and evolving understanding that turns scattered context into a navigable history. Everything resolves to markdown. The system gets out of the way.
 
@@ -121,7 +125,7 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | Command | Description |
 |---------|-------------|
 | `temper search <query>` | Semantic search across the knowledge base |
-| `temper context <name>` | Show topic with related context |
+| `temper context <n>` | Show topic with related context |
 
 ### Content
 
@@ -147,7 +151,7 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 
 | Command | Description |
 |---------|-------------|
-| `temper context add <name>` | Add a context |
+| `temper context add <n>` | Add a context |
 | `temper context list` | List contexts |
 | `temper skill generate` | Preview generated Claude Code skill |
 | `temper skill install` | Install skill file |
@@ -185,7 +189,6 @@ To automatically prime new Claude Code sessions with recent context, add a `Sess
 {
   "hooks": {
     "SessionStart": [{
-      "matcher": "startup",
       "hooks": [{
         "type": "command",
         "command": "temper warmup --context myapp"
@@ -199,17 +202,13 @@ This runs `temper warmup` on every new session, injecting active tasks, recent s
 
 ## Temper Cloud
 
-Temper is local-first and will remain functional locally throughout. **Temper Cloud** extends the model to multi-machine and multi-agent access.
+Your vault stays as markdown files on your machine. `temper sync` uses a manifest-based protocol to compute diffs between your local state and the server — a three-way comparison of local file, manifest record, and remote content. Non-conflicting changes merge automatically at the paragraph level using Rust-native diffing. Genuine conflicts are annotated in `.conflict.md` files for human resolution.
 
-<p align="center">
-  <img src="docs/diagrams/dual-authority-model.svg" alt="Dual authority model: git owns content, Postgres owns state, temper reconciles" width="700" />
-</p>
-
-Git and Postgres are both authoritative, for different things. Git owns document content, prose, and version history. Postgres owns structured metadata, lifecycle state, and search vectors. Temper is the intervention layer that reconciles between them.
+Your vault can also live in a git repo, sync to Obsidian, or coexist with any other tool that reads files — temper's sync is self-contained and doesn't depend on or interfere with external version control.
 
 What cloud adds:
 
-- **Cross-machine sync** with conflict resolution
+- **Cross-machine sync** with manifest-based diffing and auto-merge
 - **Semantic search** powered by pgvector embeddings
 - **MCP server** for direct agent integration
 - **Team contexts** with granular access control

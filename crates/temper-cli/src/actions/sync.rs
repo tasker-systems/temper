@@ -846,8 +846,7 @@ pub async fn sync_refresh(
     }
 
     // Track which server items were matched
-    let mut matched_server_ids: std::collections::HashSet<Uuid> =
-        std::collections::HashSet::new();
+    let mut matched_server_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
 
     for item in &server.items {
         if manifest.entries.contains_key(&item.resource_id) {
@@ -968,8 +967,7 @@ pub async fn sync_reset(
     }
 
     // Track which server resources have been matched
-    let mut matched_server_ids: std::collections::HashSet<Uuid> =
-        std::collections::HashSet::new();
+    let mut matched_server_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
 
     // Walk vault files
     for entry in ignore::WalkBuilder::new(vault_root)

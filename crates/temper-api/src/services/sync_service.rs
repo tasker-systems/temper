@@ -179,10 +179,7 @@ struct ManifestRow {
 
 /// Fetch all active resources for a profile — metadata only, no content.
 /// Used by `GET /api/sync/manifest` for manifest recovery (refresh/reset).
-pub async fn fetch_manifest(
-    pool: &PgPool,
-    profile_id: Uuid,
-) -> ApiResult<SyncManifestResponse> {
+pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncManifestResponse> {
     let rows = sqlx::query_as::<_, ManifestRow>(
         r#"
         SELECT r.id AS resource_id,

@@ -212,9 +212,8 @@ pub fn reset(format: &str) -> Result<()> {
     // Backup before reset
     sync_actions::backup_manifest(&temper_dir)?;
 
-    let (new_manifest, result) = rt.block_on(async {
-        sync_actions::sync_reset(&client, &manifest, &vault_root).await
-    })?;
+    let (new_manifest, result) =
+        rt.block_on(async { sync_actions::sync_reset(&client, &manifest, &vault_root).await })?;
 
     // Save rebuilt manifest
     crate::manifest_io::save_manifest(&temper_dir, &new_manifest)?;

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" font-family="system-ui, -apple-system, sans-serif">
+  <!-- Threaded T mark -->
+  <path d="M 12 6 L 12 34" stroke="#7eb8da" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <path d="M 4 16 L 20 16 Q 27 16 30 21 Q 33 26 31 32" stroke="#7eb8da" stroke-width="2.6" stroke-linecap="round" fill="none"/>
+  <!-- Wordmark -->
+  <text x="46" y="27" font-family="'JetBrains Mono', 'Fira Code', monospace" font-size="18" fill="#7eb8da" letter-spacing="0.12em">temper</text>
+</svg>
