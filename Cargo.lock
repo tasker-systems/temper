@@ -4076,6 +4076,7 @@ dependencies = [
  "chrono",
  "dirs 5.0.1",
  "rmp-serde",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml",

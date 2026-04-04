@@ -78,7 +78,7 @@ impl TemperMcpService {
     #[tool(description = "List resources in the knowledge base. Optionally filter by context.")]
     async fn list_resources(
         &self,
-        Parameters(input): Parameters<tools::resources::ListResourcesInput>,
+        Parameters(input): Parameters<temper_core::types::resource::ResourceListParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         tools::resources::list_resources(self, input).await
     }
@@ -94,7 +94,7 @@ impl TemperMcpService {
     #[tool(description = "Create a new resource in the knowledge base.")]
     async fn create_resource(
         &self,
-        Parameters(input): Parameters<tools::resources::CreateResourceInput>,
+        Parameters(input): Parameters<temper_core::types::resource::ResourceCreateRequest>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         tools::resources::create_resource(self, input).await
     }
@@ -102,7 +102,7 @@ impl TemperMcpService {
     #[tool(description = "Semantic search across resources using an embedding vector.")]
     async fn search(
         &self,
-        Parameters(input): Parameters<tools::search::SearchInput>,
+        Parameters(input): Parameters<temper_core::types::api::SearchParams>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         tools::search::search(self, input).await
     }

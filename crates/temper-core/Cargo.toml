@@ -18,7 +18,9 @@ dirs = "5"
 uuid = { version = "1", features = ["v7", "serde"] }
 ts-rs = { version = "10", optional = true, features = ["chrono-impl", "uuid-impl", "serde-json-impl"] }
 utoipa = { version = "5", optional = true }
+schemars = { version = "1", optional = true, features = ["uuid1", "chrono04"] }
 
 [features]
 web-api = ["utoipa"]
 typescript = ["ts-rs"]
+mcp = ["schemars"]

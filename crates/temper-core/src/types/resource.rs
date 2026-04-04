@@ -10,6 +10,7 @@ use uuid::Uuid;
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceRow {
     pub id: Uuid,
     pub kb_context_id: Uuid,
@@ -31,6 +32,7 @@ pub struct ResourceRow {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListParams {
     /// Filter by context ID.
     pub kb_context_id: Option<Uuid>,
@@ -45,6 +47,7 @@ pub struct ResourceListParams {
 /// Request body for creating a resource.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceCreateRequest {
     pub kb_context_id: Uuid,
     pub kb_doc_type_id: Uuid,
@@ -76,6 +79,7 @@ pub struct ContentChunk {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ContentResponse {
     pub resource_id: Uuid,
     pub markdown: String,
