@@ -159,6 +159,90 @@ pub fn set_frontmatter_field(content: &str, key: &str, value: &str) -> String {
     lines.join("\n") + "\n"
 }
 
+/// Rename a frontmatter field key, preserving its value. Only operates within
+/// the YAML frontmatter block — body content is not modified.
+pub fn rename_frontmatter_field(content: &str, old_key: &str, new_key: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result = Vec::with_capacity(lines.len());
+    let mut in_frontmatter = false;
+    let mut frontmatter_count = 0;
+
+    for line in &lines {
+        if line.trim() == "---" {
+            frontmatter_count += 1;
+            in_frontmatter = frontmatter_count == 1;
+            result.push(line.to_string());
+            continue;
+        }
+        if in_frontmatter && line.starts_with(&format!("{old_key}:")) {
+            let rest = &line[old_key.len()..]; // includes the ':'
+            result.push(format!("{new_key}{rest}"));
+        } else {
+            result.push(line.to_string());
+        }
+    }
+
+    let joined = result.join("\n");
+    if content.ends_with('\n') {
+        joined + "\n"
+    } else {
+        joined
+    }
+}
+
+/// Remove a field entirely from the frontmatter block. Body content is not modified.
+pub fn remove_frontmatter_field(content: &str, key: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result = Vec::with_capacity(lines.len());
+    let mut in_frontmatter = false;
+    let mut frontmatter_count = 0;
+
+    for line in &lines {
+        if line.trim() == "---" {
+            frontmatter_count += 1;
+            in_frontmatter = frontmatter_count == 1;
+            result.push(line.to_string());
+            continue;
+        }
+        if in_frontmatter && line.starts_with(&format!("{key}:")) {
+            // skip this line — removes the field
+            continue;
+        }
+        result.push(line.to_string());
+    }
+
+    let joined = result.join("\n");
+    if content.ends_with('\n') {
+        joined + "\n"
+    } else {
+        joined
+    }
+}
+
+/// Insert a new field at the top of the frontmatter block (immediately after the
+/// opening `---`). Body content is not modified.
+pub fn insert_frontmatter_field(content: &str, key: &str, value: &str) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut result = Vec::with_capacity(lines.len() + 1);
+    let mut inserted = false;
+
+    for line in &lines {
+        result.push(line.to_string());
+        // Insert after the first `---` opener
+        if !inserted && line.trim() == "---" {
+            result.push(format!("{key}: {value}"));
+            inserted = true;
+        }
+    }
+
+    let joined = result.join("\n");
+    if content.ends_with('\n') {
+        joined + "\n"
+    } else {
+        joined
+    }
+}
+
 /// Write a note to the filesystem, creating parent directories as needed
 pub fn write_note(path: &Path, content: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
