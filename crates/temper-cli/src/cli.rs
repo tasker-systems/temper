@@ -69,7 +69,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Normalize vault structure and repair drift
+    /// [Deprecated: use `temper doctor fix`] Normalize vault structure and repair drift
     Normalize {
         #[arg(long)]
         context: Option<String>,
