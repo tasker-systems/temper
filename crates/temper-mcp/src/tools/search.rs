@@ -16,9 +16,8 @@ pub async fn search(
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Search failed: {e}"), None))?;
 
-    let text =
-        serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
-    Ok(CallToolResult::success(vec![
-        rmcp::model::Content::text(text),
-    ]))
+    let text = serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string());
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        text,
+    )]))
 }

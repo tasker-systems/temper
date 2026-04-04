@@ -38,9 +38,7 @@ struct AuthorizationServerMetadata {
 }
 
 /// `GET /.well-known/oauth-protected-resource`
-pub async fn oauth_protected_resource(
-    State(state): State<Arc<McpAppState>>,
-) -> impl IntoResponse {
+pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> impl IntoResponse {
     let base = &state.mcp_config.mcp_base_url;
     let auth0 = state.mcp_config.auth0_domain.trim_end_matches('/');
 

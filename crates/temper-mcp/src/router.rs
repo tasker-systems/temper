@@ -53,12 +53,13 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         config,
     );
 
-    let mcp_routes = Router::new()
-        .nest_service("/mcp", mcp_service)
-        .layer(middleware::from_fn_with_state(
-            shared.clone(),
-            require_mcp_auth,
-        ));
+    let mcp_routes =
+        Router::new()
+            .nest_service("/mcp", mcp_service)
+            .layer(middleware::from_fn_with_state(
+                shared.clone(),
+                require_mcp_auth,
+            ));
 
     // ── Health (public) ────────────────────────────────────────────────
     let health = Router::new().route("/mcp/health", get(|| async { "ok" }));

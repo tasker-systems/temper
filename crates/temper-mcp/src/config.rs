@@ -21,8 +21,7 @@ impl McpConfig {
         Ok(Self {
             mcp_base_url: env::var("MCP_BASE_URL")?,
             auth0_domain: env::var("AUTH_ISSUER")?,
-            mcp_audience: env::var("MCP_AUDIENCE")
-                .or_else(|_| env::var("AUTH_AUDIENCE"))?,
+            mcp_audience: env::var("MCP_AUDIENCE").or_else(|_| env::var("AUTH_AUDIENCE"))?,
         })
     }
 }

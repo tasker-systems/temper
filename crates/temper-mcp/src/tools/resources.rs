@@ -29,14 +29,17 @@ pub async fn list_resources(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    let rows =
-        temper_api::services::resource_service::list_visible(&svc.api_state.pool, profile.id, input)
-            .await
-            .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None))?;
+    let rows = temper_api::services::resource_service::list_visible(
+        &svc.api_state.pool,
+        profile.id,
+        input,
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None))?;
 
-    Ok(CallToolResult::success(vec![
-        rmcp::model::Content::text(to_text(&rows)),
-    ]))
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&rows),
+    )]))
 }
 
 pub async fn get_resource(
@@ -48,13 +51,17 @@ pub async fn get_resource(
 
     let row = temper_api::services::resource_service::get_visible(pool, profile.id, input.id)
         .await
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None))?;
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+        })?;
 
     if input.include_content.unwrap_or(false) {
         let markdown =
             temper_api::services::resource_service::get_content(pool, profile.id, input.id)
                 .await
-                .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None))?;
+                .map_err(|e| {
+                    rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
+                })?;
 
         let response = ContentResponse {
             resource_id: row.id,
@@ -65,9 +72,9 @@ pub async fn get_resource(
             rmcp::model::Content::text(to_text(&response)),
         ]))
     } else {
-        Ok(CallToolResult::success(vec![
-            rmcp::model::Content::text(to_text(&row)),
-        ]))
+        Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+            to_text(&row),
+        )]))
     }
 }
 
@@ -77,11 +84,14 @@ pub async fn create_resource(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    let row = temper_api::services::resource_service::create(&svc.api_state.pool, profile.id, input)
-        .await
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to create resource: {e}"), None))?;
+    let row =
+        temper_api::services::resource_service::create(&svc.api_state.pool, profile.id, input)
+            .await
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("Failed to create resource: {e}"), None)
+            })?;
 
-    Ok(CallToolResult::success(vec![
-        rmcp::model::Content::text(to_text(&row)),
-    ]))
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&row),
+    )]))
 }

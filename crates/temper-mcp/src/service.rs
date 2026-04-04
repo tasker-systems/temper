@@ -41,11 +41,7 @@ impl TemperMcpService {
     /// Resolve and cache the caller's profile from the database.
     async fn resolve_profile(&self, claims: &McpClaims) -> Result<Profile, rmcp::ErrorData> {
         let auth_claims = AuthClaims {
-            provider: self
-                .api_state
-                .config
-                .auth_provider_name
-                .clone(),
+            provider: self.api_state.config.auth_provider_name.clone(),
             external_user_id: claims.sub.clone(),
             // MCP tokens may not include email; the profile service will
             // look it up from cached auth links.
@@ -58,19 +54,16 @@ impl TemperMcpService {
         profile_service::resolve_from_claims(&self.api_state.pool, &auth_claims)
             .await
             .map_err(|e| {
-                rmcp::ErrorData::internal_error(
-                    format!("Failed to resolve profile: {e}"),
-                    None,
-                )
+                rmcp::ErrorData::internal_error(format!("Failed to resolve profile: {e}"), None)
             })
     }
 
     /// Get the authenticated caller's profile, or return a protocol error.
     pub async fn require_profile(&self) -> Result<Profile, rmcp::ErrorData> {
         let guard = self.profile.lock().await;
-        guard.clone().ok_or_else(|| {
-            rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
-        })
+        guard
+            .clone()
+            .ok_or_else(|| rmcp::ErrorData::internal_error("Not authenticated".to_string(), None))
     }
 
     // ── Tools ──────────────────────────────────────────────────────────
@@ -125,10 +118,10 @@ impl TemperMcpService {
 impl rmcp::ServerHandler for TemperMcpService {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(rmcp::model::Implementation::new(
-                "temper-mcp",
-                env!("CARGO_PKG_VERSION"),
-            ).with_title("Temper Knowledge Base"))
+            .with_server_info(
+                rmcp::model::Implementation::new("temper-mcp", env!("CARGO_PKG_VERSION"))
+                    .with_title("Temper Knowledge Base"),
+            )
             .with_instructions(
                 "Access and manage your Temper knowledge base. \
                  Search notes, list resources, create new content, and explore contexts.",
