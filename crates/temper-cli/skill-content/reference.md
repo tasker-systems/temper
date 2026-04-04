@@ -71,3 +71,15 @@ temper note create --show-template
 temper task create --show-template
 temper research save --show-template
 ```
+
+## Skill-Only Commands
+
+These commands are handled by the skill routing layer, not the temper CLI directly.
+They compose multiple CLI commands into guided workflows.
+
+| Skill Command | What It Does |
+|---------------|-------------|
+| `task start <slug>` | Shows task, moves to in-progress, routes to workflow |
+| `task resume <slug>` | Shows task, reads last session, continues workflow |
+| `task create` | Guided interactive task creation with prompts |
+| `session start` | Start a session without a predefined task |
