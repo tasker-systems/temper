@@ -21,17 +21,15 @@ pub struct GetResourceInput {
     pub include_content: Option<bool>,
 }
 
-/// MCP input for update_resource — wraps the core update with the resource ID.
+/// MCP input for update_resource — bundles the resource ID (which REST takes
+/// as a path parameter) together with the shared update payload.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateResourceInput {
     /// UUID of the resource to update.
     pub id: Uuid,
-    /// New title (optional).
-    pub title: Option<String>,
-    /// New slug (optional).
-    pub slug: Option<String>,
-    /// New mimetype (optional).
-    pub mimetype: Option<String>,
+    /// Fields to update.
+    #[serde(flatten)]
+    pub update: ResourceUpdateRequest,
 }
 
 /// MCP input for delete_resource.
@@ -131,17 +129,11 @@ pub async fn update_resource(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    let req = ResourceUpdateRequest {
-        title: input.title,
-        slug: input.slug,
-        mimetype: input.mimetype,
-    };
-
     let row = temper_api::services::resource_service::update(
         &svc.api_state.pool,
         profile.id,
         input.id,
-        req,
+        input.update,
     )
     .await
     .map_err(|e| {
