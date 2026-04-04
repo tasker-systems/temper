@@ -16,6 +16,7 @@ ort = { version = "2.0.0-rc.12", optional = true }
 hf-hub = { version = "0.5", optional = true }
 tokenizers = { version = "0.22", optional = true }
 ndarray = { version = "0.17", optional = true }
+html-to-markdown-rs = "3.1.0"
 
 [features]
 default = ["extract", "embed"]
@@ -25,6 +26,7 @@ test-embed = ["embed"]
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt"] }
 
 [package.metadata.cargo-machete]
 ignored = ["temper-core"]

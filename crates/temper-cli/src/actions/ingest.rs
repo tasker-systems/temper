@@ -307,7 +307,7 @@ pub async fn ingest_file(
     doc_type: &str,
     resource_mode: Option<&str>,
 ) -> Result<(temper_core::types::ResourceRow, String)> {
-    let extraction = crate::extract::extract_to_markdown(file_path)?;
+    let extraction = crate::extract::extract_to_markdown(file_path).await?;
     let extracted_content = extraction.content.clone();
 
     let title = title_from_path(file_path);
@@ -329,7 +329,7 @@ pub async fn ingest_file(
         context,
         doc_type,
         mode,
-        &extraction.mime_type,
+        "text/markdown",
         Some(metadata),
     )?;
 
@@ -356,7 +356,7 @@ pub async fn ingest_url(
 ) -> Result<(temper_core::types::ResourceRow, String)> {
     let (temp_path, display_name) = fetch_url_to_tempfile(url).await?;
 
-    let extraction = crate::extract::extract_to_markdown(temp_path.as_ref())?;
+    let extraction = crate::extract::extract_to_markdown(temp_path.as_ref()).await?;
     let extracted_content = extraction.content.clone();
 
     let title = display_name;
@@ -374,7 +374,7 @@ pub async fn ingest_url(
         context,
         doc_type,
         mode,
-        &extraction.mime_type,
+        "text/markdown",
         Some(metadata),
     )?;
     // Override origin_uri with the original URL
