@@ -12,6 +12,38 @@
 
 ---
 
+## Architectural Constraints
+
+### SRP: commands/ vs actions/ boundary
+
+Follow the existing normalize pattern: `commands/*.rs` files are **thin wrappers** that call into
+`actions/*.rs` for business logic and then format the returned data for display. No business logic,
+no data construction, no hand-rolled JSON in command files. The command layer's job is:
+1. Call the action function
+2. Format the result for the user (text or JSON via `Serialize` derives)
+
+### Frontmatter manipulation lives in vault.rs
+
+`vault.rs` already owns `parse_frontmatter`, `set_frontmatter_field`, `slugify`. New frontmatter
+operations (`rename_frontmatter_field`, `remove_frontmatter_field`, `insert_frontmatter_field`)
+belong there too. `actions/doctor.rs` composes these, it doesn't own them.
+
+### Testability
+
+- **TDD strictly**: write the failing test, run it, implement, run it, commit.
+- **Unit tests** in `crates/temper-cli/tests/` for action-level behavior.
+- **Vault utility tests** in `crates/temper-cli/tests/vault_test.rs` for new frontmatter functions.
+- **Schema tests** in `crates/temper-core/tests/schema_test.rs` for validation logic.
+- **E2E tests** in `tests/e2e/tests/doctor_test.rs` using `E2eTestApp` infrastructure.
+- Each function does one thing (SG-2). If it scans AND validates AND fixes — split it.
+
+### Subagent Guidance
+
+All subagents executing this plan MUST follow the 10 principles in
+`~/.claude/skills/temper/subagent-guidance.md` — especially SG-1 (read sibling files before
+writing), SG-2 (single responsibility), SG-4 (tests must actually run), and SG-6 (verify
+before claiming done).
+
 ## File Structure
 
 ### New Files
@@ -26,10 +58,12 @@
 | `crates/temper-core/schemas/decision.schema.json` | Decision-specific fields |
 | `crates/temper-core/schemas/concept.schema.json` | Concept-specific fields |
 | `crates/temper-core/src/schema.rs` | Schema loading, validation API, hash computation |
-| `crates/temper-cli/src/commands/doctor.rs` | CLI command: doctor and doctor fix |
+| `crates/temper-cli/src/commands/doctor.rs` | Thin CLI wrapper: call actions, format output |
 | `crates/temper-cli/src/actions/doctor.rs` | Business logic: vault scan, validate, fix |
-| `crates/temper-cli/tests/doctor_test.rs` | Tests for doctor command |
+| `crates/temper-cli/tests/doctor_test.rs` | Unit tests for doctor scan and fix actions |
+| `crates/temper-cli/tests/vault_test.rs` | (extend) Tests for new frontmatter manipulation fns |
 | `crates/temper-core/tests/schema_test.rs` | Tests for schema validation |
+| `tests/e2e/tests/doctor_test.rs` | E2E tests exercising doctor against real vault setup |
 
 ### Modified Files
 
@@ -37,6 +71,7 @@
 |------|--------|
 | `crates/temper-core/Cargo.toml` | Add `jsonschema` dependency |
 | `crates/temper-core/src/lib.rs` | Add `pub mod schema;` |
+| `crates/temper-cli/src/vault.rs` | Add `rename_frontmatter_field`, `remove_frontmatter_field`, `insert_frontmatter_field` |
 | `crates/temper-cli/src/cli.rs` | Add `Doctor` command variant |
 | `crates/temper-cli/src/main.rs` | Add doctor dispatch arm |
 | `crates/temper-cli/src/commands/mod.rs` | Add `pub mod doctor;` |
@@ -1371,14 +1406,213 @@ git commit -m "feat: add doctor scan action with schema validation, legacy check
 
 ---
 
-## Task 5: Doctor Command — Output Formatting
+## Task 5: Vault Frontmatter Utilities — rename, remove, insert
+
+New frontmatter manipulation functions belong in `vault.rs` alongside the existing
+`parse_frontmatter` and `set_frontmatter_field`. Test-first in `vault_test.rs`.
+
+**Files:**
+- Modify: `crates/temper-cli/src/vault.rs`
+- Modify: `crates/temper-cli/tests/vault_test.rs`
+
+- [ ] **Step 1: Write failing tests for new vault functions**
+
+Add to `crates/temper-cli/tests/vault_test.rs`:
+
+```rust
+#[test]
+fn test_rename_frontmatter_field() {
+    let content = "---\nid: \"abc-123\"\ntype: task\ntitle: \"Hello\"\n---\n\n# Hello\n";
+    let result = temper_cli::vault::rename_frontmatter_field(content, "id", "temper-id");
+    assert!(result.contains("temper-id: \"abc-123\""), "got:\n{result}");
+    assert!(!result.contains("\nid:"), "old key should be gone");
+    assert!(result.contains("# Hello"), "body preserved");
+}
+
+#[test]
+fn test_rename_frontmatter_field_preserves_body() {
+    let content = "---\nstage: backlog\n---\n\nSome body with stage: info here.\n";
+    let result = temper_cli::vault::rename_frontmatter_field(content, "stage", "temper-stage");
+    assert!(result.contains("temper-stage: backlog"));
+    assert!(result.contains("stage: info here"), "body line with 'stage:' should not be renamed");
+}
+
+#[test]
+fn test_remove_frontmatter_field() {
+    let content = "---\nid: \"abc\"\ntype: task\ntitle: \"Hello\"\n---\n\n# Hello\n";
+    let result = temper_cli::vault::remove_frontmatter_field(content, "type");
+    assert!(!result.contains("\ntype:"), "field should be removed");
+    assert!(result.contains("id: \"abc\""), "other fields preserved");
+    assert!(result.contains("# Hello"), "body preserved");
+}
+
+#[test]
+fn test_insert_frontmatter_field() {
+    let content = "---\ntitle: \"Hello\"\n---\n\n# Hello\n";
+    let result = temper_cli::vault::insert_frontmatter_field(content, "temper-id", "\"new-uuid\"");
+    assert!(result.contains("temper-id: \"new-uuid\""));
+    // New field should appear before existing fields (after opening ---)
+    let id_pos = result.find("temper-id").unwrap();
+    let title_pos = result.find("title:").unwrap();
+    assert!(id_pos < title_pos, "inserted field should be at top of frontmatter");
+}
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+```bash
+cargo nextest run -p temper-cli test_rename_frontmatter_field test_remove_frontmatter_field test_insert_frontmatter_field
+```
+
+Expected: compilation error — functions don't exist yet.
+
+- [ ] **Step 3: Implement the three functions in vault.rs**
+
+Add to `crates/temper-cli/src/vault.rs`:
+
+```rust
+/// Rename a frontmatter field key, preserving the value. Only operates within
+/// the YAML frontmatter block (between the first pair of `---` delimiters).
+pub fn rename_frontmatter_field(content: &str, old_key: &str, new_key: &str) -> String {
+    let mut result = Vec::new();
+    let mut in_frontmatter = false;
+    let mut fm_count = 0;
+
+    for line in content.lines() {
+        if line.trim() == "---" {
+            fm_count += 1;
+            in_frontmatter = fm_count == 1;
+            result.push(line.to_string());
+            continue;
+        }
+
+        if in_frontmatter && line.starts_with(&format!("{old_key}:")) {
+            let value_part = &line[old_key.len()..];
+            result.push(format!("{new_key}{value_part}"));
+        } else {
+            result.push(line.to_string());
+        }
+    }
+
+    result.join("\n") + if content.ends_with('\n') { "\n" } else { "" }
+}
+
+/// Remove a frontmatter field entirely. Only operates within the YAML
+/// frontmatter block.
+pub fn remove_frontmatter_field(content: &str, key: &str) -> String {
+    let mut result = Vec::new();
+    let mut in_frontmatter = false;
+    let mut fm_count = 0;
+
+    for line in content.lines() {
+        if line.trim() == "---" {
+            fm_count += 1;
+            in_frontmatter = fm_count == 1;
+            result.push(line.to_string());
+            continue;
+        }
+
+        if in_frontmatter && line.starts_with(&format!("{key}:")) {
+            continue;
+        }
+
+        result.push(line.to_string());
+    }
+
+    result.join("\n") + if content.ends_with('\n') { "\n" } else { "" }
+}
+
+/// Insert a new field at the top of frontmatter (after the opening `---`).
+pub fn insert_frontmatter_field(content: &str, key: &str, value: &str) -> String {
+    if let Some(pos) = content.find("---\n") {
+        let insert_pos = pos + 4;
+        let mut result = content[..insert_pos].to_string();
+        result.push_str(&format!("{key}: {value}\n"));
+        result.push_str(&content[insert_pos..]);
+        result
+    } else {
+        content.to_string()
+    }
+}
+```
+
+- [ ] **Step 4: Run tests**
+
+```bash
+cargo nextest run -p temper-cli test_rename_frontmatter test_remove_frontmatter test_insert_frontmatter
+```
+
+Expected: all 4 tests pass.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add crates/temper-cli/src/vault.rs crates/temper-cli/tests/vault_test.rs
+git commit -m "feat: add rename, remove, insert frontmatter field utilities to vault.rs"
+```
+
+---
+
+## Task 6: Doctor Command — Thin CLI Wrapper and Output
+
+The command layer follows the normalize pattern: call actions, format returned data.
+`DoctorReport` and `FixReport` derive `Serialize` so JSON output is just
+`serde_json::to_string_pretty`. No hand-built JSON, no raw `println!`/`eprintln!`.
+
+**All terminal output goes through `crate::output::*` functions** (which use `anstream` +
+`anstyle` for auto-detecting terminal capabilities and graceful degradation). Read
+`crates/temper-cli/src/output/mod.rs` and `crates/temper-cli/src/output/styles.rs` before
+writing any output code. Available styled output functions:
+
+- `output::success(msg)` — green ✓ prefix
+- `output::error(msg)` — red ✗ prefix (stderr)
+- `output::warning(msg)` — yellow ! prefix (stderr)
+- `output::header(msg)` — bold
+- `output::label(name, value)` — bold label + value
+- `output::hint(msg)` — dimmed guidance
+- `output::status_icon(bool, msg)` — ✓/✗ based on health
+- `output::item(msg)` — bullet point
+- `output::plain(msg)` — unstyled
+- `output::dim(msg)` — muted secondary info
+
+**indicatif** is available in Cargo.toml (machete-excluded, not yet used anywhere). The doctor
+scan is a good candidate for a progress bar when scanning large vaults. If using it, follow
+`indicatif` patterns that compose with `anstream` (both use the same terminal detection).
+This is optional — don't block the core functionality on it, but wire it up if time allows.
 
 **Files:**
 - Modify: `crates/temper-cli/src/commands/doctor.rs`
+- Modify: `crates/temper-core/src/schema.rs` (add Serialize derives)
+- Modify: `crates/temper-cli/src/actions/doctor.rs` (add Serialize derives)
 
-- [ ] **Step 1: Replace the stub with real output**
+- [ ] **Step 1: Add Serialize derives to report types**
 
-Replace the contents of `crates/temper-cli/src/commands/doctor.rs`:
+In `crates/temper-core/src/schema.rs`, add `Serialize` to `ValidationIssue` and `ValidationResult`:
+
+```rust
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ValidationIssue { ... }
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ValidationResult { ... }
+```
+
+In `crates/temper-cli/src/actions/doctor.rs`, add `Serialize` to `DoctorReport`:
+
+```rust
+use serde::Serialize;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DoctorReport { ... }
+```
+
+- [ ] **Step 2: Replace the command stub with thin wrapper**
+
+Replace `crates/temper-cli/src/commands/doctor.rs`. Note: ALL output goes through
+`crate::output::*` — never raw `println!`. JSON output uses `output::plain` with
+`serde_json::to_string_pretty`.
 
 ```rust
 use crate::actions::doctor;
@@ -1386,69 +1620,35 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::output;
 
-/// Run doctor (validate only).
+/// Run doctor (validate only). Delegates to actions::doctor::scan for all logic.
 pub fn run(config: &Config, context: Option<&str>, format: &str) -> Result<()> {
     let report = doctor::scan(config, context)?;
 
     if format == "json" {
-        print_json_report(&report);
+        output::plain(serde_json::to_string_pretty(&report).unwrap_or_default());
         return Ok(());
     }
 
     if report.total_issues == 0 {
-        output::success(format!(
-            "{} files checked — no issues found",
-            report.files_checked
-        ));
+        output::success(format!("{} files checked — no issues found", report.files_checked));
         return Ok(());
     }
 
-    // Print per-file issues
-    for result in &report.file_results {
-        if result.issues.is_empty() {
-            continue;
-        }
-        output::header(&result.file_path);
-        for issue in &result.issues {
-            let fixable = if issue.auto_fixable { " [auto-fixable]" } else { "" };
-            let path = if issue.path.is_empty() {
-                String::new()
-            } else {
-                format!(" {}", issue.path)
-            };
-            output::warning(format!("  {}{}: {}{}", "⚠", path, issue.message, fixable));
-        }
-        output::blank();
-    }
-
-    // Summary
-    output::plain(format!(
-        "{} files checked, {} issues ({} auto-fixable, {} manual)",
-        report.files_checked,
-        report.total_issues,
-        report.auto_fixable,
-        report.total_issues - report.auto_fixable,
-    ));
-
-    if report.auto_fixable > 0 {
-        output::hint("Run `temper doctor fix` to auto-fix issues, or `temper doctor fix --dry-run` to preview.");
-    }
+    print_issues(&report);
+    print_summary(&report);
 
     Ok(())
 }
 
-/// Run doctor fix (validate + auto-fix).
+/// Run doctor fix (validate + auto-fix). Delegates to actions::doctor for all logic.
 pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<()> {
     let report = doctor::scan(config, context)?;
 
     if report.auto_fixable == 0 {
         if report.total_issues == 0 {
-            output::success(format!(
-                "{} files checked — no issues found",
-                report.files_checked
-            ));
+            output::success(format!("{} files checked — no issues found", report.files_checked));
         } else {
-            output::plain(format!(
+            output::warning(format!(
                 "{} issues found but none are auto-fixable. Run `temper doctor` for details.",
                 report.total_issues
             ));
@@ -1459,10 +1659,9 @@ pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<
     let fixed = doctor::fix(config, context, dry_run)?;
 
     if dry_run {
-        output::plain(format!(
+        output::dim(format!(
             "Dry run: would fix {} issues across {} files",
-            fixed.fields_renamed + fixed.fields_backfilled,
-            fixed.files_modified,
+            fixed.fields_renamed + fixed.fields_backfilled, fixed.files_modified,
         ));
     } else {
         output::success(format!(
@@ -1481,55 +1680,69 @@ pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<
     Ok(())
 }
 
-fn print_json_report(report: &doctor::DoctorReport) {
-    let results: Vec<serde_json::Value> = report
-        .file_results
-        .iter()
-        .filter(|r| !r.issues.is_empty())
-        .map(|r| {
-            serde_json::json!({
-                "file": r.file_path,
-                "issues": r.issues.iter().map(|i| serde_json::json!({
-                    "path": i.path,
-                    "message": i.message,
-                    "auto_fixable": i.auto_fixable,
-                })).collect::<Vec<_>>(),
-            })
-        })
-        .collect();
+fn print_issues(report: &doctor::DoctorReport) {
+    for result in &report.file_results {
+        if result.issues.is_empty() {
+            continue;
+        }
+        output::header(&result.file_path);
+        for issue in &result.issues {
+            let fixable_tag = if issue.auto_fixable { " [auto-fixable]" } else { "" };
+            let path_tag = if issue.path.is_empty() {
+                String::new()
+            } else {
+                format!(" {}", issue.path)
+            };
+            if issue.auto_fixable {
+                output::warning(format!("{path_tag}: {}{fixable_tag}", issue.message));
+            } else {
+                output::error(format!("{path_tag}: {}", issue.message));
+            }
+        }
+        output::blank();
+    }
+}
 
-    let output = serde_json::json!({
-        "files_checked": report.files_checked,
-        "total_issues": report.total_issues,
-        "auto_fixable": report.auto_fixable,
-        "results": results,
-    });
-
-    println!("{}", serde_json::to_string_pretty(&output).unwrap_or_default());
+fn print_summary(report: &doctor::DoctorReport) {
+    output::label("Checked", report.files_checked);
+    output::label("Issues", format!(
+        "{} ({} auto-fixable, {} manual)",
+        report.total_issues, report.auto_fixable,
+        report.total_issues - report.auto_fixable,
+    ));
+    if report.auto_fixable > 0 {
+        output::hint("Run `temper doctor fix` to auto-fix, or `temper doctor fix --dry-run` to preview.");
+    }
 }
 ```
 
-- [ ] **Step 2: Verify it compiles**
+- [ ] **Step 3: Verify compilation**
 
 ```bash
 cargo build -p temper-cli 2>&1 | tail -5
 ```
 
-Expected: compilation error — `doctor::fix` doesn't exist yet. That's expected; we implement it next.
+Expected: compiles cleanly.
 
-- [ ] **Step 3: Commit the output formatting (with temporary compilation note)**
+- [ ] **Step 4: Commit**
 
-Don't commit yet — we'll fix the compilation in the next task and commit together.
+```bash
+git add crates/temper-core/src/schema.rs crates/temper-cli/src/commands/doctor.rs crates/temper-cli/src/actions/doctor.rs
+git commit -m "feat: thin doctor command wrapper with styled output and Serialize-derived JSON"
+```
 
 ---
 
-## Task 6: Doctor Fix — Auto-Fix Logic
+## Task 7: Doctor Fix — Auto-Fix Action Logic
+
+This task adds the `fix` function to `actions/doctor.rs`. It composes the vault.rs
+frontmatter utilities (from Task 5) — no frontmatter manipulation logic lives here.
 
 **Files:**
 - Modify: `crates/temper-cli/src/actions/doctor.rs`
-- Create additional tests in: `crates/temper-cli/tests/doctor_test.rs`
+- Modify: `crates/temper-cli/tests/doctor_test.rs`
 
-- [ ] **Step 1: Write failing test for doctor fix**
+- [ ] **Step 1: Write failing tests for doctor fix**
 
 Add to `crates/temper-cli/tests/doctor_test.rs`:
 
@@ -1562,19 +1775,16 @@ Some content here.
     assert!(result.fields_renamed > 0, "Should have renamed fields");
     assert_eq!(result.files_modified, 1);
 
-    // Read the file back and verify new field names
     let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
-    assert!(content.contains("temper-id:"), "Should contain temper-id, got:\n{content}");
-    assert!(content.contains("temper-type:"), "Should contain temper-type");
-    assert!(content.contains("temper-context:"), "Should contain temper-context");
-    assert!(content.contains("temper-stage:"), "Should contain temper-stage");
-    assert!(content.contains("temper-created:"), "Should contain temper-created");
-    // Legacy names should be gone
-    assert!(!content.contains("\nid:"), "Should not contain bare 'id:'");
-    assert!(!content.contains("\ntype:"), "Should not contain bare 'type:'");
-    assert!(!content.contains("\ncontext:"), "Should not contain bare 'context:'");
-    // Body should be preserved
-    assert!(content.contains("Some content here."), "Body should be preserved");
+    assert!(content.contains("temper-id:"), "got:\n{content}");
+    assert!(content.contains("temper-type:"));
+    assert!(content.contains("temper-context:"));
+    assert!(content.contains("temper-stage:"));
+    assert!(content.contains("temper-created:"));
+    assert!(!content.contains("\nid:"), "bare 'id:' should be gone");
+    assert!(!content.contains("\ntype:"));
+    assert!(!content.contains("\ncontext:"));
+    assert!(content.contains("Some content here."), "body preserved");
 }
 
 #[test]
@@ -1598,9 +1808,8 @@ created: "2026-04-03T21:23:32.026022-04:00"
     write_vault_file(&dir, "temper/task/old-task.md", original);
 
     let result = temper_cli::actions::doctor::fix(&config, None, true).unwrap();
-    assert!(result.fields_renamed > 0, "Should report fields to rename");
+    assert!(result.fields_renamed > 0);
 
-    // File should be unchanged
     let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
     assert_eq!(content, original, "Dry run should not modify file");
 }
@@ -1626,24 +1835,33 @@ date: "2026-04-04"
     );
 
     let result = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
-    assert!(result.fields_backfilled > 0, "Should backfill temper-created");
+    assert!(result.fields_backfilled > 0);
 
     let content =
         fs::read_to_string(dir.path().join("temper/session/2026-04-04 — my-session.md")).unwrap();
-    assert!(
-        content.contains("temper-created:"),
-        "Should contain temper-created, got:\n{content}"
-    );
+    assert!(content.contains("temper-created:"), "got:\n{content}");
 }
 ```
 
-- [ ] **Step 2: Add FixReport type and fix function to actions/doctor.rs**
+- [ ] **Step 2: Run tests to verify they fail**
 
-Add to `crates/temper-cli/src/actions/doctor.rs`:
+```bash
+cargo nextest run -p temper-cli test_doctor_fix
+```
+
+Expected: compilation error or test failure — `fix` function not yet implemented.
+
+- [ ] **Step 3: Implement fix function in actions/doctor.rs**
+
+Add to `crates/temper-cli/src/actions/doctor.rs`. Note: this composes `vault::rename_frontmatter_field`,
+`vault::remove_frontmatter_field`, `vault::insert_frontmatter_field`, and
+`vault::set_frontmatter_field` — it does NOT implement its own frontmatter manipulation.
 
 ```rust
+use serde::Serialize;
+
 /// Summary of fixes applied by doctor fix.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FixReport {
     pub files_modified: u32,
     pub fields_renamed: u32,
@@ -1695,7 +1913,6 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
         }
     }
 
-    // Also fix research directory
     let research_dir = config.vault_root.join("research");
     if research_dir.is_dir() {
         fix_research_dir(&research_dir, context_filter, &mut report, dry_run)?;
@@ -1743,6 +1960,8 @@ fn fix_directory(dir: &Path, report: &mut FixReport, dry_run: bool) -> Result<()
     Ok(())
 }
 
+/// Apply auto-fixes to a single vault file. Each fix is a discrete step that
+/// re-parses frontmatter after the previous step to avoid stale state.
 fn fix_file(file_path: &Path, report: &mut FixReport, dry_run: bool) -> Result<()> {
     let content = fs::read_to_string(file_path)?;
     let mut modified = content.clone();
@@ -1758,45 +1977,39 @@ fn fix_file(file_path: &Path, report: &mut FixReport, dry_run: bool) -> Result<(
         None => return Ok(()),
     };
 
-    // 1. Rename legacy fields
+    // Step 1: Rename legacy fields (uses vault::rename/remove_frontmatter_field)
     for (old_name, new_name) in LEGACY_FIELD_MAP {
         let has_old = mapping.contains_key(&serde_yaml::Value::String(old_name.to_string()));
         let has_new = mapping.contains_key(&serde_yaml::Value::String(new_name.to_string()));
 
         if has_old && !has_new {
-            modified = rename_frontmatter_field(&modified, old_name, new_name);
+            modified = vault::rename_frontmatter_field(&modified, old_name, new_name);
             report.fields_renamed += 1;
             file_changed = true;
         } else if has_old && has_new {
-            // Both exist — drop the old one
-            modified = remove_frontmatter_field(&modified, old_name);
+            modified = vault::remove_frontmatter_field(&modified, old_name);
             report.fields_renamed += 1;
             file_changed = true;
         }
     }
 
-    // 2. Backfill temper-created from date field if missing
-    let fm_after = vault::parse_frontmatter(&modified);
-    if let Some(ref v) = fm_after {
-        let has_created = v.get("temper-created").is_some();
-        if !has_created {
+    // Step 2: Backfill temper-created from date field if missing
+    if let Some(ref v) = vault::parse_frontmatter(&modified) {
+        if v.get("temper-created").is_none() {
             if let Some(date_str) = v.get("date").and_then(|d| d.as_str()) {
                 let created_value = format!("{date_str}T00:00:00Z");
-                modified =
-                    vault::set_frontmatter_field(&modified, "temper-created", &created_value);
+                modified = vault::set_frontmatter_field(&modified, "temper-created", &created_value);
                 report.fields_backfilled += 1;
                 file_changed = true;
             }
         }
     }
 
-    // 3. Backfill temper-id if missing (generate UUIDv7)
-    let fm_after = vault::parse_frontmatter(&modified);
-    if let Some(ref v) = fm_after {
-        let has_id = v.get("temper-id").is_some();
-        if !has_id {
+    // Step 3: Backfill temper-id if missing (generate UUIDv7)
+    if let Some(ref v) = vault::parse_frontmatter(&modified) {
+        if v.get("temper-id").is_none() {
             let new_id = uuid::Uuid::now_v7();
-            modified = insert_frontmatter_field(&modified, "temper-id", &format!("\"{new_id}\""));
+            modified = vault::insert_frontmatter_field(&modified, "temper-id", &format!("\"{new_id}\""));
             report.fields_backfilled += 1;
             file_changed = true;
         }
@@ -1811,80 +2024,17 @@ fn fix_file(file_path: &Path, report: &mut FixReport, dry_run: bool) -> Result<(
 
     Ok(())
 }
-
-/// Rename a frontmatter field key (preserving the value).
-fn rename_frontmatter_field(content: &str, old_key: &str, new_key: &str) -> String {
-    let mut result = Vec::new();
-    let mut in_frontmatter = false;
-    let mut fm_count = 0;
-
-    for line in content.lines() {
-        if line.trim() == "---" {
-            fm_count += 1;
-            in_frontmatter = fm_count == 1;
-            result.push(line.to_string());
-            continue;
-        }
-
-        if in_frontmatter && line.starts_with(&format!("{old_key}:")) {
-            // Replace the key, keep the value
-            let value_part = &line[old_key.len()..];
-            result.push(format!("{new_key}{value_part}"));
-        } else {
-            result.push(line.to_string());
-        }
-    }
-
-    result.join("\n") + if content.ends_with('\n') { "\n" } else { "" }
-}
-
-/// Remove a frontmatter field entirely.
-fn remove_frontmatter_field(content: &str, key: &str) -> String {
-    let mut result = Vec::new();
-    let mut in_frontmatter = false;
-    let mut fm_count = 0;
-
-    for line in content.lines() {
-        if line.trim() == "---" {
-            fm_count += 1;
-            in_frontmatter = fm_count == 1;
-            result.push(line.to_string());
-            continue;
-        }
-
-        if in_frontmatter && line.starts_with(&format!("{key}:")) {
-            continue; // Skip this line
-        }
-
-        result.push(line.to_string());
-    }
-
-    result.join("\n") + if content.ends_with('\n') { "\n" } else { "" }
-}
-
-/// Insert a new field at the top of frontmatter (after the opening ---).
-fn insert_frontmatter_field(content: &str, key: &str, value: &str) -> String {
-    if let Some(pos) = content.find("---\n") {
-        let insert_pos = pos + 4;
-        let mut result = content[..insert_pos].to_string();
-        result.push_str(&format!("{key}: {value}\n"));
-        result.push_str(&content[insert_pos..]);
-        result
-    } else {
-        content.to_string()
-    }
-}
 ```
 
-- [ ] **Step 3: Run all doctor tests**
+- [ ] **Step 4: Run all doctor tests**
 
 ```bash
 cargo nextest run -p temper-cli test_doctor
 ```
 
-Expected: all 8 tests pass.
+Expected: all 8 tests pass (5 scan + 3 fix).
 
-- [ ] **Step 4: Run full quality check**
+- [ ] **Step 5: Run full quality check**
 
 ```bash
 cargo make check
@@ -1892,19 +2042,20 @@ cargo make check
 
 Expected: fmt, clippy, and all existing tests pass.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add crates/temper-cli/src/commands/doctor.rs crates/temper-cli/src/actions/doctor.rs crates/temper-cli/tests/doctor_test.rs
-git commit -m "feat: implement doctor fix with legacy field rename, backfill, and dry-run support"
+git add crates/temper-cli/src/actions/doctor.rs crates/temper-cli/tests/doctor_test.rs
+git commit -m "feat: implement doctor fix — legacy field rename, backfill, dry-run support"
 ```
 
 ---
 
-## Task 7: Deprecate Normalize in Favor of Doctor
+## Task 8: Deprecate Normalize in Favor of Doctor
 
 **Files:**
 - Modify: `crates/temper-cli/src/cli.rs`
+- Modify: `crates/temper-cli/src/commands/normalize.rs`
 
 - [ ] **Step 1: Add deprecation notice to normalize command**
 
@@ -1940,7 +2091,126 @@ git commit -m "chore: deprecate normalize command in favor of temper doctor / do
 
 ---
 
-## Task 8: Final Integration — Full Test Suite and Clippy
+## Task 9: E2E Tests for Doctor
+
+Exercise the doctor command through the full CLI path using the `E2eTestApp` infrastructure
+and vault fixtures. These tests verify the command works end-to-end, not just the action layer.
+
+**Files:**
+- Create: `tests/e2e/tests/doctor_test.rs`
+
+- [ ] **Step 1: Write e2e test — doctor reports clean for valid vault**
+
+Create `tests/e2e/tests/doctor_test.rs`:
+
+```rust
+#![cfg(feature = "test-db")]
+
+mod common;
+
+use std::fs;
+
+/// temper doctor reports no issues for a vault with valid new-format files.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn doctor_clean_vault(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    // Create a valid task file in new format
+    let task_dir = app.cli_config.vault_root.join("temper").join("task");
+    fs::create_dir_all(&task_dir).unwrap();
+    fs::write(
+        task_dir.join("valid-task.md"),
+        r#"---
+temper-id: "019d5616-8e3c-7432-9867-222b36e46ea1"
+temper-type: task
+temper-context: temper
+temper-created: "2026-04-03T21:23:32-04:00"
+temper-stage: backlog
+title: "Valid task"
+slug: valid-task
+---
+
+# Valid task
+"#,
+    )
+    .unwrap();
+
+    let report = temper_cli::actions::doctor::scan(&app.cli_config, None).unwrap();
+    assert_eq!(report.files_checked, 1);
+    assert_eq!(report.total_issues, 0);
+}
+
+/// temper doctor detects legacy fields and doctor fix renames them.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn doctor_fix_legacy_roundtrip(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    let task_dir = app.cli_config.vault_root.join("temper").join("task");
+    fs::create_dir_all(&task_dir).unwrap();
+    let task_path = task_dir.join("legacy-task.md");
+    fs::write(
+        &task_path,
+        r#"---
+id: "019d5616-8e3c-7432-9867-222b36e46ea1"
+type: task
+context: temper
+stage: backlog
+title: "Legacy task"
+slug: legacy-task
+created: "2026-04-03T21:23:32-04:00"
+---
+
+# Legacy task
+"#,
+    )
+    .unwrap();
+
+    // Doctor should detect issues
+    let report = temper_cli::actions::doctor::scan(&app.cli_config, None).unwrap();
+    assert!(report.total_issues > 0, "Should detect legacy fields");
+    assert!(report.auto_fixable > 0);
+
+    // Fix should rename them
+    let fix_report = temper_cli::actions::doctor::fix(&app.cli_config, None, false).unwrap();
+    assert!(fix_report.fields_renamed > 0);
+
+    // Doctor again should be clean (or at least fewer issues)
+    let report_after = temper_cli::actions::doctor::scan(&app.cli_config, None).unwrap();
+    assert!(
+        report_after.total_issues < report.total_issues,
+        "Issues should decrease after fix: before={}, after={}",
+        report.total_issues, report_after.total_issues,
+    );
+
+    // Verify the file has new field names
+    let content = fs::read_to_string(&task_path).unwrap();
+    assert!(content.contains("temper-id:"));
+    assert!(content.contains("temper-type:"));
+    assert!(content.contains("temper-context:"));
+    assert!(content.contains("temper-stage:"));
+}
+```
+
+- [ ] **Step 2: Run e2e tests**
+
+```bash
+cargo nextest run -p temper-e2e --features test-db doctor
+```
+
+Expected: both e2e tests pass. If the e2e infra doesn't have `cli_config.contexts` set to
+include `"temper"`, the scan won't find files — check the `common::setup` function and adjust
+the config or create the context first.
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add tests/e2e/tests/doctor_test.rs
+git commit -m "test: add e2e tests for doctor scan and fix roundtrip"
+```
+
+---
+
+## Task 10: Final Integration — Full Test Suite and Clippy
 
 **Files:**
 - No new files — verification only
@@ -1951,7 +2221,7 @@ git commit -m "chore: deprecate normalize command in favor of temper doctor / do
 cargo make test
 ```
 
-Expected: all tests pass (existing + new doctor + schema tests).
+Expected: all tests pass (existing + new doctor + schema + vault utility tests).
 
 - [ ] **Step 2: Run full quality checks**
 
