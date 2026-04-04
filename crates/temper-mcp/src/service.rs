@@ -112,6 +112,55 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         tools::contexts::get_context(self, input).await
     }
+
+    #[tool(description = "Create a new context (workspace) in the knowledge base.")]
+    async fn create_context(
+        &self,
+        Parameters(input): Parameters<temper_core::types::context::ContextCreateRequest>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::contexts::create_context(self, input).await
+    }
+
+    #[tool(
+        description = "Update a resource's title, slug, or mimetype. Only the fields provided will be changed."
+    )]
+    async fn update_resource(
+        &self,
+        Parameters(input): Parameters<tools::resources::UpdateResourceInput>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::resources::update_resource(self, input).await
+    }
+
+    #[tool(description = "Soft-delete a resource by ID. The resource is deactivated, not permanently removed.")]
+    async fn delete_resource(
+        &self,
+        Parameters(input): Parameters<tools::resources::DeleteResourceInput>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::resources::delete_resource(self, input).await
+    }
+
+    #[tool(
+        description = "Get the full markdown content of a resource. Returns the reconstituted document."
+    )]
+    async fn get_resource_content(
+        &self,
+        Parameters(input): Parameters<tools::resources::GetResourceContentInput>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::resources::get_resource_content(self, input).await
+    }
+
+    #[tool(description = "List events in the knowledge base. Useful for auditing and debugging. Optionally filter by resource ID or event type.")]
+    async fn list_events(
+        &self,
+        Parameters(input): Parameters<temper_core::types::api::EventListParams>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::events::list_events(self, input).await
+    }
+
+    #[tool(description = "Get the authenticated user's profile, including display name, email, and preferences.")]
+    async fn get_profile(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+        tools::profiles::get_profile(self).await
+    }
 }
 
 #[tool_handler]
