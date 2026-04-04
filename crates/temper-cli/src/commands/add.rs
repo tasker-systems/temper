@@ -979,5 +979,329 @@ fn emit_event(
 
 #[cfg(test)]
 mod tests {
-    // Tests are added in Task 3
+    use super::*;
+
+    // --- URL detection ---
+
+    #[test]
+    fn url_http_routes_to_url_handler() {
+        let err = run(
+            "http://example.com/doc.pdf",
+            false,
+            Some("work"),
+            "note",
+            "text",
+            false,
+            false,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            !err.to_string().contains("not yet implemented"),
+            "URL should be routed, not rejected: {err}"
+        );
+    }
+
+    #[test]
+    fn url_https_routes_to_url_handler() {
+        let err = run(
+            "https://example.com/paper.md",
+            false,
+            Some("work"),
+            "note",
+            "text",
+            false,
+            false,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            !err.to_string().contains("not yet implemented"),
+            "URL should be routed, not rejected: {err}"
+        );
+    }
+
+    // --- UUID detection ---
+
+    #[test]
+    fn uuid_path_detected_as_uuid() {
+        let uuid_str = "12345678-1234-1234-1234-123456789abc";
+        assert!(
+            uuid::Uuid::parse_str(uuid_str).is_ok(),
+            "should parse as UUID: {uuid_str}"
+        );
+    }
+
+    #[test]
+    fn file_path_not_detected_as_uuid() {
+        let file_path = "/home/user/documents/my-notes.pdf";
+        assert!(
+            uuid::Uuid::parse_str(file_path).is_err(),
+            "file path should not parse as UUID: {file_path}"
+        );
+    }
+
+    #[test]
+    fn relative_file_path_not_detected_as_uuid() {
+        let file_path = "notes/my-document.md";
+        assert!(
+            uuid::Uuid::parse_str(file_path).is_err(),
+            "relative path should not parse as UUID: {file_path}"
+        );
+    }
+
+    // --- run() integration ---
+
+    #[test]
+    fn run_with_uuid_path_without_vault_fails_gracefully() {
+        let result = run(
+            "12345678-1234-1234-1234-123456789abc",
+            false,
+            None,
+            "resource",
+            "text",
+            false,
+            false,
+            None,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_file_without_context_returns_error() {
+        let result = run(
+            "/tmp/some-file.md",
+            false,
+            None,
+            "resource",
+            "text",
+            false,
+            false,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("--context is required"));
+    }
+
+    #[test]
+    fn run_auto_without_context_does_not_require_context_upfront() {
+        let result = run(
+            "/tmp/nonexistent.md",
+            false,
+            None,
+            "auto",
+            "text",
+            false,
+            false,
+            None,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(
+            !err.contains("--context is required"),
+            "auto mode should not require --context upfront: {err}"
+        );
+    }
+
+    #[test]
+    fn url_without_context_returns_error() {
+        let result = run(
+            "https://example.com/doc.pdf",
+            false,
+            None,
+            "resource",
+            "text",
+            false,
+            false,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("--context is required"));
+    }
+
+    // --- Nonexistent file ---
+
+    #[test]
+    fn nonexistent_file_returns_error() {
+        let result = run(
+            "/tmp/does-not-exist-xyz-12345.md",
+            false,
+            Some("work"),
+            "note",
+            "text",
+            false,
+            false,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("file not found"));
+    }
+
+    // --- Directory mode ---
+
+    #[test]
+    fn collect_files_respects_max_depth() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        fs::write(root.join("top.md"), "# Top").unwrap();
+
+        let sub = root.join("sub");
+        fs::create_dir(&sub).unwrap();
+        fs::write(sub.join("inner.md"), "# Inner").unwrap();
+
+        let deep = sub.join("deep");
+        fs::create_dir(&deep).unwrap();
+        fs::write(deep.join("deep.md"), "# Deep").unwrap();
+
+        let deeper = deep.join("deeper");
+        fs::create_dir(&deeper).unwrap();
+        fs::write(deeper.join("too_deep.md"), "# Too Deep").unwrap();
+
+        let config = DirectoryConfig {
+            max_depth: 2,
+            ..DirectoryConfig::default()
+        };
+        let files = collect_files(root, &config).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"top.md"), "top.md not found in {names:?}");
+        assert!(names.contains(&"inner.md"), "inner.md not found in {names:?}");
+        assert!(!names.contains(&"deep.md"), "deep.md should be excluded");
+        assert!(!names.contains(&"too_deep.md"), "too_deep.md should be excluded");
+    }
+
+    #[test]
+    fn collect_files_filters_by_extension() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        fs::write(root.join("doc.md"), "# Markdown").unwrap();
+        fs::write(root.join("notes.txt"), "plain text").unwrap();
+        fs::write(root.join("image.png"), "binary").unwrap();
+        fs::write(root.join("data.csv"), "a,b,c").unwrap();
+        fs::write(root.join("page.html"), "<html/>").unwrap();
+
+        let config = DirectoryConfig::default();
+        let files = collect_files(root, &config).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+
+        assert!(names.contains(&"doc.md"), "doc.md should be included");
+        assert!(names.contains(&"notes.txt"), "notes.txt should be included");
+        assert!(names.contains(&"page.html"), "page.html should be included");
+        assert!(!names.contains(&"image.png"), "image.png should be excluded");
+        assert!(!names.contains(&"data.csv"), "data.csv should be excluded");
+    }
+
+    #[test]
+    fn preflight_check_rejects_oversized_directory() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        fs::write(root.join("big.md"), "# Big file with lots of content").unwrap();
+
+        let config = DirectoryConfig {
+            max_total_bytes: 1,
+            ..DirectoryConfig::default()
+        };
+
+        let err = preflight_check(root, &config).unwrap_err();
+        assert!(
+            err.to_string().contains("exceeds limit"),
+            "expected 'exceeds limit' in: {err}"
+        );
+    }
+
+    #[test]
+    fn preflight_check_accepts_within_limit() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let root = dir.path();
+
+        fs::write(root.join("small.md"), "# Small").unwrap();
+
+        let config = DirectoryConfig::default();
+        let files = preflight_check(root, &config).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        assert!(names.contains(&"small.md"));
+    }
+
+    #[test]
+    fn run_directory_errors_on_non_directory() {
+        let err = run(
+            "/tmp/not-a-real-directory-xyz-12345",
+            true,
+            Some("work"),
+            "note",
+            "text",
+            false,
+            false,
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("not a directory")
+                || err.to_string().contains("exceeds limit")
+                || err.to_string().contains("No matching"),
+            "unexpected error: {err}"
+        );
+    }
+
+    // --- Dry-run ---
+
+    #[test]
+    fn dry_run_url_does_not_upload() {
+        let result = run(
+            "https://example.com/doc.pdf",
+            false,
+            Some("work"),
+            "resource",
+            "text",
+            false,
+            true,
+            None,
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn dry_run_uuid_does_not_promote() {
+        let result = run(
+            "12345678-1234-1234-1234-123456789abc",
+            false,
+            None,
+            "resource",
+            "text",
+            false,
+            true,
+            None,
+        );
+        assert!(result.is_ok());
+    }
 }
