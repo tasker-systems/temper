@@ -103,30 +103,51 @@ struct ClientRegistrationResponse {
 /// Claude Desktop the seamless connector experience (no manual
 /// client_id entry) without opening Auth0's native DCR endpoint.
 ///
-/// The Auth0 application must have the appropriate callback URLs
-/// configured (e.g. `https://claude.ai/api/mcp/auth_callback`).
+/// Only redirect URIs listed in `mcp-server.toml` are echoed back.
+/// Returns 503 if `MCP_CLIENT_ID` is not configured.
 pub async fn register_client(
     State(state): State<Arc<McpAppState>>,
     Json(request): Json<ClientRegistrationRequest>,
 ) -> impl IntoResponse {
+    let Some(ref client_id) = state.mcp_config.mcp_client_id else {
+        tracing::warn!("DCR request received but MCP_CLIENT_ID is not configured");
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "temporarily_unavailable",
+                "error_description": "Dynamic client registration is not configured"
+            })),
+        ));
+    };
+
     let client_name = request
         .client_name
         .unwrap_or_else(|| "MCP Client".to_string());
 
+    // Only echo back redirect URIs that are in our allowed list.
+    let allowed = &state.mcp_config.oauth.redirect_uris;
+    let redirect_uris: Vec<String> = request
+        .redirect_uris
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|uri| allowed.contains(uri))
+        .collect();
+
     tracing::info!(
         client_name = %client_name,
+        redirect_uris = ?redirect_uris,
         "MCP dynamic client registration (returning static client_id)"
     );
 
-    (
+    Ok((
         StatusCode::CREATED,
-        Json(ClientRegistrationResponse {
-            client_id: state.mcp_config.mcp_client_id.clone(),
+        Json(serde_json::json!(ClientRegistrationResponse {
+            client_id: client_id.clone(),
             client_name,
-            redirect_uris: request.redirect_uris.unwrap_or_default(),
+            redirect_uris,
             grant_types: vec!["authorization_code", "refresh_token"],
             response_types: vec!["code"],
             token_endpoint_auth_method: "none",
-        }),
-    )
+        })),
+    ))
 }
