@@ -15,6 +15,9 @@ struct McpServerFile {
 pub struct OAuthStaticConfig {
     /// Allowed redirect URIs echoed back in DCR responses.
     pub redirect_uris: Vec<String>,
+    /// Accept any `http://localhost` or `http://127.0.0.1` redirect URI.
+    #[serde(default)]
+    pub allow_localhost: bool,
 }
 
 /// Configuration specific to the MCP server deployment.

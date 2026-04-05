@@ -4,8 +4,15 @@
 [oauth]
 # Allowed redirect URIs for dynamic client registration responses.
 # Only URIs listed here will be echoed back in registration responses.
+# Note: localhost URIs are needed for Claude Code and Claude Desktop,
+# which run local OAuth callback servers on dynamic ports.
 redirect_uris = [
     "https://temperkb.io/api/auth/cli-callback",
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
 ]
+
+# If true, any http://localhost or http://127.0.0.1 redirect URI is
+# accepted in addition to the explicit list above. Required for
+# desktop/CLI MCP clients that use local callback servers.
+allow_localhost = true

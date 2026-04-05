@@ -124,13 +124,16 @@ pub async fn register_client(
         .client_name
         .unwrap_or_else(|| "MCP Client".to_string());
 
-    // Only echo back redirect URIs that are in our allowed list.
-    let allowed = &state.mcp_config.oauth.redirect_uris;
+    // Only echo back redirect URIs that are in our allowed list
+    // (or localhost URIs when allow_localhost is enabled).
+    let oauth = &state.mcp_config.oauth;
     let redirect_uris: Vec<String> = request
         .redirect_uris
         .unwrap_or_default()
         .into_iter()
-        .filter(|uri| allowed.contains(uri))
+        .filter(|uri| {
+            oauth.redirect_uris.contains(uri) || (oauth.allow_localhost && is_localhost_uri(uri))
+        })
         .collect();
 
     tracing::info!(
@@ -150,4 +153,10 @@ pub async fn register_client(
             token_endpoint_auth_method: "none",
         })),
     ))
+}
+
+/// Returns true if the URI is an `http://localhost` or `http://127.0.0.1` callback.
+/// These are used by desktop/CLI MCP clients that run local OAuth servers.
+fn is_localhost_uri(uri: &str) -> bool {
+    uri.starts_with("http://localhost") || uri.starts_with("http://127.0.0.1")
 }
