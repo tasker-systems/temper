@@ -54,13 +54,15 @@ async fn sync_status_detects_server_resource(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/sync-status".to_string(),
         context_name: "sync-test".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
+
         content_hash: "synctest00000000000000000000000000000000000000000000000000000000"
             .to_string(),
         slug: "sync-test-doc".to_string(),
-        mimetype: "text/markdown".to_string(),
+
         content: "# Sync Test\n\nContent for sync testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -120,12 +122,14 @@ async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/sync-match".to_string(),
         context_name: "sync-match".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
+
         content_hash: content_hash.clone(),
         slug: "sync-match-doc".to_string(),
-        mimetype: "text/markdown".to_string(),
+
         content: "# Match\n\nSame on both sides.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -150,6 +154,10 @@ async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
                     uri: kb_uri.clone(),
                     local_hash: content_hash.clone(),
                     remote_hash: content_hash,
+                    managed_hash: String::new(),
+                    remote_managed_hash: String::new(),
+                    open_hash: String::new(),
+                    remote_open_hash: String::new(),
                 }],
             }],
         })
@@ -220,13 +228,15 @@ async fn sync_complete_updates_content_hash(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/sync-complete".to_string(),
         context_name: "sync-complete".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
+
         content_hash: "old0000000000000000000000000000000000000000000000000000000000000"
             .to_string(),
         slug: "sync-complete-doc".to_string(),
-        mimetype: "text/markdown".to_string(),
+
         content: "# Complete\n\nFor sync complete testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -307,12 +317,14 @@ async fn sync_manifest_returns_resources(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/mfst-res".to_string(),
         context_name: "mfst-res".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
+
         content_hash: content_hash.clone(),
         slug: "mfst-res-doc".to_string(),
-        mimetype: "text/markdown".to_string(),
+
         content: "# Manifest Test\n\nContent for manifest testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 
@@ -373,13 +385,15 @@ async fn sync_manifest_excludes_inactive(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/sync-manifest-inactive".to_string(),
         context_name: "manifest-inactive".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
+
         content_hash: "inactive00000000000000000000000000000000000000000000000000000000"
             .to_string(),
         slug: "will-be-deleted".to_string(),
-        mimetype: "text/markdown".to_string(),
+
         content: "# Will Be Deleted".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 

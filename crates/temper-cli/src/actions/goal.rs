@@ -161,7 +161,7 @@ pub fn update(config: &Config, slug: &str, status: &str, context: Option<&str>) 
         return Err(TemperError::Vault(format!("goal not found: {slug}")));
     }
     let content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let updated = vault::set_frontmatter_field(&content, "status", status);
+    let updated = vault::set_frontmatter_field(&content, "temper-status", status);
     fs::write(&path, updated).map_err(|e| TemperError::Vault(e.to_string()))?;
     let event = discovery::Event::GoalUpdate {
         ts: Local::now().to_rfc3339(),
@@ -197,9 +197,14 @@ pub fn count_tasks_by_stage(
             Some(fm) => fm,
             None => continue,
         };
-        let g = fm.get("goal").and_then(|v| v.as_str()).unwrap_or("unknown");
+        let g = fm
+            .get("temper-goal")
+            .or_else(|| fm.get("goal"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
         let stage = fm
-            .get("stage")
+            .get("temper-stage")
+            .or_else(|| fm.get("stage"))
             .and_then(|v| v.as_str())
             .unwrap_or("backlog");
         *counts

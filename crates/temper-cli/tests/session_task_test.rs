@@ -90,7 +90,7 @@ fn test_session_save_with_task_and_state_moves_task() {
     )
     .unwrap();
     assert!(
-        task_content.contains("stage: done"),
+        task_content.contains("temper-stage: done"),
         "task should be marked done"
     );
 }

@@ -1,12 +1,12 @@
 ---
-id: "{{ id }}"
-type: goal
+temper-id: "{{ id }}"
+temper-type: goal
 title: "{{ title }}"
 slug: "{{ slug }}"
-context: "{{ context }}"
-seq: {{ seq }}
-status: active
-created: {{ date }}
+temper-context: "{{ context }}"
+temper-seq: {{ seq }}
+temper-status: active
+temper-created: {{ date }}
 ---
 
 # {{ title }}

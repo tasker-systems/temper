@@ -152,7 +152,10 @@ fn process_file(
     let fm = vault::parse_frontmatter(&modified);
 
     // --- Check for missing `id` field ---
-    let has_id = fm.as_ref().and_then(|v| v.get("id")).is_some();
+    let has_id = fm
+        .as_ref()
+        .and_then(|v| v.get("temper-id").or_else(|| v.get("id")))
+        .is_some();
 
     if !has_id {
         // Derive a date from the slug prefix (YYYY-MM-DD) or frontmatter date field
@@ -173,9 +176,20 @@ fn process_file(
 
     // --- Check for old stage values ---
     if let Some(ref v) = fm {
-        if let Some(stage_val) = v.get("stage").and_then(|s| s.as_str()) {
-            if OLD_STAGES.contains(&stage_val) {
-                modified = vault::set_frontmatter_field(&modified, "stage", "in-progress");
+        // Check temper-stage first, fall back to legacy stage
+        let (stage_key, stage_val) = v
+            .get("temper-stage")
+            .and_then(|s| s.as_str())
+            .map(|s| ("temper-stage", s))
+            .or_else(|| {
+                v.get("stage")
+                    .and_then(|s| s.as_str())
+                    .map(|s| ("stage", s))
+            })
+            .unzip();
+        if let (Some(key), Some(val)) = (stage_key, stage_val) {
+            if OLD_STAGES.contains(&val) {
+                modified = vault::set_frontmatter_field(&modified, key, "in-progress");
                 summary.stages_migrated += 1;
                 changed = true;
             }
@@ -187,7 +201,11 @@ fn process_file(
 
     // --- Check if file is in wrong context directory ---
     if let Some(ref v) = fm {
-        if let Some(fm_context) = v.get("context").and_then(|p| p.as_str()) {
+        let fm_context = v
+            .get("temper-context")
+            .or_else(|| v.get("context"))
+            .and_then(|p| p.as_str());
+        if let Some(fm_context) = fm_context {
             if fm_context != dir_context_name {
                 // For the new layout, we'd need to know the base dir to move to.
                 // Count it but don't auto-move (requires knowing full vault structure).
@@ -221,17 +239,19 @@ fn process_file(
     if doc_type == "task" {
         if let Some(ref v) = fm {
             // Check if effort key exists at all (null counts as existing)
-            let has_effort_key = v.get("effort").is_some();
+            let has_effort_key = v.get("temper-effort").is_some() || v.get("effort").is_some();
             if !has_effort_key {
-                // Insert effort: null after the stage: line so set_frontmatter_field works later
+                // Insert temper-effort: null after the temper-stage: (or stage:) line
                 let mut new_lines = Vec::new();
                 let mut in_fm = false;
                 for line in modified.lines() {
                     new_lines.push(line.to_string());
                     if line.trim() == "---" {
                         in_fm = !in_fm;
-                    } else if in_fm && line.starts_with("stage:") {
-                        new_lines.push("effort: null".to_string());
+                    } else if in_fm
+                        && (line.starts_with("temper-stage:") || line.starts_with("stage:"))
+                    {
+                        new_lines.push("temper-effort: null".to_string());
                     }
                 }
                 modified = new_lines.join("\n") + "\n";

@@ -21,7 +21,17 @@ use temper_core::types::sync::{
 struct DiffRow {
     resource_id: Option<Uuid>,
     kb_uri: String,
-    content_hash: String,
+    body_hash: String,
+    #[expect(
+        dead_code,
+        reason = "returned by SQL; will be used for three-tier sync"
+    )]
+    managed_hash: String,
+    #[expect(
+        dead_code,
+        reason = "returned by SQL; will be used for three-tier sync"
+    )]
+    open_hash: String,
     #[expect(dead_code, reason = "returned by SQL but not used in categorization")]
     updated: Option<DateTime<Utc>>,
     diff_type: String,
@@ -37,19 +47,19 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
 
     for row in rows {
         match row.diff_type.as_str() {
-            "to_push" => to_push.push(SyncPushItem {
+            "to_push" | "to_push_body" | "to_push_meta" => to_push.push(SyncPushItem {
                 uri: row.kb_uri,
                 resource_id: row.resource_id,
             }),
-            "to_pull" => to_pull.push(SyncPullItem {
+            "to_pull" | "to_pull_body" | "to_pull_meta" => to_pull.push(SyncPullItem {
                 uri: row.kb_uri,
                 resource_id: row.resource_id.expect("to_pull must have resource_id"),
-                content_hash: row.content_hash,
+                content_hash: row.body_hash,
             }),
             "conflict" => conflicts.push(SyncConflictItem {
                 uri: row.kb_uri,
                 resource_id: row.resource_id.expect("conflict must have resource_id"),
-                server_hash: row.content_hash,
+                server_hash: row.body_hash,
             }),
             "removed" => removed.push(SyncRemovedItem {
                 uri: row.kb_uri,
@@ -83,6 +93,10 @@ pub async fn compute_sync_diff(
                 "uri": entry.uri,
                 "local_hash": entry.local_hash,
                 "remote_hash": entry.remote_hash,
+                "managed_hash": entry.managed_hash,
+                "remote_managed_hash": entry.remote_managed_hash,
+                "open_hash": entry.open_hash,
+                "remote_open_hash": entry.remote_open_hash,
             }));
         }
     }
@@ -91,7 +105,7 @@ pub async fn compute_sync_diff(
 
     let rows = sqlx::query_as::<_, DiffRow>(
         r#"
-        SELECT resource_id, kb_uri, content_hash, updated, diff_type
+        SELECT resource_id, kb_uri, body_hash, managed_hash, open_hash, updated, diff_type
           FROM sync_diff_for_device($1, $2::text[], $3::jsonb)
         "#,
     )
@@ -104,7 +118,7 @@ pub async fn compute_sync_diff(
     Ok(categorize_diff_rows(rows))
 }
 
-/// Finalize a sync round: batch-update content hashes and upsert device state.
+/// Finalize a sync round: batch-update body hashes and upsert device state.
 ///
 /// Uses a single UPDATE with unnest() instead of per-row loop
 /// (fixes code review audit item 5e).
@@ -129,10 +143,10 @@ pub async fn complete_sync_round(
 
         let result = sqlx::query(
             r#"
-            UPDATE kb_resources r
-            SET content_hash = u.content_hash, updated = now()
-            FROM unnest($1::uuid[], $2::text[]) AS u(resource_id, content_hash)
-            WHERE r.id = u.resource_id
+            UPDATE kb_resource_manifests m
+            SET body_hash = u.body_hash, updated = now()
+            FROM unnest($1::uuid[], $2::text[]) AS u(resource_id, body_hash)
+            WHERE m.resource_id = u.resource_id
             "#,
         )
         .bind(&ids)
@@ -174,7 +188,9 @@ struct ManifestRow {
     context_name: String,
     doc_type_name: String,
     slug: String,
-    content_hash: String,
+    body_hash: String,
+    managed_hash: String,
+    open_hash: String,
 }
 
 /// Fetch all active resources for a profile — metadata only, no content.
@@ -186,10 +202,13 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                c.name AS context_name,
                d.name AS doc_type_name,
                COALESCE(r.slug, '') AS slug,
-               COALESCE(r.content_hash, '') AS content_hash
+               COALESCE(m.body_hash, '') AS body_hash,
+               COALESCE(m.managed_hash, '') AS managed_hash,
+               COALESCE(m.open_hash, '') AS open_hash
           FROM kb_resources r
           JOIN kb_contexts c ON c.id = r.kb_context_id
           JOIN kb_doc_types d ON d.id = r.kb_doc_type_id
+          LEFT JOIN kb_resource_manifests m ON m.resource_id = r.id
          WHERE r.owner_profile_id = $1
            AND r.is_active = true
          ORDER BY c.name, d.name, r.slug
@@ -211,7 +230,9 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                 context: row.context_name,
                 doc_type: row.doc_type_name,
                 slug: row.slug,
-                content_hash: row.content_hash,
+                content_hash: row.body_hash,
+                managed_hash: row.managed_hash,
+                open_hash: row.open_hash,
                 uri,
             }
         })
@@ -230,39 +251,77 @@ mod tests {
             DiffRow {
                 resource_id: Some(Uuid::nil()),
                 kb_uri: "kb://ctx/task/a".to_owned(),
-                content_hash: "h1".to_owned(),
+                body_hash: "h1".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
                 updated: None,
-                diff_type: "to_push".to_owned(),
+                diff_type: "to_push_body".to_owned(),
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
                 kb_uri: "kb://ctx/task/b".to_owned(),
-                content_hash: "h2".to_owned(),
+                body_hash: "h2".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
                 updated: None,
                 diff_type: "to_pull".to_owned(),
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
                 kb_uri: "kb://ctx/task/c".to_owned(),
-                content_hash: "h3".to_owned(),
+                body_hash: "h3".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
                 updated: None,
                 diff_type: "conflict".to_owned(),
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
                 kb_uri: "kb://ctx/task/d".to_owned(),
-                content_hash: "h4".to_owned(),
+                body_hash: "h4".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
                 updated: None,
                 diff_type: "removed".to_owned(),
+            },
+            DiffRow {
+                resource_id: Some(Uuid::nil()),
+                kb_uri: "kb://ctx/task/e".to_owned(),
+                body_hash: "h5".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                updated: None,
+                diff_type: "to_push_meta".to_owned(),
+            },
+            DiffRow {
+                resource_id: Some(Uuid::nil()),
+                kb_uri: "kb://ctx/task/f".to_owned(),
+                body_hash: "h6".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                updated: None,
+                diff_type: "to_pull_body".to_owned(),
+            },
+            DiffRow {
+                resource_id: Some(Uuid::nil()),
+                kb_uri: "kb://ctx/task/g".to_owned(),
+                body_hash: "h7".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                updated: None,
+                diff_type: "to_pull_meta".to_owned(),
             },
         ];
 
         let result = categorize_diff_rows(rows);
-        assert_eq!(result.to_push.len(), 1);
-        assert_eq!(result.to_pull.len(), 1);
+        assert_eq!(result.to_push.len(), 2);
+        assert_eq!(result.to_pull.len(), 3); // to_pull + to_pull_body + to_pull_meta
         assert_eq!(result.conflicts.len(), 1);
         assert_eq!(result.removed.len(), 1);
         assert_eq!(result.to_push[0].uri, "kb://ctx/task/a");
+        assert_eq!(result.to_push[1].uri, "kb://ctx/task/e");
         assert_eq!(result.to_pull[0].uri, "kb://ctx/task/b");
+        assert_eq!(result.to_pull[1].uri, "kb://ctx/task/f");
+        assert_eq!(result.to_pull[2].uri, "kb://ctx/task/g");
     }
 }

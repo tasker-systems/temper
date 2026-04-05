@@ -1,0 +1,324 @@
+use std::fs;
+
+use tempfile::TempDir;
+
+fn test_config(dir: &TempDir) -> temper_cli::config::Config {
+    let state_dir = dir.path().join(".temper");
+    fs::create_dir_all(&state_dir).unwrap();
+    fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
+    fs::write(state_dir.join("events.jsonl"), "").unwrap();
+    temper_cli::config::Config {
+        vault_root: dir.path().to_path_buf(),
+        state_dir,
+        contexts: vec!["temper".to_string()],
+        skill_output: dir.path().join("temper.md"),
+        skill_framework: "superpowers".to_string(),
+    }
+}
+
+fn write_vault_file(dir: &TempDir, rel_path: &str, content: &str) {
+    let path = dir.path().join(rel_path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, content).unwrap();
+}
+
+// ---------------------------------------------------------------------------
+// A valid new-format task (all required base + task fields present)
+// ---------------------------------------------------------------------------
+const VALID_TASK_FM: &str = r#"---
+temper-id: "01900000-0000-7000-8000-000000000001"
+temper-type: task
+temper-context: temper
+temper-created: "2026-01-01T00:00:00Z"
+title: "Implement feature X"
+temper-stage: backlog
+slug: implement-feature-x
+---
+
+Body text.
+"#;
+
+// ---------------------------------------------------------------------------
+// A valid new-format goal
+// ---------------------------------------------------------------------------
+const VALID_GOAL_FM: &str = r#"---
+temper-id: "01900000-0000-7000-8000-000000000002"
+temper-type: goal
+temper-context: temper
+temper-created: "2026-01-01T00:00:00Z"
+title: "Ship v1"
+temper-status: active
+slug: ship-v1
+---
+
+Goal body.
+"#;
+
+// ---------------------------------------------------------------------------
+// A valid session
+// ---------------------------------------------------------------------------
+const VALID_SESSION_FM: &str = r#"---
+temper-id: "01900000-0000-7000-8000-000000000003"
+temper-type: session
+temper-context: temper
+temper-created: "2026-01-01T00:00:00Z"
+title: "Session 2026-01-01"
+date: "2026-01-01"
+---
+
+Session notes.
+"#;
+
+// ---------------------------------------------------------------------------
+// Old-format task using legacy field names
+// ---------------------------------------------------------------------------
+const LEGACY_TASK_FM: &str = r#"---
+id: "01900000-0000-7000-8000-000000000010"
+type: task
+context: temper
+created: "2026-01-01T00:00:00Z"
+title: "Old task"
+stage: backlog
+slug: old-task
+---
+
+Legacy body.
+"#;
+
+// ---------------------------------------------------------------------------
+// Task with invalid enum value for temper-stage
+// ---------------------------------------------------------------------------
+const INVALID_STAGE_TASK_FM: &str = r#"---
+temper-id: "01900000-0000-7000-8000-000000000020"
+temper-type: task
+temper-context: temper
+temper-created: "2026-01-01T00:00:00Z"
+title: "Bad stage task"
+temper-stage: active
+slug: bad-stage-task
+---
+
+Body.
+"#;
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_doctor_valid_task_no_issues() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    write_vault_file(&dir, "temper/task/implement-feature-x.md", VALID_TASK_FM);
+
+    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
+
+    assert_eq!(report.files_checked, 1, "should scan exactly one file");
+    assert_eq!(
+        report.total_issues,
+        0,
+        "valid task should have no issues; got: {:?}",
+        report
+            .file_results
+            .iter()
+            .flat_map(|r| &r.issues)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_doctor_detects_legacy_fields() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    write_vault_file(&dir, "temper/task/old-task.md", LEGACY_TASK_FM);
+
+    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
+
+    assert_eq!(report.files_checked, 1);
+    assert!(
+        report.total_issues > 0,
+        "legacy fields should produce issues"
+    );
+    assert!(
+        report.auto_fixable > 0,
+        "legacy field issues should be auto-fixable"
+    );
+
+    // Verify the legacy field messages are present
+    let all_messages: Vec<&str> = report
+        .file_results
+        .iter()
+        .flat_map(|r| r.issues.iter().map(|i| i.message.as_str()))
+        .collect();
+    assert!(
+        all_messages.iter().any(|m| m.contains("legacy field")),
+        "should mention 'legacy field' in at least one issue message"
+    );
+}
+
+#[test]
+fn test_doctor_detects_invalid_enum() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    write_vault_file(&dir, "temper/task/bad-stage-task.md", INVALID_STAGE_TASK_FM);
+
+    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
+
+    assert_eq!(report.files_checked, 1);
+    assert!(
+        report.total_issues > 0,
+        "invalid enum value should produce a validation error"
+    );
+}
+
+#[test]
+fn test_doctor_valid_session_no_issues() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    write_vault_file(
+        &dir,
+        "temper/session/session-2026-01-01.md",
+        VALID_SESSION_FM,
+    );
+
+    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
+
+    assert_eq!(report.files_checked, 1);
+    assert_eq!(
+        report.total_issues,
+        0,
+        "valid session should have no issues; got: {:?}",
+        report
+            .file_results
+            .iter()
+            .flat_map(|r| &r.issues)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_doctor_scans_multiple_doctypes() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    write_vault_file(&dir, "temper/task/implement-feature-x.md", VALID_TASK_FM);
+    write_vault_file(&dir, "temper/goal/ship-v1.md", VALID_GOAL_FM);
+
+    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
+
+    assert_eq!(
+        report.files_checked, 2,
+        "should scan task and goal files (one each)"
+    );
+    assert_eq!(
+        report.total_issues, 0,
+        "both valid files should produce no issues"
+    );
+}
+
+#[test]
+fn test_doctor_context_filter() {
+    let dir = TempDir::new().unwrap();
+    let mut config = test_config(&dir);
+    config.contexts = vec!["temper".to_string(), "other".to_string()];
+
+    write_vault_file(&dir, "temper/task/implement-feature-x.md", VALID_TASK_FM);
+    // This file is in 'other' context and should be excluded by the filter
+    write_vault_file(
+        &dir,
+        "other/task/something.md",
+        &VALID_TASK_FM.replace("temper-context: temper", "temper-context: other"),
+    );
+
+    let report = temper_cli::actions::doctor::scan(&config, Some("temper")).unwrap();
+
+    assert_eq!(
+        report.files_checked, 1,
+        "context filter should restrict scan to 'temper' context only"
+    );
+}
+
+#[test]
+fn test_doctor_no_frontmatter_reports_issue() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    write_vault_file(
+        &dir,
+        "temper/task/no-fm.md",
+        "Just body text, no frontmatter.\n",
+    );
+
+    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
+
+    assert_eq!(report.files_checked, 1);
+    assert!(
+        report.total_issues > 0,
+        "missing frontmatter should be an issue"
+    );
+    let has_fm_issue = report
+        .file_results
+        .iter()
+        .flat_map(|r| r.issues.iter())
+        .any(|i| i.message.contains("No YAML frontmatter"));
+    assert!(has_fm_issue, "should report missing frontmatter");
+}
+
+#[test]
+fn test_doctor_fix_renames_legacy_fields() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    write_vault_file(
+        &dir,
+        "temper/task/old-task.md",
+        "---\nid: \"019d5616-8e3c-7432-9867-222b36e46ea1\"\ntype: task\ncontext: temper\nstage: backlog\ntitle: \"Old task\"\nslug: old-task\ncreated: \"2026-04-03T21:23:32.026022-04:00\"\n---\n\n# Old task\n\nSome content here.\n",
+    );
+
+    let result = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
+    assert!(result.fields_renamed > 0, "Should have renamed fields");
+    assert_eq!(result.files_modified, 1);
+
+    let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
+    assert!(content.contains("temper-id:"), "got:\n{content}");
+    assert!(content.contains("temper-type:"));
+    assert!(content.contains("temper-context:"));
+    assert!(content.contains("temper-stage:"));
+    assert!(content.contains("temper-created:"));
+    assert!(!content.contains("\nid:"), "bare 'id:' should be gone");
+    assert!(!content.contains("\ntype:"));
+    assert!(content.contains("Some content here."), "body preserved");
+}
+
+#[test]
+fn test_doctor_fix_dry_run_does_not_modify() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    let original = "---\nid: \"019d5616-8e3c-7432-9867-222b36e46ea1\"\ntype: task\ncontext: temper\nstage: backlog\ntitle: \"Old task\"\nslug: old-task\ncreated: \"2026-04-03T21:23:32.026022-04:00\"\n---\n\n# Old task\n";
+
+    write_vault_file(&dir, "temper/task/old-task.md", original);
+
+    let result = temper_cli::actions::doctor::fix(&config, None, true).unwrap();
+    assert!(result.fields_renamed > 0);
+
+    let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
+    assert_eq!(content, original, "Dry run should not modify file");
+}
+
+#[test]
+fn test_doctor_fix_backfills_temper_created_from_date() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    write_vault_file(
+        &dir,
+        "temper/session/my-session.md",
+        "---\ntemper-id: \"019d5977-f476-7e41-b4aa-fc4bd2b24426\"\ntemper-type: session\ntemper-context: temper\ntitle: \"My session\"\ndate: \"2026-04-04\"\n---\n\n## Goal\n",
+    );
+
+    let result = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
+    assert!(result.fields_backfilled > 0);
+
+    let content = fs::read_to_string(dir.path().join("temper/session/my-session.md")).unwrap();
+    assert!(content.contains("temper-created:"), "got:\n{content}");
+}

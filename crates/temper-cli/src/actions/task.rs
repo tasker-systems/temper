@@ -226,7 +226,7 @@ pub fn move_task(
     let from_effort = task.effort.clone();
 
     if let Some(s) = stage {
-        content = vault::set_frontmatter_field(&content, "stage", s);
+        content = vault::set_frontmatter_field(&content, "temper-stage", s);
     }
 
     let mut from_goal: Option<String> = None;
@@ -243,22 +243,22 @@ pub fn move_task(
         }
         from_goal = Some(task.goal.clone());
         to_goal = Some(g.to_string());
-        content = vault::set_frontmatter_field(&content, "goal", g);
+        content = vault::set_frontmatter_field(&content, "temper-goal", g);
         // Assign new seq at end of target goal
         let new_seq = next_seq(config, &task.context, g)?;
-        content = vault::set_frontmatter_field(&content, "seq", &new_seq.to_string());
+        content = vault::set_frontmatter_field(&content, "temper-seq", &new_seq.to_string());
     }
 
     if let Some(m) = mode {
-        content = vault::set_frontmatter_field(&content, "mode", m);
+        content = vault::set_frontmatter_field(&content, "temper-mode", m);
     }
 
     if let Some(e) = effort {
-        content = vault::set_frontmatter_field(&content, "effort", e);
+        content = vault::set_frontmatter_field(&content, "temper-effort", e);
     }
 
     let datetime = Local::now().to_rfc3339();
-    content = vault::set_frontmatter_field(&content, "updated", &datetime);
+    content = vault::set_frontmatter_field(&content, "temper-updated", &datetime);
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     let to_mode = mode.map(String::from);
@@ -306,13 +306,13 @@ pub fn done(
     let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     let datetime = Local::now().to_rfc3339();
-    content = vault::set_frontmatter_field(&content, "stage", "done");
-    content = vault::set_frontmatter_field(&content, "updated", &datetime);
+    content = vault::set_frontmatter_field(&content, "temper-stage", "done");
+    content = vault::set_frontmatter_field(&content, "temper-updated", &datetime);
     if let Some(b) = branch {
-        content = vault::set_frontmatter_field(&content, "branch", b);
+        content = vault::set_frontmatter_field(&content, "temper-branch", b);
     }
     if let Some(p) = pr {
-        content = vault::set_frontmatter_field(&content, "pr", p);
+        content = vault::set_frontmatter_field(&content, "temper-pr", p);
     }
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
 

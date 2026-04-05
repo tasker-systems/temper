@@ -2,7 +2,7 @@ mod cli;
 
 use clap::Parser;
 use cli::{
-    AuthAction, Cli, Commands, ContextAction, GoalAction, NoteAction, ResearchAction,
+    AuthAction, Cli, Commands, ContextAction, DoctorAction, GoalAction, NoteAction, ResearchAction,
     SessionAction, SkillAction, SyncAction, TaskAction,
 };
 use temper_cli::commands;
@@ -111,6 +111,13 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 SessionAction::List { context, format } => {
                     temper_cli::commands::session::list(&config, context.as_deref(), &format)
                 }
+                SessionAction::Show {
+                    slug,
+                    context,
+                    format,
+                } => {
+                    temper_cli::commands::session::show(&config, &slug, context.as_deref(), &format)
+                }
             }
         }
         Commands::Task { action } => {
@@ -135,10 +142,12 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "no context specified — use --context <name>".into(),
                         )
                     })?;
+                    let context =
+                        temper_cli::commands::resolve_context_with_fallback(&config, context);
                     let title = title.expect("title required when not using --show-template");
                     temper_cli::commands::task::create(
                         &config,
-                        context,
+                        &context,
                         &title,
                         goal.as_deref(),
                         mode.as_deref(),
@@ -225,9 +234,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "no context specified — use --context <name>".into(),
                         )
                     })?;
+                    let context =
+                        temper_cli::commands::resolve_context_with_fallback(&config, context);
                     temper_cli::commands::goal::create(
                         &config,
-                        context,
+                        &context,
                         &title,
                         slug.as_deref(),
                         &format,
@@ -240,7 +251,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "no context specified — use --context <name>".into(),
                         )
                     })?;
-                    temper_cli::commands::goal::list(&config, context, &format)
+                    let context =
+                        temper_cli::commands::resolve_context_with_fallback(&config, context);
+                    temper_cli::commands::goal::list(&config, &context, &format)
                 }
                 GoalAction::Update {
                     slug,
@@ -259,6 +272,22 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             temper_cli::commands::normalize::run(&config, context.as_deref(), dry_run, fix_slugs)?;
+            Ok(())
+        }
+        Commands::Doctor {
+            action,
+            context,
+            format,
+        } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            match action {
+                Some(DoctorAction::Fix { dry_run }) => {
+                    temper_cli::commands::doctor::run_fix(&config, context.as_deref(), dry_run)?;
+                }
+                None => {
+                    temper_cli::commands::doctor::run(&config, context.as_deref(), &format)?;
+                }
+            }
             Ok(())
         }
         Commands::Warmup { context, format } => {

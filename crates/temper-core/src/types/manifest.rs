@@ -26,9 +26,23 @@ pub struct ManifestEntry {
     /// Relative path within the vault (e.g., "temper/tickets/r5-indexing.md")
     pub path: String,
     /// SHA-256 hash of the local file body (frontmatter stripped) at last manifest update
-    pub content_hash: String,
-    /// SHA-256 hash of the remote content at last sync
-    pub remote_hash: String,
+    #[serde(alias = "content_hash")]
+    pub body_hash: String,
+    /// SHA-256 hash of the remote body at last sync
+    #[serde(alias = "remote_hash")]
+    pub remote_body_hash: String,
+    /// SHA-256 hash of the local managed frontmatter (temper-* fields) at last manifest update
+    #[serde(default)]
+    pub managed_hash: String,
+    /// SHA-256 hash of the local open frontmatter (user fields) at last manifest update
+    #[serde(default)]
+    pub open_hash: String,
+    /// SHA-256 hash of the remote managed frontmatter at last sync
+    #[serde(default)]
+    pub remote_managed_hash: String,
+    /// SHA-256 hash of the remote open frontmatter at last sync
+    #[serde(default)]
+    pub remote_open_hash: String,
     /// When this entry was last synced with the server
     pub synced_at: DateTime<Utc>,
     /// Current sync state
@@ -102,8 +116,12 @@ mod tests {
             resource_id,
             ManifestEntry {
                 path: "temper/tickets/r5.md".to_string(),
-                content_hash: "sha256:abc123".to_string(),
-                remote_hash: "sha256:abc123".to_string(),
+                body_hash: "sha256:abc123".to_string(),
+                remote_body_hash: "sha256:abc123".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
@@ -115,6 +133,53 @@ mod tests {
         assert_eq!(parsed.entries.len(), 1);
         let entry = parsed.entries.get(&resource_id).unwrap();
         assert_eq!(entry.path, "temper/tickets/r5.md");
+        assert_eq!(entry.body_hash, "sha256:abc123");
+        assert_eq!(entry.remote_body_hash, "sha256:abc123");
         assert_eq!(entry.state, ManifestEntryState::Clean);
+    }
+
+    #[test]
+    fn test_manifest_entry_migration_from_old_format() {
+        let old_json = serde_json::json!({
+            "path": "temper/goals/my-goal.md",
+            "content_hash": "sha256:oldcontent",
+            "remote_hash": "sha256:oldremote",
+            "synced_at": "2026-01-01T00:00:00Z",
+            "state": "clean"
+        });
+        let entry: ManifestEntry = serde_json::from_value(old_json).unwrap();
+        assert_eq!(entry.body_hash, "sha256:oldcontent");
+        assert_eq!(entry.remote_body_hash, "sha256:oldremote");
+        assert_eq!(entry.managed_hash, "");
+        assert_eq!(entry.open_hash, "");
+        assert_eq!(entry.remote_managed_hash, "");
+        assert_eq!(entry.remote_open_hash, "");
+        assert_eq!(entry.state, ManifestEntryState::Clean);
+    }
+
+    #[test]
+    fn test_manifest_entry_new_format_roundtrip() {
+        let entry = ManifestEntry {
+            path: "temper/sessions/s1.md".to_string(),
+            body_hash: "sha256:body".to_string(),
+            remote_body_hash: "sha256:rbody".to_string(),
+            managed_hash: "sha256:managed".to_string(),
+            open_hash: "sha256:open".to_string(),
+            remote_managed_hash: "sha256:rmanaged".to_string(),
+            remote_open_hash: "sha256:ropen".to_string(),
+            synced_at: Utc::now(),
+            state: ManifestEntryState::LocalModified,
+            mtime_secs: Some(1_700_000_000),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ManifestEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.body_hash, "sha256:body");
+        assert_eq!(parsed.remote_body_hash, "sha256:rbody");
+        assert_eq!(parsed.managed_hash, "sha256:managed");
+        assert_eq!(parsed.open_hash, "sha256:open");
+        assert_eq!(parsed.remote_managed_hash, "sha256:rmanaged");
+        assert_eq!(parsed.remote_open_hash, "sha256:ropen");
+        assert_eq!(parsed.state, ManifestEntryState::LocalModified);
+        assert_eq!(parsed.mtime_secs, Some(1_700_000_000));
     }
 }

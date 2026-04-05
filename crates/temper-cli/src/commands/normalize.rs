@@ -9,6 +9,8 @@ pub fn run(
     dry_run: bool,
     fix_slugs: bool,
 ) -> Result<NormalizeSummary> {
+    crate::output::warning("Note: `temper normalize` is deprecated. Use `temper doctor` and `temper doctor fix` instead.");
+
     let summary = crate::actions::normalize::run(config, project, dry_run, fix_slugs)?;
 
     // Print summary

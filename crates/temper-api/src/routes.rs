@@ -32,6 +32,7 @@ pub fn create_app(state: AppState) -> Router {
             "/api/resources/{id}/content",
             get(handlers::resources::get_content),
         )
+        .route("/api/resources/{id}/meta", put(handlers::meta::update_meta))
         .route(
             "/api/profile",
             get(handlers::profiles::get).patch(handlers::profiles::update),

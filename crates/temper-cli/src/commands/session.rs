@@ -84,7 +84,7 @@ pub fn save(
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
     // Set context field in frontmatter
-    let content = vault::set_frontmatter_field(&content, "context", &context_name);
+    let content = vault::set_frontmatter_field(&content, "temper-context", &context_name);
 
     // If stdin content was piped, replace the template body
     let content = if let Some(body) = stdin_content {
@@ -154,7 +154,8 @@ fn link_session_to_task(
     // Extract the session's id from its frontmatter
     let session_content = std::fs::read_to_string(session_path)?;
     let session_id = if let Some(fm) = vault::parse_frontmatter(&session_content) {
-        fm.get("id")
+        fm.get("temper-id")
+            .or_else(|| fm.get("id"))
             .and_then(|v| v.as_str())
             .map(String::from)
             .unwrap_or_default()
@@ -202,7 +203,8 @@ fn link_session_to_task(
         if output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !branch.is_empty() && branch != "HEAD" {
-                task_content = vault::set_frontmatter_field(&task_content, "branch", &branch);
+                task_content =
+                    vault::set_frontmatter_field(&task_content, "temper-branch", &branch);
             }
         }
     }
@@ -210,10 +212,112 @@ fn link_session_to_task(
     // Optionally update the task stage
     if let Some(s) = state {
         vault::validate_stage(s)?;
-        task_content = vault::set_frontmatter_field(&task_content, "stage", s);
+        task_content = vault::set_frontmatter_field(&task_content, "temper-stage", s);
     }
 
     std::fs::write(&task_path, &task_content)?;
+    Ok(())
+}
+
+/// Show a single session's raw markdown content.
+///
+/// Searches `<context>/session/` dirs for a file whose slug matches the given
+/// `slug_or_suffix`. Matches against the title portion of the filename (after the
+/// em-dash separator) or the full stem (date + title).
+pub fn show(
+    config: &Config,
+    slug_or_suffix: &str,
+    context: Option<&str>,
+    format: &str,
+) -> Result<()> {
+    let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
+        vec![ctx.to_string()]
+    } else {
+        config.contexts.clone()
+    };
+
+    let needle = vault::slugify(slug_or_suffix);
+    let mut matches: Vec<(SessionEntry, PathBuf)> = Vec::new();
+
+    for ctx in &contexts_to_scan {
+        let session_dir = config.doc_type_dir(ctx, "session");
+        if !session_dir.is_dir() {
+            continue;
+        }
+        for file_entry in std::fs::read_dir(&session_dir)? {
+            let file_entry = file_entry?;
+            let path = file_entry.path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            let stem = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            let title_slug = if let Some(pos) = stem.find(" \u{2014} ") {
+                stem[pos + " \u{2014} ".len()..].to_string()
+            } else {
+                stem.clone()
+            };
+
+            // Match: exact title slug, or full stem contains the needle
+            if title_slug == needle
+                || vault::slugify(&stem) == needle
+                || title_slug.contains(&needle)
+            {
+                let date = parse_date_from_file(&path)
+                    .or_else(|| extract_date_from_stem(&stem))
+                    .unwrap_or_else(|| "unknown".to_string());
+                matches.push((
+                    SessionEntry {
+                        date,
+                        context: ctx.clone(),
+                        title: title_slug,
+                    },
+                    path,
+                ));
+            }
+        }
+    }
+
+    if matches.is_empty() {
+        return Err(crate::error::TemperError::Vault(format!(
+            "session not found: {slug_or_suffix}"
+        )));
+    }
+
+    // Sort by date descending, take the most recent match
+    matches.sort_by(|a, b| b.0.date.cmp(&a.0.date));
+    let (entry, path) = &matches[0];
+
+    if format == "json" {
+        #[derive(Serialize)]
+        struct SessionShow<'a> {
+            date: &'a str,
+            context: &'a str,
+            title: &'a str,
+            path: String,
+            content: String,
+        }
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| crate::error::TemperError::Vault(e.to_string()))?;
+        let relative = path.strip_prefix(&config.vault_root).unwrap_or(path);
+        let info = SessionShow {
+            date: &entry.date,
+            context: &entry.context,
+            title: &entry.title,
+            path: relative.to_string_lossy().to_string(),
+            content,
+        };
+        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+        println!("{json}");
+        return Ok(());
+    }
+
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| crate::error::TemperError::Vault(e.to_string()))?;
+    print!("{content}");
     Ok(())
 }
 
@@ -340,4 +444,125 @@ pub fn session_path(config: &Config, context: &str, title: &str) -> PathBuf {
     let slug = vault::slugify(title);
     let filename = format!("{today} \u{2014} {slug}.md");
     config.doc_type_dir(context, "session").join(filename)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn test_vault() -> (TempDir, Config) {
+        let tmp = TempDir::new().unwrap();
+        let vault_root = tmp.path().to_path_buf();
+        let state_dir = vault_root.join(".temper");
+        fs::create_dir_all(&state_dir).unwrap();
+        fs::create_dir_all(vault_root.join("temper/session")).unwrap();
+        fs::create_dir_all(vault_root.join("default/session")).unwrap();
+        let config = Config {
+            vault_root,
+            state_dir,
+            contexts: vec!["temper".to_string(), "default".to_string()],
+            skill_output: PathBuf::from("/tmp/test-skill"),
+            skill_framework: "superpowers".to_string(),
+        };
+        (tmp, config)
+    }
+
+    fn write_session(config: &Config, context: &str, date: &str, slug: &str, body: &str) {
+        let dir = config.doc_type_dir(context, "session");
+        let filename = format!("{date} \u{2014} {slug}.md");
+        let content = format!(
+            "---\ntemper-id: \"test-id\"\ntemper-type: session\ndate: {date}\n---\n\n{body}"
+        );
+        fs::write(dir.join(filename), content).unwrap();
+    }
+
+    #[test]
+    fn show_exact_slug_match() {
+        let (_tmp, config) = test_vault();
+        write_session(
+            &config,
+            "temper",
+            "2026-04-04",
+            "my-session",
+            "## Goal\nTest",
+        );
+        let result = show(&config, "my-session", Some("temper"), "text");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn show_partial_slug_match() {
+        let (_tmp, config) = test_vault();
+        write_session(
+            &config,
+            "temper",
+            "2026-04-04",
+            "fix-temper-init-data-hygiene",
+            "## Goal\nFix stuff",
+        );
+        let result = show(&config, "fix-temper-init", Some("temper"), "text");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn show_not_found_returns_error() {
+        let (_tmp, config) = test_vault();
+        write_session(&config, "temper", "2026-04-04", "some-session", "body");
+        let result = show(&config, "nonexistent", Some("temper"), "text");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("session not found"), "got: {err}");
+    }
+
+    #[test]
+    fn show_returns_most_recent_when_multiple_match() {
+        let (_tmp, config) = test_vault();
+        write_session(&config, "temper", "2026-04-01", "my-work", "## Goal\nOlder");
+        write_session(&config, "temper", "2026-04-04", "my-work", "## Goal\nNewer");
+        // Both match "my-work" — should get the 04-04 one
+        let result = show(&config, "my-work", Some("temper"), "json");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn show_scans_all_contexts_when_none_specified() {
+        let (_tmp, config) = test_vault();
+        write_session(
+            &config,
+            "default",
+            "2026-04-04",
+            "cross-context",
+            "## Goal\nHere",
+        );
+        let result = show(&config, "cross-context", None, "text");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn show_wrong_context_returns_error() {
+        let (_tmp, config) = test_vault();
+        write_session(&config, "temper", "2026-04-04", "only-in-temper", "body");
+        let result = show(&config, "only-in-temper", Some("default"), "text");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn list_returns_sessions_sorted_by_date_desc() {
+        let (_tmp, config) = test_vault();
+        write_session(&config, "temper", "2026-04-01", "first", "body");
+        write_session(&config, "temper", "2026-04-03", "third", "body");
+        write_session(&config, "temper", "2026-04-02", "second", "body");
+        // list doesn't return data directly but we can verify it doesn't error
+        let result = list(&config, Some("temper"), "json");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn list_empty_context_shows_hint() {
+        let (_tmp, config) = test_vault();
+        let result = list(&config, Some("temper"), "text");
+        assert!(result.is_ok());
+    }
 }

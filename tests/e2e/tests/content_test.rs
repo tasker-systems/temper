@@ -37,13 +37,13 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/content-test".to_string(),
         context_name: "content-test".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
         content_hash: "cont0test0000000000000000000000000000000000000000000000000000000"
             .to_string(),
         slug: "content-retrieval-doc".to_string(),
-        mimetype: "text/markdown".to_string(),
         content: chunk_content.to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&chunks).expect("encode chunks"),
     };
 

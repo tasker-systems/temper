@@ -1,18 +1,18 @@
 ---
-id: "{{ id }}"
-type: task
+temper-id: "{{ id }}"
+temper-type: task
 title: "{{ title }}"
 slug: "{{ slug }}"
-context: "{{ context }}"
-goal: "{{ goal }}"
-stage: backlog
-mode: {{ mode }}
-effort: {{ effort }}
-seq: {{ seq }}
-created: {{ datetime }}
-updated: {{ datetime }}
-branch: null
-pr: null
+temper-context: "{{ context }}"
+temper-goal: "{{ goal }}"
+temper-stage: backlog
+temper-mode: {{ mode }}
+temper-effort: {{ effort }}
+temper-seq: {{ seq }}
+temper-created: {{ datetime }}
+temper-updated: {{ datetime }}
+temper-branch: null
+temper-pr: null
 ---
 
 # {{ title }}

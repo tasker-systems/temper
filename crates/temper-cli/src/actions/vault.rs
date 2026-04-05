@@ -12,7 +12,8 @@ pub fn read_document(path: &Path) -> Result<VaultDocument> {
     let frontmatter = parse_frontmatter(&raw).unwrap_or(serde_yaml::Value::Null);
 
     let note_type = frontmatter
-        .get("type")
+        .get("temper-type")
+        .or_else(|| frontmatter.get("type"))
         .and_then(|v| v.as_str())
         .unwrap_or("unknown")
         .to_string();

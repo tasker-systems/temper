@@ -124,6 +124,20 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     .execute(pool)
     .await?;
 
+    // Auto-provision a "default" context for the new profile.
+    // Ignore conflict — if the profile somehow already has one, that's fine.
+    sqlx::query(
+        r#"
+        INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
+        VALUES ($1, 'default', 'kb_profiles', $2)
+        ON CONFLICT ON CONSTRAINT kb_contexts_owner_name_unique DO NOTHING
+        "#,
+    )
+    .bind(Uuid::now_v7())
+    .bind(profile_id)
+    .execute(pool)
+    .await?;
+
     get_by_id(pool, profile_id).await
 }
 

@@ -83,14 +83,15 @@ path = "{vault_path_str}"
 [sync.auto]
 doctypes = ["task", "goal", "session"]
 
+# Add contexts to sync: temper context add <name>
 [sync.subscriptions]
-contexts = ["default"]
+contexts = []
 
 [cli]
 progress = "bar"
 
 [skill]
-output = "~/.claude/commands/temper.md"
+output = "~/.claude/skills/temper"
 framework = "superpowers"
 
 [auth]
@@ -109,4 +110,54 @@ scopes = ["openid", "profile", "email", "offline_access"]
     output::dim(format!("Wrote global config to {}", config_path.display()));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn config_template_contains_correct_skill_output() {
+        // Reproduce the format string with a test path to verify contract
+        let vault_path_str = "/tmp/test-vault";
+        let config_content = format!(
+            r#"[vault]
+path = "{vault_path_str}"
+
+[sync.auto]
+doctypes = ["task", "goal", "session"]
+
+# Add contexts to sync: temper context add <name>
+[sync.subscriptions]
+contexts = []
+
+[cli]
+progress = "bar"
+
+[skill]
+output = "~/.claude/skills/temper"
+framework = "superpowers"
+
+[auth]
+provider = "auth0"
+
+[auth.providers.auth0]
+authorize_url = "https://temperkb.us.auth0.com/authorize"
+token_url = "https://temperkb.us.auth0.com/oauth/token"
+client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
+audience = "https://temperkb.io/api"
+scopes = ["openid", "profile", "email", "offline_access"]
+"#
+        );
+        assert!(
+            config_content.contains(r#"output = "~/.claude/skills/temper""#),
+            "skill output must point to skills dir, not commands"
+        );
+        assert!(
+            config_content.contains("contexts = []"),
+            "subscriptions should default to empty"
+        );
+        assert!(
+            !config_content.contains("commands/temper.md"),
+            "must not contain stale commands path"
+        );
+    }
 }

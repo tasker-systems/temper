@@ -21,10 +21,11 @@ pub fn compute_content_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     let bytes = hasher.finalize();
-    bytes.iter().fold(String::new(), |mut acc, b| {
+    let hex = bytes.iter().fold(String::new(), |mut acc, b| {
         acc.push_str(&format!("{b:02x}"));
         acc
-    })
+    });
+    format!("sha256:{hex}")
 }
 
 // ---------------------------------------------------------------------------
@@ -80,17 +81,20 @@ pub fn parse_source_frontmatter(content: &str) -> Option<ParsedFrontmatter> {
 
     Some(ParsedFrontmatter {
         title: s("title"),
-        // "type" is the legacy field; "doc_type" is the new one.
-        doc_type: s("doc_type").or_else(|| s("type")),
-        context: s("context"),
+        doc_type: s("temper-type")
+            .or_else(|| s("doc_type"))
+            .or_else(|| s("type")),
+        context: s("temper-context").or_else(|| s("context")),
         slug: s("slug"),
-        date: s("date").or_else(|| s("created").map(|c| c[..10].to_string())),
-        legacy_id: s("id").or_else(|| s("temper-id")),
-        goal: s("goal"),
-        stage: s("stage"),
-        mode: s("mode"),
-        effort: s("effort"),
-        status: s("status"),
+        date: s("date")
+            .or_else(|| s("temper-created").map(|c| c[..10].to_string()))
+            .or_else(|| s("created").map(|c| c[..10].to_string())),
+        legacy_id: s("temper-id").or_else(|| s("id")),
+        goal: s("temper-goal").or_else(|| s("goal")),
+        stage: s("temper-stage").or_else(|| s("stage")),
+        mode: s("temper-mode").or_else(|| s("mode")),
+        effort: s("temper-effort").or_else(|| s("effort")),
+        status: s("temper-status").or_else(|| s("status")),
     })
 }
 
@@ -136,8 +140,6 @@ pub fn build_ingest_payload(
     title: &str,
     context: &str,
     doc_type: &str,
-    resource_mode: &str,
-    mime_type: &str,
     metadata: Option<serde_json::Value>,
 ) -> Result<temper_core::types::IngestPayload> {
     use temper_core::types::ingest::{pack_chunks, PackedChunk};
@@ -177,12 +179,12 @@ pub fn build_ingest_payload(
         origin_uri,
         context_name: context.to_owned(),
         doc_type_name: doc_type.to_owned(),
-        resource_mode: resource_mode.to_owned(),
         content_hash,
         slug,
-        mimetype: mime_type.to_owned(),
         content: content.to_owned(),
         metadata,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed,
     })
 }
@@ -305,13 +307,11 @@ pub async fn ingest_file(
     file_path: &Path,
     context: &str,
     doc_type: &str,
-    resource_mode: Option<&str>,
 ) -> Result<(temper_core::types::ResourceRow, String)> {
     let extraction = crate::extract::extract_to_markdown(file_path).await?;
     let extracted_content = extraction.content.clone();
 
     let title = title_from_path(file_path);
-    let mode = resource_mode.unwrap_or("added");
 
     let device_id = crate::config::load_device_id();
     let canonical_path = std::fs::canonicalize(file_path)
@@ -328,8 +328,6 @@ pub async fn ingest_file(
         &title,
         context,
         doc_type,
-        mode,
-        "text/markdown",
         Some(metadata),
     )?;
 
@@ -352,7 +350,6 @@ pub async fn ingest_url(
     url: &str,
     context: &str,
     doc_type: &str,
-    resource_mode: Option<&str>,
 ) -> Result<(temper_core::types::ResourceRow, String)> {
     let (temp_path, display_name) = fetch_url_to_tempfile(url).await?;
 
@@ -360,7 +357,6 @@ pub async fn ingest_url(
     let extracted_content = extraction.content.clone();
 
     let title = display_name;
-    let mode = resource_mode.unwrap_or("added");
 
     let device_id = crate::config::load_device_id();
     let metadata = serde_json::json!({
@@ -373,8 +369,6 @@ pub async fn ingest_url(
         &title,
         context,
         doc_type,
-        mode,
-        "text/markdown",
         Some(metadata),
     )?;
     // Override origin_uri with the original URL
@@ -438,17 +432,17 @@ pub fn build_frontmatter(
 ) -> String {
     let now = chrono::Utc::now().to_rfc3339();
     let mut fm = format!(
-        "---\ntemper-id: {id}\ntitle: \"{title}\"\ncontext: {context}\ndoc_type: {doc_type}\n"
+        "---\ntemper-id: {id}\ntemper-type: {doc_type}\ntemper-context: {context}\ntemper-created: {now}\ntitle: \"{title}\"\n"
     );
     if let Some(source) = ingestion_source {
-        fm.push_str(&format!("ingestion_source: \"{source}\"\n"));
+        fm.push_str(&format!("temper-source: \"{source}\"\n"));
     }
     if let Some(fields) = extra_fields {
         for (key, value) in fields {
             fm.push_str(&format!("{key}: \"{value}\"\n"));
         }
     }
-    fm.push_str(&format!("created: {now}\n---\n\n"));
+    fm.push_str("---\n\n");
     fm
 }
 
@@ -495,7 +489,8 @@ pub fn write_vault_file_and_register(
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id_str)?;
 
     let content_hash = compute_content_hash(content);
-    let remote_hash = resource.content_hash.clone().unwrap_or_default();
+    // After ingest, server body_hash matches our local content_hash
+    let remote_hash = content_hash.clone();
     let rel_path = vault_path
         .strip_prefix(vault_root)
         .unwrap_or(&vault_path)
@@ -512,8 +507,12 @@ pub fn write_vault_file_and_register(
         resource.id,
         temper_core::types::ManifestEntry {
             path: rel_path,
-            content_hash,
-            remote_hash,
+            body_hash: content_hash,
+            remote_body_hash: remote_hash,
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
             synced_at: chrono::Utc::now(),
             state: temper_core::types::ManifestEntryState::Clean,
             mtime_secs,
@@ -609,7 +608,9 @@ mod tests {
         let hash1 = compute_content_hash(content);
         let hash2 = compute_content_hash(content);
         assert_eq!(hash1, hash2);
-        assert_eq!(hash1.len(), 64); // SHA-256 = 32 bytes = 64 hex chars
+        assert!(hash1.starts_with("sha256:"));
+        // "sha256:" prefix (7 chars) + 64 hex chars = 71 total
+        assert_eq!(hash1.len(), 71);
     }
 
     #[test]
@@ -620,10 +621,12 @@ mod tests {
     }
 
     #[test]
-    fn content_hash_is_lowercase_hex() {
+    fn content_hash_has_sha256_prefix() {
         let hash = compute_content_hash("test");
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
-        assert!(hash.chars().all(|c| !c.is_uppercase()));
+        assert!(hash.starts_with("sha256:"));
+        let hex_part = &hash[7..];
+        assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
+        assert!(hex_part.chars().all(|c| !c.is_uppercase()));
     }
 
     // --- Title extraction ---
@@ -687,9 +690,9 @@ mod tests {
         let fm = build_frontmatter(id, "My Title", "work", "note", None, None);
         assert!(fm.contains("temper-id:"));
         assert!(fm.contains("title: \"My Title\""));
-        assert!(fm.contains("context: work"));
-        assert!(fm.contains("doc_type: note"));
-        assert!(fm.contains("created:"));
+        assert!(fm.contains("temper-context: work"));
+        assert!(fm.contains("temper-type: note"));
+        assert!(fm.contains("temper-created:"));
         assert!(fm.starts_with("---\n"));
         assert!(fm.contains("\n---\n"));
     }
@@ -706,8 +709,8 @@ mod tests {
             None,
         );
         assert!(
-            fm.contains("ingestion_source: \"/home/user/file.pdf\""),
-            "expected ingestion_source in frontmatter:\n{fm}"
+            fm.contains("temper-source: \"/home/user/file.pdf\""),
+            "expected temper-source in frontmatter:\n{fm}"
         );
     }
 
@@ -716,8 +719,8 @@ mod tests {
         let id = Uuid::nil();
         let fm = build_frontmatter(id, "My Title", "work", "note", None, None);
         assert!(
-            !fm.contains("ingestion_source"),
-            "unexpected ingestion_source in frontmatter:\n{fm}"
+            !fm.contains("temper-source"),
+            "unexpected temper-source in frontmatter:\n{fm}"
         );
     }
 
@@ -794,10 +797,12 @@ created: 2026-03-23
 
     #[test]
     fn parse_frontmatter_new_format() {
-        let content = "---\ntemper-id: abc-123\ndoc_type: research\n---\n\nBody\n";
+        let content =
+            "---\ntemper-id: abc-123\ntemper-type: research\ntemper-context: work\n---\n\nBody\n";
         let fm = parse_source_frontmatter(content).expect("should parse");
         assert_eq!(fm.doc_type.as_deref(), Some("research"));
         assert_eq!(fm.legacy_id.as_deref(), Some("abc-123"));
+        assert_eq!(fm.context.as_deref(), Some("work"));
     }
 
     #[test]

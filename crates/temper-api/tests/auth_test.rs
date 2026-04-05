@@ -91,3 +91,41 @@ async fn test_valid_jwt_auto_provisions_profile(pool: PgPool) {
         "email field should match"
     );
 }
+
+/// Auto-provisioned profile must have a "default" context.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_auto_provisioned_profile_has_default_context(pool: PgPool) {
+    let app = common::setup_test_app(pool).await;
+
+    let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
+    let email = format!("defaultctx-{}@example.com", uuid::Uuid::new_v4());
+    let token = common::generate_test_jwt(&sub, &email);
+
+    // Trigger auto-provisioning
+    let resp = app
+        .client
+        .get(app.url("/api/profile"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    // Check that the "default" context was created
+    let resp = app
+        .client
+        .get(app.url("/api/contexts"))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .await
+        .expect("contexts request failed");
+    assert_eq!(resp.status().as_u16(), 200);
+
+    let body: Vec<Value> = resp.json().await.expect("expected JSON array");
+    let has_default = body.iter().any(|c| c["name"] == "default");
+    assert!(
+        has_default,
+        "auto-provisioned profile must have a 'default' context; got: {:?}",
+        body.iter().map(|c| c["name"].clone()).collect::<Vec<_>>()
+    );
+}

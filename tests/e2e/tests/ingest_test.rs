@@ -30,13 +30,13 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/ingest-test".to_string(),
         context_name: "e2e-test".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
         content_hash: "e2e0test00000000000000000000000000000000000000000000000000000000"
             .to_string(),
         slug: "e2e-test-document".to_string(),
-        mimetype: "text/markdown".to_string(),
         content: "# E2E Test\n\nThis is a test document for e2e testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 

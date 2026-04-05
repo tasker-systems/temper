@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://temperkb.io/schemas/goal.schema.json",
+  "allOf": [
+    { "$ref": "base.schema.json" }
+  ],
+  "properties": {
+    "temper-type": { "const": "goal" },
+    "temper-status": {
+      "type": "string",
+      "enum": ["active", "completed", "paused", "cancelled"],
+      "description": "Goal lifecycle status"
+    },
+    "temper-seq": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Ordering within context"
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]*$",
+      "description": "URL-safe identifier"
+    }
+  },
+  "required": ["slug"],
+  "additionalProperties": true
+}

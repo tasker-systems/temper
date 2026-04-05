@@ -30,7 +30,7 @@ fn test_normalize_backfills_missing_ids() {
     let content = std::fs::read_to_string(&path).unwrap();
     let stripped = content
         .lines()
-        .filter(|l| !l.starts_with("id:"))
+        .filter(|l| !l.starts_with("temper-id:") && !l.starts_with("id:"))
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(&path, format!("{stripped}\n")).unwrap();
@@ -118,7 +118,7 @@ fn test_normalize_detects_misplaced_files() {
     // Edit the frontmatter context to differ from the directory context
     let path = dir.path().join("myapp/task").join(format!("{slug}.md"));
     let content = std::fs::read_to_string(&path).unwrap();
-    let modified = content.replace("context: \"myapp\"", "context: \"other\"");
+    let modified = content.replace("temper-context: \"myapp\"", "temper-context: \"other\"");
     std::fs::write(&path, &modified).unwrap();
 
     let summary = temper_cli::commands::normalize::run(&config, None, false, false).unwrap();
@@ -150,7 +150,7 @@ fn test_normalize_backfills_missing_effort() {
     let content = std::fs::read_to_string(&path).unwrap();
     let stripped = content
         .lines()
-        .filter(|l| !l.starts_with("effort:"))
+        .filter(|l| !l.starts_with("temper-effort:") && !l.starts_with("effort:"))
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(&path, format!("{stripped}\n")).unwrap();
@@ -163,7 +163,7 @@ fn test_normalize_backfills_missing_effort() {
 
     let updated = std::fs::read_to_string(&path).unwrap();
     assert!(
-        updated.contains("effort: null"),
-        "should have backfilled effort: null"
+        updated.contains("temper-effort: null"),
+        "should have backfilled temper-effort: null"
     );
 }

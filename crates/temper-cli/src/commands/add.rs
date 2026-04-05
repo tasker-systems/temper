@@ -133,9 +133,8 @@ fn run_single_file(
     let (rt, client) = runtime::build_runtime_and_client()?;
     rt.block_on(runtime::ensure_profile(&client))?;
 
-    let (resource, extracted_content) = rt.block_on(async {
-        ingest::ingest_file(&client, &file_path, context, doc_type, Some("added")).await
-    })?;
+    let (resource, extracted_content) =
+        rt.block_on(async { ingest::ingest_file(&client, &file_path, context, doc_type).await })?;
 
     if fmt == OutputFormat::Text {
         output::plain(format!(
@@ -234,15 +233,7 @@ fn run_single_auto_file(
         }
     }
 
-    let payload = ingest::build_ingest_payload(
-        body,
-        &title,
-        &context,
-        &doc_type,
-        "added",
-        "text/markdown",
-        Some(metadata),
-    )?;
+    let payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, Some(metadata))?;
 
     let resource = rt.block_on(async {
         client
@@ -405,7 +396,7 @@ fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::err
     rt.block_on(runtime::ensure_profile(&client))?;
 
     let (resource, extracted_content) = rt.block_on(async {
-        ingest::ingest_url(&client, url, context, doc_type, Some("added"))
+        ingest::ingest_url(&client, url, context, doc_type)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))
     })?;
@@ -714,7 +705,7 @@ fn run_directory(
                     .unwrap_or("unknown")
                     .to_string();
 
-                match ingest::ingest_file(&client, file, context, doc_type, Some("added")).await {
+                match ingest::ingest_file(&client, file, context, doc_type).await {
                     Ok((resource, extracted_content)) => {
                         let slug = ingest::slug_from_title(&resource.title);
                         let slug = ingest::dedup_vault_slug(&vault_root, context, doc_type, &slug);
@@ -892,15 +883,7 @@ async fn add_single_auto_file(
         }
     }
 
-    let payload = ingest::build_ingest_payload(
-        body,
-        &title,
-        &context,
-        &doc_type,
-        "added",
-        "text/markdown",
-        Some(metadata),
-    )?;
+    let payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, Some(metadata))?;
 
     let resource = client
         .ingest()

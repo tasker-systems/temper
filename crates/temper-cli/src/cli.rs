@@ -69,7 +69,7 @@ pub enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Normalize vault structure and repair drift
+    /// [Deprecated: use `temper doctor fix`] Normalize vault structure and repair drift
     Normalize {
         #[arg(long)]
         context: Option<String>,
@@ -77,6 +77,17 @@ pub enum Commands {
         dry_run: bool,
         #[arg(long)]
         fix_slugs: bool,
+    },
+    /// Validate vault frontmatter and repair drift
+    Doctor {
+        #[command(subcommand)]
+        action: Option<DoctorAction>,
+        /// Filter by context
+        #[arg(long)]
+        context: Option<String>,
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
     },
     /// Context primer for new sessions
     Warmup {
@@ -113,7 +124,7 @@ pub enum Commands {
         #[arg(long)]
         context: Option<String>,
         /// Doc type — use "auto" to read from each file's YAML frontmatter
-        #[arg(long, default_value = "resource")]
+        #[arg(long, default_value = "research")]
         doc_type: String,
         /// Output format
         #[arg(long, default_value = "text")]
@@ -326,6 +337,15 @@ pub enum SessionAction {
         #[arg(long, default_value = "text")]
         format: String,
     },
+    /// Show a session's raw markdown content
+    Show {
+        /// Session title slug or date-slug suffix (e.g. "fix-temper-init" or "2026-04-04-fix-temper-init")
+        slug: String,
+        #[arg(long)]
+        context: Option<String>,
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -408,5 +428,15 @@ pub enum SyncAction {
         /// Output format
         #[arg(long, default_value = "text")]
         format: String,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DoctorAction {
+    /// Auto-fix issues (rename legacy fields, backfill missing fields)
+    Fix {
+        /// Preview fixes without writing (dry run)
+        #[arg(long)]
+        dry_run: bool,
     },
 }

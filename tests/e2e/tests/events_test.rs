@@ -59,13 +59,13 @@ async fn events_appear_after_resource_creation(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/events-test".to_string(),
         context_name: "e2e-events-test".to_string(),
         doc_type_name: "research".to_string(),
-        resource_mode: "imported".to_string(),
         content_hash: "e2e0evnt00000000000000000000000000000000000000000000000000000000"
             .to_string(),
         slug: "e2e-events-test-doc".to_string(),
-        mimetype: "text/markdown".to_string(),
         content: "# E2E Events Test\n\nThis document is used for events e2e testing.".to_string(),
         metadata: None,
+        managed_meta: None,
+        open_meta: None,
         chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
     };
 

@@ -2,8 +2,20 @@
 
 ## Invocation
 
-Always run `temper` directly from PATH. Never use `cargo run`, `python`, full paths, or
-any indirect invocation method.
+**Always run `temper` directly from PATH.** Never use `cargo run -p temper-cli`, `python`,
+full paths, or any indirect invocation method — even when working inside the temper source
+repository. The installed binary may differ from the in-development code, and that is
+intentional: we use the installed CLI to manage our own workflow while evolving the crate.
+
+**Before running any temper command**, verify the binary exists:
+```bash
+which temper
+```
+If `temper` is not on PATH, **stop and warn the user**:
+> "The `temper` binary is not installed or not on PATH. Install it with
+> `cargo install --path crates/temper-cli` or ensure `~/.cargo/bin` is in your PATH."
+
+Do not fall back to `cargo run` as a workaround.
 
 ## Commands
 
@@ -13,6 +25,7 @@ any indirect invocation method.
 | context | `temper context [<name>]` |
 | session save | `temper session save "<title>" [--task <slug>] [--state <state>]` |
 | session list | `temper session list [--context <ctx>] [--limit <n>]` |
+| session show | `temper session show <slug> [--context <ctx>]` |
 | task create | `temper task create "<title>" --mode <mode> --effort <effort> [--context <ctx>]` |
 | task list | `temper task list [--stage <stage>] [--context <ctx>]` |
 | task move | `temper task move <slug> [--stage <stage>] [--mode <mode>] [--effort <effort>]` |
@@ -71,3 +84,15 @@ temper note create --show-template
 temper task create --show-template
 temper research save --show-template
 ```
+
+## Skill-Only Commands
+
+These commands are handled by the skill routing layer, not the temper CLI directly.
+They compose multiple CLI commands into guided workflows.
+
+| Skill Command | What It Does |
+|---------------|-------------|
+| `task start <slug>` | Shows task, moves to in-progress, routes to workflow |
+| `task resume <slug>` | Shows task, reads last session, continues workflow |
+| `task create` | Guided interactive task creation with prompts |
+| `session start` | Start a session without a predefined task |
