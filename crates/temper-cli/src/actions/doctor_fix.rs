@@ -747,8 +747,14 @@ pub struct ApplyReport {
 }
 
 /// Keys that need quoted values in YAML frontmatter.
-fn needs_quoting(key: &str, value: &str) -> bool {
-    key == "temper-id" || key == "temper-created" || value.contains(' ') || value.contains(':')
+/// Determine whether a frontmatter value needs YAML quoting.
+///
+/// Matches the convention in `ingest::build_frontmatter`: titles and values
+/// with spaces get quoted, everything else (UUIDs, timestamps, slugs, enums)
+/// stays unquoted. This avoids cosmetic diffs between CLI-created and
+/// doctor-fixed frontmatter.
+fn needs_quoting(_key: &str, value: &str) -> bool {
+    value.contains(' ') || value.contains('"') || value.contains('#')
 }
 
 /// Sort `plan` by phase, then apply every action.
