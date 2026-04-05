@@ -591,7 +591,14 @@ pub fn fix_filename(path: &Path, fm: &Value, vault_root: &Path) -> Vec<FixAction
         let date = fm_str(fm, "date").or_else(|| extract_date_from_filename(&filename));
 
         match date {
-            Some(d) => format!("{d}-{slug}.md"),
+            Some(d) => {
+                // Avoid doubled dates: if slug already starts with the date, don't prepend
+                if slug.starts_with(&d) {
+                    format!("{slug}.md")
+                } else {
+                    format!("{d}-{slug}.md")
+                }
+            }
             None => return Vec::new(), // can't build date-prefixed name without a date
         }
     } else {
@@ -742,10 +749,51 @@ fn needs_quoting(key: &str, value: &str) -> bool {
 /// Sort `plan` by phase, then apply every action.
 ///
 /// In `dry_run` mode the counts are updated but no files are written or moved.
+///
+/// When the same source file has both a RelocateFile and a RenameFile action,
+/// they are merged: the file moves to the new directory with the new filename.
+/// Duplicate moves for the same source are skipped after the first succeeds.
 pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<ApplyReport> {
+    use std::collections::HashSet;
     use std::fs;
 
     plan.sort();
+
+    // Track which source paths have already been moved (phase 1) to skip duplicates.
+    let mut moved_sources: HashSet<PathBuf> = HashSet::new();
+
+    // Merge relocate + rename: if a file has both, build a combined target.
+    // Collect all phase-1 actions and build a map of old_path → final new_path.
+    let mut final_targets: std::collections::HashMap<PathBuf, PathBuf> =
+        std::collections::HashMap::new();
+    for action in &plan.actions {
+        match action {
+            FixAction::RelocateFile {
+                old_path, new_path, ..
+            } => {
+                final_targets.insert(old_path.clone(), new_path.clone());
+            }
+            FixAction::RenameFile {
+                old_path, new_path, ..
+            } => {
+                // If this file is also being relocated, merge: use the relocate's
+                // directory with the rename's filename.
+                let entry = final_targets.entry(old_path.clone());
+                match entry {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        // Already has a relocate target — update to use rename's filename
+                        let relocate_dir = e.get().parent().unwrap_or(new_path);
+                        let rename_filename = new_path.file_name().unwrap_or_default();
+                        e.insert(relocate_dir.join(rename_filename));
+                    }
+                    std::collections::hash_map::Entry::Vacant(e) => {
+                        e.insert(new_path.clone());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
 
     let mut report = ApplyReport::default();
 
@@ -757,7 +805,12 @@ pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<App
                 new_key,
             } => {
                 if !dry_run {
-                    let content = fs::read_to_string(path)?;
+                    let content = fs::read_to_string(path).map_err(|e| {
+                        crate::error::TemperError::Vault(format!(
+                            "RenameField read {}: {e}",
+                            path.display()
+                        ))
+                    })?;
                     let updated = if let Some(fm) = crate::vault::parse_frontmatter(&content) {
                         let new_exists = fm.get(new_key.as_str()).is_some();
                         if new_exists {
@@ -776,38 +829,64 @@ pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<App
                 path, key, value, ..
             } => {
                 if !dry_run {
-                    let content = fs::read_to_string(path)?;
+                    let content = fs::read_to_string(path).map_err(|e| {
+                        crate::error::TemperError::Vault(format!(
+                            "SetField read {}: {e}",
+                            path.display()
+                        ))
+                    })?;
                     let formatted = if needs_quoting(key, value) {
                         format!("\"{}\"", value)
                     } else {
                         value.clone()
                     };
                     let updated = crate::vault::insert_frontmatter_field(&content, key, &formatted);
-                    fs::write(path, updated)?;
+                    fs::write(path, updated).map_err(|e| {
+                        crate::error::TemperError::Vault(format!(
+                            "SetField write {}: {e}",
+                            path.display()
+                        ))
+                    })?;
                 }
                 report.fields_set += 1;
             }
-            FixAction::RenameFile {
-                old_path, new_path, ..
-            } => {
-                if !dry_run {
-                    if let Some(parent) = new_path.parent() {
-                        fs::create_dir_all(parent)?;
-                    }
-                    fs::rename(old_path, new_path)?;
+            FixAction::RenameFile { old_path, .. } | FixAction::RelocateFile { old_path, .. } => {
+                // Skip if this source was already moved by a prior action.
+                if moved_sources.contains(old_path) {
+                    continue;
                 }
-                report.files_renamed += 1;
-            }
-            FixAction::RelocateFile {
-                old_path, new_path, ..
-            } => {
+                // Use the merged final target (relocate dir + rename filename).
+                let target = final_targets
+                    .get(old_path)
+                    .cloned()
+                    .unwrap_or_else(|| match action {
+                        FixAction::RenameFile { new_path, .. }
+                        | FixAction::RelocateFile { new_path, .. } => new_path.clone(),
+                        _ => unreachable!(),
+                    });
                 if !dry_run {
-                    if let Some(parent) = new_path.parent() {
-                        fs::create_dir_all(parent)?;
+                    if let Some(parent) = target.parent() {
+                        fs::create_dir_all(parent).map_err(|e| {
+                            crate::error::TemperError::Vault(format!(
+                                "move mkdir {}: {e}",
+                                parent.display()
+                            ))
+                        })?;
                     }
-                    fs::rename(old_path, new_path)?;
+                    fs::rename(old_path, &target).map_err(|e| {
+                        crate::error::TemperError::Vault(format!(
+                            "move {} -> {}: {e}",
+                            old_path.display(),
+                            target.display()
+                        ))
+                    })?;
                 }
-                report.files_relocated += 1;
+                moved_sources.insert(old_path.clone());
+                match action {
+                    FixAction::RenameFile { .. } => report.files_renamed += 1,
+                    FixAction::RelocateFile { .. } => report.files_relocated += 1,
+                    _ => unreachable!(),
+                }
             }
             FixAction::UpdateManifest { .. } => {
                 report.manifest_updated += 1;
