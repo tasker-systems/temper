@@ -1,4 +1,5 @@
 {
+	"installCommand": "bun install",
 	"rewrites": [
 		{ "source": "/mcp", "destination": "https://temper-cloud.vercel.app/mcp" },
 		{ "source": "/mcp/:path*", "destination": "https://temper-cloud.vercel.app/mcp/:path*" },
