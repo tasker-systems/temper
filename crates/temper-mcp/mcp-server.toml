@@ -1,0 +1,11 @@
+# MCP server configuration embedded at compile time.
+# Extend this file with any static config the MCP server needs.
+
+[oauth]
+# Allowed redirect URIs for dynamic client registration responses.
+# Only URIs listed here will be echoed back in registration responses.
+redirect_uris = [
+    "https://temperkb.io/api/auth/cli-callback",
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+]

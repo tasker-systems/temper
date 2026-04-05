@@ -1,6 +1,10 @@
-//! Router assembly — combines OAuth discovery, health, and the MCP endpoint.
+//! Router assembly — combines OAuth discovery, health, registration, and the MCP endpoint.
 
-use axum::{middleware, routing::get, Router};
+use axum::{
+    middleware,
+    routing::{get, post},
+    Router,
+};
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
 };
@@ -39,6 +43,13 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
         )
         .with_state(shared.clone());
 
+    // ── Public OAuth registration (thin DCR proxy) ─────────────────────
+    // Returns the pre-registered Auth0 client_id to MCP clients like
+    // Claude Desktop so they can complete OAuth without manual entry.
+    let registration_routes = Router::new()
+        .route("/oauth/register", post(discovery::register_client))
+        .with_state(shared.clone());
+
     // ── Protected MCP endpoint ─────────────────────────────────────────
     // StreamableHttpService handles POST /mcp, GET /mcp (SSE), DELETE /mcp.
     // Using stateless mode (json_response + !stateful_mode) for Vercel
@@ -66,6 +77,7 @@ pub fn build_router(api_state: AppState, mcp_config: McpConfig) -> Router {
 
     Router::new()
         .merge(discovery_routes)
+        .merge(registration_routes)
         .merge(health)
         .merge(mcp_routes)
         .layer(CorsLayer::permissive())

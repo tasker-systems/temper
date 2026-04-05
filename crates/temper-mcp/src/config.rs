@@ -1,4 +1,21 @@
+use serde::Deserialize;
 use std::env;
+
+/// Static MCP server configuration embedded at compile time from `mcp-server.toml`.
+static MCP_SERVER_TOML: &str = include_str!("../mcp-server.toml");
+
+/// Top-level shape of `mcp-server.toml`.
+#[derive(Debug, Clone, Deserialize)]
+struct McpServerFile {
+    oauth: OAuthStaticConfig,
+}
+
+/// OAuth-related static configuration (allowed redirect URIs, etc.).
+#[derive(Debug, Clone, Deserialize)]
+pub struct OAuthStaticConfig {
+    /// Allowed redirect URIs echoed back in DCR responses.
+    pub redirect_uris: Vec<String>,
+}
 
 /// Configuration specific to the MCP server deployment.
 #[derive(Debug, Clone)]
@@ -14,14 +31,48 @@ pub struct McpConfig {
     /// OAuth audience / resource indicator for MCP tokens.
     /// Must match what Auth0 is configured to issue tokens for.
     pub mcp_audience: String,
+
+    /// Pre-registered Auth0 application client_id for MCP clients.
+    /// Returned by the registration endpoint so clients like Claude Desktop
+    /// can complete OAuth without manual client_id entry.
+    /// `None` if `MCP_CLIENT_ID` is not set — DCR will return 503.
+    pub mcp_client_id: Option<String>,
+
+    /// Static OAuth config loaded from the embedded `mcp-server.toml`.
+    pub oauth: OAuthStaticConfig,
 }
 
 impl McpConfig {
-    pub fn from_env() -> Result<Self, env::VarError> {
+    pub fn from_env() -> Result<Self, McpConfigError> {
+        let server_file: McpServerFile =
+            toml::from_str(MCP_SERVER_TOML).map_err(McpConfigError::Toml)?;
+
         Ok(Self {
-            mcp_base_url: env::var("MCP_BASE_URL")?,
-            auth0_domain: env::var("AUTH_ISSUER")?,
-            mcp_audience: env::var("MCP_AUDIENCE").or_else(|_| env::var("AUTH_AUDIENCE"))?,
+            mcp_base_url: env::var("MCP_BASE_URL").map_err(McpConfigError::Env)?,
+            auth0_domain: env::var("AUTH_ISSUER").map_err(McpConfigError::Env)?,
+            mcp_audience: env::var("MCP_AUDIENCE")
+                .or_else(|_| env::var("AUTH_AUDIENCE"))
+                .map_err(McpConfigError::Env)?,
+            mcp_client_id: env::var("MCP_CLIENT_ID").ok(),
+            oauth: server_file.oauth,
         })
     }
 }
+
+/// Errors that can occur when loading MCP configuration.
+#[derive(Debug)]
+pub enum McpConfigError {
+    Env(env::VarError),
+    Toml(toml::de::Error),
+}
+
+impl std::fmt::Display for McpConfigError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Env(e) => write!(f, "missing environment variable: {e}"),
+            Self::Toml(e) => write!(f, "invalid mcp-server.toml: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for McpConfigError {}

@@ -4146,6 +4146,7 @@ dependencies = [
  "temper-api",
  "temper-core",
  "tokio",
+ "toml 0.8.23",
  "tower-http",
  "tracing",
  "uuid",
