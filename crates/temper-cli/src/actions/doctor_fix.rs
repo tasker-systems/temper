@@ -684,6 +684,11 @@ pub fn fix_manifest_for_moves(
             _ => continue,
         };
 
+        // Skip no-op moves (source == target after dedup)
+        if old_path == new_path {
+            continue;
+        }
+
         let old_rel = match old_path.strip_prefix(vault_root) {
             Ok(r) => r.to_string_lossy().to_string(),
             Err(_) => continue,
@@ -864,6 +869,10 @@ pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<App
                         | FixAction::RelocateFile { new_path, .. } => new_path.clone(),
                         _ => unreachable!(),
                     });
+                // Skip no-op renames (source == target after dedup)
+                if *old_path == target {
+                    continue;
+                }
                 if !dry_run {
                     if let Some(parent) = target.parent() {
                         fs::create_dir_all(parent).map_err(|e| {
