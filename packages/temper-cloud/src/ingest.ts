@@ -12,7 +12,6 @@ export interface IngestMetadata {
   kb_doc_type_id: string; // UUID or resolved from name
   origin_uri: string;
   slug?: string;
-  mimetype?: string;
   tags?: string[];
   metadata?: Record<string, unknown>;
   context_name?: string; // Resolve to UUID server-side
@@ -26,8 +25,6 @@ export interface ResourceRecord {
   origin_uri: string;
   title: string;
   slug: string | null;
-  content_hash: string | null;
-  mimetype: string | null;
   originator_profile_id: string;
   owner_profile_id: string;
   is_active: boolean;
@@ -62,21 +59,22 @@ export async function getProfileId(db: NeonClient, claims: AuthClaims): Promise<
 // ---------------------------------------------------------------------------
 
 /**
- * Check for an existing active resource with the same content hash owned by
+ * Check for an existing active resource with the same body hash owned by
  * the same profile. Returns the matching ResourceRecord or null.
  */
-export async function findByContentHash(
+export async function findByBodyHash(
   db: NeonClient,
-  contentHash: string,
+  bodyHash: string,
   profileId: string,
 ): Promise<ResourceRecord | null> {
   const rows = await db`
-    SELECT id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
-           mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
-    FROM kb_resources
-    WHERE content_hash = ${contentHash}
-      AND owner_profile_id = ${profileId}::uuid
-      AND is_active = true
+    SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title, r.slug,
+           r.originator_profile_id, r.owner_profile_id, r.is_active, r.created, r.updated
+    FROM kb_resources r
+    JOIN kb_resource_manifests m ON m.resource_id = r.id
+    WHERE m.body_hash = ${bodyHash}
+      AND r.owner_profile_id = ${profileId}::uuid
+      AND r.is_active = true
     LIMIT 1
   `;
   if (rows.length === 0) return null;
@@ -167,12 +165,11 @@ export async function insertResource(
 
   const newId = randomUUID();
   const slug = meta.slug ?? null;
-  const mimetype = meta.mimetype ?? null;
 
   const rows = await db`
     INSERT INTO kb_resources (
-      id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
-      mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
+      id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+      originator_profile_id, owner_profile_id, is_active, created, updated
     ) VALUES (
       ${newId}::uuid,
       ${contextId}::uuid,
@@ -180,16 +177,20 @@ export async function insertResource(
       ${meta.origin_uri},
       ${meta.title},
       ${slug},
-      ${contentHash},
-      ${mimetype},
       ${profileId}::uuid,
       ${profileId}::uuid,
       true,
       now(),
       now()
     )
-    RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title, slug, content_hash,
-              mimetype, originator_profile_id, owner_profile_id, is_active, created, updated
+    RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+              originator_profile_id, owner_profile_id, is_active, created, updated
+  `;
+
+  // Create manifest entry for body hash tracking
+  await db`
+    INSERT INTO kb_resource_manifests (resource_id, body_hash, updated)
+    VALUES (${newId}::uuid, ${contentHash}, now())
   `;
 
   return rows[0] as unknown as ResourceRecord;
@@ -200,17 +201,21 @@ export async function insertResource(
 // ---------------------------------------------------------------------------
 
 /**
- * Update the content_hash on an existing resource (used when re-ingesting
- * updated content for the same resource).
+ * Update the body_hash on an existing resource's manifest entry (used when
+ * re-ingesting updated content for the same resource).
  */
 export async function updateResourceHash(
   db: NeonClient,
   resourceId: string,
-  contentHash: string,
+  bodyHash: string,
 ): Promise<void> {
   await db`
-    UPDATE kb_resources
-    SET content_hash = ${contentHash}, updated = now()
-    WHERE id = ${resourceId}::uuid
+    INSERT INTO kb_resource_manifests (resource_id, body_hash, updated)
+    VALUES (${resourceId}::uuid, ${bodyHash}, now())
+    ON CONFLICT (resource_id)
+    DO UPDATE SET body_hash = ${bodyHash}, updated = now()
+  `;
+  await db`
+    UPDATE kb_resources SET updated = now() WHERE id = ${resourceId}::uuid
   `;
 }

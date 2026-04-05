@@ -16,13 +16,13 @@ kb_context_id: string | null,
 /**
  * Maximum results to return (default 50, max 200).
  */
-limit: bigint | null, 
+limit: number | null, 
 /**
  * Offset for pagination.
  */
-offset: bigint | null, };
+offset: number | null, };
 
 /**
  * Row type matching the `kb_resources` table.
  */
-export type ResourceRow = { id: string, kb_context_id: string, kb_doc_type_id: string, origin_uri: string, title: string, slug: string | null, content_hash: string | null, mimetype: string | null, originator_profile_id: string, owner_profile_id: string, is_active: boolean, created: string, updated: string, };
+export type ResourceRow = { id: string, kb_context_id: string, kb_doc_type_id: string, origin_uri: string, title: string, slug: string | null, originator_profile_id: string, owner_profile_id: string, is_active: boolean, created: string, updated: string, };
