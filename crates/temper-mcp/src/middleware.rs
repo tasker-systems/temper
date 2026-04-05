@@ -60,7 +60,12 @@ pub async fn require_mcp_auth(
             next.run(request).await
         }
         Err(e) => {
-            tracing::debug!("MCP JWT validation failed: {e}");
+            tracing::warn!(
+                error = %e,
+                issuer = %issuer,
+                audience = %audience,
+                "MCP JWT validation failed"
+            );
             unauthorized(&state)
         }
     }
