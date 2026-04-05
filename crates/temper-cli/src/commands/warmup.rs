@@ -237,9 +237,8 @@ fn format_event_brief(event: &crate::discovery::Event) -> String {
             let date = &ts[..10];
             format!("  {date}  goal {goal} \u{2192} {status}")
         }
-        Event::Normalize { ts, .. } => {
-            let date = &ts[..10];
-            format!("  {date}  normalize")
-        }
+        // Normalize is kept in the Event enum only for historical event log
+        // deserialization; it has no useful warmup display.
+        _ => String::new(),
     }
 }

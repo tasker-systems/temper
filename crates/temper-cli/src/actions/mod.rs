@@ -1,7 +1,6 @@
 pub mod doctor;
 pub mod goal;
 pub mod ingest;
-pub mod normalize;
 pub mod progress;
 pub mod runtime;
 pub mod search;

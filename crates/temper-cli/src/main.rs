@@ -265,15 +265,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 }
             }
         }
-        Commands::Normalize {
-            context,
-            dry_run,
-            fix_slugs,
-        } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::normalize::run(&config, context.as_deref(), dry_run, fix_slugs)?;
-            Ok(())
-        }
         Commands::Doctor {
             action,
             context,
