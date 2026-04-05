@@ -133,9 +133,8 @@ fn run_single_file(
     let (rt, client) = runtime::build_runtime_and_client()?;
     rt.block_on(runtime::ensure_profile(&client))?;
 
-    let (resource, extracted_content) = rt.block_on(async {
-        ingest::ingest_file(&client, &file_path, context, doc_type).await
-    })?;
+    let (resource, extracted_content) =
+        rt.block_on(async { ingest::ingest_file(&client, &file_path, context, doc_type).await })?;
 
     if fmt == OutputFormat::Text {
         output::plain(format!(
@@ -234,13 +233,7 @@ fn run_single_auto_file(
         }
     }
 
-    let payload = ingest::build_ingest_payload(
-        body,
-        &title,
-        &context,
-        &doc_type,
-        Some(metadata),
-    )?;
+    let payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, Some(metadata))?;
 
     let resource = rt.block_on(async {
         client
@@ -890,13 +883,7 @@ async fn add_single_auto_file(
         }
     }
 
-    let payload = ingest::build_ingest_payload(
-        body,
-        &title,
-        &context,
-        &doc_type,
-        Some(metadata),
-    )?;
+    let payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, Some(metadata))?;
 
     let resource = client
         .ingest()

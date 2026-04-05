@@ -558,13 +558,7 @@ async fn push_resource(
     };
     let title = ingest::title_from_path(&file_path);
 
-    let mut payload = ingest::build_ingest_payload(
-        body,
-        &title,
-        context,
-        doc_type,
-        None,
-    )?;
+    let mut payload = ingest::build_ingest_payload(body, &title, context, doc_type, None)?;
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 
@@ -814,13 +808,7 @@ async fn merge_and_push_resource(
     };
     let title = ingest::title_from_path(&file_path);
 
-    let payload = ingest::build_ingest_payload(
-        merged_body,
-        &title,
-        context,
-        doc_type,
-        None,
-    )?;
+    let payload = ingest::build_ingest_payload(merged_body, &title, context, doc_type, None)?;
 
     // 7. Push via update
     let _resource = client

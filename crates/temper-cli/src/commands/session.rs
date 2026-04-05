@@ -472,7 +472,9 @@ mod tests {
     fn write_session(config: &Config, context: &str, date: &str, slug: &str, body: &str) {
         let dir = config.doc_type_dir(context, "session");
         let filename = format!("{date} \u{2014} {slug}.md");
-        let content = format!("---\ntemper-id: \"test-id\"\ntemper-type: session\ndate: {date}\n---\n\n{body}");
+        let content = format!(
+            "---\ntemper-id: \"test-id\"\ntemper-type: session\ndate: {date}\n---\n\n{body}"
+        );
         fs::write(dir.join(filename), content).unwrap();
     }
 
