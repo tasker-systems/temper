@@ -253,7 +253,16 @@ fn collect_fixes_for_directory(dir: &Path, vault_root: &Path, plan: &mut FixPlan
 
 /// Collect fix actions for a single file and add them to the plan.
 fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
-    let content = fs::read_to_string(file_path)?;
+    let mut content = fs::read_to_string(file_path)?;
+
+    // Pre-pass: if frontmatter fails to parse, attempt dedup and rewrite.
+    if vault::parse_frontmatter(&content).is_none() {
+        if let Some(deduped) = dedup_frontmatter_keys(&content) {
+            fs::write(file_path, &deduped)?;
+            content = deduped;
+        }
+    }
+
     let Some(fm) = vault::parse_frontmatter(&content) else {
         return Ok(());
     };
@@ -262,6 +271,69 @@ fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPla
     plan.extend(fix_relocation(file_path, &fm, vault_root));
     plan.extend(fix_filename(file_path, &fm, vault_root));
     Ok(())
+}
+
+/// Deduplicate frontmatter keys, keeping the last occurrence of each key.
+///
+/// Returns `Some(new_content)` if duplicates were found, `None` if the content
+/// has no frontmatter or no duplicates.
+fn dedup_frontmatter_keys(content: &str) -> Option<String> {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let rest = &trimmed[3..];
+    let end_pos = rest.find("---")?;
+    let yaml_block = &rest[..end_pos];
+    let after_fm = &rest[end_pos..];
+
+    // Parse lines, track seen keys, keep last occurrence
+    let lines: Vec<&str> = yaml_block.lines().collect();
+    let mut seen_keys: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    // First pass: find the last index for each key
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            if !key.is_empty() && !key.starts_with('#') {
+                seen_keys.insert(key.to_string(), i);
+            }
+        }
+    }
+
+    // Check if any key appears more than once
+    let mut key_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for line in &lines {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            if !key.is_empty() && !key.starts_with('#') {
+                *key_counts.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+    let has_duplicates = key_counts.values().any(|&count| count > 1);
+    if !has_duplicates {
+        return None;
+    }
+
+    // Second pass: keep only lines where the key's last index matches current index
+    let mut deduped_lines: Vec<&str> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            if !key.is_empty() && !key.starts_with('#') {
+                if seen_keys.get(key) == Some(&i) {
+                    deduped_lines.push(line);
+                }
+                continue;
+            }
+        }
+        // Non-key lines (blank, comments) — keep them
+        deduped_lines.push(line);
+    }
+
+    let new_yaml = deduped_lines.join("\n");
+    Some(format!("---\n{new_yaml}\n{after_fm}"))
 }
 
 #[cfg(test)]
@@ -289,5 +361,28 @@ mod tests {
     fn detect_doc_type_falls_back_to_dir() {
         let fm = yaml_val("title: no type field here");
         assert_eq!(detect_doc_type(&fm, "session").unwrap(), "session");
+    }
+
+    #[test]
+    fn dedup_frontmatter_keeps_last_occurrence() {
+        let content = "---\ntemper-type: task\ntitle: First\ntemper-type: research\ntitle: Second\n---\nBody\n";
+        let result = dedup_frontmatter_keys(content).unwrap();
+        assert!(result.contains("temper-type: research"));
+        assert!(result.contains("title: Second"));
+        assert!(!result.contains("temper-type: task"));
+        assert!(!result.contains("title: First"));
+        assert!(result.contains("Body"));
+    }
+
+    #[test]
+    fn dedup_frontmatter_returns_none_when_no_duplicates() {
+        let content = "---\ntemper-type: task\ntitle: Only One\n---\nBody\n";
+        assert!(dedup_frontmatter_keys(content).is_none());
+    }
+
+    #[test]
+    fn dedup_frontmatter_returns_none_when_no_frontmatter() {
+        let content = "Just some markdown\n";
+        assert!(dedup_frontmatter_keys(content).is_none());
     }
 }

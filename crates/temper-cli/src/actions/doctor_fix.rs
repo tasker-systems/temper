@@ -437,12 +437,24 @@ fn infer_date(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
     if dt != "session" && dt != "research" {
         return None;
     }
-    let date = extract_date_from_filename(&ctx.filename)?;
-    Some((
-        "date".to_string(),
-        date,
-        "extracted from filename date prefix".to_string(),
-    ))
+    // Try filename date prefix first, then fall back to temper-created
+    if let Some(date) = extract_date_from_filename(&ctx.filename) {
+        return Some((
+            "date".into(),
+            date,
+            "extracted from filename date prefix".into(),
+        ));
+    }
+    if let Some(created) = fm_str(ctx.fm, "temper-created") {
+        if created.len() >= 10 {
+            return Some((
+                "date".into(),
+                created[..10].to_string(),
+                "extracted from temper-created".into(),
+            ));
+        }
+    }
+    None
 }
 
 fn infer_temper_created(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
