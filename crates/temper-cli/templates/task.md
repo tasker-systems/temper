@@ -9,7 +9,7 @@ temper-stage: backlog
 temper-mode: {{ mode }}
 temper-effort: {{ effort }}
 temper-seq: {{ seq }}
-created: {{ datetime }}
+temper-created: {{ datetime }}
 temper-updated: {{ datetime }}
 temper-branch: null
 temper-pr: null

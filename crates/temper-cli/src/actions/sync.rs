@@ -582,9 +582,19 @@ async fn push_resource(
             .map_err(|e| TemperError::Api(e.to_string()))?
     };
 
+    // Compute frontmatter hashes so we can record them as the remote values
+    let (pushed_managed_hash, pushed_open_hash) =
+        if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+            temper_core::schema::compute_frontmatter_hashes(&fm)
+        } else {
+            (String::new(), String::new())
+        };
+
     if let Some(e) = manifest.entries.get_mut(&entry_id) {
-        // After push, server body_hash matches what we sent
+        // After push, server hashes match what we sent
         e.remote_body_hash = payload.content_hash.clone();
+        e.remote_managed_hash = pushed_managed_hash;
+        e.remote_open_hash = pushed_open_hash;
         e.state = ManifestEntryState::Clean;
         e.synced_at = chrono::Utc::now();
         e.mtime_secs = file_mtime_secs(&file_path).ok();
@@ -670,6 +680,14 @@ async fn pull_resource(
         .to_string_lossy()
         .to_string();
 
+    // Compute frontmatter tier hashes from the written file
+    let (managed_hash, open_hash) = if let Some(fm) = crate::vault::parse_frontmatter(&full_content)
+    {
+        temper_core::schema::compute_frontmatter_hashes(&fm)
+    } else {
+        (String::new(), String::new())
+    };
+
     let mtime_secs = file_mtime_secs(&vault_path).ok();
 
     manifest.entries.insert(
@@ -678,10 +696,10 @@ async fn pull_resource(
             path: rel_path,
             body_hash: content_hash,
             remote_body_hash: item.content_hash.clone(),
-            managed_hash: String::new(),
-            open_hash: String::new(),
-            remote_managed_hash: String::new(),
-            remote_open_hash: String::new(),
+            managed_hash: managed_hash.clone(),
+            open_hash: open_hash.clone(),
+            remote_managed_hash: managed_hash,
+            remote_open_hash: open_hash,
             synced_at: chrono::Utc::now(),
             state: ManifestEntryState::Clean,
             mtime_secs,
@@ -811,11 +829,21 @@ async fn merge_and_push_resource(
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
-    // 8. Update manifest entry
+    // 8. Compute frontmatter hashes from the merged file
+    let (pushed_managed_hash, pushed_open_hash) =
+        if let Some(fm) = crate::vault::parse_frontmatter(&new_file_content) {
+            temper_core::schema::compute_frontmatter_hashes(&fm)
+        } else {
+            (String::new(), String::new())
+        };
+
+    // 9. Update manifest entry
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
         e.body_hash = ingest::compute_content_hash(merged_body);
-        // After push, server body_hash matches what we sent
+        // After push, server hashes match what we sent
         e.remote_body_hash = payload.content_hash.clone();
+        e.remote_managed_hash = pushed_managed_hash;
+        e.remote_open_hash = pushed_open_hash;
         e.state = ManifestEntryState::Clean;
         e.synced_at = chrono::Utc::now();
         e.mtime_secs = file_mtime_secs(&file_path).ok();
@@ -867,6 +895,10 @@ pub fn backup_manifest(temper_dir: &Path) -> Result<()> {
 /// - De-duplicate by content hash within same context/doc_type
 /// - Preserve local-only Pending entries that haven't been pushed yet
 /// - Update remote_hash for all matched entries
+///
+/// TODO: remote_managed_hash and remote_open_hash remain empty after refresh
+/// because the server sync manifest API does not yet return three-tier hashes.
+/// Once the API is extended, populate these from the server response.
 pub async fn sync_refresh(
     client: &temper_client::TemperClient,
     manifest: &mut Manifest,
@@ -988,6 +1020,10 @@ pub async fn sync_refresh(
 /// 4. Rebuild all local content hashes
 /// 5. Mark unmatched local files as Pending (new)
 /// 6. Mark unmatched server resources for pull (Pending with empty content_hash)
+///
+/// TODO: remote_managed_hash and remote_open_hash remain empty after reset
+/// because the server sync manifest API does not yet return three-tier hashes.
+/// Once the API is extended, populate these from the server response.
 pub async fn sync_reset(
     client: &temper_client::TemperClient,
     old_manifest: &Manifest,

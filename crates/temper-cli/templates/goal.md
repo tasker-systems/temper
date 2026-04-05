@@ -6,7 +6,7 @@ slug: "{{ slug }}"
 temper-context: "{{ context }}"
 temper-seq: {{ seq }}
 temper-status: active
-created: {{ date }}
+temper-created: {{ date }}
 ---
 
 # {{ title }}

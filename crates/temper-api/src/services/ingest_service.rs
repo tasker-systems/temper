@@ -14,11 +14,31 @@ use temper_core::types::ingest::{unpack_chunks, IngestPayload, PackedChunk};
 use temper_core::types::resource::ResourceRow;
 
 /// Compute a `sha256:<hex>` hash of a JSON value (canonical form).
+///
+/// Keys are sorted recursively to ensure deterministic output regardless
+/// of the insertion order of `serde_json::Map`.
 pub fn hash_json_value(value: &serde_json::Value) -> String {
-    let serialized = serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string());
+    let canonical = canonicalize_json(value);
+    let serialized = serde_json::to_string(&canonical).unwrap_or_else(|_| "{}".to_string());
     let mut hasher = Sha256::new();
     hasher.update(serialized.as_bytes());
     format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn canonicalize_json(value: &serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<String, serde_json::Value> = map
+                .iter()
+                .map(|(k, v)| (k.clone(), canonicalize_json(v)))
+                .collect();
+            serde_json::to_value(sorted).unwrap_or(serde_json::Value::Object(map.clone()))
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.iter().map(canonicalize_json).collect())
+        }
+        other => other.clone(),
+    }
 }
 
 /// Insert an event into kb_events.

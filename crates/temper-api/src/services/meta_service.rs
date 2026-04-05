@@ -31,23 +31,26 @@ pub async fn update_meta(
 
     let mut tx = pool.begin().await?;
 
-    // 2. Update kb_resource_manifests
-    sqlx::query(
+    // 2. Update kb_resource_manifests (plain UPDATE — must already exist;
+    //    we don't want to insert a row with an empty body_hash).
+    let rows = sqlx::query(
         r#"
-        INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
-        VALUES ($1, '', $2, $3, $4, $5, now())
-        ON CONFLICT (resource_id)
-        DO UPDATE SET managed_meta = $2, open_meta = $3,
-                      managed_hash = $4, open_hash = $5, updated = now()
+        UPDATE kb_resource_manifests
+        SET managed_meta = $1, open_meta = $2, managed_hash = $3, open_hash = $4, updated = now()
+        WHERE resource_id = $5
         "#,
     )
-    .bind(resource_id)
     .bind(&payload.managed_meta)
     .bind(&payload.open_meta)
     .bind(&payload.managed_hash)
     .bind(&payload.open_hash)
+    .bind(resource_id)
     .execute(&mut *tx)
     .await?;
+
+    if rows.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
 
     // 3. Cascade identity fields from managed_meta to kb_resources
     let managed: ManagedMeta =
@@ -76,14 +79,17 @@ pub async fn update_meta(
                 .bind(doc_type)
                 .fetch_optional(&mut *tx)
                 .await?;
-        if let Some((dt_id,)) = doc_type_id {
-            sqlx::query(
-                "UPDATE kb_resources SET kb_doc_type_id = $1, updated = now() WHERE id = $2",
-            )
-            .bind(dt_id)
-            .bind(resource_id)
-            .execute(&mut *tx)
-            .await?;
+        let (dt_id,) = doc_type_id
+            .ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type: '{doc_type}'")))?;
+        let dt_rows = sqlx::query(
+            "UPDATE kb_resources SET kb_doc_type_id = $1, updated = now() WHERE id = $2",
+        )
+        .bind(dt_id)
+        .bind(resource_id)
+        .execute(&mut *tx)
+        .await?;
+        if dt_rows.rows_affected() == 0 {
+            return Err(ApiError::NotFound);
         }
     }
 
@@ -94,15 +100,13 @@ pub async fn update_meta(
                 .bind(context_name)
                 .fetch_optional(&mut *tx)
                 .await?;
-        if let Some((ctx_id,)) = context_id {
-            sqlx::query(
-                "UPDATE kb_resources SET kb_context_id = $1, updated = now() WHERE id = $2",
-            )
+        let (ctx_id,) = context_id
+            .ok_or_else(|| ApiError::BadRequest(format!("unknown context: '{context_name}'")))?;
+        sqlx::query("UPDATE kb_resources SET kb_context_id = $1, updated = now() WHERE id = $2")
             .bind(ctx_id)
             .bind(resource_id)
             .execute(&mut *tx)
             .await?;
-        }
     }
 
     // 4. Insert kb_event

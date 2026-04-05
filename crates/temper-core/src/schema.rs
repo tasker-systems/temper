@@ -250,7 +250,7 @@ pub fn compute_frontmatter_hashes(frontmatter: &serde_yaml::Value) -> (String, S
             continue;
         };
         let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-        if key_str.starts_with("temper-") {
+        if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
             meta.insert(key_str.to_string(), json_value);
         } else {
             open.insert(key_str.to_string(), json_value);
