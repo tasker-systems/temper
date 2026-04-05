@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde_yaml::Value;
+use temper_core::types::manifest::Manifest;
 use uuid::Uuid;
 
 /// A single corrective action to apply to the vault.
@@ -649,6 +650,75 @@ pub fn fix_missing_fields(path: &Path, fm: &Value, vault_root: &Path) -> Vec<Fix
     actions
 }
 
+// ---------------------------------------------------------------------------
+// F5: manifest reconciliation helpers
+// ---------------------------------------------------------------------------
+
+/// Produce `UpdateManifest` actions for files that have been renamed or relocated.
+///
+/// For each `RenameFile` or `RelocateFile` action in `move_actions`, searches
+/// `manifest` for an entry matching the old relative path and emits an
+/// `UpdateManifest` action with the new relative path.
+pub fn fix_manifest_for_moves(
+    move_actions: &[FixAction],
+    manifest: &Manifest,
+    vault_root: &Path,
+) -> Vec<FixAction> {
+    let mut actions = Vec::new();
+
+    for action in move_actions {
+        let (old_path, new_path) = match action {
+            FixAction::RenameFile {
+                old_path, new_path, ..
+            } => (old_path, new_path),
+            FixAction::RelocateFile {
+                old_path, new_path, ..
+            } => (old_path, new_path),
+            _ => continue,
+        };
+
+        let old_rel = match old_path.strip_prefix(vault_root) {
+            Ok(r) => r.to_string_lossy().to_string(),
+            Err(_) => continue,
+        };
+        let new_rel = match new_path.strip_prefix(vault_root) {
+            Ok(r) => r.to_string_lossy().to_string(),
+            Err(_) => continue,
+        };
+
+        for (uuid, entry) in &manifest.entries {
+            if entry.path == old_rel {
+                actions.push(FixAction::UpdateManifest {
+                    temper_id: *uuid,
+                    old_path: old_rel.clone(),
+                    new_path: new_rel.clone(),
+                });
+                break;
+            }
+        }
+    }
+
+    actions
+}
+
+/// Produce `RemoveManifest` actions for manifest entries whose files no longer
+/// exist on disk.
+pub fn fix_stale_manifest_entries(manifest: &Manifest, vault_root: &Path) -> Vec<FixAction> {
+    let mut actions = Vec::new();
+
+    for (uuid, entry) in &manifest.entries {
+        let full_path = vault_root.join(&entry.path);
+        if !full_path.exists() {
+            actions.push(FixAction::RemoveManifest {
+                temper_id: *uuid,
+                reason: format!("file no longer exists: {}", entry.path),
+            });
+        }
+    }
+
+    actions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1153,6 +1223,74 @@ mod tests {
         assert!(
             actions.is_empty(),
             "expected no actions for fully-populated frontmatter, got: {actions:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // F5 tests
+    // -----------------------------------------------------------------------
+
+    fn make_manifest_with_entry(id: Uuid, path: &str) -> temper_core::types::manifest::Manifest {
+        use chrono::Utc;
+        use std::collections::HashMap;
+        use temper_core::types::manifest::{ManifestEntry, ManifestEntryState};
+
+        let mut entries = HashMap::new();
+        entries.insert(
+            id,
+            ManifestEntry {
+                path: path.to_string(),
+                body_hash: "sha256:abc".into(),
+                remote_body_hash: "sha256:abc".into(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+            },
+        );
+        temper_core::types::manifest::Manifest {
+            device_id: "test-device".into(),
+            last_sync: None,
+            entries,
+        }
+    }
+
+    #[test]
+    fn f5_updates_manifest_for_rename() {
+        let id = Uuid::now_v7();
+        let manifest = make_manifest_with_entry(id, "temper/task/old-name.md");
+        let rename = FixAction::RenameFile {
+            old_path: PathBuf::from("/vault/temper/task/old-name.md"),
+            new_path: PathBuf::from("/vault/temper/task/new-name.md"),
+            reason: "slugify".into(),
+        };
+        let vault_root = Path::new("/vault");
+        let actions = fix_manifest_for_moves(&[rename], &manifest, vault_root);
+        assert_eq!(actions.len(), 1);
+        assert!(
+            matches!(&actions[0], FixAction::UpdateManifest { temper_id, new_path, .. }
+                if *temper_id == id && new_path == "temper/task/new-name.md"),
+            "unexpected action: {:?}",
+            actions[0]
+        );
+    }
+
+    #[test]
+    fn f5_removes_stale_manifest_entries() {
+        let id = Uuid::now_v7();
+        let manifest = make_manifest_with_entry(id, "temper/task/deleted-file.md");
+        let vault_root = Path::new("/vault");
+        // The file doesn't exist on disk
+        let actions = fix_stale_manifest_entries(&manifest, vault_root);
+        assert_eq!(actions.len(), 1);
+        assert!(
+            matches!(&actions[0], FixAction::RemoveManifest { temper_id, .. }
+                if *temper_id == id),
+            "unexpected action: {:?}",
+            actions[0]
         );
     }
 }
