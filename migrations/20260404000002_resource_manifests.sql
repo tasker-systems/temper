@@ -47,7 +47,7 @@ CREATE INDEX idx_resource_manifests_goal
 
 -- GIN index on open_meta for flexible queries
 CREATE INDEX idx_resource_manifests_open_meta
-    ON kb_resource_manifests USING GIN (open_meta);
+    ON kb_resource_manifests USING GIN (open_meta jsonb_path_ops);
 
 -- ─── 4. Drop columns and indexes from kb_resources ──────────────────────────
 
@@ -132,7 +132,7 @@ LANGUAGE SQL STABLE AS $$
                  AND sr.body_hash = me.remote_body_hash THEN 'to_push_body'
             -- Body changed on server only
             WHEN me.local_body_hash = me.remote_body_hash
-                 AND sr.body_hash != me.remote_body_hash THEN 'to_pull'
+                 AND sr.body_hash != me.remote_body_hash THEN 'to_pull_body'
             -- Meta changed locally only (skip when client sends empty hashes — old format)
             WHEN me.local_managed_hash != '' AND me.local_managed_hash != me.remote_managed_hash
                  AND sr.managed_hash = me.remote_managed_hash THEN 'to_push_meta'
@@ -140,9 +140,9 @@ LANGUAGE SQL STABLE AS $$
                  AND sr.open_hash = me.remote_open_hash THEN 'to_push_meta'
             -- Meta changed on server only (skip when client sends empty hashes)
             WHEN me.local_managed_hash != '' AND sr.managed_hash != me.remote_managed_hash
-                 AND me.local_managed_hash = me.remote_managed_hash THEN 'to_pull'
+                 AND me.local_managed_hash = me.remote_managed_hash THEN 'to_pull_meta'
             WHEN me.local_open_hash != '' AND sr.open_hash != me.remote_open_hash
-                 AND me.local_open_hash = me.remote_open_hash THEN 'to_pull'
+                 AND me.local_open_hash = me.remote_open_hash THEN 'to_pull_meta'
             -- Meta changed on both sides (skip when client sends empty hashes)
             WHEN me.local_managed_hash != '' AND me.local_managed_hash != me.remote_managed_hash
                  AND sr.managed_hash != me.remote_managed_hash THEN 'conflict'

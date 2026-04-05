@@ -13,6 +13,14 @@ pub struct SyncManifestEntry {
     pub uri: String,
     pub local_hash: String,
     pub remote_hash: String,
+    #[serde(default)]
+    pub managed_hash: String,
+    #[serde(default)]
+    pub remote_managed_hash: String,
+    #[serde(default)]
+    pub open_hash: String,
+    #[serde(default)]
+    pub remote_open_hash: String,
 }
 
 /// Per-context grouping of manifest entries.
@@ -104,6 +112,8 @@ pub struct SyncManifestItem {
     pub doc_type: String,
     pub slug: String,
     pub content_hash: String,
+    pub managed_hash: String,
+    pub open_hash: String,
     pub uri: String,
 }
 
@@ -147,6 +157,10 @@ mod tests {
                     uri: "kb://temper/task/00000000-0000-0000-0000-000000000000".to_string(),
                     local_hash: "sha256:abc".to_string(),
                     remote_hash: "sha256:abc".to_string(),
+                    managed_hash: String::new(),
+                    remote_managed_hash: String::new(),
+                    open_hash: String::new(),
+                    remote_open_hash: String::new(),
                 }],
             }],
         };
@@ -221,6 +235,8 @@ mod tests {
                 doc_type: "task".to_string(),
                 slug: "my-task".to_string(),
                 content_hash: "sha256:abc".to_string(),
+                managed_hash: "sha256:def".to_string(),
+                open_hash: "sha256:ghi".to_string(),
                 uri: "kb://temper/task/00000000-0000-0000-0000-000000000000".to_string(),
             }],
         };

@@ -51,7 +51,7 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
                 uri: row.kb_uri,
                 resource_id: row.resource_id,
             }),
-            "to_pull" => to_pull.push(SyncPullItem {
+            "to_pull" | "to_pull_body" | "to_pull_meta" => to_pull.push(SyncPullItem {
                 uri: row.kb_uri,
                 resource_id: row.resource_id.expect("to_pull must have resource_id"),
                 content_hash: row.body_hash,
@@ -93,6 +93,10 @@ pub async fn compute_sync_diff(
                 "uri": entry.uri,
                 "local_hash": entry.local_hash,
                 "remote_hash": entry.remote_hash,
+                "managed_hash": entry.managed_hash,
+                "remote_managed_hash": entry.remote_managed_hash,
+                "open_hash": entry.open_hash,
+                "remote_open_hash": entry.remote_open_hash,
             }));
         }
     }
@@ -185,6 +189,8 @@ struct ManifestRow {
     doc_type_name: String,
     slug: String,
     body_hash: String,
+    managed_hash: String,
+    open_hash: String,
 }
 
 /// Fetch all active resources for a profile — metadata only, no content.
@@ -196,7 +202,9 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                c.name AS context_name,
                d.name AS doc_type_name,
                COALESCE(r.slug, '') AS slug,
-               COALESCE(m.body_hash, '') AS body_hash
+               COALESCE(m.body_hash, '') AS body_hash,
+               COALESCE(m.managed_hash, '') AS managed_hash,
+               COALESCE(m.open_hash, '') AS open_hash
           FROM kb_resources r
           JOIN kb_contexts c ON c.id = r.kb_context_id
           JOIN kb_doc_types d ON d.id = r.kb_doc_type_id
@@ -223,6 +231,8 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                 doc_type: row.doc_type_name,
                 slug: row.slug,
                 content_hash: row.body_hash,
+                managed_hash: row.managed_hash,
+                open_hash: row.open_hash,
                 uri,
             }
         })
@@ -283,15 +293,35 @@ mod tests {
                 updated: None,
                 diff_type: "to_push_meta".to_owned(),
             },
+            DiffRow {
+                resource_id: Some(Uuid::nil()),
+                kb_uri: "kb://ctx/task/f".to_owned(),
+                body_hash: "h6".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                updated: None,
+                diff_type: "to_pull_body".to_owned(),
+            },
+            DiffRow {
+                resource_id: Some(Uuid::nil()),
+                kb_uri: "kb://ctx/task/g".to_owned(),
+                body_hash: "h7".to_owned(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                updated: None,
+                diff_type: "to_pull_meta".to_owned(),
+            },
         ];
 
         let result = categorize_diff_rows(rows);
         assert_eq!(result.to_push.len(), 2);
-        assert_eq!(result.to_pull.len(), 1);
+        assert_eq!(result.to_pull.len(), 3); // to_pull + to_pull_body + to_pull_meta
         assert_eq!(result.conflicts.len(), 1);
         assert_eq!(result.removed.len(), 1);
         assert_eq!(result.to_push[0].uri, "kb://ctx/task/a");
         assert_eq!(result.to_push[1].uri, "kb://ctx/task/e");
         assert_eq!(result.to_pull[0].uri, "kb://ctx/task/b");
+        assert_eq!(result.to_pull[1].uri, "kb://ctx/task/f");
+        assert_eq!(result.to_pull[2].uri, "kb://ctx/task/g");
     }
 }
