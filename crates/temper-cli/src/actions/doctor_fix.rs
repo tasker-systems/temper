@@ -719,6 +719,131 @@ pub fn fix_stale_manifest_entries(manifest: &Manifest, vault_root: &Path) -> Vec
     actions
 }
 
+// ---------------------------------------------------------------------------
+// Action applicator
+// ---------------------------------------------------------------------------
+
+/// Summary of changes applied (or counted in dry-run) by [`apply_plan`].
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ApplyReport {
+    pub fields_renamed: u32,
+    pub fields_set: u32,
+    pub files_renamed: u32,
+    pub files_relocated: u32,
+    pub manifest_updated: u32,
+    pub manifest_removed: u32,
+}
+
+/// Keys that need quoted values in YAML frontmatter.
+fn needs_quoting(key: &str, value: &str) -> bool {
+    key == "temper-id" || key == "temper-created" || value.contains(' ') || value.contains(':')
+}
+
+/// Sort `plan` by phase, then apply every action.
+///
+/// In `dry_run` mode the counts are updated but no files are written or moved.
+pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<ApplyReport> {
+    use std::fs;
+
+    plan.sort();
+
+    let mut report = ApplyReport::default();
+
+    for action in &plan.actions {
+        match action {
+            FixAction::RenameField {
+                path,
+                old_key,
+                new_key,
+            } => {
+                if !dry_run {
+                    let content = fs::read_to_string(path)?;
+                    let updated = if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+                        let new_exists = fm.get(new_key.as_str()).is_some();
+                        if new_exists {
+                            crate::vault::remove_frontmatter_field(&content, old_key)
+                        } else {
+                            crate::vault::rename_frontmatter_field(&content, old_key, new_key)
+                        }
+                    } else {
+                        crate::vault::rename_frontmatter_field(&content, old_key, new_key)
+                    };
+                    fs::write(path, updated)?;
+                }
+                report.fields_renamed += 1;
+            }
+            FixAction::SetField {
+                path, key, value, ..
+            } => {
+                if !dry_run {
+                    let content = fs::read_to_string(path)?;
+                    let formatted = if needs_quoting(key, value) {
+                        format!("\"{}\"", value)
+                    } else {
+                        value.clone()
+                    };
+                    let updated = crate::vault::insert_frontmatter_field(&content, key, &formatted);
+                    fs::write(path, updated)?;
+                }
+                report.fields_set += 1;
+            }
+            FixAction::RenameFile {
+                old_path, new_path, ..
+            } => {
+                if !dry_run {
+                    if let Some(parent) = new_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::rename(old_path, new_path)?;
+                }
+                report.files_renamed += 1;
+            }
+            FixAction::RelocateFile {
+                old_path, new_path, ..
+            } => {
+                if !dry_run {
+                    if let Some(parent) = new_path.parent() {
+                        fs::create_dir_all(parent)?;
+                    }
+                    fs::rename(old_path, new_path)?;
+                }
+                report.files_relocated += 1;
+            }
+            FixAction::UpdateManifest { .. } => {
+                report.manifest_updated += 1;
+            }
+            FixAction::RemoveManifest { .. } => {
+                report.manifest_removed += 1;
+            }
+        }
+    }
+
+    Ok(report)
+}
+
+/// Apply manifest-level actions from `plan` to `manifest` in memory.
+///
+/// Callers are responsible for persisting the manifest after this call.
+pub fn apply_manifest_actions(plan: &FixPlan, manifest: &mut Manifest) {
+    for action in &plan.actions {
+        match action {
+            FixAction::UpdateManifest {
+                temper_id,
+                new_path,
+                ..
+            } => {
+                if let Some(entry) = manifest.entries.get_mut(temper_id) {
+                    entry.path = new_path.clone();
+                }
+            }
+            FixAction::RemoveManifest { temper_id, .. } => {
+                manifest.entries.remove(temper_id);
+            }
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1292,5 +1417,102 @@ mod tests {
             "unexpected action: {:?}",
             actions[0]
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // apply_plan tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn apply_plan_renames_field_in_file() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.md");
+        fs::write(&file, "---\ntype: task\ntitle: Test\n---\nBody\n").unwrap();
+
+        let mut plan = FixPlan::new();
+        plan.add(FixAction::RenameField {
+            path: file.clone(),
+            old_key: "type".into(),
+            new_key: "temper-type".into(),
+        });
+
+        let report = apply_plan(&mut plan, false).unwrap();
+        assert_eq!(report.fields_renamed, 1);
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert!(content.contains("temper-type: task"));
+        assert!(!content.contains("\ntype: task"));
+    }
+
+    #[test]
+    fn apply_plan_sets_missing_field() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.md");
+        fs::write(&file, "---\ntemper-type: task\ntitle: Test\n---\nBody\n").unwrap();
+
+        let mut plan = FixPlan::new();
+        plan.add(FixAction::SetField {
+            path: file.clone(),
+            key: "slug".into(),
+            value: "test".into(),
+            reason: "inferred".into(),
+        });
+
+        let report = apply_plan(&mut plan, false).unwrap();
+        assert_eq!(report.fields_set, 1);
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert!(content.contains("slug: test"));
+    }
+
+    #[test]
+    fn apply_plan_renames_file() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let old = dir.path().join("old.md");
+        let new = dir.path().join("new.md");
+        fs::write(&old, "---\ntitle: Test\n---\n").unwrap();
+
+        let mut plan = FixPlan::new();
+        plan.add(FixAction::RenameFile {
+            old_path: old.clone(),
+            new_path: new.clone(),
+            reason: "slugify".into(),
+        });
+
+        apply_plan(&mut plan, false).unwrap();
+        assert!(!old.exists());
+        assert!(new.exists());
+    }
+
+    #[test]
+    fn apply_plan_dry_run_changes_nothing() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        let file = dir.path().join("test.md");
+        let original = "---\ntype: task\ntitle: Test\n---\nBody\n";
+        fs::write(&file, original).unwrap();
+
+        let mut plan = FixPlan::new();
+        plan.add(FixAction::RenameField {
+            path: file.clone(),
+            old_key: "type".into(),
+            new_key: "temper-type".into(),
+        });
+
+        apply_plan(&mut plan, true).unwrap();
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert_eq!(content, original);
     }
 }
