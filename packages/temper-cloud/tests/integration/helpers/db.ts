@@ -11,7 +11,7 @@ export function getTestDb() {
 // Well-known seed IDs from migrations/20260326000002_r2_seed.sql
 const SYSTEM_PROFILE_ID = "00000000-0000-0000-0004-000000000001";
 const TEMPER_CONTEXT_ID = "00000000-0000-0000-0003-000000000001";
-const SOURCE_DOC_TYPE_ID = "00000000-0000-0000-0001-000000000007";
+const RESEARCH_DOC_TYPE_ID = "00000000-0000-0000-0001-000000000004";
 
 export interface TestResource {
   id: string;
@@ -26,7 +26,7 @@ export async function createTestResource(sql: postgres.Sql, title: string): Prom
   await sql`
     INSERT INTO kb_resources (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
                            originator_profile_id, owner_profile_id, created, updated)
-    VALUES (${id}, ${TEMPER_CONTEXT_ID}, ${SOURCE_DOC_TYPE_ID},
+    VALUES (${id}, ${TEMPER_CONTEXT_ID}, ${RESEARCH_DOC_TYPE_ID},
             ${`test://${id}`}, ${title}, ${`test-${id}`},
             ${SYSTEM_PROFILE_ID}, ${SYSTEM_PROFILE_ID},
             ${now}::timestamptz, ${now}::timestamptz)
