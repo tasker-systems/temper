@@ -485,6 +485,148 @@ const INFER_RULES: &[InferFn] = &[
 ];
 
 // ---------------------------------------------------------------------------
+// F3: fix_relocation
+// ---------------------------------------------------------------------------
+
+/// Doc types that use the date-prefix filename convention.
+pub const DATE_PREFIX_DOC_TYPES: &[&str] = &["session", "research"];
+
+/// Produce a `RelocateFile` action if the file is in the wrong directory.
+///
+/// Compares frontmatter `temper-context` + `temper-type` against the actual
+/// parent directory of `path`. If they disagree, a `RelocateFile` action is
+/// emitted.
+///
+/// Expected directory layout:
+/// - `research` doc type: `{vault_root}/{context}/research/`
+/// - All others: `{vault_root}/{context}/{doc_type}/`
+pub fn fix_relocation(path: &Path, fm: &Value, vault_root: &Path) -> Vec<FixAction> {
+    // Extract context: prefer temper-context, fall back to context, then project
+    let context = fm_str(fm, "temper-context")
+        .or_else(|| fm_str(fm, "context"))
+        .or_else(|| fm_str(fm, "project"));
+
+    // Extract doc_type: prefer temper-type, fall back to type, then doc_type
+    let doc_type = fm_str(fm, "temper-type")
+        .or_else(|| fm_str(fm, "type"))
+        .or_else(|| fm_str(fm, "doc_type"));
+
+    let (context, doc_type) = match (context, doc_type) {
+        (Some(c), Some(d)) => (c, d),
+        _ => return Vec::new(),
+    };
+
+    // Compute expected directory
+    let expected_dir = vault_root.join(&context).join(&doc_type);
+
+    // Current directory of the file
+    let current_dir = match path.parent() {
+        Some(p) => p.to_path_buf(),
+        None => return Vec::new(),
+    };
+
+    if current_dir == expected_dir {
+        return Vec::new();
+    }
+
+    let filename = match path.file_name() {
+        Some(f) => f,
+        None => return Vec::new(),
+    };
+
+    let new_path = expected_dir.join(filename);
+
+    vec![FixAction::RelocateFile {
+        old_path: path.to_path_buf(),
+        new_path,
+        reason: format!(
+            "context={context}, type={doc_type}: expected directory {expected_dir}",
+            expected_dir = expected_dir.display()
+        ),
+    }]
+}
+
+// ---------------------------------------------------------------------------
+// F4: fix_filename
+// ---------------------------------------------------------------------------
+
+/// Produce a `RenameFile` action if the filename doesn't match the expected
+/// doc-type-specific slug convention.
+///
+/// Rules:
+/// - `session`, `research` → `{date}-{slug}.md` (date-prefixed)
+/// - `task`, `goal`, `decision`, `concept`, etc. → `{slug}.md` (pure slug)
+///
+/// Deduplication: if the target path already exists and isn't the source file,
+/// appends `-2`, `-3`, etc. to the slug until a free name is found.
+pub fn fix_filename(path: &Path, fm: &Value, vault_root: &Path) -> Vec<FixAction> {
+    let _ = vault_root; // used for dedup below
+
+    let doc_type = fm_str(fm, "temper-type")
+        .or_else(|| fm_str(fm, "type"))
+        .or_else(|| fm_str(fm, "doc_type"));
+
+    let doc_type = match doc_type {
+        Some(dt) => dt,
+        None => return Vec::new(),
+    };
+
+    let filename = match path.file_name().and_then(|f| f.to_str()) {
+        Some(f) => f.to_string(),
+        None => return Vec::new(),
+    };
+
+    // Derive slug: prefer fm slug, then slugify fm title, then slug_from_filename
+    let slug = fm_str(fm, "slug")
+        .or_else(|| fm_str(fm, "title").map(|t| crate::vault::slugify(&t)))
+        .unwrap_or_else(|| slug_from_filename(&filename));
+
+    if slug.is_empty() {
+        return Vec::new();
+    }
+
+    let expected_filename = if DATE_PREFIX_DOC_TYPES.contains(&doc_type.as_str()) {
+        // Need a date: prefer fm "date", else extract from filename
+        let date = fm_str(fm, "date").or_else(|| extract_date_from_filename(&filename));
+
+        match date {
+            Some(d) => format!("{d}-{slug}.md"),
+            None => return Vec::new(), // can't build date-prefixed name without a date
+        }
+    } else {
+        format!("{slug}.md")
+    };
+
+    if filename == expected_filename {
+        return Vec::new();
+    }
+
+    // Build new path, deduplicating if target already exists
+    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+    let mut candidate = parent.join(&expected_filename);
+    let mut suffix = 2usize;
+    while candidate.exists() && candidate != path {
+        let dedup_slug = format!("{slug}-{suffix}");
+        let dedup_name = if DATE_PREFIX_DOC_TYPES.contains(&doc_type.as_str()) {
+            let date = fm_str(fm, "date")
+                .or_else(|| extract_date_from_filename(&filename))
+                .unwrap_or_default();
+            format!("{date}-{dedup_slug}.md")
+        } else {
+            format!("{dedup_slug}.md")
+        };
+        candidate = parent.join(dedup_name);
+        suffix += 1;
+    }
+
+    vec![FixAction::RenameFile {
+        old_path: path.to_path_buf(),
+        new_path: candidate,
+        reason: format!("filename should follow {doc_type} convention"),
+    }]
+}
+
+// ---------------------------------------------------------------------------
 // F2: fix_missing_fields
 // ---------------------------------------------------------------------------
 
@@ -842,6 +984,150 @@ mod tests {
         let root = vault_root();
         let ctx = InferContext::new(&path, &fm, &root);
         assert!(infer_temper_stage(&ctx).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // F3 tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn f3_relocates_research_from_legacy_path() {
+        // Legacy layout: research/{context}/file.md → should be {context}/research/file.md
+        let path = PathBuf::from("/vault/research/temper/test.md");
+        let fm = yaml_fm(&[("temper-context", "temper"), ("temper-type", "research")]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_relocation(&path, &fm, &root);
+        assert_eq!(actions.len(), 1, "expected one RelocateFile action");
+        match &actions[0] {
+            FixAction::RelocateFile {
+                old_path, new_path, ..
+            } => {
+                assert_eq!(old_path, &PathBuf::from("/vault/research/temper/test.md"));
+                assert_eq!(new_path, &PathBuf::from("/vault/temper/research/test.md"));
+            }
+            other => panic!("expected RelocateFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn f3_relocates_wrong_context() {
+        // File is in /vault/general/task/ but fm says context=temper
+        let path = PathBuf::from("/vault/general/task/test.md");
+        let fm = yaml_fm(&[("temper-context", "temper"), ("temper-type", "task")]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_relocation(&path, &fm, &root);
+        assert_eq!(actions.len(), 1, "expected one RelocateFile action");
+        match &actions[0] {
+            FixAction::RelocateFile {
+                old_path, new_path, ..
+            } => {
+                assert_eq!(old_path, &PathBuf::from("/vault/general/task/test.md"));
+                assert_eq!(new_path, &PathBuf::from("/vault/temper/task/test.md"));
+            }
+            other => panic!("expected RelocateFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn f3_no_relocation_when_correct() {
+        // File is already in the right place
+        let path = PathBuf::from("/vault/temper/task/test.md");
+        let fm = yaml_fm(&[("temper-context", "temper"), ("temper-type", "task")]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_relocation(&path, &fm, &root);
+        assert!(
+            actions.is_empty(),
+            "expected no actions for correctly located file"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // F4 tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn f4_slugifies_emdash_session_filename() {
+        // em-dash separator in session filename should be normalised to hyphen
+        let path = PathBuf::from("/vault/project/session/2026-04-05 \u{2014} my-session.md");
+        let fm = yaml_fm(&[("temper-type", "session")]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_filename(&path, &fm, &root);
+        assert_eq!(actions.len(), 1, "expected one RenameFile action");
+        match &actions[0] {
+            FixAction::RenameFile { new_path, .. } => {
+                assert_eq!(
+                    new_path.file_name().and_then(|f| f.to_str()),
+                    Some("2026-04-05-my-session.md")
+                );
+            }
+            other => panic!("expected RenameFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn f4_strips_date_from_task_filename() {
+        // Tasks should not have a date prefix
+        let path = PathBuf::from("/vault/project/task/2026-04-05-my-task.md");
+        let fm = yaml_fm(&[("temper-type", "task")]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_filename(&path, &fm, &root);
+        assert_eq!(actions.len(), 1, "expected one RenameFile action");
+        match &actions[0] {
+            FixAction::RenameFile { new_path, .. } => {
+                assert_eq!(
+                    new_path.file_name().and_then(|f| f.to_str()),
+                    Some("my-task.md")
+                );
+            }
+            other => panic!("expected RenameFile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn f4_no_rename_when_already_correct_task() {
+        let path = PathBuf::from("/vault/project/task/my-task.md");
+        let fm = yaml_fm(&[("temper-type", "task"), ("slug", "my-task")]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_filename(&path, &fm, &root);
+        assert!(
+            actions.is_empty(),
+            "expected no actions for correctly named task file"
+        );
+    }
+
+    #[test]
+    fn f4_no_rename_when_already_correct_session() {
+        let path = PathBuf::from("/vault/project/session/2026-04-05-my-session.md");
+        let fm = yaml_fm(&[
+            ("temper-type", "session"),
+            ("date", "2026-04-05"),
+            ("slug", "my-session"),
+        ]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_filename(&path, &fm, &root);
+        assert!(
+            actions.is_empty(),
+            "expected no actions for correctly named session file"
+        );
+    }
+
+    #[test]
+    fn f4_slugifies_non_slug_task_filename() {
+        // Filename has non-slug chars; fm slug tells us the correct slug
+        let path = PathBuf::from("/vault/project/task/My Feature!.md");
+        let fm = yaml_fm(&[("temper-type", "task"), ("slug", "my-feature")]);
+        let root = PathBuf::from("/vault");
+        let actions = fix_filename(&path, &fm, &root);
+        assert_eq!(actions.len(), 1, "expected one RenameFile action");
+        match &actions[0] {
+            FixAction::RenameFile { new_path, .. } => {
+                assert_eq!(
+                    new_path.file_name().and_then(|f| f.to_str()),
+                    Some("my-feature.md")
+                );
+            }
+            other => panic!("expected RenameFile, got {other:?}"),
+        }
     }
 
     // -----------------------------------------------------------------------
