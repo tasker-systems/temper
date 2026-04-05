@@ -9,8 +9,13 @@ use temper_core::schema::{
     ValidationResult,
 };
 
+use crate::actions::doctor_fix::{
+    apply_manifest_actions, apply_plan, fix_filename, fix_legacy_fields, fix_manifest_for_moves,
+    fix_missing_fields, fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
+};
 use crate::config::Config;
 use crate::error::Result;
+use crate::manifest_io;
 use crate::vault;
 
 /// Aggregated report from a vault doctor scan.
@@ -163,43 +168,12 @@ fn detect_doc_type(fm: &serde_yaml::Value, dir_doc_type: &str) -> Option<String>
     Some(dir_doc_type.to_string())
 }
 
-/// Report from an auto-fix run.
-#[derive(Debug, Clone, Serialize)]
-pub struct FixReport {
-    pub files_modified: u32,
-    pub fields_renamed: u32,
-    pub fields_backfilled: u32,
-}
-
-/// Legacy field rename map: (old_name, new_name)
-const LEGACY_FIELD_MAP: &[(&str, &str)] = &[
-    ("id", "temper-id"),
-    ("type", "temper-type"),
-    ("doc_type", "temper-type"),
-    ("context", "temper-context"),
-    ("project", "temper-context"),
-    ("ingestion_source", "temper-source"),
-    ("created", "temper-created"),
-    ("updated", "temper-updated"),
-    ("stage", "temper-stage"),
-    ("mode", "temper-mode"),
-    ("effort", "temper-effort"),
-    ("goal", "temper-goal"),
-    ("seq", "temper-seq"),
-    ("branch", "temper-branch"),
-    ("pr", "temper-pr"),
-    ("status", "temper-status"),
-    ("legacy_id", "temper-legacy-id"),
-];
-
-/// Auto-fix issues in the vault: rename legacy fields, backfill missing temper-created, backfill
-/// missing temper-id.
-pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Result<FixReport> {
-    let mut report = FixReport {
-        files_modified: 0,
-        fields_renamed: 0,
-        fields_backfilled: 0,
-    };
+/// Auto-fix issues in the vault using the FixAction pipeline.
+///
+/// Collects fix actions for all vault files, applies them in phase order,
+/// and updates the manifest to reflect any file moves.
+pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Result<ApplyReport> {
+    let mut plan = FixPlan::new();
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
         vec![ctx.to_string()]
@@ -214,7 +188,7 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
             if !dir.is_dir() {
                 continue;
             }
-            fix_directory(&dir, dry_run, &mut report)?;
+            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
         }
     }
 
@@ -226,15 +200,44 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
             if !dir.is_dir() {
                 continue;
             }
-            fix_directory(&dir, dry_run, &mut report)?;
+            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
+        }
+    }
+
+    // F5: Manifest reconciliation
+    let temper_dir = config.vault_root.join(".temper");
+    let manifest_result = manifest_io::load_manifest(&temper_dir, "doctor-fix");
+    if let Ok(manifest) = &manifest_result {
+        let move_actions: Vec<_> = plan
+            .actions
+            .iter()
+            .filter(|a| a.phase() == 1)
+            .cloned()
+            .collect();
+        plan.extend(fix_manifest_for_moves(
+            &move_actions,
+            manifest,
+            &config.vault_root,
+        ));
+        plan.extend(fix_stale_manifest_entries(manifest, &config.vault_root));
+    }
+
+    // Apply
+    let report = apply_plan(&mut plan, dry_run)?;
+
+    // Apply manifest changes and save
+    if !dry_run {
+        if let Ok(mut manifest) = manifest_result {
+            apply_manifest_actions(&plan, &mut manifest);
+            manifest_io::save_manifest(&temper_dir, &manifest)?;
         }
     }
 
     Ok(report)
 }
 
-/// Fix all `.md` files in `dir`.
-fn fix_directory(dir: &Path, dry_run: bool, report: &mut FixReport) -> Result<()> {
+/// Collect fix actions for all `.md` files in `dir`.
+fn collect_fixes_for_directory(dir: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
     let md_files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -242,92 +245,22 @@ fn fix_directory(dir: &Path, dry_run: bool, report: &mut FixReport) -> Result<()
         .collect();
 
     for file_path in md_files {
-        fix_file(&file_path, dry_run, report)?;
+        collect_fixes_for_file(&file_path, vault_root, plan)?;
     }
 
     Ok(())
 }
 
-/// Apply auto-fixes to a single file and update the report.
-fn fix_file(file_path: &Path, dry_run: bool, report: &mut FixReport) -> Result<()> {
-    let original = fs::read_to_string(file_path)?;
-
-    // Step 1: Parse frontmatter — skip files with none
-    let Some(_) = vault::parse_frontmatter(&original) else {
+/// Collect fix actions for a single file and add them to the plan.
+fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
+    let content = fs::read_to_string(file_path)?;
+    let Some(fm) = vault::parse_frontmatter(&content) else {
         return Ok(());
     };
-
-    let mut content = original.clone();
-    let mut fields_renamed: u32 = 0;
-    let mut fields_backfilled: u32 = 0;
-
-    // Step 2: Rename legacy fields
-    for (old_key, new_key) in LEGACY_FIELD_MAP {
-        let fm = vault::parse_frontmatter(&content);
-        let Some(ref fm) = fm else { continue };
-
-        let has_old = fm.get(*old_key).is_some();
-        let has_new = fm.get(*new_key).is_some();
-
-        if has_old && !has_new {
-            // Rename old → new
-            content = vault::rename_frontmatter_field(&content, old_key, new_key);
-            fields_renamed += 1;
-        } else if has_old && has_new {
-            // Both exist — drop the old, keep the new
-            content = vault::remove_frontmatter_field(&content, old_key);
-            fields_renamed += 1;
-        }
-    }
-
-    // Step 3: Re-parse. If temper-created is missing but date exists → backfill
-    {
-        let fm = vault::parse_frontmatter(&content);
-        if let Some(ref fm) = fm {
-            let has_created = fm.get("temper-created").is_some();
-            let date_val = fm
-                .get("date")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            if !has_created {
-                if let Some(date_str) = date_val {
-                    let ts_value = format!("\"{}T00:00:00Z\"", date_str);
-                    content =
-                        vault::insert_frontmatter_field(&content, "temper-created", &ts_value);
-                    fields_backfilled += 1;
-                }
-            }
-        }
-    }
-
-    // Step 4: Re-parse. If temper-id is missing → insert new UUIDv7
-    {
-        let fm = vault::parse_frontmatter(&content);
-        if let Some(ref fm) = fm {
-            if fm.get("temper-id").is_none() {
-                let new_id = crate::ids::generate_id();
-                content = vault::insert_frontmatter_field(
-                    &content,
-                    "temper-id",
-                    &format!("\"{new_id}\""),
-                );
-                fields_backfilled += 1;
-            }
-        }
-    }
-
-    // Step 5: Write back if changed and not dry_run
-    if content != original {
-        report.fields_renamed += fields_renamed;
-        report.fields_backfilled += fields_backfilled;
-        report.files_modified += 1;
-
-        if !dry_run {
-            fs::write(file_path, &content)?;
-        }
-    }
-
+    plan.extend(fix_legacy_fields(file_path, &fm));
+    plan.extend(fix_missing_fields(file_path, &fm, vault_root));
+    plan.extend(fix_relocation(file_path, &fm, vault_root));
+    plan.extend(fix_filename(file_path, &fm, vault_root));
     Ok(())
 }
 
