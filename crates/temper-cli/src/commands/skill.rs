@@ -14,6 +14,7 @@ use crate::templates::{CommandWrapperTemplate, SkillTemplate};
 static REFERENCE_MD: &str = include_str!("../../skill-content/reference.md");
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
 static SESSION_LIFECYCLE_MD: &str = include_str!("../../skill-content/session-lifecycle.md");
+static KNOWLEDGE_BASE_MD: &str = include_str!("../../../../agent-skills/knowledge-base.md");
 static WF_BUILD_SMALL: &str = include_str!("../../skill-content/workflows/build-small.md");
 static WF_BUILD_MEDIUM: &str = include_str!("../../skill-content/workflows/build-medium.md");
 static WF_BUILD_LARGE: &str = include_str!("../../skill-content/workflows/build-large.md");
@@ -124,6 +125,7 @@ pub fn check(config: &Config) -> Result<()> {
         "reference.md",
         "subagent-guidance.md",
         "session-lifecycle.md",
+        "knowledge-base.md",
         "workflows/build-small.md",
         "workflows/build-medium.md",
         "workflows/build-large.md",
@@ -235,6 +237,11 @@ pub fn generate_skill_files_with_hash(
     );
 
     files.insert(
+        "knowledge-base.md".to_string(),
+        KNOWLEDGE_BASE_MD.to_string(),
+    );
+
+    files.insert(
         "workflows/build-small.md".to_string(),
         WF_BUILD_SMALL.to_string(),
     );
@@ -323,6 +330,7 @@ mod tests {
         assert!(files.contains_key("reference.md"));
         assert!(files.contains_key("subagent-guidance.md"));
         assert!(files.contains_key("session-lifecycle.md"));
+        assert!(files.contains_key("knowledge-base.md"));
         assert!(files.contains_key("workflows/build-small.md"));
         assert!(files.contains_key("workflows/build-medium.md"));
         assert!(files.contains_key("workflows/build-large.md"));

@@ -57,6 +57,7 @@ pub struct ResourceCreateRequest {
 /// Request body for updating a resource.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceUpdateRequest {
     pub title: Option<String>,
     pub slug: Option<String>,

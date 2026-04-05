@@ -21,6 +21,11 @@ The vault is the source of truth for strategic context. You read and write markd
 directly — no CLI or database required. Everything is human-readable, version-controllable,
 and portable.
 
+> **Cloud access**: If a Temper MCP server is configured, you can also access the knowledge
+> base through MCP resources and tools instead of (or alongside) local file access. See
+> `knowledge-base.md` for MCP access patterns and `claude-desktop.md` for Claude Desktop
+> setup.
+
 **Important distinction**: The vault holds the *strategic layer* — milestones, tickets,
 sessions, concepts. Design specs, implementation plans, and code live in the *project
 repositories* themselves (often under `docs/superpowers/specs/` and `docs/superpowers/plans/`).
