@@ -28,7 +28,7 @@ pub struct DoctorReport {
 }
 
 /// Doc types whose files live at `{vault_root}/{context}/{doc_type}/`.
-const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept"];
+const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
 
 /// Scan the vault and validate all markdown frontmatter.
 ///
