@@ -130,6 +130,10 @@ pub fn build_status_request(manifest: &Manifest, context_filter: &[String]) -> S
             uri,
             local_hash: entry.body_hash.clone(),
             remote_hash: entry.remote_body_hash.clone(),
+            managed_hash: entry.managed_hash.clone(),
+            remote_managed_hash: entry.remote_managed_hash.clone(),
+            open_hash: entry.open_hash.clone(),
+            remote_open_hash: entry.remote_open_hash.clone(),
         });
     }
 
@@ -559,8 +563,6 @@ async fn push_resource(
         &title,
         context,
         doc_type,
-        "imported",
-        "text/markdown",
         None,
     )?;
     payload.managed_meta = managed_meta;
@@ -817,8 +819,6 @@ async fn merge_and_push_resource(
         &title,
         context,
         doc_type,
-        "imported",
-        "text/markdown",
         None,
     )?;
 
@@ -894,11 +894,7 @@ pub fn backup_manifest(temper_dir: &Path) -> Result<()> {
 /// - De-duplicate by resource UUID (server wins for matching IDs)
 /// - De-duplicate by content hash within same context/doc_type
 /// - Preserve local-only Pending entries that haven't been pushed yet
-/// - Update remote_hash for all matched entries
-///
-/// TODO: remote_managed_hash and remote_open_hash remain empty after refresh
-/// because the server sync manifest API does not yet return three-tier hashes.
-/// Once the API is extended, populate these from the server response.
+/// - Update remote hashes (body, managed, open) for all matched entries
 pub async fn sync_refresh(
     client: &temper_client::TemperClient,
     manifest: &mut Manifest,
@@ -938,9 +934,11 @@ pub async fn sync_refresh(
 
     for item in &server.items {
         if manifest.entries.contains_key(&item.resource_id) {
-            // UUID match — update remote_body_hash
+            // UUID match — update remote hashes
             if let Some(entry) = manifest.entries.get_mut(&item.resource_id) {
                 entry.remote_body_hash = item.content_hash.clone();
+                entry.remote_managed_hash = item.managed_hash.clone();
+                entry.remote_open_hash = item.open_hash.clone();
                 if entry.body_hash == item.content_hash {
                     entry.state = ManifestEntryState::Clean;
                 }
@@ -959,6 +957,8 @@ pub async fn sync_refresh(
                 if let Some(entry) = manifest.entries.remove(&existing_id) {
                     let mut updated = entry;
                     updated.remote_body_hash = item.content_hash.clone();
+                    updated.remote_managed_hash = item.managed_hash.clone();
+                    updated.remote_open_hash = item.open_hash.clone();
                     updated.state = ManifestEntryState::Clean;
                     manifest.entries.insert(item.resource_id, updated);
                 }
@@ -974,8 +974,8 @@ pub async fn sync_refresh(
                         remote_body_hash: item.content_hash.clone(),
                         managed_hash: String::new(),
                         open_hash: String::new(),
-                        remote_managed_hash: String::new(),
-                        remote_open_hash: String::new(),
+                        remote_managed_hash: item.managed_hash.clone(),
+                        remote_open_hash: item.open_hash.clone(),
                         synced_at: chrono::Utc::now(),
                         state: ManifestEntryState::Pending,
                         mtime_secs: None,
@@ -1020,10 +1020,6 @@ pub async fn sync_refresh(
 /// 4. Rebuild all local content hashes
 /// 5. Mark unmatched local files as Pending (new)
 /// 6. Mark unmatched server resources for pull (Pending with empty content_hash)
-///
-/// TODO: remote_managed_hash and remote_open_hash remain empty after reset
-/// because the server sync manifest API does not yet return three-tier hashes.
-/// Once the API is extended, populate these from the server response.
 pub async fn sync_reset(
     client: &temper_client::TemperClient,
     old_manifest: &Manifest,
@@ -1111,8 +1107,8 @@ pub async fn sync_reset(
                         remote_body_hash: server_item.content_hash.clone(),
                         managed_hash: String::new(),
                         open_hash: String::new(),
-                        remote_managed_hash: String::new(),
-                        remote_open_hash: String::new(),
+                        remote_managed_hash: server_item.managed_hash.clone(),
+                        remote_open_hash: server_item.open_hash.clone(),
                         synced_at: chrono::Utc::now(),
                         state: ManifestEntryState::Clean,
                         mtime_secs: mtime,
@@ -1145,8 +1141,8 @@ pub async fn sync_reset(
                         remote_body_hash: server_item.content_hash.clone(),
                         managed_hash: String::new(),
                         open_hash: String::new(),
-                        remote_managed_hash: String::new(),
-                        remote_open_hash: String::new(),
+                        remote_managed_hash: server_item.managed_hash.clone(),
+                        remote_open_hash: server_item.open_hash.clone(),
                         synced_at: chrono::Utc::now(),
                         state: ManifestEntryState::Clean,
                         mtime_secs: mtime,
@@ -1194,8 +1190,8 @@ pub async fn sync_reset(
                     remote_body_hash: item.content_hash.clone(),
                     managed_hash: String::new(),
                     open_hash: String::new(),
-                    remote_managed_hash: String::new(),
-                    remote_open_hash: String::new(),
+                    remote_managed_hash: item.managed_hash.clone(),
+                    remote_open_hash: item.open_hash.clone(),
                     synced_at: chrono::Utc::now(),
                     state: ManifestEntryState::Pending,
                     mtime_secs: None,

@@ -140,8 +140,6 @@ pub fn build_ingest_payload(
     title: &str,
     context: &str,
     doc_type: &str,
-    resource_mode: &str,
-    mime_type: &str,
     metadata: Option<serde_json::Value>,
 ) -> Result<temper_core::types::IngestPayload> {
     use temper_core::types::ingest::{pack_chunks, PackedChunk};
@@ -181,10 +179,8 @@ pub fn build_ingest_payload(
         origin_uri,
         context_name: context.to_owned(),
         doc_type_name: doc_type.to_owned(),
-        resource_mode: resource_mode.to_owned(),
         content_hash,
         slug,
-        mimetype: mime_type.to_owned(),
         content: content.to_owned(),
         metadata,
         managed_meta: None,
@@ -311,13 +307,11 @@ pub async fn ingest_file(
     file_path: &Path,
     context: &str,
     doc_type: &str,
-    resource_mode: Option<&str>,
 ) -> Result<(temper_core::types::ResourceRow, String)> {
     let extraction = crate::extract::extract_to_markdown(file_path).await?;
     let extracted_content = extraction.content.clone();
 
     let title = title_from_path(file_path);
-    let mode = resource_mode.unwrap_or("added");
 
     let device_id = crate::config::load_device_id();
     let canonical_path = std::fs::canonicalize(file_path)
@@ -334,8 +328,6 @@ pub async fn ingest_file(
         &title,
         context,
         doc_type,
-        mode,
-        "text/markdown",
         Some(metadata),
     )?;
 
@@ -358,7 +350,6 @@ pub async fn ingest_url(
     url: &str,
     context: &str,
     doc_type: &str,
-    resource_mode: Option<&str>,
 ) -> Result<(temper_core::types::ResourceRow, String)> {
     let (temp_path, display_name) = fetch_url_to_tempfile(url).await?;
 
@@ -366,7 +357,6 @@ pub async fn ingest_url(
     let extracted_content = extraction.content.clone();
 
     let title = display_name;
-    let mode = resource_mode.unwrap_or("added");
 
     let device_id = crate::config::load_device_id();
     let metadata = serde_json::json!({
@@ -379,8 +369,6 @@ pub async fn ingest_url(
         &title,
         context,
         doc_type,
-        mode,
-        "text/markdown",
         Some(metadata),
     )?;
     // Override origin_uri with the original URL
