@@ -88,7 +88,7 @@ pub struct MetaUpdatePayload {
 }
 
 /// Row type mapping to the `kb_resource_manifests` table.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ResourceManifestRow {
     /// UUID of the resource

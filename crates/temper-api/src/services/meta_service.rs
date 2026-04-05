@@ -116,7 +116,7 @@ pub async fn update_meta(
         "api",
         None,
         Some(resource_id),
-        "resource.meta_updated",
+        "managed_meta_updated",
         &serde_json::json!({
             "managed_hash": &payload.managed_hash,
             "open_hash": &payload.open_hash,

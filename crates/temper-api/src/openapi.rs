@@ -98,6 +98,7 @@ mod tests {
         assert!(json.contains("/api/profile/auth-links"));
         assert!(json.contains("/api/events"));
         assert!(json.contains("/api/search"));
+        assert!(json.contains("/api/resources/{id}/meta"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));

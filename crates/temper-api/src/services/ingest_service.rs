@@ -234,7 +234,7 @@ pub async fn ingest(
         "api",
         Some(context.id),
         Some(resource_id),
-        "resource.created",
+        "resource_created",
         &serde_json::json!({"body_hash": &payload.content_hash}),
     )
     .await?;
@@ -363,7 +363,7 @@ pub async fn update(
         "api",
         Some(resource.kb_context_id),
         Some(resource_id),
-        "resource.modified",
+        "body_updated",
         &serde_json::json!({"body_hash": &payload.content_hash}),
     )
     .await?;
