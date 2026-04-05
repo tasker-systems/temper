@@ -1,4 +1,5 @@
 pub mod doctor;
+pub mod doctor_fix;
 pub mod goal;
 pub mod ingest;
 pub mod progress;
