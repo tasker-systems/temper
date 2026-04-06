@@ -187,6 +187,7 @@ async fn replace_chunks(
 pub async fn ingest(
     pool: &PgPool,
     profile_id: Uuid,
+    device_id: &str,
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // 1. Resolve context
@@ -268,7 +269,7 @@ pub async fn ingest(
     let event_id = insert_event(
         &mut tx,
         profile_id,
-        "api",
+        device_id,
         Some(context.id),
         Some(resource_id),
         "resource_created",
@@ -285,7 +286,7 @@ pub async fn ingest(
         resource_id,
         event_id,
         profile_id,
-        "api",
+        device_id,
         &payload.content_hash,
         &managed_hash,
         &open_hash,
@@ -303,6 +304,7 @@ pub async fn update(
     pool: &PgPool,
     profile_id: Uuid,
     resource_id: Uuid,
+    device_id: &str,
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // Verify the profile can modify this resource
@@ -377,7 +379,7 @@ pub async fn update(
     let event_id = insert_event(
         &mut tx,
         profile_id,
-        "api",
+        device_id,
         Some(resource.kb_context_id),
         Some(resource_id),
         "body_updated",
@@ -394,7 +396,7 @@ pub async fn update(
         resource_id,
         event_id,
         profile_id,
-        "api",
+        device_id,
         &payload.content_hash,
         &managed_hash,
         &open_hash,

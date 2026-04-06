@@ -1,9 +1,10 @@
 use axum::extract::{Path, State};
+use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
 use crate::error::ApiResult;
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::ingest_service;
 use crate::state::AppState;
 
@@ -25,9 +26,13 @@ use temper_core::types::resource::ResourceRow;
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
+    device_id: Option<Extension<DeviceId>>,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<ResourceRow>> {
-    ingest_service::ingest(&state.pool, auth.0.profile.id, payload)
+    let device_id = device_id
+        .map(|d| d.0 .0.clone())
+        .unwrap_or_else(|| "api".to_string());
+    ingest_service::ingest(&state.pool, auth.0.profile.id, &device_id, payload)
         .await
         .map(Json)
 }
@@ -48,10 +53,20 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
+    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<IngestPayload>,
 ) -> ApiResult<Json<ResourceRow>> {
-    ingest_service::update(&state.pool, auth.0.profile.id, resource_id, payload)
-        .await
-        .map(Json)
+    let device_id = device_id
+        .map(|d| d.0 .0.clone())
+        .unwrap_or_else(|| "api".to_string());
+    ingest_service::update(
+        &state.pool,
+        auth.0.profile.id,
+        resource_id,
+        &device_id,
+        payload,
+    )
+    .await
+    .map(Json)
 }

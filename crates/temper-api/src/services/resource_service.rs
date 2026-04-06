@@ -196,7 +196,12 @@ pub async fn update(
 }
 
 /// Soft-delete a resource. Requires `can_modify_resource()` to return true.
-pub async fn delete(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiResult<()> {
+pub async fn delete(
+    pool: &PgPool,
+    profile_id: Uuid,
+    resource_id: Uuid,
+    device_id: &str,
+) -> ApiResult<()> {
     let can_modify: bool = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
         .bind(profile_id)
         .bind(resource_id)
@@ -244,7 +249,7 @@ pub async fn delete(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiRe
     let event_id = insert_event(
         &mut tx,
         profile_id,
-        "api",
+        device_id,
         Some(context_id),
         Some(resource_id),
         "resource_deleted",
@@ -261,7 +266,7 @@ pub async fn delete(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiRe
         resource_id,
         event_id,
         profile_id,
-        "api",
+        device_id,
         &body_hash,
         &managed_hash,
         &open_hash,

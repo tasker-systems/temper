@@ -16,6 +16,7 @@ pub async fn update_meta(
     pool: &PgPool,
     profile_id: Uuid,
     resource_id: Uuid,
+    device_id: &str,
     payload: MetaUpdatePayload,
 ) -> ApiResult<Value> {
     // 1. Check can_modify_resource
@@ -122,7 +123,7 @@ pub async fn update_meta(
     let event_id = insert_event(
         &mut tx,
         profile_id,
-        "api",
+        device_id,
         None,
         Some(resource_id),
         "managed_meta_updated",
@@ -139,7 +140,7 @@ pub async fn update_meta(
         resource_id,
         event_id,
         profile_id,
-        "api",
+        device_id,
         &body_hash,
         &payload.managed_hash,
         &payload.open_hash,

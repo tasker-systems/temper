@@ -1,10 +1,11 @@
 use axum::extract::{Path, State};
+use axum::Extension;
 use axum::Json;
 use serde_json::Value;
 use uuid::Uuid;
 
 use crate::error::{ApiResult, ErrorBody};
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::meta_service;
 use crate::state::AppState;
 
@@ -27,10 +28,20 @@ use temper_core::types::managed_meta::MetaUpdatePayload;
 pub async fn update_meta(
     State(state): State<AppState>,
     auth: AuthUser,
+    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
     Json(payload): Json<MetaUpdatePayload>,
 ) -> ApiResult<Json<Value>> {
-    meta_service::update_meta(&state.pool, auth.0.profile.id, resource_id, payload)
-        .await
-        .map(Json)
+    let device_id = device_id
+        .map(|d| d.0 .0.clone())
+        .unwrap_or_else(|| "api".to_string());
+    meta_service::update_meta(
+        &state.pool,
+        auth.0.profile.id,
+        resource_id,
+        &device_id,
+        payload,
+    )
+    .await
+    .map(Json)
 }
