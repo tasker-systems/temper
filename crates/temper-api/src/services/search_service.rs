@@ -1,9 +1,18 @@
+//! Search service — routes queries to the `unified_search()` SQL function,
+//! combining full-text (tsvector) and vector (pgvector) search.
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 
-pub use temper_core::types::api::{SearchParams, SearchResultRow};
+pub use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
+
+// TODO(task-5): remove — kept temporarily so handlers/search.rs compiles
+pub use temper_core::types::api::SearchResultRow;
+
+// TODO(task-6): remove — kept temporarily so ingest_service.rs compiles
+pub use temper_core::types::ingest::format_embedding;
 
 const MAX_LIMIT: i64 = 50;
 const DEFAULT_LIMIT: i64 = 10;
@@ -11,121 +20,74 @@ const EMBEDDING_DIM: usize = 768;
 
 /// Validate search params. Returns the sanitized limit.
 pub fn validate_params(params: &SearchParams) -> ApiResult<i64> {
-    if params.embedding.len() != EMBEDDING_DIM {
-        return Err(ApiError::BadRequest(format!(
-            "embedding must be {EMBEDDING_DIM} dimensions, got {}",
-            params.embedding.len()
-        )));
+    let has_query = params.query.as_ref().is_some_and(|q| !q.trim().is_empty());
+    let has_embedding = params.embedding.is_some();
+
+    if !has_query && !has_embedding {
+        return Err(ApiError::BadRequest(
+            "at least one of 'query' or 'embedding' must be provided".into(),
+        ));
     }
+
+    if let Some(ref emb) = params.embedding {
+        if emb.len() != EMBEDDING_DIM {
+            return Err(ApiError::BadRequest(format!(
+                "embedding must be {EMBEDDING_DIM} dimensions, got {}",
+                emb.len()
+            )));
+        }
+    }
+
     Ok(params.limit.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT))
 }
 
-/// Format an embedding vector as a pgvector literal string: `[0.1,0.2,...]`
-pub fn format_embedding(embedding: &[f32]) -> String {
-    format!(
-        "[{}]",
-        embedding
-            .iter()
-            .map(|v| v.to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    )
-}
-
-/// Build the WHERE clause fragments and corresponding bind values for optional filters.
-///
-/// Returns (where_clause, context_bind, doc_type_bind) where where_clause is
-/// appended to the base query. The bind values are Options that the caller
-/// binds in order — only non-None values produce parameter placeholders.
-pub fn build_filter_clause(
-    context: Option<Uuid>,
-    doc_type: Option<&str>,
-    next_param: &mut i32,
-) -> (String, Option<Uuid>, Option<String>) {
-    let mut clause = String::new();
-    let mut ctx_bind = None;
-    let mut dt_bind = None;
-
-    if let Some(ctx) = context {
-        clause.push_str(&format!(" AND r.kb_context_id = ${next_param}"));
-        *next_param += 1;
-        ctx_bind = Some(ctx);
+/// Compute FTS/vector weights based on which inputs are provided.
+pub fn compute_weights(query: &Option<String>, embedding: &Option<Vec<f32>>) -> (f64, f64) {
+    let has_query = query.as_ref().is_some_and(|q| !q.trim().is_empty());
+    match (has_query, embedding.is_some()) {
+        (true, true) => (0.5, 0.5),
+        (true, false) => (1.0, 0.0),
+        (false, true) => (0.0, 1.0),
+        (false, false) => (0.0, 0.0),
     }
-    if let Some(dt) = doc_type {
-        clause.push_str(&format!(" AND dt.name = ${next_param}"));
-        *next_param += 1;
-        dt_bind = Some(dt.to_string());
-    }
-
-    (clause, ctx_bind, dt_bind)
 }
 
-/// Resolve a context name to its UUID for the given profile.
-/// Uses contexts_visible_to() for proper visibility scoping.
-async fn resolve_context_id(
-    pool: &PgPool,
-    name: &str,
-    profile_id: Uuid,
-) -> ApiResult<Option<Uuid>> {
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT cv.id FROM contexts_visible_to($1) cv WHERE cv.name = $2")
-            .bind(profile_id)
-            .bind(name)
-            .fetch_optional(pool)
-            .await?;
-    Ok(row.map(|(id,)| id))
-}
-
-/// Execute the vector similarity search query.
+/// Execute the unified search (FTS + optional vector).
 pub async fn search(
     pool: &PgPool,
     profile_id: Uuid,
     params: SearchParams,
-) -> ApiResult<Vec<SearchResultRow>> {
+) -> ApiResult<Vec<UnifiedSearchResultRow>> {
     let limit = validate_params(&params)?;
-    let embedding_str = format_embedding(&params.embedding);
+    let offset = params.offset.unwrap_or(0);
+    let (fts_weight, vec_weight) = compute_weights(&params.query, &params.embedding);
 
-    // Resolve context name → UUID (if provided)
-    let context_id = if let Some(ref name) = params.context_name {
-        resolve_context_id(pool, name, profile_id).await?
-    } else {
-        None
-    };
+    let embedding_str = params
+        .embedding
+        .as_ref()
+        .map(|e| temper_core::types::ingest::format_embedding(e));
 
-    // Parameter slots: $1 = embedding, $2 = profile_id, then optional filters, then limit.
-    let mut next_param: i32 = 3;
-    let (filter_clause, ctx_bind, dt_bind) =
-        build_filter_clause(context_id, params.doc_type.as_deref(), &mut next_param);
-    let limit_param = next_param;
+    let rows = sqlx::query_as::<_, UnifiedSearchResultRow>(
+        r#"
+        SELECT resource_id, title, slug, kb_uri, origin_uri,
+               context, doc_type, fts_score, vector_score,
+               combined_score, origin
+          FROM unified_search($1, $2, $3::vector, $4, $5, $6, $7, $8, $9, $10)
+        "#,
+    )
+    .bind(profile_id)
+    .bind(params.query.as_deref().unwrap_or(""))
+    .bind(embedding_str.as_deref())
+    .bind(&params.search_config)
+    .bind(params.context_name.as_deref())
+    .bind(params.doc_type.as_deref())
+    .bind(fts_weight)
+    .bind(vec_weight)
+    .bind(limit as i32)
+    .bind(offset as i32)
+    .fetch_all(pool)
+    .await?;
 
-    let sql = format!(
-        "SELECT r.id AS resource_id, r.title, \
-         kb_resource_uri(r.id) AS kb_uri, r.origin_uri, \
-         ctx.name AS context, dt.name AS doc_type, \
-         c.content AS snippet, c.header_path, \
-         (1 - (c.embedding <=> $1::vector))::real AS score \
-         FROM kb_current_chunks c \
-         JOIN kb_resources r ON c.resource_id = r.id \
-         LEFT JOIN kb_contexts ctx ON r.kb_context_id = ctx.id \
-         JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id \
-         WHERE r.id IN (SELECT resource_id FROM resources_visible_to($2)) \
-         {filter_clause} \
-         ORDER BY c.embedding <=> $1::vector LIMIT ${limit_param}"
-    );
-
-    // Build the query with dynamic binds.
-    let mut query = sqlx::query_as::<_, SearchResultRow>(&sql)
-        .bind(&embedding_str)
-        .bind(profile_id);
-
-    if let Some(ctx) = ctx_bind {
-        query = query.bind(ctx);
-    }
-    if let Some(dt) = dt_bind {
-        query = query.bind(dt);
-    }
-
-    let rows = query.bind(limit).fetch_all(pool).await?;
     Ok(rows)
 }
 
@@ -134,92 +96,107 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_validate_params_wrong_dimension() {
+    fn validate_rejects_neither_query_nor_embedding() {
         let params = SearchParams {
-            embedding: vec![0.0; 100],
+            query: None,
+            embedding: None,
+            search_config: "english".into(),
             context_name: None,
             doc_type: None,
             limit: None,
+            offset: None,
         };
-        let result = validate_params(&params);
-        assert!(result.is_err());
+        assert!(validate_params(&params).is_err());
     }
 
     #[test]
-    fn test_validate_params_correct_dimension() {
+    fn validate_accepts_query_only() {
         let params = SearchParams {
-            embedding: vec![0.0; 768],
+            query: Some("test".into()),
+            embedding: None,
+            search_config: "english".into(),
             context_name: None,
             doc_type: None,
             limit: None,
+            offset: None,
         };
-        let result = validate_params(&params);
-        assert_eq!(result.unwrap(), 10); // default limit
+        assert_eq!(validate_params(&params).unwrap(), DEFAULT_LIMIT);
     }
 
     #[test]
-    fn test_validate_params_clamps_limit() {
+    fn validate_accepts_embedding_only() {
         let params = SearchParams {
-            embedding: vec![0.0; 768],
+            query: None,
+            embedding: Some(vec![0.0; 768]),
+            search_config: "english".into(),
+            context_name: None,
+            doc_type: None,
+            limit: None,
+            offset: None,
+        };
+        assert!(validate_params(&params).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_wrong_dimension() {
+        let params = SearchParams {
+            query: None,
+            embedding: Some(vec![0.0; 100]),
+            search_config: "english".into(),
+            context_name: None,
+            doc_type: None,
+            limit: None,
+            offset: None,
+        };
+        assert!(validate_params(&params).is_err());
+    }
+
+    #[test]
+    fn validate_clamps_limit() {
+        let params = SearchParams {
+            query: Some("test".into()),
+            embedding: None,
+            search_config: "english".into(),
             context_name: None,
             doc_type: None,
             limit: Some(200),
+            offset: None,
         };
-        assert_eq!(validate_params(&params).unwrap(), 50);
+        assert_eq!(validate_params(&params).unwrap(), MAX_LIMIT);
     }
 
     #[test]
-    fn test_format_embedding() {
-        let embedding = vec![0.1, 0.2, 0.3];
-        let result = format_embedding(&embedding);
-        assert_eq!(result, "[0.1,0.2,0.3]");
+    fn validate_rejects_empty_query_with_no_embedding() {
+        let params = SearchParams {
+            query: Some("".into()),
+            embedding: None,
+            search_config: "english".into(),
+            context_name: None,
+            doc_type: None,
+            limit: None,
+            offset: None,
+        };
+        assert!(validate_params(&params).is_err());
     }
 
     #[test]
-    fn test_format_embedding_empty() {
-        let result = format_embedding(&[]);
-        assert_eq!(result, "[]");
+    fn compute_weights_query_only() {
+        let (fts, vec) = compute_weights(&Some("test".into()), &None);
+        assert_eq!(fts, 1.0);
+        assert_eq!(vec, 0.0);
     }
 
     #[test]
-    fn test_build_filter_clause_no_filters() {
-        let mut next = 3;
-        let (clause, ctx, dt) = build_filter_clause(None, None, &mut next);
-        assert_eq!(clause, "");
-        assert!(ctx.is_none());
-        assert!(dt.is_none());
-        assert_eq!(next, 3);
+    fn compute_weights_embedding_only() {
+        let (fts, vec) = compute_weights(&None, &Some(vec![0.0; 768]));
+        assert_eq!(fts, 0.0);
+        assert_eq!(vec, 1.0);
     }
 
     #[test]
-    fn test_build_filter_clause_context_only() {
-        let mut next = 3;
-        let id = Uuid::nil();
-        let (clause, ctx, dt) = build_filter_clause(Some(id), None, &mut next);
-        assert_eq!(clause, " AND r.kb_context_id = $3");
-        assert_eq!(ctx, Some(id));
-        assert!(dt.is_none());
-        assert_eq!(next, 4);
-    }
-
-    #[test]
-    fn test_build_filter_clause_both_filters() {
-        let mut next = 3;
-        let id = Uuid::nil();
-        let (clause, ctx, dt) = build_filter_clause(Some(id), Some("task"), &mut next);
-        assert_eq!(clause, " AND r.kb_context_id = $3 AND dt.name = $4");
-        assert_eq!(ctx, Some(id));
-        assert_eq!(dt.as_deref(), Some("task"));
-        assert_eq!(next, 5);
-    }
-
-    #[test]
-    fn test_build_filter_clause_doc_type_only() {
-        let mut next = 3;
-        let (clause, ctx, dt) = build_filter_clause(None, Some("session"), &mut next);
-        assert_eq!(clause, " AND dt.name = $3");
-        assert!(ctx.is_none());
-        assert_eq!(dt.as_deref(), Some("session"));
-        assert_eq!(next, 4);
+    fn compute_weights_both() {
+        let (fts, vec) = compute_weights(&Some("q".into()), &Some(vec![0.0; 768]));
+        assert_eq!(fts, 0.5);
+        assert_eq!(vec, 0.5);
     }
 }
