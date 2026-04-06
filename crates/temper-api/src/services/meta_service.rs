@@ -110,7 +110,7 @@ pub async fn update_meta(
     }
 
     // 4. Insert kb_event
-    insert_event(
+    let _event_id = insert_event(
         &mut tx,
         profile_id,
         "api",

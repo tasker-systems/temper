@@ -50,7 +50,7 @@ pub async fn insert_event(
     resource_id: Option<Uuid>,
     event_type: &str,
     payload: &serde_json::Value,
-) -> ApiResult<()> {
+) -> ApiResult<Uuid> {
     let event_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -67,7 +67,7 @@ pub async fn insert_event(
     .bind(payload)
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    Ok(event_id)
 }
 
 /// Resolve doc_type name to UUID from kb_doc_types.
@@ -228,7 +228,7 @@ pub async fn ingest(
     persist_chunks(&mut tx, resource_id, &chunks).await?;
 
     // 8. Insert event
-    insert_event(
+    let _event_id = insert_event(
         &mut tx,
         profile_id,
         "api",
@@ -320,7 +320,7 @@ pub async fn update(
     replace_chunks(&mut tx, resource_id, &chunks).await?;
 
     // Insert event
-    insert_event(
+    let _event_id = insert_event(
         &mut tx,
         profile_id,
         "api",
