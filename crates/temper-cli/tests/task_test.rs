@@ -411,12 +411,24 @@ fn test_task_list_filters_by_stage() {
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
 
     // Create two tasks — one stays backlog, one moves to in-progress
-    let slug_backlog =
-        temper_cli::commands::task::create(&config, "myapp", "Backlog Task", Some(&g_slug), None, None)
-            .unwrap();
-    let slug_ip =
-        temper_cli::commands::task::create(&config, "myapp", "InProg Task", Some(&g_slug), None, None)
-            .unwrap();
+    let slug_backlog = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Backlog Task",
+        Some(&g_slug),
+        None,
+        None,
+    )
+    .unwrap();
+    let slug_ip = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "InProg Task",
+        Some(&g_slug),
+        None,
+        None,
+    )
+    .unwrap();
     temper_cli::commands::task::move_task(
         &config,
         &slug_ip,
@@ -469,9 +481,15 @@ fn test_find_task_by_seq_number() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::commands::task::create(&config, "myapp", "Seq Lookup", Some(&g_slug), None, None)
-            .unwrap();
+    let slug = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Seq Lookup",
+        Some(&g_slug),
+        None,
+        None,
+    )
+    .unwrap();
 
     // Get the task's seq number
     let task = temper_cli::commands::task::find_task(&config, &slug, None)

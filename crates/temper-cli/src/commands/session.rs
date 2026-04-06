@@ -330,7 +330,12 @@ pub fn show(
 ///
 /// Scans `<context>/session/` dirs, parses frontmatter for date, sorts by date descending,
 /// displays up to 20 entries.
-pub fn list(config: &Config, context: Option<&str>, limit: Option<usize>, format: &str) -> Result<()> {
+pub fn list(
+    config: &Config,
+    context: Option<&str>,
+    limit: Option<usize>,
+    format: &str,
+) -> Result<()> {
     let mut entries: Vec<SessionEntry> = Vec::new();
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
