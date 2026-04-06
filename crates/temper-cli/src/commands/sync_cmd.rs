@@ -114,6 +114,9 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
             .await
     })?;
 
+    // Persist rehashed manifest so computed managed/open hashes are retained.
+    crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
+
     if fmt == OutputFormat::Json {
         let event = serde_json::json!({
             "to_push": diff.to_push.len(),

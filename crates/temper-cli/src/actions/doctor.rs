@@ -225,10 +225,13 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
     // Apply
     let report = apply_plan(&mut plan, dry_run)?;
 
-    // Apply manifest changes and save
+    // Apply manifest changes, rehash modified files, and save
     if !dry_run {
         if let Ok(mut manifest) = manifest_result {
             apply_manifest_actions(&plan, &mut manifest);
+            // Rehash all entries so body/managed/open hashes reflect
+            // the content changes doctor fix just made.
+            crate::actions::sync::rehash_manifest(&mut manifest, &config.vault_root)?;
             manifest_io::save_manifest(&temper_dir, &manifest)?;
         }
     }
