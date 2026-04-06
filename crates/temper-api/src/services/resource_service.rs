@@ -212,8 +212,8 @@ pub async fn delete(
 ) -> ApiResult<()> {
     let can_modify = sqlx::query_scalar!(
         "SELECT can_modify_resource($1, $2)",
-        profile_id.0,
-        resource_id.0,
+        *profile_id,
+        *resource_id,
     )
     .fetch_one(pool)
     .await?
@@ -228,7 +228,7 @@ pub async fn delete(
     // Fetch current hashes for the audit snapshot before soft-delete
     let hashes = sqlx::query!(
         "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
-        resource_id.0,
+        *resource_id,
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -240,7 +240,7 @@ pub async fn delete(
     // Fetch context_id for the event
     let context_id = sqlx::query_scalar!(
         "SELECT kb_context_id FROM kb_resources WHERE id = $1",
-        resource_id.0,
+        *resource_id,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -254,7 +254,7 @@ pub async fn delete(
          WHERE id = $1
            AND is_active = true
         "#,
-        resource_id.0,
+        *resource_id,
     )
     .execute(&mut *tx)
     .await?;

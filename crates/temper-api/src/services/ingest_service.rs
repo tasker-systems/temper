@@ -110,7 +110,7 @@ async fn find_by_body_hash(
            AND r.is_active = true
          LIMIT 1
         "#,
-        profile_id.0,
+        *profile_id,
         body_hash,
     )
     .fetch_optional(pool)
@@ -130,7 +130,7 @@ async fn persist_chunks(
 
     let count = sqlx::query_scalar!(
         "SELECT persist_resource_chunks($1, $2)",
-        resource_id.0,
+        *resource_id,
         chunks_json
     )
     .fetch_one(&mut **tx)
@@ -151,7 +151,7 @@ async fn replace_chunks(
 
     let count = sqlx::query_scalar!(
         "SELECT replace_resource_chunks($1, $2)",
-        resource_id.0,
+        *resource_id,
         chunks_json
     )
     .fetch_one(&mut **tx)
@@ -215,14 +215,14 @@ pub async fn ingest(
                   originator_profile_id, owner_profile_id, is_active,
                   created, updated
         "#,
-        resource_id.0,
-        context.id.0,
+        *resource_id,
+        *context.id,
         doc_type_id,
         payload.origin_uri,
         payload.title,
         payload.slug,
-        profile_id.0,
-        profile_id.0,
+        *profile_id,
+        *profile_id,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -233,7 +233,7 @@ pub async fn ingest(
         INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
         VALUES ($1, $2, $3, $4, $5, $6, now())
         "#,
-        resource_id.0,
+        *resource_id,
         payload.content_hash,
         managed_meta,
         open_meta,
@@ -314,8 +314,8 @@ pub async fn update(
     // Verify the profile can modify this resource
     let can_modify = sqlx::query_scalar!(
         "SELECT true FROM can_modify_resource($1, $2)",
-        profile_id.0,
-        resource_id.0,
+        *profile_id,
+        *resource_id,
     )
     .fetch_optional(pool)
     .await?;
@@ -354,7 +354,7 @@ pub async fn update(
                   originator_profile_id, owner_profile_id, is_active,
                   created, updated
         "#,
-        resource_id.0,
+        *resource_id,
     )
     .fetch_one(&mut *tx)
     .await?;
@@ -368,7 +368,7 @@ pub async fn update(
         DO UPDATE SET body_hash = $2, managed_meta = $3, open_meta = $4,
                       managed_hash = $5, open_hash = $6, updated = now()
         "#,
-        resource_id.0,
+        *resource_id,
         payload.content_hash,
         managed_meta,
         open_meta,

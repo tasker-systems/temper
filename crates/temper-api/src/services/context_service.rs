@@ -21,7 +21,7 @@ pub async fn list_visible(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Vec
           JOIN kb_contexts c ON c.id = cv.id
          ORDER BY c.name
         "#,
-        profile_id.0
+        *profile_id
     )
     .fetch_all(pool)
     .await?;
@@ -43,8 +43,8 @@ pub async fn get_visible(
           JOIN kb_contexts c ON c.id = cv.id
          WHERE c.id = $2
         "#,
-        profile_id.0,
-        context_id.0
+        *profile_id,
+        *context_id
     )
     .fetch_optional(pool)
     .await?
@@ -65,7 +65,7 @@ pub async fn resolve_by_name(
           JOIN kb_contexts c ON c.id = cv.id
          WHERE c.name = $2
         "#,
-        profile_id.0,
+        *profile_id,
         name
     )
     .fetch_optional(pool)
@@ -88,9 +88,9 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
         VALUES ($1, $2, 'kb_profiles', $3)
         RETURNING id, name, kb_owner_table, kb_owner_id, created, updated
         "#,
-        id.0,
+        *id,
         name,
-        profile_id.0
+        *profile_id
     )
     .fetch_one(&mut *tx)
     .await?;

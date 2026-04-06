@@ -23,8 +23,8 @@ pub async fn update_meta(
     // 1. Check can_modify_resource
     let can_modify = sqlx::query_scalar!(
         "SELECT can_modify_resource($1, $2)",
-        profile_id.0,
-        resource_id.0
+        *profile_id,
+        *resource_id
     )
     .fetch_one(pool)
     .await?
@@ -48,7 +48,7 @@ pub async fn update_meta(
         &payload.open_meta as &serde_json::Value,
         &payload.managed_hash,
         &payload.open_hash,
-        resource_id.0,
+        *resource_id,
     )
     .execute(&mut *tx)
     .await?;
@@ -66,7 +66,7 @@ pub async fn update_meta(
         sqlx::query!(
             "UPDATE kb_resources SET title = $1, updated = now() WHERE id = $2",
             title,
-            resource_id.0,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
@@ -75,7 +75,7 @@ pub async fn update_meta(
         sqlx::query!(
             "UPDATE kb_resources SET slug = $1, updated = now() WHERE id = $2",
             slug,
-            resource_id.0,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
@@ -90,7 +90,7 @@ pub async fn update_meta(
         let dt_rows = sqlx::query!(
             "UPDATE kb_resources SET kb_doc_type_id = $1, updated = now() WHERE id = $2",
             dt_id,
-            resource_id.0,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
@@ -111,7 +111,7 @@ pub async fn update_meta(
         sqlx::query!(
             "UPDATE kb_resources SET kb_context_id = $1, updated = now() WHERE id = $2",
             ctx_id,
-            resource_id.0,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
