@@ -113,12 +113,11 @@ pub async fn update_meta(
     // Fetch current body_hash for enriched event payload and audit snapshot.
     // MetaUpdatePayload only carries managed/open hashes — body is unchanged
     // by meta updates, but we need it for complete event + audit records.
-    let (body_hash,): (String,) = sqlx::query_as(
-        "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
-    )
-    .bind(resource_id)
-    .fetch_one(&mut *tx)
-    .await?;
+    let (body_hash,): (String,) =
+        sqlx::query_as("SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1")
+            .bind(resource_id)
+            .fetch_one(&mut *tx)
+            .await?;
 
     let event_id = insert_event(
         &mut tx,
