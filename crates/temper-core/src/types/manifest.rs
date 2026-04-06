@@ -51,6 +51,11 @@ pub struct ManifestEntry {
     /// Used to skip rehashing unchanged files.
     #[serde(default)]
     pub mtime_secs: Option<i64>,
+    /// Whether this entry has a locally-generated provisional ID that hasn't
+    /// been confirmed by the server yet.  Provisional entries always POST
+    /// (never PUT) and get rekeyed to the server ID after success.
+    #[serde(default)]
+    pub provisional: bool,
 }
 
 /// The local manifest — `<vault>/.temper/manifest.json`.
@@ -125,6 +130,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
         let json = serde_json::to_string_pretty(&manifest).unwrap();
@@ -170,6 +176,7 @@ mod tests {
             synced_at: Utc::now(),
             state: ManifestEntryState::LocalModified,
             mtime_secs: Some(1_700_000_000),
+            provisional: false,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: ManifestEntry = serde_json::from_str(&json).unwrap();
@@ -181,5 +188,47 @@ mod tests {
         assert_eq!(parsed.remote_open_hash, "sha256:ropen");
         assert_eq!(parsed.state, ManifestEntryState::LocalModified);
         assert_eq!(parsed.mtime_secs, Some(1_700_000_000));
+        assert!(!parsed.provisional);
+    }
+
+    #[test]
+    fn test_manifest_entry_provisional_defaults_false() {
+        // Old JSON without the `provisional` field should deserialize to false
+        let old_json = serde_json::json!({
+            "path": "temper/goals/my-goal.md",
+            "body_hash": "sha256:body",
+            "remote_body_hash": "sha256:remote",
+            "synced_at": "2026-01-01T00:00:00Z",
+            "state": "clean"
+        });
+        let entry: ManifestEntry = serde_json::from_value(old_json).unwrap();
+        assert!(
+            !entry.provisional,
+            "provisional should default to false for old manifests"
+        );
+    }
+
+    #[test]
+    fn test_manifest_entry_provisional_roundtrip() {
+        // provisional: true should survive serialize/deserialize
+        let entry = ManifestEntry {
+            path: "temper/sessions/new.md".to_string(),
+            body_hash: "sha256:body".to_string(),
+            remote_body_hash: "sha256:rbody".to_string(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs: None,
+            provisional: true,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ManifestEntry = serde_json::from_str(&json).unwrap();
+        assert!(
+            parsed.provisional,
+            "provisional: true should survive roundtrip"
+        );
     }
 }

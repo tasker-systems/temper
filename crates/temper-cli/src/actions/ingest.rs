@@ -516,6 +516,7 @@ pub fn write_vault_file_and_register(
             synced_at: chrono::Utc::now(),
             state: temper_core::types::ManifestEntryState::Clean,
             mtime_secs,
+            provisional: false,
         },
     );
     crate::manifest_io::save_manifest(&temper_dir, &manifest)?;

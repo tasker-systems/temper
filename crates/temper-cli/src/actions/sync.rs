@@ -325,6 +325,7 @@ pub fn scan_vault_for_untracked(
                 synced_at: chrono::Utc::now(),
                 state: temper_core::types::ManifestEntryState::Pending,
                 mtime_secs: mtime,
+                provisional: false,
             },
         );
 
@@ -745,6 +746,7 @@ async fn pull_resource(
             synced_at: chrono::Utc::now(),
             state: ManifestEntryState::Clean,
             mtime_secs,
+            provisional: false,
         },
     );
 
@@ -1013,6 +1015,7 @@ pub async fn sync_refresh(
                         synced_at: chrono::Utc::now(),
                         state: ManifestEntryState::Pending,
                         mtime_secs: None,
+                        provisional: false,
                     },
                 );
                 added += 1;
@@ -1162,6 +1165,7 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
+                        provisional: false,
                     },
                 );
                 matched_by_id += 1;
@@ -1203,6 +1207,7 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
+                        provisional: false,
                     },
                 );
                 matched_by_hash += 1;
@@ -1228,6 +1233,7 @@ pub async fn sync_reset(
                 synced_at: chrono::Utc::now(),
                 state: ManifestEntryState::Pending,
                 mtime_secs: mtime,
+                provisional: false,
             },
         );
     }
@@ -1254,6 +1260,7 @@ pub async fn sync_reset(
                     synced_at: chrono::Utc::now(),
                     state: ManifestEntryState::Pending,
                     mtime_secs: None,
+                    provisional: false,
                 },
             );
         }
@@ -1304,6 +1311,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
         m
@@ -1560,6 +1568,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None, // Force rehash
+                provisional: false,
             },
         );
 
@@ -1612,6 +1621,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
@@ -1658,6 +1668,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: Some(file_mtime),
+                provisional: false,
             },
         );
 
@@ -1702,6 +1713,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: Some(file_mtime),
+                provisional: false,
             },
         );
 
@@ -1741,6 +1753,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None, // No mtime — must rehash
+                provisional: false,
             },
         );
 
@@ -1796,6 +1809,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
@@ -1901,6 +1915,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
@@ -1931,6 +1946,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
