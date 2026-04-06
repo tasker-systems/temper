@@ -108,9 +108,11 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         &format,
                     )
                 }
-                SessionAction::List { context, format } => {
-                    temper_cli::commands::session::list(&config, context.as_deref(), &format)
-                }
+                SessionAction::List {
+                    context,
+                    limit,
+                    format,
+                } => temper_cli::commands::session::list(&config, context.as_deref(), limit, &format),
                 SessionAction::Show {
                     slug,
                     context,

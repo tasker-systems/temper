@@ -330,7 +330,7 @@ pub fn show(
 ///
 /// Scans `<context>/session/` dirs, parses frontmatter for date, sorts by date descending,
 /// displays up to 20 entries.
-pub fn list(config: &Config, context: Option<&str>, format: &str) -> Result<()> {
+pub fn list(config: &Config, context: Option<&str>, limit: Option<usize>, format: &str) -> Result<()> {
     let mut entries: Vec<SessionEntry> = Vec::new();
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
@@ -348,7 +348,7 @@ pub fn list(config: &Config, context: Option<&str>, format: &str) -> Result<()> 
 
     // Sort by date descending (most recent first)
     entries.sort_by(|a, b| b.date.cmp(&a.date));
-    entries.truncate(20);
+    entries.truncate(limit.unwrap_or(20));
 
     if format == "json" {
         let json = serde_json::to_string_pretty(&entries).unwrap_or_default();
@@ -564,14 +564,14 @@ mod tests {
         write_session(&config, "temper", "2026-04-03", "third", "body");
         write_session(&config, "temper", "2026-04-02", "second", "body");
         // list doesn't return data directly but we can verify it doesn't error
-        let result = list(&config, Some("temper"), "json");
+        let result = list(&config, Some("temper"), None, "json");
         assert!(result.is_ok());
     }
 
     #[test]
     fn list_empty_context_shows_hint() {
         let (_tmp, config) = test_vault();
-        let result = list(&config, Some("temper"), "text");
+        let result = list(&config, Some("temper"), None, "text");
         assert!(result.is_ok());
     }
 }

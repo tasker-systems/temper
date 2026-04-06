@@ -330,6 +330,8 @@ pub enum SessionAction {
     List {
         #[arg(long)]
         context: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
         #[arg(long, default_value = "text")]
         format: String,
     },
