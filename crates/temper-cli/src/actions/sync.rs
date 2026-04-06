@@ -339,6 +339,7 @@ pub fn scan_vault_for_untracked(
                 synced_at: chrono::Utc::now(),
                 state: temper_core::types::ManifestEntryState::Pending,
                 mtime_secs: mtime,
+                last_audit_id: None,
                 provisional: is_provisional,
             },
         );
@@ -795,6 +796,7 @@ async fn pull_resource(
             synced_at: chrono::Utc::now(),
             state: ManifestEntryState::Clean,
             mtime_secs,
+            last_audit_id: None,
             provisional: false,
         },
     );
@@ -1064,6 +1066,7 @@ pub async fn sync_refresh(
                         synced_at: chrono::Utc::now(),
                         state: ManifestEntryState::Pending,
                         mtime_secs: None,
+                        last_audit_id: None,
                         provisional: false,
                     },
                 );
@@ -1219,6 +1222,7 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
+                        last_audit_id: None,
                         provisional: false,
                     },
                 );
@@ -1244,6 +1248,7 @@ pub async fn sync_reset(
                     synced_at: chrono::Utc::now(),
                     state: ManifestEntryState::Pending,
                     mtime_secs: mtime,
+                    last_audit_id: None,
                     provisional: true,
                 },
             );
@@ -1283,6 +1288,7 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
+                        last_audit_id: None,
                         provisional: false,
                     },
                 );
@@ -1313,6 +1319,7 @@ pub async fn sync_reset(
                 synced_at: chrono::Utc::now(),
                 state: ManifestEntryState::Pending,
                 mtime_secs: mtime,
+                last_audit_id: None,
                 provisional: is_provisional,
             },
         );
@@ -1340,6 +1347,7 @@ pub async fn sync_reset(
                     synced_at: chrono::Utc::now(),
                     state: ManifestEntryState::Pending,
                     mtime_secs: None,
+                    last_audit_id: None,
                     provisional: false,
                 },
             );
@@ -1391,6 +1399,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -1648,6 +1657,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None, // Force rehash
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -1701,6 +1711,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -1748,6 +1759,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: Some(file_mtime),
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -1793,6 +1805,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: Some(file_mtime),
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -1833,6 +1846,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None, // No mtime — must rehash
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -1889,6 +1903,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -1995,6 +2010,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                last_audit_id: None,
                 provisional: false,
             },
         );
@@ -2026,6 +2042,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                last_audit_id: None,
                 provisional: false,
             },
         );

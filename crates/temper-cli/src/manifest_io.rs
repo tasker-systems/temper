@@ -82,6 +82,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                last_audit_id: None,
                 provisional: false,
             },
         );

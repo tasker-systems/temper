@@ -1486,6 +1486,7 @@ mod tests {
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
                 provisional: false,
+                last_audit_id: None,
             },
         );
         temper_core::types::manifest::Manifest {

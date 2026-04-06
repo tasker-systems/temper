@@ -56,6 +56,10 @@ pub struct ManifestEntry {
     /// (never PUT) and get rekeyed to the server ID after success.
     #[serde(default)]
     pub provisional: bool,
+    /// Most recent kb_resource_audits.id this device is aware of.
+    /// Used for precedence-based sync conflict resolution.
+    #[serde(default)]
+    pub last_audit_id: Option<Uuid>,
 }
 
 /// The local manifest — `<vault>/.temper/manifest.json`.
@@ -131,6 +135,7 @@ mod tests {
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
                 provisional: false,
+                last_audit_id: None,
             },
         );
         let json = serde_json::to_string_pretty(&manifest).unwrap();
@@ -177,6 +182,7 @@ mod tests {
             state: ManifestEntryState::LocalModified,
             mtime_secs: Some(1_700_000_000),
             provisional: false,
+            last_audit_id: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: ManifestEntry = serde_json::from_str(&json).unwrap();
@@ -223,6 +229,7 @@ mod tests {
             state: ManifestEntryState::Clean,
             mtime_secs: None,
             provisional: true,
+            last_audit_id: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         let parsed: ManifestEntry = serde_json::from_str(&json).unwrap();
@@ -230,5 +237,43 @@ mod tests {
             parsed.provisional,
             "provisional: true should survive roundtrip"
         );
+    }
+
+    #[test]
+    fn test_manifest_entry_last_audit_id_defaults_none() {
+        let old_json = serde_json::json!({
+            "path": "temper/goals/my-goal.md",
+            "body_hash": "sha256:body",
+            "remote_body_hash": "sha256:remote",
+            "synced_at": "2026-01-01T00:00:00Z",
+            "state": "clean"
+        });
+        let entry: ManifestEntry = serde_json::from_value(old_json).unwrap();
+        assert!(
+            entry.last_audit_id.is_none(),
+            "last_audit_id should default to None for old manifests"
+        );
+    }
+
+    #[test]
+    fn test_manifest_entry_last_audit_id_roundtrip() {
+        let id = Uuid::now_v7();
+        let entry = ManifestEntry {
+            path: "temper/sessions/s1.md".to_string(),
+            body_hash: "sha256:body".to_string(),
+            remote_body_hash: "sha256:rbody".to_string(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs: None,
+            provisional: false,
+            last_audit_id: Some(id),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        let parsed: ManifestEntry = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.last_audit_id, Some(id));
     }
 }

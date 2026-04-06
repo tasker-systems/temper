@@ -191,6 +191,7 @@ struct ManifestRow {
     body_hash: String,
     managed_hash: String,
     open_hash: String,
+    last_audit_id: Option<Uuid>,
 }
 
 /// Fetch all active resources for a profile — metadata only, no content.
@@ -204,7 +205,10 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                COALESCE(r.slug, '') AS slug,
                COALESCE(m.body_hash, '') AS body_hash,
                COALESCE(m.managed_hash, '') AS managed_hash,
-               COALESCE(m.open_hash, '') AS open_hash
+               COALESCE(m.open_hash, '') AS open_hash,
+               (SELECT a.id FROM kb_resource_audits a
+                 WHERE a.resource_id = r.id
+                 ORDER BY a.created DESC LIMIT 1) AS last_audit_id
           FROM kb_resources r
           JOIN kb_contexts c ON c.id = r.kb_context_id
           JOIN kb_doc_types d ON d.id = r.kb_doc_type_id
@@ -234,6 +238,7 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                 managed_hash: row.managed_hash,
                 open_hash: row.open_hash,
                 uri,
+                last_audit_id: row.last_audit_id,
             }
         })
         .collect();

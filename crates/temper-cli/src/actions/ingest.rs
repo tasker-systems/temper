@@ -534,6 +534,7 @@ pub fn write_vault_file_and_register(
             synced_at: chrono::Utc::now(),
             state: temper_core::types::ManifestEntryState::Clean,
             mtime_secs,
+            last_audit_id: None,
             provisional: false,
         },
     );
