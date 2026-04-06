@@ -23,20 +23,20 @@ Do not fall back to `cargo run` as a workaround.
 |---------|--------|
 | search | `temper search "<query>" [--context <ctx>] [--type <doctype>]` |
 | context | `temper context [<name>]` |
-| session save | `temper session save "<title>" [--task <slug>] [--state <state>]` |
+| session save | `temper session save [<title>] [--context <ctx>] [--task <slug>] [--state <state>]` |
 | session list | `temper session list [--context <ctx>] [--limit <n>]` |
 | session show | `temper session show <slug> [--context <ctx>]` |
-| task create | `temper task create "<title>" --mode <mode> --effort <effort> [--context <ctx>]` |
-| task list | `temper task list [--stage <stage>] [--context <ctx>]` |
-| task move | `temper task move <slug> [--stage <stage>] [--mode <mode>] [--effort <effort>]` |
-| task done | `temper task done <slug>` |
-| task show | `temper task show <slug>` |
+| task create | `temper task create --title "<title>" --context <ctx> [--goal <slug>] [--mode <mode>] [--effort <effort>]` |
+| task list | `temper task list [--context <ctx>] [--goal <slug>] [--stage <stage>]` |
+| task move | `temper task move <slug> [--stage <stage>] [--goal <slug>] [--context <ctx>] [--mode <mode>] [--effort <effort>]` |
+| task done | `temper task done <slug> [--branch <name>] [--pr <url>] [--context <ctx>]` |
+| task show | `temper task show <slug-or-suffix-or-seq> [--context <ctx>]` |
 | goal list | `temper goal list [--context <ctx>]` |
 | note create | `temper note create "<title>" [--context <ctx>] [--type <doctype>]` |
 | research save | `temper research save "<title>" [--task <slug>]` |
 | normalize | `temper normalize [--dry-run]` |
 | events | `temper events [--limit <n>]` |
-| warmup | `temper warmup` |
+| warmup | `temper warmup [--context <ctx>]` |
 | index | `temper index [--force]` |
 | status | `temper status` |
 

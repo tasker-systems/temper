@@ -4,7 +4,7 @@ use clap::{Parser, Subcommand};
 #[command(
     name = "temper",
     about = "Developer workflow tool for agent-assisted development",
-    styles = temper_cli::output::clap_styles()
+    styles = crate::output::clap_styles()
 )]
 pub struct Cli {
     /// Path to vault (overrides TEMPER_VAULT and auto-detection)
@@ -244,6 +244,8 @@ pub enum TaskAction {
         context: Option<String>,
         #[arg(long)]
         goal: Option<String>,
+        #[arg(long)]
+        stage: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
@@ -328,6 +330,8 @@ pub enum SessionAction {
     List {
         #[arg(long)]
         context: Option<String>,
+        #[arg(long)]
+        limit: Option<usize>,
         #[arg(long, default_value = "text")]
         format: String,
     },

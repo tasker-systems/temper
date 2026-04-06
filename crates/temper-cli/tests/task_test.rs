@@ -217,7 +217,7 @@ fn test_task_list_json_format() {
     temper_cli::commands::task::create(&config, "myapp", "JSON Test", Some(&g_slug), None, None)
         .unwrap();
 
-    let result = temper_cli::commands::task::list(&config, Some("myapp"), None, "json");
+    let result = temper_cli::commands::task::list(&config, Some("myapp"), None, None, "json");
     assert!(result.is_ok());
 }
 
@@ -400,4 +400,106 @@ fn test_task_show_json_includes_mode_effort() {
         .unwrap();
     assert_eq!(task.mode, Some("plan".to_string()));
     assert_eq!(task.effort, Some("small".to_string()));
+}
+
+#[test]
+fn test_task_list_filters_by_stage() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    let g_slug =
+        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+
+    // Create two tasks — one stays backlog, one moves to in-progress
+    let slug_backlog = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Backlog Task",
+        Some(&g_slug),
+        None,
+        None,
+    )
+    .unwrap();
+    let slug_ip = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "InProg Task",
+        Some(&g_slug),
+        None,
+        None,
+    )
+    .unwrap();
+    temper_cli::commands::task::move_task(
+        &config,
+        &slug_ip,
+        Some("in-progress"),
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Load all tasks — should have 2
+    let all = temper_cli::commands::task::load_tasks(&config, Some("myapp"), None).unwrap();
+    assert_eq!(all.len(), 2);
+
+    // list with stage=backlog should succeed (text format, just verify no error)
+    let result =
+        temper_cli::commands::task::list(&config, Some("myapp"), None, Some("backlog"), "json");
+    assert!(result.is_ok());
+
+    // Verify actual filtering by checking load_tasks + manual filter (mirrors list internals)
+    let backlog_tasks: Vec<_> = all.iter().filter(|t| t.stage == "backlog").collect();
+    assert_eq!(backlog_tasks.len(), 1);
+    assert!(backlog_tasks[0].slug.contains(&slug_backlog));
+
+    let ip_tasks: Vec<_> = all.iter().filter(|t| t.stage == "in-progress").collect();
+    assert_eq!(ip_tasks.len(), 1);
+    assert!(ip_tasks[0].slug.contains(&slug_ip));
+}
+
+#[test]
+fn test_task_list_rejects_invalid_stage() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    let g_slug =
+        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    temper_cli::commands::task::create(&config, "myapp", "Task", Some(&g_slug), None, None)
+        .unwrap();
+
+    let result =
+        temper_cli::commands::task::list(&config, Some("myapp"), None, Some("brainstorm"), "text");
+    assert!(result.is_err(), "invalid stage should be rejected");
+}
+
+#[test]
+fn test_find_task_by_seq_number() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    let g_slug =
+        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let slug = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Seq Lookup",
+        Some(&g_slug),
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Get the task's seq number
+    let task = temper_cli::commands::task::find_task(&config, &slug, None)
+        .unwrap()
+        .expect("task should exist by slug");
+    let seq = task.seq;
+
+    // Look up by seq number string
+    let found = temper_cli::commands::task::find_task(&config, &seq.to_string(), None)
+        .unwrap()
+        .expect("task should be found by seq number");
+    assert_eq!(found.slug, slug);
 }

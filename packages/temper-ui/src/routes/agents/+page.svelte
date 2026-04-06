@@ -92,11 +92,9 @@
   <div class="injects-list">
     <p>Every startup injects:</p>
     <div class="inject-items">
-      <div class="inject-item"><span class="inject-dot"></span>Active tasks with mode and effort</div>
-      <div class="inject-item"><span class="inject-dot"></span>Last 3 session summaries</div>
+      <div class="inject-item"><span class="inject-dot"></span>In-progress tasks with mode and effort</div>
+      <div class="inject-item"><span class="inject-dot"></span>Last 5 session summaries</div>
       <div class="inject-item"><span class="inject-dot"></span>Full content of the most recent session</div>
-      <div class="inject-item"><span class="inject-dot"></span>Open decisions and deferred items</div>
-      <div class="inject-item"><span class="inject-dot"></span>Last 15 project events</div>
     </div>
   </div>
 </Section>

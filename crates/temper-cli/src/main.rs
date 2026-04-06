@@ -1,7 +1,5 @@
-mod cli;
-
 use clap::Parser;
-use cli::{
+use temper_cli::cli::{
     AuthAction, Cli, Commands, ContextAction, DoctorAction, GoalAction, NoteAction, ResearchAction,
     SessionAction, SkillAction, SyncAction, TaskAction,
 };
@@ -108,8 +106,12 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         &format,
                     )
                 }
-                SessionAction::List { context, format } => {
-                    temper_cli::commands::session::list(&config, context.as_deref(), &format)
+                SessionAction::List {
+                    context,
+                    limit,
+                    format,
+                } => {
+                    temper_cli::commands::session::list(&config, context.as_deref(), limit, &format)
                 }
                 SessionAction::Show {
                     slug,
@@ -192,10 +194,17 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 TaskAction::List {
                     context,
                     goal,
+                    stage,
                     format,
                 } => {
                     let context = context.as_deref();
-                    temper_cli::commands::task::list(&config, context, goal.as_deref(), &format)
+                    temper_cli::commands::task::list(
+                        &config,
+                        context,
+                        goal.as_deref(),
+                        stage.as_deref(),
+                        &format,
+                    )
                 }
                 TaskAction::Show {
                     slug,

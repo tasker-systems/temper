@@ -2,8 +2,10 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use askama::Template;
+use clap::CommandFactory;
 use sha2::{Digest, Sha256};
 
+use crate::cli::Cli;
 use crate::config::{self, Config};
 use crate::error::{Result, TemperError};
 use crate::output;
@@ -11,7 +13,6 @@ use crate::templates::{CommandWrapperTemplate, SkillTemplate};
 
 // ── Static content (compiled into the binary) ────────────────────────────────
 
-static REFERENCE_MD: &str = include_str!("../../skill-content/reference.md");
 static SUBAGENT_GUIDANCE_MD: &str = include_str!("../../skill-content/subagent-guidance.md");
 static SESSION_LIFECYCLE_MD: &str = include_str!("../../skill-content/session-lifecycle.md");
 static KNOWLEDGE_BASE_MD: &str = include_str!("../../../../agent-skills/knowledge-base.md");
@@ -22,6 +23,178 @@ static WF_PLAN_SMALL: &str = include_str!("../../skill-content/workflows/plan-sm
 static WF_PLAN_MEDIUM: &str = include_str!("../../skill-content/workflows/plan-medium.md");
 static WF_PLAN_LARGE: &str = include_str!("../../skill-content/workflows/plan-large.md");
 
+static REFERENCE_FOOTER: &str = r#"
+## Task Stages
+
+| Stage | Meaning |
+|-------|---------|
+| backlog | Not yet started |
+| in-progress | Actively being worked |
+| done | Completed |
+| cancelled | Abandoned or no longer relevant |
+
+## Modes
+
+| Mode | Purpose |
+|------|---------|
+| plan | Research, design, discovery -- understanding before building |
+| build | Implementation -- producing artifacts |
+
+## Effort Levels
+
+| Effort | Scope |
+|--------|-------|
+| small | Single session, focused deliverable |
+| medium | Multi-step, bounded to a clear outcome |
+| large | Multi-session, may require decomposition |
+
+## Discovery Workflow
+
+1. `temper search "<topic>"` -- find relevant documents and notes
+2. `temper context [<name>]` -- understand current context and recent activity
+3. Use search results to guide targeted file reads
+
+Search first, read second. Don't guess at file paths.
+
+## Template Access
+
+Use `--show-template` on creation commands to display the expected frontmatter and body
+structure without creating anything:
+
+```bash
+temper note create --show-template
+temper task create --show-template
+temper research save --show-template
+```
+
+## Skill-Only Commands
+
+These commands are handled by the skill routing layer, not the temper CLI directly.
+They compose multiple CLI commands into guided workflows.
+
+| Skill Command | What It Does |
+|---------------|-------------|
+| `task start <slug>` | Shows task, moves to in-progress, routes to workflow |
+| `task resume <slug>` | Shows task, reads last session, continues workflow |
+| `task create` | Guided interactive task creation with prompts |
+| `session start` | Start a session without a predefined task |
+"#;
+
+/// Generate the reference.md content from clap's command tree.
+pub fn generate_reference() -> String {
+    let cmd = Cli::command();
+    let mut rows = Vec::new();
+    collect_command_rows(&cmd, "", &mut rows);
+
+    let mut out = String::new();
+    out.push_str("# CLI Reference\n\n");
+    out.push_str("## Invocation\n\n");
+    out.push_str("**Always run `temper` directly from PATH.** Never use `cargo run -p temper-cli`, `python`,\n");
+    out.push_str("full paths, or any indirect invocation method — even when working inside the temper source\n");
+    out.push_str(
+        "repository. The installed binary may differ from the in-development code, and that is\n",
+    );
+    out.push_str("intentional: we use the installed CLI to manage our own workflow while evolving the crate.\n\n");
+    out.push_str("**Before running any temper command**, verify the binary exists:\n");
+    out.push_str("```bash\nwhich temper\n```\n");
+    out.push_str("If `temper` is not on PATH, **stop and warn the user**:\n");
+    out.push_str("> \"The `temper` binary is not installed or not on PATH. Install it with\n");
+    out.push_str("> `cargo install --path crates/temper-cli` or ensure `~/.cargo/bin` is in your PATH.\"\n\n");
+    out.push_str("Do not fall back to `cargo run` as a workaround.\n\n");
+    out.push_str("## Commands\n\n");
+    out.push_str("| Command | Syntax |\n");
+    out.push_str("|---------|--------|\n");
+    for (name, syntax) in &rows {
+        out.push_str(&format!("| {} | `{}` |\n", name, syntax));
+    }
+    out.push_str(
+        "\nPipe content via stdin for `session save`, `note create`, and `research save`.\n",
+    );
+    out.push_str(REFERENCE_FOOTER);
+    out
+}
+
+/// Recursively collect (command_name, syntax_string) rows from the clap command tree.
+fn collect_command_rows(cmd: &clap::Command, prefix: &str, rows: &mut Vec<(String, String)>) {
+    for sub in cmd.get_subcommands() {
+        if sub.is_hide_set() {
+            continue;
+        }
+        let name = sub.get_name();
+        let full_name = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{} {}", prefix, name)
+        };
+
+        // If this command has subcommands, recurse into them
+        let child_subs: Vec<_> = sub.get_subcommands().filter(|c| !c.is_hide_set()).collect();
+        if !child_subs.is_empty() {
+            // If subcommand is optional, also emit a row for the parent command
+            if !sub.is_subcommand_required_set() {
+                let syntax = build_syntax(&full_name, sub);
+                rows.push((full_name.clone(), syntax));
+            }
+            collect_command_rows(sub, &full_name, rows);
+        } else {
+            let syntax = build_syntax(&full_name, sub);
+            rows.push((full_name, syntax));
+        }
+    }
+}
+
+/// Build a syntax string like `temper task create --title <title> [--context <ctx>]`
+fn build_syntax(full_name: &str, cmd: &clap::Command) -> String {
+    let mut parts = vec![format!("temper {}", full_name)];
+
+    for arg in cmd.get_arguments() {
+        // Skip hidden args
+        if arg.is_hide_set() {
+            continue;
+        }
+        let id = arg.get_id().as_str();
+        // Skip --format (implementation detail)
+        if id == "format" {
+            continue;
+        }
+        // Skip global --help and --version
+        if id == "help" || id == "version" || id == "vault" {
+            continue;
+        }
+
+        if arg.is_positional() {
+            if arg.is_required_set() {
+                parts.push(format!("<{}>", id));
+            } else {
+                parts.push(format!("[<{}>]", id));
+            }
+        } else {
+            // Flag/option arg
+            let long = arg
+                .get_long()
+                .map(|l| format!("--{}", l))
+                .unwrap_or_else(|| format!("--{}", id));
+
+            let takes_value = !matches!(
+                arg.get_action(),
+                clap::ArgAction::SetTrue | clap::ArgAction::SetFalse | clap::ArgAction::Count
+            );
+            if takes_value {
+                if arg.is_required_set() {
+                    parts.push(format!("{} <{}>", long, id));
+                } else {
+                    parts.push(format!("[{} <{}>]", long, id));
+                }
+            } else {
+                // Boolean flag
+                parts.push(format!("[{}]", long));
+            }
+        }
+    }
+
+    parts.join(" ")
+}
+
 // ── Public API ───────────────────────────────────────────────────────────────
 
 /// Generate all skill files as a map of relative_path → content.
@@ -30,10 +203,9 @@ pub fn generate_skill_files(config: &Config) -> Result<HashMap<String, String>> 
     generate_skill_files_with_hash(config, &hash)
 }
 
-/// Backward-compatible: returns SKILL.md content for stdout preview.
-pub fn generate(config: &Config) -> Result<String> {
-    let files = generate_skill_files(config)?;
-    Ok(files.get("SKILL.md").cloned().unwrap_or_default())
+/// Returns the generated reference.md content for stdout preview.
+pub fn generate(_config: &Config) -> Result<String> {
+    Ok(generate_reference())
 }
 
 /// Install skill directory and command wrapper.
@@ -226,7 +398,7 @@ pub fn generate_skill_files_with_hash(
             .map_err(|e| TemperError::Config(format!("template render error: {}", e)))?,
     );
 
-    files.insert("reference.md".to_string(), REFERENCE_MD.to_string());
+    files.insert("reference.md".to_string(), generate_reference());
     files.insert(
         "subagent-guidance.md".to_string(),
         SUBAGENT_GUIDANCE_MD.to_string(),
@@ -391,5 +563,88 @@ mod tests {
     fn test_extract_config_hash_not_found() {
         let content = "---\nname: temper\n---";
         assert_eq!(extract_config_hash(content), None);
+    }
+
+    #[test]
+    fn test_generate_reference_contains_all_commands() {
+        let reference = generate_reference();
+        assert!(
+            reference.contains("| init |"),
+            "should contain init command"
+        );
+        assert!(
+            reference.contains("| task create |"),
+            "should contain task create"
+        );
+        assert!(
+            reference.contains("| task list |"),
+            "should contain task list"
+        );
+        assert!(
+            reference.contains("| session list |"),
+            "should contain session list"
+        );
+        assert!(reference.contains("| warmup |"), "should contain warmup");
+        assert!(reference.contains("| search |"), "should contain search");
+    }
+
+    #[test]
+    fn test_generate_reference_shows_actual_flags() {
+        let reference = generate_reference();
+        // These flags were recently added - they MUST appear
+        assert!(
+            reference.contains("--stage"),
+            "should contain --stage flag from task list"
+        );
+        assert!(
+            reference.contains("--limit"),
+            "should contain --limit flag from session list"
+        );
+    }
+
+    #[test]
+    fn test_generate_reference_excludes_hidden_args() {
+        let reference = generate_reference();
+        // --stdin is hidden in clap definitions
+        assert!(
+            !reference.contains("--stdin"),
+            "should NOT contain hidden --stdin flag"
+        );
+    }
+
+    #[test]
+    fn test_generate_reference_excludes_format_flag() {
+        let reference = generate_reference();
+        // --format is an implementation detail, should not appear in syntax column
+        assert!(
+            !reference.contains("--format"),
+            "should NOT contain --format flag in syntax column"
+        );
+    }
+
+    #[test]
+    fn test_generate_reference_has_footer_sections() {
+        let reference = generate_reference();
+        assert!(
+            reference.contains("## Task Stages"),
+            "should have Task Stages section"
+        );
+        assert!(reference.contains("## Modes"), "should have Modes section");
+        assert!(
+            reference.contains("## Skill-Only Commands"),
+            "should have Skill-Only Commands"
+        );
+    }
+
+    #[test]
+    fn test_generate_skill_files_uses_generated_reference() {
+        let config = test_config();
+        let files = generate_skill_files_with_hash(&config, "testhash").unwrap();
+        let reference = &files["reference.md"];
+        // Should contain generated commands, not stale static content
+        assert!(
+            reference.contains("--stage"),
+            "installed reference.md should have --stage"
+        );
     }
 }

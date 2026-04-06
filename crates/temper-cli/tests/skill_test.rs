@@ -56,9 +56,10 @@ fn test_skill_generate_produces_valid_content() {
     let config = test_config_with_global(&dir);
 
     let content = temper_cli::commands::skill::generate(&config).unwrap();
+    // generate() now returns reference.md content (generated from clap)
     assert!(content.contains("temper"));
-    assert!(content.contains("myapp"));
-    assert!(content.contains("config-hash:"));
+    assert!(content.contains("# CLI Reference"));
+    assert!(content.contains("## Commands"));
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
@@ -91,14 +92,20 @@ fn test_skill_install_writes_directory() {
 }
 
 #[test]
-fn test_skill_generate_includes_vault_and_contexts() {
+fn test_skill_generate_includes_reference_sections() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
+    // generate() now returns reference.md with generated commands and footer
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    let vault_str = dir.path().to_string_lossy();
-    assert!(content.contains(&*vault_str), "should contain vault path");
-    assert!(content.contains("- `myapp`"), "should contain context list");
+    assert!(
+        content.contains("## Invocation"),
+        "should contain invocation section"
+    );
+    assert!(
+        content.contains("## Task Stages"),
+        "should contain task stages footer"
+    );
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
@@ -106,15 +113,15 @@ fn test_skill_generate_includes_vault_and_contexts() {
 }
 
 #[test]
-fn test_skill_generate_includes_modular_structure() {
+fn test_skill_generate_includes_command_table() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
+    // generate() now returns reference.md with the generated command table
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("## How This Skill Works"));
-    assert!(content.contains("reference.md"));
-    assert!(content.contains("subagent-guidance.md"));
-    assert!(content.contains("session-lifecycle.md"));
+    assert!(content.contains("| Command | Syntax |"));
+    assert!(content.contains("| init |"));
+    assert!(content.contains("| search |"));
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
@@ -122,13 +129,16 @@ fn test_skill_generate_includes_modular_structure() {
 }
 
 #[test]
-fn test_skill_generate_includes_task_start() {
+fn test_skill_generate_includes_task_commands() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
+    // generate() now returns reference.md with task subcommands
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("## On Task Start"));
-    assert!(content.contains("mode and effort"));
+    assert!(content.contains("| task create |"));
+    assert!(content.contains("| task list |"));
+    assert!(content.contains("--mode"));
+    assert!(content.contains("--effort"));
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
@@ -136,26 +146,27 @@ fn test_skill_generate_includes_task_start() {
 }
 
 #[test]
-fn test_skill_generate_includes_new_routing() {
+fn test_skill_generate_includes_skill_only_commands() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
+    // generate() now returns reference.md which includes skill-only commands in footer
     let content = temper_cli::commands::skill::generate(&config).unwrap();
     assert!(
-        content.contains("## On Task Resume"),
-        "should contain task resume section"
+        content.contains("## Skill-Only Commands"),
+        "should contain skill-only commands section"
     );
     assert!(
-        content.contains("## On Session Start"),
-        "should contain session start section"
+        content.contains("task start"),
+        "should contain task start skill command"
     );
     assert!(
-        content.contains("## On Task Create"),
-        "should contain task create section"
+        content.contains("task resume"),
+        "should contain task resume skill command"
     );
     assert!(
-        content.contains("## Command Routing"),
-        "should contain routing table"
+        content.contains("session start"),
+        "should contain session start skill command"
     );
 
     unsafe {
