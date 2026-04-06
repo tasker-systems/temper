@@ -57,6 +57,21 @@ pub async fn query_api(
         .map_err(|e| TemperError::Api(e.to_string()))
 }
 
+/// Call the search API with a plain text query (no embedding needed).
+pub async fn text_query_api(
+    client: &temper_client::TemperClient,
+    query: &str,
+    context_name: Option<String>,
+    doc_type: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<UnifiedSearchResultRow>> {
+    client
+        .search()
+        .text_query(query, context_name, doc_type, limit)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))
+}
+
 /// Enrich API results with local manifest data.
 pub fn enrich_results(
     results: Vec<UnifiedSearchResultRow>,
