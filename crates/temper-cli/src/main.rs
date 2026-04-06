@@ -379,12 +379,14 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             doc_type,
             limit,
             format,
+            text_only,
         } => commands::search_cmd::run(
             &query,
             context.as_deref(),
             doc_type.as_deref(),
             limit,
             &format,
+            text_only,
         ),
     }
 }

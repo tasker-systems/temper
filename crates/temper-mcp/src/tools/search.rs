@@ -1,4 +1,4 @@
-//! Search tool — vector similarity search across resources.
+//! Search tool — full-text and/or vector similarity search across resources.
 
 use rmcp::model::CallToolResult;
 

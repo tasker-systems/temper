@@ -3,7 +3,7 @@
 //! All testable functions. The CLI command is a thin wrapper over these.
 
 use serde::Serialize;
-use temper_core::types::api::SearchResultRow;
+use temper_core::types::api::UnifiedSearchResultRow;
 use temper_core::types::Manifest;
 use uuid::Uuid;
 
@@ -14,15 +14,15 @@ use crate::error::{Result, TemperError};
 pub struct EnrichedSearchResult {
     pub resource_id: Uuid,
     pub title: String,
+    pub slug: String,
     pub kb_uri: String,
     pub origin_uri: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<String>,
     pub doc_type: String,
     pub score: f32,
-    pub snippet: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub header_path: Option<String>,
+    /// Which search mode(s) found this result: "fts", "vector", or "both"
+    pub origin: String,
     pub local: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vault_path: Option<String>,
@@ -49,7 +49,7 @@ pub async fn query_api(
     context_name: Option<String>,
     doc_type: Option<String>,
     limit: Option<i64>,
-) -> Result<Vec<SearchResultRow>> {
+) -> Result<Vec<UnifiedSearchResultRow>> {
     client
         .search()
         .query(embedding, context_name, doc_type, limit)
@@ -57,9 +57,24 @@ pub async fn query_api(
         .map_err(|e| TemperError::Api(e.to_string()))
 }
 
+/// Call the search API with a plain text query (no embedding needed).
+pub async fn text_query_api(
+    client: &temper_client::TemperClient,
+    query: &str,
+    context_name: Option<String>,
+    doc_type: Option<String>,
+    limit: Option<i64>,
+) -> Result<Vec<UnifiedSearchResultRow>> {
+    client
+        .search()
+        .text_query(query, context_name, doc_type, limit)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))
+}
+
 /// Enrich API results with local manifest data.
 pub fn enrich_results(
-    results: Vec<SearchResultRow>,
+    results: Vec<UnifiedSearchResultRow>,
     manifest: &Manifest,
 ) -> Vec<EnrichedSearchResult> {
     results
@@ -69,13 +84,13 @@ pub fn enrich_results(
             EnrichedSearchResult {
                 resource_id: row.resource_id,
                 title: row.title,
+                slug: row.slug,
                 kb_uri: row.kb_uri,
                 origin_uri: row.origin_uri,
                 context: row.context,
                 doc_type: row.doc_type,
-                score: row.score,
-                snippet: truncate_snippet(&row.snippet, 200),
-                header_path: row.header_path,
+                score: row.combined_score,
+                origin: row.origin,
                 local: entry.is_some(),
                 vault_path: entry.map(|e| e.path.clone()),
             }
@@ -107,15 +122,13 @@ pub fn format_text(results: &[EnrichedSearchResult]) -> Vec<String> {
     for (i, r) in results.iter().enumerate() {
         let local_marker = if r.local { " [local]" } else { "" };
         lines.push(format!(
-            "{}. {} (score: {:.2}){local_marker}",
+            "{}. {} (score: {:.2}, via {}){local_marker}",
             i + 1,
             r.title,
-            r.score
+            r.score,
+            r.origin
         ));
-        if let Some(ref header) = r.header_path {
-            lines.push(format!("   {header}"));
-        }
-        lines.push(format!("   {}", r.snippet));
+        lines.push(format!("   {}", r.slug));
         if let Some(ref path) = r.vault_path {
             lines.push(format!("   vault: {path}"));
         }
@@ -130,17 +143,19 @@ mod tests {
     use chrono::Utc;
     use temper_core::types::{ManifestEntry, ManifestEntryState};
 
-    fn sample_result(resource_id: Uuid, title: &str) -> SearchResultRow {
-        SearchResultRow {
+    fn sample_result(resource_id: Uuid, title: &str) -> UnifiedSearchResultRow {
+        UnifiedSearchResultRow {
             resource_id,
             title: title.to_string(),
+            slug: "test-task".to_string(),
             kb_uri: format!("kb://temper/task/{resource_id}"),
             origin_uri: "file:///vault/temper/tasks/test.md".to_string(),
             context: Some("temper".to_string()),
             doc_type: "task".to_string(),
-            score: 0.85,
-            snippet: "Some relevant content".to_string(),
-            header_path: Some("## Section".to_string()),
+            fts_score: 0.85,
+            vector_score: 0.0,
+            combined_score: 0.85,
+            origin: "fts".to_string(),
         }
     }
 
@@ -239,5 +254,7 @@ mod tests {
         assert!(json.get("origin_uri").is_some());
         assert!(json.get("local").is_some());
         assert!(json.get("score").is_some());
+        assert!(json.get("origin").is_some());
+        assert!(json.get("slug").is_some());
     }
 }

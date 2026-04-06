@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
-use crate::services::search_service::format_embedding;
+use temper_core::types::ingest::chunks_to_jsonb;
 
 use temper_core::types::ingest::{unpack_chunks, IngestPayload, PackedChunk};
 use temper_core::types::resource::ResourceRow;
@@ -110,40 +110,40 @@ async fn find_by_body_hash(
     Ok(row)
 }
 
-/// Insert chunks with embeddings into kb_chunks + content into kb_chunk_content.
-async fn insert_chunks(
+/// Batch-insert chunks for a new resource via SQL function.
+/// Gates search triggers, does bulk INSERT, rebuilds search index once.
+async fn persist_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_id: Uuid,
     chunks: &[PackedChunk],
-) -> ApiResult<()> {
-    for chunk in chunks {
-        let chunk_id = Uuid::now_v7();
-        let embedding_str = format_embedding(&chunk.embedding);
-        sqlx::query(
-            r#"
-            INSERT INTO kb_chunks (
-                id, resource_id, chunk_index, version, header_path,
-                content_hash, embedding, is_current
-            )
-            VALUES ($1, $2, $3, 1, $4, $5, $6::vector, true)
-            "#,
-        )
-        .bind(chunk_id)
+) -> ApiResult<i32> {
+    let chunks_json = chunks_to_jsonb(chunks);
+
+    let (count,): (i32,) = sqlx::query_as("SELECT persist_resource_chunks($1, $2)")
         .bind(resource_id)
-        .bind(chunk.chunk_index as i32)
-        .bind(&chunk.header_path)
-        .bind(&chunk.content_hash)
-        .bind(&embedding_str)
-        .execute(&mut **tx)
+        .bind(&chunks_json)
+        .fetch_one(&mut **tx)
         .await?;
 
-        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, $2)")
-            .bind(chunk_id)
-            .bind(&chunk.content)
-            .execute(&mut **tx)
-            .await?;
-    }
-    Ok(())
+    Ok(count)
+}
+
+/// Version-bump old chunks and batch-insert new ones via SQL function.
+/// Gates search triggers, does bulk version-bump + INSERT, rebuilds once.
+async fn replace_chunks(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    resource_id: Uuid,
+    chunks: &[PackedChunk],
+) -> ApiResult<i32> {
+    let chunks_json = chunks_to_jsonb(chunks);
+
+    let (count,): (i32,) = sqlx::query_as("SELECT replace_resource_chunks($1, $2)")
+        .bind(resource_id)
+        .bind(&chunks_json)
+        .fetch_one(&mut **tx)
+        .await?;
+
+    Ok(count)
 }
 
 /// Process a full ingest payload: resolve names, dedup, insert resource + chunks.
@@ -225,7 +225,7 @@ pub async fn ingest(
     .await?;
 
     // 7. Insert chunks with embeddings
-    insert_chunks(&mut tx, resource_id, &chunks).await?;
+    persist_chunks(&mut tx, resource_id, &chunks).await?;
 
     // 8. Insert event
     insert_event(
@@ -316,45 +316,8 @@ pub async fn update(
     .execute(&mut *tx)
     .await?;
 
-    // Version-bump old chunks
-    sqlx::query(
-        "UPDATE kb_chunks SET is_current = false WHERE resource_id = $1 AND is_current = true",
-    )
-    .bind(resource_id)
-    .execute(&mut *tx)
-    .await?;
-
-    // Insert new chunks (version auto-computed)
-    for chunk in &chunks {
-        let chunk_id = Uuid::now_v7();
-        let embedding_str = format_embedding(&chunk.embedding);
-        sqlx::query(
-            r#"
-            INSERT INTO kb_chunks (
-                id, resource_id, chunk_index, version, header_path,
-                content_hash, embedding, is_current
-            )
-            VALUES ($1, $2, $3,
-                    COALESCE((SELECT MAX(version) FROM kb_chunks
-                              WHERE resource_id = $2 AND chunk_index = $3), 0) + 1,
-                    $4, $5, $6::vector, true)
-            "#,
-        )
-        .bind(chunk_id)
-        .bind(resource_id)
-        .bind(chunk.chunk_index as i32)
-        .bind(&chunk.header_path)
-        .bind(&chunk.content_hash)
-        .bind(&embedding_str)
-        .execute(&mut *tx)
-        .await?;
-
-        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1, $2)")
-            .bind(chunk_id)
-            .bind(&chunk.content)
-            .execute(&mut *tx)
-            .await?;
-    }
+    // Replace chunks — version-bump + batch insert + search rebuild in one call
+    replace_chunks(&mut tx, resource_id, &chunks).await?;
 
     // Insert event
     insert_event(

@@ -168,6 +168,9 @@ pub enum Commands {
         /// Output format (text or json)
         #[arg(long, default_value = "text")]
         format: String,
+        /// Use text-only search (no local embedding needed)
+        #[arg(long)]
+        text_only: bool,
     },
 }
 

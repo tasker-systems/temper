@@ -4,7 +4,7 @@ use reqwest::Method;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::api::{SearchParams, SearchResultRow};
+use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 
 /// Sub-client for search operations.
 pub struct SearchClient<'a> {
@@ -22,20 +22,48 @@ impl<'a> SearchClient<'a> {
         Self { http }
     }
 
-    /// Run a vector similarity search.
+    /// Run a vector search with a pre-computed embedding.
     pub async fn query(
         &self,
         embedding: Vec<f32>,
         context_name: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
-    ) -> Result<Vec<SearchResultRow>> {
+    ) -> Result<Vec<UnifiedSearchResultRow>> {
+        self.search(None, Some(embedding), context_name, doc_type, limit)
+            .await
+    }
+
+    /// Run a full-text search with a plain text query (no embedding needed).
+    pub async fn text_query(
+        &self,
+        query: &str,
+        context_name: Option<String>,
+        doc_type: Option<String>,
+        limit: Option<i64>,
+    ) -> Result<Vec<UnifiedSearchResultRow>> {
+        self.search(Some(query.to_string()), None, context_name, doc_type, limit)
+            .await
+    }
+
+    /// Run a unified search with optional text query and/or embedding.
+    pub async fn search(
+        &self,
+        query: Option<String>,
+        embedding: Option<Vec<f32>>,
+        context_name: Option<String>,
+        doc_type: Option<String>,
+        limit: Option<i64>,
+    ) -> Result<Vec<UnifiedSearchResultRow>> {
         let token = self.http.resolve_token()?;
         let params = SearchParams {
+            query,
             embedding,
+            search_config: "english".into(),
             context_name,
             doc_type,
             limit,
+            offset: None,
         };
         let req = self.http.post("/api/search").json(&params);
         self.http
