@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { AuthClaims } from "./auth.js";
 import type { NeonClient } from "./db.js";
+import { DEVICE_ID_CLOUD, insertEventAndAudit } from "./events.js";
+import { canonicalJsonHash } from "./hash.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -193,6 +195,20 @@ export async function insertResource(
     VALUES (${newId}::uuid, ${contentHash}, now())
   `;
 
+  const emptyHash = canonicalJsonHash({});
+
+  await insertEventAndAudit(db, {
+    profileId,
+    deviceId: DEVICE_ID_CLOUD,
+    contextId: contextId,
+    resourceId: newId,
+    eventType: "resource_created",
+    action: "create",
+    bodyHash: contentHash,
+    managedHash: emptyHash,
+    openHash: emptyHash,
+  });
+
   return rows[0] as unknown as ResourceRecord;
 }
 
@@ -208,6 +224,8 @@ export async function updateResourceHash(
   db: NeonClient,
   resourceId: string,
   bodyHash: string,
+  profileId: string,
+  contextId: string,
 ): Promise<void> {
   await db`
     INSERT INTO kb_resource_manifests (resource_id, body_hash, updated)
@@ -218,4 +236,18 @@ export async function updateResourceHash(
   await db`
     UPDATE kb_resources SET updated = now() WHERE id = ${resourceId}::uuid
   `;
+
+  const emptyHash = canonicalJsonHash({});
+
+  await insertEventAndAudit(db, {
+    profileId,
+    deviceId: DEVICE_ID_CLOUD,
+    contextId,
+    resourceId,
+    eventType: "body_updated",
+    action: "update_body",
+    bodyHash,
+    managedHash: emptyHash,
+    openHash: emptyHash,
+  });
 }
