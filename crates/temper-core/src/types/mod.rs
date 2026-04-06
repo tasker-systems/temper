@@ -9,6 +9,7 @@
 
 pub mod access;
 pub mod api;
+pub mod audit;
 pub mod auth;
 pub mod config;
 pub mod conflict;
@@ -35,6 +36,7 @@ pub use access::{AccessLevel, AccessScoped, TeamResource};
 pub use api::{
     EventListParams, EventRow, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
 };
+pub use audit::ResourceAuditRow;
 pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
 pub use config::{
     expand_tilde, global_config_path, load_config, load_config_from, AuthConfig,
