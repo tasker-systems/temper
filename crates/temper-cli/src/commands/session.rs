@@ -155,6 +155,7 @@ fn link_session_to_task(
     let session_content = std::fs::read_to_string(session_path)?;
     let session_id = if let Some(fm) = vault::parse_frontmatter(&session_content) {
         fm.get("temper-id")
+            .or_else(|| fm.get("temper-provisional-id"))
             .or_else(|| fm.get("id"))
             .and_then(|v| v.as_str())
             .map(String::from)

@@ -28,7 +28,7 @@ pub fn create(
     content = content.replace("{{placeholder}}", title);
     content = vault::set_frontmatter_field(&content, "title", title);
     content = vault::set_frontmatter_field(&content, "date", &today);
-    content = vault::set_frontmatter_field(&content, "temper-id", &format!("\"{id}\""));
+    content = vault::set_frontmatter_field(&content, "temper-provisional-id", &format!("\"{id}\""));
 
     // Determine output path: <vault_root>/<note_type>s/<title>.md
     let slug = vault::slugify(title);
