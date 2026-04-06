@@ -214,7 +214,7 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                COALESCE(m.body_hash, '') AS "body_hash!",
                COALESCE(m.managed_hash, '') AS "managed_hash!",
                COALESCE(m.open_hash, '') AS "open_hash!",
-               la.id AS last_audit_id
+               la.id AS "last_audit_id?"
           FROM kb_resources r
           JOIN kb_contexts c ON c.id = r.kb_context_id
           JOIN kb_doc_types d ON d.id = r.kb_doc_type_id
