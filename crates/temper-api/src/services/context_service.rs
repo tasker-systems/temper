@@ -13,15 +13,16 @@ pub use temper_core::types::context::{ContextCreateRequest, ContextRow};
 
 /// List all contexts visible to the profile (owned + team-shared).
 pub async fn list_visible(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<ContextRow>> {
-    let rows = sqlx::query_as::<_, ContextRow>(
+    let rows = sqlx::query_as!(
+        ContextRow,
         r#"
         SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
           FROM contexts_visible_to($1) cv
           JOIN kb_contexts c ON c.id = cv.id
          ORDER BY c.name
         "#,
+        profile_id
     )
-    .bind(profile_id)
     .fetch_all(pool)
     .await?;
 
@@ -34,16 +35,17 @@ pub async fn get_visible(
     profile_id: Uuid,
     context_id: Uuid,
 ) -> ApiResult<ContextRow> {
-    sqlx::query_as::<_, ContextRow>(
+    sqlx::query_as!(
+        ContextRow,
         r#"
         SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
           FROM contexts_visible_to($1) cv
           JOIN kb_contexts c ON c.id = cv.id
          WHERE c.id = $2
         "#,
+        profile_id,
+        context_id
     )
-    .bind(profile_id)
-    .bind(context_id)
     .fetch_optional(pool)
     .await?
     .ok_or(ApiError::NotFound)
@@ -51,16 +53,17 @@ pub async fn get_visible(
 
 /// Resolve a context by name within the profile's visible contexts.
 pub async fn resolve_by_name(pool: &PgPool, profile_id: Uuid, name: &str) -> ApiResult<ContextRow> {
-    sqlx::query_as::<_, ContextRow>(
+    sqlx::query_as!(
+        ContextRow,
         r#"
         SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
           FROM contexts_visible_to($1) cv
           JOIN kb_contexts c ON c.id = cv.id
          WHERE c.name = $2
         "#,
+        profile_id,
+        name
     )
-    .bind(profile_id)
-    .bind(name)
     .fetch_optional(pool)
     .await?
     .ok_or(ApiError::NotFound)
@@ -72,16 +75,17 @@ pub async fn resolve_by_name(pool: &PgPool, profile_id: Uuid, name: &str) -> Api
 /// for this owner (enforced by `kb_contexts_owner_name_unique` constraint).
 pub async fn create(pool: &PgPool, profile_id: Uuid, name: &str) -> ApiResult<ContextRow> {
     let id = Uuid::now_v7();
-    let row = sqlx::query_as::<_, ContextRow>(
+    let row = sqlx::query_as!(
+        ContextRow,
         r#"
         INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
         VALUES ($1, $2, 'kb_profiles', $3)
         RETURNING id, name, kb_owner_table, kb_owner_id, created, updated
         "#,
+        id,
+        name,
+        profile_id
     )
-    .bind(id)
-    .bind(name)
-    .bind(profile_id)
     .fetch_one(pool)
     .await?;
 

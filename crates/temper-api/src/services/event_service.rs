@@ -20,11 +20,14 @@ pub async fn list_visible(
 
     let rows = match (params.resource_id, params.event_type.as_deref()) {
         (Some(rid), Some(etype)) => {
-            sqlx::query_as::<_, EventRow>(
+            sqlx::query_as!(
+                EventRow,
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
-                       e.resource_id, e.event_type, e.payload, e.created
+                SELECT e.id, e.profile_id, e.device_id,
+                       e.kb_context_id as "kb_context_id: Uuid",
+                       e.resource_id as "resource_id: Uuid",
+                       e.event_type, e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
                    AND e.resource_id = $2
@@ -32,70 +35,79 @@ pub async fn list_visible(
                  ORDER BY e.created DESC
                  LIMIT $4 OFFSET $5
                 "#,
+                profile_id,
+                rid,
+                etype,
+                limit,
+                offset,
             )
-            .bind(profile_id)
-            .bind(rid)
-            .bind(etype)
-            .bind(limit)
-            .bind(offset)
             .fetch_all(pool)
             .await?
         }
         (Some(rid), None) => {
-            sqlx::query_as::<_, EventRow>(
+            sqlx::query_as!(
+                EventRow,
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
-                       e.resource_id, e.event_type, e.payload, e.created
+                SELECT e.id, e.profile_id, e.device_id,
+                       e.kb_context_id as "kb_context_id: Uuid",
+                       e.resource_id as "resource_id: Uuid",
+                       e.event_type, e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
                    AND e.resource_id = $2
                  ORDER BY e.created DESC
                  LIMIT $3 OFFSET $4
                 "#,
+                profile_id,
+                rid,
+                limit,
+                offset,
             )
-            .bind(profile_id)
-            .bind(rid)
-            .bind(limit)
-            .bind(offset)
             .fetch_all(pool)
             .await?
         }
         (None, Some(etype)) => {
-            sqlx::query_as::<_, EventRow>(
+            sqlx::query_as!(
+                EventRow,
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
-                       e.resource_id, e.event_type, e.payload, e.created
+                SELECT e.id, e.profile_id, e.device_id,
+                       e.kb_context_id as "kb_context_id: Uuid",
+                       e.resource_id as "resource_id: Uuid",
+                       e.event_type, e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
                    AND e.event_type = $2
                  ORDER BY e.created DESC
                  LIMIT $3 OFFSET $4
                 "#,
+                profile_id,
+                etype,
+                limit,
+                offset,
             )
-            .bind(profile_id)
-            .bind(etype)
-            .bind(limit)
-            .bind(offset)
             .fetch_all(pool)
             .await?
         }
         (None, None) => {
-            sqlx::query_as::<_, EventRow>(
+            sqlx::query_as!(
+                EventRow,
                 r#"
                 WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT e.id, e.profile_id, e.device_id, e.kb_context_id,
-                       e.resource_id, e.event_type, e.payload, e.created
+                SELECT e.id, e.profile_id, e.device_id,
+                       e.kb_context_id as "kb_context_id: Uuid",
+                       e.resource_id as "resource_id: Uuid",
+                       e.event_type, e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
                  ORDER BY e.created DESC
                  LIMIT $2 OFFSET $3
                 "#,
+                profile_id,
+                limit,
+                offset,
             )
-            .bind(profile_id)
-            .bind(limit)
-            .bind(offset)
             .fetch_all(pool)
             .await?
         }

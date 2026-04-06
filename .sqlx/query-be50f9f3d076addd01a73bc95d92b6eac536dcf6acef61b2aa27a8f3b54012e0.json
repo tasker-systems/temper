@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE kb_resource_manifests\n        SET managed_meta = $1, open_meta = $2, managed_hash = $3, open_hash = $4, updated = now()\n        WHERE resource_id = $5\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Jsonb",
+        "Varchar",
+        "Varchar",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "be50f9f3d076addd01a73bc95d92b6eac536dcf6acef61b2aa27a8f3b54012e0"
+}
