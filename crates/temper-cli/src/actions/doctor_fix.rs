@@ -46,7 +46,10 @@ pub enum FixAction {
         new_path: String,
     },
     /// Remove a manifest record whose file no longer exists (phase 2).
-    RemoveManifest { temper_id: ResourceId, reason: String },
+    RemoveManifest {
+        temper_id: ResourceId,
+        reason: String,
+    },
 }
 
 /// Sentinel path used as a stand-in for manifest actions in `target_path()`.
@@ -1467,7 +1470,10 @@ mod tests {
     // F5 tests
     // -----------------------------------------------------------------------
 
-    fn make_manifest_with_entry(id: ResourceId, path: &str) -> temper_core::types::manifest::Manifest {
+    fn make_manifest_with_entry(
+        id: ResourceId,
+        path: &str,
+    ) -> temper_core::types::manifest::Manifest {
         use chrono::Utc;
         use std::collections::HashMap;
         use temper_core::types::manifest::{ManifestEntry, ManifestEntryState};

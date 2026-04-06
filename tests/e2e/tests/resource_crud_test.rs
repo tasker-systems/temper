@@ -46,7 +46,10 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
     assert_eq!(created.title, "E2E Create & Get Test");
     assert_eq!(created.origin_uri, "test://e2e/resource-create-get");
     assert_eq!(created.kb_context_id, context.id);
-    assert_eq!(created.kb_doc_type_id, temper_core::types::DocTypeId(doc_type_id));
+    assert_eq!(
+        created.kb_doc_type_id,
+        temper_core::types::DocTypeId(doc_type_id)
+    );
     assert!(created.is_active);
 
     let fetched = app

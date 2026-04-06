@@ -150,6 +150,12 @@ pub async fn delete(
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
-    resource_service::delete(&state.pool, ProfileId::from(auth.0.profile.id), ResourceId::from(resource_id), &device_id).await?;
+    resource_service::delete(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        ResourceId::from(resource_id),
+        &device_id,
+    )
+    .await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }

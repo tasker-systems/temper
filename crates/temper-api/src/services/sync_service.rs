@@ -54,17 +54,23 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
             }),
             "to_pull" | "to_pull_body" | "to_pull_meta" => to_pull.push(SyncPullItem {
                 uri: row.kb_uri,
-                resource_id: ResourceId::from(row.resource_id.expect("to_pull must have resource_id")),
+                resource_id: ResourceId::from(
+                    row.resource_id.expect("to_pull must have resource_id"),
+                ),
                 content_hash: row.body_hash,
             }),
             "conflict" => conflicts.push(SyncConflictItem {
                 uri: row.kb_uri,
-                resource_id: ResourceId::from(row.resource_id.expect("conflict must have resource_id")),
+                resource_id: ResourceId::from(
+                    row.resource_id.expect("conflict must have resource_id"),
+                ),
                 server_hash: row.body_hash,
             }),
             "removed" => removed.push(SyncRemovedItem {
                 uri: row.kb_uri,
-                resource_id: ResourceId::from(row.resource_id.expect("removed must have resource_id")),
+                resource_id: ResourceId::from(
+                    row.resource_id.expect("removed must have resource_id"),
+                ),
             }),
             _ => {} // ignore unknown diff types
         }

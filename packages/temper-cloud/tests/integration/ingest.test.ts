@@ -1,8 +1,8 @@
 import type postgres from "postgres";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import type { NeonClient } from "../../src/db.js";
-import { insertResource, updateResourceHash } from "../../src/ingest.js";
 import type { IngestMetadata } from "../../src/ingest.js";
+import { insertResource, updateResourceHash } from "../../src/ingest.js";
 import { getTestDb } from "./helpers/db.js";
 
 // The postgres.Sql tagged-template interface is compatible with NeonClient at runtime.
@@ -41,7 +41,12 @@ describe("ingest event parity", () => {
       origin_uri: "test://integration/insert",
     };
 
-    const resource = await insertResource(asNeonClient(sql), meta, "sha256:test123abc", TEST_PROFILE_ID);
+    const resource = await insertResource(
+      asNeonClient(sql),
+      meta,
+      "sha256:test123abc",
+      TEST_PROFILE_ID,
+    );
     createdResourceIds.push(resource.id);
 
     const events = await sql`
@@ -79,10 +84,21 @@ describe("ingest event parity", () => {
       origin_uri: "test://integration/update",
     };
 
-    const resource = await insertResource(asNeonClient(sql), meta, "sha256:original", TEST_PROFILE_ID);
+    const resource = await insertResource(
+      asNeonClient(sql),
+      meta,
+      "sha256:original",
+      TEST_PROFILE_ID,
+    );
     createdResourceIds.push(resource.id);
 
-    await updateResourceHash(asNeonClient(sql), resource.id, "sha256:updated", TEST_PROFILE_ID, TEST_CONTEXT_ID);
+    await updateResourceHash(
+      asNeonClient(sql),
+      resource.id,
+      "sha256:updated",
+      TEST_PROFILE_ID,
+      TEST_CONTEXT_ID,
+    );
 
     const events = await sql`
       SELECT event_type FROM kb_events

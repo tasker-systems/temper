@@ -43,7 +43,8 @@ pub async fn create(
     auth: AuthUser,
     Json(body): Json<ContextCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<ContextRow>)> {
-    let row = context_service::create(&state.pool, ProfileId::from(auth.0.profile.id), &body.name).await?;
+    let row = context_service::create(&state.pool, ProfileId::from(auth.0.profile.id), &body.name)
+        .await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -63,7 +64,11 @@ pub async fn get(
     auth: AuthUser,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<ContextRow>> {
-    context_service::get_visible(&state.pool, ProfileId::from(auth.0.profile.id), ContextId::from(context_id))
-        .await
-        .map(Json)
+    context_service::get_visible(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        ContextId::from(context_id),
+    )
+    .await
+    .map(Json)
 }

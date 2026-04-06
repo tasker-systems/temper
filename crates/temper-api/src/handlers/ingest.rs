@@ -33,9 +33,14 @@ pub async fn create(
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
-    ingest_service::ingest(&state.pool, ProfileId::from(auth.0.profile.id), &device_id, payload)
-        .await
-        .map(Json)
+    ingest_service::ingest(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        &device_id,
+        payload,
+    )
+    .await
+    .map(Json)
 }
 
 #[utoipa::path(

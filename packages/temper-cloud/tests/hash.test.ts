@@ -49,8 +49,6 @@ describe("canonicalJsonHash", () => {
       "temper-seq": 42,
       title: "Test task",
     });
-    expect(result).toBe(
-      "sha256:d39e1380d3b0ce969fe93f1df8b2da5d1caabf90b33e2e30f01d661f2c3c4895",
-    );
+    expect(result).toBe("sha256:d39e1380d3b0ce969fe93f1df8b2da5d1caabf90b33e2e30f01d661f2c3c4895");
   });
 });

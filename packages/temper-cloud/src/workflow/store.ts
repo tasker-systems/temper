@@ -3,6 +3,6 @@ export {
   buildStoreChunksQueries,
   buildStoreChunksQuery,
   buildVersionBumpQuery,
-  chunksToJsonb,
   type ChunkRow,
+  chunksToJsonb,
 } from "../processing/store.js";
