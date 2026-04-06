@@ -1,4 +1,3 @@
-use crate::commands::events;
 use crate::config::Config;
 use crate::error::Result;
 
@@ -21,7 +20,7 @@ fn run_text(config: &Config, project: &str) -> Result<()> {
     // Section 1: Recent sessions
     println!("## Recent Sessions");
     println!();
-    let sessions = collect_recent_sessions(config, project, 3);
+    let sessions = collect_recent_sessions(config, project, 5);
     if sessions.is_empty() {
         println!("No recent sessions.");
     } else {
@@ -39,7 +38,7 @@ fn run_text(config: &Config, project: &str) -> Result<()> {
         for (title, slug, mode, effort) in &in_progress {
             let mode_label = mode.as_deref().unwrap_or("no-mode");
             let effort_label = effort.as_deref().unwrap_or("no-effort");
-            println!("- [{mode_label}/{effort_label}] {title} ({slug})");
+            println!("- [{mode_label}/{effort_label}] {slug}: {title}");
         }
         println!();
     }
@@ -66,24 +65,11 @@ fn run_text(config: &Config, project: &str) -> Result<()> {
         println!();
     }
 
-    // Section 3: Recent events
-    println!("## Recent Events");
-    println!();
-    let recent_events = events::load_events(config, Some(project), 15)?;
-    if recent_events.is_empty() {
-        println!("No recent events.");
-    } else {
-        for event in &recent_events {
-            println!("{}", format_event_brief(event));
-        }
-    }
-
     Ok(())
 }
 
 fn run_json(config: &Config, project: &str) -> Result<()> {
-    let sessions = collect_recent_sessions(config, project, 3);
-    let recent_events = events::load_events(config, Some(project), 15)?;
+    let sessions = collect_recent_sessions(config, project, 5);
     let in_progress = collect_in_progress_tasks(config, project);
     let in_progress_json: Vec<_> = in_progress
         .iter()
@@ -114,9 +100,6 @@ fn run_json(config: &Config, project: &str) -> Result<()> {
             serde_json::json!({"date": date, "title": title})
         }).collect::<Vec<_>>(),
         "last_session_content": last_session_content,
-        "recent_events": recent_events.iter().map(|e| {
-            serde_json::to_value(e).unwrap_or_default()
-        }).collect::<Vec<_>>(),
         "in_progress_tasks": in_progress_json,
     });
 
@@ -190,55 +173,4 @@ fn collect_in_progress_tasks(
         .filter(|t| t.stage == "in-progress")
         .map(|t| (t.title, t.slug, t.mode, t.effort))
         .collect()
-}
-
-/// Brief event formatting for warmup output.
-fn format_event_brief(event: &crate::discovery::Event) -> String {
-    use crate::discovery::Event;
-    match event {
-        Event::NoteCreate {
-            ts,
-            note_type,
-            title,
-            ..
-        } => {
-            let date = &ts[..10];
-            format!("  {date}  created {note_type}: {title}")
-        }
-        Event::TaskCreate {
-            ts, task, title, ..
-        } => {
-            let date = &ts[..10];
-            format!("  {date}  created task: {title} ({task})")
-        }
-        Event::TaskMove {
-            ts,
-            task,
-            from_stage,
-            to_stage,
-            ..
-        } => {
-            let date = &ts[..10];
-            format!("  {date}  moved {task}: {from_stage} \u{2192} {to_stage}")
-        }
-        Event::TaskDone { ts, task, .. } => {
-            let date = &ts[..10];
-            format!("  {date}  completed {task}")
-        }
-        Event::GoalCreate {
-            ts, goal, title, ..
-        } => {
-            let date = &ts[..10];
-            format!("  {date}  created goal: {title} ({goal})")
-        }
-        Event::GoalUpdate {
-            ts, goal, status, ..
-        } => {
-            let date = &ts[..10];
-            format!("  {date}  goal {goal} \u{2192} {status}")
-        }
-        // Normalize is kept in the Event enum only for historical event log
-        // deserialization; it has no useful warmup display.
-        _ => String::new(),
-    }
 }
