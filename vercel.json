@@ -2,6 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "installCommand": "cd packages/temper-cloud && bun install",
+  "build": {
+    "env": {
+      "SQLX_OFFLINE": "true"
+    }
+  },
   "routes": [
     { "handle": "filesystem" },
     { "src": "/mcp", "dest": "/api/mcp" },
