@@ -115,6 +115,9 @@ pub struct SyncManifestItem {
     pub managed_hash: String,
     pub open_hash: String,
     pub uri: String,
+    /// Most recent audit ID for this resource on the server.
+    #[serde(default)]
+    pub last_audit_id: Option<Uuid>,
 }
 
 /// Response body for `GET /api/sync/manifest`.
@@ -238,6 +241,7 @@ mod tests {
                 managed_hash: "sha256:def".to_string(),
                 open_hash: "sha256:ghi".to_string(),
                 uri: "kb://temper/task/00000000-0000-0000-0000-000000000000".to_string(),
+                last_audit_id: None,
             }],
         };
         let json = serde_json::to_string(&resp).unwrap();

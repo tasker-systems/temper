@@ -102,6 +102,11 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
 
 /// Seed fixtures: delete test data, insert stable seed resource.
 async fn clean_and_seed(pool: &PgPool) {
+    sqlx::query("DELETE FROM kb_resource_audits")
+        .execute(pool)
+        .await
+        .expect("clean kb_resource_audits");
+
     sqlx::query(
         "DELETE FROM kb_events WHERE profile_id NOT IN (
             '00000000-0000-0000-0004-000000000001',

@@ -50,7 +50,7 @@ pub async fn insert_event(
     resource_id: Option<Uuid>,
     event_type: &str,
     payload: &serde_json::Value,
-) -> ApiResult<()> {
+) -> ApiResult<Uuid> {
     let event_id = Uuid::now_v7();
     sqlx::query(
         r#"
@@ -67,7 +67,44 @@ pub async fn insert_event(
     .bind(payload)
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    Ok(event_id)
+}
+
+/// Insert an audit trail row into kb_resource_audits.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "audit row requires all hash fields plus identifiers"
+)]
+pub async fn insert_audit(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    resource_id: Uuid,
+    event_id: Uuid,
+    profile_id: Uuid,
+    device_id: &str,
+    body_hash: &str,
+    managed_hash: &str,
+    open_hash: &str,
+    action: &str,
+) -> ApiResult<Uuid> {
+    let audit_id: (Uuid,) = sqlx::query_as(
+        r#"
+        INSERT INTO kb_resource_audits
+            (resource_id, event_id, profile_id, device_id, body_hash, managed_hash, open_hash, action)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+        "#,
+    )
+    .bind(resource_id)
+    .bind(event_id)
+    .bind(profile_id)
+    .bind(device_id)
+    .bind(body_hash)
+    .bind(managed_hash)
+    .bind(open_hash)
+    .bind(action)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(audit_id.0)
 }
 
 /// Resolve doc_type name to UUID from kb_doc_types.
@@ -150,6 +187,7 @@ async fn replace_chunks(
 pub async fn ingest(
     pool: &PgPool,
     profile_id: Uuid,
+    device_id: &str,
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // 1. Resolve context
@@ -228,14 +266,31 @@ pub async fn ingest(
     persist_chunks(&mut tx, resource_id, &chunks).await?;
 
     // 8. Insert event
-    insert_event(
+    let event_id = insert_event(
         &mut tx,
         profile_id,
-        "api",
+        device_id,
         Some(context.id),
         Some(resource_id),
         "resource_created",
-        &serde_json::json!({"body_hash": &payload.content_hash}),
+        &serde_json::json!({
+            "body_hash": &payload.content_hash,
+            "managed_hash": &managed_hash,
+            "open_hash": &open_hash,
+        }),
+    )
+    .await?;
+
+    insert_audit(
+        &mut tx,
+        resource_id,
+        event_id,
+        profile_id,
+        device_id,
+        &payload.content_hash,
+        &managed_hash,
+        &open_hash,
+        "create",
     )
     .await?;
 
@@ -249,6 +304,7 @@ pub async fn update(
     pool: &PgPool,
     profile_id: Uuid,
     resource_id: Uuid,
+    device_id: &str,
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // Verify the profile can modify this resource
@@ -320,14 +376,31 @@ pub async fn update(
     replace_chunks(&mut tx, resource_id, &chunks).await?;
 
     // Insert event
-    insert_event(
+    let event_id = insert_event(
         &mut tx,
         profile_id,
-        "api",
+        device_id,
         Some(resource.kb_context_id),
         Some(resource_id),
         "body_updated",
-        &serde_json::json!({"body_hash": &payload.content_hash}),
+        &serde_json::json!({
+            "body_hash": &payload.content_hash,
+            "managed_hash": &managed_hash,
+            "open_hash": &open_hash,
+        }),
+    )
+    .await?;
+
+    insert_audit(
+        &mut tx,
+        resource_id,
+        event_id,
+        profile_id,
+        device_id,
+        &payload.content_hash,
+        &managed_hash,
+        &open_hash,
+        "update_body",
     )
     .await?;
 

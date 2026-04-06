@@ -1,9 +1,10 @@
 use axum::extract::{Path, Query, State};
+use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
 use crate::error::{ApiResult, ErrorBody};
-use crate::middleware::auth::AuthUser;
+use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::resource_service::{
     self, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
 };
@@ -142,8 +143,12 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     auth: AuthUser,
+    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<DeleteResponse>> {
-    resource_service::delete(&state.pool, auth.0.profile.id, resource_id).await?;
+    let device_id = device_id
+        .map(|d| d.0 .0.clone())
+        .unwrap_or_else(|| "api".to_string());
+    resource_service::delete(&state.pool, auth.0.profile.id, resource_id, &device_id).await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }

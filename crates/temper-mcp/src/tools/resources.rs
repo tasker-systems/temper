@@ -151,11 +151,16 @@ pub async fn delete_resource(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    temper_api::services::resource_service::delete(&svc.api_state.pool, profile.id, input.id)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to delete resource: {e}"), None)
-        })?;
+    temper_api::services::resource_service::delete(
+        &svc.api_state.pool,
+        profile.id,
+        input.id,
+        "mcp",
+    )
+    .await
+    .map_err(|e| {
+        rmcp::ErrorData::internal_error(format!("Failed to delete resource: {e}"), None)
+    })?;
 
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&serde_json::json!({ "deleted": true, "id": input.id })),
