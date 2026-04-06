@@ -54,7 +54,7 @@ pub fn save(
 
     // Build path: <vault_root>/<context>/session/<date> — <slug>.md
     let slug = vault::slugify(note_title);
-    let filename = format!("{today} \u{2014} {slug}.md");
+    let filename = format!("{today}-{slug}.md");
     let session_dir = config.doc_type_dir(&context_name, "session");
     let note_path = session_dir.join(&filename);
 
@@ -256,7 +256,11 @@ pub fn show(
                 .to_string_lossy()
                 .to_string();
             let title_slug = if let Some(pos) = stem.find(" \u{2014} ") {
+                // Legacy format: "2026-04-05 — slug"
                 stem[pos + " \u{2014} ".len()..].to_string()
+            } else if stem.len() > 10 && stem.as_bytes().get(10) == Some(&b'-') {
+                // New format: "2026-04-05-slug"
+                stem[11..].to_string()
             } else {
                 stem.clone()
             };
@@ -402,9 +406,13 @@ fn add_session_entry(path: &std::path::Path, context: &str, entries: &mut Vec<Se
         .or_else(|| extract_date_from_stem(&stem))
         .unwrap_or_else(|| "unknown".to_string());
 
-    // Extract title: filename stem after the em-dash separator, or full stem
+    // Extract title: filename stem after the em-dash separator (legacy) or hyphen (new format), or full stem
     let title = if let Some(pos) = stem.find(" \u{2014} ") {
+        // Legacy format: "2026-04-05 — slug"
         stem[pos + " \u{2014} ".len()..].to_string()
+    } else if stem.len() > 10 && stem.as_bytes().get(10) == Some(&b'-') {
+        // New format: "2026-04-05-slug"
+        stem[11..].to_string()
     } else {
         stem.clone()
     };
@@ -442,7 +450,7 @@ fn extract_date_from_stem(stem: &str) -> Option<String> {
 pub fn session_path(config: &Config, context: &str, title: &str) -> PathBuf {
     let today = Local::now().format("%Y-%m-%d").to_string();
     let slug = vault::slugify(title);
-    let filename = format!("{today} \u{2014} {slug}.md");
+    let filename = format!("{today}-{slug}.md");
     config.doc_type_dir(context, "session").join(filename)
 }
 
@@ -471,7 +479,7 @@ mod tests {
 
     fn write_session(config: &Config, context: &str, date: &str, slug: &str, body: &str) {
         let dir = config.doc_type_dir(context, "session");
-        let filename = format!("{date} \u{2014} {slug}.md");
+        let filename = format!("{date}-{slug}.md");
         let content = format!(
             "---\ntemper-id: \"test-id\"\ntemper-type: session\ndate: {date}\n---\n\n{body}"
         );

@@ -20,7 +20,7 @@ pub fn save(
     let context_name = context.unwrap_or("general");
 
     let slug = format!("{today}-{}", vault::slugify(title));
-    let filename = format!("{today} \u{2014} {title}.md");
+    let filename = format!("{today}-{}.md", vault::slugify(title));
     let research_dir = config.vault_root.join("research").join(context_name);
     let note_path = research_dir.join(&filename);
 

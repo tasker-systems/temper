@@ -56,8 +56,12 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
 
         let file_mtime = file_mtime_secs(&file_path)?;
 
-        // Skip rehash if mtime hasn't changed — file is untouched.
-        if entry.mtime_secs == Some(file_mtime) {
+        // Skip rehash if mtime hasn't changed AND all hashes are populated.
+        // If managed_hash or open_hash are empty, we must recompute them even
+        // if the file hasn't been modified (backfill for entries created before
+        // three-tier hashing was wired in).
+        let hashes_complete = !entry.managed_hash.is_empty() && !entry.open_hash.is_empty();
+        if entry.mtime_secs == Some(file_mtime) && hashes_complete {
             continue;
         }
 
@@ -276,7 +280,13 @@ pub fn scan_vault_for_untracked(
                 }
             };
 
-        let resource_id = Uuid::now_v7();
+        // Use the file's temper-id if present; only mint a new UUID for files
+        // without frontmatter (which will get frontmatter injected below).
+        let resource_id = fm
+            .as_ref()
+            .and_then(|f| f.legacy_id.as_deref())
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .unwrap_or_else(Uuid::now_v7);
         if fm.is_none() {
             let frontmatter = ingest::build_frontmatter(
                 resource_id,
@@ -295,14 +305,21 @@ pub fn scan_vault_for_untracked(
         let content_hash = ingest::compute_content_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
+        let (managed_hash, open_hash) =
+            if let Some(fm) = crate::vault::parse_frontmatter(&full_content) {
+                temper_core::schema::compute_frontmatter_hashes(&fm)
+            } else {
+                (String::new(), String::new())
+            };
+
         manifest.entries.insert(
             resource_id,
             temper_core::types::ManifestEntry {
                 path: rel_path.clone(),
                 body_hash: content_hash,
                 remote_body_hash: String::new(),
-                managed_hash: String::new(),
-                open_hash: String::new(),
+                managed_hash,
+                open_hash,
                 remote_managed_hash: String::new(),
                 remote_open_hash: String::new(),
                 synced_at: chrono::Utc::now(),
@@ -562,7 +579,7 @@ async fn push_resource(
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 
-    let _resource = if item.resource_id.is_some() {
+    let resource = if item.resource_id.is_some() {
         // Existing resource — PUT update
         client
             .ingest()
@@ -578,15 +595,44 @@ async fn push_resource(
             .map_err(|e| TemperError::Api(e.to_string()))?
     };
 
+    // If the server assigned a different resource ID (POST create), remap the
+    // manifest entry so the local UUID matches the server's authoritative ID.
+    let server_id = resource.id;
+    if server_id != entry_id {
+        tracing::info!(
+            %entry_id,
+            %server_id,
+            "remapping manifest entry: local ID → server ID"
+        );
+        if let Some(entry) = manifest.entries.remove(&entry_id) {
+            manifest.entries.insert(server_id, entry);
+
+            // Update the file's temper-id frontmatter to match the server ID.
+            let file_content = std::fs::read_to_string(&file_path)?;
+            let updated = file_content.replace(&entry_id.to_string(), &server_id.to_string());
+            if updated != file_content {
+                std::fs::write(&file_path, &updated)?;
+                tracing::info!("updated temper-id in file frontmatter");
+            } else {
+                tracing::warn!(
+                    %entry_id,
+                    "temper-id not found in file content — frontmatter not updated"
+                );
+            }
+        }
+    }
+
     // Compute frontmatter hashes so we can record them as the remote values
-    let (pushed_managed_hash, pushed_open_hash) =
-        if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+    let (pushed_managed_hash, pushed_open_hash) = {
+        let current = std::fs::read_to_string(&file_path)?;
+        if let Some(fm) = crate::vault::parse_frontmatter(&current) {
             temper_core::schema::compute_frontmatter_hashes(&fm)
         } else {
             (String::new(), String::new())
-        };
+        }
+    };
 
-    if let Some(e) = manifest.entries.get_mut(&entry_id) {
+    if let Some(e) = manifest.entries.get_mut(&server_id) {
         // After push, server hashes match what we sent
         e.remote_body_hash = payload.content_hash.clone();
         e.remote_managed_hash = pushed_managed_hash;
@@ -1076,6 +1122,14 @@ pub async fn sync_reset(
         let content_hash = ingest::compute_content_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
+        // Compute local frontmatter tier hashes
+        let (local_managed_hash, local_open_hash) =
+            if let Some(fm_val) = crate::vault::parse_frontmatter(&content) {
+                temper_core::schema::compute_frontmatter_hashes(&fm_val)
+            } else {
+                (String::new(), String::new())
+            };
+
         let fm = ingest::parse_source_frontmatter(&content);
 
         // Try matching by temper-id frontmatter first
@@ -1087,18 +1141,26 @@ pub async fn sync_reset(
         if let Some(tid) = temper_id {
             if let Some(server_item) = server_by_id.get(&tid) {
                 // Match by temper-id
+                let state = if content_hash == server_item.content_hash
+                    && local_managed_hash == server_item.managed_hash
+                    && local_open_hash == server_item.open_hash
+                {
+                    ManifestEntryState::Clean
+                } else {
+                    ManifestEntryState::LocalModified
+                };
                 new_manifest.entries.insert(
                     tid,
                     temper_core::types::ManifestEntry {
                         path: rel_path,
                         body_hash: content_hash,
                         remote_body_hash: server_item.content_hash.clone(),
-                        managed_hash: String::new(),
-                        open_hash: String::new(),
+                        managed_hash: local_managed_hash,
+                        open_hash: local_open_hash,
                         remote_managed_hash: server_item.managed_hash.clone(),
                         remote_open_hash: server_item.open_hash.clone(),
                         synced_at: chrono::Utc::now(),
-                        state: ManifestEntryState::Clean,
+                        state,
                         mtime_secs: mtime,
                     },
                 );
@@ -1121,18 +1183,25 @@ pub async fn sync_reset(
         let hash_key = (ctx, doc_type, content_hash.clone());
         if let Some(server_item) = server_by_hash.get(&hash_key) {
             if !matched_server_ids.contains(&server_item.resource_id) {
+                let state = if local_managed_hash == server_item.managed_hash
+                    && local_open_hash == server_item.open_hash
+                {
+                    ManifestEntryState::Clean
+                } else {
+                    ManifestEntryState::LocalModified
+                };
                 new_manifest.entries.insert(
                     server_item.resource_id,
                     temper_core::types::ManifestEntry {
                         path: rel_path,
                         body_hash: content_hash,
                         remote_body_hash: server_item.content_hash.clone(),
-                        managed_hash: String::new(),
-                        open_hash: String::new(),
+                        managed_hash: local_managed_hash,
+                        open_hash: local_open_hash,
                         remote_managed_hash: server_item.managed_hash.clone(),
                         remote_open_hash: server_item.open_hash.clone(),
                         synced_at: chrono::Utc::now(),
-                        state: ManifestEntryState::Clean,
+                        state,
                         mtime_secs: mtime,
                     },
                 );
@@ -1142,16 +1211,18 @@ pub async fn sync_reset(
             }
         }
 
-        // Unmatched local file — mark as Pending (new, will push on next sync)
-        let resource_id = Uuid::now_v7();
+        // Unmatched local file — mark as Pending (new, will push on next sync).
+        // Use the file's temper-id if present so push_resource can remap it
+        // after the server assigns an authoritative ID.
+        let resource_id = temper_id.unwrap_or_else(Uuid::now_v7);
         new_manifest.entries.insert(
             resource_id,
             temper_core::types::ManifestEntry {
                 path: rel_path,
                 body_hash: content_hash,
                 remote_body_hash: String::new(),
-                managed_hash: String::new(),
-                open_hash: String::new(),
+                managed_hash: local_managed_hash,
+                open_hash: local_open_hash,
                 remote_managed_hash: String::new(),
                 remote_open_hash: String::new(),
                 synced_at: chrono::Utc::now(),
@@ -1276,16 +1347,22 @@ mod tests {
     }
 
     #[test]
-    fn rehash_skips_unchanged_files() {
+    fn rehash_skips_unchanged_files_with_complete_hashes() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
         let mut manifest = sample_manifest();
 
-        let content = "test content";
-        let hash = ingest::compute_content_hash(content);
+        // File with frontmatter so we can compute all three hashes
+        let content = "---\ntemper-type: task\ntitle: Test\ndate: 2026-01-01\n---\ntest content";
+        let body = strip_frontmatter(content);
+        let hash = ingest::compute_content_hash(body);
 
         let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
-        manifest.entries.get_mut(&id).unwrap().body_hash = hash;
+        let entry = manifest.entries.get_mut(&id).unwrap();
+        entry.body_hash = hash;
+        // Set non-empty managed/open hashes so the skip condition is met
+        entry.managed_hash = "sha256:abc".to_string();
+        entry.open_hash = "sha256:def".to_string();
 
         let file_dir = vault.join("temper/task");
         fs::create_dir_all(&file_dir).unwrap();
@@ -1295,8 +1372,55 @@ mod tests {
         )
         .unwrap();
 
+        // First rehash sets mtime
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        // Hashes differ from "sha256:abc"/"sha256:def" so it recomputes
+        assert!(changed > 0);
+
+        // Reset state to Clean for the skip test
+        let entry = manifest.entries.get_mut(&id).unwrap();
+        entry.state = ManifestEntryState::Clean;
+
+        // Second rehash should skip — mtime matches and hashes are complete
         let changed = rehash_manifest(&mut manifest, vault).unwrap();
         assert_eq!(changed, 0);
+    }
+
+    #[test]
+    fn rehash_backfills_empty_managed_open_hashes() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let mut manifest = sample_manifest();
+
+        let content = "---\ntemper-type: task\ntitle: Test\ndate: 2026-01-01\n---\ntest content";
+        let body = strip_frontmatter(content);
+        let hash = ingest::compute_content_hash(body);
+
+        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let entry = manifest.entries.get_mut(&id).unwrap();
+        entry.body_hash = hash;
+        // Leave managed_hash and open_hash empty — simulating the old bug
+
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(
+            file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
+            content,
+        )
+        .unwrap();
+
+        // First pass: sets mtime AND backfills hashes
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        assert_eq!(changed, 1);
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert!(
+            !entry.managed_hash.is_empty(),
+            "managed_hash should be populated"
+        );
+        assert!(!entry.open_hash.is_empty(), "open_hash should be populated");
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
     }
 
     #[test]
@@ -1506,7 +1630,8 @@ mod tests {
     // --- Mtime optimization tests ---
 
     #[test]
-    fn rehash_skips_file_when_mtime_matches() {
+    #[test]
+    fn rehash_skips_file_when_mtime_matches_and_hashes_complete() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
         let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
@@ -1525,6 +1650,51 @@ mod tests {
                 path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: "stale-hash-that-would-trigger-if-read".to_string(),
                 remote_body_hash: "stale-hash-that-would-trigger-if-read".to_string(),
+                // Hashes must be non-empty for skip to apply
+                managed_hash: "sha256:abc".to_string(),
+                open_hash: "sha256:def".to_string(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: Some(file_mtime),
+            },
+        );
+
+        // Mtime matches AND hashes are complete — rehash should skip
+        let changed = rehash_manifest(&mut manifest, vault).unwrap();
+        assert_eq!(changed, 0);
+        assert_eq!(
+            manifest.entries[&id].body_hash,
+            "stale-hash-that-would-trigger-if-read"
+        );
+    }
+
+    #[test]
+    fn rehash_backfills_when_mtime_matches_but_hashes_empty() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
+        fs::write(
+            &file_path,
+            "---\ntemper-type: task\ntitle: Test\n---\nbody content",
+        )
+        .unwrap();
+
+        let file_mtime = file_mtime_secs(&file_path).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                body_hash: ingest::compute_content_hash("body content"),
+                remote_body_hash: String::new(),
+                // Empty hashes — must backfill even though mtime matches
                 managed_hash: String::new(),
                 open_hash: String::new(),
                 remote_managed_hash: String::new(),
@@ -1535,13 +1705,11 @@ mod tests {
             },
         );
 
-        // Mtime matches — rehash should skip entirely, preserving stale hash
+        // Mtime matches but hashes are empty — should backfill
         let changed = rehash_manifest(&mut manifest, vault).unwrap();
-        assert_eq!(changed, 0);
-        assert_eq!(
-            manifest.entries[&id].body_hash,
-            "stale-hash-that-would-trigger-if-read"
-        );
+        assert_eq!(changed, 1);
+        assert!(!manifest.entries[&id].managed_hash.is_empty());
+        assert!(!manifest.entries[&id].open_hash.is_empty());
     }
 
     #[test]
@@ -1777,6 +1945,37 @@ mod tests {
         let progress = crate::actions::progress::CollectingProgress::default();
         let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
         assert_eq!(found, 0, "overwritten file should not appear as untracked");
+    }
+
+    #[test]
+    fn scan_untracked_computes_all_three_hashes() {
+        let dir = TempDir::new().unwrap();
+        let vault = dir.path();
+        let mut manifest = Manifest::new("test-device".to_string());
+
+        let file_dir = vault.join("temper/task");
+        fs::create_dir_all(&file_dir).unwrap();
+        fs::write(
+            file_dir.join("my-task.md"),
+            "---\ntemper-type: task\ntitle: My Task\ntemper-id: 019d0000-0000-0000-0000-000000000001\ntemper-context: temper\ndate: 2026-01-01\n---\n\n# My Task\n\nBody content here.\n",
+        )
+        .unwrap();
+
+        let progress = crate::actions::progress::CollectingProgress::default();
+        let found = scan_vault_for_untracked(&mut manifest, vault, &progress).unwrap();
+        assert_eq!(found, 1);
+
+        // The entry should have all three hashes populated
+        let entry = manifest.entries.values().next().unwrap();
+        assert!(!entry.body_hash.is_empty(), "body_hash should be populated");
+        assert!(
+            !entry.managed_hash.is_empty(),
+            "managed_hash should be populated"
+        );
+        assert!(!entry.open_hash.is_empty(), "open_hash should be populated");
+        assert!(entry.body_hash.starts_with("sha256:"));
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
     }
 
     #[test]

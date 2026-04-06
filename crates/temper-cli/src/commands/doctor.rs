@@ -29,45 +29,36 @@ pub fn run(config: &Config, context: Option<&str>, format: &str) -> Result<()> {
 
 /// Run doctor fix (validate + auto-fix). Delegates to actions::doctor.
 pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<()> {
-    let report = doctor::scan(config, context)?;
-
-    if report.auto_fixable == 0 {
-        if report.total_issues == 0 {
-            output::success(format!(
-                "{} files checked — no issues found",
-                report.files_checked
-            ));
-        } else {
-            output::warning(format!(
-                "{} issues found but none are auto-fixable. Run `temper doctor` for details.",
-                report.total_issues
-            ));
-        }
-        return Ok(());
-    }
-
-    let fixed = doctor::fix(config, context, dry_run)?;
+    let report = doctor::fix(config, context, dry_run)?;
+    let total = report.fields_renamed
+        + report.fields_set
+        + report.files_renamed
+        + report.files_relocated
+        + report.manifest_updated
+        + report.manifest_removed;
 
     if dry_run {
         output::dim(format!(
-            "Dry run: would fix {} issues across {} files",
-            fixed.fields_renamed + fixed.fields_backfilled,
-            fixed.files_modified,
+            "Dry run: would apply {total} fixes ({} field renames, {} fields set, {} file renames, {} relocations, {} manifest updates, {} manifest removals)",
+            report.fields_renamed,
+            report.fields_set,
+            report.files_renamed,
+            report.files_relocated,
+            report.manifest_updated,
+            report.manifest_removed
         ));
     } else {
         output::success(format!(
-            "Fixed {} files: {} fields renamed, {} fields backfilled",
-            fixed.files_modified, fixed.fields_renamed, fixed.fields_backfilled,
+            "Fixed: {} field renames, {} fields set, {} file renames, {} relocations",
+            report.fields_renamed, report.fields_set, report.files_renamed, report.files_relocated
         ));
+        if report.manifest_updated > 0 || report.manifest_removed > 0 {
+            output::dim(format!(
+                "Manifest: {} entries updated, {} stale entries removed",
+                report.manifest_updated, report.manifest_removed
+            ));
+        }
     }
-
-    let remaining = report.total_issues - report.auto_fixable;
-    if remaining > 0 {
-        output::hint(format!(
-            "{remaining} issues require manual attention. Run `temper doctor` for details."
-        ));
-    }
-
     Ok(())
 }
 

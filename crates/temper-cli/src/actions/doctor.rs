@@ -9,8 +9,13 @@ use temper_core::schema::{
     ValidationResult,
 };
 
+use crate::actions::doctor_fix::{
+    apply_manifest_actions, apply_plan, fix_filename, fix_legacy_fields, fix_manifest_for_moves,
+    fix_missing_fields, fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
+};
 use crate::config::Config;
 use crate::error::Result;
+use crate::manifest_io;
 use crate::vault;
 
 /// Aggregated report from a vault doctor scan.
@@ -23,7 +28,7 @@ pub struct DoctorReport {
 }
 
 /// Doc types whose files live at `{vault_root}/{context}/{doc_type}/`.
-const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept"];
+const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
 
 /// Scan the vault and validate all markdown frontmatter.
 ///
@@ -163,43 +168,12 @@ fn detect_doc_type(fm: &serde_yaml::Value, dir_doc_type: &str) -> Option<String>
     Some(dir_doc_type.to_string())
 }
 
-/// Report from an auto-fix run.
-#[derive(Debug, Clone, Serialize)]
-pub struct FixReport {
-    pub files_modified: u32,
-    pub fields_renamed: u32,
-    pub fields_backfilled: u32,
-}
-
-/// Legacy field rename map: (old_name, new_name)
-const LEGACY_FIELD_MAP: &[(&str, &str)] = &[
-    ("id", "temper-id"),
-    ("type", "temper-type"),
-    ("doc_type", "temper-type"),
-    ("context", "temper-context"),
-    ("project", "temper-context"),
-    ("ingestion_source", "temper-source"),
-    ("created", "temper-created"),
-    ("updated", "temper-updated"),
-    ("stage", "temper-stage"),
-    ("mode", "temper-mode"),
-    ("effort", "temper-effort"),
-    ("goal", "temper-goal"),
-    ("seq", "temper-seq"),
-    ("branch", "temper-branch"),
-    ("pr", "temper-pr"),
-    ("status", "temper-status"),
-    ("legacy_id", "temper-legacy-id"),
-];
-
-/// Auto-fix issues in the vault: rename legacy fields, backfill missing temper-created, backfill
-/// missing temper-id.
-pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Result<FixReport> {
-    let mut report = FixReport {
-        files_modified: 0,
-        fields_renamed: 0,
-        fields_backfilled: 0,
-    };
+/// Auto-fix issues in the vault using the FixAction pipeline.
+///
+/// Collects fix actions for all vault files, applies them in phase order,
+/// and updates the manifest to reflect any file moves.
+pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Result<ApplyReport> {
+    let mut plan = FixPlan::new();
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
         vec![ctx.to_string()]
@@ -214,7 +188,7 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
             if !dir.is_dir() {
                 continue;
             }
-            fix_directory(&dir, dry_run, &mut report)?;
+            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
         }
     }
 
@@ -226,15 +200,47 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
             if !dir.is_dir() {
                 continue;
             }
-            fix_directory(&dir, dry_run, &mut report)?;
+            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
+        }
+    }
+
+    // F5: Manifest reconciliation
+    let temper_dir = config.vault_root.join(".temper");
+    let manifest_result = manifest_io::load_manifest(&temper_dir, "doctor-fix");
+    if let Ok(manifest) = &manifest_result {
+        let move_actions: Vec<_> = plan
+            .actions
+            .iter()
+            .filter(|a| a.phase() == 1)
+            .cloned()
+            .collect();
+        plan.extend(fix_manifest_for_moves(
+            &move_actions,
+            manifest,
+            &config.vault_root,
+        ));
+        plan.extend(fix_stale_manifest_entries(manifest, &config.vault_root));
+    }
+
+    // Apply
+    let report = apply_plan(&mut plan, dry_run)?;
+
+    // Apply manifest changes, rehash modified files, and save
+    if !dry_run {
+        if let Ok(mut manifest) = manifest_result {
+            apply_manifest_actions(&plan, &mut manifest);
+            // Rehash all entries so body/managed/open hashes reflect
+            // the content changes doctor fix just made.
+            crate::actions::sync::rehash_manifest(&mut manifest, &config.vault_root)?;
+            manifest_io::save_manifest(&temper_dir, &manifest)?;
         }
     }
 
     Ok(report)
 }
 
-/// Fix all `.md` files in `dir`.
-fn fix_directory(dir: &Path, dry_run: bool, report: &mut FixReport) -> Result<()> {
+/// Collect fix actions for all `.md` files in `dir`.
+fn collect_fixes_for_directory(dir: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
     let md_files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -242,93 +248,95 @@ fn fix_directory(dir: &Path, dry_run: bool, report: &mut FixReport) -> Result<()
         .collect();
 
     for file_path in md_files {
-        fix_file(&file_path, dry_run, report)?;
+        collect_fixes_for_file(&file_path, vault_root, plan)?;
     }
 
     Ok(())
 }
 
-/// Apply auto-fixes to a single file and update the report.
-fn fix_file(file_path: &Path, dry_run: bool, report: &mut FixReport) -> Result<()> {
-    let original = fs::read_to_string(file_path)?;
+/// Collect fix actions for a single file and add them to the plan.
+fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
+    let mut content = fs::read_to_string(file_path)?;
 
-    // Step 1: Parse frontmatter — skip files with none
-    let Some(_) = vault::parse_frontmatter(&original) else {
+    // Pre-pass: if frontmatter fails to parse, attempt dedup and rewrite.
+    if vault::parse_frontmatter(&content).is_none() {
+        if let Some(deduped) = dedup_frontmatter_keys(&content) {
+            fs::write(file_path, &deduped)?;
+            content = deduped;
+        }
+    }
+
+    let Some(fm) = vault::parse_frontmatter(&content) else {
         return Ok(());
     };
-
-    let mut content = original.clone();
-    let mut fields_renamed: u32 = 0;
-    let mut fields_backfilled: u32 = 0;
-
-    // Step 2: Rename legacy fields
-    for (old_key, new_key) in LEGACY_FIELD_MAP {
-        let fm = vault::parse_frontmatter(&content);
-        let Some(ref fm) = fm else { continue };
-
-        let has_old = fm.get(*old_key).is_some();
-        let has_new = fm.get(*new_key).is_some();
-
-        if has_old && !has_new {
-            // Rename old → new
-            content = vault::rename_frontmatter_field(&content, old_key, new_key);
-            fields_renamed += 1;
-        } else if has_old && has_new {
-            // Both exist — drop the old, keep the new
-            content = vault::remove_frontmatter_field(&content, old_key);
-            fields_renamed += 1;
-        }
-    }
-
-    // Step 3: Re-parse. If temper-created is missing but date exists → backfill
-    {
-        let fm = vault::parse_frontmatter(&content);
-        if let Some(ref fm) = fm {
-            let has_created = fm.get("temper-created").is_some();
-            let date_val = fm
-                .get("date")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string());
-
-            if !has_created {
-                if let Some(date_str) = date_val {
-                    let ts_value = format!("\"{}T00:00:00Z\"", date_str);
-                    content =
-                        vault::insert_frontmatter_field(&content, "temper-created", &ts_value);
-                    fields_backfilled += 1;
-                }
-            }
-        }
-    }
-
-    // Step 4: Re-parse. If temper-id is missing → insert new UUIDv7
-    {
-        let fm = vault::parse_frontmatter(&content);
-        if let Some(ref fm) = fm {
-            if fm.get("temper-id").is_none() {
-                let new_id = crate::ids::generate_id();
-                content = vault::insert_frontmatter_field(
-                    &content,
-                    "temper-id",
-                    &format!("\"{new_id}\""),
-                );
-                fields_backfilled += 1;
-            }
-        }
-    }
-
-    // Step 5: Write back if changed and not dry_run
-    if content != original {
-        report.fields_renamed += fields_renamed;
-        report.fields_backfilled += fields_backfilled;
-        report.files_modified += 1;
-
-        if !dry_run {
-            fs::write(file_path, &content)?;
-        }
-    }
-
+    plan.extend(fix_legacy_fields(file_path, &fm));
+    plan.extend(fix_missing_fields(file_path, &fm, vault_root));
+    plan.extend(fix_relocation(file_path, &fm, vault_root));
+    plan.extend(fix_filename(file_path, &fm, vault_root));
     Ok(())
+}
+
+/// Deduplicate frontmatter keys, keeping the last occurrence of each key.
+///
+/// Returns `Some(new_content)` if duplicates were found, `None` if the content
+/// has no frontmatter or no duplicates.
+fn dedup_frontmatter_keys(content: &str) -> Option<String> {
+    let trimmed = content.trim_start();
+    if !trimmed.starts_with("---") {
+        return None;
+    }
+    let rest = &trimmed[3..];
+    let end_pos = rest.find("---")?;
+    let yaml_block = &rest[..end_pos];
+    let after_fm = &rest[end_pos..];
+
+    // Parse lines, track seen keys, keep last occurrence
+    let lines: Vec<&str> = yaml_block.lines().collect();
+    let mut seen_keys: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    // First pass: find the last index for each key
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            if !key.is_empty() && !key.starts_with('#') {
+                seen_keys.insert(key.to_string(), i);
+            }
+        }
+    }
+
+    // Check if any key appears more than once
+    let mut key_counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for line in &lines {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            if !key.is_empty() && !key.starts_with('#') {
+                *key_counts.entry(key).or_insert(0) += 1;
+            }
+        }
+    }
+    let has_duplicates = key_counts.values().any(|&count| count > 1);
+    if !has_duplicates {
+        return None;
+    }
+
+    // Second pass: keep only lines where the key's last index matches current index
+    let mut deduped_lines: Vec<&str> = Vec::new();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(colon_pos) = line.find(':') {
+            let key = line[..colon_pos].trim();
+            if !key.is_empty() && !key.starts_with('#') {
+                if seen_keys.get(key) == Some(&i) {
+                    deduped_lines.push(line);
+                }
+                continue;
+            }
+        }
+        // Non-key lines (blank, comments) — keep them
+        deduped_lines.push(line);
+    }
+
+    let new_yaml = deduped_lines.join("\n");
+    Some(format!("---\n{new_yaml}\n{after_fm}"))
 }
 
 #[cfg(test)]
@@ -356,5 +364,28 @@ mod tests {
     fn detect_doc_type_falls_back_to_dir() {
         let fm = yaml_val("title: no type field here");
         assert_eq!(detect_doc_type(&fm, "session").unwrap(), "session");
+    }
+
+    #[test]
+    fn dedup_frontmatter_keeps_last_occurrence() {
+        let content = "---\ntemper-type: task\ntitle: First\ntemper-type: research\ntitle: Second\n---\nBody\n";
+        let result = dedup_frontmatter_keys(content).unwrap();
+        assert!(result.contains("temper-type: research"));
+        assert!(result.contains("title: Second"));
+        assert!(!result.contains("temper-type: task"));
+        assert!(!result.contains("title: First"));
+        assert!(result.contains("Body"));
+    }
+
+    #[test]
+    fn dedup_frontmatter_returns_none_when_no_duplicates() {
+        let content = "---\ntemper-type: task\ntitle: Only One\n---\nBody\n";
+        assert!(dedup_frontmatter_keys(content).is_none());
+    }
+
+    #[test]
+    fn dedup_frontmatter_returns_none_when_no_frontmatter() {
+        let content = "Just some markdown\n";
+        assert!(dedup_frontmatter_keys(content).is_none());
     }
 }
