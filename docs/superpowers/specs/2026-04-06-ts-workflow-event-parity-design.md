@@ -77,10 +77,13 @@ can succeed independently).
 Add four NewType wrappers in `temper-core::types::ids` to prevent raw UUID
 confusion across domain boundaries:
 
+- `ContextId(Uuid)` — `kb_contexts.id`
+- `DocTypeId(Uuid)` — `kb_doc_types.id`
 - `EventId(Uuid)` — `kb_events.id`
-- `AuditId(Uuid)` — `kb_resource_audits.id`
 - `ResourceId(Uuid)` — `kb_resources.id`
 - `ProfileId(Uuid)` — `kb_profiles.id`
+- `ResourceAuditId(Uuid)` — `kb_resource_audits.id`
+- `ResourceManifestId(Uuid)` — `kb_resource_manifests.id`
 
 **Derives** (matching existing temper-core patterns):
 
@@ -93,29 +96,35 @@ confusion across domain boundaries:
 
 **Constructors:**
 
-- `EventId::new()` — calls `Uuid::now_v7()` (events need time-sortable IDs)
-- `AuditId`, `ResourceId`, `ProfileId` — `::new()` also uses `Uuid::now_v7()`
-  for consistency, plus `::from(uuid)` for wrapping existing values from DB rows
+All seven types share the same interface:
+- `::new()` — calls `Uuid::now_v7()` for time-sortable ID generation
+- `::from(uuid)` — wraps an existing UUID from DB rows or external input
+- `::as_uuid(&self)` — access the inner UUID when needed (e.g. for sqlx binds)
 
 **Struct updates:**
 
 | Struct | Field | Before | After |
 |--------|-------|--------|-------|
-| `ResourceAuditRow` | `id` | `Uuid` | `AuditId` |
+| `ResourceAuditRow` | `id` | `Uuid` | `ResourceAuditId` |
 | `ResourceAuditRow` | `event_id` | `Uuid` | `EventId` |
 | `ResourceAuditRow` | `resource_id` | `Uuid` | `ResourceId` |
 | `ResourceAuditRow` | `profile_id` | `Uuid` | `ProfileId` |
 | `EventResponse` | `id` | `Uuid` | `EventId` |
 | `EventResponse` | `profile_id` | `Uuid` | `ProfileId` |
 | `EventResponse` | `resource_id` | `Option<Uuid>` | `Option<ResourceId>` |
-| `ManifestEntry` | `last_audit_id` | `Option<Uuid>` | `Option<AuditId>` |
-| `SyncManifestItem` | `last_audit_id` | `Option<Uuid>` | `Option<AuditId>` |
+| `ManifestEntry` | `last_audit_id` | `Option<Uuid>` | `Option<ResourceAuditId>` |
+| `SyncManifestItem` | `last_audit_id` | `Option<Uuid>` | `Option<ResourceAuditId>` |
 | `ResourceRow` | `id` | `Uuid` | `ResourceId` |
+| `ResourceRow` | `kb_context_id` | `Uuid` | `ContextId` |
+| `ResourceRow` | `kb_doc_type_id` | `Uuid` | `DocTypeId` |
 | `ResourceRow` | `originator_profile_id` | `Uuid` | `ProfileId` |
 | `ResourceRow` | `owner_profile_id` | `Uuid` | `ProfileId` |
 
-Additional structs using `resource_id: Uuid` or `profile_id: Uuid` will be
-updated as encountered during compilation — the compiler enforces completeness.
+Additional structs using these UUID fields will be updated as encountered
+during compilation — the compiler enforces completeness. Core domain tables
+covered: contexts, doc_types, events, resources, profiles, resource_audits,
+resource_manifests. Non-core tables (teams, transfers, blob_files) are left
+as raw UUIDs until their domain code is actively being worked on.
 
 ### 3. Rust Migration
 
@@ -136,7 +145,7 @@ pub async fn insert_event_and_audit(
     body_hash: &str,
     managed_hash: &str,
     open_hash: &str,
-) -> ApiResult<(EventId, AuditId)>
+) -> ApiResult<(EventId, ResourceAuditId)>
 ```
 
 **Call sites** (all four existing mutation paths):
@@ -248,7 +257,7 @@ to audit — a simpler direct `kb_events` INSERT suffices, or a second SQL funct
 ## Out of Scope
 
 - **napi.rs FFI module** — future work to eliminate TS/Rust hash duplication
-- **Additional NewType IDs** beyond the four defined (ContextId, DocTypeId, etc.)
+- **NewType IDs for non-core tables** (teams, transfers, blob_files, etc.)
 - **Managed/open meta capture in TS pipeline** — the upload endpoint handles
   extracted documents without frontmatter. When the MCP `ingest_content` tool
   is built (task `2026-04-06-temper-mcp-content-creation-agent-workflow`), it
