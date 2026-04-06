@@ -87,27 +87,18 @@ pub struct CloudVaultConfig {
     pub path: String,
 }
 
-/// Auto-sync configuration — which doc types trigger auto-sync on create/update.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SyncAutoConfig {
-    #[serde(default)]
-    pub doctypes: Vec<String>,
-}
-
 /// Sync subscriptions — which contexts are synced.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SyncSubscriptionsConfig {
+pub struct SyncSubscriptions {
     #[serde(default)]
     pub contexts: Vec<String>,
 }
 
-/// New sync config with auto + subscriptions sub-sections.
+/// Sync config — which contexts are synced.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UnifiedSyncConfig {
     #[serde(default)]
-    pub auto: SyncAutoConfig,
-    #[serde(default)]
-    pub subscriptions: SyncSubscriptionsConfig,
+    pub subscriptions: SyncSubscriptions,
 }
 
 /// Skill generation config.
@@ -393,9 +384,6 @@ path = "~/vault"
 [vault]
 path = "~/projects/kb-vault"
 
-[sync.auto]
-doctypes = ["task", "goal", "session"]
-
 [sync.subscriptions]
 contexts = ["temper", "storyteller", "tasker", "writing"]
 
@@ -421,7 +409,6 @@ api_url = "https://api.example.com"
 "#;
         let config: TemperConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/projects/kb-vault");
-        assert_eq!(config.sync.auto.doctypes, vec!["task", "goal", "session"]);
         assert_eq!(
             config.sync.subscriptions.contexts,
             vec!["temper", "storyteller", "tasker", "writing"]
@@ -447,7 +434,6 @@ path = "~/vault"
 "#;
         let config: TemperConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/vault");
-        assert!(config.sync.auto.doctypes.is_empty());
         assert!(config.sync.subscriptions.contexts.is_empty());
         assert_eq!(config.cli.progress, "bar");
         assert_eq!(config.auth.provider, "auth0");

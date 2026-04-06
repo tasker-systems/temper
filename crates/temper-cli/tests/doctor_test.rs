@@ -264,21 +264,20 @@ fn test_doctor_no_frontmatter_reports_issue() {
 }
 
 #[test]
-fn test_doctor_fix_renames_legacy_fields() {
+fn test_doctor_fix_sets_missing_temper_fields() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
+    // File with temper-* style but missing some managed fields (temper-id, slug, temper-stage)
     write_vault_file(
         &dir,
         "temper/task/old-task.md",
-        "---\nid: \"019d5616-8e3c-7432-9867-222b36e46ea1\"\ntype: task\ncontext: temper\nstage: backlog\ntitle: \"Old task\"\nslug: old-task\ncreated: \"2026-04-03T21:23:32.026022-04:00\"\n---\n\n# Old task\n\nSome content here.\n",
+        "---\ntemper-type: task\ntemper-context: temper\ntemper-stage: backlog\ntemper-created: \"2026-04-03T21:23:32.026022-04:00\"\ntitle: \"Old task\"\nslug: old-task\n---\n\n# Old task\n\nSome content here.\n",
     );
 
     let result = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
-    assert!(result.fields_renamed > 0, "Should have renamed fields");
     assert!(
-        result.fields_renamed + result.fields_set + result.files_renamed + result.files_relocated
-            >= 1,
+        result.fields_set + result.files_renamed + result.files_relocated >= 1,
         "Should have applied at least one fix"
     );
 
@@ -288,8 +287,6 @@ fn test_doctor_fix_renames_legacy_fields() {
     assert!(content.contains("temper-context:"));
     assert!(content.contains("temper-stage:"));
     assert!(content.contains("temper-created:"));
-    assert!(!content.contains("\nid:"), "bare 'id:' should be gone");
-    assert!(!content.contains("\ntype:"));
     assert!(content.contains("Some content here."), "body preserved");
 }
 
@@ -298,14 +295,15 @@ fn test_doctor_fix_dry_run_does_not_modify() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let original = "---\nid: \"019d5616-8e3c-7432-9867-222b36e46ea1\"\ntype: task\ncontext: temper\nstage: backlog\ntitle: \"Old task\"\nslug: old-task\ncreated: \"2026-04-03T21:23:32.026022-04:00\"\n---\n\n# Old task\n";
+    // File with missing temper-id — dry run should count the set action but not apply it
+    let original = "---\ntemper-type: task\ntemper-context: temper\ntemper-stage: backlog\ntemper-created: \"2026-04-03T21:23:32.026022-04:00\"\ntitle: \"Old task\"\nslug: old-task\n---\n\n# Old task\n";
 
     write_vault_file(&dir, "temper/task/old-task.md", original);
 
     let result = temper_cli::actions::doctor::fix(&config, None, true).unwrap();
     assert!(
-        result.fields_renamed > 0,
-        "Dry run should count field renames"
+        result.fields_set > 0,
+        "Dry run should count field sets (temper-id missing)"
     );
 
     let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();

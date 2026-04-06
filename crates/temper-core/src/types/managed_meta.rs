@@ -27,10 +27,6 @@ pub struct ManagedMeta {
     #[serde(rename = "temper-source", skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
 
-    /// Legacy identifier used before UUIDv7 migration
-    #[serde(rename = "temper-legacy-id", skip_serializing_if = "Option::is_none")]
-    pub legacy_id: Option<String>,
-
     /// Task workflow stage (task only)
     #[serde(rename = "temper-stage", skip_serializing_if = "Option::is_none")]
     pub stage: Option<String>,

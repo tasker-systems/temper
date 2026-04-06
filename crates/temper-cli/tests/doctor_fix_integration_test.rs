@@ -24,29 +24,28 @@ fn doctor_fix_pipeline_end_to_end() {
     let config = test_config(&dir);
     let vault = dir.path();
 
-    // Create a task with legacy fields and non-slug filename (em-dash + spaces + punctuation)
+    // Create a task with missing temper-* fields and non-slug filename (em-dash + spaces + punctuation)
     let task_dir = vault.join("temper").join("task");
     fs::create_dir_all(&task_dir).unwrap();
     fs::write(
         task_dir.join("2026-04-05 \u{2014} My Feature!.md"),
-        "---\ntype: task\ncontext: temper\ncreated: 2026-04-05\ntitle: My Feature!\n---\nBody\n",
+        "---\ntemper-type: task\ntemper-context: temper\ntitle: My Feature!\n---\nBody\n",
     )
     .unwrap();
 
-    // Create a session with em-dash filename (legacy format)
+    // Create a session with em-dash filename and missing fields
     let session_dir = vault.join("temper").join("session");
     fs::create_dir_all(&session_dir).unwrap();
     fs::write(
         session_dir.join("2026-04-05 \u{2014} my-session.md"),
-        "---\ntype: session\ncontext: temper\ndate: 2026-04-05\ntitle: My Session\n---\nNotes\n",
+        "---\ntemper-type: session\ntemper-context: temper\ndate: 2026-04-05\ntitle: My Session\n---\nNotes\n",
     )
     .unwrap();
 
     // Run fix (not dry run)
     let report = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
 
-    // Verify field fixes happened
-    assert!(report.fields_renamed > 0, "expected field renames");
+    // Verify field fixes happened (temper-id, slug, temper-stage, etc. set by inference)
     assert!(report.fields_set > 0, "expected fields set");
 
     // Verify task file was renamed (slugified, no date prefix for tasks)

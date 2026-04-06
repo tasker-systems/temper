@@ -30,10 +30,6 @@
       "type": "string",
       "description": "Original ingestion source path or URL"
     },
-    "temper-legacy-id": {
-      "type": "string",
-      "description": "Previous UUID from migration"
-    },
     "title": {
       "type": "string",
       "minLength": 1,

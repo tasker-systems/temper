@@ -63,7 +63,6 @@ static KNOWN_TEMPER_FIELDS: &[&str] = &[
     "temper-created",
     "temper-updated",
     "temper-source",
-    "temper-legacy-id",
     // task
     "temper-stage",
     "temper-mode",
@@ -88,7 +87,6 @@ static LEGACY_FIELDS: &[(&str, &str)] = &[
     ("created", "temper-created"),
     ("updated", "temper-updated"),
     ("source", "temper-source"),
-    ("legacy_id", "temper-legacy-id"),
     ("stage", "temper-stage"),
     ("status", "temper-status"),
     ("mode", "temper-mode"),
