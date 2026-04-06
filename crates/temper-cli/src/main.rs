@@ -1,7 +1,5 @@
-mod cli;
-
 use clap::Parser;
-use cli::{
+use temper_cli::cli::{
     AuthAction, Cli, Commands, ContextAction, DoctorAction, GoalAction, NoteAction, ResearchAction,
     SessionAction, SkillAction, SyncAction, TaskAction,
 };
