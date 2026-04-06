@@ -32,16 +32,17 @@ pub fn validate_preferences_size(preferences: Option<&Value>) -> ApiResult<()> {
 /// 5. Otherwise, create a new profile and a new auth link.
 pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
     // 1 & 2: direct lookup by provider + external user id
-    let existing_link = sqlx::query_as::<_, ProfileAuthLink>(
+    let existing_link = sqlx::query_as!(
+        ProfileAuthLink,
         r#"
         SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
           FROM kb_profile_auth_links
          WHERE auth_provider = $1
            AND auth_provider_user_id = $2
         "#,
+        &claims.provider,
+        &claims.external_user_id,
     )
-    .bind(&claims.provider)
-    .bind(&claims.external_user_id)
     .fetch_optional(pool)
     .await?;
 
@@ -51,33 +52,34 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
 
     // 3: email reconciliation — only if the new identity's email is verified
     if claims.email_verified == Some(true) {
-        let reconciled_link = sqlx::query_as::<_, ProfileAuthLink>(
+        let reconciled_link = sqlx::query_as!(
+            ProfileAuthLink,
             r#"
             SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
               FROM kb_profile_auth_links
              WHERE email = $1
              LIMIT 1
             "#,
+            &claims.email,
         )
-        .bind(&claims.email)
         .fetch_optional(pool)
         .await?;
 
         if let Some(existing) = reconciled_link {
             // 4: create new auth link for this provider pointing to the existing profile
             let new_link_id = Uuid::now_v7();
-            sqlx::query(
+            sqlx::query!(
                 r#"
                 INSERT INTO kb_profile_auth_links
                     (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
                 VALUES ($1, $2, $3, $4, $5, false, now())
                 "#,
+                new_link_id,
+                existing.profile_id,
+                &claims.provider,
+                &claims.external_user_id,
+                &claims.email as &str,
             )
-            .bind(new_link_id)
-            .bind(existing.profile_id)
-            .bind(&claims.provider)
-            .bind(&claims.external_user_id)
-            .bind(&claims.email)
             .execute(pool)
             .await?;
 
@@ -95,46 +97,46 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
     let display_name = claims.email.split('@').next().unwrap_or("user").to_string();
 
     let profile_id = Uuid::now_v7();
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_profiles
             (id, display_name, email, avatar_url, preferences, vault_config, is_active, created, updated)
         VALUES ($1, $2, $3, null, '{}', '{}', true, now(), now())
         "#,
+        profile_id,
+        &display_name,
+        &claims.email as &str,
     )
-    .bind(profile_id)
-    .bind(&display_name)
-    .bind(&claims.email)
     .execute(pool)
     .await?;
 
     let auth_link_id = Uuid::now_v7();
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_profile_auth_links
             (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
         VALUES ($1, $2, $3, $4, $5, true, now())
         "#,
+        auth_link_id,
+        profile_id,
+        &claims.provider,
+        &claims.external_user_id,
+        &claims.email as &str,
     )
-    .bind(auth_link_id)
-    .bind(profile_id)
-    .bind(&claims.provider)
-    .bind(&claims.external_user_id)
-    .bind(&claims.email)
     .execute(pool)
     .await?;
 
     // Auto-provision a "default" context for the new profile.
     // Ignore conflict — if the profile somehow already has one, that's fine.
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
         VALUES ($1, 'default', 'kb_profiles', $2)
         ON CONFLICT ON CONSTRAINT kb_contexts_owner_name_unique DO NOTHING
         "#,
+        Uuid::now_v7(),
+        profile_id,
     )
-    .bind(Uuid::now_v7())
-    .bind(profile_id)
     .execute(pool)
     .await?;
 
@@ -143,15 +145,24 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
 
 /// Load a profile by ID. Returns `NotFound` if missing or inactive.
 pub async fn get_by_id(pool: &PgPool, id: Uuid) -> ApiResult<Profile> {
-    let profile = sqlx::query_as::<_, Profile>(
+    let profile = sqlx::query_as!(
+        Profile,
         r#"
-        SELECT id, display_name, email, avatar_url, preferences, vault_config, is_active, created, updated
+        SELECT id,
+               display_name,
+               email,
+               avatar_url,
+               preferences as "preferences: serde_json::Value",
+               vault_config as "vault_config: serde_json::Value",
+               is_active,
+               created,
+               updated
           FROM kb_profiles
          WHERE id = $1
            AND is_active = true
         "#,
+        id,
     )
-    .bind(id)
     .fetch_optional(pool)
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -173,7 +184,7 @@ pub async fn update(
     let new_preferences = preferences.unwrap_or(&current.preferences);
     let new_vault_config = vault_config.unwrap_or(&current.vault_config);
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE kb_profiles
            SET display_name = $1,
@@ -183,11 +194,11 @@ pub async fn update(
          WHERE id = $4
            AND is_active = true
         "#,
+        new_display_name,
+        new_preferences as &Value,
+        new_vault_config as &Value,
+        id,
     )
-    .bind(new_display_name)
-    .bind(new_preferences)
-    .bind(new_vault_config)
-    .bind(id)
     .execute(pool)
     .await?;
 
@@ -196,15 +207,16 @@ pub async fn update(
 
 /// List all auth links attached to a profile.
 pub async fn list_auth_links(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<ProfileAuthLink>> {
-    let links = sqlx::query_as::<_, ProfileAuthLink>(
+    let links = sqlx::query_as!(
+        ProfileAuthLink,
         r#"
         SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
           FROM kb_profile_auth_links
          WHERE profile_id = $1
          ORDER BY linked_at ASC
         "#,
+        profile_id,
     )
-    .bind(profile_id)
     .fetch_all(pool)
     .await?;
 
