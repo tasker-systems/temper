@@ -1175,6 +1175,11 @@ pub async fn sync_reset(
             .and_then(|f| f.legacy_id.as_deref())
             .and_then(|id| Uuid::parse_str(id).ok());
 
+        let provisional_id = fm
+            .as_ref()
+            .and_then(|f| f.provisional_id.as_deref())
+            .and_then(|id| Uuid::parse_str(id).ok());
+
         if let Some(tid) = temper_id {
             if let Some(server_item) = server_by_id.get(&tid) {
                 // Match by temper-id
@@ -1206,6 +1211,28 @@ pub async fn sync_reset(
                 matched_server_ids.insert(tid);
                 continue;
             }
+        }
+
+        // Provisional files — skip server matching entirely, mark Pending
+        if temper_id.is_none() && provisional_id.is_some() {
+            let resource_id = provisional_id.unwrap();
+            new_manifest.entries.insert(
+                resource_id,
+                temper_core::types::ManifestEntry {
+                    path: rel_path,
+                    body_hash: content_hash,
+                    remote_body_hash: String::new(),
+                    managed_hash: local_managed_hash,
+                    open_hash: local_open_hash,
+                    remote_managed_hash: String::new(),
+                    remote_open_hash: String::new(),
+                    synced_at: chrono::Utc::now(),
+                    state: ManifestEntryState::Pending,
+                    mtime_secs: mtime,
+                    provisional: true,
+                },
+            );
+            continue;
         }
 
         // Try matching by content hash
@@ -1253,7 +1280,11 @@ pub async fn sync_reset(
         // Unmatched local file — mark as Pending (new, will push on next sync).
         // Use the file's temper-id if present so push_resource can remap it
         // after the server assigns an authoritative ID.
-        let resource_id = temper_id.unwrap_or_else(Uuid::now_v7);
+        let (resource_id, is_provisional) = if let Some(tid) = temper_id {
+            (tid, false)
+        } else {
+            (Uuid::now_v7(), true)
+        };
         new_manifest.entries.insert(
             resource_id,
             temper_core::types::ManifestEntry {
@@ -1267,7 +1298,7 @@ pub async fn sync_reset(
                 synced_at: chrono::Utc::now(),
                 state: ManifestEntryState::Pending,
                 mtime_secs: mtime,
-                provisional: false,
+                provisional: is_provisional,
             },
         );
     }
