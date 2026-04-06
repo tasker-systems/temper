@@ -1026,6 +1026,7 @@ pub async fn sync_refresh(
                 entry.remote_body_hash = item.content_hash.clone();
                 entry.remote_managed_hash = item.managed_hash.clone();
                 entry.remote_open_hash = item.open_hash.clone();
+                entry.last_audit_id = item.last_audit_id;
                 if entry.body_hash == item.content_hash {
                     entry.state = ManifestEntryState::Clean;
                 }
@@ -1046,6 +1047,7 @@ pub async fn sync_refresh(
                     updated.remote_body_hash = item.content_hash.clone();
                     updated.remote_managed_hash = item.managed_hash.clone();
                     updated.remote_open_hash = item.open_hash.clone();
+                    updated.last_audit_id = item.last_audit_id;
                     updated.state = ManifestEntryState::Clean;
                     manifest.entries.insert(item.resource_id, updated);
                 }
@@ -1066,7 +1068,7 @@ pub async fn sync_refresh(
                         synced_at: chrono::Utc::now(),
                         state: ManifestEntryState::Pending,
                         mtime_secs: None,
-                        last_audit_id: None,
+                        last_audit_id: item.last_audit_id,
                         provisional: false,
                     },
                 );
@@ -1222,7 +1224,7 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
-                        last_audit_id: None,
+                        last_audit_id: server_item.last_audit_id,
                         provisional: false,
                     },
                 );
@@ -1288,7 +1290,7 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
-                        last_audit_id: None,
+                        last_audit_id: server_item.last_audit_id,
                         provisional: false,
                     },
                 );
@@ -1347,7 +1349,7 @@ pub async fn sync_reset(
                     synced_at: chrono::Utc::now(),
                     state: ManifestEntryState::Pending,
                     mtime_secs: None,
-                    last_audit_id: None,
+                    last_audit_id: item.last_audit_id,
                     provisional: false,
                 },
             );
