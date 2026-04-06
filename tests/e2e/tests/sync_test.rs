@@ -363,6 +363,76 @@ async fn sync_manifest_returns_resources(pool: sqlx::PgPool) {
     );
 }
 
+/// GET /api/sync/manifest — resource without audit rows returns null last_audit_id.
+///
+/// Regression test: the sqlx query_as! macro inferred last_audit_id as non-null
+/// from local dev data. In production, resources can exist without audit rows
+/// (e.g. migrated data), causing a runtime decode error on column 7.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sync_manifest_handles_null_last_audit_id(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("mfst-null-audit")
+        .await
+        .expect("context create failed");
+
+    let payload = IngestPayload {
+        title: "No Audit Doc".to_string(),
+        origin_uri: "test://e2e/mfst-null-audit".to_string(),
+        context_name: "mfst-null-audit".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: "nullaudit0000000000000000000000000000000000000000000000000000000"
+            .to_string(),
+        slug: "no-audit-doc".to_string(),
+        content: "# No Audit\n\nResource with audit rows removed.".to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+    };
+
+    let resource = app
+        .client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("ingest failed");
+
+    // Delete audit rows to simulate a resource without audit trail
+    sqlx::query("DELETE FROM kb_resource_audits WHERE resource_id = $1")
+        .bind(resource.id)
+        .execute(&pool)
+        .await
+        .expect("delete audit rows");
+
+    // Manifest should still work — last_audit_id will be NULL
+    let resp = app
+        .client
+        .sync()
+        .manifest()
+        .await
+        .expect("sync manifest should handle null last_audit_id");
+
+    let item = resp
+        .items
+        .iter()
+        .find(|i| i.resource_id == resource.id)
+        .expect("resource should appear in manifest");
+
+    assert!(
+        item.last_audit_id.is_none(),
+        "last_audit_id should be None after removing audit rows"
+    );
+}
+
 /// GET /api/sync/manifest — inactive resources are excluded.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn sync_manifest_excludes_inactive(pool: sqlx::PgPool) {
