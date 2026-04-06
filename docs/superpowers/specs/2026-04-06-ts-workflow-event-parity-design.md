@@ -200,9 +200,9 @@ template literal.
 Three layers, executed in order:
 
 **Layer 1: Rust e2e tests (existing)**
-Migrate Rust to the SQL functions (`insert_event_and_audit` and `store_chunks`),
-run existing `audit_test.rs` and ingest e2e tests. If they pass, the SQL
-functions are correct.
+Migrate Rust to `insert_event_and_audit` SQL function, run existing
+`audit_test.rs` and ingest e2e tests. `persist_resource_chunks()` is already
+in use on the Rust side — no migration needed there.
 
 **Layer 2: Hash parity tests**
 Shared JSON fixtures tested in both Rust and TypeScript:
@@ -224,22 +224,18 @@ New tests in `packages/temper-cloud/src/__tests__/ingest.test.ts`:
 - Call `updateResourceHash()`, verify `body_updated` event + `update_body` audit
 - Verify event payload JSONB contains all three hashes
 
-### 7. Chunk Storage SQL Function
+### 7. Chunk Storage: Migrate TS to Existing SQL Function
 
-The Rust ingest path inserts chunks inside a transaction in `ingest_service.rs`.
+The Rust ingest path already calls `persist_resource_chunks(resource_id, chunks_json)`
+— a SQL function that atomically gates search triggers, does bulk INSERT of chunks
+and chunk content, and rebuilds the search index once. See `ingest_service.rs`
+`persist_chunks()`.
+
 The TypeScript `storeStep` in both `process-upload.ts` and `process-ingest.ts`
-performs the same operation with inline SQL. To achieve parity and prevent drift,
-the chunk insertion logic moves to a SQL function as well.
-
-**SQL function `store_chunks()`** — accepts the resource ID, version number, and
-chunk data (as JSONB array), atomically:
-- Marks existing chunks as `is_current = false`
-- Inserts new `kb_chunks` rows
-- Inserts corresponding `kb_chunk_content` rows
-- Returns the new version number
-
-The Rust ingest service migrates to call this function (validated by existing
-e2e tests), then the TypeScript storeStep calls the same function.
+currently performs the same operation with inline SQL (version bump, chunk INSERT,
+chunk_content INSERT). Migrate both to call `persist_resource_chunks()` instead,
+passing the same JSONB array format the Rust side uses. This eliminates the
+inline SQL drift risk and ensures identical chunk storage behavior.
 
 ### 8. Context Auto-Creation Events
 
@@ -265,7 +261,7 @@ to audit — a simpler direct `kb_events` INSERT suffices, or a second SQL funct
 | File | Change |
 |------|--------|
 | `migrations/2026MMDD_insert_event_and_audit.sql` | New SQL function for event+audit |
-| `migrations/2026MMDD_store_chunks.sql` | New SQL function for chunk storage |
+| (no new migration — `persist_resource_chunks()` already exists) | — |
 | `crates/temper-core/src/types/ids.rs` | NewType definitions |
 | `crates/temper-core/src/types/mod.rs` | Module registration |
 | `crates/temper-core/src/types/audit.rs` | Use `EventId`, `AuditId`, `ResourceId`, `ProfileId` |
@@ -279,8 +275,8 @@ to audit — a simpler direct `kb_events` INSERT suffices, or a second SQL funct
 | `crates/temper-api/src/handlers/*.rs` | Update for NewType IDs as needed |
 | `packages/temper-cloud/src/hash.ts` | New: canonical JSON hashing |
 | `packages/temper-cloud/src/ingest.ts` | Wire event+audit into mutations |
-| `api/workflows/process-upload.ts` | Migrate storeStep to `store_chunks()` SQL function |
-| `api/workflows/process-ingest.ts` | Migrate storeStep to `store_chunks()` SQL function |
+| `api/workflows/process-upload.ts` | Migrate storeStep to call `persist_resource_chunks()` |
+| `api/workflows/process-ingest.ts` | Migrate storeStep to call `persist_resource_chunks()` |
 | `packages/temper-cloud/src/__tests__/hash.test.ts` | New: hash parity tests |
 | `packages/temper-cloud/src/__tests__/ingest.test.ts` | New: integration tests |
 | `package.json` (temper-cloud) | Add `uuidv7` dependency |
