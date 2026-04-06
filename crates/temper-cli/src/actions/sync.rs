@@ -280,21 +280,31 @@ pub fn scan_vault_for_untracked(
                 }
             };
 
-        // Use the file's temper-id if present; only mint a new UUID for files
-        // without frontmatter (which will get frontmatter injected below).
-        let resource_id = fm
+        // Determine resource ID and provisional status:
+        // - temper-id present → server-confirmed, not provisional
+        // - temper-provisional-id present → locally-generated, provisional
+        // - neither → mint new UUID, provisional
+        let (resource_id, is_provisional) = if let Some(tid) = fm
             .as_ref()
             .and_then(|f| f.legacy_id.as_deref())
             .and_then(|id| Uuid::parse_str(id).ok())
-            .unwrap_or_else(Uuid::now_v7);
+        {
+            (tid, false)
+        } else if let Some(pid) = fm
+            .as_ref()
+            .and_then(|f| f.provisional_id.as_deref())
+            .and_then(|id| Uuid::parse_str(id).ok())
+        {
+            (pid, true)
+        } else {
+            (Uuid::now_v7(), true)
+        };
         if fm.is_none() {
-            let frontmatter = ingest::build_frontmatter(
+            let frontmatter = ingest::build_provisional_frontmatter(
                 resource_id,
                 &ingest::title_from_path(path),
                 &context,
                 &doc_type,
-                None,
-                None,
             );
             let new_content = format!("{frontmatter}{content}");
             std::fs::write(path, &new_content)?;
@@ -325,7 +335,7 @@ pub fn scan_vault_for_untracked(
                 synced_at: chrono::Utc::now(),
                 state: temper_core::types::ManifestEntryState::Pending,
                 mtime_secs: mtime,
-                provisional: false,
+                provisional: is_provisional,
             },
         );
 

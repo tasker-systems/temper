@@ -420,6 +420,22 @@ pub fn dedup_vault_slug(vault_root: &Path, context: &str, doc_type: &str, slug: 
     format!("{slug}-{}", Uuid::now_v7())
 }
 
+/// Generate YAML frontmatter for a new vault file with a provisional ID.
+///
+/// Uses `temper-provisional-id` instead of `temper-id` to indicate the ID
+/// hasn't been confirmed by the server yet.
+pub fn build_provisional_frontmatter(
+    id: Uuid,
+    title: &str,
+    context: &str,
+    doc_type: &str,
+) -> String {
+    let now = chrono::Utc::now().to_rfc3339();
+    format!(
+        "---\ntemper-provisional-id: {id}\ntemper-type: {doc_type}\ntemper-context: {context}\ntemper-created: {now}\ntitle: \"{title}\"\n---\n\n"
+    )
+}
+
 /// Generate YAML frontmatter for a vault file.
 ///
 /// `extra_fields` allows callers to inject additional key-value pairs (e.g.
