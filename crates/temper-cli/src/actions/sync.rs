@@ -168,6 +168,10 @@ fn split_frontmatter_tiers(fm: &serde_yaml::Value) -> (serde_json::Value, serde_
         let Some(key_str) = key.as_str() else {
             continue;
         };
+        // Skip identity fields — tracked structurally, not as metadata
+        if key_str == "temper-id" || key_str == "temper-provisional-id" {
+            continue;
+        }
         let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
         if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
             managed.insert(key_str.to_string(), json_value);
@@ -587,6 +591,17 @@ async fn push_resource(
     let title = ingest::title_from_path(&file_path);
 
     let mut payload = ingest::build_ingest_payload(body, &title, context, doc_type, None)?;
+    // Strip identity fields from managed_meta before sending — the server
+    // tracks resource identity via kb_resources.id, not as metadata fields.
+    // Including them would cause managed_hash divergence between client and
+    // server after provisional IDs are replaced with authoritative ones.
+    let managed_meta = managed_meta.map(|mut m| {
+        if let Some(obj) = m.as_object_mut() {
+            obj.remove("temper-id");
+            obj.remove("temper-provisional-id");
+        }
+        m
+    });
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 

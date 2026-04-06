@@ -250,6 +250,11 @@ pub fn compute_frontmatter_hashes(frontmatter: &serde_yaml::Value) -> (String, S
             continue;
         };
         let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+        // Skip identity fields — the resource ID is tracked structurally
+        // (manifest key / kb_resources.id), not as hashed metadata.
+        if key_str == "temper-id" || key_str == "temper-provisional-id" {
+            continue;
+        }
         if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
             meta.insert(key_str.to_string(), json_value);
         } else {
@@ -278,25 +283,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_provisional_id_hashes_into_managed_tier() {
-        let yaml: serde_yaml::Value = serde_yaml::from_str(
-            "temper-provisional-id: \"019d6088-3a3b-71a3-b26c-d38b8338773e\"\ntitle: \"Test\"\ncustom-field: \"value\""
-        ).unwrap();
-        let (managed, open) = compute_frontmatter_hashes(&yaml);
+    fn test_identity_fields_excluded_from_managed_hash() {
+        // temper-id and temper-provisional-id are identity fields tracked
+        // structurally, not as hashed metadata.
+        let yaml1: serde_yaml::Value =
+            serde_yaml::from_str("temper-id: \"aaa\"\ntitle: \"Test\"\ncustom-field: \"value\"")
+                .unwrap();
+        let yaml2: serde_yaml::Value =
+            serde_yaml::from_str("temper-id: \"bbb\"\ntitle: \"Test\"\ncustom-field: \"value\"")
+                .unwrap();
+        let yaml3: serde_yaml::Value = serde_yaml::from_str(
+            "temper-provisional-id: \"ccc\"\ntitle: \"Test\"\ncustom-field: \"value\"",
+        )
+        .unwrap();
 
-        // Changing the provisional ID should change the managed hash
-        let yaml2: serde_yaml::Value = serde_yaml::from_str(
-            "temper-provisional-id: \"019d6088-0000-0000-0000-000000000000\"\ntitle: \"Test\"\ncustom-field: \"value\""
-        ).unwrap();
-        let (managed2, open2) = compute_frontmatter_hashes(&yaml2);
+        let (m1, o1) = compute_frontmatter_hashes(&yaml1);
+        let (m2, o2) = compute_frontmatter_hashes(&yaml2);
+        let (m3, o3) = compute_frontmatter_hashes(&yaml3);
 
-        assert_ne!(
-            managed, managed2,
-            "different provisional IDs should produce different managed hashes"
-        );
         assert_eq!(
-            open, open2,
-            "custom-field is the same so open hash should match"
+            m1, m2,
+            "different temper-id values should produce same managed hash"
         );
+        assert_eq!(m1, m3, "temper-provisional-id should also be excluded");
+        assert_eq!(o1, o2, "open hash should match");
+        assert_eq!(o1, o3, "open hash should match");
     }
 }
