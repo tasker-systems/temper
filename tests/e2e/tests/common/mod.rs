@@ -102,77 +102,77 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
 
 /// Seed fixtures: delete test data, insert stable seed resource.
 async fn clean_and_seed(pool: &PgPool) {
-    sqlx::query("DELETE FROM kb_resource_audits")
+    sqlx::query!("DELETE FROM kb_resource_audits")
         .execute(pool)
         .await
         .expect("clean kb_resource_audits");
 
-    sqlx::query(
+    sqlx::query!(
         "DELETE FROM kb_events WHERE profile_id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
+            '00000000-0000-0000-0004-000000000001'::uuid,
+            '00000000-0000-0000-0004-000000000002'::uuid
         )",
     )
     .execute(pool)
     .await
     .expect("clean kb_events");
 
-    sqlx::query("DELETE FROM kb_device_sync_state")
+    sqlx::query!("DELETE FROM kb_device_sync_state")
         .execute(pool)
         .await
         .expect("clean kb_device_sync_state");
-    sqlx::query("DELETE FROM kb_transfers")
+    sqlx::query!("DELETE FROM kb_transfers")
         .execute(pool)
         .await
         .expect("clean kb_transfers");
-    sqlx::query("DELETE FROM kb_team_invitations")
+    sqlx::query!("DELETE FROM kb_team_invitations")
         .execute(pool)
         .await
         .expect("clean kb_team_invitations");
-    sqlx::query("DELETE FROM kb_team_resources")
+    sqlx::query!("DELETE FROM kb_team_resources")
         .execute(pool)
         .await
         .expect("clean kb_team_resources");
-    sqlx::query("DELETE FROM kb_team_members")
+    sqlx::query!("DELETE FROM kb_team_members")
         .execute(pool)
         .await
         .expect("clean kb_team_members");
-    sqlx::query("DELETE FROM kb_teams")
+    sqlx::query!("DELETE FROM kb_teams")
         .execute(pool)
         .await
         .expect("clean kb_teams");
 
-    sqlx::query(
+    sqlx::query!(
         "DELETE FROM kb_resources WHERE owner_profile_id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
+            '00000000-0000-0000-0004-000000000001'::uuid,
+            '00000000-0000-0000-0004-000000000002'::uuid
         )",
     )
     .execute(pool)
     .await
     .expect("clean test resources");
 
-    sqlx::query(
+    sqlx::query!(
         "DELETE FROM kb_profile_auth_links WHERE profile_id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
+            '00000000-0000-0000-0004-000000000001'::uuid,
+            '00000000-0000-0000-0004-000000000002'::uuid
         )",
     )
     .execute(pool)
     .await
     .expect("clean test auth links");
 
-    sqlx::query(
+    sqlx::query!(
         "DELETE FROM kb_profiles WHERE id NOT IN (
-            '00000000-0000-0000-0004-000000000001',
-            '00000000-0000-0000-0004-000000000002'
+            '00000000-0000-0000-0004-000000000001'::uuid,
+            '00000000-0000-0000-0004-000000000002'::uuid
         )",
     )
     .execute(pool)
     .await
     .expect("clean test profiles");
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_resources
             (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
@@ -188,10 +188,10 @@ async fn clean_and_seed(pool: &PgPool) {
         )
         ON CONFLICT (id) DO UPDATE SET updated = now()
         "#,
+        uuid::Uuid::parse_str(TEMPER_CONTEXT_ID).unwrap(),
+        uuid::Uuid::parse_str(RESEARCH_DOC_TYPE_ID).unwrap(),
+        uuid::Uuid::parse_str(SYSTEM_PROFILE_ID).unwrap(),
     )
-    .bind(uuid::Uuid::parse_str(TEMPER_CONTEXT_ID).unwrap())
-    .bind(uuid::Uuid::parse_str(RESEARCH_DOC_TYPE_ID).unwrap())
-    .bind(uuid::Uuid::parse_str(SYSTEM_PROFILE_ID).unwrap())
     .execute(pool)
     .await
     .expect("seed resource");
