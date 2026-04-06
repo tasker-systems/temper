@@ -21,7 +21,8 @@ pub async fn list_visible(
     let offset = params.offset.unwrap_or(0).max(0);
 
     let rows = if let Some(ctx_id) = params.kb_context_id {
-        sqlx::query_as::<_, ResourceRow>(
+        sqlx::query_as!(
+            ResourceRow,
             r#"
             WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
             SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
@@ -35,15 +36,16 @@ pub async fn list_visible(
              ORDER BY r.updated DESC
              LIMIT $3 OFFSET $4
             "#,
+            profile_id,
+            ctx_id,
+            limit,
+            offset,
         )
-        .bind(profile_id)
-        .bind(ctx_id)
-        .bind(limit)
-        .bind(offset)
         .fetch_all(pool)
         .await?
     } else {
-        sqlx::query_as::<_, ResourceRow>(
+        sqlx::query_as!(
+            ResourceRow,
             r#"
             WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
             SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
@@ -56,10 +58,10 @@ pub async fn list_visible(
              ORDER BY r.updated DESC
              LIMIT $2 OFFSET $3
             "#,
+            profile_id,
+            limit,
+            offset,
         )
-        .bind(profile_id)
-        .bind(limit)
-        .bind(offset)
         .fetch_all(pool)
         .await?
     };
@@ -73,7 +75,8 @@ pub async fn get_visible(
     profile_id: Uuid,
     resource_id: Uuid,
 ) -> ApiResult<ResourceRow> {
-    let row = sqlx::query_as::<_, ResourceRow>(
+    let row = sqlx::query_as!(
+        ResourceRow,
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
         SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
@@ -85,9 +88,9 @@ pub async fn get_visible(
          WHERE r.id = $2
            AND r.is_active = true
         "#,
+        profile_id,
+        resource_id,
     )
-    .bind(profile_id)
-    .bind(resource_id)
     .fetch_optional(pool)
     .await?
     .ok_or(ApiError::NotFound)?;
@@ -100,15 +103,16 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     // Visibility check first.
     get_visible(pool, profile_id, resource_id).await?;
 
-    let chunks = sqlx::query_as::<_, ContentChunk>(
+    let chunks = sqlx::query_as!(
+        ContentChunk,
         r#"
-        SELECT chunk_index, header_path, content
+        SELECT chunk_index as "chunk_index!: i32", header_path as "header_path!: String", content as "content!: String"
           FROM kb_current_chunks
          WHERE resource_id = $1
          ORDER BY chunk_index
         "#,
+        resource_id,
     )
-    .bind(resource_id)
     .fetch_all(pool)
     .await?;
 
@@ -134,21 +138,21 @@ pub async fn create(
     req: ResourceCreateRequest,
 ) -> ApiResult<ResourceRow> {
     let id = Uuid::now_v7();
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_resources
             (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
              originator_profile_id, owner_profile_id, is_active, created, updated)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())
         "#,
+        id,
+        req.kb_context_id,
+        req.kb_doc_type_id,
+        req.origin_uri,
+        req.title,
+        req.slug,
+        profile_id,
     )
-    .bind(id)
-    .bind(req.kb_context_id)
-    .bind(req.kb_doc_type_id)
-    .bind(&req.origin_uri)
-    .bind(&req.title)
-    .bind(&req.slug)
-    .bind(profile_id)
     .execute(pool)
     .await?;
 
@@ -162,11 +166,14 @@ pub async fn update(
     resource_id: Uuid,
     req: ResourceUpdateRequest,
 ) -> ApiResult<ResourceRow> {
-    let can_modify: bool = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
-        .bind(profile_id)
-        .bind(resource_id)
-        .fetch_one(pool)
-        .await?;
+    let can_modify = sqlx::query_scalar!(
+        "SELECT can_modify_resource($1, $2)",
+        profile_id,
+        resource_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
 
     if !can_modify {
         return Err(ApiError::Forbidden);
@@ -177,7 +184,7 @@ pub async fn update(
     let new_title = req.title.as_deref().unwrap_or(&current.title);
     let new_slug = req.slug.as_deref().or(current.slug.as_deref());
 
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE kb_resources
            SET title    = $1,
@@ -186,10 +193,10 @@ pub async fn update(
          WHERE id = $3
            AND is_active = true
         "#,
+        new_title,
+        new_slug,
+        resource_id,
     )
-    .bind(new_title)
-    .bind(new_slug)
-    .bind(resource_id)
     .execute(pool)
     .await?;
 
@@ -203,11 +210,14 @@ pub async fn delete(
     resource_id: ResourceId,
     device_id: &str,
 ) -> ApiResult<()> {
-    let can_modify: bool = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
-        .bind(profile_id)
-        .bind(resource_id)
-        .fetch_one(pool)
-        .await?;
+    let can_modify = sqlx::query_scalar!(
+        "SELECT can_modify_resource($1, $2)",
+        profile_id.0,
+        resource_id.0,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
 
     if !can_modify {
         return Err(ApiError::Forbidden);
@@ -216,24 +226,27 @@ pub async fn delete(
     let mut tx = pool.begin().await?;
 
     // Fetch current hashes for the audit snapshot before soft-delete
-    let hashes: Option<(String, String, String)> = sqlx::query_as(
+    let hashes = sqlx::query!(
         "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
+        resource_id.0,
     )
-    .bind(resource_id)
     .fetch_optional(&mut *tx)
     .await?;
 
-    let (body_hash, managed_hash, open_hash) = hashes.unwrap_or_default();
+    let (body_hash, managed_hash, open_hash) = hashes
+        .map(|h| (h.body_hash, h.managed_hash, h.open_hash))
+        .unwrap_or_default();
 
     // Fetch context_id for the event
-    let (context_id,): (Uuid,) =
-        sqlx::query_as("SELECT kb_context_id FROM kb_resources WHERE id = $1")
-            .bind(resource_id)
-            .fetch_one(&mut *tx)
-            .await?;
+    let context_id = sqlx::query_scalar!(
+        "SELECT kb_context_id FROM kb_resources WHERE id = $1",
+        resource_id.0,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
 
     // Soft-delete the resource
-    sqlx::query(
+    sqlx::query!(
         r#"
         UPDATE kb_resources
            SET is_active = false,
@@ -241,8 +254,8 @@ pub async fn delete(
          WHERE id = $1
            AND is_active = true
         "#,
+        resource_id.0,
     )
-    .bind(resource_id)
     .execute(&mut *tx)
     .await?;
 

@@ -18,6 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
+    env:
+      SQLX_OFFLINE: "true"
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -28,7 +31,7 @@ jobs:
       - name: Setup Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: test
+          prefix-key: test-v2
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -58,6 +61,7 @@ jobs:
           --health-retries 5
 
     env:
+      SQLX_OFFLINE: "true"
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
 
     steps:
@@ -70,7 +74,7 @@ jobs:
       - name: Setup Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: test-db
+          prefix-key: test-db-v2
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest

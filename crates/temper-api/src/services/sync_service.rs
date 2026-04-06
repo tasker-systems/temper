@@ -104,15 +104,22 @@ pub async fn compute_sync_diff(
 
     let manifest_jsonb = serde_json::Value::Array(manifest_entries);
 
-    let rows = sqlx::query_as::<_, DiffRow>(
+    let rows = sqlx::query_as!(
+        DiffRow,
         r#"
-        SELECT resource_id, kb_uri, body_hash, managed_hash, open_hash, updated, diff_type
+        SELECT resource_id,
+               kb_uri AS "kb_uri!",
+               body_hash AS "body_hash!",
+               managed_hash AS "managed_hash!",
+               open_hash AS "open_hash!",
+               updated,
+               diff_type AS "diff_type!"
           FROM sync_diff_for_device($1, $2::text[], $3::jsonb)
         "#,
+        profile_id,
+        &context_names as &[String],
+        manifest_jsonb,
     )
-    .bind(profile_id)
-    .bind(&context_names)
-    .bind(&manifest_jsonb)
     .fetch_all(pool)
     .await?;
 
@@ -142,16 +149,16 @@ pub async fn complete_sync_round(
             .map(|m| m.content_hash.clone())
             .collect();
 
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             UPDATE kb_resource_manifests m
             SET body_hash = u.body_hash, updated = now()
             FROM unnest($1::uuid[], $2::text[]) AS u(resource_id, body_hash)
             WHERE m.resource_id = u.resource_id
             "#,
+            &ids as &[Uuid],
+            &hashes as &[String],
         )
-        .bind(&ids)
-        .bind(&hashes)
         .execute(&mut *tx)
         .await?;
 
@@ -161,16 +168,16 @@ pub async fn complete_sync_round(
     };
 
     // Upsert device sync state
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_device_sync_state (id, profile_id, device_id, last_sync_at)
         VALUES (gen_random_uuid(), $1, $2, now())
         ON CONFLICT (profile_id, device_id)
         DO UPDATE SET last_sync_at = now()
         "#,
+        profile_id,
+        request.device_id,
     )
-    .bind(profile_id)
-    .bind(&request.device_id)
     .execute(&mut *tx)
     .await?;
 
@@ -198,15 +205,16 @@ struct ManifestRow {
 /// Fetch all active resources for a profile — metadata only, no content.
 /// Used by `GET /api/sync/manifest` for manifest recovery (refresh/reset).
 pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncManifestResponse> {
-    let rows = sqlx::query_as::<_, ManifestRow>(
+    let rows = sqlx::query_as!(
+        ManifestRow,
         r#"
         SELECT r.id AS resource_id,
                c.name AS context_name,
                d.name AS doc_type_name,
-               COALESCE(r.slug, '') AS slug,
-               COALESCE(m.body_hash, '') AS body_hash,
-               COALESCE(m.managed_hash, '') AS managed_hash,
-               COALESCE(m.open_hash, '') AS open_hash,
+               COALESCE(r.slug, '') AS "slug!",
+               COALESCE(m.body_hash, '') AS "body_hash!",
+               COALESCE(m.managed_hash, '') AS "managed_hash!",
+               COALESCE(m.open_hash, '') AS "open_hash!",
                la.id AS last_audit_id
           FROM kb_resources r
           JOIN kb_contexts c ON c.id = r.kb_context_id
@@ -223,8 +231,8 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
            AND r.is_active = true
          ORDER BY c.name, d.name, r.slug
         "#,
+        profile_id,
     )
-    .bind(profile_id)
     .fetch_all(pool)
     .await?;
 

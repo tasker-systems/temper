@@ -1,0 +1,58 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at\n          FROM kb_profile_auth_links\n         WHERE profile_id = $1\n         ORDER BY linked_at ASC\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "auth_provider",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "auth_provider_user_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "is_default",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 6,
+        "name": "linked_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "f1e08329001a94d3f7f23265ad328a9ee1fe2e64cbf0682177f9b344deeb3366"
+}

@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT replace_resource_chunks($1, $2)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "replace_resource_chunks",
+        "type_info": "Int4"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "c91206a135c50d39bbc324fb37ab8512adeda23f6d927c7075db1e43dcff4942"
+}

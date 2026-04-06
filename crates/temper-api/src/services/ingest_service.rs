@@ -82,13 +82,11 @@ pub async fn insert_event_and_audit(
 
 /// Resolve doc_type name to UUID from kb_doc_types.
 async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
-    let row: Option<(Uuid,)> = sqlx::query_as("SELECT id FROM kb_doc_types WHERE name = $1")
-        .bind(name)
+    let id = sqlx::query_scalar!("SELECT id FROM kb_doc_types WHERE name = $1", name)
         .fetch_optional(pool)
         .await?;
 
-    row.map(|(id,)| id)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type: '{name}'")))
+    id.ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type: '{name}'")))
 }
 
 /// Check for body-hash dedup — returns existing resource if hash matches.
@@ -97,11 +95,12 @@ async fn find_by_body_hash(
     profile_id: ProfileId,
     body_hash: &str,
 ) -> ApiResult<Option<ResourceRow>> {
-    let row = sqlx::query_as::<_, ResourceRow>(
+    let row = sqlx::query_as!(
+        ResourceRow,
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
         SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug,
+               r.slug as "slug: _",
                r.originator_profile_id, r.owner_profile_id, r.is_active,
                r.created, r.updated
           FROM kb_resources r
@@ -111,9 +110,9 @@ async fn find_by_body_hash(
            AND r.is_active = true
          LIMIT 1
         "#,
+        profile_id.0,
+        body_hash,
     )
-    .bind(profile_id)
-    .bind(body_hash)
     .fetch_optional(pool)
     .await?;
 
@@ -129,11 +128,14 @@ async fn persist_chunks(
 ) -> ApiResult<i32> {
     let chunks_json = chunks_to_jsonb(chunks);
 
-    let (count,): (i32,) = sqlx::query_as("SELECT persist_resource_chunks($1, $2)")
-        .bind(resource_id)
-        .bind(&chunks_json)
-        .fetch_one(&mut **tx)
-        .await?;
+    let count = sqlx::query_scalar!(
+        "SELECT persist_resource_chunks($1, $2)",
+        resource_id.0,
+        chunks_json
+    )
+    .fetch_one(&mut **tx)
+    .await?
+    .expect("persist_resource_chunks returned NULL");
 
     Ok(count)
 }
@@ -147,11 +149,14 @@ async fn replace_chunks(
 ) -> ApiResult<i32> {
     let chunks_json = chunks_to_jsonb(chunks);
 
-    let (count,): (i32,) = sqlx::query_as("SELECT replace_resource_chunks($1, $2)")
-        .bind(resource_id)
-        .bind(&chunks_json)
-        .fetch_one(&mut **tx)
-        .await?;
+    let count = sqlx::query_scalar!(
+        "SELECT replace_resource_chunks($1, $2)",
+        resource_id.0,
+        chunks_json
+    )
+    .fetch_one(&mut **tx)
+    .await?
+    .expect("replace_resource_chunks returned NULL");
 
     Ok(count)
 }
@@ -196,43 +201,45 @@ pub async fn ingest(
     let mut tx = pool.begin().await?;
 
     let resource_id = ResourceId::new();
-    let resource = sqlx::query_as::<_, ResourceRow>(
+    let resource = sqlx::query_as!(
+        ResourceRow,
         r#"
         INSERT INTO kb_resources (
             id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
             originator_profile_id, owner_profile_id,
             created, updated
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7, now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
         RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
-                  slug,
+                  slug as "slug: _",
                   originator_profile_id, owner_profile_id, is_active,
                   created, updated
         "#,
+        resource_id.0,
+        context.id.0,
+        doc_type_id,
+        payload.origin_uri,
+        payload.title,
+        payload.slug,
+        profile_id.0,
+        profile_id.0,
     )
-    .bind(resource_id)
-    .bind(context_id)
-    .bind(doc_type_id)
-    .bind(&payload.origin_uri)
-    .bind(&payload.title)
-    .bind(&payload.slug)
-    .bind(profile_id)
     .fetch_one(&mut *tx)
     .await?;
 
     // Insert manifest row
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
         VALUES ($1, $2, $3, $4, $5, $6, now())
         "#,
+        resource_id.0,
+        payload.content_hash,
+        managed_meta,
+        open_meta,
+        managed_hash,
+        open_hash,
     )
-    .bind(resource_id)
-    .bind(&payload.content_hash)
-    .bind(&managed_meta)
-    .bind(&open_meta)
-    .bind(&managed_hash)
-    .bind(&open_hash)
     .execute(&mut *tx)
     .await?;
 
@@ -305,12 +312,13 @@ pub async fn update(
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // Verify the profile can modify this resource
-    let can_modify: Option<(bool,)> =
-        sqlx::query_as("SELECT true FROM can_modify_resource($1, $2)")
-            .bind(profile_id)
-            .bind(resource_id)
-            .fetch_optional(pool)
-            .await?;
+    let can_modify = sqlx::query_scalar!(
+        "SELECT true FROM can_modify_resource($1, $2)",
+        profile_id.0,
+        resource_id.0,
+    )
+    .fetch_optional(pool)
+    .await?;
 
     if can_modify.is_none() {
         return Err(ApiError::NotFound);
@@ -335,23 +343,24 @@ pub async fn update(
     let mut tx = pool.begin().await?;
 
     // Update resource timestamp
-    let resource = sqlx::query_as::<_, ResourceRow>(
+    let resource = sqlx::query_as!(
+        ResourceRow,
         r#"
         UPDATE kb_resources
         SET updated = now()
         WHERE id = $1
         RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
-                  slug,
+                  slug as "slug: _",
                   originator_profile_id, owner_profile_id, is_active,
                   created, updated
         "#,
+        resource_id.0,
     )
-    .bind(resource_id)
     .fetch_one(&mut *tx)
     .await?;
 
     // Upsert manifest row
-    sqlx::query(
+    sqlx::query!(
         r#"
         INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
         VALUES ($1, $2, $3, $4, $5, $6, now())
@@ -359,13 +368,13 @@ pub async fn update(
         DO UPDATE SET body_hash = $2, managed_meta = $3, open_meta = $4,
                       managed_hash = $5, open_hash = $6, updated = now()
         "#,
+        resource_id.0,
+        payload.content_hash,
+        managed_meta,
+        open_meta,
+        managed_hash,
+        open_hash,
     )
-    .bind(resource_id)
-    .bind(&payload.content_hash)
-    .bind(&managed_meta)
-    .bind(&open_meta)
-    .bind(&managed_hash)
-    .bind(&open_hash)
     .execute(&mut *tx)
     .await?;
 
