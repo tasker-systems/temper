@@ -1,5 +1,5 @@
 ---
-id: "{{id}}"
+temper-provisional-id: "{{id}}"
 type: goal
 title: "{{title}}"
 slug: "{{slug}}"

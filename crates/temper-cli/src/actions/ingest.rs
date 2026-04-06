@@ -64,6 +64,7 @@ pub struct ParsedFrontmatter {
     pub slug: Option<String>,
     pub date: Option<String>,
     pub legacy_id: Option<String>,
+    pub provisional_id: Option<String>,
     pub goal: Option<String>,
     pub stage: Option<String>,
     pub mode: Option<String>,
@@ -90,6 +91,7 @@ pub fn parse_source_frontmatter(content: &str) -> Option<ParsedFrontmatter> {
             .or_else(|| s("temper-created").map(|c| c[..10].to_string()))
             .or_else(|| s("created").map(|c| c[..10].to_string())),
         legacy_id: s("temper-id").or_else(|| s("id")),
+        provisional_id: s("temper-provisional-id"),
         goal: s("temper-goal").or_else(|| s("goal")),
         stage: s("temper-stage").or_else(|| s("stage")),
         mode: s("temper-mode").or_else(|| s("mode")),
@@ -956,5 +958,27 @@ created: 2026-03-23
     fn display_name_from_url_root() {
         // Domain "example.com" is treated as a filename — dot stripped → "example"
         assert_eq!(display_name_from_url("https://example.com/"), "example");
+    }
+
+    // --- provisional_id parsing ---
+
+    #[test]
+    fn test_parse_provisional_id() {
+        let content = "---\ntemper-provisional-id: \"019d6088-3a3b-71a3-b26c-d38b8338773e\"\ntitle: \"Test\"\n---\n\nBody";
+        let fm = parse_source_frontmatter(content).unwrap();
+        assert_eq!(
+            fm.provisional_id.as_deref(),
+            Some("019d6088-3a3b-71a3-b26c-d38b8338773e")
+        );
+        assert!(fm.legacy_id.is_none());
+    }
+
+    #[test]
+    fn test_parse_both_ids_prefers_temper_id() {
+        let content =
+            "---\ntemper-id: \"aaa\"\ntemper-provisional-id: \"bbb\"\ntitle: \"Test\"\n---\n\nBody";
+        let fm = parse_source_frontmatter(content).unwrap();
+        assert_eq!(fm.legacy_id.as_deref(), Some("aaa"));
+        assert_eq!(fm.provisional_id.as_deref(), Some("bbb"));
     }
 }
