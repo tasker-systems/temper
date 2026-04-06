@@ -376,7 +376,11 @@ With:
         Some(context.id),
         Some(resource_id),
         "resource_created",
-        &serde_json::json!({"body_hash": &payload.content_hash}),
+        &serde_json::json!({
+            "body_hash": &payload.content_hash,
+            "managed_hash": &managed_hash,
+            "open_hash": &open_hash,
+        }),
     )
     .await?;
 
@@ -446,7 +450,11 @@ New:
         Some(resource.kb_context_id),
         Some(resource_id),
         "body_updated",
-        &serde_json::json!({"body_hash": &payload.content_hash}),
+        &serde_json::json!({
+            "body_hash": &payload.content_hash,
+            "managed_hash": &managed_hash,
+            "open_hash": &open_hash,
+        }),
     )
     .await?;
 
@@ -494,9 +502,11 @@ Old:
     .await?;
 ```
 
-New (we need to fetch `body_hash` for the audit row — read it from the manifest row we just updated):
+New (MetaUpdatePayload doesn't carry body_hash since meta updates don't change body content — we fetch it from the manifest for both the enriched event payload and the audit snapshot):
 ```rust
-    // Fetch current body_hash for audit snapshot
+    // Fetch current body_hash for enriched event payload and audit snapshot.
+    // MetaUpdatePayload only carries managed/open hashes — body is unchanged
+    // by meta updates, but we need it for complete event + audit records.
     let (body_hash,): (String,) = sqlx::query_as(
         "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
     )
@@ -512,6 +522,7 @@ New (we need to fetch `body_hash` for the audit row — read it from the manifes
         Some(resource_id),
         "managed_meta_updated",
         &serde_json::json!({
+            "body_hash": &body_hash,
             "managed_hash": &payload.managed_hash,
             "open_hash": &payload.open_hash,
         }),
@@ -1258,3 +1269,39 @@ Expected: no formatting issues.
 - [ ] **Step 4: Fix any issues found, re-verify, commit fixes**
 
 If any issues found, fix them and create a commit for each fix.
+
+---
+
+## Findings: Mutation Paths Without Events (Followup)
+
+The endpoint audit revealed several mutation paths that don't emit `kb_events`. These are out of scope for this PR but should be tracked as a followup task.
+
+### Resource-adjacent mutations (may warrant events)
+
+| Endpoint | Service | What it does | Notes |
+|----------|---------|-------------|-------|
+| `POST /api/resources` | `resource_service::create()` | Creates bare resource shell (no manifest, no chunks) | Different semantic from ingest — no hashes exist yet. Could emit `resource_shell_created` but unclear value. |
+| `PATCH /api/resources/{id}` | `resource_service::update()` | Updates title/slug only | No hash changes. Could emit `resource_updated` for audit trail but no hash-based audit row applies. |
+| `POST /api/sync/complete` | `sync_service::complete_sync_round()` | Batch-updates manifest hashes after sync | Infrastructure/sync finalization, not a user mutation. A `sync_completed` event could help debugging. |
+
+### TypeScript pipeline (needs event+audit parity)
+
+| Path | What it does | Notes |
+|------|-------------|-------|
+| `POST /api/upload` + `processUpload` workflow | Blob upload → chunk extraction → storage | Writes `kb_blob_files`, `kb_chunks`, `kb_chunk_content` without events. Needs parity with Rust ingest path. |
+| `processIngest` workflow | Chunk storage | Same gap — no events emitted. |
+| `packages/temper-cloud/src/ingest.ts` | `insertResource()`, `updateResourceHash()` | Library functions that write resources/manifests without events. |
+
+### Non-resource mutations (no action needed)
+
+| Endpoint | Why no event |
+|----------|-------------|
+| `PATCH /api/profile` | Profile updates are not resource mutations |
+| `POST /api/contexts` | Context creation is administrative, not resource-scoped |
+| Auth middleware auto-provision | Infrastructure — auto-creates profile/auth-link/default-context |
+
+### Recommended followup tasks
+
+1. **TS workflow event parity** — Ensure TypeScript upload/ingest pipeline creates events + audit rows matching the Rust ingest path
+2. **events.jsonl removal** — Remove local filesystem events.jsonl and all CLI code that reads/writes it; cloud events are now authoritative
+3. **Resource shell events** — Decide whether bare `POST /api/resources` and `PATCH /api/resources/{id}` should emit events
