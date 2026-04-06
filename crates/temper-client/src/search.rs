@@ -4,7 +4,7 @@ use reqwest::Method;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::api::{SearchParams, SearchResultRow};
+use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 
 /// Sub-client for search operations.
 pub struct SearchClient<'a> {
@@ -22,14 +22,14 @@ impl<'a> SearchClient<'a> {
         Self { http }
     }
 
-    /// Run a vector similarity search.
+    /// Run a search — text query, embedding vector, or both.
     pub async fn query(
         &self,
         embedding: Vec<f32>,
         context_name: Option<String>,
         doc_type: Option<String>,
         limit: Option<i64>,
-    ) -> Result<Vec<SearchResultRow>> {
+    ) -> Result<Vec<UnifiedSearchResultRow>> {
         let token = self.http.resolve_token()?;
         let params = SearchParams {
             embedding: Some(embedding),
