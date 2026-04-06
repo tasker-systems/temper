@@ -111,6 +111,15 @@ Rust crates use feature flags to gate heavy dependencies:
 - **Auth** — Auth0 device authorization PKCE flow. Tokens cached locally. API validates JWTs via JWKS.
 - **CI** — GitHub Actions: `code-quality.yml` (fmt, clippy, machete), `test-rust.yml`, `test-typescript.yml`, `ci-success.yml` (merge gate).
 
+## SQL Query Checking
+
+All SQL queries use `sqlx::query!()` / `sqlx::query_as!()` / `sqlx::query_scalar!()` macros for compile-time verification against the actual schema. One exception: the `unified_search` query in `search_service.rs` uses runtime `query_as` due to pgvector `::vector` type cast incompatibility with the macro.
+
+- **Local dev:** Set `DATABASE_URL` — macros check against the live database
+- **CI builds:** `SQLX_OFFLINE=true` with committed `.sqlx/` cache (no database needed for compilation)
+- **After changing any SQL:** Regenerate cache with `cargo sqlx prepare --workspace -- --all-features`
+- **Tests always run against a real database** (Docker Postgres locally, CI database in GitHub Actions)
+
 ## Environment
 
 - Docker Postgres on port **5437** (not 5432, to avoid conflicts).

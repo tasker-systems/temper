@@ -1,0 +1,20 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO kb_resources\n            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,\n             originator_profile_id, owner_profile_id, is_active, created, updated)\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Varchar",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b1bcd19a2a7b562f7d793c741f945a55f389ea99718b7825b8bb917a9c6cf4cd"
+}
