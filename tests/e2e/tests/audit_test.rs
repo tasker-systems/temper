@@ -52,10 +52,10 @@ async fn audit_row_created_on_ingest(pool: sqlx::PgPool) {
     let (resource_id, _ctx) = ingest_test_resource(&app, "create").await;
 
     // Verify audit row exists via direct DB query
-    let audit_rows = sqlx::query!(
+    let audit_rows: Vec<(uuid::Uuid, String, String)> = sqlx::query_as(
         "SELECT id, action, body_hash FROM kb_resource_audits WHERE resource_id = $1 ORDER BY created",
-        resource_id
     )
+    .bind(resource_id)
     .fetch_all(&pool)
     .await
     .expect("query audit rows");
@@ -65,11 +65,8 @@ async fn audit_row_created_on_ingest(pool: sqlx::PgPool) {
         1,
         "expected exactly one audit row after ingest"
     );
-    assert_eq!(audit_rows[0].action, "create");
-    assert!(
-        !audit_rows[0].body_hash.is_empty(),
-        "body_hash should not be empty"
-    );
+    assert_eq!(audit_rows[0].1, "create");
+    assert!(!audit_rows[0].2.is_empty(), "body_hash should not be empty");
 }
 
 /// Updating a resource's body creates an update_body audit row.
@@ -106,17 +103,17 @@ async fn audit_row_created_on_update(pool: sqlx::PgPool) {
         .expect("ingest update failed");
 
     // Verify two audit rows: create + update_body
-    let audit_rows = sqlx::query!(
+    let audit_rows: Vec<(String,)> = sqlx::query_as(
         "SELECT action FROM kb_resource_audits WHERE resource_id = $1 ORDER BY created",
-        resource_id
     )
+    .bind(resource_id)
     .fetch_all(&pool)
     .await
     .expect("query audit rows");
 
     assert_eq!(audit_rows.len(), 2);
-    assert_eq!(audit_rows[0].action, "create");
-    assert_eq!(audit_rows[1].action, "update_body");
+    assert_eq!(audit_rows[0].0, "create");
+    assert_eq!(audit_rows[1].0, "update_body");
 }
 
 /// Updating managed meta creates an update_meta audit row.
@@ -157,17 +154,17 @@ async fn audit_row_created_on_meta_update(pool: sqlx::PgPool) {
     );
 
     // Verify audit rows: create + update_meta
-    let audit_rows = sqlx::query!(
+    let audit_rows: Vec<(String,)> = sqlx::query_as(
         "SELECT action FROM kb_resource_audits WHERE resource_id = $1 ORDER BY created",
-        resource_id
     )
+    .bind(resource_id)
     .fetch_all(&pool)
     .await
     .expect("query audit rows");
 
     assert_eq!(audit_rows.len(), 2);
-    assert_eq!(audit_rows[0].action, "create");
-    assert_eq!(audit_rows[1].action, "update_meta");
+    assert_eq!(audit_rows[0].0, "create");
+    assert_eq!(audit_rows[1].0, "update_meta");
 }
 
 /// Deleting a resource creates a delete audit row.
@@ -190,17 +187,17 @@ async fn audit_row_created_on_delete(pool: sqlx::PgPool) {
         .expect("delete failed");
 
     // Verify audit rows: create + delete
-    let audit_rows = sqlx::query!(
+    let audit_rows: Vec<(String,)> = sqlx::query_as(
         "SELECT action FROM kb_resource_audits WHERE resource_id = $1 ORDER BY created",
-        resource_id
     )
+    .bind(resource_id)
     .fetch_all(&pool)
     .await
     .expect("query audit rows");
 
     assert_eq!(audit_rows.len(), 2);
-    assert_eq!(audit_rows[0].action, "create");
-    assert_eq!(audit_rows[1].action, "delete");
+    assert_eq!(audit_rows[0].0, "create");
+    assert_eq!(audit_rows[1].0, "delete");
 }
 
 /// Audit rows link to valid events (foreign key integrity).
@@ -216,23 +213,19 @@ async fn audit_row_references_valid_event(pool: sqlx::PgPool) {
     let (resource_id, _ctx) = ingest_test_resource(&app, "fk").await;
 
     // Verify the audit row's event_id exists in kb_events
-    let valid_count = sqlx::query_scalar!(
+    let valid_count: (i64,) = sqlx::query_as(
         r#"
         SELECT COUNT(*) FROM kb_resource_audits a
         JOIN kb_events e ON e.id = a.event_id
         WHERE a.resource_id = $1
         "#,
-        resource_id
     )
+    .bind(resource_id)
     .fetch_one(&pool)
     .await
     .expect("join query");
 
-    assert_eq!(
-        valid_count.unwrap_or(0),
-        1,
-        "audit row should reference a valid event"
-    );
+    assert_eq!(valid_count.0, 1, "audit row should reference a valid event");
 }
 
 /// Fetch manifest includes last_audit_id for resources with audits.
