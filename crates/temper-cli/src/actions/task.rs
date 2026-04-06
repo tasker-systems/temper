@@ -90,17 +90,27 @@ pub fn find_task(
         .filter(|t| t.slug.ends_with(slug_or_suffix))
         .collect();
     match matches.len() {
-        0 => Ok(None),
-        1 => Ok(Some(matches[0].clone())),
-        _ => Err(TemperError::Vault(format!(
-            "ambiguous slug suffix '{slug_or_suffix}', matches: {}",
-            matches
-                .iter()
-                .map(|t| t.slug.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))),
+        1 => return Ok(Some(matches[0].clone())),
+        n if n > 1 => {
+            return Err(TemperError::Vault(format!(
+                "ambiguous slug suffix '{slug_or_suffix}', matches: {}",
+                matches
+                    .iter()
+                    .map(|t| t.slug.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )))
+        }
+        _ => {}
     }
+    // Seq number match
+    if let Ok(seq) = slug_or_suffix.parse::<u32>() {
+        let seq_matches: Vec<_> = all.iter().filter(|t| t.seq == seq).collect();
+        if seq_matches.len() == 1 {
+            return Ok(Some(seq_matches[0].clone()));
+        }
+    }
+    Ok(None)
 }
 
 /// Create a new task.

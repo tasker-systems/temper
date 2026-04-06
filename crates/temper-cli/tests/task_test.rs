@@ -461,3 +461,27 @@ fn test_task_list_rejects_invalid_stage() {
         temper_cli::commands::task::list(&config, Some("myapp"), None, Some("brainstorm"), "text");
     assert!(result.is_err(), "invalid stage should be rejected");
 }
+
+#[test]
+fn test_find_task_by_seq_number() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+
+    let g_slug =
+        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let slug =
+        temper_cli::commands::task::create(&config, "myapp", "Seq Lookup", Some(&g_slug), None, None)
+            .unwrap();
+
+    // Get the task's seq number
+    let task = temper_cli::commands::task::find_task(&config, &slug, None)
+        .unwrap()
+        .expect("task should exist by slug");
+    let seq = task.seq;
+
+    // Look up by seq number string
+    let found = temper_cli::commands::task::find_task(&config, &seq.to_string(), None)
+        .unwrap()
+        .expect("task should be found by seq number");
+    assert_eq!(found.slug, slug);
+}
