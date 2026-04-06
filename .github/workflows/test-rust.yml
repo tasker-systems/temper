@@ -61,6 +61,7 @@ jobs:
           --health-retries 5
 
     env:
+      SQLX_OFFLINE: "true"
       DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
 
     steps:
