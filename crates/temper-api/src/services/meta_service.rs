@@ -6,7 +6,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::ingest_service::insert_event;
+use crate::services::ingest_service::{insert_audit, insert_event};
 
 use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
@@ -110,7 +110,17 @@ pub async fn update_meta(
     }
 
     // 4. Insert kb_event
-    let _event_id = insert_event(
+    // Fetch current body_hash for enriched event payload and audit snapshot.
+    // MetaUpdatePayload only carries managed/open hashes — body is unchanged
+    // by meta updates, but we need it for complete event + audit records.
+    let (body_hash,): (String,) = sqlx::query_as(
+        "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
+    )
+    .bind(resource_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let event_id = insert_event(
         &mut tx,
         profile_id,
         "api",
@@ -118,9 +128,23 @@ pub async fn update_meta(
         Some(resource_id),
         "managed_meta_updated",
         &serde_json::json!({
+            "body_hash": &body_hash,
             "managed_hash": &payload.managed_hash,
             "open_hash": &payload.open_hash,
         }),
+    )
+    .await?;
+
+    insert_audit(
+        &mut tx,
+        resource_id,
+        event_id,
+        profile_id,
+        "api",
+        &body_hash,
+        &payload.managed_hash,
+        &payload.open_hash,
+        "update_meta",
     )
     .await?;
 

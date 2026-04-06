@@ -2,6 +2,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use crate::services::ingest_service::{insert_audit, insert_event};
 
 pub use temper_core::types::resource::{
     ContentChunk, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
@@ -206,6 +207,26 @@ pub async fn delete(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiRe
         return Err(ApiError::Forbidden);
     }
 
+    let mut tx = pool.begin().await?;
+
+    // Fetch current hashes for the audit snapshot before soft-delete
+    let hashes: Option<(String, String, String)> = sqlx::query_as(
+        "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
+    )
+    .bind(resource_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let (body_hash, managed_hash, open_hash) = hashes.unwrap_or_default();
+
+    // Fetch context_id for the event
+    let (context_id,): (Uuid,) =
+        sqlx::query_as("SELECT kb_context_id FROM kb_resources WHERE id = $1")
+            .bind(resource_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+    // Soft-delete the resource
     sqlx::query(
         r#"
         UPDATE kb_resources
@@ -216,8 +237,39 @@ pub async fn delete(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiRe
         "#,
     )
     .bind(resource_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    // Record event and audit
+    let event_id = insert_event(
+        &mut tx,
+        profile_id,
+        "api",
+        Some(context_id),
+        Some(resource_id),
+        "resource_deleted",
+        &serde_json::json!({
+            "body_hash": &body_hash,
+            "managed_hash": &managed_hash,
+            "open_hash": &open_hash,
+        }),
+    )
+    .await?;
+
+    insert_audit(
+        &mut tx,
+        resource_id,
+        event_id,
+        profile_id,
+        "api",
+        &body_hash,
+        &managed_hash,
+        &open_hash,
+        "delete",
+    )
+    .await?;
+
+    tx.commit().await?;
 
     Ok(())
 }

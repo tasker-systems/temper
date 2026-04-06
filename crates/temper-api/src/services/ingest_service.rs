@@ -374,14 +374,31 @@ pub async fn update(
     replace_chunks(&mut tx, resource_id, &chunks).await?;
 
     // Insert event
-    let _event_id = insert_event(
+    let event_id = insert_event(
         &mut tx,
         profile_id,
         "api",
         Some(resource.kb_context_id),
         Some(resource_id),
         "body_updated",
-        &serde_json::json!({"body_hash": &payload.content_hash}),
+        &serde_json::json!({
+            "body_hash": &payload.content_hash,
+            "managed_hash": &managed_hash,
+            "open_hash": &open_hash,
+        }),
+    )
+    .await?;
+
+    insert_audit(
+        &mut tx,
+        resource_id,
+        event_id,
+        profile_id,
+        "api",
+        &payload.content_hash,
+        &managed_hash,
+        &open_hash,
+        "update_body",
     )
     .await?;
 
