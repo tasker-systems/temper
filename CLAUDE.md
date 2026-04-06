@@ -117,3 +117,7 @@ Rust crates use feature flags to gate heavy dependencies:
 - `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`
 - Linting: Rust uses clippy with `-D warnings`; TypeScript uses Biome.
 - Pre-commit hook in `githooks/pre-commit`.
+
+## Cloud Agents
+
+For tasks delegated to cloud-based Claude Code sessions, see [docs/guides/cloud-agents.md](docs/guides/cloud-agents.md) for the task preparation guide and environment setup.
