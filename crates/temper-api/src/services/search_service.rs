@@ -8,8 +8,6 @@ use crate::error::{ApiError, ApiResult};
 
 pub use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 
-// TODO(task-5): remove — kept temporarily so handlers/search.rs compiles
-pub use temper_core::types::api::SearchResultRow;
 
 const MAX_LIMIT: i64 = 50;
 const DEFAULT_LIMIT: i64 = 10;

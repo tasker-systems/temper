@@ -32,10 +32,13 @@ impl<'a> SearchClient<'a> {
     ) -> Result<Vec<SearchResultRow>> {
         let token = self.http.resolve_token()?;
         let params = SearchParams {
-            embedding,
+            embedding: Some(embedding),
+            query: None,
+            search_config: "english".into(),
             context_name,
             doc_type,
             limit,
+            offset: None,
         };
         let req = self.http.post("/api/search").json(&params);
         self.http
