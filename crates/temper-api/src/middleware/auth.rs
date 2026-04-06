@@ -157,16 +157,17 @@ async fn lookup_cached_email(
     provider: &str,
     external_user_id: &str,
 ) -> Option<(String, Option<bool>)> {
-    let row: Option<(String,)> = sqlx::query_as(
+    let email = sqlx::query_scalar!(
         "SELECT email FROM kb_profile_auth_links WHERE auth_provider = $1 AND auth_provider_user_id = $2",
+        provider,
+        external_user_id,
     )
-    .bind(provider)
-    .bind(external_user_id)
     .fetch_optional(pool)
     .await
-    .ok()?;
+    .ok()?
+    .flatten();
 
-    row.map(|(email,)| (email, Some(true)))
+    email.map(|e| (e, Some(true)))
 }
 
 /// OIDC userinfo response (subset of fields we need).

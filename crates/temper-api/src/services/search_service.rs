@@ -61,6 +61,7 @@ pub async fn search(
         .as_ref()
         .map(|e| temper_core::types::ingest::format_embedding(e));
 
+    // NOTE: Uses runtime query_as — pgvector ::vector cast not supported by sqlx macro
     let rows = sqlx::query_as::<_, UnifiedSearchResultRow>(
         r#"
         SELECT resource_id, title, slug, kb_uri, origin_uri,
