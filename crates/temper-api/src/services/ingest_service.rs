@@ -259,6 +259,41 @@ pub async fn ingest(
     Ok(resource)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_empty_object() {
+        let hash = hash_json_value(&serde_json::json!({}));
+        assert_eq!(
+            hash,
+            "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        );
+    }
+
+    #[test]
+    fn hash_key_order_independent() {
+        let a = hash_json_value(&serde_json::json!({"b": 2, "a": 1}));
+        let b = hash_json_value(&serde_json::json!({"a": 1, "b": 2}));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn hash_json_shared_fixture() {
+        let fixture = serde_json::json!({
+            "temper-type": "task",
+            "temper-stage": "in-progress",
+            "temper-seq": 42,
+            "title": "Test task"
+        });
+        let hash = hash_json_value(&fixture);
+        eprintln!("Rust shared fixture hash: {hash}");
+        assert!(hash.starts_with("sha256:"));
+        assert_eq!(hash.len(), 7 + 64);
+    }
+}
+
 /// Update an existing resource's content — re-chunk and re-embed.
 pub async fn update(
     pool: &PgPool,
