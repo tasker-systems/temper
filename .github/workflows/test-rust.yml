@@ -31,7 +31,7 @@ jobs:
       - name: Setup Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: test
+          prefix-key: test-v2
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -74,7 +74,7 @@ jobs:
       - name: Setup Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: test-db
+          prefix-key: test-db-v2
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
