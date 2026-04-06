@@ -25,11 +25,11 @@ function, making the database the single source of truth for event+audit inserti
 CREATE FUNCTION insert_event_and_audit(
   p_event_id       UUID,           -- caller generates UUIDv7
   p_profile_id     UUID,
-  p_device_id      TEXT,
-  p_context_id     UUID,           -- nullable
+  p_device_id      VARCHAR(128),   -- UUIDv7 most common, but also "vercel-cloud", "mcp", etc.
+  p_context_id     UUID,           -- NOT NULL — inferred from resource's kb_context_id at call time
   p_resource_id    UUID,           -- required (audit row needs it)
   p_event_type     VARCHAR(64),
-  p_action         TEXT,
+  p_action         VARCHAR(64),
   p_body_hash      TEXT,
   p_managed_hash   TEXT,
   p_open_hash      TEXT
@@ -52,6 +52,19 @@ CREATE FUNCTION insert_event_and_audit(
 `Uuid::now_v7()`, TypeScript uses the `uuidv7` npm package. No default fallback —
 v4 would hurt btree index performance. Native Postgres UUIDv7 arrives with
 Neon's upgrade to Postgres 18.
+
+**`context_id` is NOT NULL:** While `kb_events.kb_context_id` is nullable in the
+schema, this function requires it. The context is always inferrable from
+`resource_id → kb_resources.kb_context_id` at call time. We store it explicitly
+because a resource can change contexts when moved — the event captures which
+context the resource was in at the moment of mutation.
+
+**`device_id` is VARCHAR(128):** Wide enough for UUIDv7 strings (the most common
+case from CLI sync) but not a UUID type since server-side origins use descriptive
+strings like `"vercel-cloud"` or `"mcp"`.
+
+**`action` is VARCHAR(64) and indexed:** Supports filtering audit rows by action
+type efficiently.
 
 **Transaction semantics:** The function inherits the caller's transaction context.
 Rust calls it inside an existing `sqlx::Transaction`. TypeScript calls it via the
@@ -116,7 +129,7 @@ pub async fn insert_event_and_audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     profile_id: ProfileId,
     device_id: &str,
-    context_id: Option<Uuid>,
+    context_id: Uuid,
     resource_id: ResourceId,
     event_type: &str,
     action: &str,
@@ -187,8 +200,9 @@ template literal.
 Three layers, executed in order:
 
 **Layer 1: Rust e2e tests (existing)**
-Migrate Rust to the SQL function, run existing `audit_test.rs`. Six tests cover
-all four mutation paths. If they pass, the SQL function is correct.
+Migrate Rust to the SQL functions (`insert_event_and_audit` and `store_chunks`),
+run existing `audit_test.rs` and ingest e2e tests. If they pass, the SQL
+functions are correct.
 
 **Layer 2: Hash parity tests**
 Shared JSON fixtures tested in both Rust and TypeScript:
@@ -210,14 +224,34 @@ New tests in `packages/temper-cloud/src/__tests__/ingest.test.ts`:
 - Call `updateResourceHash()`, verify `body_updated` event + `update_body` audit
 - Verify event payload JSONB contains all three hashes
 
+### 7. Chunk Storage SQL Function
+
+The Rust ingest path inserts chunks inside a transaction in `ingest_service.rs`.
+The TypeScript `storeStep` in both `process-upload.ts` and `process-ingest.ts`
+performs the same operation with inline SQL. To achieve parity and prevent drift,
+the chunk insertion logic moves to a SQL function as well.
+
+**SQL function `store_chunks()`** — accepts the resource ID, version number, and
+chunk data (as JSONB array), atomically:
+- Marks existing chunks as `is_current = false`
+- Inserts new `kb_chunks` rows
+- Inserts corresponding `kb_chunk_content` rows
+- Returns the new version number
+
+The Rust ingest service migrates to call this function (validated by existing
+e2e tests), then the TypeScript storeStep calls the same function.
+
+### 8. Context Auto-Creation Events
+
+When `resolveContextId()` auto-creates a `kb_contexts` row (both in Rust
+`context_service` and TypeScript `ingest.ts`), emit a `context_created` event.
+This uses `insert_event_and_audit()` is not appropriate since there's no resource
+to audit — a simpler direct `kb_events` INSERT suffices, or a second SQL function
+`insert_event()` for non-resource events.
+
 ## Out of Scope
 
 - **napi.rs FFI module** — future work to eliminate TS/Rust hash duplication
-- **Workflow storeStep events** — chunk writes in `process-upload.ts` and
-  `process-ingest.ts` are sub-resource operations, not resource mutations.
-  Events for chunking can be added later if needed.
-- **`resolveContextId` events** — context auto-creation is a side effect, not
-  a resource mutation
 - **Additional NewType IDs** beyond the four defined (ContextId, DocTypeId, etc.)
 - **Managed/open meta capture in TS pipeline** — the upload endpoint handles
   extracted documents without frontmatter. When the MCP `ingest_content` tool
@@ -230,7 +264,8 @@ New tests in `packages/temper-cloud/src/__tests__/ingest.test.ts`:
 
 | File | Change |
 |------|--------|
-| `migrations/2026MMDD_insert_event_and_audit.sql` | New SQL function |
+| `migrations/2026MMDD_insert_event_and_audit.sql` | New SQL function for event+audit |
+| `migrations/2026MMDD_store_chunks.sql` | New SQL function for chunk storage |
 | `crates/temper-core/src/types/ids.rs` | NewType definitions |
 | `crates/temper-core/src/types/mod.rs` | Module registration |
 | `crates/temper-core/src/types/audit.rs` | Use `EventId`, `AuditId`, `ResourceId`, `ProfileId` |
@@ -244,6 +279,8 @@ New tests in `packages/temper-cloud/src/__tests__/ingest.test.ts`:
 | `crates/temper-api/src/handlers/*.rs` | Update for NewType IDs as needed |
 | `packages/temper-cloud/src/hash.ts` | New: canonical JSON hashing |
 | `packages/temper-cloud/src/ingest.ts` | Wire event+audit into mutations |
+| `api/workflows/process-upload.ts` | Migrate storeStep to `store_chunks()` SQL function |
+| `api/workflows/process-ingest.ts` | Migrate storeStep to `store_chunks()` SQL function |
 | `packages/temper-cloud/src/__tests__/hash.test.ts` | New: hash parity tests |
 | `packages/temper-cloud/src/__tests__/ingest.test.ts` | New: integration tests |
 | `package.json` (temper-cloud) | Add `uuidv7` dependency |
