@@ -6,6 +6,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_core::types::context::ContextCreateRequest;
+use temper_core::types::ids::{ContextId, ProfileId};
 
 use crate::service::TemperMcpService;
 
@@ -19,7 +20,7 @@ pub struct GetContextInput {
 pub async fn list_contexts(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
 
-    let rows = temper_api::services::context_service::list_visible(&svc.api_state.pool, profile.id)
+    let rows = temper_api::services::context_service::list_visible(&svc.api_state.pool, ProfileId::from(profile.id))
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to list contexts: {e}"), None)
@@ -39,8 +40,8 @@ pub async fn get_context(
 
     let row = temper_api::services::context_service::get_visible(
         &svc.api_state.pool,
-        profile.id,
-        input.id,
+        ProfileId::from(profile.id),
+        ContextId::from(input.id),
     )
     .await
     .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get context: {e}"), None))?;
@@ -58,7 +59,7 @@ pub async fn create_context(
     let profile = svc.require_profile().await?;
 
     let row =
-        temper_api::services::context_service::create(&svc.api_state.pool, profile.id, &input.name)
+        temper_api::services::context_service::create(&svc.api_state.pool, ProfileId::from(profile.id), &input.name)
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to create context: {e}"), None)

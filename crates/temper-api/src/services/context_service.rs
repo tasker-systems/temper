@@ -5,14 +5,14 @@
 //! rename-delete-relocate.md.
 
 use sqlx::PgPool;
-use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use temper_core::types::ids::{ContextId, ProfileId};
 
 pub use temper_core::types::context::{ContextCreateRequest, ContextRow};
 
 /// List all contexts visible to the profile (owned + team-shared).
-pub async fn list_visible(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<ContextRow>> {
+pub async fn list_visible(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Vec<ContextRow>> {
     let rows = sqlx::query_as::<_, ContextRow>(
         r#"
         SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
@@ -31,8 +31,8 @@ pub async fn list_visible(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<Cont
 /// Get a single context by ID, scoped to profile visibility.
 pub async fn get_visible(
     pool: &PgPool,
-    profile_id: Uuid,
-    context_id: Uuid,
+    profile_id: ProfileId,
+    context_id: ContextId,
 ) -> ApiResult<ContextRow> {
     sqlx::query_as::<_, ContextRow>(
         r#"
@@ -50,7 +50,7 @@ pub async fn get_visible(
 }
 
 /// Resolve a context by name within the profile's visible contexts.
-pub async fn resolve_by_name(pool: &PgPool, profile_id: Uuid, name: &str) -> ApiResult<ContextRow> {
+pub async fn resolve_by_name(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResult<ContextRow> {
     sqlx::query_as::<_, ContextRow>(
         r#"
         SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
@@ -70,8 +70,8 @@ pub async fn resolve_by_name(pool: &PgPool, profile_id: Uuid, name: &str) -> Api
 ///
 /// Returns 409 Conflict if a context with the same name already exists
 /// for this owner (enforced by `kb_contexts_owner_name_unique` constraint).
-pub async fn create(pool: &PgPool, profile_id: Uuid, name: &str) -> ApiResult<ContextRow> {
-    let id = Uuid::now_v7();
+pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResult<ContextRow> {
+    let id = ContextId::new();
     let row = sqlx::query_as::<_, ContextRow>(
         r#"
         INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)

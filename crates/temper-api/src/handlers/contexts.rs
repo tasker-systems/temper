@@ -7,6 +7,7 @@ use crate::error::ApiResult;
 use crate::middleware::auth::AuthUser;
 use crate::services::context_service::{self, ContextCreateRequest, ContextRow};
 use crate::state::AppState;
+use temper_core::types::ids::{ContextId, ProfileId};
 
 #[utoipa::path(
     get,
@@ -21,7 +22,7 @@ pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> ApiResult<Json<Vec<ContextRow>>> {
-    context_service::list_visible(&state.pool, auth.0.profile.id)
+    context_service::list_visible(&state.pool, ProfileId::from(auth.0.profile.id))
         .await
         .map(Json)
 }
@@ -42,7 +43,7 @@ pub async fn create(
     auth: AuthUser,
     Json(body): Json<ContextCreateRequest>,
 ) -> ApiResult<(StatusCode, Json<ContextRow>)> {
-    let row = context_service::create(&state.pool, auth.0.profile.id, &body.name).await?;
+    let row = context_service::create(&state.pool, ProfileId::from(auth.0.profile.id), &body.name).await?;
     Ok((StatusCode::CREATED, Json(row)))
 }
 
@@ -62,7 +63,7 @@ pub async fn get(
     auth: AuthUser,
     Path(context_id): Path<Uuid>,
 ) -> ApiResult<Json<ContextRow>> {
-    context_service::get_visible(&state.pool, auth.0.profile.id, context_id)
+    context_service::get_visible(&state.pool, ProfileId::from(auth.0.profile.id), ContextId::from(context_id))
         .await
         .map(Json)
 }

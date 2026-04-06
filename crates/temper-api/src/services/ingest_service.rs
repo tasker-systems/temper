@@ -164,8 +164,8 @@ pub async fn ingest(
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // 1. Resolve context
-    let context = context_service::resolve_by_name(pool, Uuid::from(profile_id), &payload.context_name).await?;
-    let context_id = ContextId::from(context.id);
+    let context = context_service::resolve_by_name(pool, profile_id, &payload.context_name).await?;
+    let context_id = context.id;
 
     // 2. Resolve doc_type
     let doc_type_id = resolve_doc_type(pool, &payload.doc_type_name).await?;
