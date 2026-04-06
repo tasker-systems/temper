@@ -272,3 +272,31 @@ fn hash_map(fields: &BTreeMap<String, serde_json::Value>) -> String {
     let result = hasher.finalize();
     format!("sha256:{}", hex::encode(result))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provisional_id_hashes_into_managed_tier() {
+        let yaml: serde_yaml::Value = serde_yaml::from_str(
+            "temper-provisional-id: \"019d6088-3a3b-71a3-b26c-d38b8338773e\"\ntitle: \"Test\"\ncustom-field: \"value\""
+        ).unwrap();
+        let (managed, open) = compute_frontmatter_hashes(&yaml);
+
+        // Changing the provisional ID should change the managed hash
+        let yaml2: serde_yaml::Value = serde_yaml::from_str(
+            "temper-provisional-id: \"019d6088-0000-0000-0000-000000000000\"\ntitle: \"Test\"\ncustom-field: \"value\""
+        ).unwrap();
+        let (managed2, open2) = compute_frontmatter_hashes(&yaml2);
+
+        assert_ne!(
+            managed, managed2,
+            "different provisional IDs should produce different managed hashes"
+        );
+        assert_eq!(
+            open, open2,
+            "custom-field is the same so open hash should match"
+        );
+    }
+}
