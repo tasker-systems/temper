@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use super::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+
 /// Row type matching the `kb_resources` table.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
@@ -12,14 +14,14 @@ use uuid::Uuid;
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceRow {
-    pub id: Uuid,
-    pub kb_context_id: Uuid,
-    pub kb_doc_type_id: Uuid,
+    pub id: ResourceId,
+    pub kb_context_id: ContextId,
+    pub kb_doc_type_id: DocTypeId,
     pub origin_uri: String,
     pub title: String,
     pub slug: Option<String>,
-    pub originator_profile_id: Uuid,
-    pub owner_profile_id: Uuid,
+    pub originator_profile_id: ProfileId,
+    pub owner_profile_id: ProfileId,
     pub is_active: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
@@ -78,7 +80,7 @@ pub struct ContentChunk {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ContentResponse {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub markdown: String,
 }
 

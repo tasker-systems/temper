@@ -6,7 +6,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::ingest_service::{insert_audit, insert_event};
+use crate::services::ingest_service::insert_event_and_audit;
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
@@ -14,16 +15,16 @@ use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 /// identity fields (title, slug, temper-type, temper-context) to kb_resources.
 pub async fn update_meta(
     pool: &PgPool,
-    profile_id: Uuid,
-    resource_id: Uuid,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
     device_id: &str,
     payload: MetaUpdatePayload,
 ) -> ApiResult<Value> {
     // 1. Check can_modify_resource
     let can_modify = sqlx::query_scalar!(
         "SELECT can_modify_resource($1, $2)",
-        profile_id,
-        resource_id
+        *profile_id,
+        *resource_id
     )
     .fetch_one(pool)
     .await?
@@ -47,7 +48,7 @@ pub async fn update_meta(
         &payload.open_meta as &serde_json::Value,
         &payload.managed_hash,
         &payload.open_hash,
-        resource_id,
+        *resource_id,
     )
     .execute(&mut *tx)
     .await?;
@@ -65,7 +66,7 @@ pub async fn update_meta(
         sqlx::query!(
             "UPDATE kb_resources SET title = $1, updated = now() WHERE id = $2",
             title,
-            resource_id,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
@@ -74,7 +75,7 @@ pub async fn update_meta(
         sqlx::query!(
             "UPDATE kb_resources SET slug = $1, updated = now() WHERE id = $2",
             slug,
-            resource_id,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
@@ -89,7 +90,7 @@ pub async fn update_meta(
         let dt_rows = sqlx::query!(
             "UPDATE kb_resources SET kb_doc_type_id = $1, updated = now() WHERE id = $2",
             dt_id,
-            resource_id,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
@@ -110,48 +111,35 @@ pub async fn update_meta(
         sqlx::query!(
             "UPDATE kb_resources SET kb_context_id = $1, updated = now() WHERE id = $2",
             ctx_id,
-            resource_id,
+            *resource_id,
         )
         .execute(&mut *tx)
         .await?;
     }
 
-    // 4. Insert kb_event
-    // Fetch current body_hash for enriched event payload and audit snapshot.
-    // MetaUpdatePayload only carries managed/open hashes — body is unchanged
-    // by meta updates, but we need it for complete event + audit records.
-    let body_hash = sqlx::query_scalar!(
-        "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
-        resource_id,
+    // 4. Insert kb_event + audit atomically
+    // Fetch current body_hash and context_id for the event + audit records.
+    let (body_hash, context_id): (String, Uuid) = sqlx::query_as(
+        r#"SELECT m.body_hash, r.kb_context_id
+           FROM kb_resource_manifests m
+           JOIN kb_resources r ON r.id = m.resource_id
+           WHERE m.resource_id = $1"#,
     )
+    .bind(resource_id)
     .fetch_one(&mut *tx)
     .await?;
 
-    let event_id = insert_event(
+    insert_event_and_audit(
         &mut tx,
         profile_id,
         device_id,
-        None,
-        Some(resource_id),
-        "managed_meta_updated",
-        &serde_json::json!({
-            "body_hash": &body_hash,
-            "managed_hash": &payload.managed_hash,
-            "open_hash": &payload.open_hash,
-        }),
-    )
-    .await?;
-
-    insert_audit(
-        &mut tx,
+        ContextId::from(context_id),
         resource_id,
-        event_id,
-        profile_id,
-        device_id,
+        "managed_meta_updated",
+        "update_meta",
         &body_hash,
         &payload.managed_hash,
         &payload.open_hash,
-        "update_meta",
     )
     .await?;
 

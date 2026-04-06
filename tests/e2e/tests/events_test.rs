@@ -82,7 +82,7 @@ async fn events_appear_after_resource_creation(pool: sqlx::PgPool) {
         .client
         .events()
         .list(&EventListParams {
-            resource_id: Some(resource.id),
+            resource_id: Some(resource.id.into()),
             event_type: None,
             limit: Some(50),
             offset: None,

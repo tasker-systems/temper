@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
+import { uuidv7 } from "uuidv7";
 import type { AuthClaims } from "./auth.js";
 import type { NeonClient } from "./db.js";
+import { DEVICE_ID_CLOUD, insertEventAndAudit } from "./events.js";
+import { canonicalJsonHash } from "./hash.js";
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -106,12 +109,19 @@ export async function resolveContextId(
     return existing[0].id as string;
   }
 
-  // Auto-create
-  const newId = randomUUID();
+  // Auto-create (UUIDv7 for btree index performance)
+  const newId = uuidv7();
   await db`
     INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
     VALUES (${newId}::uuid, ${name}, 'kb_profiles', ${profileId}::uuid)
   `;
+
+  const eventId = uuidv7();
+  await db`
+    INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, event_type, payload, created)
+    VALUES (${eventId}::uuid, ${profileId}::uuid, ${"vercel-cloud"}, ${newId}::uuid, 'context_created', '{}', now())
+  `;
+
   return newId;
 }
 
@@ -193,6 +203,20 @@ export async function insertResource(
     VALUES (${newId}::uuid, ${contentHash}, now())
   `;
 
+  const emptyHash = canonicalJsonHash({});
+
+  await insertEventAndAudit(db, {
+    profileId,
+    deviceId: DEVICE_ID_CLOUD,
+    contextId: contextId,
+    resourceId: newId,
+    eventType: "resource_created",
+    action: "create",
+    bodyHash: contentHash,
+    managedHash: emptyHash,
+    openHash: emptyHash,
+  });
+
   return rows[0] as unknown as ResourceRecord;
 }
 
@@ -208,6 +232,8 @@ export async function updateResourceHash(
   db: NeonClient,
   resourceId: string,
   bodyHash: string,
+  profileId: string,
+  contextId: string,
 ): Promise<void> {
   await db`
     INSERT INTO kb_resource_manifests (resource_id, body_hash, updated)
@@ -218,4 +244,18 @@ export async function updateResourceHash(
   await db`
     UPDATE kb_resources SET updated = now() WHERE id = ${resourceId}::uuid
   `;
+
+  const emptyHash = canonicalJsonHash({});
+
+  await insertEventAndAudit(db, {
+    profileId,
+    deviceId: DEVICE_ID_CLOUD,
+    contextId,
+    resourceId,
+    eventType: "body_updated",
+    action: "update_body",
+    bodyHash,
+    managedHash: emptyHash,
+    openHash: emptyHash,
+  });
 }

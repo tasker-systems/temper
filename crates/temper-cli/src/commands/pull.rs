@@ -6,10 +6,12 @@ use crate::actions::ingest;
 use crate::actions::runtime;
 use crate::error::TemperError;
 use crate::output;
+use temper_core::types::ResourceId;
 
 pub fn run(resource_id: &str) -> crate::error::Result<()> {
     let id = Uuid::parse_str(resource_id)
         .map_err(|e| TemperError::NotFound(format!("Invalid UUID: {e}")))?;
+    let resource_id_typed = ResourceId::from(id);
 
     runtime::with_client(|client| {
         Box::pin(async move {
@@ -33,7 +35,7 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                 crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
             let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
-            if let Some(entry) = manifest.entries.get_mut(&id) {
+            if let Some(entry) = manifest.entries.get_mut(&resource_id_typed) {
                 // IMPORTED resource — write to vault path from manifest.
                 let vault_path = vault_root.join(&entry.path);
                 if let Some(parent) = vault_path.parent() {

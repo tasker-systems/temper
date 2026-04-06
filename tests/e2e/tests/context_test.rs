@@ -56,7 +56,7 @@ async fn context_get_by_id(pool: sqlx::PgPool) {
     let fetched = app
         .client
         .contexts()
-        .get(created.id)
+        .get(created.id.into())
         .await
         .expect("context get by id failed");
 

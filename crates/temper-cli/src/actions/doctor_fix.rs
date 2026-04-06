@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 
 use serde_yaml::Value;
 use temper_core::types::manifest::Manifest;
-use uuid::Uuid;
+use temper_core::types::ResourceId;
 
 /// A single corrective action to apply to the vault.
 #[derive(Debug, Clone, PartialEq)]
@@ -41,12 +41,15 @@ pub enum FixAction {
     },
     /// Update the manifest record for a file that has moved (phase 2).
     UpdateManifest {
-        temper_id: Uuid,
+        temper_id: ResourceId,
         old_path: String,
         new_path: String,
     },
     /// Remove a manifest record whose file no longer exists (phase 2).
-    RemoveManifest { temper_id: Uuid, reason: String },
+    RemoveManifest {
+        temper_id: ResourceId,
+        reason: String,
+    },
 }
 
 /// Sentinel path used as a stand-in for manifest actions in `target_path()`.
@@ -958,6 +961,7 @@ pub fn apply_manifest_actions(plan: &FixPlan, manifest: &mut Manifest) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn make_path(s: &str) -> PathBuf {
         PathBuf::from(s)
@@ -998,7 +1002,7 @@ mod tests {
 
     fn sample_update_manifest() -> FixAction {
         FixAction::UpdateManifest {
-            temper_id: Uuid::now_v7(),
+            temper_id: ResourceId::new(),
             old_path: "task/old.md".to_string(),
             new_path: "task/new.md".to_string(),
         }
@@ -1006,7 +1010,7 @@ mod tests {
 
     fn sample_remove_manifest() -> FixAction {
         FixAction::RemoveManifest {
-            temper_id: Uuid::now_v7(),
+            temper_id: ResourceId::new(),
             reason: "file deleted".to_string(),
         }
     }
@@ -1466,7 +1470,10 @@ mod tests {
     // F5 tests
     // -----------------------------------------------------------------------
 
-    fn make_manifest_with_entry(id: Uuid, path: &str) -> temper_core::types::manifest::Manifest {
+    fn make_manifest_with_entry(
+        id: ResourceId,
+        path: &str,
+    ) -> temper_core::types::manifest::Manifest {
         use chrono::Utc;
         use std::collections::HashMap;
         use temper_core::types::manifest::{ManifestEntry, ManifestEntryState};
@@ -1498,7 +1505,7 @@ mod tests {
 
     #[test]
     fn f5_updates_manifest_for_rename() {
-        let id = Uuid::now_v7();
+        let id = ResourceId::new();
         let manifest = make_manifest_with_entry(id, "temper/task/old-name.md");
         let rename = FixAction::RenameFile {
             old_path: PathBuf::from("/vault/temper/task/old-name.md"),
@@ -1518,7 +1525,7 @@ mod tests {
 
     #[test]
     fn f5_removes_stale_manifest_entries() {
-        let id = Uuid::now_v7();
+        let id = ResourceId::new();
         let manifest = make_manifest_with_entry(id, "temper/task/deleted-file.md");
         let vault_root = Path::new("/vault");
         // The file doesn't exist on disk

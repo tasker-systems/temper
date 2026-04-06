@@ -1,12 +1,10 @@
 import { chunkText } from "../../packages/temper-cloud/src/processing/chunk.js";
 import { embedTexts } from "../../packages/temper-cloud/src/processing/embed.js";
 import {
-  buildVersionBumpQuery,
-  buildStoreChunksQueries,
+  chunksToJsonb,
   type ChunkRow,
 } from "../../packages/temper-cloud/src/processing/store.js";
 import { getDb } from "../../packages/temper-cloud/src/db.js";
-import { randomUUID } from "crypto";
 
 export async function processIngest(resourceId: string, markdown: string) {
   "use workflow";
@@ -39,34 +37,19 @@ async function storeStep(
 
   const db = getDb();
 
-  // Determine next version for this resource
-  const versionResult = await db`
-    SELECT COALESCE(MAX(version), 0) + 1 AS next_version
-    FROM kb_chunks WHERE resource_id = ${resourceId}::uuid
-  `;
-  const nextVersion = versionResult[0].next_version as number;
-
-  // Mark old chunks as not current
-  const bumpQuery = buildVersionBumpQuery(resourceId, nextVersion);
-  await db.query(bumpQuery.sql, bumpQuery.params);
-
   // Build chunk rows with embeddings
   const chunkRows: ChunkRow[] = chunks.map((chunk, i) => ({
-    id: randomUUID(),
+    id: "",
     resource_id: resourceId,
     chunk_index: chunk.chunk_index,
-    version: nextVersion,
+    version: 0,
     header_path: chunk.header_path,
     content: chunk.content,
     content_hash: chunk.content_hash,
     embedding: embeddings[i],
   }));
 
-  // Store chunks + content (separate tables)
-  const storeQueries = buildStoreChunksQueries(chunkRows);
-  for (const q of storeQueries) {
-    if (q.sql) {
-      await db.query(q.sql, q.params);
-    }
-  }
+  // Store chunks atomically via SQL function (handles version bump + insert)
+  const chunksJson = JSON.stringify(chunksToJsonb(chunkRows));
+  await db`SELECT persist_resource_chunks(${resourceId}::uuid, ${chunksJson}::jsonb)`;
 }

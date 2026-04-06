@@ -1,7 +1,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use uuid::Uuid;
+
+use super::ids::ResourceId;
 
 /// Temper-governed frontmatter fields for a vault resource.
 ///
@@ -76,7 +77,7 @@ pub struct ManagedMeta {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct MetaUpdatePayload {
     /// UUID of the resource being updated
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     /// Serialized managed (temper-*) frontmatter fields
     pub managed_meta: Value,
     /// Serialized open (user-defined) frontmatter fields
@@ -92,7 +93,7 @@ pub struct MetaUpdatePayload {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ResourceManifestRow {
     /// UUID of the resource
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     /// SHA-256 hash of the resource body (frontmatter stripped)
     pub body_hash: String,
     /// Serialized managed (temper-*) frontmatter fields
@@ -110,6 +111,7 @@ pub struct ResourceManifestRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn managed_meta_serde_roundtrip() {
@@ -184,7 +186,7 @@ mod tests {
     #[test]
     fn meta_update_payload_serde() {
         let payload = MetaUpdatePayload {
-            resource_id: Uuid::nil(),
+            resource_id: ResourceId::from(Uuid::nil()),
             managed_meta: serde_json::json!({"temper-type": "task"}),
             open_meta: serde_json::json!({"tags": ["rust"]}),
             managed_hash: "sha256:abc123".to_string(),
@@ -194,7 +196,7 @@ mod tests {
         let json = serde_json::to_string(&payload).unwrap();
         let parsed: MetaUpdatePayload = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(parsed.resource_id, Uuid::nil());
+        assert_eq!(parsed.resource_id, ResourceId::from(Uuid::nil()));
         assert_eq!(parsed.managed_hash, "sha256:abc123");
         assert_eq!(parsed.open_hash, "sha256:def456");
         assert_eq!(parsed.managed_meta["temper-type"], "task");

@@ -57,7 +57,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
     let content_resp = app
         .client
         .resources()
-        .content(resource.id)
+        .content(resource.id.into())
         .await
         .expect("content retrieval failed");
 

@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
+use super::ids::ContextId;
+
 /// Response row for context endpoints.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "context.ts"))]
@@ -12,7 +14,7 @@ use uuid::Uuid;
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ContextRow {
-    pub id: Uuid,
+    pub id: ContextId,
     pub name: String,
     pub kb_owner_table: String,
     pub kb_owner_id: Uuid,

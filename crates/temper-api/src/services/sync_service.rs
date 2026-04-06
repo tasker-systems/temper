@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::error::ApiResult;
 
+use temper_core::types::ids::{ResourceAuditId, ResourceId};
 use temper_core::types::sync::{
     SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem, SyncManifestItem,
     SyncManifestResponse, SyncPullItem, SyncPushItem, SyncRemovedItem, SyncStatusRequest,
@@ -49,21 +50,27 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
         match row.diff_type.as_str() {
             "to_push" | "to_push_body" | "to_push_meta" => to_push.push(SyncPushItem {
                 uri: row.kb_uri,
-                resource_id: row.resource_id,
+                resource_id: row.resource_id.map(ResourceId::from),
             }),
             "to_pull" | "to_pull_body" | "to_pull_meta" => to_pull.push(SyncPullItem {
                 uri: row.kb_uri,
-                resource_id: row.resource_id.expect("to_pull must have resource_id"),
+                resource_id: ResourceId::from(
+                    row.resource_id.expect("to_pull must have resource_id"),
+                ),
                 content_hash: row.body_hash,
             }),
             "conflict" => conflicts.push(SyncConflictItem {
                 uri: row.kb_uri,
-                resource_id: row.resource_id.expect("conflict must have resource_id"),
+                resource_id: ResourceId::from(
+                    row.resource_id.expect("conflict must have resource_id"),
+                ),
                 server_hash: row.body_hash,
             }),
             "removed" => removed.push(SyncRemovedItem {
                 uri: row.kb_uri,
-                resource_id: row.resource_id.expect("removed must have resource_id"),
+                resource_id: ResourceId::from(
+                    row.resource_id.expect("removed must have resource_id"),
+                ),
             }),
             _ => {} // ignore unknown diff types
         }
@@ -140,7 +147,7 @@ pub async fn complete_sync_round(
         let ids: Vec<Uuid> = request
             .merged_resources
             .iter()
-            .map(|m| m.resource_id)
+            .map(|m| Uuid::from(m.resource_id))
             .collect();
         let hashes: Vec<String> = request
             .merged_resources
@@ -243,7 +250,7 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                 row.context_name, row.doc_type_name, row.resource_id
             );
             SyncManifestItem {
-                resource_id: row.resource_id,
+                resource_id: ResourceId::from(row.resource_id),
                 context: row.context_name,
                 doc_type: row.doc_type_name,
                 slug: row.slug,
@@ -251,7 +258,7 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                 managed_hash: row.managed_hash,
                 open_hash: row.open_hash,
                 uri,
-                last_audit_id: row.last_audit_id,
+                last_audit_id: row.last_audit_id.map(ResourceAuditId::from),
             }
         })
         .collect();

@@ -20,7 +20,7 @@ dirs = "5"
 hex = "0.4"
 uuid = { version = "1", features = ["v7", "serde"] }
 ts-rs = { version = "10", optional = true, features = ["chrono-impl", "uuid-impl", "serde-json-impl"] }
-utoipa = { version = "5", optional = true }
+utoipa = { version = "5", optional = true, features = ["uuid"] }
 schemars = { version = "1", optional = true, features = ["uuid1", "chrono04"] }
 
 [features]

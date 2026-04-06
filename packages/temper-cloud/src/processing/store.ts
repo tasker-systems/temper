@@ -100,6 +100,20 @@ export function buildStoreChunksQuery(chunks: ChunkRow[]): QueryResult {
   return queries[0];
 }
 
+/**
+ * Format chunks as JSONB array matching the persist_resource_chunks() SQL
+ * function's expected input format (same as Rust chunks_to_jsonb).
+ */
+export function chunksToJsonb(chunks: ChunkRow[]): object[] {
+  return chunks.map((c) => ({
+    chunk_index: c.chunk_index,
+    header_path: c.header_path,
+    content: c.content,
+    content_hash: c.content_hash,
+    embedding: `[${c.embedding.join(",")}]`,
+  }));
+}
+
 export function buildStatusUpdateQuery(
   blobFileId: string,
   status: "pending" | "processing" | "processed" | "failed",

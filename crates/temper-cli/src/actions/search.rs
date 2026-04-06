@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 use temper_core::types::api::UnifiedSearchResultRow;
-use temper_core::types::Manifest;
+use temper_core::types::{Manifest, ResourceId};
 use uuid::Uuid;
 
 use crate::error::{Result, TemperError};
@@ -80,7 +80,7 @@ pub fn enrich_results(
     results
         .into_iter()
         .map(|row| {
-            let entry = manifest.entries.get(&row.resource_id);
+            let entry = manifest.entries.get(&ResourceId::from(row.resource_id));
             EnrichedSearchResult {
                 resource_id: row.resource_id,
                 title: row.title,
@@ -162,7 +162,7 @@ mod tests {
     fn sample_manifest() -> Manifest {
         let mut manifest = Manifest::new("test-device".to_string());
         manifest.entries.insert(
-            Uuid::nil(),
+            ResourceId::from(Uuid::nil()),
             ManifestEntry {
                 path: "temper/tasks/test-task.md".to_string(),
                 body_hash: "sha256:abc".to_string(),

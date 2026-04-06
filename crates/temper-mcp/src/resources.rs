@@ -152,18 +152,21 @@ pub async fn read_resource(
         .strip_prefix("temper://contexts/")
         .and_then(|rest| rest.strip_suffix("/resources"))
     {
-        let context =
-            temper_api::services::context_service::resolve_by_name(&state.pool, profile.id, name)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to resolve context '{name}': {e}"),
-                        None,
-                    )
-                })?;
+        let context = temper_api::services::context_service::resolve_by_name(
+            &state.pool,
+            temper_core::types::ProfileId::from(profile.id),
+            name,
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(
+                format!("Failed to resolve context '{name}': {e}"),
+                None,
+            )
+        })?;
 
         let params = temper_core::types::resource::ResourceListParams {
-            kb_context_id: Some(context.id),
+            kb_context_id: Some(uuid::Uuid::from(context.id)),
             limit: Some(200),
             offset: None,
         };

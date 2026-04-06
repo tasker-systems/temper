@@ -9,6 +9,7 @@ use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::meta_service;
 use crate::state::AppState;
 
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::MetaUpdatePayload;
 
 #[utoipa::path(
@@ -37,8 +38,8 @@ pub async fn update_meta(
         .unwrap_or_else(|| "api".to_string());
     meta_service::update_meta(
         &state.pool,
-        auth.0.profile.id,
-        resource_id,
+        ProfileId::from(auth.0.profile.id),
+        ResourceId::from(resource_id),
         &device_id,
         payload,
     )

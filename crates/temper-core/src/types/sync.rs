@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+
+use super::ids::{ResourceAuditId, ResourceId};
 
 // ---------------------------------------------------------------------------
 // Status endpoint (POST /api/sync/status)
@@ -40,14 +41,14 @@ pub struct SyncStatusRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPushItem {
     pub uri: String,
-    pub resource_id: Option<Uuid>,
+    pub resource_id: Option<ResourceId>,
 }
 
 /// A resource the client should pull (server has newer or new resource).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPullItem {
     pub uri: String,
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub content_hash: String,
 }
 
@@ -55,7 +56,7 @@ pub struct SyncPullItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncConflictItem {
     pub uri: String,
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub server_hash: String,
 }
 
@@ -63,7 +64,7 @@ pub struct SyncConflictItem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncRemovedItem {
     pub uri: String,
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
 }
 
 /// Response body for `POST /api/sync/status`.
@@ -82,7 +83,7 @@ pub struct SyncStatusResponse {
 /// A resource whose content_hash should be updated after sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MergedResource {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub content_hash: String,
 }
 
@@ -107,7 +108,7 @@ pub struct SyncCompleteResponse {
 /// A single resource entry in the server manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncManifestItem {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub context: String,
     pub doc_type: String,
     pub slug: String,
@@ -117,7 +118,7 @@ pub struct SyncManifestItem {
     pub uri: String,
     /// Most recent audit ID for this resource on the server.
     #[serde(default)]
-    pub last_audit_id: Option<Uuid>,
+    pub last_audit_id: Option<ResourceAuditId>,
 }
 
 /// Response body for `GET /api/sync/manifest`.
@@ -142,7 +143,7 @@ pub enum ResolutionType {
 /// Request body for `POST /api/sync/resolve` (I6c).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncResolveRequest {
-    pub resource_id: Uuid,
+    pub resource_id: ResourceId,
     pub resolution: ResolutionType,
     pub content_hash: String,
 }
@@ -150,6 +151,7 @@ pub struct SyncResolveRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn sync_status_request_serde_roundtrip() {
@@ -196,7 +198,7 @@ mod tests {
         let req = SyncCompleteRequest {
             device_id: "device-abc".to_string(),
             merged_resources: vec![MergedResource {
-                resource_id: Uuid::nil(),
+                resource_id: ResourceId::from(Uuid::nil()),
                 content_hash: "sha256:def".to_string(),
             }],
         };
@@ -233,7 +235,7 @@ mod tests {
     fn sync_manifest_response_serde_roundtrip() {
         let resp = SyncManifestResponse {
             items: vec![SyncManifestItem {
-                resource_id: Uuid::nil(),
+                resource_id: ResourceId::from(Uuid::nil()),
                 context: "temper".to_string(),
                 doc_type: "task".to_string(),
                 slug: "my-task".to_string(),
