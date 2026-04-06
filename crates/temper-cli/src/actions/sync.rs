@@ -590,7 +590,12 @@ async fn push_resource(
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 
-    let resource = if item.resource_id.is_some() {
+    let is_provisional = manifest
+        .entries
+        .get(&entry_id)
+        .map_or(false, |e| e.provisional);
+
+    let resource = if item.resource_id.is_some() && !is_provisional {
         // Existing resource — PUT update
         client
             .ingest()
@@ -598,7 +603,7 @@ async fn push_resource(
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?
     } else {
-        // New resource — POST create
+        // New resource — POST create (also used for provisional entries)
         client
             .ingest()
             .create(&payload)
@@ -609,26 +614,45 @@ async fn push_resource(
     // If the server assigned a different resource ID (POST create), remap the
     // manifest entry so the local UUID matches the server's authoritative ID.
     let server_id = resource.id;
-    if server_id != entry_id {
+    if server_id != entry_id || is_provisional {
         tracing::info!(
             %entry_id,
             %server_id,
+            is_provisional,
             "remapping manifest entry: local ID → server ID"
         );
-        if let Some(entry) = manifest.entries.remove(&entry_id) {
+        if let Some(mut entry) = manifest.entries.remove(&entry_id) {
+            entry.provisional = false;
             manifest.entries.insert(server_id, entry);
 
-            // Update the file's temper-id frontmatter to match the server ID.
+            // Replace provisional frontmatter key+value with authoritative temper-id.
             let file_content = std::fs::read_to_string(&file_path)?;
-            let updated = file_content.replace(&entry_id.to_string(), &server_id.to_string());
+            let updated = file_content
+                .replace(
+                    &format!("temper-provisional-id: \"{entry_id}\""),
+                    &format!("temper-id: \"{server_id}\""),
+                )
+                .replace(
+                    &format!("temper-provisional-id: {entry_id}"),
+                    &format!("temper-id: {server_id}"),
+                );
+
             if updated != file_content {
                 std::fs::write(&file_path, &updated)?;
-                tracing::info!("updated temper-id in file frontmatter");
+                tracing::info!("replaced temper-provisional-id with temper-id in frontmatter");
             } else {
-                tracing::warn!(
-                    %entry_id,
-                    "temper-id not found in file content — frontmatter not updated"
-                );
+                // Fallback: try replacing old-style id: or temper-id: (for files
+                // that already had temper-id with a local UUID)
+                let fallback = file_content.replace(&entry_id.to_string(), &server_id.to_string());
+                if fallback != file_content {
+                    std::fs::write(&file_path, &fallback)?;
+                    tracing::info!("updated temper-id in file frontmatter (fallback path)");
+                } else {
+                    tracing::warn!(
+                        %entry_id,
+                        "temper-provisional-id not found in file content — frontmatter not updated"
+                    );
+                }
             }
         }
     }
