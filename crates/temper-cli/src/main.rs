@@ -192,10 +192,17 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 TaskAction::List {
                     context,
                     goal,
+                    stage,
                     format,
                 } => {
                     let context = context.as_deref();
-                    temper_cli::commands::task::list(&config, context, goal.as_deref(), &format)
+                    temper_cli::commands::task::list(
+                        &config,
+                        context,
+                        goal.as_deref(),
+                        stage.as_deref(),
+                        &format,
+                    )
                 }
                 TaskAction::Show {
                     slug,

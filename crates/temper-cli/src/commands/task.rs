@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::error::{Result, TemperError};
 use crate::output;
+use crate::vault;
 
 // Re-export data types and functions from the actions layer
 pub use crate::actions::task::{create, done, find_task, load_tasks, move_task, next_seq};
@@ -34,9 +35,16 @@ pub fn list(
     config: &Config,
     context: Option<&str>,
     goal_slug: Option<&str>,
+    stage: Option<&str>,
     format: &str,
 ) -> Result<()> {
-    let tasks = load_tasks(config, context, goal_slug)?;
+    if let Some(s) = stage {
+        vault::validate_stage(s)?;
+    }
+    let mut tasks = load_tasks(config, context, goal_slug)?;
+    if let Some(s) = stage {
+        tasks.retain(|t| t.stage == s);
+    }
     if format == "json" {
         let json = serde_json::to_string_pretty(&tasks)
             .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?;

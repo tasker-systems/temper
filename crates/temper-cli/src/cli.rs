@@ -244,6 +244,8 @@ pub enum TaskAction {
         context: Option<String>,
         #[arg(long)]
         goal: Option<String>,
+        #[arg(long)]
+        stage: Option<String>,
         #[arg(long, default_value = "text")]
         format: String,
     },
