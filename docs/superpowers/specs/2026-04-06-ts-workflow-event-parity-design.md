@@ -83,7 +83,6 @@ confusion across domain boundaries:
 - `ResourceId(Uuid)` — `kb_resources.id`
 - `ProfileId(Uuid)` — `kb_profiles.id`
 - `ResourceAuditId(Uuid)` — `kb_resource_audits.id`
-- `ResourceManifestId(Uuid)` — `kb_resource_manifests.id`
 
 **Derives** (matching existing temper-core patterns):
 
@@ -122,9 +121,10 @@ All seven types share the same interface:
 
 Additional structs using these UUID fields will be updated as encountered
 during compilation — the compiler enforces completeness. Core domain tables
-covered: contexts, doc_types, events, resources, profiles, resource_audits,
-resource_manifests. Non-core tables (teams, transfers, blob_files) are left
-as raw UUIDs until their domain code is actively being worked on.
+covered: contexts, doc_types, events, resources, profiles, resource_audits.
+`kb_resource_manifests` uses `resource_id` as PK (no separate id column).
+Non-core tables (teams, transfers, blob_files) are left as raw UUIDs until
+their domain code is actively being worked on.
 
 ### 3. Rust Migration
 
