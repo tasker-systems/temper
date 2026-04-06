@@ -280,7 +280,13 @@ pub fn scan_vault_for_untracked(
                 }
             };
 
-        let resource_id = Uuid::now_v7();
+        // Use the file's temper-id if present; only mint a new UUID for files
+        // without frontmatter (which will get frontmatter injected below).
+        let resource_id = fm
+            .as_ref()
+            .and_then(|f| f.legacy_id.as_deref())
+            .and_then(|id| Uuid::parse_str(id).ok())
+            .unwrap_or_else(Uuid::now_v7);
         if fm.is_none() {
             let frontmatter = ingest::build_frontmatter(
                 resource_id,
@@ -573,7 +579,7 @@ async fn push_resource(
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 
-    let _resource = if item.resource_id.is_some() {
+    let resource = if item.resource_id.is_some() {
         // Existing resource — PUT update
         client
             .ingest()
@@ -589,15 +595,44 @@ async fn push_resource(
             .map_err(|e| TemperError::Api(e.to_string()))?
     };
 
+    // If the server assigned a different resource ID (POST create), remap the
+    // manifest entry so the local UUID matches the server's authoritative ID.
+    let server_id = resource.id;
+    if server_id != entry_id {
+        tracing::info!(
+            %entry_id,
+            %server_id,
+            "remapping manifest entry: local ID → server ID"
+        );
+        if let Some(entry) = manifest.entries.remove(&entry_id) {
+            manifest.entries.insert(server_id, entry);
+
+            // Update the file's temper-id frontmatter to match the server ID.
+            let file_content = std::fs::read_to_string(&file_path)?;
+            let updated = file_content.replace(&entry_id.to_string(), &server_id.to_string());
+            if updated != file_content {
+                std::fs::write(&file_path, &updated)?;
+                tracing::info!("updated temper-id in file frontmatter");
+            } else {
+                tracing::warn!(
+                    %entry_id,
+                    "temper-id not found in file content — frontmatter not updated"
+                );
+            }
+        }
+    }
+
     // Compute frontmatter hashes so we can record them as the remote values
-    let (pushed_managed_hash, pushed_open_hash) =
-        if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+    let (pushed_managed_hash, pushed_open_hash) = {
+        let current = std::fs::read_to_string(&file_path)?;
+        if let Some(fm) = crate::vault::parse_frontmatter(&current) {
             temper_core::schema::compute_frontmatter_hashes(&fm)
         } else {
             (String::new(), String::new())
-        };
+        }
+    };
 
-    if let Some(e) = manifest.entries.get_mut(&entry_id) {
+    if let Some(e) = manifest.entries.get_mut(&server_id) {
         // After push, server hashes match what we sent
         e.remote_body_hash = payload.content_hash.clone();
         e.remote_managed_hash = pushed_managed_hash;
@@ -1176,8 +1211,10 @@ pub async fn sync_reset(
             }
         }
 
-        // Unmatched local file — mark as Pending (new, will push on next sync)
-        let resource_id = Uuid::now_v7();
+        // Unmatched local file — mark as Pending (new, will push on next sync).
+        // Use the file's temper-id if present so push_resource can remap it
+        // after the server assigns an authoritative ID.
+        let resource_id = temper_id.unwrap_or_else(Uuid::now_v7);
         new_manifest.entries.insert(
             resource_id,
             temper_core::types::ManifestEntry {
