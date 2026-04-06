@@ -11,9 +11,6 @@ pub use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 // TODO(task-5): remove — kept temporarily so handlers/search.rs compiles
 pub use temper_core::types::api::SearchResultRow;
 
-// TODO(task-6): remove — kept temporarily so ingest_service.rs compiles
-pub use temper_core::types::ingest::format_embedding;
-
 const MAX_LIMIT: i64 = 50;
 const DEFAULT_LIMIT: i64 = 10;
 const EMBEDDING_DIM: usize = 768;
