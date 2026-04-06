@@ -8,7 +8,6 @@ use crate::error::{ApiError, ApiResult};
 
 pub use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 
-
 const MAX_LIMIT: i64 = 50;
 const DEFAULT_LIMIT: i64 = 10;
 const EMBEDDING_DIM: usize = 768;

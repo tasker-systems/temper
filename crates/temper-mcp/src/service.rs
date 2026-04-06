@@ -95,7 +95,9 @@ impl TemperMcpService {
         tools::resources::create_resource(self, input).await
     }
 
-    #[tool(description = "Search resources using text queries, embedding vectors, or both. Send a plain text 'query' for full-text search — no embedding required.")]
+    #[tool(
+        description = "Search resources using text queries, embedding vectors, or both. Send a plain text 'query' for full-text search — no embedding required."
+    )]
     async fn search(
         &self,
         Parameters(input): Parameters<temper_core::types::api::SearchParams>,
