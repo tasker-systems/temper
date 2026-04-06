@@ -109,8 +109,8 @@ export async function resolveContextId(
     return existing[0].id as string;
   }
 
-  // Auto-create
-  const newId = randomUUID();
+  // Auto-create (UUIDv7 for btree index performance)
+  const newId = uuidv7();
   await db`
     INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
     VALUES (${newId}::uuid, ${name}, 'kb_profiles', ${profileId}::uuid)

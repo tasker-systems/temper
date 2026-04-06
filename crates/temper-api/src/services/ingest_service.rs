@@ -288,9 +288,11 @@ mod tests {
             "title": "Test task"
         });
         let hash = hash_json_value(&fixture);
-        eprintln!("Rust shared fixture hash: {hash}");
-        assert!(hash.starts_with("sha256:"));
-        assert_eq!(hash.len(), 7 + 64);
+        // This exact value must match the TypeScript canonicalJsonHash test
+        assert_eq!(
+            hash,
+            "sha256:d39e1380d3b0ce969fe93f1df8b2da5d1caabf90b33e2e30f01d661f2c3c4895"
+        );
     }
 }
 

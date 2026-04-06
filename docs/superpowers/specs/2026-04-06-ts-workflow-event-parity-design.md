@@ -25,7 +25,7 @@ function, making the database the single source of truth for event+audit inserti
 CREATE FUNCTION insert_event_and_audit(
   p_event_id       UUID,           -- caller generates UUIDv7
   p_profile_id     UUID,
-  p_device_id      VARCHAR(128),   -- UUIDv7 most common, but also "vercel-cloud", "mcp", etc.
+  p_device_id      VARCHAR(64),   -- UUIDv7 most common, but also "vercel-cloud", "mcp", etc.
   p_context_id     UUID,           -- NOT NULL — inferred from resource's kb_context_id at call time
   p_resource_id    UUID,           -- required (audit row needs it)
   p_event_type     VARCHAR(64),
@@ -59,7 +59,7 @@ schema, this function requires it. The context is always inferrable from
 because a resource can change contexts when moved — the event captures which
 context the resource was in at the moment of mutation.
 
-**`device_id` is VARCHAR(128):** Wide enough for UUIDv7 strings (the most common
+**`device_id` is VARCHAR(64):** Wide enough for UUIDv7 strings (the most common
 case from CLI sync) but not a UUID type since server-side origins use descriptive
 strings like `"vercel-cloud"` or `"mcp"`.
 

@@ -39,6 +39,10 @@ export async function insertEventAndAudit(
     )
   `;
 
+  if (!rows[0]) {
+    throw new Error("insert_event_and_audit returned no rows");
+  }
+
   return {
     eventId: rows[0].event_id as string,
     auditId: rows[0].audit_id as string,

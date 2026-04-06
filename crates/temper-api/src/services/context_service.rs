@@ -72,6 +72,8 @@ pub async fn resolve_by_name(pool: &PgPool, profile_id: ProfileId, name: &str) -
 /// for this owner (enforced by `kb_contexts_owner_name_unique` constraint).
 pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResult<ContextRow> {
     let id = ContextId::new();
+    let mut tx = pool.begin().await?;
+
     let row = sqlx::query_as::<_, ContextRow>(
         r#"
         INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
@@ -82,7 +84,7 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
     .bind(id)
     .bind(name)
     .bind(profile_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     let event_id = EventId::new();
@@ -95,8 +97,10 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
     .bind("api")
     .bind(id)
     .bind("context_created")
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(row)
 }
