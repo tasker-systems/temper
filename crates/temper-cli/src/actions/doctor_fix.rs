@@ -364,6 +364,11 @@ fn infer_temper_id(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
     if fm_str(ctx.fm, "temper-id").is_some() {
         return None;
     }
+    // Don't generate temper-id if file has a provisional ID — sync will
+    // replace it with the server-authoritative temper-id after push.
+    if fm_str(ctx.fm, "temper-provisional-id").is_some() {
+        return None;
+    }
     let id = crate::ids::generate_id();
     Some(("temper-id".to_string(), id, "generated UUIDv7".to_string()))
 }
@@ -1480,6 +1485,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
         temper_core::types::manifest::Manifest {

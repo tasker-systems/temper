@@ -174,6 +174,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
         manifest

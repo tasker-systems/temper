@@ -250,6 +250,11 @@ pub fn compute_frontmatter_hashes(frontmatter: &serde_yaml::Value) -> (String, S
             continue;
         };
         let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
+        // Skip identity fields — the resource ID is tracked structurally
+        // (manifest key / kb_resources.id), not as hashed metadata.
+        if key_str == "temper-id" || key_str == "temper-provisional-id" {
+            continue;
+        }
         if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
             meta.insert(key_str.to_string(), json_value);
         } else {
@@ -271,4 +276,37 @@ fn hash_map(fields: &BTreeMap<String, serde_json::Value>) -> String {
     hasher.update(serialized.as_bytes());
     let result = hasher.finalize();
     format!("sha256:{}", hex::encode(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_identity_fields_excluded_from_managed_hash() {
+        // temper-id and temper-provisional-id are identity fields tracked
+        // structurally, not as hashed metadata.
+        let yaml1: serde_yaml::Value =
+            serde_yaml::from_str("temper-id: \"aaa\"\ntitle: \"Test\"\ncustom-field: \"value\"")
+                .unwrap();
+        let yaml2: serde_yaml::Value =
+            serde_yaml::from_str("temper-id: \"bbb\"\ntitle: \"Test\"\ncustom-field: \"value\"")
+                .unwrap();
+        let yaml3: serde_yaml::Value = serde_yaml::from_str(
+            "temper-provisional-id: \"ccc\"\ntitle: \"Test\"\ncustom-field: \"value\"",
+        )
+        .unwrap();
+
+        let (m1, o1) = compute_frontmatter_hashes(&yaml1);
+        let (m2, o2) = compute_frontmatter_hashes(&yaml2);
+        let (m3, o3) = compute_frontmatter_hashes(&yaml3);
+
+        assert_eq!(
+            m1, m2,
+            "different temper-id values should produce same managed hash"
+        );
+        assert_eq!(m1, m3, "temper-provisional-id should also be excluded");
+        assert_eq!(o1, o2, "open hash should match");
+        assert_eq!(o1, o3, "open hash should match");
+    }
 }

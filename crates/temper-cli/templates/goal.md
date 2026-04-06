@@ -1,5 +1,5 @@
 ---
-temper-id: "{{ id }}"
+temper-provisional-id: "{{ id }}"
 temper-type: goal
 title: "{{ title }}"
 slug: "{{ slug }}"

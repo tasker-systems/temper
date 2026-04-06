@@ -168,6 +168,10 @@ fn split_frontmatter_tiers(fm: &serde_yaml::Value) -> (serde_json::Value, serde_
         let Some(key_str) = key.as_str() else {
             continue;
         };
+        // Skip identity fields — tracked structurally, not as metadata
+        if key_str == "temper-id" || key_str == "temper-provisional-id" {
+            continue;
+        }
         let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
         if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
             managed.insert(key_str.to_string(), json_value);
@@ -280,21 +284,31 @@ pub fn scan_vault_for_untracked(
                 }
             };
 
-        // Use the file's temper-id if present; only mint a new UUID for files
-        // without frontmatter (which will get frontmatter injected below).
-        let resource_id = fm
+        // Determine resource ID and provisional status:
+        // - temper-id present → server-confirmed, not provisional
+        // - temper-provisional-id present → locally-generated, provisional
+        // - neither → mint new UUID, provisional
+        let (resource_id, is_provisional) = if let Some(tid) = fm
             .as_ref()
             .and_then(|f| f.legacy_id.as_deref())
             .and_then(|id| Uuid::parse_str(id).ok())
-            .unwrap_or_else(Uuid::now_v7);
+        {
+            (tid, false)
+        } else if let Some(pid) = fm
+            .as_ref()
+            .and_then(|f| f.provisional_id.as_deref())
+            .and_then(|id| Uuid::parse_str(id).ok())
+        {
+            (pid, true)
+        } else {
+            (Uuid::now_v7(), true)
+        };
         if fm.is_none() {
-            let frontmatter = ingest::build_frontmatter(
+            let frontmatter = ingest::build_provisional_frontmatter(
                 resource_id,
                 &ingest::title_from_path(path),
                 &context,
                 &doc_type,
-                None,
-                None,
             );
             let new_content = format!("{frontmatter}{content}");
             std::fs::write(path, &new_content)?;
@@ -325,6 +339,7 @@ pub fn scan_vault_for_untracked(
                 synced_at: chrono::Utc::now(),
                 state: temper_core::types::ManifestEntryState::Pending,
                 mtime_secs: mtime,
+                provisional: is_provisional,
             },
         );
 
@@ -576,10 +591,26 @@ async fn push_resource(
     let title = ingest::title_from_path(&file_path);
 
     let mut payload = ingest::build_ingest_payload(body, &title, context, doc_type, None)?;
+    // Strip identity fields from managed_meta before sending — the server
+    // tracks resource identity via kb_resources.id, not as metadata fields.
+    // Including them would cause managed_hash divergence between client and
+    // server after provisional IDs are replaced with authoritative ones.
+    let managed_meta = managed_meta.map(|mut m| {
+        if let Some(obj) = m.as_object_mut() {
+            obj.remove("temper-id");
+            obj.remove("temper-provisional-id");
+        }
+        m
+    });
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 
-    let resource = if item.resource_id.is_some() {
+    let is_provisional = manifest
+        .entries
+        .get(&entry_id)
+        .map_or(false, |e| e.provisional);
+
+    let resource = if item.resource_id.is_some() && !is_provisional {
         // Existing resource — PUT update
         client
             .ingest()
@@ -587,7 +618,7 @@ async fn push_resource(
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?
     } else {
-        // New resource — POST create
+        // New resource — POST create (also used for provisional entries)
         client
             .ingest()
             .create(&payload)
@@ -598,26 +629,45 @@ async fn push_resource(
     // If the server assigned a different resource ID (POST create), remap the
     // manifest entry so the local UUID matches the server's authoritative ID.
     let server_id = resource.id;
-    if server_id != entry_id {
+    if server_id != entry_id || is_provisional {
         tracing::info!(
             %entry_id,
             %server_id,
+            is_provisional,
             "remapping manifest entry: local ID → server ID"
         );
-        if let Some(entry) = manifest.entries.remove(&entry_id) {
+        if let Some(mut entry) = manifest.entries.remove(&entry_id) {
+            entry.provisional = false;
             manifest.entries.insert(server_id, entry);
 
-            // Update the file's temper-id frontmatter to match the server ID.
+            // Replace provisional frontmatter key+value with authoritative temper-id.
             let file_content = std::fs::read_to_string(&file_path)?;
-            let updated = file_content.replace(&entry_id.to_string(), &server_id.to_string());
+            let updated = file_content
+                .replace(
+                    &format!("temper-provisional-id: \"{entry_id}\""),
+                    &format!("temper-id: \"{server_id}\""),
+                )
+                .replace(
+                    &format!("temper-provisional-id: {entry_id}"),
+                    &format!("temper-id: {server_id}"),
+                );
+
             if updated != file_content {
                 std::fs::write(&file_path, &updated)?;
-                tracing::info!("updated temper-id in file frontmatter");
+                tracing::info!("replaced temper-provisional-id with temper-id in frontmatter");
             } else {
-                tracing::warn!(
-                    %entry_id,
-                    "temper-id not found in file content — frontmatter not updated"
-                );
+                // Fallback: try replacing old-style id: or temper-id: (for files
+                // that already had temper-id with a local UUID)
+                let fallback = file_content.replace(&entry_id.to_string(), &server_id.to_string());
+                if fallback != file_content {
+                    std::fs::write(&file_path, &fallback)?;
+                    tracing::info!("updated temper-id in file frontmatter (fallback path)");
+                } else {
+                    tracing::warn!(
+                        %entry_id,
+                        "temper-provisional-id not found in file content — frontmatter not updated"
+                    );
+                }
             }
         }
     }
@@ -745,6 +795,7 @@ async fn pull_resource(
             synced_at: chrono::Utc::now(),
             state: ManifestEntryState::Clean,
             mtime_secs,
+            provisional: false,
         },
     );
 
@@ -1013,6 +1064,7 @@ pub async fn sync_refresh(
                         synced_at: chrono::Utc::now(),
                         state: ManifestEntryState::Pending,
                         mtime_secs: None,
+                        provisional: false,
                     },
                 );
                 added += 1;
@@ -1138,6 +1190,11 @@ pub async fn sync_reset(
             .and_then(|f| f.legacy_id.as_deref())
             .and_then(|id| Uuid::parse_str(id).ok());
 
+        let provisional_id = fm
+            .as_ref()
+            .and_then(|f| f.provisional_id.as_deref())
+            .and_then(|id| Uuid::parse_str(id).ok());
+
         if let Some(tid) = temper_id {
             if let Some(server_item) = server_by_id.get(&tid) {
                 // Match by temper-id
@@ -1162,12 +1219,35 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
+                        provisional: false,
                     },
                 );
                 matched_by_id += 1;
                 matched_server_ids.insert(tid);
                 continue;
             }
+        }
+
+        // Provisional files — skip server matching entirely, mark Pending
+        if temper_id.is_none() && provisional_id.is_some() {
+            let resource_id = provisional_id.unwrap();
+            new_manifest.entries.insert(
+                resource_id,
+                temper_core::types::ManifestEntry {
+                    path: rel_path,
+                    body_hash: content_hash,
+                    remote_body_hash: String::new(),
+                    managed_hash: local_managed_hash,
+                    open_hash: local_open_hash,
+                    remote_managed_hash: String::new(),
+                    remote_open_hash: String::new(),
+                    synced_at: chrono::Utc::now(),
+                    state: ManifestEntryState::Pending,
+                    mtime_secs: mtime,
+                    provisional: true,
+                },
+            );
+            continue;
         }
 
         // Try matching by content hash
@@ -1203,6 +1283,7 @@ pub async fn sync_reset(
                         synced_at: chrono::Utc::now(),
                         state,
                         mtime_secs: mtime,
+                        provisional: false,
                     },
                 );
                 matched_by_hash += 1;
@@ -1214,7 +1295,11 @@ pub async fn sync_reset(
         // Unmatched local file — mark as Pending (new, will push on next sync).
         // Use the file's temper-id if present so push_resource can remap it
         // after the server assigns an authoritative ID.
-        let resource_id = temper_id.unwrap_or_else(Uuid::now_v7);
+        let (resource_id, is_provisional) = if let Some(tid) = temper_id {
+            (tid, false)
+        } else {
+            (Uuid::now_v7(), true)
+        };
         new_manifest.entries.insert(
             resource_id,
             temper_core::types::ManifestEntry {
@@ -1228,6 +1313,7 @@ pub async fn sync_reset(
                 synced_at: chrono::Utc::now(),
                 state: ManifestEntryState::Pending,
                 mtime_secs: mtime,
+                provisional: is_provisional,
             },
         );
     }
@@ -1254,6 +1340,7 @@ pub async fn sync_reset(
                     synced_at: chrono::Utc::now(),
                     state: ManifestEntryState::Pending,
                     mtime_secs: None,
+                    provisional: false,
                 },
             );
         }
@@ -1304,6 +1391,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
         m
@@ -1560,6 +1648,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None, // Force rehash
+                provisional: false,
             },
         );
 
@@ -1612,6 +1701,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
@@ -1658,6 +1748,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: Some(file_mtime),
+                provisional: false,
             },
         );
 
@@ -1702,6 +1793,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: Some(file_mtime),
+                provisional: false,
             },
         );
 
@@ -1741,6 +1833,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None, // No mtime — must rehash
+                provisional: false,
             },
         );
 
@@ -1796,6 +1889,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
@@ -1901,6 +1995,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
@@ -1931,6 +2026,7 @@ mod tests {
                 synced_at: Utc::now(),
                 state: ManifestEntryState::Clean,
                 mtime_secs: None,
+                provisional: false,
             },
         );
 
