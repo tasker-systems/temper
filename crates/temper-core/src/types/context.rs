@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
 
-use super::ids::{ContextId, ProfileId};
+use super::ids::ContextId;
 
 /// Response row for context endpoints.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
