@@ -32,7 +32,7 @@ pub fn save_manifest(temper_dir: &Path, manifest: &Manifest) -> crate::error::Re
 mod tests {
     use super::*;
     use chrono::Utc;
-    use temper_core::types::{ManifestEntry, ManifestEntryState};
+    use temper_core::types::{ManifestEntry, ManifestEntryState, ResourceId};
     use uuid::Uuid;
 
     #[test]
@@ -68,7 +68,7 @@ mod tests {
         let temper_dir = dir.path().join(".temper");
 
         let mut manifest = Manifest::new("device-xyz".to_string());
-        let id = Uuid::nil();
+        let id = ResourceId::from(Uuid::nil());
         manifest.entries.insert(
             id,
             ManifestEntry {

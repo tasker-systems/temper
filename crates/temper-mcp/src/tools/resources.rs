@@ -5,6 +5,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::resource::{
     ContentResponse, ResourceCreateRequest, ResourceListParams, ResourceUpdateRequest,
 };
@@ -153,8 +154,8 @@ pub async fn delete_resource(
 
     temper_api::services::resource_service::delete(
         &svc.api_state.pool,
-        profile.id,
-        input.id,
+        ProfileId::from(profile.id),
+        ResourceId::from(input.id),
         "mcp",
     )
     .await
@@ -181,7 +182,7 @@ pub async fn get_resource_content(
         })?;
 
     let response = ContentResponse {
-        resource_id: input.id,
+        resource_id: ResourceId::from(input.id),
         markdown,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(

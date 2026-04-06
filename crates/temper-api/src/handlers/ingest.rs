@@ -8,6 +8,7 @@ use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::ingest_service;
 use crate::state::AppState;
 
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::resource::ResourceRow;
 
@@ -32,7 +33,7 @@ pub async fn create(
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
-    ingest_service::ingest(&state.pool, auth.0.profile.id, &device_id, payload)
+    ingest_service::ingest(&state.pool, ProfileId::from(auth.0.profile.id), &device_id, payload)
         .await
         .map(Json)
 }
@@ -62,8 +63,8 @@ pub async fn update(
         .unwrap_or_else(|| "api".to_string());
     ingest_service::update(
         &state.pool,
-        auth.0.profile.id,
-        resource_id,
+        ProfileId::from(auth.0.profile.id),
+        ResourceId::from(resource_id),
         &device_id,
         payload,
     )

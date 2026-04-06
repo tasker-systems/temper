@@ -6,7 +6,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::ingest_service::{insert_audit, insert_event};
+use crate::services::ingest_service::insert_event_and_audit;
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
@@ -14,8 +15,8 @@ use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 /// identity fields (title, slug, temper-type, temper-context) to kb_resources.
 pub async fn update_meta(
     pool: &PgPool,
-    profile_id: Uuid,
-    resource_id: Uuid,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
     device_id: &str,
     payload: MetaUpdatePayload,
 ) -> ApiResult<Value> {
@@ -110,41 +111,29 @@ pub async fn update_meta(
             .await?;
     }
 
-    // 4. Insert kb_event
-    // Fetch current body_hash for enriched event payload and audit snapshot.
-    // MetaUpdatePayload only carries managed/open hashes — body is unchanged
-    // by meta updates, but we need it for complete event + audit records.
-    let (body_hash,): (String,) =
-        sqlx::query_as("SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1")
-            .bind(resource_id)
-            .fetch_one(&mut *tx)
-            .await?;
-
-    let event_id = insert_event(
-        &mut tx,
-        profile_id,
-        device_id,
-        None,
-        Some(resource_id),
-        "managed_meta_updated",
-        &serde_json::json!({
-            "body_hash": &body_hash,
-            "managed_hash": &payload.managed_hash,
-            "open_hash": &payload.open_hash,
-        }),
+    // 4. Insert kb_event + audit atomically
+    // Fetch current body_hash and context_id for the event + audit records.
+    let (body_hash, context_id): (String, Uuid) = sqlx::query_as(
+        r#"SELECT m.body_hash, r.kb_context_id
+           FROM kb_resource_manifests m
+           JOIN kb_resources r ON r.id = m.resource_id
+           WHERE m.resource_id = $1"#,
     )
+    .bind(resource_id)
+    .fetch_one(&mut *tx)
     .await?;
 
-    insert_audit(
+    insert_event_and_audit(
         &mut tx,
-        resource_id,
-        event_id,
         profile_id,
         device_id,
+        ContextId::from(context_id),
+        resource_id,
+        "managed_meta_updated",
+        "update_meta",
         &body_hash,
         &payload.managed_hash,
         &payload.open_hash,
-        "update_meta",
     )
     .await?;
 

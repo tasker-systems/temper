@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+
+use super::ids::{ResourceAuditId, ResourceId};
 
 /// Per-resource sync state in the local manifest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -59,7 +60,7 @@ pub struct ManifestEntry {
     /// Most recent kb_resource_audits.id this device is aware of.
     /// Used for precedence-based sync conflict resolution.
     #[serde(default)]
-    pub last_audit_id: Option<Uuid>,
+    pub last_audit_id: Option<ResourceAuditId>,
 }
 
 /// The local manifest — `<vault>/.temper/manifest.json`.
@@ -74,7 +75,7 @@ pub struct Manifest {
     /// Timestamp of last completed sync round
     pub last_sync: Option<DateTime<Utc>>,
     /// Resource UUID → manifest entry
-    pub entries: HashMap<Uuid, ManifestEntry>,
+    pub entries: HashMap<ResourceId, ManifestEntry>,
 }
 
 impl Manifest {
@@ -91,6 +92,7 @@ impl Manifest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     #[test]
     fn test_manifest_entry_state_serde() {
@@ -120,7 +122,7 @@ mod tests {
     #[test]
     fn test_manifest_json_roundtrip() {
         let mut manifest = Manifest::new("device-abc".to_string());
-        let resource_id = Uuid::nil();
+        let resource_id = ResourceId::from(Uuid::nil());
         manifest.entries.insert(
             resource_id,
             ManifestEntry {
@@ -257,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_manifest_entry_last_audit_id_roundtrip() {
-        let id = Uuid::now_v7();
+        let id = ResourceAuditId::from(Uuid::now_v7());
         let entry = ManifestEntry {
             path: "temper/sessions/s1.md".to_string(),
             body_hash: "sha256:body".to_string(),

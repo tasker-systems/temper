@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use super::ids::{EventId, ProfileId, ResourceId};
+
 /// Query parameters for `GET /api/events`.
 ///
 /// Events are scoped by time-bounded resource visibility: you see events on
@@ -22,11 +24,11 @@ pub struct EventQuery {
 /// An event returned from the API.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventResponse {
-    pub id: Uuid,
-    pub profile_id: Uuid,
+    pub id: EventId,
+    pub profile_id: ProfileId,
     pub device_id: String,
     pub context: Option<String>,
-    pub resource_id: Option<Uuid>,
+    pub resource_id: Option<ResourceId>,
     pub event_type: String,
     pub payload: serde_json::Value,
     pub created: DateTime<Utc>,
@@ -53,11 +55,11 @@ mod tests {
     #[test]
     fn test_event_response_serde() {
         let event = EventResponse {
-            id: Uuid::nil(),
-            profile_id: Uuid::nil(),
+            id: EventId::from(Uuid::nil()),
+            profile_id: ProfileId::from(Uuid::nil()),
             device_id: "device-abc".to_string(),
             context: Some("temper".to_string()),
-            resource_id: Some(Uuid::nil()),
+            resource_id: Some(ResourceId::from(Uuid::nil())),
             event_type: "resource.modified".to_string(),
             payload: serde_json::json!({"content_hash": "sha256:abc"}),
             created: Utc::now(),

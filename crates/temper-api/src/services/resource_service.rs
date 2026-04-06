@@ -2,7 +2,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::ingest_service::{insert_audit, insert_event};
+use crate::services::ingest_service::insert_event_and_audit;
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 pub use temper_core::types::resource::{
     ContentChunk, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
@@ -198,8 +199,8 @@ pub async fn update(
 /// Soft-delete a resource. Requires `can_modify_resource()` to return true.
 pub async fn delete(
     pool: &PgPool,
-    profile_id: Uuid,
-    resource_id: Uuid,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
     device_id: &str,
 ) -> ApiResult<()> {
     let can_modify: bool = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
@@ -245,32 +246,18 @@ pub async fn delete(
     .execute(&mut *tx)
     .await?;
 
-    // Record event and audit
-    let event_id = insert_event(
+    // Record event and audit atomically
+    insert_event_and_audit(
         &mut tx,
         profile_id,
         device_id,
-        Some(context_id),
-        Some(resource_id),
-        "resource_deleted",
-        &serde_json::json!({
-            "body_hash": &body_hash,
-            "managed_hash": &managed_hash,
-            "open_hash": &open_hash,
-        }),
-    )
-    .await?;
-
-    insert_audit(
-        &mut tx,
+        ContextId::from(context_id),
         resource_id,
-        event_id,
-        profile_id,
-        device_id,
+        "resource_deleted",
+        "delete",
         &body_hash,
         &managed_hash,
         &open_hash,
-        "delete",
     )
     .await?;
 

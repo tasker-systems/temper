@@ -1,5 +1,6 @@
 //! `temper remove` — delete a resource from the cloud and optionally the vault.
 
+use temper_core::types::ResourceId;
 use uuid::Uuid;
 
 use crate::actions::runtime;
@@ -9,6 +10,7 @@ use crate::output;
 pub fn run(resource_id: &str, force: bool) -> crate::error::Result<()> {
     let id = Uuid::parse_str(resource_id)
         .map_err(|e| TemperError::NotFound(format!("Invalid UUID: {e}")))?;
+    let rid = ResourceId::from(id);
 
     runtime::with_client(|client| {
         Box::pin(async move {
@@ -27,7 +29,7 @@ pub fn run(resource_id: &str, force: bool) -> crate::error::Result<()> {
                 crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
             let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
-            if let Some(entry) = manifest.entries.get(&id) {
+            if let Some(entry) = manifest.entries.get(&rid) {
                 let vault_path = vault_root.join(&entry.path);
 
                 let should_remove = if force {
@@ -49,7 +51,7 @@ pub fn run(resource_id: &str, force: bool) -> crate::error::Result<()> {
                         std::fs::remove_file(&vault_path)?;
                         output::dim(format!("Removed vault file: {}", vault_path.display()));
                     }
-                    manifest.entries.remove(&id);
+                    manifest.entries.remove(&rid);
                     crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
                 }
             }

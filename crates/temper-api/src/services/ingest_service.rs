@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
+use temper_core::types::ids::{ContextId, EventId, ProfileId, ResourceAuditId, ResourceId};
 use temper_core::types::ingest::chunks_to_jsonb;
 
 use temper_core::types::ingest::{unpack_chunks, IngestPayload, PackedChunk};
@@ -41,22 +42,27 @@ fn canonicalize_json(value: &serde_json::Value) -> serde_json::Value {
     }
 }
 
-/// Insert an event into kb_events.
-pub async fn insert_event(
+/// Insert an event and audit trail row atomically via the SQL function.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "event+audit require all hash fields plus identifiers"
+)]
+pub async fn insert_event_and_audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     device_id: &str,
-    context_id: Option<Uuid>,
-    resource_id: Option<Uuid>,
+    context_id: ContextId,
+    resource_id: ResourceId,
     event_type: &str,
-    payload: &serde_json::Value,
-) -> ApiResult<Uuid> {
-    let event_id = Uuid::now_v7();
-    sqlx::query(
-        r#"
-        INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, resource_id, event_type, payload, created)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-        "#,
+    action: &str,
+    body_hash: &str,
+    managed_hash: &str,
+    open_hash: &str,
+) -> ApiResult<(EventId, ResourceAuditId)> {
+    let event_id = EventId::new();
+
+    let row: (Uuid, Uuid) = sqlx::query_as(
+        "SELECT event_id, audit_id FROM insert_event_and_audit($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(event_id)
     .bind(profile_id)
@@ -64,47 +70,14 @@ pub async fn insert_event(
     .bind(context_id)
     .bind(resource_id)
     .bind(event_type)
-    .bind(payload)
-    .execute(&mut **tx)
-    .await?;
-    Ok(event_id)
-}
-
-/// Insert an audit trail row into kb_resource_audits.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "audit row requires all hash fields plus identifiers"
-)]
-pub async fn insert_audit(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    resource_id: Uuid,
-    event_id: Uuid,
-    profile_id: Uuid,
-    device_id: &str,
-    body_hash: &str,
-    managed_hash: &str,
-    open_hash: &str,
-    action: &str,
-) -> ApiResult<Uuid> {
-    let audit_id: (Uuid,) = sqlx::query_as(
-        r#"
-        INSERT INTO kb_resource_audits
-            (resource_id, event_id, profile_id, device_id, body_hash, managed_hash, open_hash, action)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        RETURNING id
-        "#,
-    )
-    .bind(resource_id)
-    .bind(event_id)
-    .bind(profile_id)
-    .bind(device_id)
+    .bind(action)
     .bind(body_hash)
     .bind(managed_hash)
     .bind(open_hash)
-    .bind(action)
     .fetch_one(&mut **tx)
     .await?;
-    Ok(audit_id.0)
+
+    Ok((EventId::from(row.0), ResourceAuditId::from(row.1)))
 }
 
 /// Resolve doc_type name to UUID from kb_doc_types.
@@ -121,7 +94,7 @@ async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
 /// Check for body-hash dedup — returns existing resource if hash matches.
 async fn find_by_body_hash(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     body_hash: &str,
 ) -> ApiResult<Option<ResourceRow>> {
     let row = sqlx::query_as::<_, ResourceRow>(
@@ -151,7 +124,7 @@ async fn find_by_body_hash(
 /// Gates search triggers, does bulk INSERT, rebuilds search index once.
 async fn persist_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    resource_id: Uuid,
+    resource_id: ResourceId,
     chunks: &[PackedChunk],
 ) -> ApiResult<i32> {
     let chunks_json = chunks_to_jsonb(chunks);
@@ -169,7 +142,7 @@ async fn persist_chunks(
 /// Gates search triggers, does bulk version-bump + INSERT, rebuilds once.
 async fn replace_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    resource_id: Uuid,
+    resource_id: ResourceId,
     chunks: &[PackedChunk],
 ) -> ApiResult<i32> {
     let chunks_json = chunks_to_jsonb(chunks);
@@ -186,12 +159,13 @@ async fn replace_chunks(
 /// Process a full ingest payload: resolve names, dedup, insert resource + chunks.
 pub async fn ingest(
     pool: &PgPool,
-    profile_id: Uuid,
+    profile_id: ProfileId,
     device_id: &str,
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // 1. Resolve context
-    let context = context_service::resolve_by_name(pool, profile_id, &payload.context_name).await?;
+    let context = context_service::resolve_by_name(pool, Uuid::from(profile_id), &payload.context_name).await?;
+    let context_id = ContextId::from(context.id);
 
     // 2. Resolve doc_type
     let doc_type_id = resolve_doc_type(pool, &payload.doc_type_name).await?;
@@ -221,7 +195,7 @@ pub async fn ingest(
     // 6. Insert resource + manifest + chunks in a transaction
     let mut tx = pool.begin().await?;
 
-    let resource_id = Uuid::now_v7();
+    let resource_id = ResourceId::new();
     let resource = sqlx::query_as::<_, ResourceRow>(
         r#"
         INSERT INTO kb_resources (
@@ -237,7 +211,7 @@ pub async fn ingest(
         "#,
     )
     .bind(resource_id)
-    .bind(context.id)
+    .bind(context_id)
     .bind(doc_type_id)
     .bind(&payload.origin_uri)
     .bind(&payload.title)
@@ -265,32 +239,18 @@ pub async fn ingest(
     // 7. Insert chunks with embeddings
     persist_chunks(&mut tx, resource_id, &chunks).await?;
 
-    // 8. Insert event
-    let event_id = insert_event(
+    // 8. Insert event + audit atomically
+    insert_event_and_audit(
         &mut tx,
         profile_id,
         device_id,
-        Some(context.id),
-        Some(resource_id),
-        "resource_created",
-        &serde_json::json!({
-            "body_hash": &payload.content_hash,
-            "managed_hash": &managed_hash,
-            "open_hash": &open_hash,
-        }),
-    )
-    .await?;
-
-    insert_audit(
-        &mut tx,
+        context_id,
         resource_id,
-        event_id,
-        profile_id,
-        device_id,
+        "resource_created",
+        "create",
         &payload.content_hash,
         &managed_hash,
         &open_hash,
-        "create",
     )
     .await?;
 
@@ -302,8 +262,8 @@ pub async fn ingest(
 /// Update an existing resource's content — re-chunk and re-embed.
 pub async fn update(
     pool: &PgPool,
-    profile_id: Uuid,
-    resource_id: Uuid,
+    profile_id: ProfileId,
+    resource_id: ResourceId,
     device_id: &str,
     payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
@@ -375,32 +335,18 @@ pub async fn update(
     // Replace chunks — version-bump + batch insert + search rebuild in one call
     replace_chunks(&mut tx, resource_id, &chunks).await?;
 
-    // Insert event
-    let event_id = insert_event(
+    // Insert event + audit atomically
+    insert_event_and_audit(
         &mut tx,
         profile_id,
         device_id,
-        Some(resource.kb_context_id),
-        Some(resource_id),
-        "body_updated",
-        &serde_json::json!({
-            "body_hash": &payload.content_hash,
-            "managed_hash": &managed_hash,
-            "open_hash": &open_hash,
-        }),
-    )
-    .await?;
-
-    insert_audit(
-        &mut tx,
+        resource.kb_context_id,
         resource_id,
-        event_id,
-        profile_id,
-        device_id,
+        "body_updated",
+        "update_body",
         &payload.content_hash,
         &managed_hash,
         &open_hash,
-        "update_body",
     )
     .await?;
 

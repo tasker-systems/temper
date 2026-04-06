@@ -10,6 +10,7 @@ use crate::services::resource_service::{
 };
 use crate::state::AppState;
 
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::resource::{ContentResponse, DeleteResponse};
 
 #[utoipa::path(
@@ -75,7 +76,7 @@ pub async fn get_content(
     let markdown =
         resource_service::get_content(&state.pool, auth.0.profile.id, resource_id).await?;
     Ok(Json(ContentResponse {
-        resource_id,
+        resource_id: ResourceId::from(resource_id),
         markdown,
     }))
 }
@@ -149,6 +150,6 @@ pub async fn delete(
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
-    resource_service::delete(&state.pool, auth.0.profile.id, resource_id, &device_id).await?;
+    resource_service::delete(&state.pool, ProfileId::from(auth.0.profile.id), ResourceId::from(resource_id), &device_id).await?;
     Ok(Json(DeleteResponse { deleted: true }))
 }

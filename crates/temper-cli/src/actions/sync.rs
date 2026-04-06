@@ -11,9 +11,9 @@ use crate::actions::ingest;
 use crate::actions::progress::SyncProgress;
 use crate::error::{Result, TemperError};
 use temper_core::types::{
-    Manifest, ManifestEntryState, MergeResult, MergedResource, PushKind, SyncCompleteRequest,
-    SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem, SyncPushItem,
-    SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
+    Manifest, ManifestEntryState, MergeResult, MergedResource, PushKind, ResourceId,
+    SyncCompleteRequest, SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem,
+    SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
 
 // ---------------------------------------------------------------------------
@@ -220,12 +220,13 @@ pub fn parse_kb_uri(uri: &str) -> Result<(String, String)> {
 }
 
 /// Extract resource UUID from last segment of a kb:// URI.
-pub fn extract_resource_id(uri: &str) -> Result<Uuid> {
+pub fn extract_resource_id(uri: &str) -> Result<ResourceId> {
     let uuid_str = uri
         .rsplit('/')
         .next()
         .ok_or_else(|| TemperError::Config(format!("no UUID segment in URI: {uri}")))?;
     Uuid::parse_str(uuid_str)
+        .map(ResourceId::from)
         .map_err(|e| TemperError::Config(format!("invalid UUID in URI {uri}: {e}")))
 }
 
@@ -293,15 +294,15 @@ pub fn scan_vault_for_untracked(
             .and_then(|f| f.legacy_id.as_deref())
             .and_then(|id| Uuid::parse_str(id).ok())
         {
-            (tid, false)
+            (ResourceId::from(tid), false)
         } else if let Some(pid) = fm
             .as_ref()
             .and_then(|f| f.provisional_id.as_deref())
             .and_then(|id| Uuid::parse_str(id).ok())
         {
-            (pid, true)
+            (ResourceId::from(pid), true)
         } else {
-            (Uuid::now_v7(), true)
+            (ResourceId::new(), true)
         };
         if fm.is_none() {
             let frontmatter = ingest::build_provisional_frontmatter(
@@ -615,7 +616,7 @@ async fn push_resource(
         // Existing resource — PUT update
         client
             .ingest()
-            .update(entry_id, &payload)
+            .update(Uuid::from(entry_id), &payload)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?
     } else {
@@ -704,13 +705,13 @@ async fn pull_resource(
 ) -> Result<()> {
     let resource = client
         .resources()
-        .get(item.resource_id)
+        .get(Uuid::from(item.resource_id))
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
     let content_response = client
         .resources()
-        .content(item.resource_id)
+        .content(Uuid::from(item.resource_id))
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
@@ -877,7 +878,7 @@ async fn merge_and_push_resource(
     // 2. Fetch remote content
     let content_response = client
         .resources()
-        .content(item.resource_id)
+        .content(Uuid::from(item.resource_id))
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
     let remote_body = &content_response.markdown;
@@ -912,7 +913,7 @@ async fn merge_and_push_resource(
     // 7. Push via update
     let _resource = client
         .ingest()
-        .update(item.resource_id, &payload)
+        .update(Uuid::from(item.resource_id), &payload)
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
 
@@ -1001,7 +1002,7 @@ pub async fn sync_refresh(
 
     // Build a content-hash index for de-duplication:
     // (context, doc_type, content_hash) -> manifest entry UUID
-    let mut hash_index: std::collections::HashMap<(String, String, String), Uuid> =
+    let mut hash_index: std::collections::HashMap<(String, String, String), ResourceId> =
         std::collections::HashMap::new();
     for (id, entry) in &manifest.entries {
         if !entry.body_hash.is_empty() {
@@ -1017,7 +1018,8 @@ pub async fn sync_refresh(
     }
 
     // Track which server items were matched
-    let mut matched_server_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut matched_server_ids: std::collections::HashSet<ResourceId> =
+        std::collections::HashSet::new();
 
     for item in &server.items {
         if manifest.entries.contains_key(&item.resource_id) {
@@ -1127,7 +1129,7 @@ pub async fn sync_reset(
     let mut matched_by_hash = 0;
 
     // Build server index by resource_id
-    let server_by_id: std::collections::HashMap<Uuid, &temper_core::types::SyncManifestItem> =
+    let server_by_id: std::collections::HashMap<ResourceId, &temper_core::types::SyncManifestItem> =
         server.items.iter().map(|i| (i.resource_id, i)).collect();
 
     // Build server index by content_hash for fallback matching
@@ -1150,7 +1152,8 @@ pub async fn sync_reset(
     }
 
     // Track which server resources have been matched
-    let mut matched_server_ids: std::collections::HashSet<Uuid> = std::collections::HashSet::new();
+    let mut matched_server_ids: std::collections::HashSet<ResourceId> =
+        std::collections::HashSet::new();
 
     // Walk vault files
     for entry in ignore::WalkBuilder::new(vault_root)
@@ -1201,7 +1204,8 @@ pub async fn sync_reset(
             .and_then(|id| Uuid::parse_str(id).ok());
 
         if let Some(tid) = temper_id {
-            if let Some(server_item) = server_by_id.get(&tid) {
+            let tid_resource = ResourceId::from(tid);
+            if let Some(server_item) = server_by_id.get(&tid_resource) {
                 // Match by temper-id
                 let state = if content_hash == server_item.content_hash
                     && local_managed_hash == server_item.managed_hash
@@ -1212,7 +1216,7 @@ pub async fn sync_reset(
                     ManifestEntryState::LocalModified
                 };
                 new_manifest.entries.insert(
-                    tid,
+                    tid_resource,
                     temper_core::types::ManifestEntry {
                         path: rel_path,
                         body_hash: content_hash,
@@ -1229,14 +1233,14 @@ pub async fn sync_reset(
                     },
                 );
                 matched_by_id += 1;
-                matched_server_ids.insert(tid);
+                matched_server_ids.insert(tid_resource);
                 continue;
             }
         }
 
         // Provisional files — skip server matching entirely, mark Pending
         if temper_id.is_none() && provisional_id.is_some() {
-            let resource_id = provisional_id.unwrap();
+            let resource_id = ResourceId::from(provisional_id.unwrap());
             new_manifest.entries.insert(
                 resource_id,
                 temper_core::types::ManifestEntry {
@@ -1304,9 +1308,9 @@ pub async fn sync_reset(
         // Use the file's temper-id if present so push_resource can remap it
         // after the server assigns an authoritative ID.
         let (resource_id, is_provisional) = if let Some(tid) = temper_id {
-            (tid, false)
+            (ResourceId::from(tid), false)
         } else {
-            (Uuid::now_v7(), true)
+            (ResourceId::new(), true)
         };
         new_manifest.entries.insert(
             resource_id,
@@ -1387,7 +1391,7 @@ mod tests {
 
     fn sample_manifest() -> Manifest {
         let mut m = Manifest::new("device-test".to_string());
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         m.entries.insert(
             id,
             ManifestEntry {
@@ -1425,7 +1429,7 @@ mod tests {
         let changed = rehash_manifest(&mut manifest, vault).unwrap();
         assert_eq!(changed, 1);
 
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get(&id).unwrap();
         assert_eq!(entry.state, ManifestEntryState::LocalModified);
         assert_ne!(entry.body_hash, "oldhash");
@@ -1439,7 +1443,7 @@ mod tests {
         let changed = rehash_manifest(&mut manifest, dir.path()).unwrap();
         assert_eq!(changed, 1);
 
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get(&id).unwrap();
         assert_eq!(entry.state, ManifestEntryState::LocalModified);
         assert!(entry.body_hash.is_empty());
@@ -1456,7 +1460,7 @@ mod tests {
         let body = strip_frontmatter(content);
         let hash = ingest::compute_content_hash(body);
 
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get_mut(&id).unwrap();
         entry.body_hash = hash;
         // Set non-empty managed/open hashes so the skip condition is met
@@ -1495,7 +1499,7 @@ mod tests {
         let body = strip_frontmatter(content);
         let hash = ingest::compute_content_hash(body);
 
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get_mut(&id).unwrap();
         entry.body_hash = hash;
         // Leave managed_hash and open_hash empty — simulating the old bug
@@ -1564,7 +1568,7 @@ mod tests {
             extract_resource_id("kb://temper/task/12345678-1234-1234-1234-123456789abc").unwrap();
         assert_eq!(
             id,
-            Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap()
+            ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap())
         );
     }
 
@@ -1607,7 +1611,7 @@ mod tests {
         let vault = dir.path();
         let mut manifest = sample_manifest();
 
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let file_dir = vault.join("temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
@@ -1629,7 +1633,7 @@ mod tests {
     fn rehash_detects_frontmatter_changes() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         let file_v1 = "---\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
         let file_v2 = "---\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
@@ -1687,7 +1691,7 @@ mod tests {
     fn rehash_detects_body_change_with_frontmatter() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         let original = "---\ntitle: Test\n---\n\n# Original body\n";
         let modified = "---\ntitle: Test\n---\n\n# Modified body\n";
@@ -1737,7 +1741,7 @@ mod tests {
     fn rehash_skips_file_when_mtime_matches_and_hashes_complete() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         let file_dir = vault.join("temper/task");
         fs::create_dir_all(&file_dir).unwrap();
@@ -1779,7 +1783,7 @@ mod tests {
     fn rehash_backfills_when_mtime_matches_but_hashes_empty() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         let file_dir = vault.join("temper/task");
         fs::create_dir_all(&file_dir).unwrap();
@@ -1823,7 +1827,7 @@ mod tests {
     fn rehash_processes_file_when_mtime_is_none() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         let content = "no frontmatter body";
         let file_dir = vault.join("temper/task");
@@ -1891,7 +1895,7 @@ mod tests {
         fs::write(file_dir.join("existing.md"), "# Existing\n\nContent.").unwrap();
 
         let mut manifest = Manifest::new("device-test".to_string());
-        let id = Uuid::now_v7();
+        let id = ResourceId::new();
         manifest.entries.insert(
             id,
             ManifestEntry {
@@ -1962,7 +1966,7 @@ mod tests {
             }
         }"#;
         let manifest: Manifest = serde_json::from_str(json).unwrap();
-        let id = Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap();
+        let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         assert_eq!(manifest.entries[&id].mtime_secs, None);
     }
 
@@ -1989,7 +1993,7 @@ mod tests {
         // overwrite in place, NOT create my-document-2.md.
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let resource_id = Uuid::now_v7();
+        let resource_id = ResourceId::new();
 
         // Create the existing file on disk
         let file_dir = vault.join("temper/task");

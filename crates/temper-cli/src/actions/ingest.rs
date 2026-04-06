@@ -425,7 +425,7 @@ pub fn dedup_vault_slug(vault_root: &Path, context: &str, doc_type: &str, slug: 
 /// Uses `temper-provisional-id` instead of `temper-id` to indicate the ID
 /// hasn't been confirmed by the server yet.
 pub fn build_provisional_frontmatter(
-    id: Uuid,
+    id: impl std::fmt::Display,
     title: &str,
     context: &str,
     doc_type: &str,
@@ -441,7 +441,7 @@ pub fn build_provisional_frontmatter(
 /// `extra_fields` allows callers to inject additional key-value pairs (e.g.
 /// `legacy_id`, `goal`, `stage`) without bloating this function's signature.
 pub fn build_frontmatter(
-    id: Uuid,
+    id: impl std::fmt::Display,
     title: &str,
     context: &str,
     doc_type: &str,
