@@ -407,7 +407,7 @@ async fn sync_manifest_excludes_inactive(pool: sqlx::PgPool) {
     // Delete the resource (soft delete — sets is_active=false)
     app.client
         .resources()
-        .delete(resource.id)
+        .delete(resource.id.into())
         .await
         .expect("delete failed");
 

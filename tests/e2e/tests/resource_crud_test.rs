@@ -29,7 +29,7 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
     let doc_type_id = Uuid::parse_str(common::RESEARCH_DOC_TYPE_ID).expect("parse doc type UUID");
 
     let request = ResourceCreateRequest {
-        kb_context_id: context.id,
+        kb_context_id: context.id.into(),
         kb_doc_type_id: doc_type_id,
         origin_uri: "test://e2e/resource-create-get".to_string(),
         title: "E2E Create & Get Test".to_string(),
@@ -46,13 +46,13 @@ async fn resource_create_and_get(pool: sqlx::PgPool) {
     assert_eq!(created.title, "E2E Create & Get Test");
     assert_eq!(created.origin_uri, "test://e2e/resource-create-get");
     assert_eq!(created.kb_context_id, context.id);
-    assert_eq!(created.kb_doc_type_id, doc_type_id);
+    assert_eq!(created.kb_doc_type_id, temper_core::types::DocTypeId(doc_type_id));
     assert!(created.is_active);
 
     let fetched = app
         .client
         .resources()
-        .get(created.id)
+        .get(created.id.into())
         .await
         .expect("resource get failed");
 
@@ -85,7 +85,7 @@ async fn resource_update(pool: sqlx::PgPool) {
         .client
         .resources()
         .create(&ResourceCreateRequest {
-            kb_context_id: context.id,
+            kb_context_id: context.id.into(),
             kb_doc_type_id: doc_type_id,
             origin_uri: "test://e2e/resource-update".to_string(),
             title: "Original Title".to_string(),
@@ -100,7 +100,7 @@ async fn resource_update(pool: sqlx::PgPool) {
         .client
         .resources()
         .update(
-            created.id,
+            created.id.into(),
             &ResourceUpdateRequest {
                 title: Some("Updated Title".to_string()),
                 slug: None,
@@ -115,7 +115,7 @@ async fn resource_update(pool: sqlx::PgPool) {
     let fetched = app
         .client
         .resources()
-        .get(created.id)
+        .get(created.id.into())
         .await
         .expect("resource get after update failed");
 
@@ -146,7 +146,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
         .client
         .resources()
         .create(&ResourceCreateRequest {
-            kb_context_id: context.id,
+            kb_context_id: context.id.into(),
             kb_doc_type_id: doc_type_id,
             origin_uri: "test://e2e/resource-delete".to_string(),
             title: "Resource To Delete".to_string(),
@@ -158,7 +158,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
     let delete_resp = app
         .client
         .resources()
-        .delete(created.id)
+        .delete(created.id.into())
         .await
         .expect("resource delete failed");
 
@@ -171,7 +171,7 @@ async fn resource_delete(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&ResourceListParams {
-            kb_context_id: Some(context.id),
+            kb_context_id: Some(context.id.into()),
             limit: Some(50),
             offset: None,
         })
@@ -208,7 +208,7 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
         app.client
             .resources()
             .create(&ResourceCreateRequest {
-                kb_context_id: context.id,
+                kb_context_id: context.id.into(),
                 kb_doc_type_id: doc_type_id,
                 origin_uri: format!("test://e2e/resource-page/{i}"),
                 title: format!("Pagination Resource {i}"),
@@ -222,7 +222,7 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&ResourceListParams {
-            kb_context_id: Some(context.id),
+            kb_context_id: Some(context.id.into()),
             limit: Some(2),
             offset: None,
         })

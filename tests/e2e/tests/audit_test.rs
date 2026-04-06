@@ -36,7 +36,7 @@ async fn ingest_test_resource(app: &common::E2eTestApp, suffix: &str) -> (uuid::
         .await
         .expect("ingest create failed");
 
-    (resource.id, context_name)
+    (resource.id.into(), context_name)
 }
 
 /// Ingest creates a resource_created event and a corresponding audit row.
