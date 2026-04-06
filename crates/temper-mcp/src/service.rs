@@ -1,11 +1,17 @@
 //! MCP service — the central handler for all MCP tool calls.
 //!
 //! Each invocation creates a fresh `TemperMcpService`. The authenticated
-//! caller's profile is resolved from `McpClaims` injected by the JWT
-//! middleware and cached for the lifetime of the service.
+//! caller's profile is resolved from `McpClaims` (injected by the JWT
+//! middleware into the HTTP request extensions) on **every** request.
+//!
+//! In stateless mode (Vercel serverless), `initialize()` may run on a
+//! different invocation than the subsequent tool call, so we cannot rely
+//! on profile caching across requests. Instead, each tool handler
+//! extracts the HTTP `Parts` from rmcp's `Extension` and resolves the
+//! profile from the JWT claims before executing.
 
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::{common::Extension, router::tool::ToolRouter, wrapper::Parameters},
     model::{
         CallToolResult, ListResourceTemplatesResult, ListResourcesResult, PaginatedRequestParams,
         ReadResourceRequestParams, ReadResourceResult, ServerCapabilities, ServerInfo,
@@ -41,7 +47,7 @@ impl TemperMcpService {
         }
     }
 
-    /// Resolve and cache the caller's profile from the database.
+    /// Resolve the caller's profile from JWT claims.
     async fn resolve_profile(&self, claims: &McpClaims) -> Result<Profile, rmcp::ErrorData> {
         let auth_claims = AuthClaims {
             provider: self.api_state.config.auth_provider_name.clone(),
@@ -61,6 +67,32 @@ impl TemperMcpService {
             })
     }
 
+    /// Resolve the profile from HTTP request parts and cache it.
+    ///
+    /// In stateless mode each request creates a fresh service instance, so
+    /// the profile must be resolved per-request from the JWT claims that
+    /// the auth middleware injected into the HTTP extensions.
+    pub async fn ensure_profile_from_parts(
+        &self,
+        parts: &http::request::Parts,
+    ) -> Result<(), rmcp::ErrorData> {
+        let claims = parts.extensions.get::<McpClaims>().ok_or_else(|| {
+            tracing::warn!("McpClaims not found in HTTP request extensions");
+            rmcp::ErrorData::internal_error("Not authenticated".to_string(), None)
+        })?;
+
+        let profile = self.resolve_profile(claims).await?;
+        tracing::debug!(
+            profile_id = %profile.id,
+            sub = %claims.sub,
+            "Profile resolved from request"
+        );
+
+        let mut guard = self.profile.lock().await;
+        *guard = Some(profile);
+        Ok(())
+    }
+
     /// Get the authenticated caller's profile, or return a protocol error.
     pub async fn require_profile(&self) -> Result<Profile, rmcp::ErrorData> {
         let guard = self.profile.lock().await;
@@ -75,7 +107,9 @@ impl TemperMcpService {
     async fn list_resources(
         &self,
         Parameters(input): Parameters<temper_core::types::resource::ResourceListParams>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::resources::list_resources(self, input).await
     }
 
@@ -83,7 +117,9 @@ impl TemperMcpService {
     async fn get_resource(
         &self,
         Parameters(input): Parameters<tools::resources::GetResourceInput>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::resources::get_resource(self, input).await
     }
 
@@ -91,7 +127,9 @@ impl TemperMcpService {
     async fn create_resource(
         &self,
         Parameters(input): Parameters<temper_core::types::resource::ResourceCreateRequest>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::resources::create_resource(self, input).await
     }
 
@@ -101,12 +139,18 @@ impl TemperMcpService {
     async fn search(
         &self,
         Parameters(input): Parameters<temper_core::types::api::SearchParams>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::search::search(self, input).await
     }
 
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
-    async fn list_contexts(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+    async fn list_contexts(
+        &self,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::list_contexts(self).await
     }
 
@@ -114,7 +158,9 @@ impl TemperMcpService {
     async fn get_context(
         &self,
         Parameters(input): Parameters<tools::contexts::GetContextInput>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::get_context(self, input).await
     }
 
@@ -122,7 +168,9 @@ impl TemperMcpService {
     async fn create_context(
         &self,
         Parameters(input): Parameters<temper_core::types::context::ContextCreateRequest>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::contexts::create_context(self, input).await
     }
 
@@ -132,7 +180,9 @@ impl TemperMcpService {
     async fn update_resource(
         &self,
         Parameters(input): Parameters<tools::resources::UpdateResourceInput>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::resources::update_resource(self, input).await
     }
 
@@ -142,7 +192,9 @@ impl TemperMcpService {
     async fn delete_resource(
         &self,
         Parameters(input): Parameters<tools::resources::DeleteResourceInput>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::resources::delete_resource(self, input).await
     }
 
@@ -152,7 +204,9 @@ impl TemperMcpService {
     async fn get_resource_content(
         &self,
         Parameters(input): Parameters<tools::resources::GetResourceContentInput>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::resources::get_resource_content(self, input).await
     }
 
@@ -162,14 +216,20 @@ impl TemperMcpService {
     async fn list_events(
         &self,
         Parameters(input): Parameters<temper_core::types::api::EventListParams>,
+        Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::events::list_events(self, input).await
     }
 
     #[tool(
         description = "Get the authenticated user's profile, including display name, email, and preferences."
     )]
-    async fn get_profile(&self) -> Result<CallToolResult, rmcp::ErrorData> {
+    async fn get_profile(
+        &self,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
         tools::profiles::get_profile(self).await
     }
 }
@@ -234,8 +294,11 @@ impl rmcp::ServerHandler for TemperMcpService {
     async fn list_resources(
         &self,
         request: Option<PaginatedRequestParams>,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::ErrorData> {
+        if let Some(parts) = context.extensions.get::<http::request::Parts>() {
+            self.ensure_profile_from_parts(parts).await?;
+        }
         let profile = self.require_profile().await?;
         crate::resources::list_resources(&self.api_state, &profile, request).await
     }
@@ -251,8 +314,11 @@ impl rmcp::ServerHandler for TemperMcpService {
     async fn read_resource(
         &self,
         request: ReadResourceRequestParams,
-        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<ReadResourceResult, rmcp::ErrorData> {
+        if let Some(parts) = context.extensions.get::<http::request::Parts>() {
+            self.ensure_profile_from_parts(parts).await?;
+        }
         let profile = self.require_profile().await?;
         crate::resources::read_resource(&self.api_state, &profile, request).await
     }
