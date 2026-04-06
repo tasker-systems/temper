@@ -106,8 +106,19 @@ pub fn find_task(
     // Seq number match
     if let Ok(seq) = slug_or_suffix.parse::<u32>() {
         let seq_matches: Vec<_> = all.iter().filter(|t| t.seq == seq).collect();
-        if seq_matches.len() == 1 {
-            return Ok(Some(seq_matches[0].clone()));
+        match seq_matches.len() {
+            1 => return Ok(Some(seq_matches[0].clone())),
+            n if n > 1 => {
+                return Err(TemperError::Vault(format!(
+                    "ambiguous seq number '{slug_or_suffix}', matches: {}",
+                    seq_matches
+                        .iter()
+                        .map(|t| t.slug.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )))
+            }
+            _ => {}
         }
     }
     Ok(None)

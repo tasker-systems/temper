@@ -329,7 +329,7 @@ pub fn show(
 /// List recent sessions, optionally filtered by context.
 ///
 /// Scans `<context>/session/` dirs, parses frontmatter for date, sorts by date descending,
-/// displays up to 20 entries.
+/// displays up to `limit` entries (default 20).
 pub fn list(
     config: &Config,
     context: Option<&str>,
