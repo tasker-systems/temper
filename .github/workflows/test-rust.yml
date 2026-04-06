@@ -6,8 +6,7 @@ name: Rust Tests
 #   cargo nextest run --workspace --features test-embed   -> + embedding tests
 #   cargo nextest run --workspace --features test-db      -> + DB integration tests
 #
-# DB integration and embedding tiers are excluded from CI.
-# DB tests require Docker Postgres; embedding tests download HF models.
+# Embedding tests are excluded from CI (download HF models at runtime).
 # =============================================================================
 
 on:
@@ -36,3 +35,45 @@ jobs:
 
       - name: Run unit tests
         run: cargo nextest run --workspace --locked
+
+  integration-tests:
+    name: Integration & E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-trixie
+        env:
+          POSTGRES_DB: temper_development
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U temper -d temper_development"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: test-db
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run integration & E2E tests
+        run: cargo nextest run --workspace --features test-db --locked
