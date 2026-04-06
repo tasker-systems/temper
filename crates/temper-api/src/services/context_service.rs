@@ -7,7 +7,7 @@
 use sqlx::PgPool;
 
 use crate::error::{ApiError, ApiResult};
-use temper_core::types::ids::{ContextId, ProfileId};
+use temper_core::types::ids::{ContextId, EventId, ProfileId};
 
 pub use temper_core::types::context::{ContextCreateRequest, ContextRow};
 
@@ -83,6 +83,19 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
     .bind(name)
     .bind(profile_id)
     .fetch_one(pool)
+    .await?;
+
+    let event_id = EventId::new();
+    sqlx::query(
+        "INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, event_type, payload, created)
+         VALUES ($1, $2, $3, $4, $5, '{}', now())",
+    )
+    .bind(event_id)
+    .bind(profile_id)
+    .bind("api")
+    .bind(id)
+    .bind("context_created")
+    .execute(pool)
     .await?;
 
     Ok(row)

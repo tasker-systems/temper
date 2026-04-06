@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { uuidv7 } from "uuidv7";
 import type { AuthClaims } from "./auth.js";
 import type { NeonClient } from "./db.js";
 import { DEVICE_ID_CLOUD, insertEventAndAudit } from "./events.js";
@@ -114,6 +115,13 @@ export async function resolveContextId(
     INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
     VALUES (${newId}::uuid, ${name}, 'kb_profiles', ${profileId}::uuid)
   `;
+
+  const eventId = uuidv7();
+  await db`
+    INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, event_type, payload, created)
+    VALUES (${eventId}::uuid, ${profileId}::uuid, ${"vercel-cloud"}, ${newId}::uuid, 'context_created', '{}', now())
+  `;
+
   return newId;
 }
 
