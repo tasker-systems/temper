@@ -13,4 +13,14 @@ async fn list_all_doc_types(pool: sqlx::PgPool) {
     assert!(!rows.is_empty());
     assert!(rows.iter().any(|r| r.name == "research"));
     assert!(rows.iter().any(|r| r.name == "session"));
+
+    // Verify description field is populated for known doc types
+    let research = rows
+        .iter()
+        .find(|r| r.name == "research")
+        .expect("research type");
+    assert!(
+        research.description.is_some(),
+        "research should have a description"
+    );
 }

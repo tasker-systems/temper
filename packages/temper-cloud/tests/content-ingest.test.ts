@@ -45,4 +45,42 @@ describe("validatePayload", () => {
     });
     expect(result.ok).toBe(false);
   });
+
+  it("accepts payload with optional context_id and body_hash", () => {
+    const result = validatePayload({
+      resource_id: "019d6313-0e44-7842-9256-9ee385be3a51",
+      content: "# Hello",
+      replace: false,
+      context_id: "019d6313-0e44-7842-9256-9ee385be3a52",
+      body_hash: "sha256:abc123",
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.context_id).toBe("019d6313-0e44-7842-9256-9ee385be3a52");
+      expect(result.payload.body_hash).toBe("sha256:abc123");
+    }
+  });
+
+  it("accepts payload without optional fields", () => {
+    const result = validatePayload({
+      resource_id: "019d6313-0e44-7842-9256-9ee385be3a51",
+      content: "# Hello",
+      replace: false,
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.context_id).toBeUndefined();
+      expect(result.payload.body_hash).toBeUndefined();
+    }
+  });
+
+  it("rejects invalid context_id UUID", () => {
+    const result = validatePayload({
+      resource_id: "019d6313-0e44-7842-9256-9ee385be3a51",
+      content: "# Hello",
+      replace: false,
+      context_id: "not-a-uuid",
+    });
+    expect(result.ok).toBe(false);
+  });
 });
