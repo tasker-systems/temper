@@ -111,6 +111,18 @@ Rust crates use feature flags to gate heavy dependencies:
 - **Auth** — Auth0 device authorization PKCE flow. Tokens cached locally. API validates JWTs via JWKS.
 - **CI** — GitHub Actions: `code-quality.yml` (fmt, clippy, machete), `test-rust.yml`, `test-typescript.yml`, `ci-success.yml` (merge gate).
 
+## Code Quality Rules
+
+These rules apply to all code in this repository. Subagents and implementation plans must follow them.
+
+- **Typed structs over inline JSON** — Never use `serde_json::json!()` for data with a known structure. Define a struct. Compile-time type checking catches errors that runtime serialization silently passes.
+- **Shared types at boundaries** — When Rust calls TypeScript (or vice versa), the wire type lives in `temper-core` with `ts-rs` derives. Both sides share the generated type. Never define a zod schema that mirrors a Rust struct manually.
+- **Service layer owns SQL** — All SQL lives in `temper-api/src/services/`. MCP tools, CLI actions, and HTTP handlers call service functions. If inline `sqlx::query!()` appears outside a service, extract it first.
+- **Params structs** — Functions with more than 5 domain-related parameters get a params struct. `#[expect(clippy::too_many_arguments)]` is a smell to fix, not suppress.
+- **Auth before writes** — Authorization checks go before any mutations. Never write-then-check.
+- **Profile scoping** — All data queries scope through `resources_visible_to`, `can_modify_resource`, or equivalent. Even async workflows verify the profile can access the resource before writing.
+- **Pino structured logging** — TypeScript uses pino (`packages/temper-cloud/src/logger.ts`) with contextual field objects. No `console.log`.
+
 ## SQL Query Checking
 
 Production SQL queries use `sqlx::query!()` / `sqlx::query_as!()` / `sqlx::query_scalar!()` macros for compile-time verification against the actual schema. Exceptions: the `unified_search` query in `search_service.rs` uses runtime `query_as` due to pgvector `::vector` type cast incompatibility, and test fixtures use runtime `sqlx::query()` because `cargo sqlx prepare` cannot cache queries from test targets.

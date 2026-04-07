@@ -50,16 +50,18 @@ async fn create_resource_with_manifest_inserts_all_records(pool: sqlx::PgPool) {
 
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
-        profile_id,
-        "mcp-test",
-        context.id,
-        doc_type_id,
-        "MCP Test Resource",
-        Some("mcp-test-resource"),
-        "mcp://test/create",
-        &body_hash,
-        &empty,
-        &empty,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "mcp-test",
+            context_id: context.id,
+            doc_type_id,
+            title: "MCP Test Resource",
+            slug: Some("mcp-test-resource"),
+            origin_uri: "mcp://test/create",
+            content_hash: &body_hash,
+            managed_meta: &empty,
+            open_meta: &empty,
+        },
     )
     .await
     .expect("create_resource_with_manifest");
@@ -126,15 +128,18 @@ async fn find_by_body_hash_returns_existing(pool: sqlx::PgPool) {
 
     let first = ingest_service::create_resource_with_manifest(
         &pool,
-        profile_id,
-        "test",
-        context.id,
-        doc_type_id,
-        "First",
-        None,
-        "mcp://test/dedup-1",
-        &body_hash,
-        &empty,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "test",
+            context_id: context.id,
+            doc_type_id,
+            title: "First",
+            slug: None,
+            origin_uri: "mcp://test/dedup-1",
+            content_hash: &body_hash,
+            managed_meta: &empty,
+            open_meta: &empty,
+        },
         &empty,
     )
     .await
@@ -190,16 +195,18 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
 
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
-        profile_id,
-        "update-test",
-        context.id,
-        doc_type_id,
-        "Update Test Resource",
-        Some("update-test-resource"),
-        "mcp://test/update",
-        &original_hash,
-        &empty,
-        &empty,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "update-test",
+            context_id: context.id,
+            doc_type_id,
+            title: "Update Test Resource",
+            slug: Some("update-test-resource"),
+            origin_uri: "mcp://test/update",
+            content_hash: &original_hash,
+            managed_meta: &empty,
+            open_meta: &empty,
+        },
     )
     .await
     .expect("create_resource_with_manifest");

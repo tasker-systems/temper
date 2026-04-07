@@ -81,14 +81,15 @@ fn spawn_content_ingest_post(
         };
 
         let url = format!("{base_url}/api/content-ingest");
+        let payload = temper_core::types::ingest::ContentIngestRequest {
+            resource_id: resource_id.to_string(),
+            content,
+            replace,
+            context_id: Some(context_id),
+            body_hash: Some(body_hash),
+        };
         let client = reqwest::Client::new();
-        let mut req = client.post(&url).json(&serde_json::json!({
-            "resource_id": resource_id,
-            "content": content,
-            "replace": replace,
-            "context_id": context_id,
-            "body_hash": body_hash,
-        }));
+        let mut req = client.post(&url).json(&payload);
 
         if let Some(token) = bearer_token {
             req = req.bearer_auth(token);
@@ -198,18 +199,21 @@ pub async fn ingest_content(
         .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4()));
 
     // 5. Create resource + manifest + event
+    let empty_json = serde_json::json!({});
     let resource = temper_api::services::ingest_service::create_resource_with_manifest(
         pool,
-        profile_id,
-        "mcp",
-        context.id,
-        doc_type_id,
-        &input.title,
-        input.slug.as_deref(),
-        &origin_uri,
-        &body_hash,
-        &serde_json::json!({}),
-        &serde_json::json!({}),
+        &temper_api::services::ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "mcp",
+            context_id: context.id,
+            doc_type_id,
+            title: &input.title,
+            slug: input.slug.as_deref(),
+            origin_uri: &origin_uri,
+            content_hash: &body_hash,
+            managed_meta: &empty_json,
+            open_meta: &empty_json,
+        },
     )
     .await
     .map_err(|e| {
@@ -272,72 +276,26 @@ pub async fn update_resource_content(
 
     // 2. Compute new body hash
     let body_hash = content_hash(&input.content);
-
-    // 3. Get the resource row (need kb_context_id for event)
-    let resource =
-        temper_api::services::resource_service::get_visible(pool, *profile_id, *resource_id)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-            })?;
-
-    // 4. Transaction: upsert manifest, update timestamp, insert event+audit
     let empty_json = serde_json::json!({});
-    let managed_hash = temper_api::services::ingest_service::hash_json_value(&empty_json);
-    let open_hash = temper_api::services::ingest_service::hash_json_value(&empty_json);
 
+    // 3. Update manifest + fire event via shared service function
     let mut tx = pool.begin().await.map_err(|e| {
         rmcp::ErrorData::internal_error(format!("Failed to begin transaction: {e}"), None)
     })?;
 
-    // Update resource timestamp
-    sqlx::query!(
-        "UPDATE kb_resources SET updated = now() WHERE id = $1",
-        *resource_id
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("Failed to update resource: {e}"), None)
-    })?;
-
-    // Upsert manifest row
-    sqlx::query!(
-        r#"
-        INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
-        VALUES ($1, $2, $3, $4, $5, $6, now())
-        ON CONFLICT (resource_id)
-        DO UPDATE SET body_hash = $2, managed_meta = $3, open_meta = $4,
-                      managed_hash = $5, open_hash = $6, updated = now()
-        "#,
-        *resource_id,
-        body_hash,
-        empty_json,
-        empty_json,
-        managed_hash,
-        open_hash,
-    )
-    .execute(&mut *tx)
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("Failed to upsert manifest: {e}"), None)
-    })?;
-
-    // Insert event + audit
-    temper_api::services::ingest_service::insert_event_and_audit(
+    let resource = temper_api::services::ingest_service::update_resource_manifest(
         &mut tx,
         profile_id,
         "mcp",
-        resource.kb_context_id,
         resource_id,
-        "body_updated",
-        "update_body",
         &body_hash,
-        &managed_hash,
-        &open_hash,
+        &empty_json,
+        &empty_json,
     )
     .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to insert event: {e}"), None))?;
+    .map_err(|e| {
+        rmcp::ErrorData::internal_error(format!("Failed to update manifest: {e}"), None)
+    })?;
 
     tx.commit().await.map_err(|e| {
         rmcp::ErrorData::internal_error(format!("Failed to commit transaction: {e}"), None)
