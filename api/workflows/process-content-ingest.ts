@@ -72,6 +72,45 @@ async function storeStep(
   logger.info({ chunkCount: chunks.length, resourceId, replace }, "content-ingest: storing chunks");
   const db = getDb();
 
+  // Verify the profile can modify this resource before writing anything
+  const canModify = await db`
+    SELECT true FROM can_modify_resource(${profileId}::uuid, ${resourceId}::uuid)
+  `;
+  if (canModify.length === 0) {
+    logger.warn({ resourceId, profileId }, "content-ingest: profile cannot modify resource, aborting");
+    return;
+  }
+
+  // Resolve contextId and bodyHash — use passed values or fall back to scoped queries
+  const emptyHash = canonicalJsonHash({});
+  let contextId = passedContextId;
+  let bodyHash = passedBodyHash;
+
+  if (!contextId) {
+    const contextRows = await db`
+      SELECT r.kb_context_id FROM kb_resources r
+      WHERE r.id = ${resourceId}::uuid
+    `;
+    contextId = contextRows.length > 0
+      ? (contextRows[0].kb_context_id as string)
+      : undefined;
+    if (!contextId) {
+      logger.warn({ resourceId }, "content-ingest: resource not found, aborting");
+      return;
+    }
+  }
+
+  if (!bodyHash) {
+    const manifestRows = await db`
+      SELECT body_hash FROM kb_resource_manifests
+      WHERE resource_id = ${resourceId}::uuid
+    `;
+    bodyHash = manifestRows.length > 0
+      ? (manifestRows[0].body_hash as string)
+      : emptyHash;
+  }
+
+  // Now safe to write chunks
   const chunkRows: ChunkRow[] = chunks.map((chunk, i) => ({
     id: "",
     resource_id: resourceId,
@@ -89,39 +128,6 @@ async function storeStep(
     await db`SELECT replace_resource_chunks(${resourceId}::uuid, ${chunksJson}::jsonb)`;
   } else {
     await db`SELECT persist_resource_chunks(${resourceId}::uuid, ${chunksJson}::jsonb)`;
-  }
-
-  // Fire body_processed event
-  const emptyHash = canonicalJsonHash({});
-
-  // Use passed values if available, otherwise fall back to DB queries
-  let contextId = passedContextId;
-  let bodyHash = passedBodyHash;
-
-  if (!contextId) {
-    const contextRows = await db`
-      SELECT r.kb_context_id FROM kb_resources r
-      JOIN resources_visible_to(${profileId}::uuid) v ON v.resource_id = r.id
-      WHERE r.id = ${resourceId}::uuid
-    `;
-    if (contextRows.length === 0) {
-      logger.warn({ resourceId, profileId }, "content-ingest: resource not visible to profile, skipping event");
-      return;
-    }
-    contextId = contextRows[0].kb_context_id as string;
-  }
-
-  if (!bodyHash) {
-    const manifestRows = await db`
-      SELECT m.body_hash FROM kb_resource_manifests m
-      JOIN kb_resources r ON r.id = m.resource_id
-      JOIN resources_visible_to(${profileId}::uuid) v ON v.resource_id = r.id
-      WHERE m.resource_id = ${resourceId}::uuid
-    `;
-    bodyHash =
-      manifestRows.length > 0
-        ? (manifestRows[0].body_hash as string)
-        : emptyHash;
   }
 
   await insertEventAndAudit(db, {
