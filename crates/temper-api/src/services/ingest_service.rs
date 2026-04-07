@@ -81,7 +81,7 @@ pub async fn insert_event_and_audit(
 }
 
 /// Resolve doc_type name to UUID from kb_doc_types.
-async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
+pub async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
     let id = sqlx::query_scalar!("SELECT id FROM kb_doc_types WHERE name = $1", name)
         .fetch_optional(pool)
         .await?;
@@ -90,7 +90,7 @@ async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
 }
 
 /// Check for body-hash dedup — returns existing resource if hash matches.
-async fn find_by_body_hash(
+pub async fn find_by_body_hash(
     pool: &PgPool,
     profile_id: ProfileId,
     body_hash: &str,
@@ -161,6 +161,96 @@ async fn replace_chunks(
     Ok(count)
 }
 
+/// Create a resource with its manifest and event/audit trail in a single transaction.
+///
+/// This handles resource + manifest + event creation WITHOUT chunk insertion,
+/// making it reusable for both the full ingest path (CLI with pre-computed chunks)
+/// and the MCP content creation path (no chunks).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resource creation requires all metadata fields"
+)]
+pub async fn create_resource_with_manifest(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    device_id: &str,
+    context_id: ContextId,
+    doc_type_id: Uuid,
+    title: &str,
+    slug: Option<&str>,
+    origin_uri: &str,
+    content_hash: &str,
+    managed_meta: &serde_json::Value,
+    open_meta: &serde_json::Value,
+) -> ApiResult<ResourceRow> {
+    let managed_hash = hash_json_value(managed_meta);
+    let open_hash = hash_json_value(open_meta);
+
+    let mut tx = pool.begin().await?;
+
+    let resource_id = ResourceId::new();
+    let resource = sqlx::query_as!(
+        ResourceRow,
+        r#"
+        INSERT INTO kb_resources (
+            id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+            originator_profile_id, owner_profile_id,
+            created, updated
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
+        RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
+                  slug as "slug: _",
+                  originator_profile_id, owner_profile_id, is_active,
+                  created, updated
+        "#,
+        *resource_id,
+        *context_id,
+        doc_type_id,
+        origin_uri,
+        title,
+        slug,
+        *profile_id,
+        *profile_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Insert manifest row
+    sqlx::query!(
+        r#"
+        INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
+        VALUES ($1, $2, $3, $4, $5, $6, now())
+        "#,
+        *resource_id,
+        content_hash,
+        managed_meta,
+        open_meta,
+        managed_hash,
+        open_hash,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Insert event + audit atomically
+    insert_event_and_audit(
+        &mut tx,
+        profile_id,
+        device_id,
+        context_id,
+        resource_id,
+        "resource_created",
+        "create",
+        content_hash,
+        &managed_hash,
+        &open_hash,
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(resource)
+}
+
 /// Process a full ingest payload: resolve names, dedup, insert resource + chunks.
 pub async fn ingest(
     pool: &PgPool,
@@ -184,7 +274,7 @@ pub async fn ingest(
     let chunks = unpack_chunks(&payload.chunks_packed)
         .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
 
-    // 5. Compute meta hashes
+    // 5. Compute meta
     let empty_json = serde_json::json!({});
     let managed_meta = payload
         .managed_meta
@@ -194,74 +284,29 @@ pub async fn ingest(
         .open_meta
         .clone()
         .unwrap_or_else(|| empty_json.clone());
-    let managed_hash = hash_json_value(&managed_meta);
-    let open_hash = hash_json_value(&open_meta);
 
-    // 6. Insert resource + manifest + chunks in a transaction
-    let mut tx = pool.begin().await?;
-
-    let resource_id = ResourceId::new();
-    let resource = sqlx::query_as!(
-        ResourceRow,
-        r#"
-        INSERT INTO kb_resources (
-            id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
-            originator_profile_id, owner_profile_id,
-            created, updated
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
-        RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
-                  slug as "slug: _",
-                  originator_profile_id, owner_profile_id, is_active,
-                  created, updated
-        "#,
-        *resource_id,
-        *context.id,
-        doc_type_id,
-        payload.origin_uri,
-        payload.title,
-        payload.slug,
-        *profile_id,
-        *profile_id,
-    )
-    .fetch_one(&mut *tx)
-    .await?;
-
-    // Insert manifest row
-    sqlx::query!(
-        r#"
-        INSERT INTO kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
-        VALUES ($1, $2, $3, $4, $5, $6, now())
-        "#,
-        *resource_id,
-        payload.content_hash,
-        managed_meta,
-        open_meta,
-        managed_hash,
-        open_hash,
-    )
-    .execute(&mut *tx)
-    .await?;
-
-    // 7. Insert chunks with embeddings
-    persist_chunks(&mut tx, resource_id, &chunks).await?;
-
-    // 8. Insert event + audit atomically
-    insert_event_and_audit(
-        &mut tx,
+    // 6. Create resource + manifest + event
+    let resource = create_resource_with_manifest(
+        pool,
         profile_id,
         device_id,
         context_id,
-        resource_id,
-        "resource_created",
-        "create",
+        doc_type_id,
+        &payload.title,
+        Some(payload.slug.as_str()),
+        &payload.origin_uri,
         &payload.content_hash,
-        &managed_hash,
-        &open_hash,
+        &managed_meta,
+        &open_meta,
     )
     .await?;
 
-    tx.commit().await?;
+    // 7. Insert chunks in a separate transaction (if any)
+    if !chunks.is_empty() {
+        let mut tx = pool.begin().await?;
+        persist_chunks(&mut tx, resource.id, &chunks).await?;
+        tx.commit().await?;
+    }
 
     Ok(resource)
 }
