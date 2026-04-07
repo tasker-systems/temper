@@ -67,7 +67,7 @@ pub struct SystemSettings {
 }
 
 /// Public-facing system settings (no gating_team_slug — prevents info leakage).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicSystemSettings {
     pub access_mode: String,
     pub terms_version: Option<String>,
