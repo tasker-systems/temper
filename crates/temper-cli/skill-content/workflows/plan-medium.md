@@ -9,7 +9,7 @@ trade-offs between approaches, creating a technical design for a subsystem chang
 
 ## Steps
 
-1. **Read the task** — run `temper task show <slug>` to load the full task content.
+1. **Read the task** — run `temper resource show <slug> --type task` to load the full task content.
 2. **Read project fundamentals** — if `guidance/fundamentals.md` exists in the skill
    directory, read it for project-specific conventions and architectural context.
 3. **Discovery** — search for related work and context:
@@ -31,21 +31,21 @@ trade-offs between approaches, creating a technical design for a subsystem chang
    - Open questions or risks
 6. **Save the spec and create follow-ups** — persist the design:
    ```bash
-   cat <<'EOF' | temper research save "<spec title>" --context <ctx>
+   cat <<'EOF' | temper resource create --type research --title "<spec title>" --context <ctx>
    <spec content>
    EOF
    ```
    If implementation tasks are clear, create them:
    ```bash
-   temper task create "<build task title>" --context <ctx> --mode build --effort <effort>
+   temper resource create --type task --title "<build task title>" --context <ctx> --mode build --effort <effort>
    ```
 
 ## Completion
 
-Pipe the session summary via stdin to save it and mark the task done:
+Pipe the session summary via stdin to save it, then mark the task done:
 
 ```bash
-cat <<'EOF' | temper session save "<title>" --task <slug> --state done
+cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
 ## Goal
 What we set out to do
 
@@ -61,4 +61,6 @@ Related tasks, concepts, or contexts touched
 ## Next Steps
 What to pick up next session
 EOF
+
+temper resource update <slug> --type task --stage done
 ```

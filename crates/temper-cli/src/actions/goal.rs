@@ -91,11 +91,12 @@ pub fn ensure_maintenance(config: &Config, context: &str) -> Result<String> {
         .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
-    let event = discovery::Event::GoalCreate {
+    let event = discovery::Event::ResourceCreate {
         ts: Local::now().to_rfc3339(),
-        context: context.to_string(),
-        goal: slug.clone(),
+        doc_type: "goal".to_string(),
         title: "Maintenance".to_string(),
+        path: format!("{context}/goal/{slug}.md"),
+        context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -131,11 +132,12 @@ pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -
         .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
-    let event = discovery::Event::GoalCreate {
+    let event = discovery::Event::ResourceCreate {
         ts: Local::now().to_rfc3339(),
-        context: context.to_string(),
-        goal: slug.clone(),
+        doc_type: "goal".to_string(),
         title: title.to_string(),
+        path: format!("{context}/goal/{slug}.md"),
+        context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -163,11 +165,11 @@ pub fn update(config: &Config, slug: &str, status: &str, context: Option<&str>) 
     let content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     let updated = vault::set_frontmatter_field(&content, "temper-status", status);
     fs::write(&path, updated).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let event = discovery::Event::GoalUpdate {
+    let event = discovery::Event::ResourceUpdate {
         ts: Local::now().to_rfc3339(),
+        doc_type: "goal".to_string(),
+        slug: slug.to_string(),
         context: info.context,
-        goal: slug.to_string(),
-        status: status.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");

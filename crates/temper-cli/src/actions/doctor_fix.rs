@@ -139,57 +139,6 @@ impl FixPlan {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy field rename map (F1)
-// ---------------------------------------------------------------------------
-
-/// Map of (old_key, new_key) pairs for legacy frontmatter field renames.
-static LEGACY_FIELD_MAP: &[(&str, &str)] = &[
-    ("id", "temper-id"),
-    ("type", "temper-type"),
-    ("doc_type", "temper-type"),
-    ("context", "temper-context"),
-    ("project", "temper-context"),
-    ("ingestion_source", "temper-source"),
-    ("created", "temper-created"),
-    ("updated", "temper-updated"),
-    ("stage", "temper-stage"),
-    ("mode", "temper-mode"),
-    ("effort", "temper-effort"),
-    ("goal", "temper-goal"),
-    ("seq", "temper-seq"),
-    ("branch", "temper-branch"),
-    ("pr", "temper-pr"),
-    ("status", "temper-status"),
-    ("legacy_id", "temper-legacy-id"),
-];
-
-/// Produce `RenameField` actions for any legacy frontmatter keys found in `fm`.
-///
-/// If the old key exists but the new key is already present, the rename is
-/// skipped (the caller should handle the conflict separately).
-pub fn fix_legacy_fields(path: &Path, fm: &Value) -> Vec<FixAction> {
-    let mut actions = Vec::new();
-    let map = match fm.as_mapping() {
-        Some(m) => m,
-        None => return actions,
-    };
-
-    for (old_key, new_key) in LEGACY_FIELD_MAP {
-        let old_exists = map.contains_key(Value::String(old_key.to_string()));
-        let new_exists = map.contains_key(Value::String(new_key.to_string()));
-        if old_exists && !new_exists {
-            actions.push(FixAction::RenameField {
-                path: path.to_path_buf(),
-                old_key: old_key.to_string(),
-                new_key: new_key.to_string(),
-            });
-        }
-    }
-
-    actions
-}
-
-// ---------------------------------------------------------------------------
 // Field inference helpers (F2)
 // ---------------------------------------------------------------------------
 
@@ -1068,47 +1017,6 @@ mod tests {
 
     fn empty_fm() -> Value {
         Value::Mapping(serde_yaml::Mapping::new())
-    }
-
-    // -----------------------------------------------------------------------
-    // F1 tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn f1_renames_legacy_type_field() {
-        let path = PathBuf::from("/vault/project/task/foo.md");
-        let fm = yaml_fm(&[("type", "task")]);
-        let actions = fix_legacy_fields(&path, &fm);
-        assert_eq!(actions.len(), 1);
-        match &actions[0] {
-            FixAction::RenameField {
-                old_key, new_key, ..
-            } => {
-                assert_eq!(old_key, "type");
-                assert_eq!(new_key, "temper-type");
-            }
-            other => panic!("expected RenameField, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn f1_skips_when_new_field_exists() {
-        let path = PathBuf::from("/vault/project/task/foo.md");
-        // Both old and new key present — skip rename to avoid clobbering
-        let fm = yaml_fm(&[("type", "task"), ("temper-type", "task")]);
-        let actions = fix_legacy_fields(&path, &fm);
-        assert!(
-            actions.is_empty(),
-            "should skip when new key already exists"
-        );
-    }
-
-    #[test]
-    fn f1_no_actions_for_clean_frontmatter() {
-        let path = PathBuf::from("/vault/project/task/foo.md");
-        let fm = yaml_fm(&[("temper-type", "task"), ("temper-id", "some-uuid")]);
-        let actions = fix_legacy_fields(&path, &fm);
-        assert!(actions.is_empty());
     }
 
     // -----------------------------------------------------------------------

@@ -41,15 +41,26 @@ cargo install --path crates/temper-cli</code></pre>
       </tbody>
     </table>
 
-    <h3>Content</h3>
+    <h3>Resources</h3>
+    <p style="font-family: var(--serif); font-size: 0.9rem; color: var(--text-mid); margin-bottom: 0.75rem;">
+      All document types (task, goal, session, research, concept, decision) are managed through
+      the unified <code>resource</code> command with <code>--type</code>.
+    </p>
     <table>
       <tbody>
-        <tr><td><code>temper add &lt;path&gt;</code></td><td>Add a file, URL, or directory to the vault</td></tr>
-        <tr><td><code>temper session save [title]</code></td><td>Create or update a session note</td></tr>
-        <tr><td><code>temper session list [--limit &lt;n&gt;]</code></td><td>List recent sessions</td></tr>
-        <tr><td><code>temper session show &lt;slug&gt;</code></td><td>Show a session's content</td></tr>
-        <tr><td><code>temper research save &lt;title&gt;</code></td><td>Create a research note</td></tr>
-        <tr><td><code>temper note create &lt;type&gt; &lt;title&gt;</code></td><td>Create a note from template</td></tr>
+        <tr><td><code>temper resource create --type task --title &lt;t&gt;</code></td><td>Create a task</td></tr>
+        <tr><td><code>temper resource create --type goal --title &lt;t&gt;</code></td><td>Create a goal</td></tr>
+        <tr><td><code>temper resource create --type session --title &lt;t&gt;</code></td><td>Create a session note</td></tr>
+        <tr><td><code>temper resource create --type research --title &lt;t&gt;</code></td><td>Create a research note</td></tr>
+        <tr><td><code>temper resource create --type concept --title &lt;t&gt;</code></td><td>Create a concept note</td></tr>
+        <tr><td><code>temper resource create --type decision --title &lt;t&gt;</code></td><td>Record a decision</td></tr>
+        <tr><td><code>temper resource list</code></td><td>List all resources across types</td></tr>
+        <tr><td><code>temper resource list --type task</code></td><td>List resources of a specific type</td></tr>
+        <tr><td><code>temper resource list --type goal</code></td><td>List goals with task stage counts</td></tr>
+        <tr><td><code>temper resource show &lt;slug&gt;</code></td><td>Show a resource (accepts slug, suffix, or seq number)</td></tr>
+        <tr><td><code>temper resource update &lt;slug&gt; --title &lt;t&gt;</code></td><td>Update a resource's title or metadata</td></tr>
+        <tr><td><code>temper resource update &lt;slug&gt; --context-to &lt;ctx&gt;</code></td><td>Move a resource to a different context</td></tr>
+        <tr><td><code>temper resource update &lt;slug&gt; --type-to &lt;type&gt;</code></td><td>Change a resource's type</td></tr>
       </tbody>
     </table>
 
@@ -57,19 +68,6 @@ cargo install --path crates/temper-cli</code></pre>
     <table>
       <tbody>
         <tr><td><code>temper search &lt;query&gt;</code></td><td>Full-text and semantic search across the knowledge base</td></tr>
-      </tbody>
-    </table>
-
-    <h3>Goals and Tasks</h3>
-    <table>
-      <tbody>
-        <tr><td><code>temper goal create --title &lt;t&gt;</code></td><td>Create a goal</td></tr>
-        <tr><td><code>temper goal list</code></td><td>List goals with task stage counts</td></tr>
-        <tr><td><code>temper task create --title &lt;t&gt;</code></td><td>Create a task</td></tr>
-        <tr><td><code>temper task list [--stage &lt;s&gt;]</code></td><td>List tasks, optionally filtered by stage</td></tr>
-        <tr><td><code>temper task show &lt;slug&gt;</code></td><td>Show a task (accepts slug, suffix, or seq number)</td></tr>
-        <tr><td><code>temper task move &lt;slug&gt; --stage &lt;s&gt;</code></td><td>Move a task to a new stage</td></tr>
-        <tr><td><code>temper task done &lt;slug&gt;</code></td><td>Mark a task as done</td></tr>
       </tbody>
     </table>
 

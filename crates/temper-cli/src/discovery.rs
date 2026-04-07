@@ -5,69 +5,20 @@ use std::path::Path;
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum Event {
-    #[serde(rename = "note_create")]
-    NoteCreate {
+    #[serde(rename = "resource_create")]
+    ResourceCreate {
         ts: String,
-        note_type: String,
+        doc_type: String,
         title: String,
         path: String,
         context: String,
     },
-    #[serde(rename = "task_create")]
-    TaskCreate {
+    #[serde(rename = "resource_update")]
+    ResourceUpdate {
         ts: String,
+        doc_type: String,
+        slug: String,
         context: String,
-        task: String,
-        goal: String,
-        title: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mode: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<String>,
-    },
-    #[serde(rename = "task_move")]
-    TaskMove {
-        ts: String,
-        context: String,
-        task: String,
-        from_stage: String,
-        to_stage: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        from_goal: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        to_goal: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        from_mode: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        to_mode: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        from_effort: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        to_effort: Option<String>,
-    },
-    #[serde(rename = "task_done")]
-    TaskDone {
-        ts: String,
-        context: String,
-        task: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        branch: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pr: Option<String>,
-    },
-    #[serde(rename = "goal_create")]
-    GoalCreate {
-        ts: String,
-        context: String,
-        goal: String,
-        title: String,
-    },
-    #[serde(rename = "goal_update")]
-    GoalUpdate {
-        ts: String,
-        context: String,
-        goal: String,
-        status: String,
     },
     #[serde(rename = "normalize")]
     Normalize {

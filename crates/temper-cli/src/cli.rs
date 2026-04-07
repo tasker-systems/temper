@@ -44,25 +44,10 @@ pub enum Commands {
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// Create a new note
-    Note {
+    /// Manage resources (tasks, goals, sessions, research, concepts, decisions)
+    Resource {
         #[command(subcommand)]
-        action: NoteAction,
-    },
-    /// Session management
-    Session {
-        #[command(subcommand)]
-        action: SessionAction,
-    },
-    /// Manage tasks
-    Task {
-        #[command(subcommand)]
-        action: TaskAction,
-    },
-    /// Manage goals
-    Goal {
-        #[command(subcommand)]
-        action: GoalAction,
+        action: ResourceAction,
     },
     /// Manage contexts (projects)
     Context {
@@ -91,11 +76,6 @@ pub enum Commands {
     Skill {
         #[command(subcommand)]
         action: SkillAction,
-    },
-    /// Research notes
-    Research {
-        #[command(subcommand)]
-        action: ResearchAction,
     },
     /// Authenticate with temper cloud
     #[command(name = "auth")]
@@ -175,117 +155,150 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
-pub enum NoteAction {
-    /// Create a new note from template
+pub enum ResourceAction {
+    /// Create a new resource
     Create {
-        #[arg(value_name = "TYPE", required_unless_present = "show_template")]
-        note_type: Option<String>,
-        #[arg(required_unless_present = "show_template")]
+        /// Resource type (task, goal, session, research, concept, decision)
+        #[arg(long)]
+        r#type: String,
+        /// Resource title
+        #[arg(long)]
         title: Option<String>,
+        /// Context name
         #[arg(long)]
         context: Option<String>,
-        #[arg(long, hide = true)]
-        stdin: bool,
-        /// Print the raw template and exit
-        #[arg(long)]
-        show_template: bool,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum TaskAction {
-    /// Create a new task
-    Create {
-        #[arg(long, required_unless_present = "show_template")]
-        title: Option<String>,
-        #[arg(long)]
-        context: Option<String>,
+        /// Parent goal slug (task only)
         #[arg(long)]
         goal: Option<String>,
+        /// Work mode: plan or build (task only)
         #[arg(long)]
         mode: Option<String>,
+        /// Work effort: small, medium, large (task only)
         #[arg(long)]
         effort: Option<String>,
-        #[arg(long, hide = true)]
-        stdin: bool,
-        /// Print the raw template and exit
-        #[arg(long)]
-        show_template: bool,
-    },
-    /// Move a task to a new stage or goal
-    Move {
-        slug: String,
-        #[arg(long)]
-        stage: Option<String>,
-        #[arg(long)]
-        goal: Option<String>,
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long)]
-        mode: Option<String>,
-        #[arg(long)]
-        effort: Option<String>,
-    },
-    /// Mark a task as done
-    Done {
-        slug: String,
-        #[arg(long)]
-        branch: Option<String>,
-        #[arg(long)]
-        pr: Option<String>,
-        #[arg(long)]
-        context: Option<String>,
-    },
-    /// List tasks
-    List {
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long)]
-        goal: Option<String>,
-        #[arg(long)]
-        stage: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-    /// Show a task's content
-    Show {
-        slug: String,
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum GoalAction {
-    /// Create a new goal
-    Create {
-        #[arg(long)]
-        title: String,
-        #[arg(long)]
-        context: Option<String>,
+        /// Override auto-generated slug (goal only)
         #[arg(long)]
         slug: Option<String>,
+        /// Print the raw template and exit
+        #[arg(long)]
+        show_template: bool,
+        #[arg(long, hide = true)]
+        stdin: bool,
+        /// Output format (text or json)
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// List goals for a context
+    /// List resources of a given type
     List {
+        /// Resource type (task, goal, session, research, concept, decision)
+        #[arg(long)]
+        r#type: String,
+        /// Filter by context
         #[arg(long)]
         context: Option<String>,
+        /// Maximum results
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Filter by stage (task only)
+        #[arg(long)]
+        stage: Option<String>,
+        /// Filter by goal (task only)
+        #[arg(long)]
+        goal: Option<String>,
+        /// Filter by status (goal only)
+        #[arg(long)]
+        status: Option<String>,
+        /// Output format (text or json)
         #[arg(long, default_value = "text")]
         format: String,
     },
-    /// Update goal status
-    Update {
+    /// Show a resource's content
+    Show {
+        /// Resource slug
         slug: String,
+        /// Resource type (task, goal, session, research, concept, decision)
         #[arg(long)]
-        status: String,
+        r#type: String,
+        /// Filter by context
         #[arg(long)]
         context: Option<String>,
+        /// Output format (text or json)
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Update a resource's frontmatter fields
+    Update {
+        /// Resource slug
+        slug: String,
+        /// Current resource type (for lookup)
+        #[arg(long)]
+        r#type: Option<String>,
+        /// Current resource type when changing type (use with --type-to)
+        #[arg(long)]
+        type_from: Option<String>,
+        /// New resource type (converts the resource)
+        #[arg(long)]
+        type_to: Option<String>,
+        /// Context to search in
+        #[arg(long)]
+        context: Option<String>,
+        /// Move resource to a new context
+        #[arg(long)]
+        context_to: Option<String>,
+        // --- Base schema fields ---
+        /// Update title
+        #[arg(long)]
+        title: Option<String>,
+        /// Add tag (repeatable)
+        #[arg(long)]
+        tags: Vec<String>,
+        /// Add alias (repeatable)
+        #[arg(long)]
+        aliases: Vec<String>,
+        /// Add relates-to reference (repeatable)
+        #[arg(long)]
+        relates_to: Vec<String>,
+        /// Add reference (repeatable)
+        #[arg(long)]
+        references: Vec<String>,
+        /// Add depends-on reference (repeatable)
+        #[arg(long)]
+        depends_on: Vec<String>,
+        /// Set extends reference (repeatable)
+        #[arg(long)]
+        extends: Vec<String>,
+        /// Set preceded-by reference (repeatable)
+        #[arg(long)]
+        preceded_by: Vec<String>,
+        /// Set derived-from reference (repeatable)
+        #[arg(long)]
+        derived_from: Vec<String>,
+        // --- Task-specific fields ---
+        /// Task stage (backlog, in-progress, done, cancelled)
+        #[arg(long)]
+        stage: Option<String>,
+        /// Task mode (plan, build)
+        #[arg(long)]
+        mode: Option<String>,
+        /// Task effort (small, medium, large)
+        #[arg(long)]
+        effort: Option<String>,
+        /// Task goal slug
+        #[arg(long)]
+        goal: Option<String>,
+        /// Task sequence number
+        #[arg(long)]
+        seq: Option<i64>,
+        /// Git branch
+        #[arg(long)]
+        branch: Option<String>,
+        /// Pull request URL
+        #[arg(long)]
+        pr: Option<String>,
+        // --- Goal-specific fields ---
+        /// Goal status (active, completed, paused, cancelled)
+        #[arg(long)]
+        status: Option<String>,
     },
 }
 
@@ -305,62 +318,6 @@ pub enum ContextAction {
     },
     /// List configured contexts
     List,
-}
-
-#[derive(Subcommand)]
-pub enum SessionAction {
-    /// Create or update today's session note
-    Save {
-        title: Option<String>,
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long, hide = true)]
-        stdin: bool,
-        /// Print the raw template and exit
-        #[arg(long)]
-        show_template: bool,
-        #[arg(long)]
-        task: Option<String>,
-        #[arg(long)]
-        state: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-    /// List recent sessions
-    List {
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long)]
-        limit: Option<usize>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-    /// Show a session's raw markdown content
-    Show {
-        /// Session title slug or date-slug suffix (e.g. "fix-temper-init" or "2026-04-04-fix-temper-init")
-        slug: String,
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum ResearchAction {
-    /// Create or update a research note
-    Save {
-        #[arg(required_unless_present = "show_template")]
-        title: Option<String>,
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-        #[arg(long)]
-        show_template: bool,
-        #[arg(long, hide = true)]
-        stdin: bool,
-    },
 }
 
 #[derive(Subcommand, Debug)]

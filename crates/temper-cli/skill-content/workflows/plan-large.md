@@ -12,12 +12,12 @@ learn, evolve the roadmap, create the next task.
 
 ## Steps
 
-1. **Read the task** — run `temper task show <slug>` to load the full task content.
+1. **Read the task** — run `temper resource show <slug> --type task` to load the full task content.
 2. **Deep discovery** — cast a wide net:
    - `temper search "<relevant terms>"` across multiple angles
    - `temper context` to review the current context landscape
    - Codebase exploration: read key files, trace data flows, map dependencies
-   - Check recent sessions: `temper session list --context <ctx>`
+   - Check recent sessions: `temper resource list --type session --context <ctx>`
 3. **Map the problem space** — if the user has opted into a brainstorming skill, invoke
    it to MAP the problem space, NOT to design an implementation. Otherwise, explore
    these questions inline:
@@ -29,7 +29,7 @@ learn, evolve the roadmap, create the next task.
    - Present the map to the user before proceeding.
 4. **Produce a goal roadmap** — create a structured goal:
    ```bash
-   temper goal create "<goal title>" --context <ctx>
+   temper resource create --type goal --title "<goal title>" --context <ctx>
    ```
    The roadmap should include:
    - Throughline summary: what this goal achieves and why it matters
@@ -39,7 +39,7 @@ learn, evolve the roadmap, create the next task.
    - Dependencies between chunks
 5. **Create the FIRST actionable task** — pick the first chunk from the roadmap:
    ```bash
-   temper task create "<first task title>" --context <ctx> --mode build --effort <effort>
+   temper resource create --type task --title "<first task title>" --context <ctx> --mode build --effort <effort>
    ```
 6. **Code only if pushed** — the primary output of plan/large is the roadmap and first
    task, not code. Only write code if the user actively requests it in this session.
@@ -47,10 +47,10 @@ learn, evolve the roadmap, create the next task.
 ## Completion
 
 Pipe the session summary via stdin. Plan/large tasks may not reach done in a single
-session — that is expected. Use the appropriate state:
+session — that is expected. Use the appropriate stage:
 
 ```bash
-cat <<'EOF' | temper session save "<title>" --task <slug> --state done
+cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
 ## Goal
 What we set out to do
 
@@ -66,6 +66,8 @@ Related tasks, concepts, or contexts touched
 ## Next Steps
 What to pick up next session
 EOF
+
+temper resource update <slug> --type task --stage done
 ```
 
 If the roadmap is complete and the first task is created, the plan/large task is done even

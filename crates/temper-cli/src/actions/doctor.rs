@@ -10,8 +10,8 @@ use temper_core::schema::{
 };
 
 use crate::actions::doctor_fix::{
-    apply_manifest_actions, apply_plan, fix_filename, fix_legacy_fields, fix_manifest_for_moves,
-    fix_missing_fields, fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
+    apply_manifest_actions, apply_plan, fix_filename, fix_manifest_for_moves, fix_missing_fields,
+    fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
 };
 use crate::config::Config;
 use crate::error::Result;
@@ -269,7 +269,6 @@ fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPla
     let Some(fm) = vault::parse_frontmatter(&content) else {
         return Ok(());
     };
-    plan.extend(fix_legacy_fields(file_path, &fm));
     plan.extend(fix_missing_fields(file_path, &fm, vault_root));
     plan.extend(fix_relocation(file_path, &fm, vault_root));
     plan.extend(fix_filename(file_path, &fm, vault_root));

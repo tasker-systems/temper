@@ -23,10 +23,26 @@ fn test_actions_load_tasks_returns_correct_results() {
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
 
     // Create two tasks
-    temper_cli::actions::task::create(&config, "myapp", "First task", Some(&g_slug), None, None)
-        .unwrap();
-    temper_cli::actions::task::create(&config, "myapp", "Second task", Some(&g_slug), None, None)
-        .unwrap();
+    temper_cli::actions::task::create(
+        &config,
+        "myapp",
+        "First task",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    temper_cli::actions::task::create(
+        &config,
+        "myapp",
+        "Second task",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let tasks =
         temper_cli::actions::task::load_tasks(&config, Some("myapp"), Some(&g_slug)).unwrap();
@@ -53,9 +69,16 @@ fn test_actions_find_task_by_slug() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::actions::task::create(&config, "myapp", "Find Me", Some(&g_slug), None, None)
-            .unwrap();
+    let slug = temper_cli::actions::task::create(
+        &config,
+        "myapp",
+        "Find Me",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let found = temper_cli::actions::task::find_task(&config, &slug, None)
         .unwrap()
@@ -73,7 +96,8 @@ fn test_actions_next_seq_increments() {
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
 
     // First task gets seq 10
-    temper_cli::actions::task::create(&config, "myapp", "T1", Some(&g_slug), None, None).unwrap();
+    temper_cli::actions::task::create(&config, "myapp", "T1", Some(&g_slug), None, None, None)
+        .unwrap();
 
     // Next seq should be 20
     let seq = temper_cli::actions::task::next_seq(&config, "myapp", &g_slug).unwrap();
@@ -95,6 +119,7 @@ fn test_actions_reexports_match_commands() {
         "myapp",
         "Via Actions",
         Some(&g_slug),
+        None,
         None,
         None,
     )

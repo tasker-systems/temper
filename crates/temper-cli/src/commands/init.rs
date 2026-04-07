@@ -80,9 +80,6 @@ fn register_default_config(vault_path: &Path) -> Result<()> {
         r#"[vault]
 path = "{vault_path_str}"
 
-[sync.auto]
-doctypes = ["task", "goal", "session"]
-
 # Add contexts to sync: temper context add <name>
 [sync.subscriptions]
 contexts = []
@@ -121,9 +118,6 @@ mod tests {
         let config_content = format!(
             r#"[vault]
 path = "{vault_path_str}"
-
-[sync.auto]
-doctypes = ["task", "goal", "session"]
 
 # Add contexts to sync: temper context add <name>
 [sync.subscriptions]

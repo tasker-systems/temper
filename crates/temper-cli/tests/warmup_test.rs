@@ -21,7 +21,7 @@ fn test_warmup_produces_output() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::task::create(&config, "myapp", "Test", Some(&g_slug), None, None)
+    temper_cli::commands::task::create(&config, "myapp", "Test", Some(&g_slug), None, None, None)
         .unwrap();
 
     let result = temper_cli::commands::warmup::run(&config, Some("myapp"), "text");
@@ -42,6 +42,7 @@ fn test_warmup_shows_in_progress_tasks_with_mode() {
         Some(&g_slug),
         Some("build"),
         Some("medium"),
+        None,
     )
     .unwrap();
     temper_cli::commands::task::move_task(

@@ -10,8 +10,13 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "description": "URL-safe identifier"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Date concept was recorded (YYYY-MM-DD)"
     }
   },
-  "required": ["slug"],
+  "required": ["slug", "date"],
   "additionalProperties": true
 }

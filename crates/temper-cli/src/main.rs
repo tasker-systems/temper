@@ -1,7 +1,6 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, Commands, ContextAction, DoctorAction, GoalAction, NoteAction, ResearchAction,
-    SessionAction, SkillAction, SyncAction, TaskAction,
+    AuthAction, Cli, Commands, ContextAction, DoctorAction, ResourceAction, SkillAction, SyncAction,
 };
 use temper_cli::commands;
 
@@ -48,171 +47,124 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             let context = context.as_deref();
             temper_cli::commands::events::run(&config, context, limit, &format)
         }
-        Commands::Note { action } => {
+        Commands::Resource { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             match action {
-                NoteAction::Create {
-                    note_type,
-                    title,
-                    context,
-                    stdin: _,
-                    show_template,
-                    format,
-                } => {
-                    if show_template {
-                        let nt = note_type.as_deref().unwrap_or("session");
-                        let content = temper_cli::vault::get_template(nt)?;
-                        print!("{content}");
-                        return Ok(());
-                    }
-                    let note_type =
-                        note_type.expect("note_type required when not using --show-template");
-                    let title = title.expect("title required when not using --show-template");
-                    temper_cli::commands::note::create(
-                        &config,
-                        &note_type,
-                        &title,
-                        context.as_deref(),
-                        &format,
-                    )
-                }
-            }
-        }
-        Commands::Session { action } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            match action {
-                SessionAction::Save {
-                    title,
-                    context,
-                    stdin: _,
-                    show_template,
-                    task,
-                    state,
-                    format,
-                } => {
-                    if show_template {
-                        let content = temper_cli::vault::get_template("session")?;
-                        print!("{content}");
-                        return Ok(());
-                    }
-                    let stdin_content = temper_cli::vault::read_stdin_if_piped();
-                    temper_cli::commands::session::save(
-                        &config,
-                        title.as_deref(),
-                        context.as_deref(),
-                        stdin_content.as_deref(),
-                        task.as_deref(),
-                        state.as_deref(),
-                        &format,
-                    )
-                }
-                SessionAction::List {
-                    context,
-                    limit,
-                    format,
-                } => {
-                    temper_cli::commands::session::list(&config, context.as_deref(), limit, &format)
-                }
-                SessionAction::Show {
-                    slug,
-                    context,
-                    format,
-                } => {
-                    temper_cli::commands::session::show(&config, &slug, context.as_deref(), &format)
-                }
-            }
-        }
-        Commands::Task { action } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            match action {
-                TaskAction::Create {
+                ResourceAction::Create {
+                    r#type,
                     title,
                     context,
                     goal,
                     mode,
                     effort,
-                    stdin: _,
+                    slug,
                     show_template,
+                    stdin: _,
+                    format,
                 } => {
                     if show_template {
-                        let content = temper_cli::vault::get_template("task")?;
+                        let content = temper_cli::vault::get_template(&r#type)?;
                         print!("{content}");
                         return Ok(());
                     }
-                    let context = context.as_deref().ok_or_else(|| {
+                    let title = title.ok_or_else(|| {
                         temper_cli::error::TemperError::Project(
-                            "no context specified — use --context <name>".into(),
+                            "--title is required for resource create".into(),
                         )
                     })?;
-                    let context =
-                        temper_cli::commands::resolve_context_with_fallback(&config, context);
-                    let title = title.expect("title required when not using --show-template");
-                    temper_cli::commands::task::create(
+                    temper_cli::commands::resource::create(
                         &config,
-                        &context,
+                        &r#type,
                         &title,
+                        context.as_deref(),
                         goal.as_deref(),
                         mode.as_deref(),
                         effort.as_deref(),
-                    )?;
-                    Ok(())
-                }
-                TaskAction::Move {
-                    slug,
-                    stage,
-                    goal,
-                    context,
-                    mode,
-                    effort,
-                } => {
-                    let context = context.as_deref();
-                    temper_cli::commands::task::move_task(
-                        &config,
-                        &slug,
-                        stage.as_deref(),
-                        goal.as_deref(),
-                        context,
-                        mode.as_deref(),
-                        effort.as_deref(),
-                    )
-                }
-                TaskAction::Done {
-                    slug,
-                    branch,
-                    pr,
-                    context,
-                } => {
-                    let context = context.as_deref();
-                    temper_cli::commands::task::done(
-                        &config,
-                        &slug,
-                        branch.as_deref(),
-                        pr.as_deref(),
-                        context,
-                    )
-                }
-                TaskAction::List {
-                    context,
-                    goal,
-                    stage,
-                    format,
-                } => {
-                    let context = context.as_deref();
-                    temper_cli::commands::task::list(
-                        &config,
-                        context,
-                        goal.as_deref(),
-                        stage.as_deref(),
+                        slug.as_deref(),
                         &format,
                     )
                 }
-                TaskAction::Show {
+                ResourceAction::List {
+                    r#type,
+                    context,
+                    limit,
+                    stage,
+                    goal,
+                    status,
+                    format,
+                } => temper_cli::commands::resource::list(
+                    &config,
+                    &r#type,
+                    context.as_deref(),
+                    limit,
+                    stage.as_deref(),
+                    goal.as_deref(),
+                    status.as_deref(),
+                    &format,
+                ),
+                ResourceAction::Show {
                     slug,
+                    r#type,
                     context,
                     format,
+                } => temper_cli::commands::resource::show(
+                    &config,
+                    &r#type,
+                    &slug,
+                    context.as_deref(),
+                    &format,
+                ),
+                ResourceAction::Update {
+                    slug,
+                    r#type,
+                    type_from,
+                    type_to,
+                    context,
+                    context_to,
+                    title,
+                    tags,
+                    aliases,
+                    relates_to,
+                    references,
+                    depends_on,
+                    extends,
+                    preceded_by,
+                    derived_from,
+                    stage,
+                    mode,
+                    effort,
+                    goal,
+                    seq,
+                    branch,
+                    pr,
+                    status,
                 } => {
-                    let context = context.as_deref();
-                    temper_cli::commands::task::show(&config, &slug, context, &format)
+                    let params = temper_cli::commands::resource::UpdateParams {
+                        slug: &slug,
+                        doc_type: r#type.as_deref(),
+                        type_from: type_from.as_deref(),
+                        type_to: type_to.as_deref(),
+                        context: context.as_deref(),
+                        context_to: context_to.as_deref(),
+                        title: title.as_deref(),
+                        tags: &tags,
+                        aliases: &aliases,
+                        relates_to: &relates_to,
+                        references: &references,
+                        depends_on: &depends_on,
+                        extends: &extends,
+                        preceded_by: &preceded_by,
+                        derived_from: &derived_from,
+                        stage: stage.as_deref(),
+                        mode: mode.as_deref(),
+                        effort: effort.as_deref(),
+                        goal: goal.as_deref(),
+                        seq,
+                        branch: branch.as_deref(),
+                        pr: pr.as_deref(),
+                        status: status.as_deref(),
+                    };
+                    temper_cli::commands::resource::update(&config, &params)
                 }
             }
         }
@@ -229,51 +181,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 temper_cli::commands::context_cmd::list(&config)
             }
         },
-        Commands::Goal { action } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            match action {
-                GoalAction::Create {
-                    title,
-                    context,
-                    slug,
-                    format,
-                } => {
-                    let context = context.as_deref().ok_or_else(|| {
-                        temper_cli::error::TemperError::Project(
-                            "no context specified — use --context <name>".into(),
-                        )
-                    })?;
-                    let context =
-                        temper_cli::commands::resolve_context_with_fallback(&config, context);
-                    temper_cli::commands::goal::create(
-                        &config,
-                        &context,
-                        &title,
-                        slug.as_deref(),
-                        &format,
-                    )?;
-                    Ok(())
-                }
-                GoalAction::List { context, format } => {
-                    let context = context.as_deref().ok_or_else(|| {
-                        temper_cli::error::TemperError::Project(
-                            "no context specified — use --context <name>".into(),
-                        )
-                    })?;
-                    let context =
-                        temper_cli::commands::resolve_context_with_fallback(&config, context);
-                    temper_cli::commands::goal::list(&config, &context, &format)
-                }
-                GoalAction::Update {
-                    slug,
-                    status,
-                    context,
-                } => {
-                    let context = context.as_deref();
-                    temper_cli::commands::goal::update(&config, &slug, &status, context)
-                }
-            }
-        }
         Commands::Doctor {
             action,
             context,
@@ -294,34 +201,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
             temper_cli::commands::warmup::run(&config, context, &format)
-        }
-        Commands::Research { action } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            match action {
-                ResearchAction::Save {
-                    title,
-                    context,
-                    format,
-                    show_template,
-                    stdin: _,
-                } => {
-                    if show_template {
-                        let content = temper_cli::vault::get_template("research")?;
-                        print!("{content}");
-                        return Ok(());
-                    }
-                    let context = context.as_deref();
-                    let title = title.expect("title required when not using --show-template");
-                    let stdin_content = temper_cli::vault::read_stdin_if_piped();
-                    temper_cli::commands::research::save(
-                        &config,
-                        &title,
-                        context,
-                        stdin_content.as_deref(),
-                        &format,
-                    )
-                }
-            }
         }
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(),

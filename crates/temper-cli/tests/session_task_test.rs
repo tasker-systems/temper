@@ -28,6 +28,7 @@ fn test_session_save_with_task_links_entities() {
         Some(&g_slug),
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -67,6 +68,7 @@ fn test_session_save_with_task_and_state_moves_task() {
         "myapp",
         "Done task",
         Some(&g_slug),
+        None,
         None,
         None,
     )
