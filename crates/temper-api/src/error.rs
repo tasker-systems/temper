@@ -12,7 +12,9 @@ pub enum ApiError {
     #[error("Forbidden")]
     Forbidden,
     #[error("System access required")]
-    SystemAccessRequired,
+    SystemAccessRequired {
+        details: Box<temper_core::types::access_gate::SystemAccessDetails>,
+    },
     #[error("Bad request: {0}")]
     BadRequest(String),
     #[error("Conflict: {0}")]
@@ -32,6 +34,8 @@ pub(crate) struct ErrorBody {
 pub(crate) struct ErrorDetail {
     code: &'static str,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
 }
 
 impl IntoResponse for ApiError {
@@ -40,16 +44,17 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
-            ApiError::SystemAccessRequired => (StatusCode::FORBIDDEN, "SYSTEM_ACCESS_REQUIRED"),
+            ApiError::SystemAccessRequired { .. } => {
+                (StatusCode::FORBIDDEN, "SYSTEM_ACCESS_REQUIRED")
+            }
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
         let message = match &self {
-            ApiError::SystemAccessRequired => {
-                "This system requires team membership. Contact your administrator for access."
-                    .to_string()
+            ApiError::SystemAccessRequired { .. } => {
+                "This system requires approved access.".to_string()
             }
             other => other.to_string(),
         };
@@ -65,7 +70,7 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized(_) | ApiError::Forbidden => {
                 tracing::warn!(status_code, error_code = code, %message, "auth error");
             }
-            ApiError::SystemAccessRequired => {
+            ApiError::SystemAccessRequired { .. } => {
                 tracing::info!(status_code, error_code = code, "system access required");
             }
             ApiError::BadRequest(_) => {
@@ -76,8 +81,19 @@ impl IntoResponse for ApiError {
             }
         }
 
+        let details_json = match &self {
+            ApiError::SystemAccessRequired { details } => {
+                Some(serde_json::to_value(details).unwrap_or_default())
+            }
+            _ => None,
+        };
+
         let body = ErrorBody {
-            error: ErrorDetail { code, message },
+            error: ErrorDetail {
+                code,
+                message,
+                details: details_json,
+            },
         };
         (status, axum::Json(body)).into_response()
     }
