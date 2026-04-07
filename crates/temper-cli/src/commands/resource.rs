@@ -21,11 +21,13 @@ fn validate_doc_type(doc_type: &str) -> Result<()> {
     Ok(())
 }
 
-/// Resolve context with fallback to "default".
-fn require_context<'a>(config: &Config, context: Option<&'a str>) -> std::borrow::Cow<'a, str> {
+/// Require a context, returning an error if none specified.
+fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
     match context {
-        Some(ctx) => super::resolve_context_with_fallback(config, ctx),
-        None => std::borrow::Cow::Borrowed("default"),
+        Some(ctx) => Ok(super::resolve_context_with_fallback(config, ctx).into_owned()),
+        None => Err(TemperError::Project(
+            "no context specified — use --context <name>".into(),
+        )),
     }
 }
 
@@ -43,7 +45,7 @@ pub fn create(
 ) -> Result<()> {
     validate_doc_type(doc_type)?;
 
-    let ctx = require_context(config, context);
+    let ctx = require_context(config, context)?;
 
     match doc_type {
         "task" => {
@@ -72,7 +74,7 @@ pub fn create(
             crate::commands::session::save(
                 config,
                 Some(title),
-                Some(&ctx),
+                Some(ctx.as_str()),
                 stdin_content.as_deref(),
                 None, // task
                 None, // state
@@ -84,7 +86,7 @@ pub fn create(
             crate::commands::research::save(
                 config,
                 title,
-                Some(&ctx),
+                Some(ctx.as_str()),
                 stdin_content.as_deref(),
                 format,
             )
@@ -139,9 +141,6 @@ fn create_simple_resource(
         }
         _ => unreachable!(),
     };
-
-    // Set context in frontmatter
-    let content = vault::set_frontmatter_field(&content, "temper-context", context);
 
     // Handle stdin body replacement
     let content = if let Some(body) = vault::read_stdin_if_piped() {
@@ -221,14 +220,14 @@ pub fn list(
 
     match doc_type {
         "task" => {
-            let ctx = context.map(|c| require_context(config, Some(c)));
+            let ctx = context.map(|c| super::resolve_context_with_fallback(config, c).into_owned());
             crate::commands::task::list(config, ctx.as_deref(), goal, stage, format)
         }
         "goal" => {
-            let ctx = require_context(config, context);
-            // Pass status filter: goal::list doesn't accept status directly,
-            // but the function filters are handled internally. We delegate as-is.
-            let _ = status; // goal list doesn't filter by status currently
+            let ctx = require_context(config, context)?;
+            if status.is_some() {
+                output::hint("--status filter is not yet supported for goals; listing all.");
+            }
             crate::commands::goal::list(config, &ctx, format)
         }
         "session" => crate::commands::session::list(config, context, limit, format),
@@ -359,9 +358,12 @@ fn parse_simple_resource(path: &std::path::Path, context: &str) -> Option<Simple
 fn extract_date_prefix(stem: &str) -> Option<String> {
     if stem.len() >= 10 {
         let candidate = &stem[..10];
-        if candidate.len() == 10
-            && candidate.chars().nth(4) == Some('-')
-            && candidate.chars().nth(7) == Some('-')
+        let bytes = candidate.as_bytes();
+        if bytes[4] == b'-'
+            && bytes[7] == b'-'
+            && bytes[..4].iter().all(|b| b.is_ascii_digit())
+            && bytes[5..7].iter().all(|b| b.is_ascii_digit())
+            && bytes[8..10].iter().all(|b| b.is_ascii_digit())
         {
             return Some(candidate.to_string());
         }
