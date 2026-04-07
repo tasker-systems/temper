@@ -102,5 +102,8 @@ async fn get_by_slug_returns_not_found(pool: sqlx::PgPool) {
     )
     .await;
 
-    assert!(result.is_err());
+    assert!(
+        matches!(result, Err(temper_api::error::ApiError::NotFound)),
+        "expected NotFound, got: {result:?}"
+    );
 }
