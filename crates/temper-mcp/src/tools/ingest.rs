@@ -129,7 +129,7 @@ pub async fn ingest_content(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
-    // 1. Resolve context by name — auto-create if missing
+    // 1. Resolve context by name — auto-create if not found
     let context = match temper_api::services::context_service::resolve_by_name(
         pool,
         profile_id,
@@ -138,7 +138,7 @@ pub async fn ingest_content(
     .await
     {
         Ok(ctx) => ctx,
-        Err(_) => {
+        Err(temper_api::error::ApiError::NotFound) => {
             // Context doesn't exist — create it
             temper_api::services::context_service::create(pool, profile_id, &input.context_name)
                 .await
@@ -148,6 +148,12 @@ pub async fn ingest_content(
                         None,
                     )
                 })?
+        }
+        Err(e) => {
+            return Err(rmcp::ErrorData::internal_error(
+                format!("Failed to resolve context '{}': {e}", input.context_name),
+                None,
+            ));
         }
     };
 

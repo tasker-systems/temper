@@ -43,14 +43,14 @@ export default async function handler(req: Request): Promise<Response> {
 
   const { resource_id, content, replace } = validation.payload;
 
-  // Verify the caller can access this resource
-  const visibleResources = await auth.db`
-    SELECT resource_id FROM resources_visible_to(${auth.profileId}::uuid)
-    WHERE resource_id = ${resource_id}::uuid
+  // Verify the caller can modify this resource (defense-in-depth — MCP tool
+  // already checks, but this endpoint is HTTP-accessible)
+  const canModify = await auth.db`
+    SELECT true FROM can_modify_resource(${auth.profileId}::uuid, ${resource_id}::uuid)
   `;
-  if (visibleResources.length === 0) {
+  if (canModify.length === 0) {
     return new Response(
-      JSON.stringify({ error: "Resource not found or not accessible" }),
+      JSON.stringify({ error: "Resource not found or not authorized" }),
       { status: 404, headers: { "Content-Type": "application/json" } },
     );
   }

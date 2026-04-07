@@ -91,8 +91,9 @@ Input: {
 The resource is created immediately and returned with a `resource_id`. Content processing
 (embedding for search) happens asynchronously in the background.
 
-**Deduplication**: if a resource with the same `context_name` + `title` already exists,
-`ingest_content` returns the existing resource rather than creating a duplicate.
+**Deduplication**: if a resource with the same content already exists (matched by SHA256
+hash of the markdown body), `ingest_content` returns the existing resource rather than
+creating a duplicate.
 
 ### Context handling
 
@@ -122,7 +123,7 @@ re-triggers async content processing for the updated content.
 ```
 Tool: update_resource_content
 Input: {
-  "id": "<resource UUID>",
+  "resource_id": "<resource UUID>",
   "content": "New markdown content..."
 }
 ```
