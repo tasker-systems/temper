@@ -145,6 +145,17 @@ impl TemperMcpService {
         tools::search::search(self, input).await
     }
 
+    #[tool(
+        description = "List all available document types in the knowledge base. Returns id and name for each type. Use these when creating resources to specify the correct doc_type_name."
+    )]
+    async fn list_doc_types(
+        &self,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::doc_types::list_doc_types(self).await
+    }
+
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
     async fn list_contexts(
         &self,
