@@ -573,16 +573,16 @@ mod tests {
             "should contain init command"
         );
         assert!(
-            reference.contains("| task create |"),
-            "should contain task create"
+            reference.contains("| resource create |"),
+            "should contain resource create"
         );
         assert!(
-            reference.contains("| task list |"),
-            "should contain task list"
+            reference.contains("| resource list |"),
+            "should contain resource list"
         );
         assert!(
-            reference.contains("| session list |"),
-            "should contain session list"
+            reference.contains("| resource show |"),
+            "should contain resource show"
         );
         assert!(reference.contains("| warmup |"), "should contain warmup");
         assert!(reference.contains("| search |"), "should contain search");

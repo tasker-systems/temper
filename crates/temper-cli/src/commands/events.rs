@@ -6,12 +6,6 @@ use crate::output;
 /// Extract the context field from any Event variant.
 pub fn event_context(event: &Event) -> &str {
     match event {
-        Event::NoteCreate { context, .. } => context,
-        Event::TaskCreate { context, .. }
-        | Event::TaskMove { context, .. }
-        | Event::TaskDone { context, .. }
-        | Event::GoalCreate { context, .. }
-        | Event::GoalUpdate { context, .. } => context,
         Event::Normalize { project, .. } => project.as_deref().unwrap_or("general"),
         Event::ResourceCreate { context, .. } | Event::ResourceUpdate { context, .. } => context,
     }
@@ -48,45 +42,6 @@ pub fn load_events(config: &Config, project: Option<&str>, limit: usize) -> Resu
 /// Format a single event as a human-readable line.
 fn format_event(event: &Event) -> String {
     match event {
-        Event::NoteCreate {
-            ts,
-            note_type,
-            title,
-            context,
-            ..
-        } => format!("{ts}  {context:<12}  note_create     {note_type}: {title}"),
-        Event::TaskCreate {
-            ts,
-            context,
-            task,
-            title,
-            ..
-        } => format!("{ts}  {context:<12}  task_create     {task}: {title}"),
-        Event::TaskMove {
-            ts,
-            context,
-            task,
-            from_stage,
-            to_stage,
-            ..
-        } => {
-            format!("{ts}  {context:<12}  task_move       {task}: {from_stage} \u{2192} {to_stage}")
-        }
-        Event::TaskDone {
-            ts, context, task, ..
-        } => format!("{ts}  {context:<12}  task_done       {task}"),
-        Event::GoalCreate {
-            ts,
-            context,
-            goal,
-            title,
-        } => format!("{ts}  {context:<12}  goal_create     {goal}: {title}"),
-        Event::GoalUpdate {
-            ts,
-            context,
-            goal,
-            status,
-        } => format!("{ts}  {context:<12}  goal_update     {goal} \u{2192} {status}"),
         Event::Normalize {
             ts,
             project,

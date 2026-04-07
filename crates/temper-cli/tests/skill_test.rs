@@ -133,10 +133,10 @@ fn test_skill_generate_includes_task_commands() {
     let dir = TempDir::new().unwrap();
     let config = test_config_with_global(&dir);
 
-    // generate() now returns reference.md with task subcommands
+    // generate() now returns reference.md with resource subcommands
     let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("| task create |"));
-    assert!(content.contains("| task list |"));
+    assert!(content.contains("| resource create |"));
+    assert!(content.contains("| resource list |"));
     assert!(content.contains("--mode"));
     assert!(content.contains("--effort"));
 

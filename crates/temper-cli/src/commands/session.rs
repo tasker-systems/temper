@@ -121,9 +121,9 @@ pub fn save(
     } else {
         output::success(format!("Created: {relative_str}"));
     }
-    let event = Event::NoteCreate {
+    let event = Event::ResourceCreate {
         ts,
-        note_type: "session".to_string(),
+        doc_type: "session".to_string(),
         title: note_title.to_string(),
         path: relative_str.to_string(),
         context: context_name.clone(),

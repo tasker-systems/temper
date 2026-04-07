@@ -80,9 +80,9 @@ pub fn save(
     }
 
     let ts = Local::now().to_rfc3339();
-    let event = Event::NoteCreate {
+    let event = Event::ResourceCreate {
         ts,
-        note_type: "research".to_string(),
+        doc_type: "research".to_string(),
         title: title.to_string(),
         path: relative_str.to_string(),
         context: context_name.to_string(),

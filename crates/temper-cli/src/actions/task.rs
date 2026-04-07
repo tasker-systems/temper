@@ -195,14 +195,12 @@ pub fn create(
     let path = dir.join(format!("{slug}.md"));
     vault::write_note(&path, &content)?;
 
-    let event = discovery::Event::TaskCreate {
+    let event = discovery::Event::ResourceCreate {
         ts: datetime,
-        context: context.to_string(),
-        task: slug.clone(),
-        goal: gs,
+        doc_type: "task".to_string(),
         title: title.to_string(),
-        mode: mode.map(String::from),
-        effort: effort.map(String::from),
+        path: format!("{context}/task/{slug}.md"),
+        context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -243,15 +241,11 @@ pub fn move_task(
 
     let from_stage = task.stage.clone();
     let to_stage = stage.unwrap_or(&from_stage);
-    let from_mode = task.mode.clone();
-    let from_effort = task.effort.clone();
 
     if let Some(s) = stage {
         content = vault::set_frontmatter_field(&content, "temper-stage", s);
     }
 
-    let mut from_goal: Option<String> = None;
-    let mut to_goal: Option<String> = None;
     if let Some(g) = new_goal {
         // Validate goal exists and context matches
         let goal_info = goal::find_goal(config, g, None)?
@@ -262,8 +256,6 @@ pub fn move_task(
                 g, goal_info.context, task.context
             )));
         }
-        from_goal = Some(task.goal.clone());
-        to_goal = Some(g.to_string());
         content = vault::set_frontmatter_field(&content, "temper-goal", g);
         // Assign new seq at end of target goal
         let new_seq = next_seq(config, &task.context, g)?;
@@ -282,23 +274,11 @@ pub fn move_task(
     content = vault::set_frontmatter_field(&content, "temper-updated", &datetime);
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
 
-    let to_mode = mode.map(String::from);
-    let to_effort = effort.map(String::from);
-    let from_mode_for_event = if mode.is_some() { from_mode } else { None };
-    let from_effort_for_event = if effort.is_some() { from_effort } else { None };
-
-    let event = discovery::Event::TaskMove {
+    let event = discovery::Event::ResourceUpdate {
         ts: datetime,
+        doc_type: "task".to_string(),
+        slug: task.slug.clone(),
         context: task.context,
-        task: task.slug.clone(),
-        from_stage: from_stage.clone(),
-        to_stage: to_stage.to_string(),
-        from_goal,
-        to_goal,
-        from_mode: from_mode_for_event,
-        to_mode,
-        from_effort: from_effort_for_event,
-        to_effort,
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");
@@ -337,12 +317,11 @@ pub fn done(
     }
     fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
 
-    let event = discovery::Event::TaskDone {
+    let event = discovery::Event::ResourceUpdate {
         ts: datetime,
+        doc_type: "task".to_string(),
+        slug: task.slug.clone(),
         context: task.context,
-        task: task.slug.clone(),
-        branch: branch.map(String::from),
-        pr: pr.map(String::from),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
         tracing::warn!("Failed to append discovery event: {e}");

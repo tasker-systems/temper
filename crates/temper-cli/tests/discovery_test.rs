@@ -24,9 +24,9 @@ fn test_append_and_read_event() {
     let state_dir = dir.path().join(".temper");
     std::fs::create_dir_all(&state_dir).unwrap();
 
-    let event = temper_cli::discovery::Event::NoteCreate {
+    let event = temper_cli::discovery::Event::ResourceCreate {
         ts: "2026-03-23T12:00:00Z".to_string(),
-        note_type: "session".to_string(),
+        doc_type: "session".to_string(),
         title: "Test".to_string(),
         path: "sessions/test.md".to_string(),
         context: "myapp".to_string(),
