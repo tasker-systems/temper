@@ -10,6 +10,7 @@ pub mod note;
 pub mod pull;
 pub mod remove;
 pub mod research;
+pub mod resource;
 pub mod search_cmd;
 pub mod session;
 pub mod skill;

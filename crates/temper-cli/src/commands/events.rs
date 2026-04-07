@@ -13,6 +13,7 @@ pub fn event_context(event: &Event) -> &str {
         | Event::GoalCreate { context, .. }
         | Event::GoalUpdate { context, .. } => context,
         Event::Normalize { project, .. } => project.as_deref().unwrap_or("general"),
+        Event::ResourceCreate { context, .. } => context,
     }
 }
 
@@ -98,6 +99,13 @@ fn format_event(event: &Event) -> String {
             let proj = project.as_deref().unwrap_or("general");
             format!("{ts}  {proj:<12}  normalize       ids:{ids_backfilled} moved:{files_moved} stages:{stages_migrated} slugs:{slugs_fixed} fm:{frontmatter_fixed}")
         }
+        Event::ResourceCreate {
+            ts,
+            doc_type,
+            title,
+            context,
+            ..
+        } => format!("{ts}  {context:<12}  resource_create  {doc_type}: {title}"),
     }
 }
 

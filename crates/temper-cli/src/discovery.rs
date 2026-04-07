@@ -69,6 +69,14 @@ pub enum Event {
         goal: String,
         status: String,
     },
+    #[serde(rename = "resource_create")]
+    ResourceCreate {
+        ts: String,
+        doc_type: String,
+        title: String,
+        path: String,
+        context: String,
+    },
     #[serde(rename = "normalize")]
     Normalize {
         ts: String,
