@@ -10,6 +10,7 @@ import {
   DEVICE_ID_CLOUD,
   insertEventAndAudit,
 } from "../../packages/temper-cloud/src/events.js";
+import { logger } from "../../packages/temper-cloud/src/logger.js";
 
 export async function processContentIngest(
   resourceId: string,
@@ -21,9 +22,7 @@ export async function processContentIngest(
 ) {
   "use workflow";
 
-  console.log(
-    `[content-ingest] Starting processing for resource ${resourceId}, replace=${replace}`,
-  );
+  logger.info({ resourceId, replace }, "content-ingest: starting processing");
   const chunks = await chunkStep(content);
   const embeddings = await embedStep(chunks.map((c) => c.content));
   await storeStep(resourceId, chunks, embeddings, replace, profileId, contextId, bodyHash);
@@ -40,17 +39,17 @@ async function chunkStep(
   }>
 > {
   "use step";
-  console.log(`[content-ingest:chunk] Chunking ${text.length} chars`);
+  logger.info({ contentLength: text.length }, "content-ingest: chunking");
   const chunks = chunkText(text);
-  console.log(`[content-ingest:chunk] Produced ${chunks.length} chunks`);
+  logger.info({ chunkCount: chunks.length }, "content-ingest: chunking complete");
   return chunks;
 }
 
 async function embedStep(texts: string[]): Promise<number[][]> {
   "use step";
-  console.log(`[content-ingest:embed] Embedding ${texts.length} chunks`);
+  logger.info({ chunkCount: texts.length }, "content-ingest: embedding");
   const embeddings = await embedTexts(texts);
-  console.log(`[content-ingest:embed] Done`);
+  logger.info("content-ingest: embedding complete");
   return embeddings;
 }
 
@@ -70,9 +69,7 @@ async function storeStep(
 ): Promise<void> {
   "use step";
 
-  console.log(
-    `[content-ingest:store] Storing ${chunks.length} chunks for resource ${resourceId}, replace=${replace}`,
-  );
+  logger.info({ chunkCount: chunks.length, resourceId, replace }, "content-ingest: storing chunks");
   const db = getDb();
 
   const chunkRows: ChunkRow[] = chunks.map((chunk, i) => ({
@@ -102,18 +99,25 @@ async function storeStep(
   let bodyHash = passedBodyHash;
 
   if (!contextId) {
-    const contextRows =
-      await db`SELECT kb_context_id FROM kb_resources WHERE id = ${resourceId}::uuid`;
+    const contextRows = await db`
+      SELECT r.kb_context_id FROM kb_resources r
+      JOIN resources_visible_to(${profileId}::uuid) v ON v.resource_id = r.id
+      WHERE r.id = ${resourceId}::uuid
+    `;
     if (contextRows.length === 0) {
-      console.log(`[content-ingest:store] Done for resource ${resourceId}`);
+      logger.warn({ resourceId, profileId }, "content-ingest: resource not visible to profile, skipping event");
       return;
     }
     contextId = contextRows[0].kb_context_id as string;
   }
 
   if (!bodyHash) {
-    const manifestRows =
-      await db`SELECT body_hash FROM kb_resource_manifests WHERE resource_id = ${resourceId}::uuid`;
+    const manifestRows = await db`
+      SELECT m.body_hash FROM kb_resource_manifests m
+      JOIN kb_resources r ON r.id = m.resource_id
+      JOIN resources_visible_to(${profileId}::uuid) v ON v.resource_id = r.id
+      WHERE m.resource_id = ${resourceId}::uuid
+    `;
     bodyHash =
       manifestRows.length > 0
         ? (manifestRows[0].body_hash as string)
@@ -132,5 +136,5 @@ async function storeStep(
     openHash: emptyHash,
   });
 
-  console.log(`[content-ingest:store] Done for resource ${resourceId}`);
+  logger.info({ resourceId }, "content-ingest: store complete");
 }

@@ -1,3 +1,5 @@
+import { logger } from "../packages/temper-cloud/src/logger.js";
+
 export const config = { runtime: "nodejs" };
 
 export default async function handler(req: Request): Promise<Response> {
@@ -60,7 +62,7 @@ export default async function handler(req: Request): Promise<Response> {
   try {
     await processContentIngest(resource_id, content, replace, auth.profileId, context_id, body_hash);
   } catch (err) {
-    console.error("Failed to trigger content processing workflow:", err);
+    logger.error({ err, resource_id }, "Failed to trigger content processing workflow");
   }
 
   return new Response(
