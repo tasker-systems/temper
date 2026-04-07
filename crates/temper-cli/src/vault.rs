@@ -1,5 +1,8 @@
 use crate::error::{Result, TemperError};
-use crate::templates::{GoalTemplate, ResearchTemplate, SessionTemplate, TaskTemplate};
+use crate::templates::{
+    ConceptTemplate, DecisionTemplate, GoalTemplate, ResearchTemplate, SessionTemplate,
+    TaskTemplate,
+};
 use askama::Template;
 use std::path::Path;
 use std::path::PathBuf;
@@ -79,6 +82,22 @@ pub fn get_template(note_type: &str) -> Result<String> {
         }
         .render(),
         "research" => ResearchTemplate {
+            id: placeholder,
+            title: placeholder,
+            date: placeholder,
+            project: placeholder,
+            slug: placeholder,
+        }
+        .render(),
+        "concept" => ConceptTemplate {
+            id: placeholder,
+            title: placeholder,
+            date: placeholder,
+            project: placeholder,
+            slug: placeholder,
+        }
+        .render(),
+        "decision" => DecisionTemplate {
             id: placeholder,
             title: placeholder,
             date: placeholder,
