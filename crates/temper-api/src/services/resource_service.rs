@@ -20,50 +20,103 @@ pub async fn list_visible(
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let rows = if let Some(ctx_id) = params.kb_context_id {
-        sqlx::query_as!(
-            ResourceRow,
-            r#"
-            WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-            SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                   r.slug,
-                   r.originator_profile_id, r.owner_profile_id, r.is_active,
-                   r.created, r.updated
-              FROM kb_resources r
-              JOIN visible v ON v.resource_id = r.id
-             WHERE r.is_active = true
-               AND r.kb_context_id = $2
-             ORDER BY r.updated DESC
-             LIMIT $3 OFFSET $4
-            "#,
-            profile_id,
-            ctx_id,
-            limit,
-            offset,
-        )
-        .fetch_all(pool)
-        .await?
-    } else {
-        sqlx::query_as!(
-            ResourceRow,
-            r#"
-            WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-            SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                   r.slug,
-                   r.originator_profile_id, r.owner_profile_id, r.is_active,
-                   r.created, r.updated
-              FROM kb_resources r
-              JOIN visible v ON v.resource_id = r.id
-             WHERE r.is_active = true
-             ORDER BY r.updated DESC
-             LIMIT $2 OFFSET $3
-            "#,
-            profile_id,
-            limit,
-            offset,
-        )
-        .fetch_all(pool)
-        .await?
+    let rows = match (params.kb_context_id, params.kb_doc_type_id) {
+        (Some(ctx_id), Some(dt_id)) => {
+            sqlx::query_as!(
+                ResourceRow,
+                r#"
+                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
+                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
+                       r.slug,
+                       r.originator_profile_id, r.owner_profile_id, r.is_active,
+                       r.created, r.updated
+                  FROM kb_resources r
+                  JOIN visible v ON v.resource_id = r.id
+                 WHERE r.is_active = true
+                   AND r.kb_context_id = $2
+                   AND r.kb_doc_type_id = $3
+                 ORDER BY r.updated DESC
+                 LIMIT $4 OFFSET $5
+                "#,
+                profile_id,
+                ctx_id,
+                dt_id,
+                limit,
+                offset,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        (Some(ctx_id), None) => {
+            sqlx::query_as!(
+                ResourceRow,
+                r#"
+                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
+                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
+                       r.slug,
+                       r.originator_profile_id, r.owner_profile_id, r.is_active,
+                       r.created, r.updated
+                  FROM kb_resources r
+                  JOIN visible v ON v.resource_id = r.id
+                 WHERE r.is_active = true
+                   AND r.kb_context_id = $2
+                 ORDER BY r.updated DESC
+                 LIMIT $3 OFFSET $4
+                "#,
+                profile_id,
+                ctx_id,
+                limit,
+                offset,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        (None, Some(dt_id)) => {
+            sqlx::query_as!(
+                ResourceRow,
+                r#"
+                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
+                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
+                       r.slug,
+                       r.originator_profile_id, r.owner_profile_id, r.is_active,
+                       r.created, r.updated
+                  FROM kb_resources r
+                  JOIN visible v ON v.resource_id = r.id
+                 WHERE r.is_active = true
+                   AND r.kb_doc_type_id = $2
+                 ORDER BY r.updated DESC
+                 LIMIT $3 OFFSET $4
+                "#,
+                profile_id,
+                dt_id,
+                limit,
+                offset,
+            )
+            .fetch_all(pool)
+            .await?
+        }
+        (None, None) => {
+            sqlx::query_as!(
+                ResourceRow,
+                r#"
+                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
+                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
+                       r.slug,
+                       r.originator_profile_id, r.owner_profile_id, r.is_active,
+                       r.created, r.updated
+                  FROM kb_resources r
+                  JOIN visible v ON v.resource_id = r.id
+                 WHERE r.is_active = true
+                 ORDER BY r.updated DESC
+                 LIMIT $2 OFFSET $3
+                "#,
+                profile_id,
+                limit,
+                offset,
+            )
+            .fetch_all(pool)
+            .await?
+        }
     };
 
     Ok(rows)

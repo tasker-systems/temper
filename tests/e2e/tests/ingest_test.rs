@@ -57,6 +57,7 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         .resources()
         .list(&temper_core::types::resource::ResourceListParams {
             kb_context_id: None,
+            kb_doc_type_id: None,
             limit: Some(50),
             offset: None,
         })

@@ -26,6 +26,7 @@ pub async fn list_resources(
     // Fetch all visible resources (no filters, reasonable limit for browsing).
     let params = temper_core::types::resource::ResourceListParams {
         kb_context_id: None,
+        kb_doc_type_id: None,
         limit: Some(200),
         offset: None,
     };
@@ -167,6 +168,7 @@ pub async fn read_resource(
 
         let params = temper_core::types::resource::ResourceListParams {
             kb_context_id: Some(uuid::Uuid::from(context.id)),
+            kb_doc_type_id: None,
             limit: Some(200),
             offset: None,
         };
