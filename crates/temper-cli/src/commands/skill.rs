@@ -24,6 +24,17 @@ static WF_PLAN_MEDIUM: &str = include_str!("../../skill-content/workflows/plan-m
 static WF_PLAN_LARGE: &str = include_str!("../../skill-content/workflows/plan-large.md");
 
 static REFERENCE_FOOTER: &str = r#"
+## Resource Types
+
+| Type | Description |
+|------|-------------|
+| task | Work items with stage, mode, effort tracking |
+| goal | High-level objectives that group tasks |
+| session | Timestamped work session notes |
+| research | Research notes and findings |
+| concept | Named ideas, patterns, or domain terms |
+| decision | Point-in-time choices with rationale (ADR-like) |
+
 ## Task Stages
 
 | Stage | Meaning |
@@ -58,13 +69,13 @@ Search first, read second. Don't guess at file paths.
 
 ## Template Access
 
-Use `--show-template` on creation commands to display the expected frontmatter and body
+Use `--show-template` on `resource create` to display the expected frontmatter and body
 structure without creating anything:
 
 ```bash
-temper note create --show-template
-temper task create --show-template
-temper research save --show-template
+temper resource create --type session --show-template
+temper resource create --type task --show-template
+temper resource create --type research --show-template
 ```
 
 ## Skill-Only Commands
@@ -107,9 +118,7 @@ pub fn generate_reference() -> String {
     for (name, syntax) in &rows {
         out.push_str(&format!("| {} | `{}` |\n", name, syntax));
     }
-    out.push_str(
-        "\nPipe content via stdin for `session save`, `note create`, and `research save`.\n",
-    );
+    out.push_str("\nPipe content via stdin for `resource create` (all types accept stdin body).\n");
     out.push_str(REFERENCE_FOOTER);
     out
 }

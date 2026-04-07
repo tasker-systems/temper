@@ -12,7 +12,7 @@ trail for the next session.
 
 ## Steps
 
-1. **Read the task** — run `temper task show <slug>` to load the full task content.
+1. **Read the task** — run `temper resource show <slug> --type task` to load the full task content.
 2. **Read project fundamentals** — if `guidance/fundamentals.md` exists in the skill
    directory, read it for project-specific conventions, test commands, and lint rules.
 3. **Discovery** — search for related work and context:
@@ -40,7 +40,7 @@ trail for the next session.
 9. **Commit** — make a clean commit with a message that references the task context.
 10. **Create sub-tasks for remaining work** — for each remaining piece:
     ```bash
-    temper task create "<next piece title>" --context <ctx> --mode build --effort <effort>
+    temper resource create --type task --title "<next piece title>" --context <ctx> --mode build --effort <effort>
     ```
 
 ## Session Rhythm
@@ -53,11 +53,11 @@ Each session follows this cycle:
 
 ## Completion
 
-Pipe the session summary via stdin. Use `--state done` only if THIS sub-task is complete.
+Pipe the session summary via stdin. Use `--stage done` only if THIS sub-task is complete.
 The parent task may remain in-progress across sessions.
 
 ```bash
-cat <<'EOF' | temper session save "<title>" --task <slug> --state done
+cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
 ## Goal
 What we set out to do
 
@@ -73,6 +73,8 @@ Related tasks, concepts, or contexts touched
 ## Next Steps
 What to pick up next session
 EOF
+
+temper resource update <slug> --type task --stage done
 ```
 
 If the overall work is not yet finished, the next session picks up from the trail left here.

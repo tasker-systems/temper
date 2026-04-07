@@ -9,11 +9,11 @@ feasibility of an approach.
 
 ## Steps
 
-1. **Read the task** — run `temper task show <slug>` to load the full task content.
+1. **Read the task** — run `temper resource show <slug> --type task` to load the full task content.
 2. **Quick research** — gather information from multiple sources:
    - `temper search "<relevant terms>"` to find related documents in the knowledge base
    - Targeted file reads in the codebase
-   - Check recent sessions for prior work: `temper session list --context <ctx>`
+   - Check recent sessions for prior work: `temper resource list --type session --context <ctx>`
 3. **Write up findings** — produce a clear, concise summary that answers the task's
    question. Include:
    - What was investigated
@@ -21,21 +21,17 @@ feasibility of an approach.
    - Recommendations or conclusions
 4. **Save findings** — persist the research through temper:
    ```bash
-   temper research save "<title>" --context <ctx>
-   ```
-   Or pipe detailed findings via stdin:
-   ```bash
-   cat <<'EOF' | temper research save "<title>" --context <ctx>
+   cat <<'EOF' | temper resource create --type research --title "<title>" --context <ctx>
    <findings content>
    EOF
    ```
 
 ## Completion
 
-Pipe the session summary via stdin to save it and mark the task done:
+Pipe the session summary via stdin to save it, then mark the task done:
 
 ```bash
-cat <<'EOF' | temper session save "<title>" --task <slug> --state done
+cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
 ## Goal
 What we set out to do
 
@@ -51,4 +47,6 @@ Related tasks, concepts, or contexts touched
 ## Next Steps
 What to pick up next session
 EOF
+
+temper resource update <slug> --type task --stage done
 ```

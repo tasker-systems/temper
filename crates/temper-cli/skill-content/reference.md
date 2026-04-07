@@ -1,4 +1,9 @@
-# CLI Reference
+# CLI Reference (Static Source)
+
+> **Note:** This file is a static source reference only. The installed `reference.md`
+> skill file is **generated dynamically** from the clap command tree via
+> `temper skill generate`. Edit this file if you need to update footer content;
+> edit `src/commands/skill.rs` (REFERENCE_FOOTER) for the authoritative version.
 
 ## Invocation
 
@@ -17,30 +22,32 @@ If `temper` is not on PATH, **stop and warn the user**:
 
 Do not fall back to `cargo run` as a workaround.
 
-## Commands
+## Commands (generated — run `temper skill generate` for current)
 
 | Command | Syntax |
 |---------|--------|
-| search | `temper search "<query>" [--context <ctx>] [--type <doctype>]` |
+| search | `temper search "<query>" [--context <ctx>] [--doc-type <type>]` |
 | context | `temper context [<name>]` |
-| session save | `temper session save [<title>] [--context <ctx>] [--task <slug>] [--state <state>]` |
-| session list | `temper session list [--context <ctx>] [--limit <n>]` |
-| session show | `temper session show <slug> [--context <ctx>]` |
-| task create | `temper task create --title "<title>" --context <ctx> [--goal <slug>] [--mode <mode>] [--effort <effort>]` |
-| task list | `temper task list [--context <ctx>] [--goal <slug>] [--stage <stage>]` |
-| task move | `temper task move <slug> [--stage <stage>] [--goal <slug>] [--context <ctx>] [--mode <mode>] [--effort <effort>]` |
-| task done | `temper task done <slug> [--branch <name>] [--pr <url>] [--context <ctx>]` |
-| task show | `temper task show <slug-or-suffix-or-seq> [--context <ctx>]` |
-| goal list | `temper goal list [--context <ctx>]` |
-| note create | `temper note create "<title>" [--context <ctx>] [--type <doctype>]` |
-| research save | `temper research save "<title>" [--task <slug>]` |
-| normalize | `temper normalize [--dry-run]` |
-| events | `temper events [--limit <n>]` |
+| resource create | `temper resource create --type <type> --title <title> --context <ctx> [options]` |
+| resource list | `temper resource list --type <type> [--context <ctx>] [--limit <n>] [--stage <stage>]` |
+| resource show | `temper resource show <slug> --type <type> [--context <ctx>]` |
+| resource update | `temper resource update <slug> --type <type> [--stage <stage>] [--mode <mode>] [--effort <effort>]` |
 | warmup | `temper warmup [--context <ctx>]` |
-| index | `temper index [--force]` |
+| events | `temper events [--limit <n>]` |
 | status | `temper status` |
 
-Pipe content via stdin for `session save`, `note create`, and `research save`.
+Pipe content via stdin for `resource create` (all types accept stdin body).
+
+## Resource Types
+
+| Type | Description |
+|------|-------------|
+| task | Work items with stage, mode, effort tracking |
+| goal | High-level objectives that group tasks |
+| session | Timestamped work session notes |
+| research | Research notes and findings |
+| concept | Named ideas, patterns, or domain terms |
+| decision | Point-in-time choices with rationale (ADR-like) |
 
 ## Task Stages
 
@@ -76,13 +83,13 @@ Search first, read second. Don't guess at file paths.
 
 ## Template Access
 
-Use `--show-template` on creation commands to display the expected frontmatter and body
+Use `--show-template` on `resource create` to display the expected frontmatter and body
 structure without creating anything:
 
 ```bash
-temper note create --show-template
-temper task create --show-template
-temper research save --show-template
+temper resource create --type session --show-template
+temper resource create --type task --show-template
+temper resource create --type research --show-template
 ```
 
 ## Skill-Only Commands

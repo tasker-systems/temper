@@ -4,22 +4,22 @@
 
 1. Check recent sessions for the current context:
    ```bash
-   temper session list --context <current>
+   temper resource list --type session --context <current>
    ```
 2. If resuming previous work, read the last session note for continuity.
 3. Search for relevant context:
    ```bash
    temper search "<topic>"
    ```
-4. If starting via `temper task start <slug>`, load the task and route by mode/effort.
+4. If starting via `task start <slug>` (skill command), load the task and route by mode/effort.
 
 ## Session End
 
-Always pipe content via stdin. Without stdin, `session save` creates placeholder boilerplate
-that must be edited manually.
+Always pipe content via stdin. Without stdin, `resource create --type session` creates
+placeholder boilerplate that must be edited manually.
 
 ```bash
-cat <<'EOF' | temper session save "<title>" --task <slug> --state <state>
+cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
 ## Goal
 What we set out to do
 
@@ -37,8 +37,10 @@ What to pick up next session
 EOF
 ```
 
-The `--state` flag records the task's state at session end (e.g., `in-progress`, `done`).
-The `--task` flag links the session to a specific task for traceability.
+Link the session to a task by updating the task's stage after saving:
+```bash
+temper resource update <task-slug> --type task --stage done
+```
 
 ## Mid-Session Drift Detection
 
@@ -53,7 +55,7 @@ Watch for mismatches between assigned mode/effort and actual work:
 
 On confirmation, update the task:
 ```bash
-temper task move <slug> --mode <new> --effort <new>
+temper resource update <slug> --type task --mode <new> --effort <new>
 ```
 
 ## Checkpoint Pattern

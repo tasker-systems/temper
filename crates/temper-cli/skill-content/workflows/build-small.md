@@ -8,7 +8,7 @@ a CLI flag, fixing a known bug, writing a utility function, updating a configura
 
 ## Steps
 
-1. **Read the task** — run `temper task show <slug>` to load the full task content.
+1. **Read the task** — run `temper resource show <slug> --type task` to load the full task content.
 2. **Read project fundamentals** — if `guidance/fundamentals.md` exists in the skill
    directory, read it for project-specific conventions, test commands, and lint rules.
 3. **Read subagent guidance** — read `subagent-guidance.md` and apply all principles
@@ -22,10 +22,10 @@ a CLI flag, fixing a known bug, writing a utility function, updating a configura
 
 ## Completion
 
-Pipe the session summary via stdin to save it and mark the task done:
+Pipe the session summary via stdin to save it, then mark the task done:
 
 ```bash
-cat <<'EOF' | temper session save "<title>" --task <slug> --state done
+cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
 ## Goal
 What we set out to do
 
@@ -41,4 +41,6 @@ Related tasks, concepts, or contexts touched
 ## Next Steps
 What to pick up next session
 EOF
+
+temper resource update <slug> --type task --stage done
 ```

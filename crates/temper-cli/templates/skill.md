@@ -33,13 +33,13 @@ User-created guidance files. Read and apply any files found here.
 ## On Task Start
 
 > **CLI sequence**: There is no `task start` command. To start a task:
-> 1. `temper task show <slug>` — read the task content
-> 2. `temper task move <slug> --stage in-progress` — mark it active
+> 1. `temper resource show <slug> --type task` — read the task content
+> 2. `temper resource update <slug> --type task --stage in-progress` — mark it active
 >
 > Stages are: `backlog`, `in-progress`, `done`, `cancelled` (not "active").
 
-1. Read the task content via `temper task show <slug>` — extract mode and effort
-2. Move the task to in-progress: `temper task move <slug> --stage in-progress`
+1. Read the task content via `temper resource show <slug> --type task` — extract mode and effort
+2. Move the task to in-progress: `temper resource update <slug> --type task --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
 4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
 5. Check for `guidance/fundamentals.md`:
@@ -53,17 +53,17 @@ User-created guidance files. Read and apply any files found here.
 ## On Task Resume
 
 > **CLI sequence**: To resume a task from a previous session:
-> 1. `temper task show <slug>` — reload the task content
-> 2. `temper session list --context <ctx>` — find the most recent session
-> 3. `temper session show <title-slug> --context <ctx>` — read the session's "Next Steps"
+> 1. `temper resource show <slug> --type task` — reload the task content
+> 2. `temper resource list --type session --context <ctx>` — find the most recent session
+> 3. `temper resource show <title-slug> --type session --context <ctx>` — read the session's "Next Steps"
 > 4. Continue from the workflow file for this task's mode/effort
 
-1. Read the task content via `temper task show <slug>` — extract mode, effort, and context
-2. List recent sessions: `temper session list --context <ctx>`
-3. Read the most recent session note: `temper session show <title-slug> --context <ctx>`
-   - The slug is the title column from `session list` output
+1. Read the task content via `temper resource show <slug> --type task` — extract mode, effort, and context
+2. List recent sessions: `temper resource list --type session --context <ctx>`
+3. Read the most recent session note: `temper resource show <title-slug> --type session --context <ctx>`
+   - The slug is the title column from `resource list` output
    - Supports partial matching — a unique substring of the slug is enough
-4. If the task is not already in-progress, move it: `temper task move <slug> --stage in-progress`
+4. If the task is not already in-progress, move it: `temper resource update <slug> --type task --stage in-progress`
 5. Check for `guidance/fundamentals.md` — read if it exists
 6. Check auto-memory for user plugin preferences
 7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
@@ -76,7 +76,7 @@ User-created guidance files. Read and apply any files found here.
 > ad-hoc work, or when a task hasn't been created yet.
 
 1. If `--context <ctx>` provided, use it. Otherwise ask which context to work in.
-2. List in-progress tasks: `temper task list --context <ctx>`
+2. List in-progress tasks: `temper resource list --type task --context <ctx>`
 3. If tasks exist, ask: "Working on one of these, or something new?"
    - If existing task: pivot to **On Task Resume** with that slug
    - If new: continue as open session
@@ -85,7 +85,7 @@ User-created guidance files. Read and apply any files found here.
 6. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
 7. Proceed with the user's request. At session end, save via:
    ```bash
-   cat <<'EOF' | temper session save "<title>" --context <ctx> --state done
+   cat <<'EOF' | temper resource create --type session --title "<title>" --context <ctx>
    ## Goal
    ...
    EOF
@@ -102,12 +102,12 @@ User-created guidance files. Read and apply any files found here.
    - "Is this (a) research/design/discovery (plan) or (b) implementation/building (build)?"
 4. Infer or ask effort:
    - "How big is this? (a) small — single session, (b) medium — multi-step but bounded, (c) large — multi-session, may need decomposition"
-5. List goals in context: `temper goal list --context <ctx>`
+5. List goals in context: `temper resource list --type goal --context <ctx>`
    - If goals exist, ask: "Link to a goal? [list] or (none)"
 6. Ask: "Any specific acceptance criteria or outcomes?" (optional — user can skip)
 7. Create the task (pipe the problem statement and acceptance criteria via stdin):
    ```bash
-   cat <<'EOF' | temper task create --title "<title>" --context <ctx> --mode <mode> --effort <effort> [--goal <slug>]
+   cat <<'EOF' | temper resource create --type task --title "<title>" --context <ctx> --mode <mode> --effort <effort> [--goal <slug>]
    # <title>
 
    <problem statement from step 2>
