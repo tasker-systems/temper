@@ -140,7 +140,6 @@ async fn find_by_body_hash_returns_existing(pool: sqlx::PgPool) {
             managed_meta: &empty,
             open_meta: &empty,
         },
-        &empty,
     )
     .await
     .expect("first create");
