@@ -560,14 +560,27 @@ pub fn update(
     .filter_map(|(k, v)| v.map(|val| (k, val)))
     .collect();
 
+    // Base fields valid on all types (from base.schema.json)
+    const BASE_FIELDS: &[&str] = &["title"];
+
     // Validate scalar fields against schema
     for (field_name, value) in &scalar_updates {
-        if let Some((_name, schema_prop)) = schema_fields.iter().find(|(n, _)| n == field_name) {
-            if let Some(err) = schema::validate_field_value(field_name, value, schema_prop) {
-                return Err(TemperError::Vault(err));
+        if BASE_FIELDS.contains(field_name) {
+            continue; // Always valid
+        }
+        match schema_fields.iter().find(|(n, _)| n == field_name) {
+            Some((_name, schema_prop)) => {
+                if let Some(err) = schema::validate_field_value(field_name, value, schema_prop) {
+                    return Err(TemperError::Project(err));
+                }
+            }
+            None => {
+                let flag = field_name.strip_prefix("temper-").unwrap_or(field_name);
+                return Err(TemperError::Project(format!(
+                    "--{flag} is not valid for type '{current_type}'"
+                )));
             }
         }
-        // Fields not in schema are still allowed (e.g. title is always valid)
     }
 
     // Read and modify content
