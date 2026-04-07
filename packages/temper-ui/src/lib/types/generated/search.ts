@@ -12,3 +12,8 @@ kb_uri: string,
  * Original source URL or file reference
  */
 origin_uri: string, context: string | null, doc_type: string, score: number, snippet: string, header_path: string | null, };
+
+/**
+ * A unified search result combining FTS and vector scores.
+ */
+export type UnifiedSearchResultRow = { resource_id: string, title: string, slug: string, kb_uri: string, origin_uri: string, context: string | null, doc_type: string, fts_score: number, vector_score: number, combined_score: number, origin: string, };
