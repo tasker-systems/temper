@@ -21,9 +21,16 @@ fn test_task_create_includes_uuid_id() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::commands::task::create(&config, "myapp", "ID Test", Some(&g_slug), None, None)
-            .unwrap();
+    let slug = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "ID Test",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let content =
         std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
@@ -53,6 +60,7 @@ fn test_goal_create_and_task_create() {
         Some(&g_slug),
         None,
         None,
+        None,
     )
     .unwrap();
     assert!(dir
@@ -78,9 +86,16 @@ fn test_task_move_to_in_progress() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::commands::task::create(&config, "myapp", "Test", Some(&g_slug), None, None)
-            .unwrap();
+    let slug = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Test",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     temper_cli::commands::task::move_task(
         &config,
@@ -105,9 +120,16 @@ fn test_task_move_rejects_old_stages() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::commands::task::create(&config, "myapp", "Test", Some(&g_slug), None, None)
-            .unwrap();
+    let slug = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Test",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let result = temper_cli::commands::task::move_task(
         &config,
@@ -128,9 +150,16 @@ fn test_task_move_to_cancelled() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::commands::task::create(&config, "myapp", "Test", Some(&g_slug), None, None)
-            .unwrap();
+    let slug = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Test",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     temper_cli::commands::task::move_task(
         &config,
@@ -155,9 +184,16 @@ fn test_task_move_and_done() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug =
-        temper_cli::commands::task::create(&config, "myapp", "Test", Some(&g_slug), None, None)
-            .unwrap();
+    let slug = temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "Test",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     temper_cli::commands::task::move_task(
         &config,
@@ -214,8 +250,16 @@ fn test_task_list_json_format() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::task::create(&config, "myapp", "JSON Test", Some(&g_slug), None, None)
-        .unwrap();
+    temper_cli::commands::task::create(
+        &config,
+        "myapp",
+        "JSON Test",
+        Some(&g_slug),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
 
     let result = temper_cli::commands::task::list(&config, Some("myapp"), None, None, "json");
     assert!(result.is_ok());
@@ -235,6 +279,7 @@ fn test_task_create_with_mode_and_effort() {
         Some(&g_slug),
         Some("build"),
         Some("medium"),
+        None,
     )
     .unwrap();
 
@@ -264,6 +309,7 @@ fn test_task_create_without_mode_effort() {
         Some(&g_slug),
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -290,6 +336,7 @@ fn test_task_create_rejects_invalid_mode() {
         Some(&g_slug),
         Some("huge"),
         None,
+        None,
     );
     assert!(result.is_err(), "invalid mode on create should be rejected");
 }
@@ -306,6 +353,7 @@ fn test_task_move_with_effort() {
         "myapp",
         "Effort Move",
         Some(&g_slug),
+        None,
         None,
         None,
     )
@@ -334,6 +382,7 @@ fn test_task_move_with_stage_and_mode() {
         "myapp",
         "Both Move",
         Some(&g_slug),
+        None,
         None,
         None,
     )
@@ -370,6 +419,7 @@ fn test_task_move_rejects_invalid_effort() {
         Some(&g_slug),
         None,
         None,
+        None,
     )
     .unwrap();
 
@@ -392,6 +442,7 @@ fn test_task_show_json_includes_mode_effort() {
         Some(&g_slug),
         Some("plan"),
         Some("small"),
+        None,
     )
     .unwrap();
 
@@ -418,6 +469,7 @@ fn test_task_list_filters_by_stage() {
         Some(&g_slug),
         None,
         None,
+        None,
     )
     .unwrap();
     let slug_ip = temper_cli::commands::task::create(
@@ -425,6 +477,7 @@ fn test_task_list_filters_by_stage() {
         "myapp",
         "InProg Task",
         Some(&g_slug),
+        None,
         None,
         None,
     )
@@ -466,7 +519,7 @@ fn test_task_list_rejects_invalid_stage() {
 
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::task::create(&config, "myapp", "Task", Some(&g_slug), None, None)
+    temper_cli::commands::task::create(&config, "myapp", "Task", Some(&g_slug), None, None, None)
         .unwrap();
 
     let result =
@@ -486,6 +539,7 @@ fn test_find_task_by_seq_number() {
         "myapp",
         "Seq Lookup",
         Some(&g_slug),
+        None,
         None,
         None,
     )

@@ -1737,7 +1737,6 @@ mod tests {
     // --- Mtime optimization tests ---
 
     #[test]
-    #[test]
     fn rehash_skips_file_when_mtime_matches_and_hashes_complete() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();

@@ -49,11 +49,19 @@ pub fn create(
     validate_doc_type(doc_type)?;
 
     let ctx = require_context(config, context)?;
+    let stdin_content = vault::read_stdin_if_piped();
 
     match doc_type {
         "task" => {
-            let created_slug =
-                crate::actions::task::create(config, &ctx, title, goal, mode, effort)?;
+            let created_slug = crate::actions::task::create(
+                config,
+                &ctx,
+                title,
+                goal,
+                mode,
+                effort,
+                stdin_content.as_deref(),
+            )?;
             if format == "json" {
                 let json = serde_json::json!({
                     "type": "task",
@@ -73,7 +81,6 @@ pub fn create(
             Ok(())
         }
         "session" => {
-            let stdin_content = vault::read_stdin_if_piped();
             crate::commands::session::save(
                 config,
                 Some(title),
@@ -84,19 +91,22 @@ pub fn create(
                 format,
             )
         }
-        "research" => {
-            let stdin_content = vault::read_stdin_if_piped();
-            crate::commands::research::save(
-                config,
-                title,
-                Some(ctx.as_str()),
-                stdin_content.as_deref(),
-                format,
-            )
-        }
-        "concept" | "decision" => {
-            create_simple_resource(config, doc_type, title, &ctx, slug, format)
-        }
+        "research" => crate::commands::research::save(
+            config,
+            title,
+            Some(ctx.as_str()),
+            stdin_content.as_deref(),
+            format,
+        ),
+        "concept" | "decision" => create_simple_resource(
+            config,
+            doc_type,
+            title,
+            &ctx,
+            slug,
+            stdin_content.as_deref(),
+            format,
+        ),
         _ => Err(TemperError::Vault(format!(
             "unsupported resource type for create: {doc_type}"
         ))),
@@ -110,6 +120,7 @@ fn create_simple_resource(
     title: &str,
     context: &str,
     slug_override: Option<&str>,
+    stdin_content: Option<&str>,
     format: &str,
 ) -> Result<()> {
     let today = Local::now().format("%Y-%m-%d").to_string();
@@ -151,8 +162,8 @@ fn create_simple_resource(
     };
 
     // Handle stdin body replacement
-    let content = if let Some(body) = vault::read_stdin_if_piped() {
-        vault::replace_body(&content, &body)
+    let content = if let Some(body) = stdin_content {
+        vault::replace_body(&content, body)
     } else {
         content
     };

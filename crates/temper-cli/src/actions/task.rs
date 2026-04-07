@@ -132,6 +132,7 @@ pub fn create(
     goal_slug: Option<&str>,
     mode: Option<&str>,
     effort: Option<&str>,
+    stdin_content: Option<&str>,
 ) -> Result<String> {
     // Ensure maintenance goal exists if needed
     let gs = match goal_slug {
@@ -185,8 +186,8 @@ pub fn create(
         .render()
         .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
 
-    if let Some(stdin_content) = vault::read_stdin_if_piped() {
-        content.push_str(&stdin_content);
+    if let Some(body) = stdin_content {
+        content.push_str(body);
         content.push('\n');
     }
 
