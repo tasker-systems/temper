@@ -84,6 +84,12 @@ pub enum Commands {
         action: AuthAction,
     },
 
+    /// Manage team membership and access
+    Team {
+        #[command(subcommand)]
+        action: TeamAction,
+    },
+
     /// Add a file, URL, or directory to the vault
     Add {
         /// File path, directory path, URL, or resource UUID (for promotion)
@@ -336,6 +342,31 @@ pub enum AuthAction {
     Logout,
     /// Show current auth status
     Status,
+}
+
+#[derive(Subcommand)]
+pub enum TeamAction {
+    /// Request to join a team (defaults to system access)
+    Join {
+        /// Team slug (default: system gating team)
+        #[arg(long)]
+        team: Option<String>,
+        /// Message for the admin reviewing your request
+        #[arg(long)]
+        message: Option<String>,
+    },
+    /// Check your request or membership status
+    Status {
+        /// Team slug (default: system gating team)
+        #[arg(long)]
+        team: Option<String>,
+    },
+    /// Withdraw a pending request or leave a team
+    Leave {
+        /// Team slug (default: system gating team)
+        #[arg(long)]
+        team: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

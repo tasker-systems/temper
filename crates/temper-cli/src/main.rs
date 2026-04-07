@@ -1,6 +1,7 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, Commands, ContextAction, DoctorAction, ResourceAction, SkillAction, SyncAction,
+    AuthAction, Cli, Commands, ContextAction, DoctorAction, ResourceAction, SkillAction,
+    SyncAction, TeamAction,
 };
 use temper_cli::commands;
 
@@ -258,6 +259,13 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             let context = context.as_deref();
             temper_cli::commands::warmup::run(&config, context, &format)
         }
+        Commands::Team { action } => match action {
+            TeamAction::Join { team: _, message } => {
+                temper_cli::commands::team::join(message.as_deref())
+            }
+            TeamAction::Status { team: _ } => temper_cli::commands::team::status(),
+            TeamAction::Leave { team: _ } => temper_cli::commands::team::leave(),
+        },
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(),
             AuthAction::Token { jwt, provider } => {

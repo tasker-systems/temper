@@ -16,6 +16,7 @@ pub mod skill;
 pub mod status;
 pub mod sync_cmd;
 pub mod task;
+pub mod team;
 pub mod warmup;
 
 use std::borrow::Cow;
