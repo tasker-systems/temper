@@ -24,6 +24,9 @@ sessions, research, or wants to look up / store information across conversations
 | Create a new context | Tool: `create_context` | Mutation — tools only |
 | Check who you are | Tool: `get_profile` | Identity/settings |
 | Audit recent activity | Tool: `list_events` | Debugging, event history |
+| Write content to knowledge base | Tool: `ingest_content` | Creates resource + async content processing |
+| Discover valid document types | Tool: `list_doc_types` | Returns id and name for each type |
+| Update existing content | Tool: `update_resource_content` | Re-processes content for existing resource |
 
 ## Session Start Pattern
 
@@ -68,7 +71,67 @@ Resources return structured data that clients can display and inject directly:
 
 All mutations go through tools. There are no writable resources.
 
-### Creating Resources
+### Creating Content (Recommended)
+
+Use `ingest_content` when you want to write content — not just metadata — to the knowledge
+base. It creates the resource and triggers async content processing (extraction, embedding)
+in one call.
+
+```
+Tool: ingest_content
+Input: {
+  "context_name": "myproject",
+  "doc_type_name": "session",
+  "title": "Human-readable title",
+  "content": "Full markdown content goes here...",
+  "origin_uri": "optional source URL or reference"
+}
+```
+
+The resource is created immediately and returned with a `resource_id`. Content processing
+(embedding for search) happens asynchronously in the background.
+
+**Deduplication**: if a resource with the same content already exists (matched by SHA256
+hash of the markdown body), `ingest_content` returns the existing resource rather than
+creating a duplicate.
+
+### Context handling
+
+If `context_name` does not match an existing context, **do not silently create a new one**.
+Instead, ask the user: "I don't see a context named `{name}`. Would you like me to create
+it, or did you mean one of these: {list existing contexts}?" Use `list_contexts` to fetch
+the current list before asking.
+
+### Discovering Document Types
+
+Use `list_doc_types` to see what document types are available before ingesting content.
+Common types include: `session`, `research`, `concept`, `task`, `goal`. The tool returns
+an id and name for each type.
+
+```
+Tool: list_doc_types
+Input: {}
+```
+
+Pass the `name` field as `doc_type_name` in `ingest_content`.
+
+### Updating Content
+
+Use `update_resource_content` to replace the content of an existing resource. This
+re-triggers async content processing for the updated content.
+
+```
+Tool: update_resource_content
+Input: {
+  "resource_id": "<resource UUID>",
+  "content": "New markdown content..."
+}
+```
+
+### Creating Metadata-Only Resources
+
+`create_resource` creates a resource record without content. Use it only when you need
+the resource shell before content is available. Prefer `ingest_content` in most cases.
 
 ```
 Tool: create_resource
@@ -82,10 +145,9 @@ Input: {
 }
 ```
 
-To find the context ID, either read the context resource or use `list_contexts`.
-The doc type ID comes from the vault's configured document types.
+To find the context UUID, use `list_contexts`. To find the doc type UUID, use `list_doc_types`.
 
-### Updating Resources
+### Updating Metadata
 
 ```
 Tool: update_resource
@@ -120,9 +182,8 @@ Contexts are workspaces that group resources. The typical flow:
 
 - **Resources are read-only and stateless** — they always reflect current state,
   no caching surprises.
-- **Search requires an embedding vector** — the `search` tool expects a
-  768-dimensional float array. If your client doesn't provide embeddings,
-  use `list_resources` with context filtering instead.
+- **Search supports text queries** — the `search` tool accepts a plain text
+  `query` parameter for full-text search. No embedding vector needed.
 - **Pagination** — `list_resources` and `list_events` support `limit` and
   `offset`. Resources listing is capped at 200 items.
 - **Access control is automatic** — you only see resources and contexts your

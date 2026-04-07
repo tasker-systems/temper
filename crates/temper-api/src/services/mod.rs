@@ -1,4 +1,5 @@
 pub mod context_service;
+pub mod doc_type_service;
 pub mod event_service;
 pub mod ingest_service;
 pub mod meta_service;

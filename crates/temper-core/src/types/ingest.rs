@@ -31,6 +31,30 @@ pub struct IngestPayload {
     pub chunks_packed: String,
 }
 
+/// Wire payload for POST /api/content-ingest — markdown content for async
+/// chunk → embed → store processing.
+///
+/// Sent by the MCP `ingest_content` / `update_resource_content` tools to
+/// the TypeScript content-ingest endpoint. Both sides share this type:
+/// Rust via `serde`, TypeScript via ts-rs codegen.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "ingest.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContentIngestRequest {
+    /// UUID of the resource (already created by the MCP tool).
+    pub resource_id: String,
+    /// Markdown content body.
+    pub content: String,
+    /// If true, replaces existing chunks; if false, persists new chunks.
+    pub replace: bool,
+    /// Context UUID — avoids a DB lookup in the workflow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<String>,
+    /// `"sha256:<hex>"` body hash — avoids a DB lookup in the workflow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body_hash: Option<String>,
+}
+
 /// A single chunk with its embedding, serialized via MessagePack inside
 /// `IngestPayload::chunks_packed`.
 #[derive(Debug, Clone, Serialize, Deserialize)]

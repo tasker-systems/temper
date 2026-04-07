@@ -1,4 +1,5 @@
 import type { AuthClaims } from "../packages/temper-cloud/src/auth.js";
+import { logger } from "../packages/temper-cloud/src/logger.js";
 
 export const config = { runtime: "nodejs" };
 
@@ -99,7 +100,7 @@ export default async function handler(req: Request): Promise<Response> {
   try {
     await processUpload(blobFileId, blob.url, resourceId);
   } catch (err) {
-    console.error("Failed to trigger processing workflow:", err);
+    logger.error({ err }, "Failed to trigger processing workflow");
   }
 
   return new Response(

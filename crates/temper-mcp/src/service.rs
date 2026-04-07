@@ -145,6 +145,17 @@ impl TemperMcpService {
         tools::search::search(self, input).await
     }
 
+    #[tool(
+        description = "List all available document types in the knowledge base. Returns id and name for each type. Use these when creating resources to specify the correct doc_type_name."
+    )]
+    async fn list_doc_types(
+        &self,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::doc_types::list_doc_types(self).await
+    }
+
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
     async fn list_contexts(
         &self,
@@ -208,6 +219,30 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
         tools::resources::get_resource_content(self, input).await
+    }
+
+    #[tool(
+        description = "Create a new resource with markdown content. Resolves context and doc_type by name, deduplicates by content hash, and triggers async content processing (chunking, embedding, indexing)."
+    )]
+    async fn ingest_content(
+        &self,
+        Parameters(input): Parameters<tools::ingest::IngestContentInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::ingest_content(self, input, &parts).await
+    }
+
+    #[tool(
+        description = "Update the markdown content of an existing resource. Verifies ownership, updates the content hash, and triggers async re-processing."
+    )]
+    async fn update_resource_content(
+        &self,
+        Parameters(input): Parameters<tools::ingest::UpdateResourceContentInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::update_resource_content(self, input, &parts).await
     }
 
     #[tool(

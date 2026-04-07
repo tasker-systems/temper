@@ -9,6 +9,7 @@
   },
   "routes": [
     { "handle": "filesystem" },
+    { "src": "/api/content-ingest", "dest": "/api/content-ingest" },
     { "src": "/mcp", "dest": "/api/mcp" },
     { "src": "/mcp/(.*)", "dest": "/api/mcp" },
     { "src": "/oauth/(.*)", "dest": "/api/mcp" },

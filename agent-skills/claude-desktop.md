@@ -54,6 +54,9 @@ These are available as function calls during conversation:
 - `search` — semantic search across all resources
 
 **Write operations:**
+- `ingest_content` — write markdown content to the knowledge base (recommended)
+- `update_resource_content` — replace content of an existing resource
+- `list_doc_types` — discover available document types
 - `create_resource` — add a new document to the knowledge base
 - `update_resource` — change a resource's title, slug, or mimetype
 - `delete_resource` — soft-delete a resource
@@ -82,6 +85,14 @@ These are available as function calls during conversation:
 1. Ask Claude to create a resource with your conversation summary
 2. Claude uses `create_resource` to persist it in the right context
 3. The note is available in future sessions via resources
+
+### "Write content to the knowledge base"
+
+1. Use `list_doc_types` to see available document types
+2. Use `list_contexts` to check existing contexts
+3. Ask Claude to use `ingest_content` with your content, context, and doc type
+4. The resource is created immediately and becomes searchable shortly after
+5. Use the returned resource_id to reference the content later
 
 ### "Update my notes"
 
