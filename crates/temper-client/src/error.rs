@@ -11,6 +11,16 @@ pub enum ClientError {
     #[error("forbidden")]
     Forbidden,
 
+    #[error("system access required")]
+    SystemAccessRequired {
+        email: Option<String>,
+        display_name: Option<String>,
+        access_mode: String,
+        join_request_status: Option<String>,
+        request_url: Option<String>,
+        cli_command: Option<String>,
+    },
+
     #[error("{resource} not found")]
     NotFound { resource: String },
 
