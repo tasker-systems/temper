@@ -94,3 +94,19 @@ pub struct Entitlements {
     pub is_admin: bool,
     pub join_request_status: Option<JoinRequestStatus>,
 }
+
+/// Details included in the SystemAccessRequired error response.
+///
+/// SECURITY NOTE: The `email` and `display_name` fields are safe to include
+/// because the caller already proved ownership of this identity through OAuth.
+/// We are reflecting the caller's own profile back — not disclosing another
+/// user's information. Do not add fields that reveal other users' data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemAccessDetails {
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+    pub access_mode: String,
+    pub join_request_status: Option<JoinRequestStatus>,
+    pub request_url: Option<String>,
+    pub cli_command: Option<String>,
+}
