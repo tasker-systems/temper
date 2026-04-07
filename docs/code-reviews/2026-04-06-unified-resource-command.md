@@ -27,7 +27,7 @@
 - [x] **C1. `SessionAction` is dead code in `cli.rs`**
   `SessionAction` (lines 314-351 of `cli.rs`) is defined but never used. Should be removed.
 
-- [ ] **C2. `temper-legacy-id` missing from `SYSTEM_MANAGED_FIELDS` blocklist**
+- [x] **C2. `temper-legacy-id` missing from `SYSTEM_MANAGED_FIELDS` blocklist**
   The spec (line 128-129) says to keep it in the blocklist for `resource update` so old files don't get accidentally modified. Currently omitted from `SYSTEM_MANAGED_FIELDS` in `schema.rs`. Since the field is also removed from `KNOWN_TEMPER_FIELDS` and the base schema, the omission is arguably safe but deviates from spec.
 
 ### Important

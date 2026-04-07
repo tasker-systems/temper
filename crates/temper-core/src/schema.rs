@@ -275,6 +275,7 @@ pub static SYSTEM_MANAGED_FIELDS: &[&str] = &[
     "temper-created",
     "temper-updated",
     "temper-source",
+    "temper-legacy-id",
     "slug",
 ];
 
