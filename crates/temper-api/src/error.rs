@@ -11,6 +11,8 @@ pub enum ApiError {
     Unauthorized(String),
     #[error("Forbidden")]
     Forbidden,
+    #[error("System access required")]
+    SystemAccessRequired,
     #[error("Bad request: {0}")]
     BadRequest(String),
     #[error("Conflict: {0}")]
@@ -38,12 +40,19 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND"),
             ApiError::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN"),
+            ApiError::SystemAccessRequired => (StatusCode::FORBIDDEN, "SYSTEM_ACCESS_REQUIRED"),
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
             ApiError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
         };
 
-        let message = self.to_string();
+        let message = match &self {
+            ApiError::SystemAccessRequired => {
+                "This system requires team membership. Contact your administrator for access."
+                    .to_string()
+            }
+            other => other.to_string(),
+        };
         let status_code = status.as_u16();
 
         match &self {
@@ -55,6 +64,9 @@ impl IntoResponse for ApiError {
             }
             ApiError::Unauthorized(_) | ApiError::Forbidden => {
                 tracing::warn!(status_code, error_code = code, %message, "auth error");
+            }
+            ApiError::SystemAccessRequired => {
+                tracing::info!(status_code, error_code = code, "system access required");
             }
             ApiError::BadRequest(_) => {
                 tracing::warn!(status_code, error_code = code, %message, "bad request");
