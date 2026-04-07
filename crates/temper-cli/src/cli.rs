@@ -264,6 +264,15 @@ pub enum ResourceAction {
         /// Add depends-on reference (repeatable)
         #[arg(long)]
         depends_on: Vec<String>,
+        /// Set extends reference (repeatable)
+        #[arg(long)]
+        extends: Vec<String>,
+        /// Set preceded-by reference (repeatable)
+        #[arg(long)]
+        preceded_by: Vec<String>,
+        /// Set derived-from reference (repeatable)
+        #[arg(long)]
+        derived_from: Vec<String>,
         // --- Task-specific fields ---
         /// Task stage (backlog, in-progress, done, cancelled)
         #[arg(long)]
@@ -309,45 +318,6 @@ pub enum ContextAction {
     },
     /// List configured contexts
     List,
-}
-
-#[derive(Subcommand)]
-pub enum SessionAction {
-    /// Create or update today's session note
-    Save {
-        title: Option<String>,
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long, hide = true)]
-        stdin: bool,
-        /// Print the raw template and exit
-        #[arg(long)]
-        show_template: bool,
-        #[arg(long)]
-        task: Option<String>,
-        #[arg(long)]
-        state: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-    /// List recent sessions
-    List {
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long)]
-        limit: Option<usize>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
-    /// Show a session's raw markdown content
-    Show {
-        /// Session title slug or date-slug suffix (e.g. "fix-temper-init" or "2026-04-04-fix-temper-init")
-        slug: String,
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
-    },
 }
 
 #[derive(Subcommand, Debug)]
