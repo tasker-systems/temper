@@ -8,6 +8,7 @@
 //! (Postgres enums) or add `Serialize, Deserialize` (API enums).
 
 pub mod access;
+pub mod access_gate;
 pub mod api;
 pub mod audit;
 pub mod auth;
@@ -34,6 +35,10 @@ pub mod vault;
 pub mod vault_config;
 
 pub use access::{AccessLevel, AccessScoped, TeamResource};
+pub use access_gate::{
+    Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
+    SystemSettings,
+};
 pub use api::{
     EventListParams, EventRow, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
 };
