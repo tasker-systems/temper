@@ -54,7 +54,7 @@ pub async fn query_api(
         .search()
         .query(embedding, context_name, doc_type, limit)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))
+        .map_err(crate::commands::client_err)
 }
 
 /// Call the search API with a plain text query (no embedding needed).
@@ -69,7 +69,7 @@ pub async fn text_query_api(
         .search()
         .text_query(query, context_name, doc_type, limit)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))
+        .map_err(crate::commands::client_err)
 }
 
 /// Enrich API results with local manifest data.

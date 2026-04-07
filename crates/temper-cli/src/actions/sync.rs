@@ -380,7 +380,7 @@ pub async fn sync_orchestration(
         .sync()
         .status(&request)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let push_count = diff.to_push.len();
     let pull_count = diff.to_pull.len();
@@ -465,7 +465,7 @@ pub async fn sync_orchestration(
         .sync()
         .complete(&complete_req)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     // Step 10: Update manifest timestamp
     manifest.last_sync = Some(complete_resp.last_sync_at);
@@ -498,7 +498,7 @@ pub async fn sync_status_check(
         .sync()
         .status(&request)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))
+        .map_err(crate::commands::client_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -618,14 +618,14 @@ async fn push_resource(
             .ingest()
             .update(Uuid::from(entry_id), &payload)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))?
+            .map_err(crate::commands::client_err)?
     } else {
         // New resource — POST create (also used for provisional entries)
         client
             .ingest()
             .create(&payload)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))?
+            .map_err(crate::commands::client_err)?
     };
 
     // If the server assigned a different resource ID (POST create), remap the
@@ -707,13 +707,13 @@ async fn pull_resource(
         .resources()
         .get(Uuid::from(item.resource_id))
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let content_response = client
         .resources()
         .content(Uuid::from(item.resource_id))
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
 
@@ -880,7 +880,7 @@ async fn merge_and_push_resource(
         .resources()
         .content(Uuid::from(item.resource_id))
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
     let remote_body = &content_response.markdown;
 
     // 3. Run merge pipeline
@@ -915,7 +915,7 @@ async fn merge_and_push_resource(
         .ingest()
         .update(Uuid::from(item.resource_id), &payload)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     // 8. Compute frontmatter hashes from the merged file
     let (pushed_managed_hash, pushed_open_hash) =
@@ -995,7 +995,7 @@ pub async fn sync_refresh(
         .sync()
         .manifest()
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let mut matched = 0;
     let mut added = 0;
@@ -1122,7 +1122,7 @@ pub async fn sync_reset(
         .sync()
         .manifest()
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let mut new_manifest = Manifest::new(old_manifest.device_id.clone());
     let mut matched_by_id = 0;

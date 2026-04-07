@@ -20,13 +20,13 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                 .resources()
                 .get(id)
                 .await
-                .map_err(|e| TemperError::Api(e.to_string()))?;
+                .map_err(crate::commands::client_err)?;
 
             let content_response = client
                 .resources()
                 .content(id)
                 .await
-                .map_err(|e| TemperError::Api(e.to_string()))?;
+                .map_err(crate::commands::client_err)?;
 
             // Check if resource is in manifest (imported).
             let vault_root = crate::config::resolve_vault(None)?;
