@@ -44,6 +44,26 @@ pub struct ResearchTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "concept.md")]
+pub struct ConceptTemplate<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub date: &'a str,
+    pub project: &'a str,
+    pub slug: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "decision.md")]
+pub struct DecisionTemplate<'a> {
+    pub id: &'a str,
+    pub title: &'a str,
+    pub date: &'a str,
+    pub project: &'a str,
+    pub slug: &'a str,
+}
+
+#[derive(Template)]
 #[template(path = "skill.md")]
 pub struct SkillTemplate<'a> {
     pub config_hash: &'a str,
