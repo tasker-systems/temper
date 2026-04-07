@@ -1,12 +1,20 @@
 use axum::extract::State;
 use axum::Json;
 
+use temper_core::types::access_gate::Entitlements;
 use temper_core::types::{Profile, ProfileAuthLink, ProfileUpdateRequest};
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
-use crate::services::profile_service;
+use crate::services::{access_service, profile_service};
 use crate::state::AppState;
+
+#[derive(serde::Serialize)]
+pub struct ProfileWithEntitlements {
+    #[serde(flatten)]
+    pub profile: Profile,
+    pub entitlements: Entitlements,
+}
 
 #[utoipa::path(
     get,
@@ -14,14 +22,21 @@ use crate::state::AppState;
     tag = "Profile",
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Current authenticated profile", body = Profile),
+        (status = 200, description = "Current authenticated profile with entitlements"),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
-pub async fn get(State(state): State<AppState>, auth: AuthUser) -> ApiResult<Json<Profile>> {
-    profile_service::get_by_id(&state.pool, auth.0.profile.id)
-        .await
-        .map(Json)
+pub async fn get(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> ApiResult<Json<ProfileWithEntitlements>> {
+    let profile = profile_service::get_by_id(&state.pool, auth.0.profile.id).await?;
+    let entitlements = access_service::get_entitlements(&state.pool, auth.0.profile.id).await?;
+
+    Ok(Json(ProfileWithEntitlements {
+        profile,
+        entitlements,
+    }))
 }
 
 #[utoipa::path(
