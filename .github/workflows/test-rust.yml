@@ -75,8 +75,13 @@ jobs:
         with:
           prefix-key: test-db-v2
 
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@nextest
+      - name: Install cargo-nextest and cargo-sqlx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,sqlx-cli
+
+      - name: Run migrations
+        run: cargo sqlx migrate run
 
       - name: Run integration & E2E tests
         run: cargo nextest run --workspace --features test-db --locked
