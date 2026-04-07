@@ -133,7 +133,12 @@ pub async fn create_join_request(
     .await?;
 
     // Emit audit event
-    emit_join_request_event(pool, params.profile_id, row.id, "join_request.submitted").await;
+    let payload = JoinRequestEventPayload {
+        join_request_id: row.id,
+        reviewed_by: None,
+        decision_note: None,
+    };
+    emit_join_request_event(pool, params.profile_id, "join_request.submitted", &payload).await;
 
     Ok(row)
 }
@@ -197,7 +202,12 @@ pub async fn withdraw_request(pool: &PgPool, profile_id: Uuid) -> ApiResult<()> 
 
     match result {
         Some(request_id) => {
-            emit_join_request_event(pool, profile_id, request_id, "join_request.withdrawn").await;
+            let payload = JoinRequestEventPayload {
+                join_request_id: request_id,
+                reviewed_by: None,
+                decision_note: None,
+            };
+            emit_join_request_event(pool, profile_id, "join_request.withdrawn", &payload).await;
             Ok(())
         }
         None => Err(ApiError::NotFound),
@@ -309,12 +319,26 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
         .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
 
     // Emit audit event (outside transaction — best-effort)
-    let event_type = if params.decision == JoinRequestStatus::Approved {
-        "join_request.approved"
+    let (event_type, payload) = if params.decision == JoinRequestStatus::Approved {
+        (
+            "join_request.approved",
+            JoinRequestEventPayload {
+                join_request_id: row.id,
+                reviewed_by: Some(params.reviewer_profile_id),
+                decision_note: None,
+            },
+        )
     } else {
-        "join_request.rejected"
+        (
+            "join_request.rejected",
+            JoinRequestEventPayload {
+                join_request_id: row.id,
+                reviewed_by: Some(params.reviewer_profile_id),
+                decision_note: params.decision_note,
+            },
+        )
     };
-    emit_join_request_event(pool, row.requesting_profile_id, row.id, event_type).await;
+    emit_join_request_event(pool, row.requesting_profile_id, event_type, &payload).await;
 
     Ok(row)
 }
@@ -340,24 +364,35 @@ pub async fn get_entitlements(pool: &PgPool, profile_id: Uuid) -> ApiResult<Enti
 // Internal helpers
 // ---------------------------------------------------------------------------
 
+/// Typed payload for join request lifecycle audit events.
+#[derive(serde::Serialize)]
+struct JoinRequestEventPayload {
+    join_request_id: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reviewed_by: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    decision_note: Option<String>,
+}
+
 /// Emit a join request lifecycle event to kb_events (best-effort, no error propagation).
 async fn emit_join_request_event(
     pool: &PgPool,
     profile_id: Uuid,
-    join_request_id: Uuid,
     event_type: &str,
+    payload: &JoinRequestEventPayload,
 ) {
     let event_id = EventId::new();
-    let payload = serde_json::json!({ "join_request_id": join_request_id });
+    let payload_json = serde_json::to_value(payload)
+        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
 
-    let _ = sqlx::query(
+    let _ = sqlx::query!(
         "INSERT INTO kb_events (id, profile_id, device_id, event_type, payload, created)
          VALUES ($1, $2, 'system', $3, $4, now())",
+        event_id as EventId,
+        profile_id,
+        event_type,
+        payload_json,
     )
-    .bind(event_id)
-    .bind(profile_id)
-    .bind(event_type)
-    .bind(payload)
     .execute(pool)
     .await;
 }
