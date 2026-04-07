@@ -14,8 +14,64 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
-        temper_cli::output::error(format!("temper: {e}"));
+        match &e {
+            temper_cli::error::TemperError::SystemAccessRequired(details) => {
+                render_system_access_required(
+                    details.email.as_deref(),
+                    details.join_request_status.as_deref(),
+                    details.request_url.as_deref(),
+                    details.cli_command.as_deref(),
+                );
+            }
+            _ => {
+                temper_cli::output::error(format!("temper: {e}"));
+            }
+        }
         std::process::exit(1);
+    }
+}
+
+fn render_system_access_required(
+    email: Option<&str>,
+    join_request_status: Option<&str>,
+    request_url: Option<&str>,
+    cli_command: Option<&str>,
+) {
+    use temper_cli::output;
+
+    let identity = email.unwrap_or("your account");
+    output::error(format!(
+        "You're signed in as {identity}, but this temper instance\n  requires approved access."
+    ));
+    output::blank();
+
+    match join_request_status {
+        Some("pending") => {
+            output::plain("  Your access request is pending review.");
+            output::hint("  Run `temper team status` to check for updates.");
+        }
+        Some("rejected") => {
+            output::plain("  Your previous request was not approved. You can submit a new one:");
+            if let Some(cmd) = cli_command {
+                output::hint(format!("    {cmd}"));
+            }
+        }
+        Some("withdrawn") => {
+            output::plain("  You withdrew your previous request. Submit a new one:");
+            if let Some(cmd) = cli_command {
+                output::hint(format!("    {cmd}"));
+            }
+        }
+        _ => {
+            output::plain("  To request access, run:");
+            if let Some(cmd) = cli_command {
+                output::hint(format!("    {cmd}"));
+            }
+            if let Some(url) = request_url {
+                output::blank();
+                output::plain(format!("  Or visit: {url}"));
+            }
+        }
     }
 }
 
