@@ -284,6 +284,8 @@ calls to these functions the same way `ingest_content` does today.
 
 ## 7. Files Changed
 
+### Rust (MCP + service layer)
+
 | File | Change |
 |------|--------|
 | `crates/temper-mcp/src/tools/resources.rs` | Rewrite — new input structs, consolidated handlers with name resolution |
@@ -293,6 +295,16 @@ calls to these functions the same way `ingest_content` does today.
 | `crates/temper-api/src/services/resource_service.rs` | Add `get_by_slug`, add doc_type_id filter to `list_visible` |
 | `crates/temper-api/src/services/doc_type_service.rs` | Add `get_name` or `get_by_id` if needed for enrichment |
 | `crates/temper-core/src/types/resource.rs` | Update `ResourceListParams` if we want the doc_type filter at the type level (optional — MCP handler can resolve before calling) |
+
+### Documentation (agent-skills + UI)
+
+| File | Change |
+|------|--------|
+| `agent-skills/knowledge-base.md` | Rewrite tool reference: remove `ingest_content`, `update_resource_content`, `get_resource_content`; update `create_resource`, `get_resource`, `update_resource`, `list_resources` to reflect name-based params and content support |
+| `agent-skills/claude-desktop.md` | Update tool list in "Tools (Query & Mutate)" section to match consolidated tools; update workflow examples to use unified `create_resource` instead of `ingest_content` |
+| `agent-skills/SKILL.md` | Update the cloud access note referencing `ingest_content` to reference `create_resource` with content |
+| `packages/temper-ui/src/routes/docs/+page.svelte` | Update "Available Tools" table in MCP Server section — remove `get_resource_content`, update descriptions for consolidated tools, add `list_doc_types` |
+| `packages/temper-ui/src/routes/agents/+page.svelte` | Update MCP tool references if any tool names appear in the demo transcripts (currently shows conceptual `temper.search` / `temper.warmup` calls — verify accuracy) |
 
 ## 8. What's NOT Changing
 
