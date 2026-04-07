@@ -13,7 +13,7 @@ pub fn event_context(event: &Event) -> &str {
         | Event::GoalCreate { context, .. }
         | Event::GoalUpdate { context, .. } => context,
         Event::Normalize { project, .. } => project.as_deref().unwrap_or("general"),
-        Event::ResourceCreate { context, .. } => context,
+        Event::ResourceCreate { context, .. } | Event::ResourceUpdate { context, .. } => context,
     }
 }
 
@@ -106,6 +106,12 @@ fn format_event(event: &Event) -> String {
             context,
             ..
         } => format!("{ts}  {context:<12}  resource_create  {doc_type}: {title}"),
+        Event::ResourceUpdate {
+            ts,
+            doc_type,
+            slug,
+            context,
+        } => format!("{ts}  {context:<12}  resource_update  {doc_type}: {slug}"),
     }
 }
 

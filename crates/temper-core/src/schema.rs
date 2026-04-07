@@ -264,6 +264,86 @@ pub fn compute_frontmatter_hashes(frontmatter: &serde_yaml::Value) -> (String, S
 }
 
 // ---------------------------------------------------------------------------
+// Updatable field helpers
+// ---------------------------------------------------------------------------
+
+/// Fields that are system-managed and cannot be updated via CLI.
+pub static SYSTEM_MANAGED_FIELDS: &[&str] = &[
+    "temper-id",
+    "temper-provisional-id",
+    "temper-type",
+    "temper-created",
+    "temper-updated",
+    "temper-source",
+    "slug",
+];
+
+/// Get the updatable field names for a doctype by reading the schema properties
+/// and excluding system-managed fields.
+pub fn updatable_fields(doc_type: &str) -> Result<Vec<(String, serde_json::Value)>> {
+    let schema_str = match doc_type {
+        "task" => TASK_SCHEMA,
+        "goal" => GOAL_SCHEMA,
+        "session" => SESSION_SCHEMA,
+        "research" => RESEARCH_SCHEMA,
+        "decision" => DECISION_SCHEMA,
+        "concept" => CONCEPT_SCHEMA,
+        other => return Err(TemperError::Config(format!("unknown doctype '{other}'"))),
+    };
+
+    let schema: serde_json::Value = serde_json::from_str(schema_str)
+        .map_err(|e| TemperError::Config(format!("schema parse error: {e}")))?;
+
+    let mut fields = Vec::new();
+
+    if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (key, value) in props {
+            if !SYSTEM_MANAGED_FIELDS.contains(&key.as_str()) {
+                fields.push((key.clone(), value.clone()));
+            }
+        }
+    }
+
+    Ok(fields)
+}
+
+/// Validate a field value against a schema property definition.
+pub fn validate_field_value(
+    field_name: &str,
+    value: &str,
+    schema_prop: &serde_json::Value,
+) -> Option<String> {
+    // Check enum constraint
+    if let Some(enum_values) = schema_prop.get("enum") {
+        if let Some(arr) = enum_values.as_array() {
+            let valid: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect();
+            if !valid.contains(&value.to_string()) {
+                return Some(format!(
+                    "invalid value '{}' for --{}; expected one of: {}",
+                    value,
+                    field_name.strip_prefix("temper-").unwrap_or(field_name),
+                    valid.join(", ")
+                ));
+            }
+        }
+    }
+    // Check type constraint
+    if let Some(type_val) = schema_prop.get("type") {
+        if type_val == "integer" && value.parse::<i64>().is_err() {
+            return Some(format!(
+                "invalid value '{}' for --{}; expected integer",
+                value,
+                field_name.strip_prefix("temper-").unwrap_or(field_name),
+            ));
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
