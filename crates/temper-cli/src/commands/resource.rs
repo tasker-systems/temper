@@ -114,9 +114,14 @@ fn create_simple_resource(
 ) -> Result<()> {
     let today = Local::now().format("%Y-%m-%d").to_string();
     let id = crate::ids::generate_id();
+    let base_slug = vault::slugify(title);
     let slug = match slug_override {
         Some(s) => s.to_string(),
-        None => format!("{today}-{}", vault::slugify(title)),
+        // Concepts are identified by name (no date prefix); decisions get date prefix
+        None => match doc_type {
+            "concept" => base_slug,
+            _ => format!("{today}-{base_slug}"),
+        },
     };
 
     let content = match doc_type {
@@ -503,58 +508,66 @@ fn find_resource_file(
     Ok((path, ctx))
 }
 
+/// Parameters for resource update.
+pub struct UpdateParams<'a> {
+    pub slug: &'a str,
+    pub doc_type: Option<&'a str>,
+    pub type_from: Option<&'a str>,
+    pub type_to: Option<&'a str>,
+    pub context: Option<&'a str>,
+    pub context_to: Option<&'a str>,
+    // Base schema fields
+    pub title: Option<&'a str>,
+    pub tags: &'a [String],
+    pub aliases: &'a [String],
+    pub relates_to: &'a [String],
+    pub references: &'a [String],
+    pub depends_on: &'a [String],
+    pub extends: &'a [String],
+    pub preceded_by: &'a [String],
+    pub derived_from: &'a [String],
+    // Task-specific fields
+    pub stage: Option<&'a str>,
+    pub mode: Option<&'a str>,
+    pub effort: Option<&'a str>,
+    pub goal: Option<&'a str>,
+    pub seq: Option<i64>,
+    pub branch: Option<&'a str>,
+    pub pr: Option<&'a str>,
+    // Goal-specific fields
+    pub status: Option<&'a str>,
+}
+
 /// Update a resource's frontmatter fields.
-#[allow(clippy::too_many_arguments)]
-pub fn update(
-    config: &Config,
-    slug: &str,
-    doc_type: Option<&str>,
-    type_from: Option<&str>,
-    type_to: Option<&str>,
-    context: Option<&str>,
-    context_to: Option<&str>,
-    title: Option<&str>,
-    tags: &[String],
-    aliases: &[String],
-    relates_to: &[String],
-    references: &[String],
-    depends_on: &[String],
-    stage: Option<&str>,
-    mode: Option<&str>,
-    effort: Option<&str>,
-    goal: Option<&str>,
-    seq: Option<i64>,
-    branch: Option<&str>,
-    pr: Option<&str>,
-    status: Option<&str>,
-) -> Result<()> {
+pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // Resolve current type from --type or --type-from (one is required)
-    let current_type = doc_type
-        .or(type_from)
-        .ok_or_else(|| TemperError::Vault("--type or --type-from is required".into()))?;
+    let current_type = params
+        .doc_type
+        .or(params.type_from)
+        .ok_or_else(|| TemperError::Project("--type or --type-from is required".into()))?;
     validate_doc_type(current_type)?;
 
-    if let Some(tt) = type_to {
+    if let Some(tt) = params.type_to {
         validate_doc_type(tt)?;
     }
 
     // Find the resource file
-    let (path, ctx) = find_resource_file(config, current_type, slug, context)?;
+    let (path, ctx) = find_resource_file(config, current_type, params.slug, params.context)?;
 
     // Load updatable fields from schema for validation
     let schema_fields = schema::updatable_fields(current_type)?;
 
     // Build list of scalar field updates: (frontmatter_key, value)
     let scalar_updates: Vec<(&str, String)> = [
-        ("title", title.map(String::from)),
-        ("temper-stage", stage.map(String::from)),
-        ("temper-mode", mode.map(String::from)),
-        ("temper-effort", effort.map(String::from)),
-        ("temper-goal", goal.map(String::from)),
-        ("temper-branch", branch.map(String::from)),
-        ("temper-pr", pr.map(String::from)),
-        ("temper-status", status.map(String::from)),
-        ("temper-seq", seq.map(|s| s.to_string())),
+        ("title", params.title.map(String::from)),
+        ("temper-stage", params.stage.map(String::from)),
+        ("temper-mode", params.mode.map(String::from)),
+        ("temper-effort", params.effort.map(String::from)),
+        ("temper-goal", params.goal.map(String::from)),
+        ("temper-branch", params.branch.map(String::from)),
+        ("temper-pr", params.pr.map(String::from)),
+        ("temper-status", params.status.map(String::from)),
+        ("temper-seq", params.seq.map(|s| s.to_string())),
     ]
     .into_iter()
     .filter_map(|(k, v)| v.map(|val| (k, val)))
@@ -594,23 +607,26 @@ pub fn update(
 
     // Apply array field appends
     let array_updates: Vec<(&str, &[String])> = vec![
-        ("tags", tags),
-        ("aliases", aliases),
-        ("relates_to", relates_to),
-        ("references", references),
-        ("depends_on", depends_on),
+        ("tags", params.tags),
+        ("aliases", params.aliases),
+        ("relates-to", params.relates_to),
+        ("references", params.references),
+        ("depends-on", params.depends_on),
+        ("extends", params.extends),
+        ("preceded-by", params.preceded_by),
+        ("derived-from", params.derived_from),
     ];
     for (field_name, values) in &array_updates {
         for value in *values {
-            content = append_frontmatter_array(&content, field_name, value);
+            content = vault::append_frontmatter_array(&content, field_name, value);
         }
     }
 
     // Handle --context-to (move file to new context dir, update temper-context)
     let final_ctx;
     let mut final_path = path.clone();
-    if let Some(new_ctx) = context_to {
-        let new_dir = config.doc_type_dir(new_ctx, type_to.unwrap_or(current_type));
+    if let Some(new_ctx) = params.context_to {
+        let new_dir = config.doc_type_dir(new_ctx, params.type_to.unwrap_or(current_type));
         std::fs::create_dir_all(&new_dir)?;
         let filename = path
             .file_name()
@@ -624,8 +640,8 @@ pub fn update(
     }
 
     // Handle --type-to (move file to new type dir, update temper-type)
-    if let Some(new_type) = type_to {
-        let target_ctx = context_to.unwrap_or(&final_ctx);
+    if let Some(new_type) = params.type_to {
+        let target_ctx = params.context_to.unwrap_or(&final_ctx);
         let new_dir = config.doc_type_dir(target_ctx, new_type);
         std::fs::create_dir_all(&new_dir)?;
         let filename = final_path
@@ -658,7 +674,7 @@ pub fn update(
     // Emit ResourceUpdate discovery event
     let event = Event::ResourceUpdate {
         ts: datetime,
-        doc_type: type_to.unwrap_or(current_type).to_string(),
+        doc_type: params.type_to.unwrap_or(current_type).to_string(),
         slug: final_slug.clone(),
         context: final_ctx.clone(),
     };
@@ -673,77 +689,87 @@ pub fn update(
     Ok(())
 }
 
-/// Append a value to a YAML array field in frontmatter.
-///
-/// If the field exists, appends `\n  - value` after the field marker.
-/// If the field doesn't exist, inserts it before the closing `---`.
-fn append_frontmatter_array(content: &str, field: &str, value: &str) -> String {
-    let field_marker = format!("{field}:");
-    if content.contains(&format!("\n{field_marker}")) || content.starts_with(&field_marker) {
-        // Field exists — find it and append after the last list item or inline
-        let lines: Vec<&str> = content.lines().collect();
-        let mut result = Vec::with_capacity(lines.len() + 1);
-        let mut in_frontmatter = false;
-        let mut found_field = false;
-        let mut inserted = false;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        for (i, line) in lines.iter().enumerate() {
-            result.push(line.to_string());
+    // -------------------------------------------------------------------------
+    // extract_date_prefix tests
+    // -------------------------------------------------------------------------
 
-            if line.trim() == "---" {
-                in_frontmatter = !in_frontmatter;
-                continue;
-            }
+    #[test]
+    fn extract_date_prefix_valid() {
+        assert_eq!(
+            extract_date_prefix("2026-04-06-my-slug"),
+            Some("2026-04-06".to_string())
+        );
+    }
 
-            if in_frontmatter && line.starts_with(&field_marker) {
-                found_field = true;
-                // Check if next lines are list items
-                let mut last_list_idx = i;
-                for j in (i + 1)..lines.len() {
-                    if lines[j].starts_with("  - ") {
-                        last_list_idx = j;
-                    } else {
-                        break;
-                    }
-                }
-                if last_list_idx == i {
-                    // No existing list items, insert right after field line
-                    result.push(format!("  - {value}"));
-                    inserted = true;
-                }
-            }
+    #[test]
+    fn extract_date_prefix_no_date() {
+        assert_eq!(extract_date_prefix("my-slug"), None);
+    }
 
-            if found_field && !inserted && line.starts_with("  - ") {
-                // Check if next line is NOT a list item — insert after this one
-                let next = lines.get(i + 1);
-                if next.is_none_or(|n| !n.starts_with("  - ")) {
-                    result.push(format!("  - {value}"));
-                    inserted = true;
-                }
-            }
+    #[test]
+    fn extract_date_prefix_too_short() {
+        assert_eq!(extract_date_prefix("2026-04"), None);
+    }
+
+    #[test]
+    fn extract_date_prefix_invalid_separators() {
+        assert_eq!(extract_date_prefix("2026x04x06-slug"), None);
+    }
+
+    #[test]
+    fn extract_date_prefix_non_digit_year() {
+        assert_eq!(extract_date_prefix("abcd-ef-gh-slug"), None);
+    }
+
+    #[test]
+    fn extract_date_prefix_exactly_10_chars_returns_date() {
+        // Exactly 10 chars with valid date format should return Some
+        assert_eq!(
+            extract_date_prefix("2026-04-06"),
+            Some("2026-04-06".to_string())
+        );
+    }
+
+    #[test]
+    fn extract_date_prefix_non_digit_month() {
+        assert_eq!(extract_date_prefix("2026-ab-06-slug"), None);
+    }
+
+    // -------------------------------------------------------------------------
+    // validate_doc_type tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn validate_doc_type_valid_types() {
+        for doc_type in &["task", "goal", "session", "research", "concept", "decision"] {
+            assert!(
+                validate_doc_type(doc_type).is_ok(),
+                "expected '{doc_type}' to be valid"
+            );
         }
+    }
 
-        let joined = result.join("\n");
-        if content.ends_with('\n') {
-            joined + "\n"
-        } else {
-            joined
-        }
-    } else {
-        // Field doesn't exist — insert before closing ---
-        let trimmed_start = if content.trim_start().starts_with("---") {
-            content.find("---").unwrap_or(0) + 3
-        } else {
-            0
-        };
-        if let Some(close_pos) = content[trimmed_start..].find("\n---") {
-            let insert_at = trimmed_start + close_pos;
-            let new_field = format!("\n{field}:\n  - {value}");
-            let mut result = content.to_string();
-            result.insert_str(insert_at, &new_field);
-            result
-        } else {
-            content.to_string()
-        }
+    #[test]
+    fn validate_doc_type_invalid_returns_error() {
+        let result = validate_doc_type("foo");
+        assert!(result.is_err(), "expected 'foo' to be invalid");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("invalid resource type"),
+            "error should mention invalid resource type: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("foo"),
+            "error should include the invalid value: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn validate_doc_type_empty_string_returns_error() {
+        assert!(validate_doc_type("").is_err());
     }
 }

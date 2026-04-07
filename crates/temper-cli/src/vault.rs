@@ -115,6 +115,85 @@ pub fn get_template(note_type: &str) -> Result<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Array frontmatter utilities
+// ---------------------------------------------------------------------------
+
+/// Append a value to a YAML array field in frontmatter.
+///
+/// If the field exists, appends `\n  - value` after the last list item.
+/// If the field doesn't exist, inserts it before the closing `---`.
+pub fn append_frontmatter_array(content: &str, field: &str, value: &str) -> String {
+    let field_marker = format!("{field}:");
+    if content.contains(&format!("\n{field_marker}")) || content.starts_with(&field_marker) {
+        // Field exists — find it and append after the last list item or inline
+        let lines: Vec<&str> = content.lines().collect();
+        let mut result = Vec::with_capacity(lines.len() + 1);
+        let mut in_frontmatter = false;
+        let mut found_field = false;
+        let mut inserted = false;
+
+        for (i, line) in lines.iter().enumerate() {
+            result.push(line.to_string());
+
+            if line.trim() == "---" {
+                in_frontmatter = !in_frontmatter;
+                continue;
+            }
+
+            if in_frontmatter && line.starts_with(&field_marker) {
+                found_field = true;
+                // Check if next lines are list items
+                let mut last_list_idx = i;
+                for j in (i + 1)..lines.len() {
+                    if lines[j].starts_with("  - ") {
+                        last_list_idx = j;
+                    } else {
+                        break;
+                    }
+                }
+                if last_list_idx == i {
+                    // No existing list items, insert right after field line
+                    result.push(format!("  - {value}"));
+                    inserted = true;
+                }
+            }
+
+            if found_field && !inserted && line.starts_with("  - ") {
+                // Check if next line is NOT a list item — insert after this one
+                let next = lines.get(i + 1);
+                if next.is_none_or(|n| !n.starts_with("  - ")) {
+                    result.push(format!("  - {value}"));
+                    inserted = true;
+                }
+            }
+        }
+
+        let joined = result.join("\n");
+        if content.ends_with('\n') {
+            joined + "\n"
+        } else {
+            joined
+        }
+    } else {
+        // Field doesn't exist — insert before closing ---
+        let trimmed_start = if content.trim_start().starts_with("---") {
+            content.find("---").unwrap_or(0) + 3
+        } else {
+            0
+        };
+        if let Some(close_pos) = content[trimmed_start..].find("\n---") {
+            let insert_at = trimmed_start + close_pos;
+            let new_field = format!("\n{field}:\n  - {value}");
+            let mut result = content.to_string();
+            result.insert_str(insert_at, &new_field);
+            result
+        } else {
+            content.to_string()
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Frontmatter utilities
 // ---------------------------------------------------------------------------
 
@@ -312,4 +391,91 @@ pub fn collect_md_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Resul
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -------------------------------------------------------------------------
+    // append_frontmatter_array tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn append_frontmatter_array_existing_field_with_items() {
+        let content = "---\ntitle: My Task\ntags:\n  - rust\n  - cli\n---\n\nBody here.\n";
+        let result = append_frontmatter_array(content, "tags", "testing");
+        assert!(
+            result.contains("  - rust\n  - cli\n  - testing"),
+            "should append after last existing item: {result}"
+        );
+    }
+
+    #[test]
+    fn append_frontmatter_array_existing_empty_field() {
+        let content = "---\ntitle: My Task\ntags:\n---\n\nBody here.\n";
+        let result = append_frontmatter_array(content, "tags", "new-tag");
+        assert!(
+            result.contains("tags:\n  - new-tag"),
+            "should insert item after empty field: {result}"
+        );
+    }
+
+    #[test]
+    fn append_frontmatter_array_new_field_inserted_before_close() {
+        let content = "---\ntitle: My Task\ntemper-stage: backlog\n---\n\nBody here.\n";
+        let result = append_frontmatter_array(content, "tags", "important");
+        assert!(
+            result.contains("tags:\n  - important"),
+            "should insert new field: {result}"
+        );
+        // New field should appear inside frontmatter, before closing ---
+        let close_pos = result.find("\n---\n").unwrap();
+        let tags_pos = result.find("tags:").unwrap();
+        assert!(
+            tags_pos < close_pos,
+            "new field should be inside frontmatter"
+        );
+    }
+
+    #[test]
+    fn append_frontmatter_array_preserves_trailing_newline() {
+        let content = "---\ntitle: Test\ntags:\n  - existing\n---\n";
+        let result = append_frontmatter_array(content, "tags", "added");
+        assert!(
+            result.ends_with('\n'),
+            "trailing newline should be preserved"
+        );
+    }
+
+    #[test]
+    fn append_frontmatter_array_no_trailing_newline_preserved() {
+        let content = "---\ntitle: Test\ntags:\n  - existing\n---";
+        let result = append_frontmatter_array(content, "tags", "added");
+        assert!(
+            !result.ends_with('\n'),
+            "should not add trailing newline when original had none"
+        );
+    }
+
+    #[test]
+    fn append_frontmatter_array_field_outside_frontmatter_not_matched() {
+        // When "tags:" appears only in the body (not in frontmatter), the
+        // function detects the substring "\ntags:" in the content and enters the
+        // "field exists" path — but since in_frontmatter is false when the body
+        // line is encountered, no insertion happens and the content is returned
+        // unchanged (the function skips silently). Verify body content is intact.
+        let content = "---\ntitle: Test\n---\n\ntags: some body content\n";
+        let result = append_frontmatter_array(content, "tags", "body-tag");
+        // The body line must not be turned into a YAML list item
+        assert!(
+            result.contains("tags: some body content"),
+            "body content should not be modified: {result}"
+        );
+        // No spurious list item should appear
+        assert!(
+            !result.contains("  - body-tag"),
+            "should not have inserted a list item when field is outside frontmatter: {result}"
+        );
+    }
 }

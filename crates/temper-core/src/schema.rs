@@ -360,6 +360,155 @@ fn hash_map(fields: &BTreeMap<String, serde_json::Value>) -> String {
 mod tests {
     use super::*;
 
+    // -------------------------------------------------------------------------
+    // validate_field_value tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn validate_field_value_valid_enum() {
+        let schema_prop = serde_json::json!({
+            "type": "string",
+            "enum": ["backlog", "in-progress", "done", "cancelled"]
+        });
+        assert_eq!(
+            validate_field_value("temper-stage", "in-progress", &schema_prop),
+            None,
+            "valid enum value should return None"
+        );
+    }
+
+    #[test]
+    fn validate_field_value_invalid_enum() {
+        let schema_prop = serde_json::json!({
+            "type": "string",
+            "enum": ["backlog", "in-progress", "done", "cancelled"]
+        });
+        let result = validate_field_value("temper-stage", "invalid", &schema_prop);
+        assert!(
+            result.is_some(),
+            "invalid enum value should return Some(error)"
+        );
+        let msg = result.unwrap();
+        assert!(
+            msg.contains("invalid"),
+            "error message should include the bad value: {msg}"
+        );
+        assert!(
+            msg.contains("stage"),
+            "error message should include the field name (without temper- prefix): {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_field_value_valid_integer() {
+        let schema_prop = serde_json::json!({ "type": "integer", "minimum": 0 });
+        assert_eq!(
+            validate_field_value("temper-seq", "42", &schema_prop),
+            None,
+            "valid integer string should return None"
+        );
+    }
+
+    #[test]
+    fn validate_field_value_invalid_integer() {
+        let schema_prop = serde_json::json!({ "type": "integer", "minimum": 0 });
+        let result = validate_field_value("temper-seq", "abc", &schema_prop);
+        assert!(
+            result.is_some(),
+            "non-integer string should return Some(error)"
+        );
+        let msg = result.unwrap();
+        assert!(
+            msg.contains("integer"),
+            "error should mention 'integer': {msg}"
+        );
+    }
+
+    #[test]
+    fn validate_field_value_no_constraints_accepts_any() {
+        let schema_prop = serde_json::json!({ "type": "string" });
+        assert_eq!(
+            validate_field_value("temper-goal", "anything-goes", &schema_prop),
+            None,
+            "field with no enum/integer constraint should always return None"
+        );
+    }
+
+    #[test]
+    fn validate_field_value_empty_schema_accepts_any() {
+        let schema_prop = serde_json::json!({});
+        assert_eq!(
+            validate_field_value("title", "Some title", &schema_prop),
+            None
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // updatable_fields tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn updatable_fields_task_includes_expected_fields() {
+        let fields = updatable_fields("task").expect("task schema should load");
+        let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"temper-stage"),
+            "task should have temper-stage"
+        );
+        assert!(
+            names.contains(&"temper-mode"),
+            "task should have temper-mode"
+        );
+        assert!(
+            names.contains(&"temper-effort"),
+            "task should have temper-effort"
+        );
+    }
+
+    #[test]
+    fn updatable_fields_task_excludes_system_managed() {
+        let fields = updatable_fields("task").expect("task schema should load");
+        let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+        for system_field in SYSTEM_MANAGED_FIELDS {
+            assert!(
+                !names.contains(system_field),
+                "system-managed field '{system_field}' should not be in updatable fields"
+            );
+        }
+    }
+
+    #[test]
+    fn updatable_fields_goal_includes_status() {
+        let fields = updatable_fields("goal").expect("goal schema should load");
+        let names: Vec<&str> = fields.iter().map(|(n, _)| n.as_str()).collect();
+        assert!(
+            names.contains(&"temper-status"),
+            "goal should have temper-status"
+        );
+    }
+
+    #[test]
+    fn updatable_fields_session_has_fewer_than_task() {
+        let task_fields = updatable_fields("task").expect("task schema should load");
+        let session_fields = updatable_fields("session").expect("session schema should load");
+        assert!(
+            task_fields.len() > session_fields.len(),
+            "task should have more updatable fields than session (got task={}, session={})",
+            task_fields.len(),
+            session_fields.len()
+        );
+    }
+
+    #[test]
+    fn updatable_fields_unknown_doctype_returns_error() {
+        let result = updatable_fields("unknown-type");
+        assert!(result.is_err(), "unknown doctype should return an error");
+    }
+
+    // -------------------------------------------------------------------------
+    // Existing test preserved below
+    // -------------------------------------------------------------------------
+
     #[test]
     fn test_identity_fields_excluded_from_managed_hash() {
         // temper-id and temper-provisional-id are identity fields tracked
