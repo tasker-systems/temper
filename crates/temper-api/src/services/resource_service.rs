@@ -98,6 +98,38 @@ pub async fn get_visible(
     Ok(row)
 }
 
+/// Get a single resource by slug within a context, scoped to profile visibility.
+pub async fn get_by_slug(
+    pool: &PgPool,
+    profile_id: Uuid,
+    slug: &str,
+    context_id: Uuid,
+) -> ApiResult<ResourceRow> {
+    let row = sqlx::query_as!(
+        ResourceRow,
+        r#"
+        WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
+        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
+               r.slug,
+               r.originator_profile_id, r.owner_profile_id, r.is_active,
+               r.created, r.updated
+          FROM kb_resources r
+          JOIN visible v ON v.resource_id = r.id
+         WHERE r.slug = $2
+           AND r.kb_context_id = $3
+           AND r.is_active = true
+        "#,
+        profile_id,
+        slug,
+        context_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    Ok(row)
+}
+
 /// Reconstitute resource content from `kb_current_chunks`, returning markdown.
 pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiResult<String> {
     // Visibility check first.
