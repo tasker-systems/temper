@@ -41,7 +41,7 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const { resource_id, content, replace } = validation.payload;
+  const { resource_id, content, replace, context_id, body_hash } = validation.payload;
 
   // Verify the caller can modify this resource (defense-in-depth — MCP tool
   // already checks, but this endpoint is HTTP-accessible)
@@ -58,7 +58,7 @@ export default async function handler(req: Request): Promise<Response> {
   // Trigger the processing workflow. If the workflow fails to start,
   // we still return 202 since the request was accepted.
   try {
-    await processContentIngest(resource_id, content, replace, auth.profileId);
+    await processContentIngest(resource_id, content, replace, auth.profileId, context_id, body_hash);
   } catch (err) {
     console.error("Failed to trigger content processing workflow:", err);
   }

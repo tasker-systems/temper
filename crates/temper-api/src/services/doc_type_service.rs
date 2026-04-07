@@ -9,13 +9,14 @@ use crate::error::ApiResult;
 pub struct DocTypeRow {
     pub id: uuid::Uuid,
     pub name: String,
+    pub description: Option<String>,
 }
 
 /// List all system-level document types.
 pub async fn list_all(pool: &PgPool) -> ApiResult<Vec<DocTypeRow>> {
     let rows = sqlx::query_as!(
         DocTypeRow,
-        r#"SELECT id, name FROM kb_doc_types ORDER BY name"#,
+        r#"SELECT id, name, description FROM kb_doc_types ORDER BY name"#,
     )
     .fetch_all(pool)
     .await?;

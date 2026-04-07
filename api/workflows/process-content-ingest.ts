@@ -16,6 +16,8 @@ export async function processContentIngest(
   content: string,
   replace: boolean,
   profileId: string,
+  contextId?: string,
+  bodyHash?: string,
 ) {
   "use workflow";
 
@@ -24,7 +26,7 @@ export async function processContentIngest(
   );
   const chunks = await chunkStep(content);
   const embeddings = await embedStep(chunks.map((c) => c.content));
-  await storeStep(resourceId, chunks, embeddings, replace, profileId);
+  await storeStep(resourceId, chunks, embeddings, replace, profileId, contextId, bodyHash);
 }
 
 async function chunkStep(
@@ -63,6 +65,8 @@ async function storeStep(
   embeddings: number[][],
   replace: boolean,
   profileId: string,
+  passedContextId?: string,
+  passedBodyHash?: string,
 ): Promise<void> {
   "use step";
 
@@ -91,31 +95,42 @@ async function storeStep(
   }
 
   // Fire body_processed event
-  const contextRows =
-    await db`SELECT kb_context_id FROM kb_resources WHERE id = ${resourceId}::uuid`;
-  if (contextRows.length > 0) {
-    const contextId = contextRows[0].kb_context_id as string;
-    const emptyHash = canonicalJsonHash({});
+  const emptyHash = canonicalJsonHash({});
 
+  // Use passed values if available, otherwise fall back to DB queries
+  let contextId = passedContextId;
+  let bodyHash = passedBodyHash;
+
+  if (!contextId) {
+    const contextRows =
+      await db`SELECT kb_context_id FROM kb_resources WHERE id = ${resourceId}::uuid`;
+    if (contextRows.length === 0) {
+      console.log(`[content-ingest:store] Done for resource ${resourceId}`);
+      return;
+    }
+    contextId = contextRows[0].kb_context_id as string;
+  }
+
+  if (!bodyHash) {
     const manifestRows =
       await db`SELECT body_hash FROM kb_resource_manifests WHERE resource_id = ${resourceId}::uuid`;
-    const bodyHash =
+    bodyHash =
       manifestRows.length > 0
         ? (manifestRows[0].body_hash as string)
         : emptyHash;
-
-    await insertEventAndAudit(db, {
-      profileId,
-      deviceId: DEVICE_ID_CLOUD,
-      contextId,
-      resourceId,
-      eventType: "body_processed",
-      action: "process_content",
-      bodyHash,
-      managedHash: emptyHash,
-      openHash: emptyHash,
-    });
   }
+
+  await insertEventAndAudit(db, {
+    profileId,
+    deviceId: DEVICE_ID_CLOUD,
+    contextId,
+    resourceId,
+    eventType: "body_processed",
+    action: "process_content",
+    bodyHash,
+    managedHash: emptyHash,
+    openHash: emptyHash,
+  });
 
   console.log(`[content-ingest:store] Done for resource ${resourceId}`);
 }

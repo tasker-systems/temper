@@ -4,6 +4,8 @@ export const ContentIngestSchema = z.object({
   resource_id: z.string().uuid(),
   content: z.string().min(1),
   replace: z.boolean(),
+  context_id: z.string().uuid().optional(),
+  body_hash: z.string().optional(),
 });
 
 export type ContentIngestPayload = z.infer<typeof ContentIngestSchema>;

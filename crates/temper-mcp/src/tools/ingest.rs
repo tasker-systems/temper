@@ -68,6 +68,8 @@ fn spawn_content_ingest_post(
     content: String,
     replace: bool,
     bearer_token: Option<String>,
+    context_id: String,
+    body_hash: String,
 ) {
     tokio::spawn(async move {
         let base_url = match std::env::var("MCP_BASE_URL") {
@@ -84,6 +86,8 @@ fn spawn_content_ingest_post(
             "resource_id": resource_id,
             "content": content,
             "replace": replace,
+            "context_id": context_id,
+            "body_hash": body_hash,
         }));
 
         if let Some(token) = bearer_token {
@@ -214,7 +218,14 @@ pub async fn ingest_content(
 
     // 6. Fire-and-forget POST to content-ingest
     let bearer_token = extract_bearer_token(parts);
-    spawn_content_ingest_post(resource.id, input.content, false, bearer_token);
+    spawn_content_ingest_post(
+        resource.id,
+        input.content,
+        false,
+        bearer_token,
+        context.id.to_string(),
+        body_hash,
+    );
 
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&serde_json::json!({
@@ -264,7 +275,7 @@ pub async fn update_resource_content(
 
     // 3. Get the resource row (need kb_context_id for event)
     let resource =
-        temper_api::services::resource_service::get_visible(pool, *profile_id, input.resource_id)
+        temper_api::services::resource_service::get_visible(pool, *profile_id, *resource_id)
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
@@ -334,7 +345,14 @@ pub async fn update_resource_content(
 
     // 5. Fire-and-forget POST to content-ingest with replace: true
     let bearer_token = extract_bearer_token(parts);
-    spawn_content_ingest_post(resource_id, input.content, true, bearer_token);
+    spawn_content_ingest_post(
+        resource_id,
+        input.content,
+        true,
+        bearer_token,
+        resource.kb_context_id.to_string(),
+        body_hash,
+    );
 
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&serde_json::json!({
