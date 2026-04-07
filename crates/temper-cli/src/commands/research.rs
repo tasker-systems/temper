@@ -21,7 +21,7 @@ pub fn save(
 
     let slug = format!("{today}-{}", vault::slugify(title));
     let filename = format!("{today}-{}.md", vault::slugify(title));
-    let research_dir = config.vault_root.join("research").join(context_name);
+    let research_dir = config.doc_type_dir(context_name, "research");
     let note_path = research_dir.join(&filename);
 
     if note_path.exists() {
@@ -49,7 +49,7 @@ pub fn save(
         .render()
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
-    content = vault::set_frontmatter_field(&content, "project", context_name);
+    content = vault::set_frontmatter_field(&content, "temper-context", context_name);
 
     if let Some(body) = stdin_content {
         content = vault::replace_body(&content, body);
