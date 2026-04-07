@@ -88,6 +88,28 @@ impl TemperMcpService {
             "Profile resolved from request"
         );
 
+        // Check system access before allowing any tool use.
+        let has_access = temper_api::services::access_service::has_system_access(
+            &self.api_state.pool,
+            profile.id,
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to check system access: {e}"), None)
+        })?;
+
+        if !has_access {
+            return Err(rmcp::ErrorData::new(
+                rmcp::model::ErrorCode::INVALID_REQUEST,
+                "Access to this temper instance requires approval. \
+                 Visit https://temperkb.io/request-access or run \
+                 `temper team join` in the CLI to request access. \
+                 This error is terminal and should not be retried."
+                    .to_string(),
+                None,
+            ));
+        }
+
         let mut guard = self.profile.lock().await;
         *guard = Some(profile);
         Ok(())
