@@ -103,17 +103,21 @@ impl TemperMcpService {
 
     // ── Tools ──────────────────────────────────────────────────────────
 
-    #[tool(description = "List resources in the knowledge base. Optionally filter by context.")]
-    async fn list_resources(
+    #[tool(
+        description = "Create a new resource in the knowledge base. Optionally include markdown content for indexing and search. Context must already exist — use create_context first if needed. Use list_doc_types to see available types."
+    )]
+    async fn create_resource(
         &self,
-        Parameters(input): Parameters<temper_core::types::resource::ResourceListParams>,
+        Parameters(input): Parameters<tools::resources::CreateResourceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::list_resources(self, input).await
+        tools::resources::create_resource(self, input, &parts).await
     }
 
-    #[tool(description = "Get a specific resource by ID, optionally including full content.")]
+    #[tool(
+        description = "Get a resource by ID or slug. When using slug, provide context_name to disambiguate. Set include_content to true to get the full markdown."
+    )]
     async fn get_resource(
         &self,
         Parameters(input): Parameters<tools::resources::GetResourceInput>,
@@ -123,14 +127,40 @@ impl TemperMcpService {
         tools::resources::get_resource(self, input).await
     }
 
-    #[tool(description = "Create a new resource in the knowledge base.")]
-    async fn create_resource(
+    #[tool(
+        description = "List resources in the knowledge base. Filter by context and/or document type. Returns most recent first."
+    )]
+    async fn list_resources(
         &self,
-        Parameters(input): Parameters<temper_core::types::resource::ResourceCreateRequest>,
+        Parameters(input): Parameters<tools::resources::ListResourcesInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::create_resource(self, input).await
+        tools::resources::list_resources(self, input).await
+    }
+
+    #[tool(
+        description = "Update a resource's title, slug, or content. Only provided fields are changed. New content triggers re-indexing."
+    )]
+    async fn update_resource(
+        &self,
+        Parameters(input): Parameters<tools::resources::UpdateResourceInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::update_resource(self, input, &parts).await
+    }
+
+    #[tool(
+        description = "Soft-delete a resource by ID. The resource is deactivated, not permanently removed."
+    )]
+    async fn delete_resource(
+        &self,
+        Parameters(input): Parameters<tools::resources::DeleteResourceInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::delete_resource(self, input).await
     }
 
     #[tool(
@@ -143,17 +173,6 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
         tools::search::search(self, input).await
-    }
-
-    #[tool(
-        description = "List all available document types in the knowledge base. Returns id and name for each type. Use these when creating resources to specify the correct doc_type_name."
-    )]
-    async fn list_doc_types(
-        &self,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::doc_types::list_doc_types(self).await
     }
 
     #[tool(description = "List all contexts (workspaces) available to the authenticated user.")]
@@ -186,63 +205,14 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Update a resource's title, slug, or mimetype. Only the fields provided will be changed."
+        description = "List all available document types in the knowledge base. Returns id and name for each type. Use these when creating resources to specify the correct doc_type_name."
     )]
-    async fn update_resource(
+    async fn list_doc_types(
         &self,
-        Parameters(input): Parameters<tools::resources::UpdateResourceInput>,
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::update_resource(self, input).await
-    }
-
-    #[tool(
-        description = "Soft-delete a resource by ID. The resource is deactivated, not permanently removed."
-    )]
-    async fn delete_resource(
-        &self,
-        Parameters(input): Parameters<tools::resources::DeleteResourceInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::delete_resource(self, input).await
-    }
-
-    #[tool(
-        description = "Get the full markdown content of a resource. Returns the reconstituted document."
-    )]
-    async fn get_resource_content(
-        &self,
-        Parameters(input): Parameters<tools::resources::GetResourceContentInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::get_resource_content(self, input).await
-    }
-
-    #[tool(
-        description = "Create a new resource with markdown content. Resolves context and doc_type by name, deduplicates by content hash, and triggers async content processing (chunking, embedding, indexing)."
-    )]
-    async fn ingest_content(
-        &self,
-        Parameters(input): Parameters<tools::ingest::IngestContentInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::ingest_content(self, input, &parts).await
-    }
-
-    #[tool(
-        description = "Update the markdown content of an existing resource. Verifies ownership, updates the content hash, and triggers async re-processing."
-    )]
-    async fn update_resource_content(
-        &self,
-        Parameters(input): Parameters<tools::ingest::UpdateResourceContentInput>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::ingest::update_resource_content(self, input, &parts).await
+        tools::doc_types::list_doc_types(self).await
     }
 
     #[tool(
