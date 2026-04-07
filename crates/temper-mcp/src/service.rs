@@ -222,6 +222,30 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Create a new resource with markdown content. Resolves context and doc_type by name, deduplicates by content hash, and triggers async content processing (chunking, embedding, indexing)."
+    )]
+    async fn ingest_content(
+        &self,
+        Parameters(input): Parameters<tools::ingest::IngestContentInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::ingest_content(self, input, &parts).await
+    }
+
+    #[tool(
+        description = "Update the markdown content of an existing resource. Verifies ownership, updates the content hash, and triggers async re-processing."
+    )]
+    async fn update_resource_content(
+        &self,
+        Parameters(input): Parameters<tools::ingest::UpdateResourceContentInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::ingest::update_resource_content(self, input, &parts).await
+    }
+
+    #[tool(
         description = "List events in the knowledge base. Useful for auditing and debugging. Optionally filter by resource ID or event type."
     )]
     async fn list_events(

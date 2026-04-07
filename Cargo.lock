@@ -4574,12 +4574,16 @@ name = "temper-mcp"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "hex",
  "http",
  "jsonwebtoken",
+ "reqwest 0.12.28",
  "rmcp",
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
+ "sqlx",
  "temper-api",
  "temper-core",
  "tokio",
