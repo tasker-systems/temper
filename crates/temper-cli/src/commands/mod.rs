@@ -6,7 +6,6 @@ pub mod doctor;
 pub mod events;
 pub mod goal;
 pub mod init;
-pub mod note;
 pub mod pull;
 pub mod remove;
 pub mod research;
