@@ -326,108 +326,11 @@ pub fn show(
     Ok(())
 }
 
-/// List recent sessions, optionally filtered by context.
-///
-/// Scans `<context>/session/` dirs, parses frontmatter for date, sorts by date descending,
-/// displays up to `limit` entries (default 20).
-pub fn list(
-    config: &Config,
-    context: Option<&str>,
-    limit: Option<usize>,
-    format: &str,
-) -> Result<()> {
-    let mut entries: Vec<SessionEntry> = Vec::new();
-
-    let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
-        vec![ctx.to_string()]
-    } else {
-        config.contexts.clone()
-    };
-
-    for ctx in &contexts_to_scan {
-        let session_dir = config.doc_type_dir(ctx, "session");
-        if session_dir.is_dir() {
-            collect_sessions(&session_dir, ctx, &mut entries)?;
-        }
-    }
-
-    // Sort by date descending (most recent first)
-    entries.sort_by(|a, b| b.date.cmp(&a.date));
-    entries.truncate(limit.unwrap_or(20));
-
-    if format == "json" {
-        let json = serde_json::to_string_pretty(&entries).unwrap_or_default();
-        println!("{json}");
-        return Ok(());
-    }
-
-    if entries.is_empty() {
-        output::hint("No sessions found.");
-        return Ok(());
-    }
-
-    output::plain(format!("{:<12} {:<20} Title", "Date", "Context"));
-    output::dim("-".repeat(60));
-    for entry in &entries {
-        output::plain(format!(
-            "{:<12} {:<20} {}",
-            entry.date, entry.context, entry.title
-        ));
-    }
-
-    Ok(())
-}
-
 #[derive(Serialize)]
 struct SessionEntry {
     date: String,
     context: String,
     title: String,
-}
-
-fn collect_sessions(
-    dir: &std::path::Path,
-    context: &str,
-    entries: &mut Vec<SessionEntry>,
-) -> Result<()> {
-    for file_entry in std::fs::read_dir(dir)? {
-        let file_entry = file_entry?;
-        let path = file_entry.path();
-        if path.extension().is_some_and(|e| e == "md") {
-            add_session_entry(&path, context, entries);
-        }
-    }
-    Ok(())
-}
-
-fn add_session_entry(path: &std::path::Path, context: &str, entries: &mut Vec<SessionEntry>) {
-    let stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    // Try to parse date from frontmatter first, then from filename prefix
-    let date = parse_date_from_file(path)
-        .or_else(|| extract_date_from_stem(&stem))
-        .unwrap_or_else(|| "unknown".to_string());
-
-    // Extract title: filename stem after the em-dash separator (legacy) or hyphen (new format), or full stem
-    let title = if let Some(pos) = stem.find(" \u{2014} ") {
-        // Legacy format: "2026-04-05 — slug"
-        stem[pos + " \u{2014} ".len()..].to_string()
-    } else if stem.len() > 10 && stem.as_bytes().get(10) == Some(&b'-') {
-        // New format: "2026-04-05-slug"
-        stem[11..].to_string()
-    } else {
-        stem.clone()
-    };
-
-    entries.push(SessionEntry {
-        date,
-        context: context.to_string(),
-        title,
-    });
 }
 
 fn parse_date_from_file(path: &std::path::Path) -> Option<String> {
@@ -478,7 +381,6 @@ mod tests {
             state_dir,
             contexts: vec!["temper".to_string(), "default".to_string()],
             skill_output: PathBuf::from("/tmp/test-skill"),
-            skill_framework: "superpowers".to_string(),
         };
         (tmp, config)
     }
@@ -560,23 +462,5 @@ mod tests {
         write_session(&config, "temper", "2026-04-04", "only-in-temper", "body");
         let result = show(&config, "only-in-temper", Some("default"), "text");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn list_returns_sessions_sorted_by_date_desc() {
-        let (_tmp, config) = test_vault();
-        write_session(&config, "temper", "2026-04-01", "first", "body");
-        write_session(&config, "temper", "2026-04-03", "third", "body");
-        write_session(&config, "temper", "2026-04-02", "second", "body");
-        // list doesn't return data directly but we can verify it doesn't error
-        let result = list(&config, Some("temper"), None, "json");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn list_empty_context_shows_hint() {
-        let (_tmp, config) = test_vault();
-        let result = list(&config, Some("temper"), None, "text");
-        assert!(result.is_ok());
     }
 }

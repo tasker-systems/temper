@@ -126,7 +126,7 @@ fn run_single_file(
         return Ok(());
     }
 
-    if fmt == OutputFormat::Text {
+    if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
         output::progress("  Extracting... ");
     }
 
@@ -136,7 +136,7 @@ fn run_single_file(
     let (resource, extracted_content) =
         rt.block_on(async { ingest::ingest_file(&client, &file_path, context, doc_type).await })?;
 
-    if fmt == OutputFormat::Text {
+    if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
         output::plain(format!(
             "done ({} KB markdown)",
             extracted_content.len() / 1024
@@ -209,7 +209,7 @@ fn run_single_auto_file(
         return Ok(());
     }
 
-    if fmt == OutputFormat::Text {
+    if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
         output::progress("  Extracting... ");
     }
 
@@ -243,7 +243,7 @@ fn run_single_auto_file(
             .map_err(|e| TemperError::Api(e.to_string()))
     })?;
 
-    if fmt == OutputFormat::Text {
+    if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
         output::plain(format!("done ({} KB markdown)", body.len() / 1024));
     }
 
@@ -368,7 +368,7 @@ fn promote_resource(
             });
             output::plain(event);
         }
-        OutputFormat::Text => {
+        OutputFormat::Pretty | OutputFormat::NoTty => {
             output::success(format!(
                 "Promoted: \"{}\" ({}) -> {}",
                 resource.title,
@@ -388,7 +388,7 @@ fn promote_resource(
 fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::error::Result<()> {
     let fmt = OutputFormat::parse(format);
 
-    if fmt == OutputFormat::Text {
+    if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
         output::progress("  Fetching... ");
     }
 
@@ -401,7 +401,7 @@ fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::err
             .map_err(|e| TemperError::Api(e.to_string()))
     })?;
 
-    if fmt == OutputFormat::Text {
+    if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
         output::plain(format!(
             "done ({} KB markdown)",
             extracted_content.len() / 1024
@@ -938,7 +938,7 @@ fn emit_event(
             });
             output::plain(event);
         }
-        OutputFormat::Text => {
+        OutputFormat::Pretty | OutputFormat::NoTty => {
             output::success(format!(
                 "Added: \"{}\" ({}) -> {}",
                 resource.title,

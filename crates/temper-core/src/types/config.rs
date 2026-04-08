@@ -1,6 +1,5 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
+use validator::Validate;
 
 /// Merge policy for conflict resolution within a subscription scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -35,26 +34,6 @@ pub struct SyncSubscription {
     pub merge: MergePolicy,
 }
 
-/// CLI output preferences.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CliConfig {
-    /// Progress output format: "bar" (human-friendly) or "json" (JSONL stream)
-    #[serde(default = "default_progress")]
-    pub progress: String,
-}
-
-impl Default for CliConfig {
-    fn default() -> Self {
-        Self {
-            progress: default_progress(),
-        }
-    }
-}
-
-fn default_progress() -> String {
-    "bar".to_string()
-}
-
 /// Sync configuration section of config.toml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SyncConfig {
@@ -76,14 +55,13 @@ pub struct CloudConfig {
     pub vault: CloudVaultConfig,
     #[serde(default)]
     pub sync: SyncConfig,
-    #[serde(default)]
-    pub cli: CliConfig,
 }
 
 /// Vault path reference in cloud config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudVaultConfig {
     /// Path to the local vault directory
+    #[validate(length(min = 1, message = "vault path cannot be empty"))]
     pub path: String,
 }
 
@@ -102,37 +80,38 @@ pub struct UnifiedSyncConfig {
 }
 
 /// Skill generation config.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct SkillConfig {
     #[serde(default = "default_skill_output")]
+    #[validate(length(min = 1, message = "skill output path cannot be empty"))]
     pub output: String,
-    #[serde(default = "default_skill_framework")]
-    pub framework: String,
 }
 
 fn default_skill_output() -> String {
     "~/.claude/skills/temper".to_string()
 }
 
-fn default_skill_framework() -> String {
-    "superpowers".to_string()
-}
-
 impl Default for SkillConfig {
     fn default() -> Self {
         Self {
             output: default_skill_output(),
-            framework: default_skill_framework(),
         }
     }
 }
 
-/// Auth provider configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthProviderConfig {
+/// A single auth provider entry. Stored in `[[auth.providers]]` arrays in TOML.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct AuthProvider {
+    /// Provider name — referenced by `auth.provider` to pick the active entry.
+    #[validate(length(min = 1, message = "provider name cannot be empty"))]
+    pub name: String,
+    #[validate(url(message = "authorize_url must be a valid URL"))]
     pub authorize_url: String,
+    #[validate(url(message = "token_url must be a valid URL"))]
     pub token_url: String,
+    #[validate(length(min = 1, message = "client_id cannot be empty"))]
     pub client_id: String,
+    #[validate(url(message = "audience must be a valid URL"))]
     pub audience: String,
     #[serde(default = "default_callback_url")]
     pub callback_url: String,
@@ -145,12 +124,13 @@ fn default_callback_url() -> String {
 }
 
 /// Auth configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct AuthConfig {
     #[serde(default = "default_auth_provider")]
     pub provider: String,
     #[serde(default)]
-    pub providers: HashMap<String, AuthProviderConfig>,
+    #[validate(nested)]
+    pub providers: Vec<AuthProvider>,
 }
 
 fn default_auth_provider() -> String {
@@ -159,10 +139,10 @@ fn default_auth_provider() -> String {
 
 impl Default for AuthConfig {
     fn default() -> Self {
-        let mut providers = HashMap::new();
-        providers.insert(
-            "auth0".to_string(),
-            AuthProviderConfig {
+        Self {
+            provider: default_auth_provider(),
+            providers: vec![AuthProvider {
+                name: "auth0".to_string(),
                 authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
                 token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
                 client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
@@ -174,20 +154,17 @@ impl Default for AuthConfig {
                     "email".to_string(),
                     "offline_access".to_string(),
                 ],
-            },
-        );
-        Self {
-            provider: default_auth_provider(),
-            providers,
+            }],
         }
     }
 }
 
 /// Cloud API section of the configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
     /// API base URL (overridden by `TEMPER_API_URL` environment variable).
     #[serde(default = "default_api_url")]
+    #[validate(url(message = "api_url must be a valid URL"))]
     pub api_url: String,
 }
 
@@ -207,18 +184,20 @@ fn default_api_url() -> String {
 ///
 /// Single config file replacing the old split model (global config + vault temper.toml).
 /// Imported by temper-cli, temper-client, temper-mcp, and any future crate.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct TemperConfig {
+    #[validate(nested)]
     pub vault: CloudVaultConfig,
     #[serde(default)]
     pub sync: UnifiedSyncConfig,
     #[serde(default)]
-    pub cli: CliConfig,
-    #[serde(default)]
+    #[validate(nested)]
     pub skill: SkillConfig,
     #[serde(default)]
+    #[validate(nested)]
     pub auth: AuthConfig,
     #[serde(default)]
+    #[validate(nested)]
     pub cloud: CloudSection,
 }
 
@@ -226,10 +205,9 @@ impl Default for TemperConfig {
     fn default() -> Self {
         Self {
             vault: CloudVaultConfig {
-                path: "~/vault".to_string(),
+                path: "~/Documents/temper-vault".to_string(),
             },
             sync: Default::default(),
-            cli: Default::default(),
             skill: Default::default(),
             auth: Default::default(),
             cloud: Default::default(),
@@ -287,7 +265,17 @@ pub fn load_config_from(path: &std::path::Path) -> Result<TemperConfig, String> 
     }
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
-    toml::from_str(&content).map_err(|e| format!("config parse error in {}: {}", path.display(), e))
+    let cfg: TemperConfig = toml::from_str(&content)
+        .map_err(|e| format!("config parse error in {}: {}", path.display(), e))?;
+    if let Err(e) = cfg.validate() {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "config at {} has validation issues — run `temper config edit` to fix",
+            path.display()
+        );
+    }
+    Ok(cfg)
 }
 
 #[cfg(test)]
@@ -328,9 +316,6 @@ merge = "manual"
 team = "platform-team"
 doc_types = ["research", "concept"]
 merge = "auto"
-
-[cli]
-progress = "bar"
 "#;
         let config: CloudConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/projects/knowledge");
@@ -350,7 +335,6 @@ progress = "bar"
             config.sync.subscriptions[1].doc_types,
             vec!["research", "concept"]
         );
-        assert_eq!(config.cli.progress, "bar");
     }
 
     #[test]
@@ -362,7 +346,33 @@ path = "~/vault"
         let config: CloudConfig = toml::from_str(toml_str).unwrap();
         assert!(!config.sync.auto);
         assert!(config.sync.subscriptions.is_empty());
-        assert_eq!(config.cli.progress, "bar");
+    }
+
+    #[test]
+    fn stale_cli_section_and_skill_framework_parse_without_error() {
+        // Forward-compat guarantee: stale configs containing the removed
+        // `[cli]` section and `skill.framework` field must still parse.
+        //
+        // This works because none of the config structs use
+        // `#[serde(deny_unknown_fields)]` — serde's default behavior is to
+        // ignore unknown fields. If a future contributor adds that attribute
+        // to TemperConfig (or any nested struct), this test will fail as the
+        // signal that the clean break in Task 8 broke forward compat and
+        // either the attribute should come back off or a migration is needed.
+        let toml_str = r#"
+[vault]
+path = "~/Documents/temper-vault"
+
+[cli]
+progress = "bar"
+
+[skill]
+output = "~/.claude/skills/temper"
+framework = "superpowers"
+"#;
+        let cfg: TemperConfig = toml::from_str(toml_str).expect("stale config must parse");
+        assert_eq!(cfg.vault.path, "~/Documents/temper-vault");
+        assert_eq!(cfg.skill.output, "~/.claude/skills/temper");
     }
 
     #[test]
@@ -378,26 +388,27 @@ path = "~/vault"
         assert!(!json.contains("doc_types"));
     }
 
+    use validator::Validate;
+
+    // --- new auth provider shape ---
+
     #[test]
-    fn test_temper_config_toml_roundtrip() {
+    fn auth_providers_parse_as_array_of_tables() {
         let toml_str = r#"
 [vault]
 path = "~/projects/kb-vault"
 
 [sync.subscriptions]
-contexts = ["temper", "storyteller", "tasker", "writing"]
-
-[cli]
-progress = "bar"
+contexts = ["temper"]
 
 [skill]
 output = "~/.claude/skills/temper"
-framework = "superpowers"
 
 [auth]
 provider = "auth0"
 
-[auth.providers.auth0]
+[[auth.providers]]
+name = "auth0"
 authorize_url = "https://temperkb.us.auth0.com/authorize"
 token_url = "https://temperkb.us.auth0.com/oauth/token"
 client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
@@ -405,25 +416,38 @@ audience = "https://temperkb.io/api"
 scopes = ["openid", "profile", "email", "offline_access"]
 
 [cloud]
-api_url = "https://api.example.com"
+api_url = "https://temperkb.io"
 "#;
-        let config: TemperConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.vault.path, "~/projects/kb-vault");
+        let cfg: TemperConfig = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(cfg.vault.path, "~/projects/kb-vault");
+        assert_eq!(cfg.auth.provider, "auth0");
+        assert_eq!(cfg.auth.providers.len(), 1);
+        assert_eq!(cfg.auth.providers[0].name, "auth0");
         assert_eq!(
-            config.sync.subscriptions.contexts,
-            vec!["temper", "storyteller", "tasker", "writing"]
+            cfg.auth.providers[0].authorize_url,
+            "https://temperkb.us.auth0.com/authorize"
         );
-        assert_eq!(config.cli.progress, "bar");
-        assert_eq!(config.skill.output, "~/.claude/skills/temper");
-        assert_eq!(config.skill.framework, "superpowers");
-        assert_eq!(config.auth.provider, "auth0");
-        assert!(config.auth.providers.contains_key("auth0"));
-        assert_eq!(config.cloud.api_url, "https://api.example.com");
-        let auth0 = config.auth.providers.get("auth0").unwrap();
-        assert_eq!(
-            auth0.callback_url,
-            "https://temperkb.io/api/auth/cli-callback"
+    }
+
+    #[test]
+    fn auth_providers_lookup_by_name() {
+        let cfg = TemperConfig::default();
+        let active = cfg
+            .auth
+            .providers
+            .iter()
+            .find(|p| p.name == cfg.auth.provider);
+        assert!(
+            active.is_some(),
+            "default config should have its active provider"
         );
+        assert_eq!(active.unwrap().name, "auth0");
+    }
+
+    #[test]
+    fn default_vault_path_is_documents_temper_vault() {
+        let cfg = TemperConfig::default();
+        assert_eq!(cfg.vault.path, "~/Documents/temper-vault");
     }
 
     #[test]
@@ -435,15 +459,59 @@ path = "~/vault"
         let config: TemperConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/vault");
         assert!(config.sync.subscriptions.contexts.is_empty());
-        assert_eq!(config.cli.progress, "bar");
         assert_eq!(config.auth.provider, "auth0");
         // Cloud section defaults
         assert_eq!(config.cloud.api_url, "https://temperkb.io");
-        // Auth provider defaults include callback_url
-        let auth0 = config.auth.providers.get("auth0").unwrap();
+        // When `[auth]` is omitted entirely, `AuthConfig::default()` is used,
+        // which seeds the built-in auth0 provider.
+        assert_eq!(config.auth.providers.len(), 1);
+        assert_eq!(config.auth.providers[0].name, "auth0");
         assert_eq!(
-            auth0.callback_url,
+            config.auth.providers[0].callback_url,
             "https://temperkb.io/api/auth/cli-callback"
         );
+    }
+
+    // --- validator rules ---
+
+    #[test]
+    fn validate_accepts_default_config() {
+        let cfg = TemperConfig::default();
+        cfg.validate().expect("default config should validate");
+    }
+
+    #[test]
+    fn validate_rejects_empty_vault_path() {
+        let mut cfg = TemperConfig::default();
+        cfg.vault.path = String::new();
+        let err = cfg.validate().unwrap_err();
+        let s = format!("{err}");
+        assert!(s.contains("vault") || s.contains("path"), "got: {s}");
+    }
+
+    #[test]
+    fn validate_rejects_malformed_api_url() {
+        let mut cfg = TemperConfig::default();
+        cfg.cloud.api_url = "not a url".to_string();
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn validate_rejects_malformed_authorize_url_in_provider_vec() {
+        let mut cfg = TemperConfig::default();
+        cfg.auth.providers[0].authorize_url = "nope".to_string();
+        let err = cfg.validate().unwrap_err();
+        let s = format!("{err}");
+        assert!(
+            s.contains("authorize_url") || s.contains("provider"),
+            "got: {s}"
+        );
+    }
+
+    #[test]
+    fn validate_rejects_empty_provider_client_id() {
+        let mut cfg = TemperConfig::default();
+        cfg.auth.providers[0].client_id = String::new();
+        assert!(cfg.validate().is_err());
     }
 }

@@ -8,7 +8,10 @@ use temper_core::schema;
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::{Result, TemperError};
+use crate::format::OutputFormat;
 use crate::output;
+use crate::output::columns as col_registry;
+use crate::output::table::TableRenderer;
 use crate::templates::{ConceptTemplate, DecisionTemplate};
 use crate::vault;
 
@@ -224,170 +227,279 @@ fn create_simple_resource(
     Ok(())
 }
 
-/// List resources of a given type.
-pub fn list(
-    config: &Config,
-    doc_type: &str,
-    context: Option<&str>,
-    limit: Option<usize>,
-    stage: Option<&str>,
-    goal: Option<&str>,
-    status: Option<&str>,
-    format: &str,
-) -> Result<()> {
-    validate_doc_type(doc_type)?;
+// ---------------------------------------------------------------------------
+// Unified resource list pipeline
+// ---------------------------------------------------------------------------
 
-    match doc_type {
-        "task" => {
-            let ctx = context.map(|c| super::resolve_context_with_fallback(config, c).into_owned());
-            crate::commands::task::list(config, ctx.as_deref(), goal, stage, format)
-        }
-        "goal" => {
-            let ctx = require_context(config, context)?;
-            if status.is_some() {
-                output::hint("--status filter is not yet supported for goals; listing all.");
-            }
-            crate::commands::goal::list(config, &ctx, format)
-        }
-        "session" => crate::commands::session::list(config, context, limit, format),
-        "research" | "concept" | "decision" => {
-            list_simple_resources(config, doc_type, context, limit, format)
-        }
-        _ => Err(TemperError::Vault(format!(
-            "unsupported resource type for list: {doc_type}"
-        ))),
+/// A single resource row used by the unified list pipeline.
+///
+/// Carries the full frontmatter (for JSON output and column extraction) plus
+/// the vault-relative path for debugging / future display needs.
+#[derive(Debug, Clone)]
+pub struct ResourceRow {
+    /// Full parsed frontmatter as a JSON `Value`.
+    pub frontmatter: serde_json::Value,
+    /// Vault-relative path to the source markdown file.
+    pub path: String,
+}
+
+impl ResourceRow {
+    fn updated_at(&self) -> &str {
+        self.frontmatter
+            .get("temper-updated")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+    }
+
+    #[cfg(test)]
+    pub fn slug_for_tests(&self) -> String {
+        self.frontmatter
+            .get("slug")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     }
 }
 
-/// List simple resources (research, concept, decision) by scanning the doc_type directory.
-fn list_simple_resources(
+/// Filters applied after scanning and parsing rows.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ListFilters<'a> {
+    pub stage: Option<&'a str>,
+    pub goal: Option<&'a str>,
+    pub status: Option<&'a str>,
+}
+
+/// Parameters for the public `list` command, bundled to keep the CLI entry
+/// signature compact (and clippy happy).
+#[derive(Debug, Clone, Copy)]
+pub struct ListParams<'a> {
+    pub doc_type: &'a str,
+    pub context: Option<&'a str>,
+    pub limit: Option<usize>,
+    pub stage: Option<&'a str>,
+    pub goal: Option<&'a str>,
+    pub status: Option<&'a str>,
+    pub format: &'a str,
+}
+
+/// Parameters for `render_list`, the testable core of the unified list
+/// pipeline. Bundling the inputs keeps the function under the project's
+/// positional-argument limit and makes test call sites read naturally.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderListParams<'a> {
+    pub doc_type: &'a str,
+    pub config: &'a Config,
+    pub context: Option<&'a str>,
+    pub limit: Option<usize>,
+    pub filters: ListFilters<'a>,
+    pub format: OutputFormat,
+}
+
+/// Scan disk for all resources of `doc_type`, optionally restricted to one
+/// context. Returns one `ResourceRow` per `.md` file that has valid
+/// frontmatter.
+pub fn scan_rows(
     config: &Config,
     doc_type: &str,
     context: Option<&str>,
-    limit: Option<usize>,
-    format: &str,
-) -> Result<()> {
-    let mut entries: Vec<SimpleResourceEntry> = Vec::new();
-
-    let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
-        vec![ctx.to_string()]
-    } else {
-        config.contexts.clone()
+) -> Result<Vec<ResourceRow>> {
+    let contexts_to_scan: Vec<String> = match context {
+        Some(c) => vec![c.to_string()],
+        None => config.contexts.clone(),
     };
 
+    let mut rows = Vec::new();
     for ctx in &contexts_to_scan {
         let dir = config.doc_type_dir(ctx, doc_type);
-        if dir.is_dir() {
-            collect_simple_resources(&dir, ctx, &mut entries)?;
+        if !dir.is_dir() {
+            continue;
         }
-    }
-
-    // Sort by date descending (most recent first)
-    entries.sort_by(|a, b| b.date.cmp(&a.date));
-    entries.truncate(limit.unwrap_or(20));
-
-    if format == "json" {
-        let json = serde_json::to_string_pretty(&entries).unwrap_or_default();
-        println!("{json}");
-        return Ok(());
-    }
-
-    if entries.is_empty() {
-        output::hint(format!("No {doc_type} resources found."));
-        return Ok(());
-    }
-
-    output::plain(format!("{:<12} {:<20} Title", "Date", "Context"));
-    output::dim("-".repeat(60));
-    for entry in &entries {
-        output::plain(format!(
-            "{:<12} {:<20} {}",
-            entry.date, entry.context, entry.title
-        ));
-    }
-    Ok(())
-}
-
-#[derive(Debug, Serialize)]
-struct SimpleResourceEntry {
-    date: String,
-    context: String,
-    title: String,
-    slug: String,
-}
-
-fn collect_simple_resources(
-    dir: &std::path::Path,
-    context: &str,
-    entries: &mut Vec<SimpleResourceEntry>,
-) -> Result<()> {
-    for file_entry in std::fs::read_dir(dir)? {
-        let file_entry = file_entry?;
-        let path = file_entry.path();
-        if path.extension().is_some_and(|e| e == "md") {
-            if let Some(entry) = parse_simple_resource(&path, context) {
-                entries.push(entry);
+        for entry in std::fs::read_dir(&dir).map_err(|e| TemperError::Vault(e.to_string()))? {
+            let entry = entry.map_err(|e| TemperError::Vault(e.to_string()))?;
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "md") {
+                continue;
+            }
+            if let Some(row) = parse_row(&path, &config.vault_root)? {
+                rows.push(row);
             }
         }
     }
-    Ok(())
+    Ok(rows)
 }
 
-fn parse_simple_resource(path: &std::path::Path, context: &str) -> Option<SimpleResourceEntry> {
-    let stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    let content = std::fs::read_to_string(path).ok()?;
-    let fm = vault::parse_frontmatter(&content);
-
-    let title = fm
-        .as_ref()
-        .and_then(|v| v.get("title"))
-        .and_then(|v| v.as_str())
-        .unwrap_or(&stem)
-        .to_string();
-
-    let date = fm
-        .as_ref()
-        .and_then(|v| v.get("date"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .or_else(|| extract_date_prefix(&stem))
-        .unwrap_or_else(|| "unknown".to_string());
-
-    let slug = fm
-        .as_ref()
-        .and_then(|v| v.get("slug"))
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| stem.clone());
-
-    Some(SimpleResourceEntry {
-        date,
-        context: context.to_string(),
-        title,
-        slug,
-    })
+/// Read one markdown file and convert its YAML frontmatter into a
+/// `ResourceRow`. Files without valid frontmatter are skipped (`Ok(None)`).
+fn parse_row(path: &std::path::Path, vault_root: &std::path::Path) -> Result<Option<ResourceRow>> {
+    let content = std::fs::read_to_string(path).map_err(|e| TemperError::Vault(e.to_string()))?;
+    let Some(yaml) = vault::parse_frontmatter(&content) else {
+        return Ok(None);
+    };
+    // Convert YAML value -> JSON value so downstream code can use
+    // the existing `serde_json::Value`-based column registry.
+    let frontmatter = serde_json::to_value(&yaml)
+        .map_err(|e| TemperError::Vault(format!("frontmatter YAML→JSON: {e}")))?;
+    let relative = path.strip_prefix(vault_root).unwrap_or(path);
+    Ok(Some(ResourceRow {
+        frontmatter,
+        path: relative.to_string_lossy().to_string(),
+    }))
 }
 
-/// Extract a YYYY-MM-DD date prefix from a filename stem.
-fn extract_date_prefix(stem: &str) -> Option<String> {
-    if stem.len() >= 10 {
-        let candidate = &stem[..10];
-        let bytes = candidate.as_bytes();
-        if bytes[4] == b'-'
-            && bytes[7] == b'-'
-            && bytes[..4].iter().all(|b| b.is_ascii_digit())
-            && bytes[5..7].iter().all(|b| b.is_ascii_digit())
-            && bytes[8..10].iter().all(|b| b.is_ascii_digit())
-        {
-            return Some(candidate.to_string());
+/// Sort rows by `temper-updated` descending (most recent first). Rows missing
+/// the field sort to the end.
+pub fn sort_rows(rows: &mut [ResourceRow]) {
+    rows.sort_by(|a, b| b.updated_at().cmp(a.updated_at()));
+}
+
+/// Apply stage/goal/status filters, dropping rows that don't match.
+pub fn filter_rows(rows: Vec<ResourceRow>, filters: ListFilters<'_>) -> Vec<ResourceRow> {
+    rows.into_iter()
+        .filter(|row| match_filters(row, &filters))
+        .collect()
+}
+
+fn match_filters(row: &ResourceRow, filters: &ListFilters<'_>) -> bool {
+    if let Some(stage) = filters.stage {
+        if row.frontmatter.get("temper-stage").and_then(|v| v.as_str()) != Some(stage) {
+            return false;
         }
     }
-    None
+    if let Some(goal) = filters.goal {
+        if row.frontmatter.get("temper-goal").and_then(|v| v.as_str()) != Some(goal) {
+            return false;
+        }
+    }
+    if let Some(status) = filters.status {
+        if row
+            .frontmatter
+            .get("temper-status")
+            .and_then(|v| v.as_str())
+            != Some(status)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Render the unified list pipeline to a `String` for the given format.
+///
+/// This is the testable core used by both `list()` (CLI entry) and the
+/// integration tests below.
+///
+/// Empty-result handling: JSON always emits `[]` (machine-friendly),
+/// Pretty/NoTty return an empty string so the caller (`list()`) can surface
+/// a user-friendly "No X resources found" hint instead of a bare header row.
+pub fn render_list(params: &RenderListParams<'_>) -> Result<String> {
+    validate_doc_type(params.doc_type)?;
+    // Filter first, then sort — sorting unfiltered rows wastes work on rows
+    // we're about to discard.
+    let rows = scan_rows(params.config, params.doc_type, params.context)?;
+    let mut rows = filter_rows(rows, params.filters);
+    sort_rows(&mut rows);
+    rows.truncate(params.limit.unwrap_or(20));
+
+    match params.format {
+        OutputFormat::Json => {
+            let frontmatters: Vec<&serde_json::Value> =
+                rows.iter().map(|r| &r.frontmatter).collect();
+            Ok(serde_json::to_string_pretty(&frontmatters).unwrap_or_default())
+        }
+        OutputFormat::Pretty | OutputFormat::NoTty => {
+            // Empty result → return empty string so the CLI entry can render
+            // a "No X resources found" hint instead of a header-only table.
+            if rows.is_empty() {
+                return Ok(String::new());
+            }
+            let columns = col_registry::display_columns(params.doc_type);
+            if columns.is_empty() {
+                return Ok(String::new());
+            }
+            let mut renderer = TableRenderer::new(columns.clone());
+            for row in &rows {
+                renderer.push_row(col_registry::extract_row(&row.frontmatter, &columns));
+            }
+            if params.format == OutputFormat::Pretty {
+                Ok(renderer.render_pretty())
+            } else {
+                Ok(renderer.render_no_tty())
+            }
+        }
+    }
+}
+
+/// List resources of a given type (unified pipeline for all doc types).
+pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
+    // Surface helpful hints when a filter is passed for an incompatible type
+    // (the filter is still applied; if nothing matches the user sees an empty
+    // list, which is the honest answer).
+    if params.stage.is_some() && params.doc_type != "task" {
+        output::hint(format!(
+            "--stage filter is only meaningful for tasks; ignored for {}.",
+            params.doc_type
+        ));
+    }
+    if params.goal.is_some() && params.doc_type != "task" {
+        output::hint(format!(
+            "--goal filter is only meaningful for tasks; ignored for {}.",
+            params.doc_type
+        ));
+    }
+    if params.status.is_some() && params.doc_type != "goal" {
+        output::hint(format!(
+            "--status filter is only meaningful for goals; ignored for {}.",
+            params.doc_type
+        ));
+    }
+
+    if let Some(s) = params.stage {
+        if params.doc_type == "task" {
+            vault::validate_stage(s)?;
+        }
+    }
+
+    let format = OutputFormat::parse(params.format);
+
+    // Filters only pass through on compatible types; for others, drop them so
+    // the pipeline returns all rows (then the hint above tells the user why).
+    let stage = if params.doc_type == "task" {
+        params.stage
+    } else {
+        None
+    };
+    let goal = if params.doc_type == "task" {
+        params.goal
+    } else {
+        None
+    };
+    let status = if params.doc_type == "goal" {
+        params.status
+    } else {
+        None
+    };
+
+    let body = render_list(&RenderListParams {
+        doc_type: params.doc_type,
+        config,
+        context: params.context,
+        limit: params.limit,
+        filters: ListFilters {
+            stage,
+            goal,
+            status,
+        },
+        format,
+    })?;
+
+    if body.trim().is_empty() {
+        output::hint(format!("No {} resources found.", params.doc_type));
+        return Ok(());
+    }
+
+    // anstream handles TTY / no-TTY ANSI stripping based on the real stdout.
+    output::plain(body.trim_end());
+    Ok(())
 }
 
 /// Show a resource's content.
@@ -705,52 +817,6 @@ mod tests {
     use super::*;
 
     // -------------------------------------------------------------------------
-    // extract_date_prefix tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn extract_date_prefix_valid() {
-        assert_eq!(
-            extract_date_prefix("2026-04-06-my-slug"),
-            Some("2026-04-06".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_date_prefix_no_date() {
-        assert_eq!(extract_date_prefix("my-slug"), None);
-    }
-
-    #[test]
-    fn extract_date_prefix_too_short() {
-        assert_eq!(extract_date_prefix("2026-04"), None);
-    }
-
-    #[test]
-    fn extract_date_prefix_invalid_separators() {
-        assert_eq!(extract_date_prefix("2026x04x06-slug"), None);
-    }
-
-    #[test]
-    fn extract_date_prefix_non_digit_year() {
-        assert_eq!(extract_date_prefix("abcd-ef-gh-slug"), None);
-    }
-
-    #[test]
-    fn extract_date_prefix_exactly_10_chars_returns_date() {
-        // Exactly 10 chars with valid date format should return Some
-        assert_eq!(
-            extract_date_prefix("2026-04-06"),
-            Some("2026-04-06".to_string())
-        );
-    }
-
-    #[test]
-    fn extract_date_prefix_non_digit_month() {
-        assert_eq!(extract_date_prefix("2026-ab-06-slug"), None);
-    }
-
-    // -------------------------------------------------------------------------
     // validate_doc_type tests
     // -------------------------------------------------------------------------
 
@@ -782,5 +848,414 @@ mod tests {
     #[test]
     fn validate_doc_type_empty_string_returns_error() {
         assert!(validate_doc_type("").is_err());
+    }
+}
+
+#[cfg(test)]
+mod list_pipeline_tests {
+    use super::*;
+    use std::fs;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn make_config(tmp: &TempDir) -> Config {
+        let vault_root = tmp.path().to_path_buf();
+        fs::create_dir_all(vault_root.join(".temper")).unwrap();
+        Config {
+            state_dir: vault_root.join(".temper"),
+            vault_root,
+            contexts: vec!["temper".into(), "default".into()],
+            skill_output: PathBuf::from("/tmp/skill"),
+        }
+    }
+
+    fn write_resource(
+        config: &Config,
+        ctx: &str,
+        doc_type: &str,
+        slug: &str,
+        updated: &str,
+        extras: &str,
+    ) {
+        let dir = config.doc_type_dir(ctx, doc_type);
+        fs::create_dir_all(&dir).unwrap();
+        let content = format!(
+            "---\ntemper-id: \"id-{slug}\"\ntemper-type: {doc_type}\ntemper-context: {ctx}\nslug: {slug}\ntitle: \"Title {slug}\"\ntemper-updated: \"{updated}\"\n{extras}---\n\nbody\n"
+        );
+        fs::write(dir.join(format!("{slug}.md")), content).unwrap();
+    }
+
+    #[test]
+    fn scan_rows_sorts_descending_by_updated() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "a",
+            "2026-04-01T00:00:00Z",
+            "temper-stage: backlog\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "b",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: done\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+
+        let rows = scan_rows(&config, "task", Some("temper")).unwrap();
+        let mut sorted = rows;
+        sort_rows(&mut sorted);
+        assert_eq!(sorted[0].slug_for_tests(), "b");
+        assert_eq!(sorted[1].slug_for_tests(), "a");
+    }
+
+    #[test]
+    fn scan_rows_skips_non_markdown_and_files_without_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        let dir = config.doc_type_dir("temper", "task");
+        fs::create_dir_all(&dir).unwrap();
+        // Non-md file
+        fs::write(dir.join("notes.txt"), "not markdown").unwrap();
+        // Markdown without frontmatter
+        fs::write(dir.join("raw.md"), "no frontmatter here").unwrap();
+        // Valid resource
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "ok",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: backlog\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+
+        let rows = scan_rows(&config, "task", Some("temper")).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].slug_for_tests(), "ok");
+    }
+
+    #[test]
+    fn scan_rows_all_contexts_when_none_specified() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "session",
+            "one",
+            "2026-04-01T00:00:00Z",
+            "",
+        );
+        write_resource(
+            &config,
+            "default",
+            "session",
+            "two",
+            "2026-04-02T00:00:00Z",
+            "",
+        );
+
+        let rows = scan_rows(&config, "session", None).unwrap();
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn filter_rows_respects_stage() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "x",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: backlog\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "y",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: in-progress\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+
+        let rows = scan_rows(&config, "task", Some("temper")).unwrap();
+        let filtered = filter_rows(
+            rows,
+            ListFilters {
+                stage: Some("in-progress"),
+                goal: None,
+                status: None,
+            },
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].slug_for_tests(), "y");
+    }
+
+    #[test]
+    fn filter_rows_respects_goal() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "in-core",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: backlog\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "in-other",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: backlog\ntemper-goal: other\ntemper-mode: build\ntemper-effort: small\n",
+        );
+
+        let rows = scan_rows(&config, "task", Some("temper")).unwrap();
+        let filtered = filter_rows(
+            rows,
+            ListFilters {
+                stage: None,
+                goal: Some("core"),
+                status: None,
+            },
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].slug_for_tests(), "in-core");
+    }
+
+    #[test]
+    fn filter_rows_respects_status() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "goal",
+            "g1",
+            "2026-04-07T00:00:00Z",
+            "temper-status: active\ntemper-seq: 10\n",
+        );
+        write_resource(
+            &config,
+            "temper",
+            "goal",
+            "g2",
+            "2026-04-07T00:00:00Z",
+            "temper-status: completed\ntemper-seq: 20\n",
+        );
+
+        let rows = scan_rows(&config, "goal", Some("temper")).unwrap();
+        let filtered = filter_rows(
+            rows,
+            ListFilters {
+                stage: None,
+                goal: None,
+                status: Some("completed"),
+            },
+        );
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].slug_for_tests(), "g2");
+    }
+
+    #[test]
+    fn truncate_to_limit() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        for i in 0..5 {
+            write_resource(
+                &config,
+                "temper",
+                "session",
+                &format!("s{i}"),
+                &format!("2026-04-0{}T00:00:00Z", i + 1),
+                "",
+            );
+        }
+        let mut rows = scan_rows(&config, "session", Some("temper")).unwrap();
+        sort_rows(&mut rows);
+        rows.truncate(2);
+        assert_eq!(rows.len(), 2);
+    }
+
+    #[test]
+    fn render_no_tty_emits_tab_header_and_rows() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "only",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: in-progress\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::NoTty,
+        })
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(
+            lines[0],
+            "Context\tType\tSlug\tUpdated\tStage\tMode\tEffort\tGoal"
+        );
+        assert!(lines[1].starts_with("temper\ttask\tonly\t2026-04-07"));
+    }
+
+    #[test]
+    fn render_pretty_has_table_structure() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "task",
+            "alpha",
+            "2026-04-07T00:00:00Z",
+            "temper-stage: backlog\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
+        );
+
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Pretty,
+        })
+        .unwrap();
+        let lines: Vec<&str> = out.lines().collect();
+        // header | separator | 1 data row
+        assert_eq!(lines.len(), 3, "expected 3 lines got: {out}");
+        assert!(lines[0].starts_with('|'), "header should start with pipe");
+        assert!(lines[1].contains("---"), "separator row contains dashes");
+        assert!(lines[2].contains("alpha"), "data row should contain slug");
+    }
+
+    #[test]
+    fn render_json_emits_full_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        write_resource(
+            &config,
+            "temper",
+            "research",
+            "note",
+            "2026-04-07T00:00:00Z",
+            "",
+        );
+        let out = render_list(&RenderListParams {
+            doc_type: "research",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        let arr = parsed.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["slug"], "note");
+        assert_eq!(arr[0]["title"], "Title note");
+        assert_eq!(arr[0]["temper-type"], "research");
+    }
+
+    #[test]
+    fn render_json_empty_list_emits_empty_array() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed, serde_json::json!([]));
+    }
+
+    #[test]
+    fn render_list_empty_pretty_returns_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        // No resources written — the pipeline should return an empty body
+        // so the CLI entry can render a "No X resources found" hint instead
+        // of a header-only table.
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Pretty,
+        })
+        .unwrap();
+        assert!(
+            out.trim().is_empty(),
+            "expected empty body for Pretty empty-list, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn render_list_empty_no_tty_returns_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        let out = render_list(&RenderListParams {
+            doc_type: "goal",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::NoTty,
+        })
+        .unwrap();
+        assert!(
+            out.trim().is_empty(),
+            "expected empty body for NoTty empty-list, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn render_list_respects_limit() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        for i in 0..5 {
+            write_resource(
+                &config,
+                "temper",
+                "session",
+                &format!("s{i}"),
+                &format!("2026-04-0{}T00:00:00Z", i + 1),
+                "",
+            );
+        }
+        let out = render_list(&RenderListParams {
+            doc_type: "session",
+            config: &config,
+            context: Some("temper"),
+            limit: Some(2),
+            filters: ListFilters::default(),
+            format: OutputFormat::Json,
+        })
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(parsed.as_array().unwrap().len(), 2);
     }
 }

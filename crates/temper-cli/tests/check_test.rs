@@ -10,7 +10,6 @@ fn test_check_valid_vault() {
         state_dir: dir.path().join(".temper"),
         contexts: vec!["default".to_string()],
         skill_output: dir.path().join("temper.md"),
-        skill_framework: "superpowers".to_string(),
     };
 
     let result = temper_cli::commands::check::run(&config, false);

@@ -41,8 +41,8 @@ pub enum Commands {
         context: Option<String>,
         #[arg(long, default_value = "20")]
         limit: usize,
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Manage resources (tasks, goals, sessions, research, concepts, decisions)
     Resource {
@@ -61,16 +61,16 @@ pub enum Commands {
         /// Filter by context
         #[arg(long)]
         context: Option<String>,
-        /// Output format (text or json)
-        #[arg(long, default_value = "text")]
-        format: String,
+        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Context primer for new sessions
     Warmup {
         #[arg(long)]
         context: Option<String>,
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Manage Claude Code skill
     Skill {
@@ -98,8 +98,8 @@ pub enum Commands {
         #[arg(long, default_value = "research")]
         doc_type: String,
         /// Output format
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long)]
+        format: Option<String>,
         /// Override size guardrails
         #[arg(long)]
         force: bool,
@@ -132,6 +132,12 @@ pub enum Commands {
         action: SyncAction,
     },
 
+    /// Manage temper global config
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Search the knowledge base
     Search {
         /// Search query text
@@ -145,9 +151,9 @@ pub enum Commands {
         /// Maximum results (default 10)
         #[arg(long)]
         limit: Option<i64>,
-        /// Output format (text or json)
-        #[arg(long, default_value = "text")]
-        format: String,
+        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        #[arg(long)]
+        format: Option<String>,
         /// Use text-only search (no local embedding needed)
         #[arg(long)]
         text_only: bool,
@@ -184,9 +190,9 @@ pub enum ResourceAction {
         show_template: bool,
         #[arg(long, hide = true)]
         stdin: bool,
-        /// Output format (text or json)
-        #[arg(long, default_value = "text")]
-        format: String,
+        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// List resources of a given type
     List {
@@ -208,9 +214,9 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Output format (text or json)
-        #[arg(long, default_value = "text")]
-        format: String,
+        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Show a resource's content
     Show {
@@ -222,9 +228,9 @@ pub enum ResourceAction {
         /// Filter by context
         #[arg(long)]
         context: Option<String>,
-        /// Output format (text or json)
-        #[arg(long, default_value = "text")]
-        format: String,
+        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Update a resource's frontmatter fields
     Update {
@@ -360,8 +366,8 @@ pub enum SyncAction {
         #[arg(long)]
         context: Vec<String>,
         /// Output format
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Show sync status without making changes
     Status {
@@ -369,21 +375,27 @@ pub enum SyncAction {
         #[arg(long)]
         context: Vec<String>,
         /// Output format
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Refresh manifest from server (non-destructive interleave)
     Refresh {
         /// Output format
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Reset manifest from scratch (backup + full rebuild)
     Reset {
         /// Output format
-        #[arg(long, default_value = "text")]
-        format: String,
+        #[arg(long)]
+        format: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Open config.toml in $EDITOR with validate-then-save semantics
+    Edit,
 }
 
 #[derive(Subcommand)]

@@ -10,7 +10,6 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
         state_dir,
         contexts: vec!["myapp".to_string()],
         skill_output: dir.path().join("temper.md"),
-        skill_framework: "superpowers".to_string(),
     }
 }
 
