@@ -119,6 +119,110 @@ async fn invite_only_blocks_non_members(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
+// 4b. Enriched 403 contains access details (no join request)
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn enriched_403_contains_access_details(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_profile = preflight(&app, &app.token).await;
+    let admin_id = profile_id(&admin_profile);
+
+    common::enable_invite_only(&pool, admin_id).await;
+
+    let second_token = common::generate_second_user_jwt();
+    preflight(&app, &second_token).await;
+
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body: Value = resp.json().await.expect("json parse");
+
+    // Top-level error structure
+    assert_eq!(body["error"]["code"], "SYSTEM_ACCESS_REQUIRED");
+    assert!(
+        body["error"]["message"].as_str().is_some(),
+        "error.message should be present"
+    );
+
+    // Details
+    let details = &body["error"]["details"];
+    assert_eq!(details["access_mode"], "invite_only");
+    assert!(
+        details["email"].as_str().is_some(),
+        "email should be present"
+    );
+    assert_eq!(
+        details["join_request_status"],
+        Value::Null,
+        "join_request_status should be null when never requested"
+    );
+    assert!(
+        details["request_url"].as_str().is_some(),
+        "request_url should be present"
+    );
+    assert!(
+        details["cli_command"].as_str().is_some(),
+        "cli_command should be present"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 4c. Enriched 403 shows pending join request status
+// ---------------------------------------------------------------------------
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn enriched_403_shows_pending_join_request_status(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    let admin_profile = preflight(&app, &app.token).await;
+    let admin_id = profile_id(&admin_profile);
+
+    common::enable_invite_only(&pool, admin_id).await;
+
+    let second_token = common::generate_second_user_jwt();
+    preflight(&app, &second_token).await;
+
+    // Second user submits a join request
+    let resp = app
+        .reqwest_client
+        .post(app.url("/api/access/requests"))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .json(&serde_json::json!({
+            "source": "cli",
+            "message": "Please let me in"
+        }))
+        .send()
+        .await
+        .expect("request failed");
+    assert_eq!(resp.status(), StatusCode::CREATED);
+
+    // Now hit a gated endpoint — should get 403 with pending status
+    let resp = app
+        .reqwest_client
+        .get(app.url("/api/resources"))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .send()
+        .await
+        .expect("request failed");
+
+    assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    let body: Value = resp.json().await.expect("json parse");
+
+    assert_eq!(body["error"]["code"], "SYSTEM_ACCESS_REQUIRED");
+    assert_eq!(
+        body["error"]["details"]["join_request_status"], "pending",
+        "should reflect pending join request"
+    );
+    assert_eq!(body["error"]["details"]["access_mode"], "invite_only");
+}
+
+// ---------------------------------------------------------------------------
 // 5. Auth-only routes bypass gate
 // ---------------------------------------------------------------------------
 
