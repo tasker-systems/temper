@@ -8,17 +8,24 @@ pub fn join(message: Option<&str>) -> crate::error::Result<()> {
     let message = message.map(|s| s.to_string());
     crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
-            let result = client
+            match client
                 .access()
                 .create_request(message.as_deref(), "cli", None)
                 .await
-                .map_err(crate::commands::client_err)?;
-
-            output::success("Access request submitted.");
-            output::plain("  You'll gain access once an admin approves your request.");
-            output::hint("  Run `temper team status` to check.");
-            output::blank();
-            output::dim(format!("  Request ID: {}", result.id));
+            {
+                Ok(result) => {
+                    output::success("Access request submitted.");
+                    output::plain("  You'll gain access once an admin approves your request.");
+                    output::hint("  Run `temper team status` to check.");
+                    output::blank();
+                    output::dim(format!("  Request ID: {}", result.id));
+                }
+                Err(temper_client::error::ClientError::Conflict { .. }) => {
+                    output::warning("You already have a pending request.");
+                    output::hint("  Run `temper team status` to check its status.");
+                }
+                Err(e) => return Err(crate::commands::client_err(e)),
+            }
 
             Ok(())
         })

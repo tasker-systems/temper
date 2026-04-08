@@ -1,8 +1,12 @@
 use thiserror::Error;
 
-/// Details from a system access gate rejection.
+/// Details from a system access gate rejection (CLI error rendering).
+///
+/// Distinct from `types::access_gate::SystemAccessDetails` which carries
+/// serde derives for API serialization. This version uses plain strings
+/// because it arrives via the client error chain (already deserialized).
 #[derive(Debug)]
-pub struct SystemAccessDetails {
+pub struct CliAccessDetails {
     pub email: Option<String>,
     pub display_name: Option<String>,
     pub access_mode: String,
@@ -53,7 +57,7 @@ pub enum TemperError {
     NotFound(String),
 
     #[error("system access required")]
-    SystemAccessRequired(Box<SystemAccessDetails>),
+    SystemAccessRequired(Box<CliAccessDetails>),
 }
 
 pub type Result<T> = std::result::Result<T, TemperError>;

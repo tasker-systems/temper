@@ -85,7 +85,7 @@ pub async fn create_remote(client: &temper_client::TemperClient, name: &str) -> 
         .contexts()
         .create(name)
         .await
-        .map_err(|e| crate::error::TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
     output::success(format!(
         "Created context '{}' ({})",
         context.name, context.id

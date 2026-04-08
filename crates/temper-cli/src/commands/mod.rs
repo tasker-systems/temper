@@ -32,7 +32,7 @@ pub fn client_err(e: temper_client::error::ClientError) -> crate::error::TemperE
             request_url,
             cli_command,
         } => crate::error::TemperError::SystemAccessRequired(Box::new(
-            temper_core::error::SystemAccessDetails {
+            temper_core::error::CliAccessDetails {
                 email,
                 display_name,
                 access_mode,
