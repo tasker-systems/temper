@@ -78,10 +78,6 @@ MANIFEST="$VAULT/.temper/manifest.json"
 if [[ -f "$MANIFEST" ]]; then
     say "==> Step 2: rewrite manifest paths"
     BAK="$MANIFEST.pre-migration-bak"
-    if [[ "$DRY" -eq 0 ]]; then
-        cp "$MANIFEST" "$BAK"
-        say "  backup: $BAK"
-    fi
 
     # Count paths that need rewriting (do not already start with @ or +)
     need=$(jq '[.entries[]? | .path | select(startswith("@") | not) | select(startswith("+") | not)] | length' "$MANIFEST")
@@ -89,6 +85,8 @@ if [[ -f "$MANIFEST" ]]; then
 
     if [[ "$need" -gt 0 ]]; then
         if [[ "$DRY" -eq 0 ]]; then
+            cp "$MANIFEST" "$BAK"
+            say "  backup: $BAK"
             tmp=$(mktemp)
             jq '(.entries[]? | .path) |= (if (startswith("@") or startswith("+")) then . else "@me/" + . end)' "$MANIFEST" > "$tmp"
             mv "$tmp" "$MANIFEST"
