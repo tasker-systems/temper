@@ -34,6 +34,7 @@ tempfile = "3"
 askama = "0.12"
 regex = "1"
 dialoguer = "0.12"
+validator = { version = "0.20", features = ["derive"] }
 
 [features]
 default = ["extract", "embed"]

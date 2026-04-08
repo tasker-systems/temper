@@ -1,6 +1,7 @@
 pub mod add;
 pub mod auth;
 pub mod check;
+pub mod config;
 pub mod context_cmd;
 pub mod doctor;
 pub mod events;

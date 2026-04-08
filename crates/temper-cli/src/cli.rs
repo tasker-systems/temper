@@ -132,6 +132,12 @@ pub enum Commands {
         action: SyncAction,
     },
 
+    /// Manage temper global config
+    Config {
+        #[command(subcommand)]
+        action: ConfigAction,
+    },
+
     /// Search the knowledge base
     Search {
         /// Search query text
@@ -384,6 +390,12 @@ pub enum SyncAction {
         #[arg(long, default_value = "text")]
         format: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigAction {
+    /// Open config.toml in $EDITOR with validate-then-save semantics
+    Edit,
 }
 
 #[derive(Subcommand)]
