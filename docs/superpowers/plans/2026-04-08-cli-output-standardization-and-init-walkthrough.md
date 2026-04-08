@@ -6,11 +6,24 @@
 
 **Architecture:** Introduce a three-variant `OutputFormat` enum (`Pretty`/`NoTty`/`Json`) with TTY auto-detection via `std::io::IsTerminal`. A `TableRenderer` and hardcoded `ColumnRegistry` live in `crates/temper-cli/src/output/`, driven by curated per-doc-type column lists that reference schema field names. `resource::list()` becomes the single pipeline that scans, parses, filters, sorts, and renders for all six doc types. `temper init` is rewritten as a `dialoguer` wizard with a non-interactive fallback, and `temper config edit` opens `$EDITOR` on a temp copy, loops until validation passes (using `validator` derives on `TemperConfig`), then atomically replaces the file.
 
-**Tech Stack:** Rust, clap, dialoguer 0.12, validator 0.20 (derive), anstream, anstyle, serde_json, jsonschema
+**Tech Stack:** Rust, clap, dialoguer 0.12, validator 0.20 (derive), anstream, anstyle, serde_json, jsonschema, tracing
 
 **Spec:** `docs/superpowers/specs/2026-04-08-cli-output-standardization-and-init-walkthrough-design.md`
 
 **Branch:** `jct/cli-enhancements-and-init-walkthrough`
+
+## Decisions Log (resolved during planning)
+
+These resolutions override anything in the original plan body that conflicts. Task sections below have been updated to match; this log is the canonical record.
+
+1. **Existing-vault detection in `temper init`** — warn only, do NOT offer to reconfigure. Point the user at `temper config edit` if they want to change anything. (Task 9)
+2. **`load_config` validation warnings** — add `tracing` as a dep of `temper-core` and emit `tracing::warn!` from `load_config_from` when `TemperConfig::validate()` fails. Binary-size cost is zero because every downstream binary already pulls in `tracing`. (Task 7 or new Task 7b.)
+3. **`auth.provider = "none"` runtime behavior** — `temper-client::config::build_oauth_config` already returns a `get(&provider)`-miss error. Clean break is acceptable; we only need to improve the error message so the user is told to run `temper config edit` or pick a real provider. (New task, see Task 11a.)
+4. **`AuthProvider` shape refactor** — replace `AuthProviderConfig` + `HashMap<String, AuthProviderConfig>` with a new `AuthProvider { name: String, authorize_url, token_url, client_id, audience, callback_url, scopes }` struct and `providers: Vec<AuthProvider>`. Lookup becomes `providers.iter().find(|p| p.name == auth.provider)`. Validator `#[validate(nested)]` traverses vec elements natively. **This is a clean TOML format break** — existing configs using `[auth.providers.auth0]` will no longer parse; the new format is `[[auth.providers]] name = "auth0"`. Users re-run `temper init` or hand-edit. Accepted because this branch already wipes other cruft. (Task 7.)
+5. **`TemperConfig::default()` vault path** — change from `"~/vault"` to `"~/Documents/temper-vault"` so `temper config edit` on first run seeds a sensible path. (Task 7 Step 5.)
+6. **`TableRenderer` output shape** — `render_pretty()` and `render_no_tty()` return `String`; callers pass the string to `output::plain()`. Easier to unit test, matches the existing `output::*` helper pattern, and the allocation cost is trivial for table-sized output. (Task 2.)
+
+---
 
 **Test commands:**
 - Unit tests (single): `cargo nextest run -p temper-cli <test_name>`
@@ -86,9 +99,11 @@ After each major step, report: what's done, what's next, any concerns about appr
 - `crates/temper-cli/src/main.rs`
 - `crates/temper-cli/src/config.rs` (drop `skill_framework` field)
 - `crates/temper-cli/Cargo.toml` (add `dialoguer`)
-- `crates/temper-core/src/types/config.rs`
+- `crates/temper-core/src/types/config.rs` (validator derives, AuthProvider refactor, default vault path, tracing warning)
 - `crates/temper-core/src/schema.rs` (add `display_fields`)
-- `crates/temper-core/Cargo.toml` (add `validator`)
+- `crates/temper-core/Cargo.toml` (add `validator`, `tracing`)
+- `crates/temper-client/src/config.rs` (Vec-based provider lookup, improved missing-provider error)
+- `crates/temper-client/src/config.rs` tests — update TOML fixtures to `[[auth.providers]]` format
 
 ---
 
@@ -1181,26 +1196,94 @@ git commit -m "Remove per-type list formatters superseded by unified pipeline"
 
 ---
 
-## Task 7: Add `validator` dep and derive `Validate` on `TemperConfig`
+## Task 7: Refactor AuthProvider to Vec, add `validator` derives, add `tracing` warnings
 
 **Files:**
 - Modify: `crates/temper-core/Cargo.toml`
 - Modify: `crates/temper-core/src/types/config.rs`
 
-- [ ] **Step 1: Add the dependency**
+This task covers Decisions 2, 4, and the validator portion of 5. It is larger than most tasks because the refactors are tightly coupled — validator nested traversal is the whole reason we're moving off HashMap, and the tracing warning hangs off the same `load_config_from` path.
+
+- [ ] **Step 1: Add dependencies**
 
 Add to `[dependencies]` in `crates/temper-core/Cargo.toml`:
 
 ```toml
 validator = { version = "0.20", features = ["derive"] }
+tracing = "0.1"
 ```
 
-- [ ] **Step 2: Write failing validation tests**
+- [ ] **Step 2: Write failing tests for the new AuthProvider shape + validator rules**
 
-Add to the `#[cfg(test)] mod tests` block in `crates/temper-core/src/types/config.rs`:
+Replace the existing `test_temper_config_toml_roundtrip` test in `crates/temper-core/src/types/config.rs` and add new tests. Put all of this inside the existing `#[cfg(test)] mod tests { ... }` block:
 
 ```rust
     use validator::Validate;
+
+    // --- new auth provider shape ---
+
+    #[test]
+    fn auth_providers_parse_as_array_of_tables() {
+        let toml_str = r#"
+[vault]
+path = "~/projects/kb-vault"
+
+[sync.subscriptions]
+contexts = ["temper"]
+
+[skill]
+output = "~/.claude/skills/temper"
+
+[auth]
+provider = "auth0"
+
+[[auth.providers]]
+name = "auth0"
+authorize_url = "https://temperkb.us.auth0.com/authorize"
+token_url = "https://temperkb.us.auth0.com/oauth/token"
+client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
+audience = "https://temperkb.io/api"
+scopes = ["openid", "profile", "email", "offline_access"]
+
+[cloud]
+api_url = "https://temperkb.io"
+"#;
+        let cfg: TemperConfig = toml::from_str(toml_str).expect("should parse");
+        assert_eq!(cfg.vault.path, "~/projects/kb-vault");
+        assert_eq!(cfg.auth.provider, "auth0");
+        assert_eq!(cfg.auth.providers.len(), 1);
+        assert_eq!(cfg.auth.providers[0].name, "auth0");
+        assert_eq!(
+            cfg.auth.providers[0].authorize_url,
+            "https://temperkb.us.auth0.com/authorize"
+        );
+    }
+
+    #[test]
+    fn auth_providers_lookup_by_name() {
+        let cfg = TemperConfig::default();
+        let active = cfg
+            .auth
+            .providers
+            .iter()
+            .find(|p| p.name == cfg.auth.provider);
+        assert!(active.is_some(), "default config should have its active provider");
+        assert_eq!(active.unwrap().name, "auth0");
+    }
+
+    #[test]
+    fn default_vault_path_is_documents_temper_vault() {
+        let cfg = TemperConfig::default();
+        assert_eq!(cfg.vault.path, "~/Documents/temper-vault");
+    }
+
+    // --- validator rules ---
+
+    #[test]
+    fn validate_accepts_default_config() {
+        let cfg = TemperConfig::default();
+        cfg.validate().expect("default config should validate");
+    }
 
     #[test]
     fn validate_rejects_empty_vault_path() {
@@ -1219,24 +1302,99 @@ Add to the `#[cfg(test)] mod tests` block in `crates/temper-core/src/types/confi
     }
 
     #[test]
-    fn validate_rejects_malformed_auth_authorize_url() {
+    fn validate_rejects_malformed_authorize_url_in_provider_vec() {
         let mut cfg = TemperConfig::default();
-        if let Some(p) = cfg.auth.providers.get_mut("auth0") {
-            p.authorize_url = "nope".into();
-        }
-        assert!(cfg.validate().is_err());
+        cfg.auth.providers[0].authorize_url = "nope".to_string();
+        let err = cfg.validate().unwrap_err();
+        let s = format!("{err}");
+        assert!(
+            s.contains("authorize_url") || s.contains("provider"),
+            "got: {s}"
+        );
     }
 
     #[test]
-    fn validate_accepts_default_config() {
-        let cfg = TemperConfig::default();
-        cfg.validate().expect("default config should validate");
+    fn validate_rejects_empty_provider_client_id() {
+        let mut cfg = TemperConfig::default();
+        cfg.auth.providers[0].client_id = String::new();
+        assert!(cfg.validate().is_err());
     }
 ```
 
-- [ ] **Step 3: Add `#[derive(Validate)]` and field attributes**
+Delete the old `test_temper_config_toml_roundtrip` test (the one using `[auth.providers.auth0]` dotted-form) — the replacement above covers it with the new format.
 
-In `crates/temper-core/src/types/config.rs`, add `use validator::Validate;` at the top and add derives + attributes:
+- [ ] **Step 3: Refactor types — `AuthProvider` replaces `AuthProviderConfig`, `providers` becomes `Vec<AuthProvider>`**
+
+In `crates/temper-core/src/types/config.rs`:
+
+1. Delete `use std::collections::HashMap;` at the top of the file (no longer needed once the refactor lands).
+2. Add `use validator::Validate;` near the other imports.
+3. Delete `AuthProviderConfig` entirely and replace with:
+
+```rust
+/// A single auth provider entry. Stored in `[[auth.providers]]` arrays in TOML.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct AuthProvider {
+    /// Provider name — referenced by `auth.provider` to pick the active entry.
+    #[validate(length(min = 1, message = "provider name cannot be empty"))]
+    pub name: String,
+    #[validate(url(message = "authorize_url must be a valid URL"))]
+    pub authorize_url: String,
+    #[validate(url(message = "token_url must be a valid URL"))]
+    pub token_url: String,
+    #[validate(length(min = 1, message = "client_id cannot be empty"))]
+    pub client_id: String,
+    #[validate(url(message = "audience must be a valid URL"))]
+    pub audience: String,
+    #[serde(default = "default_callback_url")]
+    pub callback_url: String,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+```
+
+4. Replace `AuthConfig`:
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct AuthConfig {
+    #[serde(default = "default_auth_provider")]
+    pub provider: String,
+    #[serde(default)]
+    #[validate(nested)]
+    pub providers: Vec<AuthProvider>,
+}
+```
+
+5. Replace the `Default` impl for `AuthConfig`:
+
+```rust
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_auth_provider(),
+            providers: vec![AuthProvider {
+                name: "auth0".to_string(),
+                authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
+                token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
+                client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
+                audience: "https://temperkb.io/api".to_string(),
+                callback_url: default_callback_url(),
+                scopes: vec![
+                    "openid".to_string(),
+                    "profile".to_string(),
+                    "email".to_string(),
+                    "offline_access".to_string(),
+                ],
+            }],
+        }
+    }
+}
+```
+
+- [ ] **Step 4: Add `Validate` derives to the remaining config types**
+
+In the same file, add `Validate` to `TemperConfig`, `CloudVaultConfig`, `SkillConfig`, and `CloudSection`:
 
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -1270,30 +1428,6 @@ pub struct SkillConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-pub struct AuthProviderConfig {
-    #[validate(url(message = "authorize_url must be a valid URL"))]
-    pub authorize_url: String,
-    #[validate(url(message = "token_url must be a valid URL"))]
-    pub token_url: String,
-    #[validate(length(min = 1, message = "client_id cannot be empty"))]
-    pub client_id: String,
-    #[validate(url(message = "audience must be a valid URL"))]
-    pub audience: String,
-    #[serde(default = "default_callback_url")]
-    pub callback_url: String,
-    #[serde(default)]
-    pub scopes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-pub struct AuthConfig {
-    #[serde(default = "default_auth_provider")]
-    pub provider: String,
-    #[serde(default)]
-    pub providers: HashMap<String, AuthProviderConfig>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
     #[serde(default = "default_api_url")]
     #[validate(url(message = "api_url must be a valid URL"))]
@@ -1301,47 +1435,174 @@ pub struct CloudSection {
 }
 ```
 
-Note: `AuthConfig` uses `nested` on the parent only if its fields derive `Validate`. Since `HashMap<String, AuthProviderConfig>` cannot be auto-nested by validator, leave `AuthConfig` itself derived but validate providers manually via a custom validator only if a test demands it. For now, keep the `#[derive(Validate)]` but do NOT put `#[validate(nested)]` on `providers` — add a custom function:
+- [ ] **Step 5: Update the `TemperConfig::default()` vault path**
+
+Change the `Default` impl:
 
 ```rust
-use validator::ValidationError;
-
-fn validate_providers(
-    providers: &HashMap<String, AuthProviderConfig>,
-) -> std::result::Result<(), ValidationError> {
-    for provider in providers.values() {
-        provider
-            .validate()
-            .map_err(|_| ValidationError::new("auth_provider_invalid"))?;
+impl Default for TemperConfig {
+    fn default() -> Self {
+        Self {
+            vault: CloudVaultConfig {
+                path: "~/Documents/temper-vault".to_string(),
+            },
+            sync: Default::default(),
+            cli: Default::default(),
+            skill: Default::default(),
+            auth: Default::default(),
+            cloud: Default::default(),
+        }
     }
-    Ok(())
 }
 ```
 
-And annotate:
+Note: the `cli: Default::default()` line is removed in Task 8 — leave it here for now so this task compiles in isolation.
+
+- [ ] **Step 6: Emit a tracing warning when `load_config_from` loads an invalid config**
+
+Edit `load_config_from` in the same file to run validation after parsing and emit a warning (without blocking startup):
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-pub struct AuthConfig {
-    #[serde(default = "default_auth_provider")]
-    pub provider: String,
-    #[serde(default)]
-    #[validate(custom(function = "validate_providers"))]
-    pub providers: HashMap<String, AuthProviderConfig>,
+/// Load config from a specific path (useful for tests).
+pub fn load_config_from(path: &std::path::Path) -> Result<TemperConfig, String> {
+    if !path.exists() {
+        return Ok(TemperConfig::default());
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {}", path.display(), e))?;
+    let cfg: TemperConfig = toml::from_str(&content)
+        .map_err(|e| format!("config parse error in {}: {}", path.display(), e))?;
+    if let Err(e) = cfg.validate() {
+        tracing::warn!(
+            path = %path.display(),
+            error = %e,
+            "config at {} has validation issues — run `temper config edit` to fix",
+            path.display()
+        );
+    }
+    Ok(cfg)
 }
 ```
 
-- [ ] **Step 4: Verify tests pass**
+Add `use validator::Validate;` at the top of the file if it's not already present for the impl paths.
+
+- [ ] **Step 7: Verify tests pass**
 
 ```
 cargo nextest run -p temper-core
+cargo clippy -p temper-core --all-features -- -D warnings
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 8: Commit**
 
 ```
 git add crates/temper-core/Cargo.toml crates/temper-core/src/types/config.rs
-git commit -m "Add validator derives for TemperConfig semantic checks"
+git commit -m "Refactor AuthProvider to Vec, add validator derives, warn on invalid config load"
+```
+
+Note: temper-client will stop compiling after this commit because it still references `AuthProviderConfig` and `HashMap`. Task 7b immediately fixes it — do NOT land Task 7 without Task 7b.
+
+---
+
+## Task 7b: Update `temper-client` for the new `AuthProvider` Vec shape
+
+**Files:**
+- Modify: `crates/temper-client/src/config.rs`
+
+This task restores `temper-client` to compile after the Task 7 refactor. It also implements the improved missing-provider error message (Decision 3).
+
+- [ ] **Step 1: Read `crates/temper-client/src/config.rs` end-to-end**
+
+Understand the current `build_oauth_config` function (~line 37), its tests, and the TOML fixtures embedded in tests (they currently use `[auth.providers.auth0]` dotted form).
+
+- [ ] **Step 2: Write failing tests for the new lookup + improved error**
+
+Replace the existing test fixtures (which use the old TOML format) with new ones using `[[auth.providers]]`. Add an error-message assertion test:
+
+```rust
+    #[test]
+    fn oauth_config_missing_provider_returns_helpful_error() {
+        use temper_core::types::config::{AuthConfig, CloudSection, CloudVaultConfig, TemperConfig, UnifiedSyncConfig, SkillConfig};
+        let cfg = TemperConfig {
+            vault: CloudVaultConfig { path: "~/vault".into() },
+            sync: UnifiedSyncConfig::default(),
+            skill: SkillConfig::default(),
+            auth: AuthConfig {
+                provider: "none".to_string(),
+                providers: Vec::new(),
+            },
+            cloud: CloudSection::default(),
+        };
+        let err = build_oauth_config(&cfg).expect_err("should fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cloud sync is disabled") || msg.contains("temper config edit"),
+            "error should guide the user: {msg}"
+        );
+    }
+```
+
+Also update any existing TOML-fixture tests in this file from the dotted form (`[auth.providers.auth0]`) to the array form (`[[auth.providers]]` with `name = "auth0"`). Read the existing tests at lines ~120-280 to find all fixtures that need updating.
+
+- [ ] **Step 3: Update `build_oauth_config` to use Vec lookup and emit a helpful error**
+
+Replace the body of `build_oauth_config`:
+
+```rust
+pub fn build_oauth_config(config: &TemperConfig) -> Result<OAuthConfig, String> {
+    let provider: &AuthProvider = config
+        .auth
+        .providers
+        .iter()
+        .find(|p| p.name == config.auth.provider)
+        .ok_or_else(|| {
+            if config.auth.provider == "none" || config.auth.providers.is_empty() {
+                "cloud sync is disabled for this vault — run `temper config edit` and \
+                 set `auth.provider` to a configured provider, or re-run `temper init` \
+                 and pick an auth provider"
+                    .to_string()
+            } else {
+                format!(
+                    "auth provider '{}' not found in [[auth.providers]] — run `temper config edit` to fix",
+                    config.auth.provider
+                )
+            }
+        })?;
+    Ok(OAuthConfig {
+        authorize_url: provider.authorize_url.clone(),
+        token_url: provider.token_url.clone(),
+        client_id: provider.client_id.clone(),
+        audience: Some(provider.audience.clone()),
+        callback_url: provider.callback_url.clone(),
+        scopes: provider.scopes.clone(),
+    })
+}
+```
+
+Update the import at the top of the file:
+
+```rust
+use temper_core::types::config::{AuthProvider, TemperConfig};
+```
+
+(Remove `AuthProviderConfig` from the import.)
+
+- [ ] **Step 4: Update remaining test bodies that construct `AuthProviderConfig` directly**
+
+Any test that hand-builds `AuthProviderConfig { ... }` must be changed to `AuthProvider { name: "...".into(), ... }`. Search the file for `AuthProviderConfig` and replace. Any test that constructs `providers: HashMap::new()` becomes `providers: Vec::new()`.
+
+- [ ] **Step 5: Verify build and tests**
+
+```
+cargo build -p temper-client --all-features
+cargo nextest run -p temper-client
+```
+
+- [ ] **Step 6: Commit**
+
+```
+git add crates/temper-client/src/config.rs
+git commit -m "Adapt temper-client to AuthProvider Vec shape with helpful missing-provider error"
 ```
 
 ---
@@ -1356,7 +1617,7 @@ git commit -m "Add validator derives for TemperConfig semantic checks"
 
 - [ ] **Step 1: Write failing test that proves legacy configs still parse**
 
-Add to the test module in `crates/temper-core/src/types/config.rs`:
+Add to the test module in `crates/temper-core/src/types/config.rs`. Note: Task 7 already changed the default vault path; this task only removes the `[cli]` and `skill.framework` fields. The stale-config test must use the NEW `[[auth.providers]]` format (Task 7) plus the dropped `[cli]` and `skill.framework` fields:
 
 ```rust
     #[test]
@@ -1365,7 +1626,7 @@ Add to the test module in `crates/temper-core/src/types/config.rs`:
         // is that serde drops them silently rather than failing to parse.
         let toml_str = r#"
 [vault]
-path = "~/vault"
+path = "~/Documents/temper-vault"
 
 [cli]
 progress = "bar"
@@ -1375,7 +1636,7 @@ output = "~/.claude/skills/temper"
 framework = "superpowers"
 "#;
         let cfg: TemperConfig = toml::from_str(toml_str).expect("stale config must parse");
-        assert_eq!(cfg.vault.path, "~/vault");
+        assert_eq!(cfg.vault.path, "~/Documents/temper-vault");
         assert_eq!(cfg.skill.output, "~/.claude/skills/temper");
     }
 ```
@@ -1386,8 +1647,26 @@ In `crates/temper-core/src/types/config.rs`:
 
 1. Delete the `CliConfig` struct, its `Default` impl, and `default_progress()`.
 2. In `TemperConfig`, delete `pub cli: CliConfig,`.
-3. In `SkillConfig`, delete `framework` field and `default_skill_framework()`.
-4. Update the `Default` impl for `SkillConfig`:
+3. Update the `Default` impl for `TemperConfig` — remove the `cli: Default::default(),` line (it was left in Task 7 Step 5 for that task's isolated compile to work):
+
+```rust
+impl Default for TemperConfig {
+    fn default() -> Self {
+        Self {
+            vault: CloudVaultConfig {
+                path: "~/Documents/temper-vault".to_string(),
+            },
+            sync: Default::default(),
+            skill: Default::default(),
+            auth: Default::default(),
+            cloud: Default::default(),
+        }
+    }
+}
+```
+
+4. In `SkillConfig`, delete `framework` field and `default_skill_framework()`.
+5. Update the `Default` impl for `SkillConfig`:
 
 ```rust
 impl Default for SkillConfig {
@@ -1397,7 +1676,7 @@ impl Default for SkillConfig {
 }
 ```
 
-5. Update existing tests in the file that reference `config.cli.progress` or `config.skill.framework` — delete those assertions.
+6. Update existing tests in the file that reference `config.cli.progress` or `config.skill.framework` — delete those assertions.
 
 - [ ] **Step 3: Update `temper-cli::config::Config`**
 
@@ -1485,7 +1764,8 @@ mod tests {
         assert!(toml.contains(r#"path = "/tmp/my-vault""#));
         assert!(toml.contains("[auth]"));
         assert!(toml.contains(r#"provider = "auth0""#));
-        assert!(toml.contains("[auth.providers.auth0]"));
+        assert!(toml.contains("[[auth.providers]]"));
+        assert!(toml.contains(r#"name = "auth0""#));
         assert!(toml.contains("[cloud]"));
         assert!(toml.contains(r#"api_url = "https://temperkb.io""#));
         // Must NOT contain removed fields
@@ -1502,8 +1782,39 @@ mod tests {
         };
         let toml = render_config_toml(&answers);
         assert!(toml.contains(r#"provider = "none""#));
-        // no auth0 provider block when none chosen
-        assert!(!toml.contains("[auth.providers.auth0]"));
+        // no auth0 provider entry when none chosen
+        assert!(!toml.contains("[[auth.providers]]"));
+    }
+
+    #[test]
+    fn auth0_writes_array_of_tables_format() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::Auth0,
+        };
+        let toml = render_config_toml(&answers);
+        // Must use the new array-of-tables format, NOT the old dotted-map form
+        assert!(toml.contains("[[auth.providers]]"));
+        assert!(toml.contains(r#"name = "auth0""#));
+        assert!(!toml.contains("[auth.providers.auth0]"), "must not use old dotted form");
+    }
+
+    #[test]
+    fn apply_answers_warns_on_existing_vault_but_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("existing");
+        // Pre-create a .temper/ marker to simulate an existing vault
+        std::fs::create_dir_all(vault.join(".temper")).unwrap();
+        let answers = WizardAnswers {
+            vault_path: vault.to_string_lossy().to_string(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::Auth0,
+        };
+        // Should succeed (no error) — the existing-vault warning is emitted via output::warning
+        // and does not block. Test verifies idempotent behavior.
+        apply_answers(&answers, false).expect("should warn but succeed");
+        assert!(vault.join(".temper/manifest.json").exists());
     }
 
     #[test]
@@ -1683,6 +1994,18 @@ fn print_summary(answers: &WizardAnswers, register_global: bool) {
 /// Write vault dirs and (optionally) the global config file.
 pub fn apply_answers(answers: &WizardAnswers, register_global: bool) -> Result<()> {
     let vault = PathBuf::from(&answers.vault_path);
+
+    // Warn if a .temper/ marker already exists — per Decision 1 we do not
+    // offer to reconfigure, we just point the user at `temper config edit`.
+    let marker = vault.join(".temper");
+    if marker.exists() {
+        output::warning(format!(
+            "vault already exists at {}; re-running init is idempotent. \
+             To change settings, run `temper config edit`.",
+            vault.display()
+        ));
+    }
+
     std::fs::create_dir_all(&vault)?;
 
     let state_dir = vault.join(".temper");
@@ -1735,7 +2058,8 @@ pub fn render_config_toml(answers: &WizardAnswers) -> String {
         AuthChoice::Auth0 => r#"[auth]
 provider = "auth0"
 
-[auth.providers.auth0]
+[[auth.providers]]
+name = "auth0"
 authorize_url = "https://temperkb.us.auth0.com/authorize"
 token_url = "https://temperkb.us.auth0.com/oauth/token"
 client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
@@ -1764,7 +2088,7 @@ api_url = "https://temperkb.io"
 }
 ```
 
-Note: `AuthConfig` with `provider = "none"` must be tolerated by `temper-client`. If tests reveal it currently panics, add a tolerant branch in `temper-client` auth bootstrap (out of scope for this task unless tests demand it).
+Note: `auth.provider = "none"` is handled by Task 7b, which makes `temper-client::build_oauth_config` return a helpful error instead of panicking when no matching provider exists.
 
 - [ ] **Step 4: Verify tests pass**
 
@@ -1890,7 +2214,8 @@ output = "~/.claude/skills/temper"
 [auth]
 provider = "auth0"
 
-[auth.providers.auth0]
+[[auth.providers]]
+name = "auth0"
 authorize_url = "https://example.com/a"
 token_url = "https://example.com/t"
 client_id = "cid"
