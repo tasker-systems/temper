@@ -109,6 +109,8 @@ pub fn load_from(global: &TemperConfig, cli_vault: Option<&str>) -> Config {
         state_dir: vault_root.join(".temper"),
         vault_root,
         contexts: global.sync.subscriptions.contexts.clone(),
+        // Populated in a future session once vault_config sync lands; until
+        // then owner_for_context falls back to "@me".
         subscriptions: Vec::new(),
         skill_output: expand_tilde(&global.skill.output),
         skill_framework: global.skill.framework.clone(),
@@ -135,6 +137,8 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
         state_dir: vault_root.join(".temper"),
         vault_root,
         contexts: global.sync.subscriptions.contexts.clone(),
+        // Populated in a future session once vault_config sync lands; until
+        // then owner_for_context falls back to "@me".
         subscriptions: Vec::new(),
         skill_output: expand_tilde(&global.skill.output),
         skill_framework: global.skill.framework.clone(),
