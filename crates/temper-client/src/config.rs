@@ -6,7 +6,7 @@
 //! adds client-specific conveniences (API URL resolution, OAuth config, and
 //! building a fully-configured client).
 
-use temper_core::types::config::{AuthProviderConfig, TemperConfig};
+use temper_core::types::config::{AuthProvider, TemperConfig};
 
 // ---------------------------------------------------------------------------
 // Load / resolve  (delegated to temper-core)
@@ -32,17 +32,28 @@ pub fn api_url(config: &TemperConfig) -> String {
 
 /// Build an [`OAuthConfig`](crate::login::OAuthConfig) from the active provider.
 ///
-/// Returns an error when the named provider is not present in the config.
+/// Returns an error when the named provider is not present in the config,
+/// or when `auth.provider` is set to `"none"` (cloud sync disabled).
 pub fn oauth_config(config: &TemperConfig) -> crate::error::Result<crate::login::OAuthConfig> {
-    let provider: &AuthProviderConfig = config
+    let provider: &AuthProvider = config
         .auth
         .providers
-        .get(&config.auth.provider)
+        .iter()
+        .find(|p| p.name == config.auth.provider)
         .ok_or_else(|| {
-            crate::error::ClientError::Other(format!(
-                "auth provider '{}' not found in config",
-                config.auth.provider
-            ))
+            let msg = if config.auth.provider == "none" || config.auth.providers.is_empty() {
+                "cloud sync is disabled for this vault — run `temper config edit` and set \
+                 `auth.provider` to a configured provider, or re-run `temper init` and \
+                 pick an auth provider"
+                    .to_string()
+            } else {
+                format!(
+                    "auth provider '{}' not found in [[auth.providers]] — run \
+                     `temper config edit` to fix",
+                    config.auth.provider
+                )
+            };
+            crate::error::ClientError::Other(msg)
         })?;
     Ok(crate::login::OAuthConfig {
         authorize_url: provider.authorize_url.clone(),
@@ -100,7 +111,6 @@ pub fn build_client() -> crate::error::Result<crate::TemperClient> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::fs;
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -109,6 +119,16 @@ mod tests {
 
     /// Serialize tests that mutate `TEMPER_API_URL` to prevent races.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Find a provider in the Vec by name (test convenience).
+    fn find_provider<'a>(config: &'a TemperConfig, name: &str) -> &'a AuthProvider {
+        config
+            .auth
+            .providers
+            .iter()
+            .find(|p| p.name == name)
+            .unwrap_or_else(|| panic!("provider {name} not found"))
+    }
 
     // --- load_cloud_config ---
 
@@ -119,7 +139,7 @@ mod tests {
         let config = load_cloud_config_from(&path).unwrap();
         assert_eq!(config.auth.provider, "auth0");
         assert_eq!(config.cloud.api_url, "https://temperkb.io");
-        let provider = config.auth.providers.get("auth0").unwrap();
+        let provider = find_provider(&config, "auth0");
         assert_eq!(
             provider.authorize_url,
             "https://temperkb.us.auth0.com/authorize"
@@ -145,7 +165,8 @@ path = "~/projects/knowledge"
 [auth]
 provider = "my_provider"
 
-[auth.providers.my_provider]
+[[auth.providers]]
+name          = "my_provider"
 authorize_url = "https://example.com/auth"
 token_url     = "https://example.com/token"
 client_id     = "abc123"
@@ -159,7 +180,7 @@ api_url = "https://api.example.com"
         let config = load_cloud_config_from(&path).unwrap();
         assert_eq!(config.auth.provider, "my_provider");
         assert_eq!(config.cloud.api_url, "https://api.example.com");
-        let p = config.auth.providers.get("my_provider").unwrap();
+        let p = find_provider(&config, "my_provider");
         assert_eq!(p.client_id, "abc123");
         assert_eq!(p.scopes, vec!["openid", "profile"]);
     }
@@ -206,7 +227,8 @@ path = "~/vault"
 [auth]
 provider = "neon_auth"
 
-[auth.providers.neon_auth]
+[[auth.providers]]
+name          = "neon_auth"
 authorize_url = "https://id.example.com/auth"
 token_url     = "https://id.example.com/token"
 client_id     = "client_xyz"
@@ -235,12 +257,40 @@ scopes        = ["openid"]
             skill: Default::default(),
             auth: AuthConfig {
                 provider: "nonexistent".to_string(),
-                providers: HashMap::new(),
+                providers: Vec::new(),
             },
             cloud: CloudSection::default(),
         };
         let err = oauth_config(&config).unwrap_err();
-        assert!(err.to_string().contains("nonexistent"));
+        let msg = err.to_string();
+        // With empty providers, the helpful error guides the user
+        assert!(
+            msg.contains("cloud sync is disabled") || msg.contains("temper config edit"),
+            "expected helpful guidance, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn oauth_config_none_provider_returns_disabled_hint() {
+        let config = TemperConfig {
+            vault: temper_core::types::config::CloudVaultConfig {
+                path: "~/vault".to_string(),
+            },
+            sync: Default::default(),
+            cli: Default::default(),
+            skill: Default::default(),
+            auth: AuthConfig {
+                provider: "none".to_string(),
+                providers: Vec::new(),
+            },
+            cloud: CloudSection::default(),
+        };
+        let err = oauth_config(&config).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cloud sync is disabled"),
+            "expected disabled hint, got: {msg}"
+        );
     }
 
     // --- default provider tests ---
@@ -251,7 +301,7 @@ scopes        = ["openid"]
         let path = dir.path().join("config.toml");
         let config = load_cloud_config_from(&path).unwrap();
         assert_eq!(config.auth.provider, "auth0");
-        let provider = config.auth.providers.get("auth0").unwrap();
+        let provider = find_provider(&config, "auth0");
         assert_eq!(
             provider.authorize_url,
             "https://temperkb.us.auth0.com/authorize"
@@ -276,7 +326,8 @@ path = "~/vault"
 [auth]
 provider = "keycloak"
 
-[auth.providers.keycloak]
+[[auth.providers]]
+name          = "keycloak"
 authorize_url = "https://sso.example.com/auth"
 token_url     = "https://sso.example.com/token"
 client_id     = "custom-client"
@@ -286,7 +337,7 @@ scopes        = ["openid", "profile"]
         fs::write(&path, toml).unwrap();
         let config = load_cloud_config_from(&path).unwrap();
         assert_eq!(config.auth.provider, "keycloak");
-        let p = config.auth.providers.get("keycloak").unwrap();
+        let p = find_provider(&config, "keycloak");
         assert_eq!(p.audience, "custom-api");
     }
 
@@ -294,8 +345,17 @@ scopes        = ["openid", "profile"]
 
     #[test]
     fn build_client_succeeds_with_defaults() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        // Point TEMPER_GLOBAL_CONFIG at a non-existent path inside a temp dir
+        // so load_config() falls back to TemperConfig::default() instead of
+        // reading the developer's real ~/.config/temper/config.toml (which
+        // might be in any format at any time).
+        let dir = TempDir::new().unwrap();
+        let nonexistent = dir.path().join("no-such-config.toml");
+        std::env::set_var("TEMPER_GLOBAL_CONFIG", &nonexistent);
         std::env::remove_var("TEMPER_API_URL");
         let result = build_client();
+        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
         assert!(result.is_ok(), "build_client failed: {:?}", result.err());
     }
 
