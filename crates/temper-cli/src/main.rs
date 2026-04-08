@@ -46,7 +46,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
-            temper_cli::commands::events::run(&config, context, limit, &format)
+            let format = temper_cli::format::resolve_format_str(format.as_deref());
+            temper_cli::commands::events::run(&config, context, limit, format)
         }
         Commands::Resource { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
@@ -73,6 +74,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "--title is required for resource create".into(),
                         )
                     })?;
+                    let format = temper_cli::format::resolve_format_str(format.as_deref());
                     temper_cli::commands::resource::create(
                         &config,
                         &r#type,
@@ -82,7 +84,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         mode.as_deref(),
                         effort.as_deref(),
                         slug.as_deref(),
-                        &format,
+                        format,
                     )
                 }
                 ResourceAction::List {
@@ -93,30 +95,36 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     goal,
                     status,
                     format,
-                } => temper_cli::commands::resource::list(
-                    &config,
-                    temper_cli::commands::resource::ListParams {
-                        doc_type: &r#type,
-                        context: context.as_deref(),
-                        limit,
-                        stage: stage.as_deref(),
-                        goal: goal.as_deref(),
-                        status: status.as_deref(),
-                        format: &format,
-                    },
-                ),
+                } => {
+                    let format = temper_cli::format::resolve_format_str(format.as_deref());
+                    temper_cli::commands::resource::list(
+                        &config,
+                        temper_cli::commands::resource::ListParams {
+                            doc_type: &r#type,
+                            context: context.as_deref(),
+                            limit,
+                            stage: stage.as_deref(),
+                            goal: goal.as_deref(),
+                            status: status.as_deref(),
+                            format,
+                        },
+                    )
+                }
                 ResourceAction::Show {
                     slug,
                     r#type,
                     context,
                     format,
-                } => temper_cli::commands::resource::show(
-                    &config,
-                    &r#type,
-                    &slug,
-                    context.as_deref(),
-                    &format,
-                ),
+                } => {
+                    let format = temper_cli::format::resolve_format_str(format.as_deref());
+                    temper_cli::commands::resource::show(
+                        &config,
+                        &r#type,
+                        &slug,
+                        context.as_deref(),
+                        format,
+                    )
+                }
                 ResourceAction::Update {
                     slug,
                     r#type,
@@ -195,7 +203,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     temper_cli::commands::doctor::run_fix(&config, context.as_deref(), dry_run)?;
                 }
                 None => {
-                    temper_cli::commands::doctor::run(&config, context.as_deref(), &format)?;
+                    let format = temper_cli::format::resolve_format_str(format.as_deref());
+                    temper_cli::commands::doctor::run(&config, context.as_deref(), format)?;
                 }
             }
             Ok(())
@@ -203,7 +212,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         Commands::Warmup { context, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
-            temper_cli::commands::warmup::run(&config, context, &format)
+            let format = temper_cli::format::resolve_format_str(format.as_deref());
+            temper_cli::commands::warmup::run(&config, context, format)
         }
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(),
@@ -246,23 +256,38 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             force,
             dry_run,
             ignore,
-        } => commands::add::run(
-            &path,
-            dir,
-            context.as_deref(),
-            &doc_type,
-            &format,
-            force,
-            dry_run,
-            ignore.as_deref(),
-        ),
+        } => {
+            let format = temper_cli::format::resolve_format_str(format.as_deref());
+            commands::add::run(
+                &path,
+                dir,
+                context.as_deref(),
+                &doc_type,
+                format,
+                force,
+                dry_run,
+                ignore.as_deref(),
+            )
+        }
         Commands::Pull { resource_id } => commands::pull::run(&resource_id),
         Commands::Remove { resource_id, force } => commands::remove::run(&resource_id, force),
         Commands::Sync { action } => match action {
-            SyncAction::Run { context, format } => commands::sync_cmd::run(&context, &format),
-            SyncAction::Status { context, format } => commands::sync_cmd::status(&context, &format),
-            SyncAction::Refresh { format } => commands::sync_cmd::refresh(&format),
-            SyncAction::Reset { format } => commands::sync_cmd::reset(&format),
+            SyncAction::Run { context, format } => {
+                let format = temper_cli::format::resolve_format_str(format.as_deref());
+                commands::sync_cmd::run(&context, format)
+            }
+            SyncAction::Status { context, format } => {
+                let format = temper_cli::format::resolve_format_str(format.as_deref());
+                commands::sync_cmd::status(&context, format)
+            }
+            SyncAction::Refresh { format } => {
+                let format = temper_cli::format::resolve_format_str(format.as_deref());
+                commands::sync_cmd::refresh(format)
+            }
+            SyncAction::Reset { format } => {
+                let format = temper_cli::format::resolve_format_str(format.as_deref());
+                commands::sync_cmd::reset(format)
+            }
         },
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
@@ -274,13 +299,16 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             limit,
             format,
             text_only,
-        } => commands::search_cmd::run(
-            &query,
-            context.as_deref(),
-            doc_type.as_deref(),
-            limit,
-            &format,
-            text_only,
-        ),
+        } => {
+            let format = temper_cli::format::resolve_format_str(format.as_deref());
+            commands::search_cmd::run(
+                &query,
+                context.as_deref(),
+                doc_type.as_deref(),
+                limit,
+                format,
+                text_only,
+            )
+        }
     }
 }

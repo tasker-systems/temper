@@ -46,6 +46,21 @@ impl OutputFormat {
             Self::NoTty
         }
     }
+
+    /// Canonical string form for passing to existing `&str`-taking callsites.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pretty => "pretty",
+            Self::NoTty => "no-tty",
+            Self::Json => "json",
+        }
+    }
+}
+
+/// Resolve an optional explicit format to its canonical string form
+/// (auto-detecting the TTY when `None`). Convenience wrapper for dispatch.
+pub fn resolve_format_str(explicit: Option<&str>) -> &'static str {
+    OutputFormat::resolve(explicit).as_str()
 }
 
 /// Print a serializable value in the requested format.
