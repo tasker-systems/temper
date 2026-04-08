@@ -272,6 +272,8 @@ pub static SYSTEM_MANAGED_FIELDS: &[&str] = &[
     "temper-id",
     "temper-provisional-id",
     "temper-type",
+    "temper-context",
+    "temper-owner",
     "temper-created",
     "temper-updated",
     "temper-source",
