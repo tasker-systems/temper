@@ -59,6 +59,33 @@ impl<'a> Vault<'a> {
     pub fn rel_path(&self, owner: &str, context: &str, doc_type: &str, slug: &str) -> String {
         format!("{owner}/{context}/{doc_type}/{slug}.md")
     }
+
+    /// Parse a vault-relative path back into components.
+    /// Returns `None` if the path is malformed (missing owner sigil, wrong segment
+    /// count, or non-`.md` filename).
+    ///
+    /// Associated function — no Vault instance needed. Callers that only parse
+    /// manifest paths do not need to construct a Vault.
+    pub fn parse_rel(rel: &str) -> Option<ParsedVaultPath<'_>> {
+        let parts: Vec<&str> = rel.split('/').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        let owner = parts[0];
+        if !(owner.starts_with('@') || owner.starts_with('+')) {
+            return None;
+        }
+        let context = parts[1];
+        let doc_type = parts[2];
+        let filename = parts[3];
+        let slug = filename.strip_suffix(".md")?;
+        Some(ParsedVaultPath {
+            owner,
+            context,
+            doc_type,
+            slug,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -118,5 +145,54 @@ mod tests {
             v.rel_path("+team-x", "general", "goal", "q4-launch"),
             "+team-x/general/goal/q4-launch.md".to_string()
         );
+    }
+
+    #[test]
+    fn parse_rel_valid_personal_owner() {
+        let parsed = Vault::parse_rel("@me/temper/task/my-task.md").unwrap();
+        assert_eq!(parsed.owner, "@me");
+        assert_eq!(parsed.context, "temper");
+        assert_eq!(parsed.doc_type, "task");
+        assert_eq!(parsed.slug, "my-task");
+    }
+
+    #[test]
+    fn parse_rel_valid_team_owner() {
+        let parsed = Vault::parse_rel("+platform-eng/temper/goal/q4.md").unwrap();
+        assert_eq!(parsed.owner, "+platform-eng");
+        assert_eq!(parsed.context, "temper");
+        assert_eq!(parsed.doc_type, "goal");
+        assert_eq!(parsed.slug, "q4");
+    }
+
+    #[test]
+    fn parse_rel_rejects_no_sigil() {
+        assert!(Vault::parse_rel("temper/task/my-task.md").is_none());
+    }
+
+    #[test]
+    fn parse_rel_rejects_too_few_segments() {
+        assert!(Vault::parse_rel("@me/temper/task").is_none());
+        assert!(Vault::parse_rel("@me/temper").is_none());
+        assert!(Vault::parse_rel("@me").is_none());
+        assert!(Vault::parse_rel("").is_none());
+    }
+
+    #[test]
+    fn parse_rel_rejects_non_md_extension() {
+        assert!(Vault::parse_rel("@me/temper/task/my-task.txt").is_none());
+        assert!(Vault::parse_rel("@me/temper/task/my-task").is_none());
+    }
+
+    #[test]
+    fn parse_rel_round_trips_with_rel_path() {
+        let root = root();
+        let v = Vault::new(&root);
+        let rel = v.rel_path("@me", "temper", "task", "round-trip");
+        let parsed = Vault::parse_rel(&rel).unwrap();
+        assert_eq!(parsed.owner, "@me");
+        assert_eq!(parsed.context, "temper");
+        assert_eq!(parsed.doc_type, "task");
+        assert_eq!(parsed.slug, "round-trip");
     }
 }
