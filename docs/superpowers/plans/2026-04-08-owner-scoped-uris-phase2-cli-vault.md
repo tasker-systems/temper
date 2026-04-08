@@ -275,7 +275,8 @@ Append to the `tests` module in `vault.rs`:
 
     #[test]
     fn parse_rel_round_trips_with_rel_path() {
-        let v = Vault::new(&root());
+        let root = root();
+        let v = Vault::new(&root);
         let rel = v.rel_path("@me", "temper", "task", "round-trip");
         let parsed = Vault::parse_rel(&rel).unwrap();
         assert_eq!(parsed.owner, "@me");
