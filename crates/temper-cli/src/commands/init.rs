@@ -38,23 +38,37 @@ fn default_vault_path() -> String {
         .unwrap_or_else(|| "./temper-vault".to_string())
 }
 
+/// Resolve an initial vault path from a CLI argument: an empty argument
+/// falls back to `default_vault_path()`. Shared between interactive and
+/// non-interactive entry points so both handle the empty case identically.
+fn resolve_initial_vault(path: &Path) -> String {
+    if path.as_os_str().is_empty() {
+        default_vault_path()
+    } else {
+        path.to_string_lossy().to_string()
+    }
+}
+
+/// Convert a dialoguer prompt failure into a `TemperError`. Prompt errors
+/// are a configuration-setup problem, not a vault-state problem, so we map
+/// to `Config` rather than `Vault`.
+fn prompt_err(e: dialoguer::Error) -> TemperError {
+    TemperError::Config(format!("prompt error: {e}"))
+}
+
 /// CLI entry point dispatched from `main.rs`.
 pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<()> {
     if no_interactive {
         return run_non_interactive(path, register_global);
     }
-    let initial_vault = if path.as_os_str().is_empty() {
-        default_vault_path()
-    } else {
-        path.to_string_lossy().to_string()
-    };
+    let initial_vault = resolve_initial_vault(path);
     let answers = gather_answers(&initial_vault)?;
     print_summary(&answers, register_global);
     let proceed = Confirm::with_theme(&ColorfulTheme::default())
         .with_prompt("Proceed?")
         .default(true)
         .interact()
-        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+        .map_err(prompt_err)?;
     if !proceed {
         output::warning("Init cancelled");
         return Ok(());
@@ -65,7 +79,7 @@ pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<(
 /// Non-interactive path — uses all defaults.
 pub fn run_non_interactive(path: &Path, register_global: bool) -> Result<()> {
     let answers = WizardAnswers {
-        vault_path: path.to_string_lossy().to_string(),
+        vault_path: resolve_initial_vault(path),
         extra_contexts: Vec::new(),
         auth_choice: AuthChoice::Auth0,
     };
@@ -80,14 +94,14 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
         .with_prompt("Where should your vault live?")
         .default(initial_vault.to_string())
         .interact_text()
-        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+        .map_err(prompt_err)?;
 
     let contexts_raw: String = Input::with_theme(&theme)
         .with_prompt("Create any contexts now? (comma-separated, or Enter for just 'default')")
         .default(String::new())
         .allow_empty(true)
         .interact_text()
-        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+        .map_err(prompt_err)?;
 
     let extra_contexts: Vec<String> = contexts_raw
         .split(',')
@@ -104,7 +118,7 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
         .default(0)
         .items(&items)
         .interact()
-        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+        .map_err(prompt_err)?;
 
     let auth_choice = if idx == 0 {
         AuthChoice::Auth0
@@ -190,12 +204,17 @@ pub fn apply_answers(answers: &WizardAnswers, register_global: bool) -> Result<(
 }
 
 /// Produce the TOML body for `config.toml` from the collected answers.
+///
+/// Both the vault path and each context name are routed through
+/// `toml::Value::String` so that characters requiring escaping (backslashes,
+/// double quotes, control characters) round-trip through `TemperConfig`
+/// parsing — including Windows-style paths.
 pub fn render_config_toml(answers: &WizardAnswers) -> String {
     let mut ctxs = vec!["default".to_string()];
     ctxs.extend(answers.extra_contexts.iter().cloned());
     let ctx_list = ctxs
         .iter()
-        .map(|c| format!("\"{c}\""))
+        .map(|c| toml::Value::String(c.clone()).to_string())
         .collect::<Vec<_>>()
         .join(", ");
 
@@ -215,9 +234,13 @@ scopes = ["openid", "profile", "email", "offline_access"]
         .to_string(),
     };
 
+    // toml::Value::String already includes the surrounding quotes, so the
+    // `path =` line below does NOT wrap `{vault_path_toml}` in its own quotes.
+    let vault_path_toml = toml::Value::String(answers.vault_path.clone()).to_string();
+
     format!(
         r#"[vault]
-path = "{path}"
+path = {vault_path_toml}
 
 [sync.subscriptions]
 contexts = [{ctx_list}]
@@ -228,14 +251,72 @@ output = "~/.claude/skills/temper"
 {auth_section}
 [cloud]
 api_url = "https://temperkb.io"
-"#,
-        path = answers.vault_path,
+"#
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use temper_core::types::config::TemperConfig;
+    use validator::Validate;
+
+    /// Round-trip guard: the rendered TOML must parse into a valid
+    /// `TemperConfig` for every auth choice. This catches template drift
+    /// that string-contains assertions would miss.
+    #[test]
+    fn rendered_toml_parses_and_validates_auth0() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/roundtrip".into(),
+            extra_contexts: vec!["one".into(), "two".into()],
+            auth_choice: AuthChoice::Auth0,
+        };
+        let rendered = render_config_toml(&answers);
+        let cfg: TemperConfig =
+            toml::from_str(&rendered).expect("rendered TOML should parse into TemperConfig");
+        cfg.validate().expect("rendered config should validate");
+    }
+
+    #[test]
+    fn rendered_toml_parses_and_validates_auth_none() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::None,
+        };
+        let rendered = render_config_toml(&answers);
+        let cfg: TemperConfig =
+            toml::from_str(&rendered).expect("rendered TOML should parse into TemperConfig");
+        cfg.validate().expect("rendered config should validate");
+    }
+
+    #[test]
+    fn rendered_toml_escapes_backslashes_in_vault_path() {
+        // Windows-style path — backslashes MUST survive the render/parse
+        // round-trip without breaking the TOML or being dropped.
+        let answers = WizardAnswers {
+            vault_path: r"C:\Users\alice\Documents\temper-vault".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::None,
+        };
+        let rendered = render_config_toml(&answers);
+        let cfg: TemperConfig = toml::from_str(&rendered).expect("escaped path must parse");
+        assert_eq!(cfg.vault.path, r"C:\Users\alice\Documents\temper-vault");
+    }
+
+    #[test]
+    fn rendered_toml_escapes_double_quotes_in_vault_path() {
+        // Pathological but valid on Unix: a path containing a double quote
+        // must not break the TOML basic string it's interpolated into.
+        let answers = WizardAnswers {
+            vault_path: r#"/tmp/weird"name"#.into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::None,
+        };
+        let rendered = render_config_toml(&answers);
+        let cfg: TemperConfig = toml::from_str(&rendered).expect("escaped quote must parse");
+        assert_eq!(cfg.vault.path, r#"/tmp/weird"name"#);
+    }
 
     #[test]
     fn default_answers_generate_complete_config() {
