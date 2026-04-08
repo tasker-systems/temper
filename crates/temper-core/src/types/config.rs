@@ -350,8 +350,15 @@ path = "~/vault"
 
     #[test]
     fn stale_cli_section_and_skill_framework_parse_without_error() {
-        // This config contains fields we no longer define — the expectation
-        // is that serde drops them silently rather than failing to parse.
+        // Forward-compat guarantee: stale configs containing the removed
+        // `[cli]` section and `skill.framework` field must still parse.
+        //
+        // This works because none of the config structs use
+        // `#[serde(deny_unknown_fields)]` — serde's default behavior is to
+        // ignore unknown fields. If a future contributor adds that attribute
+        // to TemperConfig (or any nested struct), this test will fail as the
+        // signal that the clean break in Task 8 broke forward compat and
+        // either the attribute should come back off or a migration is needed.
         let toml_str = r#"
 [vault]
 path = "~/Documents/temper-vault"
