@@ -94,13 +94,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     format,
                 } => temper_cli::commands::resource::list(
                     &config,
-                    &r#type,
-                    context.as_deref(),
-                    limit,
-                    stage.as_deref(),
-                    goal.as_deref(),
-                    status.as_deref(),
-                    &format,
+                    temper_cli::commands::resource::ListParams {
+                        doc_type: &r#type,
+                        context: context.as_deref(),
+                        limit,
+                        stage: stage.as_deref(),
+                        goal: goal.as_deref(),
+                        status: status.as_deref(),
+                        format: &format,
+                    },
                 ),
                 ResourceAction::Show {
                     slug,
