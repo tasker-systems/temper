@@ -1,93 +1,207 @@
-use std::path::Path;
+//! `temper init` — guided vault + config setup.
+//!
+//! The wizard is split into two parts so that tests can drive the apply
+//! step without touching dialoguer: `gather_answers` (interactive) and
+//! `apply_answers` (pure disk work).
+
+use std::path::{Path, PathBuf};
+
+use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
 
 use crate::config::global_config_path;
-use crate::error::Result;
+use crate::error::{Result, TemperError};
 use crate::output;
 
-/// Run temper init.
-///
-/// - `no_interactive`: skip interactive prompts
-/// - `register_global`: write global config to `~/.config/temper/config.toml`.
-///   Pass `false` from tests to avoid clobbering the user's real global config.
+/// User selection for auth provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthChoice {
+    Auth0,
+    None,
+}
+
+/// Collected wizard answers — produced by `gather_answers` (interactive) or
+/// `default_answers` (`--no-interactive`).
+#[derive(Debug, Clone)]
+pub struct WizardAnswers {
+    pub vault_path: String,
+    pub extra_contexts: Vec<String>,
+    pub auth_choice: AuthChoice,
+}
+
+fn default_vault_path() -> String {
+    dirs::home_dir()
+        .map(|h| {
+            h.join("Documents/temper-vault")
+                .to_string_lossy()
+                .to_string()
+        })
+        .unwrap_or_else(|| "./temper-vault".to_string())
+}
+
+/// CLI entry point dispatched from `main.rs`.
 pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<()> {
-    // 1. Create vault directory
-    output::dim(format!("Creating vault at {}", path.display()));
-    std::fs::create_dir_all(path)?;
+    if no_interactive {
+        return run_non_interactive(path, register_global);
+    }
+    let initial_vault = if path.as_os_str().is_empty() {
+        default_vault_path()
+    } else {
+        path.to_string_lossy().to_string()
+    };
+    let answers = gather_answers(&initial_vault)?;
+    print_summary(&answers, register_global);
+    let proceed = Confirm::with_theme(&ColorfulTheme::default())
+        .with_prompt("Proceed?")
+        .default(true)
+        .interact()
+        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+    if !proceed {
+        output::warning("Init cancelled");
+        return Ok(());
+    }
+    apply_answers(&answers, register_global)
+}
 
-    // 2. Create .temper state directory with manifest and events
-    let state_dir = path.join(".temper");
+/// Non-interactive path — uses all defaults.
+pub fn run_non_interactive(path: &Path, register_global: bool) -> Result<()> {
+    let answers = WizardAnswers {
+        vault_path: path.to_string_lossy().to_string(),
+        extra_contexts: Vec::new(),
+        auth_choice: AuthChoice::Auth0,
+    };
+    apply_answers(&answers, register_global)
+}
+
+/// Run the interactive prompts and return collected answers.
+fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
+    let theme = ColorfulTheme::default();
+
+    let vault_path: String = Input::with_theme(&theme)
+        .with_prompt("Where should your vault live?")
+        .default(initial_vault.to_string())
+        .interact_text()
+        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+
+    let contexts_raw: String = Input::with_theme(&theme)
+        .with_prompt("Create any contexts now? (comma-separated, or Enter for just 'default')")
+        .default(String::new())
+        .allow_empty(true)
+        .interact_text()
+        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+
+    let extra_contexts: Vec<String> = contexts_raw
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "default")
+        .collect();
+
+    let items = [
+        "auth0 (recommended — temperkb.io cloud sync)",
+        "none (local-only, no sync)",
+    ];
+    let idx = Select::with_theme(&theme)
+        .with_prompt("Auth provider")
+        .default(0)
+        .items(&items)
+        .interact()
+        .map_err(|e| TemperError::Vault(format!("prompt error: {e}")))?;
+
+    let auth_choice = if idx == 0 {
+        AuthChoice::Auth0
+    } else {
+        AuthChoice::None
+    };
+
+    Ok(WizardAnswers {
+        vault_path,
+        extra_contexts,
+        auth_choice,
+    })
+}
+
+fn print_summary(answers: &WizardAnswers, register_global: bool) {
+    output::blank();
+    output::header("Ready to initialize:");
+    output::label("Vault", &answers.vault_path);
+    let mut ctxs = vec!["default".to_string()];
+    ctxs.extend(answers.extra_contexts.iter().cloned());
+    output::label("Contexts", ctxs.join(", "));
+    let auth_label = match answers.auth_choice {
+        AuthChoice::Auth0 => "auth0",
+        AuthChoice::None => "none",
+    };
+    output::label("Auth", auth_label);
+    if register_global {
+        output::label("Config", global_config_path().display().to_string());
+    }
+    output::blank();
+}
+
+/// Write vault dirs and (optionally) the global config file.
+pub fn apply_answers(answers: &WizardAnswers, register_global: bool) -> Result<()> {
+    let vault = PathBuf::from(&answers.vault_path);
+
+    // Warn if a .temper/ marker already exists — per Decision 1 we do not
+    // offer to reconfigure, we just point the user at `temper config edit`.
+    let marker = vault.join(".temper");
+    if marker.exists() {
+        output::warning(format!(
+            "vault already exists at {}; re-running init is idempotent. \
+             To change settings, run `temper config edit`.",
+            vault.display()
+        ));
+    }
+
+    std::fs::create_dir_all(&vault)?;
+
+    let state_dir = vault.join(".temper");
     std::fs::create_dir_all(&state_dir)?;
-
     let manifest_path = state_dir.join("manifest.json");
     if !manifest_path.exists() {
         std::fs::write(&manifest_path, "{}\n")?;
-        output::item("Created .temper/manifest.json");
     }
-
     let events_path = state_dir.join("events.jsonl");
     if !events_path.exists() {
         std::fs::write(&events_path, "")?;
-        output::item("Created .temper/events.jsonl");
     }
 
-    // 3. Create default context directory
-    let default_ctx = path.join("default");
-    std::fs::create_dir_all(&default_ctx)?;
-    output::item("Created default/ context");
+    // Create default/ and any extra contexts
+    std::fs::create_dir_all(vault.join("default"))?;
+    for ctx in &answers.extra_contexts {
+        std::fs::create_dir_all(vault.join(ctx))?;
+    }
 
-    // 4. Register global config if needed
     if register_global {
-        register_default_config(path)?;
+        let config_path = global_config_path();
+        if !config_path.exists() {
+            if let Some(parent) = config_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let toml = render_config_toml(answers);
+            std::fs::write(&config_path, toml)?;
+            output::dim(format!("Wrote global config to {}", config_path.display()));
+        } else {
+            output::dim("Global config already exists, skipping");
+        }
     }
 
-    // 5. Interactive guidance
-    if !no_interactive {
-        output::blank();
-        output::success("Vault initialized successfully");
-        output::blank();
-        output::header("Next steps");
-        output::hint("  temper check          — verify vault and tool health");
-        output::hint("  temper session save \"My First Session\" --context default");
-        output::hint("  temper task create --title \"First Task\" --context default");
-        output::blank();
-        output::hint("To generate a Claude skill for this vault:");
-        output::hint("  temper skill install");
-    }
-
+    output::success("Vault initialized successfully");
     Ok(())
 }
 
-fn register_default_config(vault_path: &Path) -> Result<()> {
-    let config_path = global_config_path();
+/// Produce the TOML body for `config.toml` from the collected answers.
+pub fn render_config_toml(answers: &WizardAnswers) -> String {
+    let mut ctxs = vec!["default".to_string()];
+    ctxs.extend(answers.extra_contexts.iter().cloned());
+    let ctx_list = ctxs
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
 
-    // Don't overwrite existing config
-    if config_path.exists() {
-        output::dim("Global config already exists, skipping");
-        return Ok(());
-    }
-
-    // Create parent dirs if needed
-    if let Some(parent) = config_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let canonical = vault_path
-        .canonicalize()
-        .unwrap_or_else(|_| vault_path.to_path_buf());
-    let vault_path_str = canonical.to_string_lossy();
-
-    let config_content = format!(
-        r#"[vault]
-path = "{vault_path_str}"
-
-# Add contexts to sync: temper context add <name>
-[sync.subscriptions]
-contexts = []
-
-[skill]
-output = "~/.claude/skills/temper"
-
-[auth]
+    let auth_section = match answers.auth_choice {
+        AuthChoice::None => "[auth]\nprovider = \"none\"\n".to_string(),
+        AuthChoice::Auth0 => r#"[auth]
 provider = "auth0"
 
 [[auth.providers]]
@@ -98,54 +212,134 @@ client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
 audience = "https://temperkb.io/api"
 scopes = ["openid", "profile", "email", "offline_access"]
 "#
-    );
+        .to_string(),
+    };
 
-    std::fs::write(&config_path, config_content)?;
-    output::dim(format!("Wrote global config to {}", config_path.display()));
+    format!(
+        r#"[vault]
+path = "{path}"
 
-    Ok(())
+[sync.subscriptions]
+contexts = [{ctx_list}]
+
+[skill]
+output = "~/.claude/skills/temper"
+
+{auth_section}
+[cloud]
+api_url = "https://temperkb.io"
+"#,
+        path = answers.vault_path,
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn config_template_contains_correct_skill_output() {
-        // Reproduce the format string with a test path to verify contract
-        let vault_path_str = "/tmp/test-vault";
-        let config_content = format!(
-            r#"[vault]
-path = "{vault_path_str}"
-
-# Add contexts to sync: temper context add <name>
-[sync.subscriptions]
-contexts = []
-
-[skill]
-output = "~/.claude/skills/temper"
-
-[auth]
-provider = "auth0"
-
-[[auth.providers]]
-name = "auth0"
-authorize_url = "https://temperkb.us.auth0.com/authorize"
-token_url = "https://temperkb.us.auth0.com/oauth/token"
-client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
-audience = "https://temperkb.io/api"
-scopes = ["openid", "profile", "email", "offline_access"]
-"#
-        );
+    fn default_answers_generate_complete_config() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/my-vault".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::Auth0,
+        };
+        let toml = render_config_toml(&answers);
+        assert!(toml.contains(r#"path = "/tmp/my-vault""#));
+        assert!(toml.contains("[auth]"));
+        assert!(toml.contains(r#"provider = "auth0""#));
+        assert!(toml.contains("[[auth.providers]]"));
+        assert!(toml.contains(r#"name = "auth0""#));
+        assert!(toml.contains("[cloud]"));
+        assert!(toml.contains(r#"api_url = "https://temperkb.io""#));
+        // Must NOT contain removed fields
+        assert!(!toml.contains("[cli]"), "cli section should not be written");
         assert!(
-            config_content.contains(r#"output = "~/.claude/skills/temper""#),
-            "skill output must point to skills dir, not commands"
+            !toml.contains("framework ="),
+            "skill.framework should not be written"
         );
+    }
+
+    #[test]
+    fn auth_none_writes_provider_none_marker() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::None,
+        };
+        let toml = render_config_toml(&answers);
+        assert!(toml.contains(r#"provider = "none""#));
+        // no auth0 provider entry when none chosen
+        assert!(!toml.contains("[[auth.providers]]"));
+    }
+
+    #[test]
+    fn auth0_writes_array_of_tables_format() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::Auth0,
+        };
+        let toml = render_config_toml(&answers);
+        // Must use the new array-of-tables format, NOT the old dotted-map form
+        assert!(toml.contains("[[auth.providers]]"));
+        assert!(toml.contains(r#"name = "auth0""#));
         assert!(
-            config_content.contains("contexts = []"),
-            "subscriptions should default to empty"
+            !toml.contains("[auth.providers.auth0]"),
+            "must not use old dotted form"
         );
-        assert!(
-            !config_content.contains("commands/temper.md"),
-            "must not contain stale commands path"
-        );
+    }
+
+    #[test]
+    fn apply_answers_warns_on_existing_vault_but_succeeds() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("existing");
+        // Pre-create a .temper/ marker to simulate an existing vault
+        std::fs::create_dir_all(vault.join(".temper")).unwrap();
+        let answers = WizardAnswers {
+            vault_path: vault.to_string_lossy().to_string(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::Auth0,
+        };
+        // Should succeed (no error) — the existing-vault warning is emitted via output::warning
+        // and does not block. Test verifies idempotent behavior.
+        apply_answers(&answers, false).expect("should warn but succeed");
+        assert!(vault.join(".temper/manifest.json").exists());
+    }
+
+    #[test]
+    fn extra_contexts_go_into_subscriptions() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec!["temper".into(), "writing".into()],
+            auth_choice: AuthChoice::Auth0,
+        };
+        let toml = render_config_toml(&answers);
+        assert!(toml.contains(r#"contexts = ["default", "temper", "writing"]"#));
+    }
+
+    #[test]
+    fn apply_answers_creates_vault_structure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_path = tmp.path().join("vault");
+        let answers = WizardAnswers {
+            vault_path: vault_path.to_string_lossy().to_string(),
+            extra_contexts: vec!["writing".into()],
+            auth_choice: AuthChoice::None,
+        };
+        apply_answers(&answers, false).expect("apply should succeed");
+        assert!(vault_path.join(".temper/manifest.json").exists());
+        assert!(vault_path.join(".temper/events.jsonl").exists());
+        assert!(vault_path.join("default").exists());
+        assert!(vault_path.join("writing").exists());
+    }
+
+    #[test]
+    fn no_interactive_defaults_and_applies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("v");
+        run_non_interactive(&vault, false).expect("non-interactive run should succeed");
+        assert!(vault.join(".temper").exists());
+        assert!(vault.join("default").exists());
     }
 }
