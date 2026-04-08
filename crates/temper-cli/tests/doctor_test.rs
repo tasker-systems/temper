@@ -31,6 +31,7 @@ temper-id: "01900000-0000-7000-8000-000000000001"
 temper-type: task
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
 title: "Implement feature X"
 temper-stage: backlog
 slug: implement-feature-x
@@ -47,6 +48,7 @@ temper-id: "01900000-0000-7000-8000-000000000002"
 temper-type: goal
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
 title: "Ship v1"
 temper-status: active
 slug: ship-v1
@@ -63,6 +65,7 @@ temper-id: "01900000-0000-7000-8000-000000000003"
 temper-type: session
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
 title: "Session 2026-01-01"
 date: "2026-01-01"
 ---
