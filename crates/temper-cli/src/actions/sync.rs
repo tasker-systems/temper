@@ -587,16 +587,13 @@ async fn push_resource(
         (None, None)
     };
 
-    let parts: Vec<&str> = entry.path.split('/').collect();
-    let context = parts.first().copied().unwrap_or("default");
-    let doc_type = if parts.len() > 1 {
-        parts[1]
-    } else {
-        "resource"
+    let (context, doc_type) = match Vault::parse_rel(&entry.path) {
+        Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+        None => ("default".to_string(), "resource".to_string()),
     };
     let title = ingest::title_from_path(&file_path);
 
-    let mut payload = ingest::build_ingest_payload(body, &title, context, doc_type, None)?;
+    let mut payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, None)?;
     // Strip identity fields from managed_meta before sending — the server
     // tracks resource identity via kb_resources.id, not as metadata fields.
     // Including them would cause managed_hash divergence between client and
@@ -903,16 +900,13 @@ async fn merge_and_push_resource(
     std::fs::write(&file_path, &new_file_content)?;
 
     // 6. Build ingest payload with strip_frontmatter on merged file
-    let parts: Vec<&str> = entry.path.split('/').collect();
-    let context = parts.first().copied().unwrap_or("default");
-    let doc_type = if parts.len() > 1 {
-        parts[1]
-    } else {
-        "resource"
+    let (context, doc_type) = match Vault::parse_rel(&entry.path) {
+        Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+        None => ("default".to_string(), "resource".to_string()),
     };
     let title = ingest::title_from_path(&file_path);
 
-    let payload = ingest::build_ingest_payload(merged_body, &title, context, doc_type, None)?;
+    let payload = ingest::build_ingest_payload(merged_body, &title, &context, &doc_type, None)?;
 
     // 7. Push via update
     let _resource = client
@@ -1010,12 +1004,9 @@ pub async fn sync_refresh(
         std::collections::HashMap::new();
     for (id, entry) in &manifest.entries {
         if !entry.body_hash.is_empty() {
-            let parts: Vec<&str> = entry.path.split('/').collect();
-            let ctx = parts.first().copied().unwrap_or("default").to_string();
-            let doc_type = if parts.len() > 1 {
-                parts[1].to_string()
-            } else {
-                "resource".to_string()
+            let (ctx, doc_type) = match Vault::parse_rel(&entry.path) {
+                Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+                None => ("default".to_string(), "resource".to_string()),
             };
             hash_index.insert((ctx, doc_type, entry.body_hash.clone()), *id);
         }

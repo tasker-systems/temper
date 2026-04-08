@@ -7,6 +7,7 @@ use crate::actions::runtime;
 use crate::error::TemperError;
 use crate::output;
 use temper_core::types::ResourceId;
+use temper_core::vault::Vault;
 
 pub fn run(resource_id: &str) -> crate::error::Result<()> {
     let id = Uuid::parse_str(resource_id)
@@ -42,17 +43,14 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     std::fs::create_dir_all(parent)?;
                 }
 
-                // Parse context/doc_type from manifest path: "{context}/{doc_type}/{slug}.md"
-                let parts: Vec<&str> = entry.path.split('/').collect();
-                let ctx = parts.first().copied().unwrap_or("default");
-                let dtype = if parts.len() > 1 {
-                    parts[1]
-                } else {
-                    "resource"
+                // Parse owner/context/doc_type from manifest path: "{owner}/{context}/{doc_type}/{slug}.md"
+                let (ctx, dtype) = match Vault::parse_rel(&entry.path) {
+                    Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+                    None => ("default".to_string(), "resource".to_string()),
                 };
 
                 let frontmatter =
-                    ingest::build_frontmatter(id, &resource.title, ctx, dtype, None, None);
+                    ingest::build_frontmatter(id, &resource.title, &ctx, &dtype, None, None);
                 let full_content = format!("{frontmatter}{}", content_response.markdown);
                 std::fs::write(&vault_path, &full_content)?;
 
