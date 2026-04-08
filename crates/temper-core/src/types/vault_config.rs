@@ -31,7 +31,10 @@ pub struct VaultConfig {
 pub struct Subscription {
     /// Which kb_context this subscription targets
     pub context: String,
-    /// Team-owned context (None = profile-owned)
+    /// Resource owner — `@handle`, `+team`, or `@me` (None = use `team` fallback then `@me`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Team-owned context (None = profile-owned). Deprecated: use `owner` instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     /// Doc type filter (None = all types)
@@ -49,6 +52,21 @@ pub struct Subscription {
     /// Git repos associated with this context (owner/repo or local paths)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub repos: Vec<String>,
+}
+
+impl Subscription {
+    /// Resolve the effective owner for this subscription.
+    ///
+    /// Priority: explicit `owner` > legacy `team` (as `+team`) > `@me`.
+    pub fn resolved_owner(&self) -> String {
+        if let Some(owner) = &self.owner {
+            return owner.clone();
+        }
+        if let Some(team) = &self.team {
+            return format!("+{team}");
+        }
+        "@me".to_string()
+    }
 }
 
 /// Per-device configuration overrides keyed by X-Temper-Device-Id.
@@ -94,6 +112,7 @@ mod tests {
             subscriptions: vec![
                 Subscription {
                     context: "temper".to_string(),
+                    owner: None,
                     team: None,
                     doc_types: None,
                     auto_sync: true,
@@ -103,6 +122,7 @@ mod tests {
                 },
                 Subscription {
                     context: "storyteller".to_string(),
+                    owner: None,
                     team: Some("narrative-team".to_string()),
                     doc_types: Some(vec!["research".to_string(), "concept".to_string()]),
                     auto_sync: false,
@@ -153,6 +173,7 @@ mod tests {
     fn subscription_skips_none_fields() {
         let sub = Subscription {
             context: "temper".to_string(),
+            owner: None,
             team: None,
             doc_types: None,
             auto_sync: false,
@@ -161,9 +182,55 @@ mod tests {
             repos: vec![],
         };
         let json = serde_json::to_string(&sub).unwrap();
+        assert!(!json.contains("owner"));
         assert!(!json.contains("team"));
         assert!(!json.contains("doc_types"));
         assert!(!json.contains("local_paths"));
         assert!(!json.contains("repos"));
+    }
+
+    #[test]
+    fn resolved_owner_uses_explicit_owner() {
+        let sub = Subscription {
+            context: "temper".to_string(),
+            owner: Some("@alice".to_string()),
+            team: Some("ignored-team".to_string()),
+            doc_types: None,
+            auto_sync: false,
+            merge_policy: MergePolicy::Manual,
+            local_paths: vec![],
+            repos: vec![],
+        };
+        assert_eq!(sub.resolved_owner(), "@alice");
+    }
+
+    #[test]
+    fn resolved_owner_falls_back_to_team() {
+        let sub = Subscription {
+            context: "general".to_string(),
+            owner: None,
+            team: Some("platform-eng".to_string()),
+            doc_types: None,
+            auto_sync: false,
+            merge_policy: MergePolicy::Manual,
+            local_paths: vec![],
+            repos: vec![],
+        };
+        assert_eq!(sub.resolved_owner(), "+platform-eng");
+    }
+
+    #[test]
+    fn resolved_owner_defaults_to_at_me() {
+        let sub = Subscription {
+            context: "temper".to_string(),
+            owner: None,
+            team: None,
+            doc_types: None,
+            auto_sync: false,
+            merge_policy: MergePolicy::Manual,
+            local_paths: vec![],
+            repos: vec![],
+        };
+        assert_eq!(sub.resolved_owner(), "@me");
     }
 }
