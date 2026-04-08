@@ -71,14 +71,23 @@ impl<'a> Vault<'a> {
         if parts.len() != 4 {
             return None;
         }
+        // Reject any empty segment (leading/trailing slashes, double slashes).
+        if parts.iter().any(|s| s.is_empty()) {
+            return None;
+        }
         let owner = parts[0];
-        if !(owner.starts_with('@') || owner.starts_with('+')) {
+        // Sigil must be followed by at least one character.
+        if owner.len() < 2 || !(owner.starts_with('@') || owner.starts_with('+')) {
             return None;
         }
         let context = parts[1];
         let doc_type = parts[2];
         let filename = parts[3];
         let slug = filename.strip_suffix(".md")?;
+        // Reject empty slug (e.g., a file named ".md").
+        if slug.is_empty() {
+            return None;
+        }
         Some(ParsedVaultPath {
             owner,
             context,
@@ -182,6 +191,18 @@ mod tests {
     fn parse_rel_rejects_non_md_extension() {
         assert!(Vault::parse_rel("@me/temper/task/my-task.txt").is_none());
         assert!(Vault::parse_rel("@me/temper/task/my-task").is_none());
+    }
+
+    #[test]
+    fn parse_rel_rejects_empty_segments_and_bare_sigil() {
+        // Empty mid-segment (double slash)
+        assert!(Vault::parse_rel("@me//task/foo.md").is_none());
+        // Leading slash produces an empty first segment
+        assert!(Vault::parse_rel("/@me/temper/task/foo.md").is_none());
+        // Bare sigil with no identifier
+        assert!(Vault::parse_rel("@/temper/task/foo.md").is_none());
+        // Empty slug (file named just ".md")
+        assert!(Vault::parse_rel("@me/temper/task/.md").is_none());
     }
 
     #[test]
