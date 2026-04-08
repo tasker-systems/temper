@@ -69,6 +69,7 @@ async fn resource_list() {
     };
     let params = ResourceListParams {
         kb_context_id: None,
+        kb_doc_type_id: None,
         limit: Some(5),
         offset: None,
     };

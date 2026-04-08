@@ -106,16 +106,16 @@ cargo install --path crates/temper-cli</code></pre>
     <h3>Available Tools</h3>
     <table>
       <tbody>
-        <tr><td><code>list_resources</code></td><td>List resources, optionally filtered by context</td></tr>
-        <tr><td><code>get_resource</code></td><td>Get a resource by ID, optionally with full content</td></tr>
-        <tr><td><code>get_resource_content</code></td><td>Get the full markdown content of a resource</td></tr>
-        <tr><td><code>create_resource</code></td><td>Create a new resource in a context</td></tr>
-        <tr><td><code>update_resource</code></td><td>Update a resource's title, slug, or mimetype</td></tr>
+        <tr><td><code>list_resources</code></td><td>List resources, filtered by context name and/or doc type name. Most recent first.</td></tr>
+        <tr><td><code>get_resource</code></td><td>Get a resource by ID or slug, optionally with full markdown content</td></tr>
+        <tr><td><code>create_resource</code></td><td>Create a resource with optional markdown content. Name-based context and doc type.</td></tr>
+        <tr><td><code>update_resource</code></td><td>Update a resource's title, slug, or content. New content triggers re-indexing.</td></tr>
         <tr><td><code>delete_resource</code></td><td>Soft-delete a resource by ID</td></tr>
         <tr><td><code>search</code></td><td>Full-text and semantic search across the knowledge base</td></tr>
         <tr><td><code>list_contexts</code></td><td>List available contexts (workspaces)</td></tr>
         <tr><td><code>get_context</code></td><td>Get details of a specific context</td></tr>
         <tr><td><code>create_context</code></td><td>Create a new context (workspace)</td></tr>
+        <tr><td><code>list_doc_types</code></td><td>List available document types</td></tr>
         <tr><td><code>list_events</code></td><td>List events, optionally filtered by resource or type</td></tr>
         <tr><td><code>get_profile</code></td><td>Get the authenticated user's profile</td></tr>
       </tbody>

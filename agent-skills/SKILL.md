@@ -23,9 +23,9 @@ and portable.
 
 > **Cloud access**: If a Temper MCP server is configured, you can also access the knowledge
 > base through MCP resources and tools instead of (or alongside) local file access. The MCP
-> server supports both reading and writing — use `ingest_content` to create resources with
-> full content, and `search` for text-based discovery. See `knowledge-base.md` for MCP
-> access patterns and `claude-desktop.md` for Claude Desktop setup.
+> server supports both reading and writing — use `create_resource` with a `content` field to
+> create resources with full content, and `search` for text-based discovery. See
+> `knowledge-base.md` for MCP access patterns and `claude-desktop.md` for Claude Desktop setup.
 
 **Important distinction**: The vault holds the *strategic layer* — milestones, tickets,
 sessions, concepts. Design specs, implementation plans, and code live in the *project

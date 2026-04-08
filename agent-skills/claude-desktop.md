@@ -48,17 +48,15 @@ These are available as function calls during conversation:
 
 **Read operations:**
 - `list_contexts` — show all workspaces
-- `list_resources` — list resources, optionally filtered by context
-- `get_resource` — get one resource by ID (optionally with content)
-- `get_resource_content` — get just the markdown for a resource
+- `get_context` — get details for a specific context
+- `list_resources` — list resources, optionally filtered by context or doc type
+- `get_resource` — get one resource by ID or slug (pass `include_content: true` for full markdown)
 - `search` — semantic search across all resources
+- `list_doc_types` — discover available document types
 
 **Write operations:**
-- `ingest_content` — write markdown content to the knowledge base (recommended)
-- `update_resource_content` — replace content of an existing resource
-- `list_doc_types` — discover available document types
-- `create_resource` — add a new document to the knowledge base
-- `update_resource` — change a resource's title, slug, or mimetype
+- `create_resource` — add a new document to the knowledge base (include `content` field to write markdown in one call)
+- `update_resource` — change a resource's title, slug, or content
 - `delete_resource` — soft-delete a resource
 - `create_context` — create a new workspace
 
@@ -83,16 +81,16 @@ These are available as function calls during conversation:
 ### "Save what we discussed"
 
 1. Ask Claude to create a resource with your conversation summary
-2. Claude uses `create_resource` to persist it in the right context
+2. Claude uses `create_resource` with a `content` field to persist it in the right context
 3. The note is available in future sessions via resources
 
 ### "Write content to the knowledge base"
 
 1. Use `list_doc_types` to see available document types
 2. Use `list_contexts` to check existing contexts
-3. Ask Claude to use `ingest_content` with your content, context, and doc type
+3. Ask Claude to use `create_resource` with your content, context, and doc type
 4. The resource is created immediately and becomes searchable shortly after
-5. Use the returned resource_id to reference the content later
+5. Use the returned `id` to reference the content later
 
 ### "Update my notes"
 
