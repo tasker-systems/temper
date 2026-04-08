@@ -1,3 +1,5 @@
+use temper_core::vault::Vault;
+
 use crate::config::Config;
 use crate::error::{Result, TemperError};
 use crate::output;
@@ -22,9 +24,9 @@ pub fn show(
         println!("{json}");
         return Ok(());
     }
-    let path = config
-        .doc_type_dir(&task.context, "task")
-        .join(format!("{}.md", task.slug));
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(&task.context);
+    let path = vault_layout.doc_file(&owner, &task.context, "task", &task.slug);
     let content = std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     print!("{content}");
     Ok(())

@@ -2,6 +2,7 @@ use std::fs;
 
 use askama::Template;
 use chrono::Local;
+use temper_core::vault::Vault;
 
 use crate::actions::types::TaskInfo;
 use crate::commands::goal;
@@ -19,8 +20,10 @@ pub fn load_tasks(
     goal_slug: Option<&str>,
 ) -> Result<Vec<TaskInfo>> {
     let mut tasks = Vec::new();
+    let vault_layout = Vault::new(&config.vault_root);
     let dirs: Vec<_> = if let Some(p) = context {
-        let d = config.doc_type_dir(p, "task");
+        let owner = config.owner_for_context(p);
+        let d = vault_layout.doc_type_dir(&owner, p, "task");
         if d.is_dir() {
             vec![d]
         } else {
@@ -30,7 +33,8 @@ pub fn load_tasks(
         // Scan all contexts for task subdirectories
         let mut found = Vec::new();
         for ctx in &config.contexts {
-            let d = config.doc_type_dir(ctx, "task");
+            let owner = config.owner_for_context(ctx);
+            let d = vault_layout.doc_type_dir(&owner, ctx, "task");
             if d.is_dir() {
                 found.push(d);
             }
@@ -191,16 +195,18 @@ pub fn create(
         content.push('\n');
     }
 
-    let dir = config.doc_type_dir(context, "task");
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(context);
+    let dir = vault_layout.doc_type_dir(&owner, context, "task");
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let path = dir.join(format!("{slug}.md"));
+    let path = vault_layout.doc_file(&owner, context, "task", &slug);
     vault::write_note(&path, &content)?;
 
     let event = discovery::Event::ResourceCreate {
         ts: datetime,
         doc_type: "task".to_string(),
         title: title.to_string(),
-        path: format!("{context}/task/{slug}.md"),
+        path: vault_layout.rel_path(&owner, context, "task", &slug),
         context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
@@ -235,9 +241,9 @@ pub fn move_task(
         vault::validate_effort(e)?;
     }
 
-    let path = config
-        .doc_type_dir(&task.context, "task")
-        .join(format!("{}.md", task.slug));
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(&task.context);
+    let path = vault_layout.doc_file(&owner, &task.context, "task", &task.slug);
     let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     let from_stage = task.stage.clone();
@@ -302,9 +308,9 @@ pub fn done(
     let task = find_task(config, slug_or_suffix, context)?
         .ok_or_else(|| TemperError::Vault(format!("task not found: {slug_or_suffix}")))?;
 
-    let path = config
-        .doc_type_dir(&task.context, "task")
-        .join(format!("{}.md", task.slug));
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(&task.context);
+    let path = vault_layout.doc_file(&owner, &task.context, "task", &task.slug);
     let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     let datetime = Local::now().to_rfc3339();

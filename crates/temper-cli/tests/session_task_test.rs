@@ -47,7 +47,7 @@ fn test_session_save_with_task_links_entities() {
     // Verify task was updated with sessions field
     let task_content = std::fs::read_to_string(
         dir.path()
-            .join("myapp/task")
+            .join("@me/myapp/task")
             .join(format!("{task_slug}.md")),
     )
     .unwrap();
@@ -88,7 +88,7 @@ fn test_session_save_with_task_and_state_moves_task() {
 
     let task_content = std::fs::read_to_string(
         dir.path()
-            .join("myapp/task")
+            .join("@me/myapp/task")
             .join(format!("{task_slug}.md")),
     )
     .unwrap();

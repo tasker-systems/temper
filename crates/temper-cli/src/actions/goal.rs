@@ -182,7 +182,9 @@ pub fn count_tasks_by_stage(
     config: &Config,
     context: &str,
 ) -> Result<std::collections::HashMap<String, std::collections::HashMap<String, usize>>> {
-    let dir = config.doc_type_dir(context, "task");
+    let vault_layout = temper_core::vault::Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(context);
+    let dir = vault_layout.doc_type_dir(&owner, context, "task");
     let mut counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>> =
         std::collections::HashMap::new();
     if !dir.is_dir() {

@@ -165,9 +165,9 @@ fn link_session_to_task(
     };
 
     // Read the task file
-    let task_path = config
-        .doc_type_dir(&task_info.context, "task")
-        .join(format!("{}.md", task_info.slug));
+    let task_vault = temper_core::vault::Vault::new(&config.vault_root);
+    let task_owner = config.owner_for_context(&task_info.context);
+    let task_path = task_vault.doc_file(&task_owner, &task_info.context, "task", &task_info.slug);
     let mut task_content = std::fs::read_to_string(&task_path)?;
 
     // Add/append to the sessions list in frontmatter

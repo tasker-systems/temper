@@ -1,3 +1,5 @@
+use temper_core::vault::Vault;
+
 use crate::config::Config;
 use crate::error::Result;
 use crate::output;
@@ -12,10 +14,12 @@ pub fn run(config: &Config, _verbose: bool) -> Result<()> {
     let mut total_tasks = 0usize;
     let mut total_goals = 0usize;
 
+    let vault_layout = Vault::new(&config.vault_root);
     for ctx in &config.contexts {
-        total_sessions += count_md_files(&config.doc_type_dir(ctx, "session"));
-        total_tasks += count_md_files(&config.doc_type_dir(ctx, "task"));
-        total_goals += count_md_files(&config.doc_type_dir(ctx, "goal"));
+        let owner = config.owner_for_context(ctx);
+        total_sessions += count_md_files(&vault_layout.doc_type_dir(&owner, ctx, "session"));
+        total_tasks += count_md_files(&vault_layout.doc_type_dir(&owner, ctx, "task"));
+        total_goals += count_md_files(&vault_layout.doc_type_dir(&owner, ctx, "goal"));
     }
 
     output::header("Files");
