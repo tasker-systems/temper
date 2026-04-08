@@ -27,3 +27,10 @@ schemars = { version = "1", optional = true, features = ["uuid1", "chrono04"] }
 web-api = ["utoipa"]
 typescript = ["ts-rs"]
 mcp = ["schemars"]
+test-db = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+
+[package.metadata.cargo-machete]
+ignored = ["tokio"]
