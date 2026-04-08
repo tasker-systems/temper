@@ -32,7 +32,12 @@ pub async fn generate_profile_slug(pool: &PgPool, display_name: &str) -> ApiResu
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
         .collect();
-    let base = base.trim_matches('-').to_string();
+    // Collapse consecutive dashes (matches SQL backfill regex [^a-zA-Z0-9]+)
+    let base: String = base
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
     let base = if base.is_empty() {
         "user".to_string()
     } else {
@@ -309,7 +314,7 @@ mod tests {
         let slug = generate_profile_slug(&pool, "José García-López")
             .await
             .unwrap();
-        assert_eq!(slug, "jos--garc-a-l-pez");
+        assert_eq!(slug, "jos-garc-a-l-pez");
     }
 
     #[sqlx::test(migrations = "../../migrations")]
