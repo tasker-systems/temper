@@ -15,6 +15,7 @@ use temper_core::types::{
     SyncCompleteRequest, SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem,
     SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
+use temper_core::vault::Vault;
 
 // ---------------------------------------------------------------------------
 // Sync result
@@ -111,24 +112,20 @@ pub fn build_status_request(manifest: &Manifest, context_filter: &[String]) -> S
         std::collections::HashMap::new();
 
     for (id, entry) in &manifest.entries {
-        let ctx = entry
-            .path
-            .split('/')
-            .next()
-            .unwrap_or("default")
-            .to_string();
+        let Some(parsed) = Vault::parse_rel(&entry.path) else {
+            // Malformed manifest entry — skip with a warning.
+            tracing::warn!("skipping malformed manifest path: {}", entry.path);
+            continue;
+        };
+
+        let ctx = parsed.context.to_string();
+        let doc_type = parsed.doc_type.to_string();
 
         if !context_filter.is_empty() && !context_filter.contains(&ctx) {
             continue;
         }
 
-        let parts: Vec<&str> = entry.path.split('/').collect();
-        let doc_type = if parts.len() > 1 {
-            parts[1]
-        } else {
-            "resource"
-        };
-        let uri = format!("kb://{ctx}/{doc_type}/{id}");
+        let uri = Vault::canonical_uri(parsed.owner, &ctx, &doc_type, &id.to_string());
 
         context_map.entry(ctx).or_default().push(SyncManifestEntry {
             uri,
@@ -207,16 +204,12 @@ fn extract_frontmatter_block(content: &str) -> &str {
 
 /// Parse a kb:// URI into (context, doc_type).
 pub fn parse_kb_uri(uri: &str) -> Result<(String, String)> {
-    let rest = uri
-        .strip_prefix("kb://")
-        .ok_or_else(|| TemperError::Config(format!("invalid kb:// URI: {uri}")))?;
-    let parts: Vec<&str> = rest.split('/').collect();
-    if parts.len() < 2 {
-        return Err(TemperError::Config(format!(
-            "kb:// URI must have at least context/doc_type: {uri}"
-        )));
-    }
-    Ok((parts[0].to_string(), parts[1].to_string()))
+    let parsed = Vault::parse_uri(uri).ok_or_else(|| {
+        TemperError::Config(format!(
+            "invalid kb:// URI (expected kb://<owner>/<context>/<doc_type>/<ident>): {uri}"
+        ))
+    })?;
+    Ok((parsed.context.to_string(), parsed.doc_type.to_string()))
 }
 
 /// Extract resource UUID from last segment of a kb:// URI.
@@ -265,6 +258,13 @@ pub fn scan_vault_for_untracked(
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
+
+        if Vault::parse_rel(&rel_path).is_none() {
+            tracing::warn!(
+                "scanned path is not owner-scoped — the vault may need migration: {rel_path}"
+            );
+            continue;
+        }
 
         if known_paths.contains(&rel_path) {
             continue;
@@ -529,21 +529,25 @@ fn push_error_context(manifest: &Manifest, item: &SyncPushItem) -> (String, Stri
         });
 
     if let Some(entry) = entry {
-        let parts: Vec<&str> = entry.path.split('/').collect();
-        let context = parts.first().copied().unwrap_or("default").to_string();
-        let doc_type = if parts.len() > 1 {
-            parts[1].to_string()
-        } else {
-            "resource".to_string()
-        };
-        (entry.path.clone(), context, doc_type)
-    } else {
-        (
-            item.uri.clone(),
+        if let Some(parsed) = Vault::parse_rel(&entry.path) {
+            return (
+                entry.path.clone(),
+                parsed.context.to_string(),
+                parsed.doc_type.to_string(),
+            );
+        }
+        return (
+            entry.path.clone(),
             "unknown".to_string(),
             "unknown".to_string(),
-        )
+        );
     }
+
+    (
+        item.uri.clone(),
+        "unknown".to_string(),
+        "unknown".to_string(),
+    )
 }
 
 async fn push_resource(
@@ -1395,7 +1399,7 @@ mod tests {
         m.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: "oldhash".to_string(),
                 remote_body_hash: "oldhash".to_string(),
                 managed_hash: String::new(),
@@ -1418,7 +1422,7 @@ mod tests {
         let vault = dir.path();
         let mut manifest = sample_manifest();
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1467,7 +1471,7 @@ mod tests {
         entry.managed_hash = "sha256:abc".to_string();
         entry.open_hash = "sha256:def".to_string();
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1504,7 +1508,7 @@ mod tests {
         entry.body_hash = hash;
         // Leave managed_hash and open_hash empty — simulating the old bug
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1535,7 +1539,7 @@ mod tests {
         assert_eq!(req.contexts[0].entries.len(), 1);
         assert!(req.contexts[0].entries[0]
             .uri
-            .starts_with("kb://temper/task/"));
+            .starts_with("kb://@me/temper/task/"));
     }
 
     #[test]
@@ -1547,7 +1551,8 @@ mod tests {
 
     #[test]
     fn parse_kb_uri_extracts_parts() {
-        let (ctx, dt) = parse_kb_uri("kb://temper/task/some-uuid").unwrap();
+        let (ctx, dt) =
+            parse_kb_uri("kb://@me/temper/task/12345678-1234-1234-1234-123456789abc").unwrap();
         assert_eq!(ctx, "temper");
         assert_eq!(dt, "task");
     }
@@ -1559,7 +1564,7 @@ mod tests {
 
     #[test]
     fn parse_kb_uri_rejects_missing_doc_type() {
-        assert!(parse_kb_uri("kb://temper").is_err());
+        assert!(parse_kb_uri("kb://@me/temper").is_err());
     }
 
     #[test]
@@ -1612,7 +1617,7 @@ mod tests {
         let mut manifest = sample_manifest();
 
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, "content").unwrap();
@@ -1644,7 +1649,7 @@ mod tests {
         let (managed_hash_v1, open_hash_v1) =
             temper_core::schema::compute_frontmatter_hashes(&fm_v1);
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, file_v1).unwrap();
@@ -1653,7 +1658,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: body_hash.clone(),
                 remote_body_hash: body_hash.clone(),
                 managed_hash: managed_hash_v1.clone(),
@@ -1698,7 +1703,7 @@ mod tests {
 
         let original_body_hash = ingest::compute_content_hash(strip_frontmatter(original));
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, original).unwrap();
@@ -1707,7 +1712,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: original_body_hash,
                 remote_body_hash: "somehash".to_string(),
                 managed_hash: String::new(),
@@ -1742,7 +1747,7 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, "body content").unwrap();
@@ -1753,7 +1758,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: "stale-hash-that-would-trigger-if-read".to_string(),
                 remote_body_hash: "stale-hash-that-would-trigger-if-read".to_string(),
                 // Hashes must be non-empty for skip to apply
@@ -1784,7 +1789,7 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(
@@ -1799,7 +1804,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: ingest::compute_content_hash("body content"),
                 remote_body_hash: String::new(),
                 // Empty hashes — must backfill even though mtime matches
@@ -1829,7 +1834,7 @@ mod tests {
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         let content = "no frontmatter body";
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1841,7 +1846,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: "oldhash".to_string(),
                 remote_body_hash: "oldhash".to_string(),
                 managed_hash: String::new(),
@@ -1870,7 +1875,7 @@ mod tests {
     fn scan_vault_discovers_untracked_files() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let file_dir = vault.join("temper/research");
+        let file_dir = vault.join("@me/temper/research");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("new-discovery.md"),
@@ -1889,7 +1894,7 @@ mod tests {
     fn scan_vault_skips_files_already_in_manifest() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let file_dir = vault.join("temper/research");
+        let file_dir = vault.join("@me/temper/research");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(file_dir.join("existing.md"), "# Existing\n\nContent.").unwrap();
 
@@ -1898,7 +1903,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/research/existing.md".to_string(),
+                path: "@me/temper/research/existing.md".to_string(),
                 body_hash: "somehash".to_string(),
                 remote_body_hash: "somehash".to_string(),
                 managed_hash: String::new(),
@@ -1934,7 +1939,7 @@ mod tests {
     fn scan_vault_respects_frontmatter_override() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let file_dir = vault.join("temper/research");
+        let file_dir = vault.join("@me/temper/research");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("overridden.md"),
@@ -1956,7 +1961,7 @@ mod tests {
             "last_sync": null,
             "entries": {
                 "12345678-1234-1234-1234-123456789abc": {
-                    "path": "temper/task/test.md",
+                    "path": "@me/temper/task/test.md",
                     "content_hash": "abc",
                     "remote_hash": "abc",
                     "synced_at": "2026-01-01T00:00:00Z",
@@ -1995,7 +2000,7 @@ mod tests {
         let resource_id = ResourceId::new();
 
         // Create the existing file on disk
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let existing_file = file_dir.join("my-document.md");
         fs::write(&existing_file, "---\ntemper-id: old\n---\n\nOld content").unwrap();
@@ -2005,7 +2010,7 @@ mod tests {
         manifest.entries.insert(
             resource_id,
             ManifestEntry {
-                path: "temper/task/my-document.md".to_string(),
+                path: "@me/temper/task/my-document.md".to_string(),
                 body_hash: ingest::compute_content_hash("Old content"),
                 remote_body_hash: "remote-hash-1".to_string(),
                 managed_hash: String::new(),
@@ -2037,7 +2042,7 @@ mod tests {
         manifest.entries.insert(
             resource_id,
             ManifestEntry {
-                path: "temper/task/my-document.md".to_string(),
+                path: "@me/temper/task/my-document.md".to_string(),
                 body_hash: content_hash,
                 remote_body_hash: "remote-hash-2".to_string(),
                 managed_hash: String::new(),
@@ -2071,7 +2076,7 @@ mod tests {
         let vault = dir.path();
         let mut manifest = Manifest::new("test-device".to_string());
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("my-task.md"),
@@ -2103,7 +2108,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(file_dir.join("my-document.md"), "existing content").unwrap();
 
