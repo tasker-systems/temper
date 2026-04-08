@@ -5,10 +5,12 @@
 //! or when the terminal doesn't support colors.
 
 mod styles;
+pub mod table;
 
 use std::io::Write;
 
 pub use styles::clap_styles;
+pub use table::{Alignment, Column, TableRenderer};
 
 use styles::{DIM, ERROR, HEADER, HINT, LABEL, SUCCESS, WARNING};
 
