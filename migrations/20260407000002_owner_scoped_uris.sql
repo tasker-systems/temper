@@ -76,7 +76,7 @@ CREATE FUNCTION resource_for_uri(p_profile_id UUID, p_kb_uri TEXT)
 RETURNS TABLE (
     resource_id  UUID,
     origin_uri   TEXT,
-    content_hash VARCHAR(64),
+    body_hash    VARCHAR(128),
     updated      TIMESTAMPTZ,
     is_active    BOOLEAN,
     access_level VARCHAR(32),
@@ -124,12 +124,13 @@ BEGIN
     RETURN QUERY
     SELECT r.id AS resource_id,
            r.origin_uri,
-           r.content_hash,
+           COALESCE(m.body_hash, '')::VARCHAR(128) AS body_hash,
            r.updated,
            r.is_active,
            v.access_level,
            v.team_role
       FROM kb_resources r
+      LEFT JOIN kb_resource_manifests m ON m.resource_id = r.id
       JOIN resources_visible_to(p_profile_id, NULL, ARRAY[resolved_id]) v
         ON v.resource_id = r.id
      WHERE r.id = resolved_id;
