@@ -216,6 +216,24 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     Ok(markdown)
 }
 
+/// Check whether the profile can modify a resource. Returns Forbidden if not.
+pub async fn check_can_modify(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiResult<()> {
+    let can_modify = sqlx::query_scalar!(
+        "SELECT can_modify_resource($1, $2)",
+        profile_id,
+        resource_id,
+    )
+    .fetch_one(pool)
+    .await?
+    .unwrap_or(false);
+
+    if !can_modify {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(())
+}
+
 /// Create a new resource. The caller is set as both originator and owner.
 pub async fn create(
     pool: &PgPool,

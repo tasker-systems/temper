@@ -80,6 +80,30 @@ pub struct DeleteResourceInput {
     pub id: Uuid,
 }
 
+// ── Response types ─────────────────────────────────────────────────
+
+/// Status of a create_resource operation.
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CreateStatus {
+    Created,
+    Existing,
+}
+
+/// Typed response for create_resource.
+#[derive(Debug, serde::Serialize)]
+pub struct CreateResourceResponse {
+    pub resource: EnrichedResource,
+    pub status: CreateStatus,
+}
+
+/// Typed response for delete_resource.
+#[derive(Debug, serde::Serialize)]
+pub struct DeleteResourceResponse {
+    pub deleted: bool,
+    pub id: Uuid,
+}
+
 // ── Response enrichment ────────────────────────────────────────────
 
 /// Enriched resource response with human-readable names.
@@ -265,11 +289,12 @@ pub async fn create_resource(
             })?
         {
             let enriched = enrich_resource(pool, profile_id, &existing).await?;
+            let response = CreateResourceResponse {
+                resource: enriched,
+                status: CreateStatus::Existing,
+            };
             return Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                to_text(&serde_json::json!({
-                    "resource": enriched,
-                    "status": "existing"
-                })),
+                to_text(&response),
             )]));
         }
     }
@@ -281,7 +306,10 @@ pub async fn create_resource(
 
     // 5. Create resource + manifest + event
     let empty_json = serde_json::json!({});
-    let hash_for_manifest = body_hash.as_deref().unwrap_or("sha256:empty");
+    // SHA256 of empty string — used when no content is provided
+    let hash_for_manifest = body_hash
+        .as_deref()
+        .unwrap_or("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
 
     let resource = ingest_service::create_resource_with_manifest(
         pool,
@@ -317,11 +345,12 @@ pub async fn create_resource(
     }
 
     let enriched = enrich_resource(pool, profile_id, &resource).await?;
+    let response = CreateResourceResponse {
+        resource: enriched,
+        status: CreateStatus::Created,
+    };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&serde_json::json!({
-            "resource": enriched,
-            "status": "created"
-        })),
+        to_text(&response),
     )]))
 }
 
@@ -462,24 +491,19 @@ pub async fn update_resource(
     let profile_id = ProfileId::from(profile.id);
     let resource_id = ResourceId::from(input.id);
 
-    // Auth check
-    let can_modify = sqlx::query_scalar!(
-        "SELECT true FROM can_modify_resource($1, $2)",
-        *profile_id,
-        *resource_id,
-    )
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("Failed to check permissions: {e}"), None)
-    })?;
-
-    if can_modify.is_none() {
-        return Err(rmcp::ErrorData::internal_error(
-            "Resource not found or not modifiable".to_string(),
-            None,
-        ));
-    }
+    // Auth check via service layer
+    resource_service::check_can_modify(pool, profile.id, input.id)
+        .await
+        .map_err(|e| match e {
+            temper_api::error::ApiError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Resource not found or not modifiable".to_string(),
+                None,
+            ),
+            other => rmcp::ErrorData::internal_error(
+                format!("Failed to check permissions: {other}"),
+                None,
+            ),
+        })?;
 
     // Update title/slug if provided
     if input.title.is_some() || input.slug.is_some() {
@@ -503,7 +527,7 @@ pub async fn update_resource(
             rmcp::ErrorData::internal_error(format!("Failed to begin transaction: {e}"), None)
         })?;
 
-        ingest_service::update_resource_manifest(
+        let updated_row = ingest_service::update_resource_manifest(
             &mut tx,
             profile_id,
             "mcp",
@@ -521,20 +545,14 @@ pub async fn update_resource(
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to commit: {e}"), None))?;
 
-        // Fire content-ingest POST
-        let resource = resource_service::get_visible(pool, profile.id, input.id)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-            })?;
-
+        // Fire content-ingest POST using context_id from the manifest update response
         let bearer_token = extract_bearer_token(parts);
         spawn_content_ingest_post(
             resource_id,
             content,
             true,
             bearer_token,
-            resource.kb_context_id.to_string(),
+            updated_row.kb_context_id.to_string(),
             body_hash,
         );
     }
@@ -569,7 +587,11 @@ pub async fn delete_resource(
         rmcp::ErrorData::internal_error(format!("Failed to delete resource: {e}"), None)
     })?;
 
+    let response = DeleteResourceResponse {
+        deleted: true,
+        id: input.id,
+    };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&serde_json::json!({ "deleted": true, "id": input.id })),
+        to_text(&response),
     )]))
 }
