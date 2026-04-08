@@ -282,6 +282,19 @@ pub struct ListParams<'a> {
     pub format: &'a str,
 }
 
+/// Parameters for `render_list`, the testable core of the unified list
+/// pipeline. Bundling the inputs keeps the function under the project's
+/// positional-argument limit and makes test call sites read naturally.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderListParams<'a> {
+    pub doc_type: &'a str,
+    pub config: &'a Config,
+    pub context: Option<&'a str>,
+    pub limit: Option<usize>,
+    pub filters: ListFilters<'a>,
+    pub format: OutputFormat,
+}
+
 /// Scan disk for all resources of `doc_type`, optionally restricted to one
 /// context. Returns one `ResourceRow` per `.md` file that has valid
 /// frontmatter.
@@ -374,41 +387,32 @@ fn match_filters(row: &ResourceRow, filters: &ListFilters<'_>) -> bool {
 ///
 /// This is the testable core used by both `list()` (CLI entry) and the
 /// integration tests below.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "thin passthrough for list command; kept as positional for test ergonomics"
-)]
-pub fn render_list(
-    doc_type: &str,
-    config: &Config,
-    context: Option<&str>,
-    limit: Option<usize>,
-    stage: Option<&str>,
-    goal: Option<&str>,
-    status: Option<&str>,
-    format: OutputFormat,
-) -> Result<String> {
-    validate_doc_type(doc_type)?;
-    let mut rows = scan_rows(config, doc_type, context)?;
+///
+/// Empty-result handling: JSON always emits `[]` (machine-friendly),
+/// Pretty/NoTty return an empty string so the caller (`list()`) can surface
+/// a user-friendly "No X resources found" hint instead of a bare header row.
+pub fn render_list(params: &RenderListParams<'_>) -> Result<String> {
+    validate_doc_type(params.doc_type)?;
+    // Filter first, then sort — sorting unfiltered rows wastes work on rows
+    // we're about to discard.
+    let rows = scan_rows(params.config, params.doc_type, params.context)?;
+    let mut rows = filter_rows(rows, params.filters);
     sort_rows(&mut rows);
-    rows = filter_rows(
-        rows,
-        ListFilters {
-            stage,
-            goal,
-            status,
-        },
-    );
-    rows.truncate(limit.unwrap_or(20));
+    rows.truncate(params.limit.unwrap_or(20));
 
-    match format {
+    match params.format {
         OutputFormat::Json => {
             let frontmatters: Vec<&serde_json::Value> =
                 rows.iter().map(|r| &r.frontmatter).collect();
             Ok(serde_json::to_string_pretty(&frontmatters).unwrap_or_default())
         }
         OutputFormat::Pretty | OutputFormat::NoTty => {
-            let columns = col_registry::display_columns(doc_type);
+            // Empty result → return empty string so the CLI entry can render
+            // a "No X resources found" hint instead of a header-only table.
+            if rows.is_empty() {
+                return Ok(String::new());
+            }
+            let columns = col_registry::display_columns(params.doc_type);
             if columns.is_empty() {
                 return Ok(String::new());
             }
@@ -416,7 +420,7 @@ pub fn render_list(
             for row in &rows {
                 renderer.push_row(col_registry::extract_row(&row.frontmatter, &columns));
             }
-            if format == OutputFormat::Pretty {
+            if params.format == OutputFormat::Pretty {
                 Ok(renderer.render_pretty())
             } else {
                 Ok(renderer.render_no_tty())
@@ -475,16 +479,18 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         None
     };
 
-    let body = render_list(
-        params.doc_type,
+    let body = render_list(&RenderListParams {
+        doc_type: params.doc_type,
         config,
-        params.context,
-        params.limit,
-        stage,
-        goal,
-        status,
+        context: params.context,
+        limit: params.limit,
+        filters: ListFilters {
+            stage,
+            goal,
+            status,
+        },
         format,
-    )?;
+    })?;
 
     if body.trim().is_empty() {
         output::hint(format!("No {} resources found.", params.doc_type));
@@ -1093,16 +1099,14 @@ mod list_pipeline_tests {
             "temper-stage: in-progress\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
         );
 
-        let out = render_list(
-            "task",
-            &config,
-            Some("temper"),
-            None,
-            None,
-            None,
-            None,
-            OutputFormat::NoTty,
-        )
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::NoTty,
+        })
         .unwrap();
         let lines: Vec<&str> = out.lines().collect();
         assert_eq!(
@@ -1125,16 +1129,14 @@ mod list_pipeline_tests {
             "temper-stage: backlog\ntemper-goal: core\ntemper-mode: build\ntemper-effort: small\n",
         );
 
-        let out = render_list(
-            "task",
-            &config,
-            Some("temper"),
-            None,
-            None,
-            None,
-            None,
-            OutputFormat::Pretty,
-        )
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Pretty,
+        })
         .unwrap();
         let lines: Vec<&str> = out.lines().collect();
         // header | separator | 1 data row
@@ -1156,16 +1158,14 @@ mod list_pipeline_tests {
             "2026-04-07T00:00:00Z",
             "",
         );
-        let out = render_list(
-            "research",
-            &config,
-            Some("temper"),
-            None,
-            None,
-            None,
-            None,
-            OutputFormat::Json,
-        )
+        let out = render_list(&RenderListParams {
+            doc_type: "research",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Json,
+        })
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let arr = parsed.as_array().unwrap();
@@ -1179,19 +1179,58 @@ mod list_pipeline_tests {
     fn render_json_empty_list_emits_empty_array() {
         let tmp = TempDir::new().unwrap();
         let config = make_config(&tmp);
-        let out = render_list(
-            "task",
-            &config,
-            Some("temper"),
-            None,
-            None,
-            None,
-            None,
-            OutputFormat::Json,
-        )
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Json,
+        })
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed, serde_json::json!([]));
+    }
+
+    #[test]
+    fn render_list_empty_pretty_returns_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        // No resources written — the pipeline should return an empty body
+        // so the CLI entry can render a "No X resources found" hint instead
+        // of a header-only table.
+        let out = render_list(&RenderListParams {
+            doc_type: "task",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::Pretty,
+        })
+        .unwrap();
+        assert!(
+            out.trim().is_empty(),
+            "expected empty body for Pretty empty-list, got: {out:?}"
+        );
+    }
+
+    #[test]
+    fn render_list_empty_no_tty_returns_empty_string() {
+        let tmp = TempDir::new().unwrap();
+        let config = make_config(&tmp);
+        let out = render_list(&RenderListParams {
+            doc_type: "goal",
+            config: &config,
+            context: Some("temper"),
+            limit: None,
+            filters: ListFilters::default(),
+            format: OutputFormat::NoTty,
+        })
+        .unwrap();
+        assert!(
+            out.trim().is_empty(),
+            "expected empty body for NoTty empty-list, got: {out:?}"
+        );
     }
 
     #[test]
@@ -1208,16 +1247,14 @@ mod list_pipeline_tests {
                 "",
             );
         }
-        let out = render_list(
-            "session",
-            &config,
-            Some("temper"),
-            Some(2),
-            None,
-            None,
-            None,
-            OutputFormat::Json,
-        )
+        let out = render_list(&RenderListParams {
+            doc_type: "session",
+            config: &config,
+            context: Some("temper"),
+            limit: Some(2),
+            filters: ListFilters::default(),
+            format: OutputFormat::Json,
+        })
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed.as_array().unwrap().len(), 2);
