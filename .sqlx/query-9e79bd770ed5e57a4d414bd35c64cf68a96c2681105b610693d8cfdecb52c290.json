@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        SELECT id,\n               display_name,\n               email,\n               avatar_url,\n               preferences as \"preferences: serde_json::Value\",\n               vault_config as \"vault_config: serde_json::Value\",\n               is_active,\n               created,\n               updated\n          FROM kb_profiles\n         WHERE id = $1\n           AND is_active = true\n        ",
+  "query": "\n        SELECT id,\n               display_name,\n               slug,\n               email,\n               avatar_url,\n               preferences as \"preferences: serde_json::Value\",\n               vault_config as \"vault_config: serde_json::Value\",\n               is_active,\n               created,\n               updated\n          FROM kb_profiles\n         WHERE id = $1\n           AND is_active = true\n        ",
   "describe": {
     "columns": [
       {
@@ -15,36 +15,41 @@
       },
       {
         "ordinal": 2,
-        "name": "email",
+        "name": "slug",
         "type_info": "Varchar"
       },
       {
         "ordinal": 3,
+        "name": "email",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
         "name": "avatar_url",
         "type_info": "Text"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "preferences: serde_json::Value",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "vault_config: serde_json::Value",
         "type_info": "Jsonb"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "is_active",
         "type_info": "Bool"
       },
       {
-        "ordinal": 7,
+        "ordinal": 8,
         "name": "created",
         "type_info": "Timestamptz"
       },
       {
-        "ordinal": 8,
+        "ordinal": 9,
         "name": "updated",
         "type_info": "Timestamptz"
       }
@@ -57,6 +62,7 @@
     "nullable": [
       false,
       false,
+      false,
       true,
       true,
       false,
@@ -66,5 +72,5 @@
       false
     ]
   },
-  "hash": "0e212e83c5292fef023a8094b48d8ad1742b2fe0e564c5bb5e80aa7c4fff9d4e"
+  "hash": "9e79bd770ed5e57a4d414bd35c64cf68a96c2681105b610693d8cfdecb52c290"
 }
