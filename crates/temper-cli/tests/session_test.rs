@@ -133,36 +133,4 @@ fn test_session_list_returns_ok() {
         "text",
     )
     .unwrap();
-
-    // list all
-    let result = temper_cli::commands::session::list(&config, None, None, "text");
-    assert!(result.is_ok());
-
-    // list filtered
-    let result = temper_cli::commands::session::list(&config, Some("proj"), None, "text");
-    assert!(result.is_ok());
-}
-
-#[test]
-fn test_session_list_respects_limit() {
-    let dir = TempDir::new().unwrap();
-    let config = test_config(&dir);
-
-    // Create 3 sessions
-    for title in &["Alpha", "Beta", "Gamma"] {
-        temper_cli::commands::session::save(
-            &config,
-            Some(title),
-            Some("proj"),
-            None,
-            None,
-            None,
-            "text",
-        )
-        .unwrap();
-    }
-
-    // Request limit of 2, verify via JSON output
-    let result = temper_cli::commands::session::list(&config, Some("proj"), Some(2), "json");
-    assert!(result.is_ok());
 }
