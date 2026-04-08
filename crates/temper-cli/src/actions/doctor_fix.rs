@@ -467,10 +467,8 @@ pub const DATE_PREFIX_DOC_TYPES: &[&str] = &["session", "research"];
 /// parent directory of `path`. If they disagree, a `RelocateFile` action is
 /// emitted.
 ///
-/// Expected directory layout:
-/// - `research` doc type: `{vault_root}/{context}/research/`
-/// - All others: `{vault_root}/{context}/{doc_type}/`
-pub fn fix_relocation(path: &Path, fm: &Value, vault_root: &Path) -> Vec<FixAction> {
+/// Expected directory layout: `{vault_root}/{owner}/{context}/{doc_type}/`
+pub fn fix_relocation(path: &Path, fm: &Value, vault_root: &Path, owner: &str) -> Vec<FixAction> {
     // Extract context: prefer temper-context, fall back to context, then project
     let context = fm_str(fm, "temper-context")
         .or_else(|| fm_str(fm, "context"))
@@ -486,8 +484,9 @@ pub fn fix_relocation(path: &Path, fm: &Value, vault_root: &Path) -> Vec<FixActi
         _ => return Vec::new(),
     };
 
-    // Compute expected directory
-    let expected_dir = vault_root.join(&context).join(&doc_type);
+    // Compute expected directory via the Vault layout helper.
+    let expected_dir =
+        temper_core::vault::Vault::new(vault_root).doc_type_dir(owner, &context, &doc_type);
 
     // Current directory of the file
     let current_dir = match path.parent() {
@@ -1210,18 +1209,24 @@ mod tests {
 
     #[test]
     fn f3_relocates_research_from_legacy_path() {
-        // Legacy layout: research/{context}/file.md → should be {context}/research/file.md
-        let path = PathBuf::from("/vault/research/temper/test.md");
+        // Misplaced under @me/research/{context}/ → should move to @me/{context}/research/
+        let path = PathBuf::from("/vault/@me/research/temper/test.md");
         let fm = yaml_fm(&[("temper-context", "temper"), ("temper-type", "research")]);
         let root = PathBuf::from("/vault");
-        let actions = fix_relocation(&path, &fm, &root);
+        let actions = fix_relocation(&path, &fm, &root, "@me");
         assert_eq!(actions.len(), 1, "expected one RelocateFile action");
         match &actions[0] {
             FixAction::RelocateFile {
                 old_path, new_path, ..
             } => {
-                assert_eq!(old_path, &PathBuf::from("/vault/research/temper/test.md"));
-                assert_eq!(new_path, &PathBuf::from("/vault/temper/research/test.md"));
+                assert_eq!(
+                    old_path,
+                    &PathBuf::from("/vault/@me/research/temper/test.md")
+                );
+                assert_eq!(
+                    new_path,
+                    &PathBuf::from("/vault/@me/temper/research/test.md")
+                );
             }
             other => panic!("expected RelocateFile, got {other:?}"),
         }
@@ -1229,18 +1234,18 @@ mod tests {
 
     #[test]
     fn f3_relocates_wrong_context() {
-        // File is in /vault/general/task/ but fm says context=temper
-        let path = PathBuf::from("/vault/general/task/test.md");
+        // File is in @me/general/task/ but fm says context=temper
+        let path = PathBuf::from("/vault/@me/general/task/test.md");
         let fm = yaml_fm(&[("temper-context", "temper"), ("temper-type", "task")]);
         let root = PathBuf::from("/vault");
-        let actions = fix_relocation(&path, &fm, &root);
+        let actions = fix_relocation(&path, &fm, &root, "@me");
         assert_eq!(actions.len(), 1, "expected one RelocateFile action");
         match &actions[0] {
             FixAction::RelocateFile {
                 old_path, new_path, ..
             } => {
-                assert_eq!(old_path, &PathBuf::from("/vault/general/task/test.md"));
-                assert_eq!(new_path, &PathBuf::from("/vault/temper/task/test.md"));
+                assert_eq!(old_path, &PathBuf::from("/vault/@me/general/task/test.md"));
+                assert_eq!(new_path, &PathBuf::from("/vault/@me/temper/task/test.md"));
             }
             other => panic!("expected RelocateFile, got {other:?}"),
         }
@@ -1248,11 +1253,11 @@ mod tests {
 
     #[test]
     fn f3_no_relocation_when_correct() {
-        // File is already in the right place
-        let path = PathBuf::from("/vault/temper/task/test.md");
+        // File is already in the right place under owner-scoped layout
+        let path = PathBuf::from("/vault/@me/temper/task/test.md");
         let fm = yaml_fm(&[("temper-context", "temper"), ("temper-type", "task")]);
         let root = PathBuf::from("/vault");
-        let actions = fix_relocation(&path, &fm, &root);
+        let actions = fix_relocation(&path, &fm, &root, "@me");
         assert!(
             actions.is_empty(),
             "expected no actions for correctly located file"

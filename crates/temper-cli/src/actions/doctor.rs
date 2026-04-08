@@ -8,6 +8,7 @@ use temper_core::schema::{
     check_legacy_fields, check_unknown_temper_fields, validate_frontmatter, ValidationIssue,
     ValidationResult,
 };
+use temper_core::vault::Vault;
 
 use crate::actions::doctor_fix::{
     apply_manifest_actions, apply_plan, fix_filename, fix_manifest_for_moves, fix_missing_fields,
@@ -27,7 +28,7 @@ pub struct DoctorReport {
     pub file_results: Vec<ValidationResult>,
 }
 
-/// Doc types whose files live at `{vault_root}/{context}/{doc_type}/`.
+/// Doc types whose files live at `{vault_root}/{owner}/{context}/{doc_type}/`.
 const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
 
 /// Scan the vault and validate all markdown frontmatter.
@@ -36,6 +37,7 @@ const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "conc
 /// contexts listed in `config.contexts` are scanned.
 pub fn scan(config: &Config, context_filter: Option<&str>) -> Result<DoctorReport> {
     let mut file_results: Vec<ValidationResult> = Vec::new();
+    let vault_layout = Vault::new(&config.vault_root);
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
         vec![ctx.to_string()]
@@ -43,26 +45,16 @@ pub fn scan(config: &Config, context_filter: Option<&str>) -> Result<DoctorRepor
         config.contexts.clone()
     };
 
-    // Walk standard entity doc type directories
+    // Walk every entity doc_type directory under its owner-scoped path.
+    // research is included in ENTITY_DOC_TYPES — no special case required.
     for doc_type in ENTITY_DOC_TYPES {
         for ctx in &contexts_to_scan {
-            let dir = config.doc_type_dir(ctx, doc_type);
+            let owner = config.owner_for_context(ctx);
+            let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
             if !dir.is_dir() {
                 continue;
             }
             scan_directory(&dir, doc_type, &mut file_results)?;
-        }
-    }
-
-    // Walk research directory: {vault_root}/research/{context}/
-    let research_root = config.vault_root.join("research");
-    if research_root.is_dir() {
-        for ctx in &contexts_to_scan {
-            let dir = research_root.join(ctx);
-            if !dir.is_dir() {
-                continue;
-            }
-            scan_directory(&dir, "research", &mut file_results)?;
         }
     }
 
@@ -174,6 +166,7 @@ fn detect_doc_type(fm: &serde_yaml::Value, dir_doc_type: &str) -> Option<String>
 /// and updates the manifest to reflect any file moves.
 pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Result<ApplyReport> {
     let mut plan = FixPlan::new();
+    let vault_layout = Vault::new(&config.vault_root);
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
         vec![ctx.to_string()]
@@ -181,26 +174,16 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
         config.contexts.clone()
     };
 
-    // Walk standard entity doc type directories
+    // Walk every entity doc_type directory under its owner-scoped path.
+    // research is included in ENTITY_DOC_TYPES — no special case required.
     for doc_type in ENTITY_DOC_TYPES {
         for ctx in &contexts_to_scan {
-            let dir = config.doc_type_dir(ctx, doc_type);
+            let owner = config.owner_for_context(ctx);
+            let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
             if !dir.is_dir() {
                 continue;
             }
-            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
-        }
-    }
-
-    // Walk research directory: {vault_root}/research/{context}/
-    let research_root = config.vault_root.join("research");
-    if research_root.is_dir() {
-        for ctx in &contexts_to_scan {
-            let dir = research_root.join(ctx);
-            if !dir.is_dir() {
-                continue;
-            }
-            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
+            collect_fixes_for_directory(&dir, &config.vault_root, &owner, &mut plan)?;
         }
     }
 
@@ -240,7 +223,12 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
 }
 
 /// Collect fix actions for all `.md` files in `dir`.
-fn collect_fixes_for_directory(dir: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
+fn collect_fixes_for_directory(
+    dir: &Path,
+    vault_root: &Path,
+    owner: &str,
+    plan: &mut FixPlan,
+) -> Result<()> {
     let md_files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -248,14 +236,19 @@ fn collect_fixes_for_directory(dir: &Path, vault_root: &Path, plan: &mut FixPlan
         .collect();
 
     for file_path in md_files {
-        collect_fixes_for_file(&file_path, vault_root, plan)?;
+        collect_fixes_for_file(&file_path, vault_root, owner, plan)?;
     }
 
     Ok(())
 }
 
 /// Collect fix actions for a single file and add them to the plan.
-fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
+fn collect_fixes_for_file(
+    file_path: &Path,
+    vault_root: &Path,
+    owner: &str,
+    plan: &mut FixPlan,
+) -> Result<()> {
     let mut content = fs::read_to_string(file_path)?;
 
     // Pre-pass: if frontmatter fails to parse, attempt dedup and rewrite.
@@ -270,7 +263,7 @@ fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPla
         return Ok(());
     };
     plan.extend(fix_missing_fields(file_path, &fm, vault_root));
-    plan.extend(fix_relocation(file_path, &fm, vault_root));
+    plan.extend(fix_relocation(file_path, &fm, vault_root, owner));
     plan.extend(fix_filename(file_path, &fm, vault_root));
     Ok(())
 }

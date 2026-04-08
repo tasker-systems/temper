@@ -26,7 +26,7 @@ fn doctor_fix_pipeline_end_to_end() {
     let vault = dir.path();
 
     // Create a task with missing temper-* fields and non-slug filename (em-dash + spaces + punctuation)
-    let task_dir = vault.join("temper").join("task");
+    let task_dir = vault.join("@me").join("temper").join("task");
     fs::create_dir_all(&task_dir).unwrap();
     fs::write(
         task_dir.join("2026-04-05 \u{2014} My Feature!.md"),
@@ -35,7 +35,7 @@ fn doctor_fix_pipeline_end_to_end() {
     .unwrap();
 
     // Create a session with em-dash filename and missing fields
-    let session_dir = vault.join("temper").join("session");
+    let session_dir = vault.join("@me").join("temper").join("session");
     fs::create_dir_all(&session_dir).unwrap();
     fs::write(
         session_dir.join("2026-04-05 \u{2014} my-session.md"),
