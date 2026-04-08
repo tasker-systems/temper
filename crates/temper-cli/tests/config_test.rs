@@ -101,6 +101,7 @@ fn test_config_doc_type_dir() {
         vault_root: std::path::PathBuf::from("/tmp/vault"),
         state_dir: std::path::PathBuf::from("/tmp/vault/.temper"),
         contexts: vec!["myapp".to_string()],
+        subscriptions: Vec::new(),
         skill_output: std::path::PathBuf::from("/tmp/temper.md"),
         skill_framework: "superpowers".to_string(),
     };

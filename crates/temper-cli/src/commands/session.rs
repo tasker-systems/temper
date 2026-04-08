@@ -477,6 +477,7 @@ mod tests {
             vault_root,
             state_dir,
             contexts: vec!["temper".to_string(), "default".to_string()],
+            subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/test-skill"),
             skill_framework: "superpowers".to_string(),
         };

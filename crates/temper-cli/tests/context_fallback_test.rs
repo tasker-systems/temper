@@ -6,6 +6,7 @@ fn test_config(vault_path: PathBuf) -> temper_cli::config::Config {
         vault_root: vault_path.clone(),
         state_dir: vault_path.join(".temper"),
         contexts: vec![],
+        subscriptions: Vec::new(),
         skill_output: PathBuf::from("/tmp/skill"),
         skill_framework: "superpowers".to_string(),
     }
