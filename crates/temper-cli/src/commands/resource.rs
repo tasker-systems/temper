@@ -4,6 +4,7 @@ use askama::Template;
 use chrono::Local;
 use serde::Serialize;
 use temper_core::schema;
+use temper_core::vault::Vault;
 
 use crate::config::Config;
 use crate::discovery::{self, Event};
@@ -168,8 +169,10 @@ fn create_simple_resource(
         content
     };
 
-    let dir = config.doc_type_dir(context, doc_type);
-    let path = dir.join(format!("{slug}.md"));
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(context);
+    let dir = vault_layout.doc_type_dir(&owner, context, doc_type);
+    let path = vault_layout.doc_file(&owner, context, doc_type, &slug);
 
     if path.exists() {
         return Err(TemperError::Vault(format!(
@@ -177,6 +180,7 @@ fn create_simple_resource(
         )));
     }
 
+    std::fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
 
     let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
@@ -275,8 +279,10 @@ fn list_simple_resources(
         config.contexts.clone()
     };
 
+    let vault_layout = Vault::new(&config.vault_root);
     for ctx in &contexts_to_scan {
-        let dir = config.doc_type_dir(ctx, doc_type);
+        let owner = config.owner_for_context(ctx);
+        let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
         if dir.is_dir() {
             collect_simple_resources(&dir, ctx, &mut entries)?;
         }
@@ -473,9 +479,11 @@ fn find_resource_file(
 
     let needle = vault::slugify(slug);
     let mut matches: Vec<(PathBuf, String)> = Vec::new();
+    let vault_layout = Vault::new(&config.vault_root);
 
     for ctx in &contexts_to_scan {
-        let dir = config.doc_type_dir(ctx, doc_type);
+        let owner = config.owner_for_context(ctx);
+        let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
         if !dir.is_dir() {
             continue;
         }
@@ -634,10 +642,13 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     }
 
     // Handle --context-to (move file to new context dir, update temper-context)
+    let vault_layout = Vault::new(&config.vault_root);
     let final_ctx;
     let mut final_path = path.clone();
     if let Some(new_ctx) = params.context_to {
-        let new_dir = config.doc_type_dir(new_ctx, params.type_to.unwrap_or(current_type));
+        let new_owner = config.owner_for_context(new_ctx);
+        let new_dir =
+            vault_layout.doc_type_dir(&new_owner, new_ctx, params.type_to.unwrap_or(current_type));
         std::fs::create_dir_all(&new_dir)?;
         let filename = path
             .file_name()
@@ -653,7 +664,8 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     // Handle --type-to (move file to new type dir, update temper-type)
     if let Some(new_type) = params.type_to {
         let target_ctx = params.context_to.unwrap_or(&final_ctx);
-        let new_dir = config.doc_type_dir(target_ctx, new_type);
+        let target_owner = config.owner_for_context(target_ctx);
+        let new_dir = vault_layout.doc_type_dir(&target_owner, target_ctx, new_type);
         std::fs::create_dir_all(&new_dir)?;
         let filename = final_path
             .file_name()
