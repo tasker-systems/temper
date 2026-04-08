@@ -62,7 +62,6 @@ fn test_load_from_uses_explicit_config() {
     config.sync.subscriptions.contexts = vec!["myctx".to_string(), "otherctx".to_string()];
     config.skill = SkillConfig {
         output: vault_dir.join("skills").to_str().unwrap().to_string(),
-        framework: "custom-framework".to_string(),
     };
 
     let result = temper_cli::config::load_from(&config, None);
@@ -72,7 +71,7 @@ fn test_load_from_uses_explicit_config() {
         result.contexts,
         vec!["myctx".to_string(), "otherctx".to_string()]
     );
-    assert_eq!(result.skill_framework, "custom-framework");
+    assert_eq!(result.skill_output, vault_dir.join("skills"));
 }
 
 #[test]
@@ -102,7 +101,6 @@ fn test_config_doc_type_dir() {
         state_dir: std::path::PathBuf::from("/tmp/vault/.temper"),
         contexts: vec!["myapp".to_string()],
         skill_output: std::path::PathBuf::from("/tmp/temper.md"),
-        skill_framework: "superpowers".to_string(),
     };
     let dir = config.doc_type_dir("myapp", "task");
     assert_eq!(dir, std::path::PathBuf::from("/tmp/vault/myapp/task"));

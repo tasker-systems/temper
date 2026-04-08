@@ -34,26 +34,6 @@ pub struct SyncSubscription {
     pub merge: MergePolicy,
 }
 
-/// CLI output preferences.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CliConfig {
-    /// Progress output format: "bar" (human-friendly) or "json" (JSONL stream)
-    #[serde(default = "default_progress")]
-    pub progress: String,
-}
-
-impl Default for CliConfig {
-    fn default() -> Self {
-        Self {
-            progress: default_progress(),
-        }
-    }
-}
-
-fn default_progress() -> String {
-    "bar".to_string()
-}
-
 /// Sync configuration section of config.toml.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SyncConfig {
@@ -75,8 +55,6 @@ pub struct CloudConfig {
     pub vault: CloudVaultConfig,
     #[serde(default)]
     pub sync: SyncConfig,
-    #[serde(default)]
-    pub cli: CliConfig,
 }
 
 /// Vault path reference in cloud config.
@@ -107,23 +85,16 @@ pub struct SkillConfig {
     #[serde(default = "default_skill_output")]
     #[validate(length(min = 1, message = "skill output path cannot be empty"))]
     pub output: String,
-    #[serde(default = "default_skill_framework")]
-    pub framework: String,
 }
 
 fn default_skill_output() -> String {
     "~/.claude/skills/temper".to_string()
 }
 
-fn default_skill_framework() -> String {
-    "superpowers".to_string()
-}
-
 impl Default for SkillConfig {
     fn default() -> Self {
         Self {
             output: default_skill_output(),
-            framework: default_skill_framework(),
         }
     }
 }
@@ -220,8 +191,6 @@ pub struct TemperConfig {
     #[serde(default)]
     pub sync: UnifiedSyncConfig,
     #[serde(default)]
-    pub cli: CliConfig,
-    #[serde(default)]
     #[validate(nested)]
     pub skill: SkillConfig,
     #[serde(default)]
@@ -239,7 +208,6 @@ impl Default for TemperConfig {
                 path: "~/Documents/temper-vault".to_string(),
             },
             sync: Default::default(),
-            cli: Default::default(),
             skill: Default::default(),
             auth: Default::default(),
             cloud: Default::default(),
@@ -348,9 +316,6 @@ merge = "manual"
 team = "platform-team"
 doc_types = ["research", "concept"]
 merge = "auto"
-
-[cli]
-progress = "bar"
 "#;
         let config: CloudConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/projects/knowledge");
@@ -370,7 +335,6 @@ progress = "bar"
             config.sync.subscriptions[1].doc_types,
             vec!["research", "concept"]
         );
-        assert_eq!(config.cli.progress, "bar");
     }
 
     #[test]
@@ -382,7 +346,26 @@ path = "~/vault"
         let config: CloudConfig = toml::from_str(toml_str).unwrap();
         assert!(!config.sync.auto);
         assert!(config.sync.subscriptions.is_empty());
-        assert_eq!(config.cli.progress, "bar");
+    }
+
+    #[test]
+    fn stale_cli_section_and_skill_framework_parse_without_error() {
+        // This config contains fields we no longer define — the expectation
+        // is that serde drops them silently rather than failing to parse.
+        let toml_str = r#"
+[vault]
+path = "~/Documents/temper-vault"
+
+[cli]
+progress = "bar"
+
+[skill]
+output = "~/.claude/skills/temper"
+framework = "superpowers"
+"#;
+        let cfg: TemperConfig = toml::from_str(toml_str).expect("stale config must parse");
+        assert_eq!(cfg.vault.path, "~/Documents/temper-vault");
+        assert_eq!(cfg.skill.output, "~/.claude/skills/temper");
     }
 
     #[test]
@@ -469,7 +452,6 @@ path = "~/vault"
         let config: TemperConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/vault");
         assert!(config.sync.subscriptions.contexts.is_empty());
-        assert_eq!(config.cli.progress, "bar");
         assert_eq!(config.auth.provider, "auth0");
         // Cloud section defaults
         assert_eq!(config.cloud.api_url, "https://temperkb.io");

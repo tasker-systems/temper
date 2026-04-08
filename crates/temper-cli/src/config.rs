@@ -28,7 +28,6 @@ pub struct Config {
     pub state_dir: PathBuf,
     pub contexts: Vec<String>,
     pub skill_output: PathBuf,
-    pub skill_framework: String,
 }
 
 impl Config {
@@ -94,7 +93,6 @@ pub fn load_from(global: &TemperConfig, cli_vault: Option<&str>) -> Config {
         vault_root,
         contexts: global.sync.subscriptions.contexts.clone(),
         skill_output: expand_tilde(&global.skill.output),
-        skill_framework: global.skill.framework.clone(),
     }
 }
 
@@ -119,7 +117,6 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
         vault_root,
         contexts: global.sync.subscriptions.contexts.clone(),
         skill_output: expand_tilde(&global.skill.output),
-        skill_framework: global.skill.framework.clone(),
     })
 }
 

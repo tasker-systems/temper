@@ -381,7 +381,6 @@ mod tests {
             state_dir,
             contexts: vec!["temper".to_string(), "default".to_string()],
             skill_output: PathBuf::from("/tmp/test-skill"),
-            skill_framework: "superpowers".to_string(),
         };
         (tmp, config)
     }

@@ -866,7 +866,6 @@ mod list_pipeline_tests {
             vault_root,
             contexts: vec!["temper".into(), "default".into()],
             skill_output: PathBuf::from("/tmp/skill"),
-            skill_framework: "none".into(),
         }
     }
 

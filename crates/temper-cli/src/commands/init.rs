@@ -84,17 +84,14 @@ path = "{vault_path_str}"
 [sync.subscriptions]
 contexts = []
 
-[cli]
-progress = "bar"
-
 [skill]
 output = "~/.claude/skills/temper"
-framework = "superpowers"
 
 [auth]
 provider = "auth0"
 
-[auth.providers.auth0]
+[[auth.providers]]
+name = "auth0"
 authorize_url = "https://temperkb.us.auth0.com/authorize"
 token_url = "https://temperkb.us.auth0.com/oauth/token"
 client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
@@ -123,17 +120,14 @@ path = "{vault_path_str}"
 [sync.subscriptions]
 contexts = []
 
-[cli]
-progress = "bar"
-
 [skill]
 output = "~/.claude/skills/temper"
-framework = "superpowers"
 
 [auth]
 provider = "auth0"
 
-[auth.providers.auth0]
+[[auth.providers]]
+name = "auth0"
 authorize_url = "https://temperkb.us.auth0.com/authorize"
 token_url = "https://temperkb.us.auth0.com/oauth/token"
 client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"

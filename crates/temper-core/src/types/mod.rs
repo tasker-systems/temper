@@ -40,9 +40,9 @@ pub use api::{
 pub use audit::ResourceAuditRow;
 pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
 pub use config::{
-    expand_tilde, global_config_path, load_config, load_config_from, AuthConfig, CliConfig,
-    CloudConfig, CloudSection, CloudVaultConfig, MergePolicy, SkillConfig, SyncConfig,
-    SyncSubscription, SyncSubscriptions, TemperConfig, UnifiedConfig, UnifiedSyncConfig,
+    expand_tilde, global_config_path, load_config, load_config_from, AuthConfig, CloudConfig,
+    CloudSection, CloudVaultConfig, MergePolicy, SkillConfig, SyncConfig, SyncSubscription,
+    SyncSubscriptions, TemperConfig, UnifiedConfig, UnifiedSyncConfig,
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow};

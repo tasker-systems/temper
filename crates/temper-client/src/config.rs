@@ -253,7 +253,6 @@ scopes        = ["openid"]
                 path: "~/vault".to_string(),
             },
             sync: Default::default(),
-            cli: Default::default(),
             skill: Default::default(),
             auth: AuthConfig {
                 provider: "nonexistent".to_string(),
@@ -277,7 +276,6 @@ scopes        = ["openid"]
                 path: "~/vault".to_string(),
             },
             sync: Default::default(),
-            cli: Default::default(),
             skill: Default::default(),
             auth: AuthConfig {
                 provider: "none".to_string(),

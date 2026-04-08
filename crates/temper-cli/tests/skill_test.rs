@@ -46,7 +46,6 @@ scopes = ["openid"]
         state_dir,
         contexts: vec!["myapp".to_string()],
         skill_output: dir.path().join("skill-output"),
-        skill_framework: "superpowers".to_string(),
     }
 }
 
