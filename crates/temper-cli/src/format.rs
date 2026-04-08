@@ -1,21 +1,54 @@
+use std::io::IsTerminal;
+
 use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Output format selector for CLI commands.
+///
+/// `Pretty` renders markdown-style pipe tables with bold headers; used when
+/// stdout is a TTY and the user did not override via `--format`. `NoTty` is
+/// tab-delimited with no borders and no ANSI, suited for pipes and scripts.
+/// `Json` always outputs full JSON (including all frontmatter).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputFormat {
-    Text,
+    Pretty,
+    NoTty,
     Json,
 }
 
 impl OutputFormat {
+    /// Parse a `--format` string. Unknown / legacy values auto-detect via TTY.
     pub fn parse(s: &str) -> Self {
         match s.to_lowercase().as_str() {
+            "pretty" => Self::Pretty,
+            "no-tty" | "notty" => Self::NoTty,
             "json" => Self::Json,
-            _ => Self::Text,
+            // Legacy "text" or anything else: auto-detect
+            _ => Self::auto(),
+        }
+    }
+
+    /// Resolve the effective format given an optional explicit CLI value.
+    ///
+    /// `None` auto-detects; `Some("text")` is treated as auto-detect for
+    /// backward compatibility.
+    pub fn resolve(explicit: Option<&str>) -> Self {
+        match explicit {
+            Some(s) => Self::parse(s),
+            None => Self::auto(),
+        }
+    }
+
+    /// Pick a format based on whether stdout is a terminal.
+    fn auto() -> Self {
+        if std::io::stdout().is_terminal() {
+            Self::Pretty
+        } else {
+            Self::NoTty
         }
     }
 }
 
-/// Print a serializable value in the requested format
+/// Print a serializable value in the requested format.
 pub fn output<T: Serialize + std::fmt::Display>(value: &T, format: OutputFormat) {
     match format {
         OutputFormat::Json => {
@@ -24,8 +57,47 @@ pub fn output<T: Serialize + std::fmt::Display>(value: &T, format: OutputFormat)
                 serde_json::to_string_pretty(value).unwrap_or_default()
             );
         }
-        OutputFormat::Text => {
+        OutputFormat::Pretty | OutputFormat::NoTty => {
             println!("{value}");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_pretty_lowercase() {
+        assert_eq!(OutputFormat::parse("pretty"), OutputFormat::Pretty);
+    }
+
+    #[test]
+    fn parse_no_tty_with_dash() {
+        assert_eq!(OutputFormat::parse("no-tty"), OutputFormat::NoTty);
+    }
+
+    #[test]
+    fn parse_json_lowercase() {
+        assert_eq!(OutputFormat::parse("json"), OutputFormat::Json);
+    }
+
+    #[test]
+    fn parse_unknown_defaults_to_auto() {
+        // "text" is legacy and should resolve to auto-detect (Pretty in tests
+        // depends on TTY; we only check that it is one of Pretty or NoTty).
+        let v = OutputFormat::parse("text");
+        assert!(matches!(v, OutputFormat::Pretty | OutputFormat::NoTty));
+    }
+
+    #[test]
+    fn resolve_explicit_honors_value() {
+        assert_eq!(OutputFormat::resolve(Some("json")), OutputFormat::Json);
+    }
+
+    #[test]
+    fn resolve_none_picks_tty_or_no_tty() {
+        let v = OutputFormat::resolve(None);
+        assert!(matches!(v, OutputFormat::Pretty | OutputFormat::NoTty));
     }
 }
