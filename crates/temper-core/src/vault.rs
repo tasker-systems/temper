@@ -95,6 +95,43 @@ impl<'a> Vault<'a> {
             slug,
         })
     }
+
+    // ----- URI operations (pure, no vault_root needed) -----
+
+    /// Build a canonical kb:// URI from components.
+    /// Returns `kb://<owner>/<context>/<doc_type>/<ident>`.
+    ///
+    /// Associated function — no Vault instance needed. API/MCP use this without
+    /// touching the filesystem.
+    pub fn canonical_uri(owner: &str, context: &str, doc_type: &str, ident: &str) -> String {
+        format!("kb://{owner}/{context}/{doc_type}/{ident}")
+    }
+
+    /// Parse a kb:// URI into components. Rejects legacy no-sigil URIs.
+    ///
+    /// Associated function — no Vault instance needed.
+    pub fn parse_uri(uri: &str) -> Option<ParsedKbUri<'_>> {
+        let rest = uri.strip_prefix("kb://")?;
+        let parts: Vec<&str> = rest.split('/').collect();
+        if parts.len() != 4 {
+            return None;
+        }
+        // Reject any empty segment (leading/trailing slashes, double slashes).
+        if parts.iter().any(|s| s.is_empty()) {
+            return None;
+        }
+        let owner = parts[0];
+        // Sigil must be followed by at least one character.
+        if owner.len() < 2 || !(owner.starts_with('@') || owner.starts_with('+')) {
+            return None;
+        }
+        Some(ParsedKbUri {
+            owner,
+            context: parts[1],
+            doc_type: parts[2],
+            ident: parts[3],
+        })
+    }
 }
 
 #[cfg(test)]
@@ -215,5 +252,91 @@ mod tests {
         assert_eq!(parsed.context, "temper");
         assert_eq!(parsed.doc_type, "task");
         assert_eq!(parsed.slug, "round-trip");
+    }
+
+    #[test]
+    fn canonical_uri_personal_with_slug() {
+        assert_eq!(
+            Vault::canonical_uri("@me", "temper", "task", "my-task"),
+            "kb://@me/temper/task/my-task".to_string()
+        );
+    }
+
+    #[test]
+    fn canonical_uri_team_with_slug() {
+        assert_eq!(
+            Vault::canonical_uri("+team-x", "general", "goal", "q4"),
+            "kb://+team-x/general/goal/q4".to_string()
+        );
+    }
+
+    #[test]
+    fn canonical_uri_with_uuid_ident() {
+        assert_eq!(
+            Vault::canonical_uri(
+                "@me",
+                "temper",
+                "task",
+                "019d6880-5c21-7bb2-86fb-a0cc612b5cf5"
+            ),
+            "kb://@me/temper/task/019d6880-5c21-7bb2-86fb-a0cc612b5cf5".to_string()
+        );
+    }
+
+    #[test]
+    fn parse_uri_valid_personal() {
+        let parsed = Vault::parse_uri("kb://@me/temper/task/my-task").unwrap();
+        assert_eq!(parsed.owner, "@me");
+        assert_eq!(parsed.context, "temper");
+        assert_eq!(parsed.doc_type, "task");
+        assert_eq!(parsed.ident, "my-task");
+    }
+
+    #[test]
+    fn parse_uri_valid_team() {
+        let parsed = Vault::parse_uri("kb://+platform/general/goal/q4").unwrap();
+        assert_eq!(parsed.owner, "+platform");
+        assert_eq!(parsed.context, "general");
+        assert_eq!(parsed.doc_type, "goal");
+        assert_eq!(parsed.ident, "q4");
+    }
+
+    #[test]
+    fn parse_uri_rejects_legacy_no_sigil() {
+        assert!(Vault::parse_uri("kb://temper/task/my-task").is_none());
+    }
+
+    #[test]
+    fn parse_uri_rejects_missing_scheme() {
+        assert!(Vault::parse_uri("@me/temper/task/my-task").is_none());
+        assert!(Vault::parse_uri("http://@me/temper/task/my-task").is_none());
+    }
+
+    #[test]
+    fn parse_uri_rejects_too_few_segments() {
+        assert!(Vault::parse_uri("kb://@me/temper/task").is_none());
+        assert!(Vault::parse_uri("kb://@me/temper").is_none());
+        assert!(Vault::parse_uri("kb://@me").is_none());
+        assert!(Vault::parse_uri("kb://").is_none());
+    }
+
+    #[test]
+    fn parse_uri_round_trips_with_canonical_uri() {
+        let uri = Vault::canonical_uri("@me", "temper", "task", "round-trip");
+        let parsed = Vault::parse_uri(&uri).unwrap();
+        assert_eq!(parsed.owner, "@me");
+        assert_eq!(parsed.context, "temper");
+        assert_eq!(parsed.doc_type, "task");
+        assert_eq!(parsed.ident, "round-trip");
+    }
+
+    #[test]
+    fn parse_uri_rejects_empty_segments_and_bare_sigil() {
+        // Empty mid-segment
+        assert!(Vault::parse_uri("kb://@me//task/foo").is_none());
+        // Bare sigil with no identifier
+        assert!(Vault::parse_uri("kb://@/temper/task/foo").is_none());
+        // Empty ident
+        assert!(Vault::parse_uri("kb://@me/temper/task/").is_none());
     }
 }
