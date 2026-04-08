@@ -35,6 +35,7 @@ askama = "0.12"
 regex = "1"
 dialoguer = "0.12"
 validator = { version = "0.20", features = ["derive"] }
+shell-words = "1"
 
 [features]
 default = ["extract", "embed"]

@@ -123,7 +123,14 @@ api_url = "https://example.com"
     fn parse_empty_vault_path_returns_invalid() {
         let broken = VALID.replace(r#"path = "/tmp/v""#, r#"path = """#);
         match parse_and_validate(&broken) {
-            ParseOutcome::Invalid(msg) => assert!(msg.contains("vault") || msg.contains("path")),
+            ParseOutcome::Invalid(msg) => {
+                // Assert on the fully-qualified nested path — this is the
+                // contract the walk_errors recursive walk was added for.
+                assert!(
+                    msg.contains("vault.path"),
+                    "expected fully-qualified 'vault.path' in error, got: {msg}"
+                );
+            }
             _ => panic!("expected invalid"),
         }
     }
@@ -135,7 +142,12 @@ api_url = "https://example.com"
             r#"api_url = "not a url""#,
         );
         match parse_and_validate(&broken) {
-            ParseOutcome::Invalid(msg) => assert!(msg.contains("api_url") || msg.contains("url")),
+            ParseOutcome::Invalid(msg) => {
+                assert!(
+                    msg.contains("cloud.api_url"),
+                    "expected fully-qualified 'cloud.api_url' in error, got: {msg}"
+                );
+            }
             _ => panic!("expected invalid"),
         }
     }

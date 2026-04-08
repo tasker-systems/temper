@@ -17,6 +17,20 @@ pub fn edit() -> Result<()> {
     ensure_config_exists(&target)?;
 
     let edit_path = action::temp_edit_path(&target);
+
+    // A stale .edit file means a previous invocation was interrupted
+    // (Ctrl+C, editor crash, etc). Warn and start fresh rather than
+    // silently overwriting — the user should know their prior edit is
+    // being discarded.
+    if edit_path.exists() {
+        output::warning(format!(
+            "discarding stale edit file from a previous interrupted session: {}",
+            edit_path.display()
+        ));
+        std::fs::remove_file(&edit_path)
+            .map_err(|e| TemperError::Config(format!("cannot remove stale edit file: {e}")))?;
+    }
+
     std::fs::copy(&target, &edit_path)
         .map_err(|e| TemperError::Config(format!("cannot copy for edit: {e}")))?;
 
@@ -68,16 +82,34 @@ fn ensure_config_exists(target: &Path) -> Result<()> {
 }
 
 fn open_in_editor(path: &Path) -> Result<()> {
-    let editor = std::env::var("EDITOR").map_err(|_| {
-        TemperError::Config("Set $EDITOR to use config edit, e.g. export EDITOR=vim".into())
-    })?;
-    let status = std::process::Command::new(&editor)
+    // Respect $VISUAL before $EDITOR (POSIX convention — $VISUAL is the
+    // interactive editor, $EDITOR is the fallback for dumb terminals).
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .map_err(|_| {
+            TemperError::Config(
+                "Set $VISUAL or $EDITOR to use `temper config edit`, \
+                 e.g. export EDITOR=vim"
+                    .into(),
+            )
+        })?;
+
+    // Split on shell-quoting rules so editors configured with arguments
+    // work: EDITOR="code --wait", EDITOR="emacsclient -nw", etc.
+    let parts = shell_words::split(&editor)
+        .map_err(|e| TemperError::Config(format!("cannot parse $EDITOR {editor:?}: {e}")))?;
+    let (program, args) = parts
+        .split_first()
+        .ok_or_else(|| TemperError::Config("$EDITOR is empty".into()))?;
+
+    let status = std::process::Command::new(program)
+        .args(args)
         .arg(path)
         .status()
-        .map_err(|e| TemperError::Config(format!("failed to launch {editor}: {e}")))?;
+        .map_err(|e| TemperError::Config(format!("failed to launch {program}: {e}")))?;
     if !status.success() {
         return Err(TemperError::Config(format!(
-            "{editor} exited with status {status}"
+            "{program} exited with status {status}"
         )));
     }
     Ok(())
