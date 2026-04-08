@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use askama::Template;
 use chrono::Local;
 use serde::Serialize;
+use temper_core::vault::Vault;
 
 use crate::config::Config;
 use crate::discovery::{self, Event};
@@ -52,11 +53,12 @@ pub fn save(
 
     let note_title = title.unwrap_or(&today);
 
-    // Build path: <vault_root>/<context>/session/<date> — <slug>.md
-    let slug = vault::slugify(note_title);
-    let filename = format!("{today}-{slug}.md");
-    let session_dir = config.doc_type_dir(&context_name, "session");
-    let note_path = session_dir.join(&filename);
+    // Build path: <vault_root>/<owner>/<context>/session/<date>-<slug>.md
+    let title_slug = vault::slugify(note_title);
+    let slug = format!("{today}-{title_slug}");
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(&context_name);
+    let note_path = vault_layout.doc_file(&owner, &context_name, "session", &slug);
 
     if note_path.exists() {
         // File exists: replace body if stdin provided, otherwise no-op
@@ -239,9 +241,11 @@ pub fn show(
 
     let needle = vault::slugify(slug_or_suffix);
     let mut matches: Vec<(SessionEntry, PathBuf)> = Vec::new();
+    let vault_layout = Vault::new(&config.vault_root);
 
     for ctx in &contexts_to_scan {
-        let session_dir = config.doc_type_dir(ctx, "session");
+        let owner = config.owner_for_context(ctx);
+        let session_dir = vault_layout.doc_type_dir(&owner, ctx, "session");
         if !session_dir.is_dir() {
             continue;
         }
@@ -344,8 +348,10 @@ pub fn list(
         config.contexts.clone()
     };
 
+    let vault_layout = Vault::new(&config.vault_root);
     for ctx in &contexts_to_scan {
-        let session_dir = config.doc_type_dir(ctx, "session");
+        let owner = config.owner_for_context(ctx);
+        let session_dir = vault_layout.doc_type_dir(&owner, ctx, "session");
         if session_dir.is_dir() {
             collect_sessions(&session_dir, ctx, &mut entries)?;
         }
@@ -455,9 +461,11 @@ fn extract_date_from_stem(stem: &str) -> Option<String> {
 #[allow(dead_code)]
 pub fn session_path(config: &Config, context: &str, title: &str) -> PathBuf {
     let today = Local::now().format("%Y-%m-%d").to_string();
-    let slug = vault::slugify(title);
-    let filename = format!("{today}-{slug}.md");
-    config.doc_type_dir(context, "session").join(filename)
+    let title_slug = vault::slugify(title);
+    let slug = format!("{today}-{title_slug}");
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(context);
+    vault_layout.doc_file(&owner, context, "session", &slug)
 }
 
 #[cfg(test)]
@@ -485,12 +493,15 @@ mod tests {
     }
 
     fn write_session(config: &Config, context: &str, date: &str, slug: &str, body: &str) {
-        let dir = config.doc_type_dir(context, "session");
-        let filename = format!("{date}-{slug}.md");
+        let vault_layout = Vault::new(&config.vault_root);
+        let owner = config.owner_for_context(context);
+        let full_slug = format!("{date}-{slug}");
+        let path = vault_layout.doc_file(&owner, context, "session", &full_slug);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         let content = format!(
             "---\ntemper-id: \"test-id\"\ntemper-type: session\ndate: {date}\n---\n\n{body}"
         );
-        fs::write(dir.join(filename), content).unwrap();
+        fs::write(path, content).unwrap();
     }
 
     #[test]

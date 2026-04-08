@@ -94,17 +94,3 @@ fn test_load_from_cli_vault_overrides_config() {
             .unwrap()
     );
 }
-
-#[test]
-fn test_config_doc_type_dir() {
-    let config = temper_cli::config::Config {
-        vault_root: std::path::PathBuf::from("/tmp/vault"),
-        state_dir: std::path::PathBuf::from("/tmp/vault/.temper"),
-        contexts: vec!["myapp".to_string()],
-        subscriptions: Vec::new(),
-        skill_output: std::path::PathBuf::from("/tmp/temper.md"),
-        skill_framework: "superpowers".to_string(),
-    };
-    let dir = config.doc_type_dir("myapp", "task");
-    assert_eq!(dir, std::path::PathBuf::from("/tmp/vault/myapp/task"));
-}

@@ -29,7 +29,7 @@ fn test_research_save_creates_note() {
     );
     assert!(result.is_ok());
 
-    let research_dir = dir.path().join("myapp/research");
+    let research_dir = dir.path().join("@me/myapp/research");
     assert!(research_dir.is_dir());
     let entries: Vec<_> = std::fs::read_dir(&research_dir).unwrap().collect();
     assert_eq!(entries.len(), 1);
@@ -48,7 +48,7 @@ fn test_research_save_idempotent_without_stdin() {
 
     temper_cli::commands::research::save(&config, "Topic", Some("myapp"), None, "text").unwrap();
 
-    let research_dir = dir.path().join("myapp/research");
+    let research_dir = dir.path().join("@me/myapp/research");
     let entries: Vec<_> = std::fs::read_dir(&research_dir).unwrap().collect();
     let path = entries[0].as_ref().unwrap().path();
     let before = std::fs::read_to_string(&path).unwrap();
@@ -73,7 +73,7 @@ fn test_research_save_with_stdin_replaces_body() {
     )
     .unwrap();
 
-    let research_dir = dir.path().join("myapp/research");
+    let research_dir = dir.path().join("@me/myapp/research");
     let entries: Vec<_> = std::fs::read_dir(&research_dir).unwrap().collect();
     let path = entries[0].as_ref().unwrap().path();
     let content = std::fs::read_to_string(&path).unwrap();

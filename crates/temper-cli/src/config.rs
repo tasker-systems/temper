@@ -34,12 +34,6 @@ pub struct Config {
 }
 
 impl Config {
-    /// Compute the directory for a given context + doc_type.
-    /// Returns `vault_root/{context}/{doc_type}/`
-    pub fn doc_type_dir(&self, context: &str, doc_type: &str) -> PathBuf {
-        self.vault_root.join(context).join(doc_type)
-    }
-
     /// Look up the subscription for a given context name.
     /// Returns `None` if the context has no subscription configured.
     pub fn subscription_for_context(&self, context: &str) -> Option<&Subscription> {

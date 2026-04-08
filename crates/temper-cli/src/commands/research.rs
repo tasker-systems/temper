@@ -1,4 +1,5 @@
 use askama::Template;
+use temper_core::vault::Vault;
 
 use crate::config::Config;
 use crate::discovery::{self, Event};
@@ -20,9 +21,9 @@ pub fn save(
     let context_name = context.unwrap_or("general");
 
     let slug = format!("{today}-{}", vault::slugify(title));
-    let filename = format!("{today}-{}.md", vault::slugify(title));
-    let research_dir = config.doc_type_dir(context_name, "research");
-    let note_path = research_dir.join(&filename);
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(context_name);
+    let note_path = vault_layout.doc_file(&owner, context_name, "research", &slug);
 
     if note_path.exists() {
         if let Some(body) = stdin_content {
