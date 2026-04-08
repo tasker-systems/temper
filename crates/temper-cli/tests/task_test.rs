@@ -51,7 +51,7 @@ fn test_goal_create_and_task_create() {
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
     assert!(dir
         .path()
-        .join("myapp/goal")
+        .join("@me/myapp/goal")
         .join(format!("{g_slug}.md"))
         .exists());
 
@@ -233,7 +233,10 @@ fn test_goal_creates_in_context_subdir() {
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.2", None, "text").unwrap();
 
-    let expected_path = dir.path().join("myapp/goal").join(format!("{g_slug}.md"));
+    let expected_path = dir
+        .path()
+        .join("@me/myapp/goal")
+        .join(format!("{g_slug}.md"));
     assert!(
         expected_path.exists(),
         "goal should be in context subdir: {}",

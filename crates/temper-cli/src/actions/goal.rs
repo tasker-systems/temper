@@ -2,6 +2,7 @@ use std::fs;
 
 use askama::Template;
 use chrono::Local;
+use temper_core::vault::Vault;
 
 use crate::actions::types::GoalInfo;
 use crate::config::Config;
@@ -13,8 +14,10 @@ use crate::vault;
 /// Load all goals, optionally filtered by context, sorted by seq.
 pub fn load_goals(config: &Config, context: Option<&str>) -> Result<Vec<GoalInfo>> {
     let mut goals = Vec::new();
+    let vault_layout = Vault::new(&config.vault_root);
     let dirs: Vec<_> = if let Some(p) = context {
-        let d = config.doc_type_dir(p, "goal");
+        let owner = config.owner_for_context(p);
+        let d = vault_layout.doc_type_dir(&owner, p, "goal");
         if d.is_dir() {
             vec![d]
         } else {
@@ -24,7 +27,8 @@ pub fn load_goals(config: &Config, context: Option<&str>) -> Result<Vec<GoalInfo
         // Scan all contexts for goal subdirectories
         let mut found = Vec::new();
         for ctx in &config.contexts {
-            let d = config.doc_type_dir(ctx, "goal");
+            let owner = config.owner_for_context(ctx);
+            let d = vault_layout.doc_type_dir(&owner, ctx, "goal");
             if d.is_dir() {
                 found.push(d);
             }
@@ -71,8 +75,10 @@ pub fn find_goal(config: &Config, slug: &str, context: Option<&str>) -> Result<O
 /// Ensure the maintenance goal exists for a context, creating it if missing.
 pub fn ensure_maintenance(config: &Config, context: &str) -> Result<String> {
     let slug = format!("{context}-maintenance");
-    let dir = config.doc_type_dir(context, "goal");
-    let path = dir.join(format!("{slug}.md"));
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(context);
+    let dir = vault_layout.doc_type_dir(&owner, context, "goal");
+    let path = vault_layout.doc_file(&owner, context, "goal", &slug);
     if path.exists() {
         return Ok(slug);
     }
@@ -95,7 +101,7 @@ pub fn ensure_maintenance(config: &Config, context: &str) -> Result<String> {
         ts: Local::now().to_rfc3339(),
         doc_type: "goal".to_string(),
         title: "Maintenance".to_string(),
-        path: format!("{context}/goal/{slug}.md"),
+        path: vault_layout.rel_path(&owner, context, "goal", &slug),
         context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
@@ -110,8 +116,10 @@ pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -
         Some(s) => s.to_string(),
         None => vault::slugify(title),
     };
-    let dir = config.doc_type_dir(context, "goal");
-    let path = dir.join(format!("{slug}.md"));
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(context);
+    let dir = vault_layout.doc_type_dir(&owner, context, "goal");
+    let path = vault_layout.doc_file(&owner, context, "goal", &slug);
     if path.exists() {
         return Err(TemperError::Vault(format!("goal already exists: {slug}")));
     }
@@ -136,7 +144,7 @@ pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -
         ts: Local::now().to_rfc3339(),
         doc_type: "goal".to_string(),
         title: title.to_string(),
-        path: format!("{context}/goal/{slug}.md"),
+        path: vault_layout.rel_path(&owner, context, "goal", &slug),
         context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
@@ -156,9 +164,9 @@ pub fn update(config: &Config, slug: &str, status: &str, context: Option<&str>) 
     }
     let info = find_goal(config, slug, context)?
         .ok_or_else(|| TemperError::Vault(format!("goal not found: {slug}")))?;
-    let path = config
-        .doc_type_dir(&info.context, "goal")
-        .join(format!("{slug}.md"));
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(&info.context);
+    let path = vault_layout.doc_file(&owner, &info.context, "goal", slug);
     if !path.exists() {
         return Err(TemperError::Vault(format!("goal not found: {slug}")));
     }
@@ -182,7 +190,7 @@ pub fn count_tasks_by_stage(
     config: &Config,
     context: &str,
 ) -> Result<std::collections::HashMap<String, std::collections::HashMap<String, usize>>> {
-    let vault_layout = temper_core::vault::Vault::new(&config.vault_root);
+    let vault_layout = Vault::new(&config.vault_root);
     let owner = config.owner_for_context(context);
     let dir = vault_layout.doc_type_dir(&owner, context, "task");
     let mut counts: std::collections::HashMap<String, std::collections::HashMap<String, usize>> =
