@@ -28,7 +28,8 @@ fn test_resolve_context_with_fallback_uses_default_for_missing() {
 fn test_resolve_context_with_fallback_keeps_existing() {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join("myctx")).unwrap();
+    // Owner-scoped layout: <vault>/@me/<context>/
+    std::fs::create_dir_all(vault_path.join("@me").join("myctx")).unwrap();
 
     let config = test_config(vault_path);
 

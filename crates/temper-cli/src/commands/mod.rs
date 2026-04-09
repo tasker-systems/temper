@@ -47,11 +47,15 @@ pub fn client_err(e: temper_client::error::ClientError) -> crate::error::TemperE
 
 /// Resolve a context name, falling back to "default" with a warning if the
 /// context directory doesn't exist in the vault.
+///
+/// Checks for the context under its owner-scoped path
+/// (`<vault_root>/<owner>/<context>/`), not the legacy flat layout.
 pub fn resolve_context_with_fallback<'a>(
     config: &crate::config::Config,
     context: &'a str,
 ) -> Cow<'a, str> {
-    let ctx_dir = config.vault_root.join(context);
+    let owner = config.owner_for_context(context);
+    let ctx_dir = config.vault_root.join(&owner).join(context);
     if ctx_dir.exists() {
         Cow::Borrowed(context)
     } else {
