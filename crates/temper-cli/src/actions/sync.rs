@@ -18,6 +18,66 @@ use temper_core::types::{
 use temper_core::vault::Vault;
 
 // ---------------------------------------------------------------------------
+// Ownership preflight
+// ---------------------------------------------------------------------------
+
+/// An entry whose frontmatter `temper-owner` disagrees with the owner segment
+/// of its manifest path. Skipped from the sync upload set until resolved.
+#[derive(Debug, Clone)]
+pub struct OwnershipMismatch {
+    pub file_path: String,
+    pub frontmatter_owner: String,
+    pub manifest_owner: String,
+}
+
+/// Validate every non-provisional manifest entry: the file's frontmatter
+/// `temper-owner` must match the owner segment of its manifest path.
+///
+/// Returns a list of mismatches to exclude from the upload set. Provisional
+/// entries are skipped — their frontmatter IS the authoritative ownership
+/// source until they're first synced. Files missing their frontmatter,
+/// unreadable, or with a malformed manifest path are also skipped (surfaced
+/// by other code paths).
+pub fn preflight_ownership_check(manifest: &Manifest, vault_root: &Path) -> Vec<OwnershipMismatch> {
+    let mut mismatches = Vec::new();
+
+    for entry in manifest.entries.values() {
+        if entry.provisional {
+            continue;
+        }
+
+        let Some(parsed) = Vault::parse_rel(&entry.path) else {
+            continue;
+        };
+        let manifest_owner = parsed.owner.to_string();
+
+        let abs_path = vault_root.join(&entry.path);
+        let content = match std::fs::read_to_string(&abs_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let Some(fm) = crate::vault::parse_frontmatter(&content) else {
+            continue;
+        };
+        let frontmatter_owner = fm
+            .get("temper-owner")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "@me".to_string());
+
+        if frontmatter_owner != manifest_owner {
+            mismatches.push(OwnershipMismatch {
+                file_path: entry.path.clone(),
+                frontmatter_owner,
+                manifest_owner,
+            });
+        }
+    }
+
+    mismatches
+}
+
+// ---------------------------------------------------------------------------
 // Sync result
 // ---------------------------------------------------------------------------
 
@@ -366,6 +426,7 @@ pub async fn sync_orchestration(
     vault_root: &Path,
     context_filter: &[String],
     progress: &dyn SyncProgress,
+    skip_paths: &std::collections::HashSet<String>,
 ) -> Result<SyncResult> {
     // Step 1: Scan vault for untracked files
     let scan_count = scan_vault_for_untracked(manifest, vault_root, progress)?;
@@ -389,6 +450,12 @@ pub async fn sync_orchestration(
     // Step 4: Push
     let mut error_count = 0;
     for item in &diff.to_push {
+        // Skip items whose resolved path is in the ownership-mismatch set.
+        if let Some(path) = resolve_push_entry_path(manifest, item) {
+            if skip_paths.contains(&path) {
+                continue;
+            }
+        }
         let kind = if item.resource_id.is_some() {
             PushKind::Modified
         } else {
@@ -2108,5 +2175,123 @@ mod tests {
             slug, "my-document-2",
             "new resource should get deduplicated slug"
         );
+    }
+
+    // --- preflight_ownership_check ---
+
+    #[test]
+    fn preflight_detects_synced_owner_drift() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("drifted.md"),
+            "---\ntemper-type: task\ntemper-owner: \"+team\"\ntitle: d\nslug: d\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/drifted.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault);
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].frontmatter_owner, "+team");
+        assert_eq!(mismatches[0].manifest_owner, "@me");
+    }
+
+    #[test]
+    fn preflight_ignores_provisional_entries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("new.md"),
+            "---\ntemper-type: task\ntemper-owner: \"+different\"\ntitle: n\nslug: n\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/new.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: String::new(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Pending,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: true,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault);
+        assert!(
+            mismatches.is_empty(),
+            "provisional entries should be ignored"
+        );
+    }
+
+    #[test]
+    fn preflight_clean_manifest_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("clean.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@me\"\ntitle: c\nslug: c\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/clean.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault);
+        assert!(mismatches.is_empty());
     }
 }
