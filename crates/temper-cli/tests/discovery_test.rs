@@ -15,7 +15,6 @@ fn test_config(dir: &TempDir, contexts: Vec<&str>) -> temper_cli::config::Config
         contexts: contexts.into_iter().map(String::from).collect(),
         subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
-        skill_framework: "superpowers".to_string(),
     }
 }
 

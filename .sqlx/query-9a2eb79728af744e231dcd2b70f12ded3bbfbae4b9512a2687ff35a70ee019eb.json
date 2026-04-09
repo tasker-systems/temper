@@ -1,0 +1,86 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))\n                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,\n                       r.slug,\n                       r.originator_profile_id, r.owner_profile_id, r.is_active,\n                       r.created, r.updated\n                  FROM kb_resources r\n                  JOIN visible v ON v.resource_id = r.id\n                 WHERE r.is_active = true\n                   AND r.kb_context_id = $2\n                   AND r.kb_doc_type_id = $3\n                 ORDER BY r.updated DESC\n                 LIMIT $4 OFFSET $5\n                ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kb_context_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_doc_type_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "origin_uri",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "title",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "slug",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 6,
+        "name": "originator_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "owner_profile_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "is_active",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "updated",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Uuid",
+        "Int8",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "9a2eb79728af744e231dcd2b70f12ded3bbfbae4b9512a2687ff35a70ee019eb"
+}

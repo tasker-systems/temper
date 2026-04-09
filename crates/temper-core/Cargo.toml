@@ -14,6 +14,8 @@ sha2 = "0.10"
 sqlx = { version = "0.8", features = ["chrono", "json", "macros", "postgres", "runtime-tokio-rustls", "uuid"] }
 thiserror = "2"
 toml = "0.8"
+tracing = "0.1"
+validator = { version = "0.20", features = ["derive"] }
 rmp-serde = "1"
 base64 = "0.22"
 dirs = "5"

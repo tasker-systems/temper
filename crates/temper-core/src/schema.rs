@@ -311,6 +311,41 @@ pub fn updatable_fields(doc_type: &str) -> Result<Vec<(String, serde_json::Value
     Ok(fields)
 }
 
+/// Field names to display in table output for a doctype, in order.
+///
+/// Unlike `updatable_fields`, this is a curated set used only for
+/// human-readable table rendering in the CLI. JSON output is unaffected and
+/// still contains the full frontmatter.
+///
+/// Universal columns come first (context, type, slug, updated), followed by
+/// per-type extras. This is the single point of curation — adding a new
+/// doctype means extending the match here.
+pub fn display_fields(doc_type: &str) -> Result<Vec<String>> {
+    const UNIVERSAL: &[&str] = &["temper-context", "temper-type", "slug", "temper-updated"];
+
+    let extras: &[&str] = match doc_type {
+        "task" => &[
+            "temper-stage",
+            "temper-mode",
+            "temper-effort",
+            "temper-goal",
+        ],
+        "goal" => &["temper-status", "temper-seq"],
+        "session" | "research" | "concept" | "decision" => &[],
+        other => {
+            return Err(TemperError::Config(format!(
+                "unknown doctype '{other}' for display_fields"
+            )));
+        }
+    };
+
+    Ok(UNIVERSAL
+        .iter()
+        .chain(extras.iter())
+        .map(|s| s.to_string())
+        .collect())
+}
+
 /// Validate a field value against a schema property definition.
 pub fn validate_field_value(
     field_name: &str,
@@ -507,6 +542,52 @@ mod tests {
     fn updatable_fields_unknown_doctype_returns_error() {
         let result = updatable_fields("unknown-type");
         assert!(result.is_err(), "unknown doctype should return an error");
+    }
+
+    // -------------------------------------------------------------------------
+    // display_fields tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn display_fields_task_includes_extra_columns() {
+        let fields = display_fields("task").expect("task display fields");
+        let names: Vec<&str> = fields.iter().map(|s| s.as_str()).collect();
+        // Universal first
+        assert_eq!(names[0], "temper-context");
+        assert_eq!(names[1], "temper-type");
+        assert_eq!(names[2], "slug");
+        assert_eq!(names[3], "temper-updated");
+        // Task extras
+        assert!(names.contains(&"temper-stage"));
+        assert!(names.contains(&"temper-mode"));
+        assert!(names.contains(&"temper-effort"));
+        assert!(names.contains(&"temper-goal"));
+    }
+
+    #[test]
+    fn display_fields_goal_has_status_and_seq() {
+        let fields = display_fields("goal").expect("goal display fields");
+        assert!(fields.contains(&"temper-status".to_string()));
+        assert!(fields.contains(&"temper-seq".to_string()));
+    }
+
+    #[test]
+    fn display_fields_session_universal_only() {
+        let fields = display_fields("session").expect("session display fields");
+        assert_eq!(
+            fields,
+            vec![
+                "temper-context".to_string(),
+                "temper-type".to_string(),
+                "slug".to_string(),
+                "temper-updated".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn display_fields_unknown_type_errors() {
+        assert!(display_fields("widget").is_err());
     }
 
     // -------------------------------------------------------------------------

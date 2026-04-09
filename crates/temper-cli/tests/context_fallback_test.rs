@@ -8,7 +8,6 @@ fn test_config(vault_path: PathBuf) -> temper_cli::config::Config {
         contexts: vec![],
         subscriptions: Vec::new(),
         skill_output: PathBuf::from("/tmp/skill"),
-        skill_framework: "superpowers".to_string(),
     }
 }
 

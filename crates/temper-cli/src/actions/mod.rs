@@ -1,3 +1,4 @@
+pub mod config;
 pub mod doctor;
 pub mod doctor_fix;
 pub mod goal;

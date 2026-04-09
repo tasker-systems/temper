@@ -18,15 +18,14 @@ sessions, research, or wants to look up / store information across conversations
 | Read a specific document | Resource: `temper://resources/{id}` | Returns metadata + full markdown |
 | Get raw markdown only | Resource: `temper://resources/{id}/content` | Lighter than full resource read |
 | Find something by topic | Tool: `search` | Semantic vector search, can't do with resources |
-| Create a new resource | Tool: `create_resource` | Mutation — tools only |
-| Update title/metadata | Tool: `update_resource` | Mutation — tools only |
+| Create a new resource (with or without content) | Tool: `create_resource` | Mutation — tools only |
+| Update title/metadata/content | Tool: `update_resource` | Mutation — tools only |
+| Read a resource with content via tool | Tool: `get_resource` with `include_content: true` | When resource browsing isn't available |
 | Delete a resource | Tool: `delete_resource` | Soft-delete, tools only |
 | Create a new context | Tool: `create_context` | Mutation — tools only |
 | Check who you are | Tool: `get_profile` | Identity/settings |
 | Audit recent activity | Tool: `list_events` | Debugging, event history |
-| Write content to knowledge base | Tool: `ingest_content` | Creates resource + async content processing |
 | Discover valid document types | Tool: `list_doc_types` | Returns id and name for each type |
-| Update existing content | Tool: `update_resource_content` | Re-processes content for existing resource |
 
 ## Session Start Pattern
 
@@ -58,12 +57,11 @@ Resources return structured data that clients can display and inject directly:
 
 ### Via Tools (for discovery)
 
-- `list_resources` — paginated list with optional context filter. Use when
-  you need programmatic filtering (limit, offset) beyond what resource
+- `list_resources` — paginated list with optional `context_name` and `doc_type_name`
+  filters. Use when you need programmatic filtering (limit, offset) beyond what resource
   browsing provides.
-- `get_resource` — single resource by ID, with optional `include_content` flag.
-  Use when you need to control whether content is included.
-- `get_resource_content` — dedicated content-only fetch by ID.
+- `get_resource` — single resource by ID or slug (with `context_name`). Pass
+  `include_content: true` to include the full markdown body.
 - `search` — semantic search using a 768-dimensional embedding vector. Returns
   scored results with snippets. Use for "find me notes about X" queries.
 
@@ -71,40 +69,38 @@ Resources return structured data that clients can display and inject directly:
 
 All mutations go through tools. There are no writable resources.
 
-### Creating Content (Recommended)
+### Creating Resources
 
-Use `ingest_content` when you want to write content — not just metadata — to the knowledge
-base. It creates the resource and triggers async content processing (extraction, embedding)
-in one call.
+Use `create_resource` to write content to the knowledge base. The `content` field is
+optional — omit it to create a metadata-only shell, or include it to create a resource
+with full content in one call. Content processing (embedding for search) happens
+asynchronously in the background.
 
 ```
-Tool: ingest_content
+Tool: create_resource
 Input: {
   "context_name": "myproject",
   "doc_type_name": "session",
   "title": "Human-readable title",
-  "content": "Full markdown content goes here...",
-  "origin_uri": "optional source URL or reference"
+  "content": "Full markdown content goes here...",  // optional
+  "slug": "optional-kebab-case-slug",              // optional
+  "origin_uri": "optional source URL or reference" // optional
 }
 ```
 
-The resource is created immediately and returned with a `resource_id`. Content processing
-(embedding for search) happens asynchronously in the background.
-
-**Deduplication**: if a resource with the same content already exists (matched by SHA256
-hash of the markdown body), `ingest_content` returns the existing resource rather than
-creating a duplicate.
+The resource is created immediately and returned with an `id`.
 
 ### Context handling
 
 If `context_name` does not match an existing context, **do not silently create a new one**.
+The context must already exist — `create_resource` will fail if the context is not found.
 Instead, ask the user: "I don't see a context named `{name}`. Would you like me to create
 it, or did you mean one of these: {list existing contexts}?" Use `list_contexts` to fetch
 the current list before asking.
 
 ### Discovering Document Types
 
-Use `list_doc_types` to see what document types are available before ingesting content.
+Use `list_doc_types` to see what document types are available before creating content.
 Common types include: `session`, `research`, `concept`, `task`, `goal`. The tool returns
 an id and name for each type.
 
@@ -113,41 +109,12 @@ Tool: list_doc_types
 Input: {}
 ```
 
-Pass the `name` field as `doc_type_name` in `ingest_content`.
+Pass the `name` field as `doc_type_name` in `create_resource`.
 
-### Updating Content
+### Updating Resources
 
-Use `update_resource_content` to replace the content of an existing resource. This
-re-triggers async content processing for the updated content.
-
-```
-Tool: update_resource_content
-Input: {
-  "resource_id": "<resource UUID>",
-  "content": "New markdown content..."
-}
-```
-
-### Creating Metadata-Only Resources
-
-`create_resource` creates a resource record without content. Use it only when you need
-the resource shell before content is available. Prefer `ingest_content` in most cases.
-
-```
-Tool: create_resource
-Input: {
-  "kb_context_id": "<context UUID>",
-  "kb_doc_type_id": "<doc type UUID>",
-  "origin_uri": "the source or reference URL",
-  "title": "Human-readable title",
-  "slug": "optional-kebab-case-slug",
-  "mimetype": "text/markdown"
-}
-```
-
-To find the context UUID, use `list_contexts`. To find the doc type UUID, use `list_doc_types`.
-
-### Updating Metadata
+Use `update_resource` to change an existing resource's title, slug, or content. All fields
+except `id` are optional — only the fields you provide are changed.
 
 ```
 Tool: update_resource
@@ -155,11 +122,9 @@ Input: {
   "id": "<resource UUID>",
   "title": "New title",       // optional
   "slug": "new-slug",         // optional
-  "mimetype": "text/markdown"  // optional
+  "content": "New markdown content..."  // optional
 }
 ```
-
-Only the fields you provide are changed. Omitted fields keep their current values.
 
 ### Deleting Resources
 

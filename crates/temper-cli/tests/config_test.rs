@@ -62,7 +62,6 @@ fn test_load_from_uses_explicit_config() {
     config.sync.subscriptions.contexts = vec!["myctx".to_string(), "otherctx".to_string()];
     config.skill = SkillConfig {
         output: vault_dir.join("skills").to_str().unwrap().to_string(),
-        framework: "custom-framework".to_string(),
     };
 
     let result = temper_cli::config::load_from(&config, None);
@@ -72,7 +71,7 @@ fn test_load_from_uses_explicit_config() {
         result.contexts,
         vec!["myctx".to_string(), "otherctx".to_string()]
     );
-    assert_eq!(result.skill_framework, "custom-framework");
+    assert_eq!(result.skill_output, vault_dir.join("skills"));
 }
 
 #[test]

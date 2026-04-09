@@ -30,7 +30,6 @@ pub struct Config {
     pub contexts: Vec<String>,
     pub subscriptions: Vec<Subscription>,
     pub skill_output: PathBuf,
-    pub skill_framework: String,
 }
 
 impl Config {
@@ -107,7 +106,6 @@ pub fn load_from(global: &TemperConfig, cli_vault: Option<&str>) -> Config {
         // then owner_for_context falls back to "@me".
         subscriptions: Vec::new(),
         skill_output: expand_tilde(&global.skill.output),
-        skill_framework: global.skill.framework.clone(),
     }
 }
 
@@ -135,7 +133,6 @@ pub fn load(cli_vault: Option<&str>) -> Result<Config> {
         // then owner_for_context falls back to "@me".
         subscriptions: Vec::new(),
         skill_output: expand_tilde(&global.skill.output),
-        skill_framework: global.skill.framework.clone(),
     })
 }
 

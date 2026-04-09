@@ -271,23 +271,7 @@ pub fn install(config: &Config, skill_dir: &Path) -> Result<()> {
 
 /// Check skill installation status.
 pub fn check(config: &Config) -> Result<()> {
-    // 1. Check superpowers plugin (if framework == "superpowers")
-    if config.skill_framework == "superpowers" {
-        let superpowers_path = dirs::home_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("~"))
-            .join(".claude/plugins/cache/claude-plugins-official/superpowers");
-
-        if superpowers_path.exists() {
-            output::status_icon(true, format!("Superpowers: {}", superpowers_path.display()));
-        } else {
-            output::status_icon(
-                false,
-                format!("Superpowers: NOT FOUND ({})", superpowers_path.display()),
-            );
-        }
-    }
-
-    // 2. Check skill directory exists
+    // 1. Check skill directory exists
     let skill_dir = &config.skill_output;
     if !skill_dir.exists() {
         output::status_icon(
@@ -300,7 +284,7 @@ pub fn check(config: &Config) -> Result<()> {
 
     output::status_icon(true, format!("Skill directory: {}", skill_dir.display()));
 
-    // 3. Check expected files
+    // 2. Check expected files
     let expected_files = [
         "SKILL.md",
         "reference.md",
@@ -330,7 +314,7 @@ pub fn check(config: &Config) -> Result<()> {
         );
     }
 
-    // 4. Check config hash staleness in SKILL.md
+    // 3. Check config hash staleness in SKILL.md
     let skill_md_path = skill_dir.join("SKILL.md");
     if skill_md_path.exists() {
         let existing = std::fs::read_to_string(&skill_md_path)
@@ -499,7 +483,6 @@ mod tests {
             contexts: vec!["alpha".to_string(), "beta".to_string()],
             subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/test-skill-output"),
-            skill_framework: "superpowers".to_string(),
         }
     }
 
