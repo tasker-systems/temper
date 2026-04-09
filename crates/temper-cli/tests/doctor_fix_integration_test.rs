@@ -92,20 +92,24 @@ fn doctor_fix_pipeline_end_to_end() {
         "should have temper-stage; got:\n{task_content}"
     );
 
-    // Re-run doctor scan — all auto-fixable issues except temper-owner (Task 17) should be
-    // resolved. temper-owner backfill is handled by a separate fix action added in Task 17;
-    // for now we only assert that no non-owner auto-fixable issues remain.
+    // Re-run doctor scan — all auto-fixable issues should be resolved after fix.
+    // Task 17 added SetOwnerField so temper-owner is now backfilled on provisional files.
     let scan = temper_cli::actions::doctor::scan(&config, None).unwrap();
-    let remaining_non_owner_fixable: Vec<_> = scan
+    let remaining_fixable: Vec<_> = scan
         .file_results
         .iter()
         .flat_map(|r| r.issues.iter())
-        .filter(|i| i.auto_fixable && i.path != "temper-owner")
+        .filter(|i| i.auto_fixable)
         .collect();
     assert_eq!(
-        remaining_non_owner_fixable.len(),
+        remaining_fixable.len(),
         0,
-        "all non-owner auto-fixable issues should be resolved after fix; remaining: {:?}",
-        remaining_non_owner_fixable
+        "all auto-fixable issues should be resolved after fix; remaining: {:?}",
+        remaining_fixable
+    );
+    // Also verify owner_backfilled was reported in the fix report
+    assert!(
+        report.owner_backfilled > 0,
+        "expected at least one owner backfill"
     );
 }

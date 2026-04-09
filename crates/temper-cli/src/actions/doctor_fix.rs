@@ -27,6 +27,9 @@ pub enum FixAction {
         value: String,
         reason: String,
     },
+    /// Set `temper-owner: "@me"` in a file whose frontmatter is missing it (phase 0).
+    /// Only emitted for provisional (never-synced) files.
+    SetOwnerField { path: PathBuf, value: String },
     /// Rename a file on disk (phase 1).
     RenameFile {
         old_path: PathBuf,
@@ -67,7 +70,7 @@ impl FixAction {
     /// * `2` — manifest record updates
     pub fn phase(&self) -> u8 {
         match self {
-            Self::RenameField { .. } | Self::SetField { .. } => 0,
+            Self::RenameField { .. } | Self::SetField { .. } | Self::SetOwnerField { .. } => 0,
             Self::RenameFile { .. } | Self::RelocateFile { .. } => 1,
             Self::UpdateManifest { .. } | Self::RemoveManifest { .. } => 2,
         }
@@ -79,7 +82,9 @@ impl FixAction {
     /// actions, returns a static sentinel path (`".temper/manifest.json"`).
     pub fn target_path(&self) -> &PathBuf {
         match self {
-            Self::RenameField { path, .. } | Self::SetField { path, .. } => path,
+            Self::RenameField { path, .. }
+            | Self::SetField { path, .. }
+            | Self::SetOwnerField { path, .. } => path,
             Self::RenameFile { old_path, .. } | Self::RelocateFile { old_path, .. } => old_path,
             Self::UpdateManifest { .. } | Self::RemoveManifest { .. } => manifest_path(),
         }
@@ -626,6 +631,29 @@ pub fn fix_missing_fields(path: &Path, fm: &Value, vault_root: &Path) -> Vec<Fix
 }
 
 // ---------------------------------------------------------------------------
+// F2b: fix_missing_owner
+// ---------------------------------------------------------------------------
+
+/// Produce a `SetOwnerField` action if the file is provisional and lacks a
+/// `temper-owner` frontmatter field.
+///
+/// Only provisional (unsynced) files are eligible for auto-backfill — synced
+/// files are server-authoritative for ownership and any mismatch must be
+/// reconciled via a real sync, not a local rewrite.
+pub fn fix_missing_owner(path: &Path, fm: &Value, is_provisional: bool) -> Vec<FixAction> {
+    if !is_provisional {
+        return Vec::new();
+    }
+    if fm.get("temper-owner").is_some() {
+        return Vec::new();
+    }
+    vec![FixAction::SetOwnerField {
+        path: path.to_path_buf(),
+        value: "@me".to_string(),
+    }]
+}
+
+// ---------------------------------------------------------------------------
 // F5: manifest reconciliation helpers
 // ---------------------------------------------------------------------------
 
@@ -708,6 +736,7 @@ pub fn fix_stale_manifest_entries(manifest: &Manifest, vault_root: &Path) -> Vec
 pub struct ApplyReport {
     pub fields_renamed: u32,
     pub fields_set: u32,
+    pub owner_backfilled: u32,
     pub files_renamed: u32,
     pub files_relocated: u32,
     pub manifest_updated: u32,
@@ -828,6 +857,31 @@ pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<App
                     })?;
                 }
                 report.fields_set += 1;
+            }
+            FixAction::SetOwnerField { path, value } => {
+                if !dry_run {
+                    let content = fs::read_to_string(path).map_err(|e| {
+                        crate::error::TemperError::Vault(format!(
+                            "SetOwnerField read {}: {e}",
+                            path.display()
+                        ))
+                    })?;
+                    // Always quote owner sigils — "@me" / "+team" would be invalid YAML unquoted
+                    // because "@" and "+" are reserved indicators.
+                    let formatted = format!("\"{}\"", value);
+                    let updated = crate::vault::insert_frontmatter_field(
+                        &content,
+                        "temper-owner",
+                        &formatted,
+                    );
+                    fs::write(path, updated).map_err(|e| {
+                        crate::error::TemperError::Vault(format!(
+                            "SetOwnerField write {}: {e}",
+                            path.display()
+                        ))
+                    })?;
+                }
+                report.owner_backfilled += 1;
             }
             FixAction::RenameFile { old_path, .. } | FixAction::RelocateFile { old_path, .. } => {
                 // Skip if this source was already moved by a prior action.
@@ -1547,5 +1601,96 @@ mod tests {
 
         let content = fs::read_to_string(&file).unwrap();
         assert_eq!(content, original);
+    }
+
+    #[test]
+    fn set_owner_field_is_phase_0() {
+        let action = FixAction::SetOwnerField {
+            path: PathBuf::from("/tmp/test.md"),
+            value: "@me".to_string(),
+        };
+        assert_eq!(action.phase(), 0);
+    }
+
+    #[test]
+    fn apply_plan_backfills_owner_field() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.md");
+        fs::write(&file, "---\ntemper-type: task\ntitle: t\n---\n\nbody\n").unwrap();
+
+        let mut plan = FixPlan::new();
+        plan.add(FixAction::SetOwnerField {
+            path: file.clone(),
+            value: "@me".to_string(),
+        });
+
+        let report = apply_plan(&mut plan, false).unwrap();
+        assert_eq!(report.owner_backfilled, 1);
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert!(
+            content.contains("temper-owner: \"@me\""),
+            "expected quoted @me in content, got: {content}"
+        );
+    }
+
+    #[test]
+    fn apply_plan_dry_run_skips_file_write() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let tmp = TempDir::new().unwrap();
+        let file = tmp.path().join("test.md");
+        let original = "---\ntemper-type: task\ntitle: t\n---\n\nbody\n";
+        fs::write(&file, original).unwrap();
+
+        let mut plan = FixPlan::new();
+        plan.add(FixAction::SetOwnerField {
+            path: file.clone(),
+            value: "@me".to_string(),
+        });
+
+        let report = apply_plan(&mut plan, true).unwrap();
+        assert_eq!(report.owner_backfilled, 1);
+
+        let content = fs::read_to_string(&file).unwrap();
+        assert_eq!(content, original, "dry run should not modify file");
+    }
+
+    #[test]
+    fn fix_missing_owner_skips_synced_file() {
+        let tmp = PathBuf::from("/tmp");
+        let file = tmp.join("test.md");
+        let fm: Value = serde_yaml::from_str("temper-type: task\ntitle: t").unwrap();
+        let actions = fix_missing_owner(&file, &fm, false);
+        assert!(actions.is_empty(), "synced file should not be fixed");
+    }
+
+    #[test]
+    fn fix_missing_owner_skips_file_with_existing_owner() {
+        let tmp = PathBuf::from("/tmp");
+        let file = tmp.join("test.md");
+        let fm: Value = serde_yaml::from_str("temper-type: task\ntemper-owner: \"@me\"").unwrap();
+        let actions = fix_missing_owner(&file, &fm, true);
+        assert!(
+            actions.is_empty(),
+            "file with existing owner should not be fixed"
+        );
+    }
+
+    #[test]
+    fn fix_missing_owner_emits_for_provisional_missing_owner() {
+        let tmp = PathBuf::from("/tmp");
+        let file = tmp.join("test.md");
+        let fm: Value = serde_yaml::from_str("temper-type: task\ntitle: t").unwrap();
+        let actions = fix_missing_owner(&file, &fm, true);
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            FixAction::SetOwnerField { value, .. } => assert_eq!(value, "@me"),
+            other => panic!("expected SetOwnerField, got {other:?}"),
+        }
     }
 }

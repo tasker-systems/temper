@@ -12,7 +12,7 @@ use temper_core::vault::Vault;
 
 use crate::actions::doctor_fix::{
     apply_manifest_actions, apply_plan, fix_filename, fix_manifest_for_moves, fix_missing_fields,
-    fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
+    fix_missing_owner, fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
 };
 use crate::config::Config;
 use crate::error::Result;
@@ -286,6 +286,11 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
     let mut plan = FixPlan::new();
     let vault_layout = Vault::new(&config.vault_root);
 
+    // Load manifest once so the fix plan can determine per-file provisionality
+    // (needed for fix_missing_owner) and later reconciliation can consume it.
+    let temper_dir = config.vault_root.join(".temper");
+    let manifest_result = manifest_io::load_manifest(&temper_dir, "doctor-fix");
+
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
         vec![ctx.to_string()]
     } else {
@@ -301,13 +306,17 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
             if !dir.is_dir() {
                 continue;
             }
-            collect_fixes_for_directory(&dir, &config.vault_root, &owner, &mut plan)?;
+            collect_fixes_for_directory(
+                &dir,
+                &config.vault_root,
+                &owner,
+                manifest_result.as_ref().ok(),
+                &mut plan,
+            )?;
         }
     }
 
-    // F5: Manifest reconciliation
-    let temper_dir = config.vault_root.join(".temper");
-    let manifest_result = manifest_io::load_manifest(&temper_dir, "doctor-fix");
+    // F5: Manifest reconciliation — manifest_result binding is still in scope.
     if let Ok(manifest) = &manifest_result {
         let move_actions: Vec<_> = plan
             .actions
@@ -345,6 +354,7 @@ fn collect_fixes_for_directory(
     dir: &Path,
     vault_root: &Path,
     owner: &str,
+    manifest: Option<&temper_core::types::Manifest>,
     plan: &mut FixPlan,
 ) -> Result<()> {
     let md_files: Vec<_> = fs::read_dir(dir)?
@@ -354,7 +364,20 @@ fn collect_fixes_for_directory(
         .collect();
 
     for file_path in md_files {
-        collect_fixes_for_file(&file_path, vault_root, owner, plan)?;
+        // Compute provisionality the same way scan_directory does.
+        let rel = file_path
+            .strip_prefix(vault_root)
+            .unwrap_or(&file_path)
+            .to_string_lossy()
+            .to_string();
+
+        let is_provisional = match manifest.and_then(|m| m.entries.values().find(|e| e.path == rel))
+        {
+            Some(entry) => entry.provisional,
+            None => true, // files not in manifest are treated as provisional
+        };
+
+        collect_fixes_for_file(&file_path, vault_root, owner, is_provisional, plan)?;
     }
 
     Ok(())
@@ -365,6 +388,7 @@ fn collect_fixes_for_file(
     file_path: &Path,
     vault_root: &Path,
     owner: &str,
+    is_provisional: bool,
     plan: &mut FixPlan,
 ) -> Result<()> {
     let mut content = fs::read_to_string(file_path)?;
@@ -381,6 +405,7 @@ fn collect_fixes_for_file(
         return Ok(());
     };
     plan.extend(fix_missing_fields(file_path, &fm, vault_root));
+    plan.extend(fix_missing_owner(file_path, &fm, is_provisional));
     plan.extend(fix_relocation(file_path, &fm, vault_root, owner));
     plan.extend(fix_filename(file_path, &fm, vault_root));
     Ok(())
