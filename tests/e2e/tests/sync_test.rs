@@ -104,7 +104,8 @@ async fn sync_status_detects_server_resource(pool: sqlx::PgPool) {
 async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
-    app.client
+    let profile = app
+        .client
         .profile()
         .get()
         .await
@@ -142,8 +143,8 @@ async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
         .await
         .expect("ingest failed");
 
-    // Build the kb:// URI that the sync SQL function expects.
-    let kb_uri = format!("kb://sync-match/research/{}", resource.id);
+    // Build the owner-scoped kb:// URI the CLI emits via Vault::canonical_uri.
+    let kb_uri = format!("kb://@{}/sync-match/research/{}", profile.slug, resource.id);
 
     // Client manifest matches server — no diff expected.
     let resp = app
@@ -175,6 +176,134 @@ async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
     assert!(
         !resp.to_pull.iter().any(|p| &p.uri == our_uri),
         "matching hash should not appear in to_pull"
+    );
+}
+
+/// POST /api/sync/status with a populated owner-scoped manifest entry.
+///
+/// The existing `sync_status_matching_hash_no_diff` test at sync_test.rs:103
+/// builds URIs manually in the legacy 3-segment format
+/// (`kb://sync-match/research/{uuid}`), which happens to work with the
+/// current `sync_diff_for_device` SQL function's `split_part(uri, '/', 5)`
+/// extraction. That's misleading coverage: the real CLI call path builds
+/// owner-scoped URIs (`kb://@<slug>/<ctx>/<type>/<uuid>`) via
+/// `Vault::canonical_uri` in `build_status_request`, and `split_part(.., '/',
+/// 5)` against those returns the doc_type segment instead of the UUID,
+/// blowing up on `::UUID` cast.
+///
+/// This test drives the real `temper_cli::actions::sync::build_status_request`
+/// function to construct the `SyncStatusRequest` from a `Manifest` populated
+/// with an owner-scoped entry, then POSTs it via the e2e client. It's the
+/// RED for the Bug E fix on `sync_diff_for_device`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sync_status_round_trips_owner_scoped_manifest_entry(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    let profile = app
+        .client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("sync-owner-scoped")
+        .await
+        .expect("context create failed");
+
+    let content_hash =
+        "ownsyn0000000000000000000000000000000000000000000000000000000000".to_string();
+
+    let payload = IngestPayload {
+        title: "Owner-Scoped Sync Doc".to_string(),
+        origin_uri: "test://e2e/sync-owner-scoped".to_string(),
+        context_name: "sync-owner-scoped".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: content_hash.clone(),
+        slug: "sync-owner-scoped-doc".to_string(),
+        content: "# Owner scoped\n\nBuilt via build_status_request.".to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+    };
+
+    let resource = app
+        .client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("ingest failed");
+
+    // Build a Manifest with a single owner-scoped entry, mirroring what the
+    // Phase 2 Vault migration produces for a synced resource.
+    let mut manifest = Manifest::new("e2e-test-device".to_string());
+    manifest.entries.insert(
+        resource.id,
+        temper_core::types::ManifestEntry {
+            path: format!(
+                "@{}/sync-owner-scoped/research/sync-owner-scoped-doc.md",
+                profile.slug
+            ),
+            body_hash: content_hash.clone(),
+            remote_body_hash: content_hash.clone(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: chrono::Utc::now(),
+            state: temper_core::types::ManifestEntryState::Clean,
+            mtime_secs: None,
+            last_audit_id: None,
+            provisional: false,
+        },
+    );
+
+    // Have the real CLI helper construct the request — this uses
+    // Vault::canonical_uri under the hood, producing the owner-scoped URI
+    // shape that the bug was hiding behind legacy-format fixtures.
+    let request = temper_cli::actions::sync::build_status_request(&manifest, &[]);
+
+    // Confirm the request is indeed owner-scoped — if this assertion ever
+    // fails we know build_status_request regressed and the rest of the
+    // test is no longer exercising what it claims to exercise.
+    let built_uri = &request
+        .contexts
+        .iter()
+        .flat_map(|c| &c.entries)
+        .next()
+        .expect("built request must contain the manifest entry")
+        .uri;
+    assert!(
+        built_uri.starts_with("kb://@") || built_uri.starts_with("kb://+"),
+        "build_status_request must emit owner-scoped URIs; got: {built_uri}"
+    );
+
+    // The actual bug: POSTing this request drives sync_diff_for_device which
+    // parses the URI via split_part(..., '/', 5). Against owner-scoped URIs
+    // that returns the literal string "research" (the doc_type), and the
+    // ::UUID cast errors the query. We're asserting the endpoint succeeds.
+    let resp = app
+        .client
+        .sync()
+        .status(&request)
+        .await
+        .expect("sync status must succeed with owner-scoped manifest entries");
+
+    // With matching hashes, the entry should not appear in any diff bucket.
+    let uri_ref = built_uri.as_str();
+    assert!(
+        !resp.to_push.iter().any(|p| p.uri == uri_ref),
+        "matching hash should not appear in to_push"
+    );
+    assert!(
+        !resp.to_pull.iter().any(|p| p.uri == uri_ref),
+        "matching hash should not appear in to_pull"
+    );
+    assert!(
+        !resp.conflicts.iter().any(|p| p.uri == uri_ref),
+        "matching hash should not appear in conflicts"
     );
 }
 

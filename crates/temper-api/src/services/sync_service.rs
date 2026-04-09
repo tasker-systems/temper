@@ -279,7 +279,7 @@ mod tests {
         let rows = vec![
             DiffRow {
                 resource_id: Some(Uuid::nil()),
-                kb_uri: "kb://ctx/task/a".to_owned(),
+                kb_uri: "kb://@me/ctx/task/a".to_owned(),
                 body_hash: "h1".to_owned(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -288,7 +288,7 @@ mod tests {
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
-                kb_uri: "kb://ctx/task/b".to_owned(),
+                kb_uri: "kb://@me/ctx/task/b".to_owned(),
                 body_hash: "h2".to_owned(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -297,7 +297,7 @@ mod tests {
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
-                kb_uri: "kb://ctx/task/c".to_owned(),
+                kb_uri: "kb://@me/ctx/task/c".to_owned(),
                 body_hash: "h3".to_owned(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -306,7 +306,7 @@ mod tests {
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
-                kb_uri: "kb://ctx/task/d".to_owned(),
+                kb_uri: "kb://@me/ctx/task/d".to_owned(),
                 body_hash: "h4".to_owned(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -315,7 +315,7 @@ mod tests {
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
-                kb_uri: "kb://ctx/task/e".to_owned(),
+                kb_uri: "kb://@me/ctx/task/e".to_owned(),
                 body_hash: "h5".to_owned(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -324,7 +324,7 @@ mod tests {
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
-                kb_uri: "kb://ctx/task/f".to_owned(),
+                kb_uri: "kb://@me/ctx/task/f".to_owned(),
                 body_hash: "h6".to_owned(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -333,7 +333,7 @@ mod tests {
             },
             DiffRow {
                 resource_id: Some(Uuid::nil()),
-                kb_uri: "kb://ctx/task/g".to_owned(),
+                kb_uri: "kb://@me/ctx/task/g".to_owned(),
                 body_hash: "h7".to_owned(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -347,10 +347,10 @@ mod tests {
         assert_eq!(result.to_pull.len(), 3); // to_pull + to_pull_body + to_pull_meta
         assert_eq!(result.conflicts.len(), 1);
         assert_eq!(result.removed.len(), 1);
-        assert_eq!(result.to_push[0].uri, "kb://ctx/task/a");
-        assert_eq!(result.to_push[1].uri, "kb://ctx/task/e");
-        assert_eq!(result.to_pull[0].uri, "kb://ctx/task/b");
-        assert_eq!(result.to_pull[1].uri, "kb://ctx/task/f");
-        assert_eq!(result.to_pull[2].uri, "kb://ctx/task/g");
+        assert_eq!(result.to_push[0].uri, "kb://@me/ctx/task/a");
+        assert_eq!(result.to_push[1].uri, "kb://@me/ctx/task/e");
+        assert_eq!(result.to_pull[0].uri, "kb://@me/ctx/task/b");
+        assert_eq!(result.to_pull[1].uri, "kb://@me/ctx/task/f");
+        assert_eq!(result.to_pull[2].uri, "kb://@me/ctx/task/g");
     }
 }
