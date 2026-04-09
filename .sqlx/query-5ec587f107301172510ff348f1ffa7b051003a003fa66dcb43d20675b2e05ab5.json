@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT has_system_access($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "has_system_access",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5ec587f107301172510ff348f1ffa7b051003a003fa66dcb43d20675b2e05ab5"
+}

@@ -4,6 +4,7 @@
 //! lifecycle (login, refresh, logout), device identity, and typed methods
 //! for every R5 API endpoint.
 
+pub mod access;
 pub mod auth;
 pub mod config;
 pub mod contexts;
@@ -68,6 +69,11 @@ impl TemperClient {
     }
 
     // ----- Sub-client accessors -----
+
+    /// System access sub-client.
+    pub fn access(&self) -> access::AccessClient<'_> {
+        access::AccessClient::new(&self.http)
+    }
 
     /// Resource CRUD sub-client.
     pub fn resources(&self) -> resources::ResourceClient<'_> {

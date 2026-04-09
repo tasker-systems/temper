@@ -21,3 +21,60 @@ jobs:
 
       - name: Run tests
         run: cd packages/temper-cloud && bun run test
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-trixie
+        env:
+          POSTGRES_DB: temper_development
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U temper -d temper_development"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+      TEST_DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Tesseract OCR
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-eng
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ts-integration-v1
+
+      - name: Install cargo-sqlx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: sqlx-cli
+
+      - name: Run database migrations
+        run: cargo sqlx migrate run
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        run: cd packages/temper-cloud && bun install --frozen-lockfile
+
+      - name: Run integration tests
+        run: cd packages/temper-cloud && bun run test:integration

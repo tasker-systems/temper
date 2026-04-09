@@ -9,6 +9,7 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["myapp".to_string(), "proj".to_string(), "other".to_string()],
+        subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
     }
 }
@@ -29,7 +30,7 @@ fn test_session_save_creates_note() {
     );
     assert!(result.is_ok());
 
-    let session_dir = dir.path().join("myapp/session");
+    let session_dir = dir.path().join("@me/myapp/session");
     assert!(session_dir.is_dir());
     let entries: Vec<_> = std::fs::read_dir(&session_dir).unwrap().collect();
     assert_eq!(entries.len(), 1);
@@ -51,7 +52,7 @@ fn test_session_save_idempotent_without_stdin() {
     )
     .unwrap();
 
-    let session_dir = dir.path().join("myapp/session");
+    let session_dir = dir.path().join("@me/myapp/session");
     let entries: Vec<_> = std::fs::read_dir(&session_dir).unwrap().collect();
     let path = entries[0].as_ref().unwrap().path();
     let before = std::fs::read_to_string(&path).unwrap();
@@ -86,7 +87,7 @@ fn test_session_save_replaces_body_with_stdin() {
     )
     .unwrap();
 
-    let session_dir = dir.path().join("proj/session");
+    let session_dir = dir.path().join("@me/proj/session");
     let entries: Vec<_> = std::fs::read_dir(&session_dir).unwrap().collect();
     let path = entries[0].as_ref().unwrap().path();
 

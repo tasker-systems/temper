@@ -15,6 +15,67 @@ use temper_core::types::{
     SyncCompleteRequest, SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem,
     SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
+use temper_core::vault::Vault;
+
+// ---------------------------------------------------------------------------
+// Ownership preflight
+// ---------------------------------------------------------------------------
+
+/// An entry whose frontmatter `temper-owner` disagrees with the owner segment
+/// of its manifest path. Skipped from the sync upload set until resolved.
+#[derive(Debug, Clone)]
+pub struct OwnershipMismatch {
+    pub file_path: String,
+    pub frontmatter_owner: String,
+    pub manifest_owner: String,
+}
+
+/// Validate every non-provisional manifest entry: the file's frontmatter
+/// `temper-owner` must match the owner segment of its manifest path.
+///
+/// Returns a list of mismatches to exclude from the upload set. Provisional
+/// entries are skipped — their frontmatter IS the authoritative ownership
+/// source until they're first synced. Files missing their frontmatter,
+/// unreadable, or with a malformed manifest path are also skipped (surfaced
+/// by other code paths).
+pub fn preflight_ownership_check(manifest: &Manifest, vault_root: &Path) -> Vec<OwnershipMismatch> {
+    let mut mismatches = Vec::new();
+
+    for entry in manifest.entries.values() {
+        if entry.provisional {
+            continue;
+        }
+
+        let Some(parsed) = Vault::parse_rel(&entry.path) else {
+            continue;
+        };
+        let manifest_owner = parsed.owner.to_string();
+
+        let abs_path = vault_root.join(&entry.path);
+        let content = match std::fs::read_to_string(&abs_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+        let Some(fm) = crate::vault::parse_frontmatter(&content) else {
+            continue;
+        };
+        let frontmatter_owner = fm
+            .get("temper-owner")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "@me".to_string());
+
+        if frontmatter_owner != manifest_owner {
+            mismatches.push(OwnershipMismatch {
+                file_path: entry.path.clone(),
+                frontmatter_owner,
+                manifest_owner,
+            });
+        }
+    }
+
+    mismatches
+}
 
 // ---------------------------------------------------------------------------
 // Sync result
@@ -111,24 +172,20 @@ pub fn build_status_request(manifest: &Manifest, context_filter: &[String]) -> S
         std::collections::HashMap::new();
 
     for (id, entry) in &manifest.entries {
-        let ctx = entry
-            .path
-            .split('/')
-            .next()
-            .unwrap_or("default")
-            .to_string();
+        let Some(parsed) = Vault::parse_rel(&entry.path) else {
+            // Malformed manifest entry — skip with a warning.
+            tracing::warn!("skipping malformed manifest path: {}", entry.path);
+            continue;
+        };
+
+        let ctx = parsed.context.to_string();
+        let doc_type = parsed.doc_type.to_string();
 
         if !context_filter.is_empty() && !context_filter.contains(&ctx) {
             continue;
         }
 
-        let parts: Vec<&str> = entry.path.split('/').collect();
-        let doc_type = if parts.len() > 1 {
-            parts[1]
-        } else {
-            "resource"
-        };
-        let uri = format!("kb://{ctx}/{doc_type}/{id}");
+        let uri = Vault::canonical_uri(parsed.owner, &ctx, &doc_type, &id.to_string());
 
         context_map.entry(ctx).or_default().push(SyncManifestEntry {
             uri,
@@ -207,16 +264,12 @@ fn extract_frontmatter_block(content: &str) -> &str {
 
 /// Parse a kb:// URI into (context, doc_type).
 pub fn parse_kb_uri(uri: &str) -> Result<(String, String)> {
-    let rest = uri
-        .strip_prefix("kb://")
-        .ok_or_else(|| TemperError::Config(format!("invalid kb:// URI: {uri}")))?;
-    let parts: Vec<&str> = rest.split('/').collect();
-    if parts.len() < 2 {
-        return Err(TemperError::Config(format!(
-            "kb:// URI must have at least context/doc_type: {uri}"
-        )));
-    }
-    Ok((parts[0].to_string(), parts[1].to_string()))
+    let parsed = Vault::parse_uri(uri).ok_or_else(|| {
+        TemperError::Config(format!(
+            "invalid kb:// URI (expected kb://<owner>/<context>/<doc_type>/<ident>): {uri}"
+        ))
+    })?;
+    Ok((parsed.context.to_string(), parsed.doc_type.to_string()))
 }
 
 /// Extract resource UUID from last segment of a kb:// URI.
@@ -265,6 +318,13 @@ pub fn scan_vault_for_untracked(
             .unwrap_or(path)
             .to_string_lossy()
             .to_string();
+
+        if Vault::parse_rel(&rel_path).is_none() {
+            tracing::warn!(
+                "scanned path is not owner-scoped — the vault may need migration: {rel_path}"
+            );
+            continue;
+        }
 
         if known_paths.contains(&rel_path) {
             continue;
@@ -366,6 +426,7 @@ pub async fn sync_orchestration(
     vault_root: &Path,
     context_filter: &[String],
     progress: &dyn SyncProgress,
+    skip_paths: &std::collections::HashSet<String>,
 ) -> Result<SyncResult> {
     // Step 1: Scan vault for untracked files
     let scan_count = scan_vault_for_untracked(manifest, vault_root, progress)?;
@@ -380,7 +441,7 @@ pub async fn sync_orchestration(
         .sync()
         .status(&request)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let push_count = diff.to_push.len();
     let pull_count = diff.to_pull.len();
@@ -389,6 +450,12 @@ pub async fn sync_orchestration(
     // Step 4: Push
     let mut error_count = 0;
     for item in &diff.to_push {
+        // Skip items whose resolved path is in the ownership-mismatch set.
+        if let Some(path) = resolve_push_entry_path(manifest, item) {
+            if skip_paths.contains(&path) {
+                continue;
+            }
+        }
         let kind = if item.resource_id.is_some() {
             PushKind::Modified
         } else {
@@ -465,7 +532,7 @@ pub async fn sync_orchestration(
         .sync()
         .complete(&complete_req)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     // Step 10: Update manifest timestamp
     manifest.last_sync = Some(complete_resp.last_sync_at);
@@ -498,7 +565,7 @@ pub async fn sync_status_check(
         .sync()
         .status(&request)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))
+        .map_err(crate::commands::client_err)
 }
 
 // ---------------------------------------------------------------------------
@@ -529,21 +596,25 @@ fn push_error_context(manifest: &Manifest, item: &SyncPushItem) -> (String, Stri
         });
 
     if let Some(entry) = entry {
-        let parts: Vec<&str> = entry.path.split('/').collect();
-        let context = parts.first().copied().unwrap_or("default").to_string();
-        let doc_type = if parts.len() > 1 {
-            parts[1].to_string()
-        } else {
-            "resource".to_string()
-        };
-        (entry.path.clone(), context, doc_type)
-    } else {
-        (
-            item.uri.clone(),
+        if let Some(parsed) = Vault::parse_rel(&entry.path) {
+            return (
+                entry.path.clone(),
+                parsed.context.to_string(),
+                parsed.doc_type.to_string(),
+            );
+        }
+        return (
+            entry.path.clone(),
             "unknown".to_string(),
             "unknown".to_string(),
-        )
+        );
     }
+
+    (
+        item.uri.clone(),
+        "unknown".to_string(),
+        "unknown".to_string(),
+    )
 }
 
 async fn push_resource(
@@ -583,16 +654,13 @@ async fn push_resource(
         (None, None)
     };
 
-    let parts: Vec<&str> = entry.path.split('/').collect();
-    let context = parts.first().copied().unwrap_or("default");
-    let doc_type = if parts.len() > 1 {
-        parts[1]
-    } else {
-        "resource"
+    let (context, doc_type) = match Vault::parse_rel(&entry.path) {
+        Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+        None => ("default".to_string(), "resource".to_string()),
     };
     let title = ingest::title_from_path(&file_path);
 
-    let mut payload = ingest::build_ingest_payload(body, &title, context, doc_type, None)?;
+    let mut payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, None)?;
     // Strip identity fields from managed_meta before sending — the server
     // tracks resource identity via kb_resources.id, not as metadata fields.
     // Including them would cause managed_hash divergence between client and
@@ -618,14 +686,14 @@ async fn push_resource(
             .ingest()
             .update(Uuid::from(entry_id), &payload)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))?
+            .map_err(crate::commands::client_err)?
     } else {
         // New resource — POST create (also used for provisional entries)
         client
             .ingest()
             .create(&payload)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))?
+            .map_err(crate::commands::client_err)?
     };
 
     // If the server assigned a different resource ID (POST create), remap the
@@ -707,13 +775,13 @@ async fn pull_resource(
         .resources()
         .get(Uuid::from(item.resource_id))
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let content_response = client
         .resources()
         .content(Uuid::from(item.resource_id))
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
 
@@ -880,7 +948,7 @@ async fn merge_and_push_resource(
         .resources()
         .content(Uuid::from(item.resource_id))
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
     let remote_body = &content_response.markdown;
 
     // 3. Run merge pipeline
@@ -899,23 +967,20 @@ async fn merge_and_push_resource(
     std::fs::write(&file_path, &new_file_content)?;
 
     // 6. Build ingest payload with strip_frontmatter on merged file
-    let parts: Vec<&str> = entry.path.split('/').collect();
-    let context = parts.first().copied().unwrap_or("default");
-    let doc_type = if parts.len() > 1 {
-        parts[1]
-    } else {
-        "resource"
+    let (context, doc_type) = match Vault::parse_rel(&entry.path) {
+        Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+        None => ("default".to_string(), "resource".to_string()),
     };
     let title = ingest::title_from_path(&file_path);
 
-    let payload = ingest::build_ingest_payload(merged_body, &title, context, doc_type, None)?;
+    let payload = ingest::build_ingest_payload(merged_body, &title, &context, &doc_type, None)?;
 
     // 7. Push via update
     let _resource = client
         .ingest()
         .update(Uuid::from(item.resource_id), &payload)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     // 8. Compute frontmatter hashes from the merged file
     let (pushed_managed_hash, pushed_open_hash) =
@@ -977,6 +1042,23 @@ pub fn backup_manifest(temper_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Extract the owner sigil (`@slug` or `+slug`) from a server manifest item's
+/// canonical `kb://` URI.
+///
+/// The server's `fetch_manifest` emits owner-scoped URIs via the
+/// `kb_resource_uri()` SQL function, so `Vault::parse_uri` reliably yields the
+/// authoritative owner — including for team contexts (`+slug`) where silently
+/// defaulting to `@me` would mis-route the resource into the personal vault
+/// directory and break ownership invariants downstream.
+///
+/// Returns `None` if the URI is malformed, rather than guessing. Callers are
+/// expected to skip the offending server item with a `tracing::warn!`, which
+/// matches the existing pattern for malformed local manifest paths in
+/// `build_status_request` (line ~175).
+fn owner_for_server_item(item: &temper_core::types::SyncManifestItem) -> Option<String> {
+    Vault::parse_uri(&item.uri).map(|parsed| parsed.owner.to_string())
+}
+
 /// Refresh: fetch server manifest and interleave into local manifest.
 ///
 /// - De-duplicate by resource UUID (server wins for matching IDs)
@@ -995,7 +1077,7 @@ pub async fn sync_refresh(
         .sync()
         .manifest()
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let mut matched = 0;
     let mut added = 0;
@@ -1006,12 +1088,9 @@ pub async fn sync_refresh(
         std::collections::HashMap::new();
     for (id, entry) in &manifest.entries {
         if !entry.body_hash.is_empty() {
-            let parts: Vec<&str> = entry.path.split('/').collect();
-            let ctx = parts.first().copied().unwrap_or("default").to_string();
-            let doc_type = if parts.len() > 1 {
-                parts[1].to_string()
-            } else {
-                "resource".to_string()
+            let (ctx, doc_type) = match Vault::parse_rel(&entry.path) {
+                Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+                None => ("default".to_string(), "resource".to_string()),
             };
             hash_index.insert((ctx, doc_type, entry.body_hash.clone()), *id);
         }
@@ -1056,11 +1135,29 @@ pub async fn sync_refresh(
                 matched += 1;
                 matched_server_ids.insert(item.resource_id);
             } else {
-                // Genuinely new from server — add as Pending (to pull on next sync)
+                // Genuinely new from server — add as Pending (to pull on next sync).
+                // Path must be the owner-scoped 4-segment form that Vault::parse_rel
+                // accepts. The owner segment is derived from the server-supplied
+                // canonical `kb://@<owner>/<ctx>/<type>/<ident>` URI, which
+                // kb_resource_uri() on the server now guarantees. A None return
+                // means the server sent a URI we can't parse — skip the entry
+                // rather than guess the owner and mis-route a team resource.
+                let Some(owner) = owner_for_server_item(item) else {
+                    tracing::warn!(
+                        "sync_refresh: skipping server item with unparseable URI {:?} \
+                         (resource_id: {})",
+                        item.uri,
+                        item.resource_id
+                    );
+                    continue;
+                };
                 manifest.entries.insert(
                     item.resource_id,
                     temper_core::types::ManifestEntry {
-                        path: format!("{}/{}/{}.md", item.context, item.doc_type, item.slug),
+                        path: format!(
+                            "{}/{}/{}/{}.md",
+                            owner, item.context, item.doc_type, item.slug
+                        ),
                         body_hash: String::new(),
                         remote_body_hash: item.content_hash.clone(),
                         managed_hash: String::new(),
@@ -1122,7 +1219,7 @@ pub async fn sync_reset(
         .sync()
         .manifest()
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let mut new_manifest = Manifest::new(old_manifest.device_id.clone());
     let mut matched_by_id = 0;
@@ -1340,10 +1437,22 @@ pub async fn sync_reset(
 
     for item in &server.items {
         if !matched_server_ids.contains(&item.resource_id) {
+            let Some(owner) = owner_for_server_item(item) else {
+                tracing::warn!(
+                    "sync_reset: skipping server item with unparseable URI {:?} \
+                     (resource_id: {})",
+                    item.uri,
+                    item.resource_id
+                );
+                continue;
+            };
             new_manifest.entries.insert(
                 item.resource_id,
                 temper_core::types::ManifestEntry {
-                    path: format!("{}/{}/{}.md", item.context, item.doc_type, item.slug),
+                    path: format!(
+                        "{}/{}/{}/{}.md",
+                        owner, item.context, item.doc_type, item.slug
+                    ),
                     body_hash: String::new(),
                     remote_body_hash: item.content_hash.clone(),
                     managed_hash: String::new(),
@@ -1395,7 +1504,7 @@ mod tests {
         m.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: "oldhash".to_string(),
                 remote_body_hash: "oldhash".to_string(),
                 managed_hash: String::new(),
@@ -1418,7 +1527,7 @@ mod tests {
         let vault = dir.path();
         let mut manifest = sample_manifest();
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1467,7 +1576,7 @@ mod tests {
         entry.managed_hash = "sha256:abc".to_string();
         entry.open_hash = "sha256:def".to_string();
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1504,7 +1613,7 @@ mod tests {
         entry.body_hash = hash;
         // Leave managed_hash and open_hash empty — simulating the old bug
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1535,7 +1644,7 @@ mod tests {
         assert_eq!(req.contexts[0].entries.len(), 1);
         assert!(req.contexts[0].entries[0]
             .uri
-            .starts_with("kb://temper/task/"));
+            .starts_with("kb://@me/temper/task/"));
     }
 
     #[test]
@@ -1547,7 +1656,8 @@ mod tests {
 
     #[test]
     fn parse_kb_uri_extracts_parts() {
-        let (ctx, dt) = parse_kb_uri("kb://temper/task/some-uuid").unwrap();
+        let (ctx, dt) =
+            parse_kb_uri("kb://@me/temper/task/12345678-1234-1234-1234-123456789abc").unwrap();
         assert_eq!(ctx, "temper");
         assert_eq!(dt, "task");
     }
@@ -1559,7 +1669,7 @@ mod tests {
 
     #[test]
     fn parse_kb_uri_rejects_missing_doc_type() {
-        assert!(parse_kb_uri("kb://temper").is_err());
+        assert!(parse_kb_uri("kb://@me/temper").is_err());
     }
 
     #[test]
@@ -1612,7 +1722,7 @@ mod tests {
         let mut manifest = sample_manifest();
 
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, "content").unwrap();
@@ -1644,7 +1754,7 @@ mod tests {
         let (managed_hash_v1, open_hash_v1) =
             temper_core::schema::compute_frontmatter_hashes(&fm_v1);
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, file_v1).unwrap();
@@ -1653,7 +1763,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: body_hash.clone(),
                 remote_body_hash: body_hash.clone(),
                 managed_hash: managed_hash_v1.clone(),
@@ -1698,7 +1808,7 @@ mod tests {
 
         let original_body_hash = ingest::compute_content_hash(strip_frontmatter(original));
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, original).unwrap();
@@ -1707,7 +1817,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: original_body_hash,
                 remote_body_hash: "somehash".to_string(),
                 managed_hash: String::new(),
@@ -1742,7 +1852,7 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(&file_path, "body content").unwrap();
@@ -1753,7 +1863,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: "stale-hash-that-would-trigger-if-read".to_string(),
                 remote_body_hash: "stale-hash-that-would-trigger-if-read".to_string(),
                 // Hashes must be non-empty for skip to apply
@@ -1784,7 +1894,7 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(
@@ -1799,7 +1909,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: ingest::compute_content_hash("body content"),
                 remote_body_hash: String::new(),
                 // Empty hashes — must backfill even though mtime matches
@@ -1829,7 +1939,7 @@ mod tests {
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         let content = "no frontmatter body";
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
@@ -1841,7 +1951,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
+                path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
                 body_hash: "oldhash".to_string(),
                 remote_body_hash: "oldhash".to_string(),
                 managed_hash: String::new(),
@@ -1870,7 +1980,7 @@ mod tests {
     fn scan_vault_discovers_untracked_files() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let file_dir = vault.join("temper/research");
+        let file_dir = vault.join("@me/temper/research");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("new-discovery.md"),
@@ -1889,7 +1999,7 @@ mod tests {
     fn scan_vault_skips_files_already_in_manifest() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let file_dir = vault.join("temper/research");
+        let file_dir = vault.join("@me/temper/research");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(file_dir.join("existing.md"), "# Existing\n\nContent.").unwrap();
 
@@ -1898,7 +2008,7 @@ mod tests {
         manifest.entries.insert(
             id,
             ManifestEntry {
-                path: "temper/research/existing.md".to_string(),
+                path: "@me/temper/research/existing.md".to_string(),
                 body_hash: "somehash".to_string(),
                 remote_body_hash: "somehash".to_string(),
                 managed_hash: String::new(),
@@ -1934,7 +2044,7 @@ mod tests {
     fn scan_vault_respects_frontmatter_override() {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
-        let file_dir = vault.join("temper/research");
+        let file_dir = vault.join("@me/temper/research");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("overridden.md"),
@@ -1956,7 +2066,7 @@ mod tests {
             "last_sync": null,
             "entries": {
                 "12345678-1234-1234-1234-123456789abc": {
-                    "path": "temper/task/test.md",
+                    "path": "@me/temper/task/test.md",
                     "content_hash": "abc",
                     "remote_hash": "abc",
                     "synced_at": "2026-01-01T00:00:00Z",
@@ -1995,7 +2105,7 @@ mod tests {
         let resource_id = ResourceId::new();
 
         // Create the existing file on disk
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         let existing_file = file_dir.join("my-document.md");
         fs::write(&existing_file, "---\ntemper-id: old\n---\n\nOld content").unwrap();
@@ -2005,7 +2115,7 @@ mod tests {
         manifest.entries.insert(
             resource_id,
             ManifestEntry {
-                path: "temper/task/my-document.md".to_string(),
+                path: "@me/temper/task/my-document.md".to_string(),
                 body_hash: ingest::compute_content_hash("Old content"),
                 remote_body_hash: "remote-hash-1".to_string(),
                 managed_hash: String::new(),
@@ -2037,7 +2147,7 @@ mod tests {
         manifest.entries.insert(
             resource_id,
             ManifestEntry {
-                path: "temper/task/my-document.md".to_string(),
+                path: "@me/temper/task/my-document.md".to_string(),
                 body_hash: content_hash,
                 remote_body_hash: "remote-hash-2".to_string(),
                 managed_hash: String::new(),
@@ -2071,7 +2181,7 @@ mod tests {
         let vault = dir.path();
         let mut manifest = Manifest::new("test-device".to_string());
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("my-task.md"),
@@ -2103,7 +2213,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let vault = dir.path();
 
-        let file_dir = vault.join("temper/task");
+        let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(file_dir.join("my-document.md"), "existing content").unwrap();
 
@@ -2112,5 +2222,123 @@ mod tests {
             slug, "my-document-2",
             "new resource should get deduplicated slug"
         );
+    }
+
+    // --- preflight_ownership_check ---
+
+    #[test]
+    fn preflight_detects_synced_owner_drift() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("drifted.md"),
+            "---\ntemper-type: task\ntemper-owner: \"+team\"\ntitle: d\nslug: d\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/drifted.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault);
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].frontmatter_owner, "+team");
+        assert_eq!(mismatches[0].manifest_owner, "@me");
+    }
+
+    #[test]
+    fn preflight_ignores_provisional_entries() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("new.md"),
+            "---\ntemper-type: task\ntemper-owner: \"+different\"\ntitle: n\nslug: n\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/new.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: String::new(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Pending,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: true,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault);
+        assert!(
+            mismatches.is_empty(),
+            "provisional entries should be ignored"
+        );
+    }
+
+    #[test]
+    fn preflight_clean_manifest_returns_empty() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("clean.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@me\"\ntitle: c\nslug: c\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/clean.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault);
+        assert!(mismatches.is_empty());
     }
 }

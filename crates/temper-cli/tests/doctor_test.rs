@@ -11,6 +11,7 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["temper".to_string()],
+        subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
     }
 }
@@ -29,6 +30,7 @@ temper-id: "01900000-0000-7000-8000-000000000001"
 temper-type: task
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
 title: "Implement feature X"
 temper-stage: backlog
 slug: implement-feature-x
@@ -45,6 +47,7 @@ temper-id: "01900000-0000-7000-8000-000000000002"
 temper-type: goal
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
 title: "Ship v1"
 temper-status: active
 slug: ship-v1
@@ -61,6 +64,7 @@ temper-id: "01900000-0000-7000-8000-000000000003"
 temper-type: session
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
 title: "Session 2026-01-01"
 date: "2026-01-01"
 ---
@@ -108,7 +112,11 @@ Body.
 fn test_doctor_valid_task_no_issues() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
-    write_vault_file(&dir, "temper/task/implement-feature-x.md", VALID_TASK_FM);
+    write_vault_file(
+        &dir,
+        "@me/temper/task/implement-feature-x.md",
+        VALID_TASK_FM,
+    );
 
     let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
 
@@ -129,7 +137,7 @@ fn test_doctor_valid_task_no_issues() {
 fn test_doctor_detects_legacy_fields() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
-    write_vault_file(&dir, "temper/task/old-task.md", LEGACY_TASK_FM);
+    write_vault_file(&dir, "@me/temper/task/old-task.md", LEGACY_TASK_FM);
 
     let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
 
@@ -159,7 +167,11 @@ fn test_doctor_detects_legacy_fields() {
 fn test_doctor_detects_invalid_enum() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
-    write_vault_file(&dir, "temper/task/bad-stage-task.md", INVALID_STAGE_TASK_FM);
+    write_vault_file(
+        &dir,
+        "@me/temper/task/bad-stage-task.md",
+        INVALID_STAGE_TASK_FM,
+    );
 
     let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
 
@@ -176,7 +188,7 @@ fn test_doctor_valid_session_no_issues() {
     let config = test_config(&dir);
     write_vault_file(
         &dir,
-        "temper/session/session-2026-01-01.md",
+        "@me/temper/session/session-2026-01-01.md",
         VALID_SESSION_FM,
     );
 
@@ -200,8 +212,12 @@ fn test_doctor_scans_multiple_doctypes() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    write_vault_file(&dir, "temper/task/implement-feature-x.md", VALID_TASK_FM);
-    write_vault_file(&dir, "temper/goal/ship-v1.md", VALID_GOAL_FM);
+    write_vault_file(
+        &dir,
+        "@me/temper/task/implement-feature-x.md",
+        VALID_TASK_FM,
+    );
+    write_vault_file(&dir, "@me/temper/goal/ship-v1.md", VALID_GOAL_FM);
 
     let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
 
@@ -221,11 +237,15 @@ fn test_doctor_context_filter() {
     let mut config = test_config(&dir);
     config.contexts = vec!["temper".to_string(), "other".to_string()];
 
-    write_vault_file(&dir, "temper/task/implement-feature-x.md", VALID_TASK_FM);
+    write_vault_file(
+        &dir,
+        "@me/temper/task/implement-feature-x.md",
+        VALID_TASK_FM,
+    );
     // This file is in 'other' context and should be excluded by the filter
     write_vault_file(
         &dir,
-        "other/task/something.md",
+        "@me/other/task/something.md",
         &VALID_TASK_FM.replace("temper-context: temper", "temper-context: other"),
     );
 
@@ -243,7 +263,7 @@ fn test_doctor_no_frontmatter_reports_issue() {
     let config = test_config(&dir);
     write_vault_file(
         &dir,
-        "temper/task/no-fm.md",
+        "@me/temper/task/no-fm.md",
         "Just body text, no frontmatter.\n",
     );
 
@@ -270,7 +290,7 @@ fn test_doctor_fix_sets_missing_temper_fields() {
     // File with temper-* style but missing some managed fields (temper-id, slug, temper-stage)
     write_vault_file(
         &dir,
-        "temper/task/old-task.md",
+        "@me/temper/task/old-task.md",
         "---\ntemper-type: task\ntemper-context: temper\ntemper-stage: backlog\ntemper-created: \"2026-04-03T21:23:32.026022-04:00\"\ntitle: \"Old task\"\nslug: old-task\n---\n\n# Old task\n\nSome content here.\n",
     );
 
@@ -280,7 +300,7 @@ fn test_doctor_fix_sets_missing_temper_fields() {
         "Should have applied at least one fix"
     );
 
-    let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
+    let content = fs::read_to_string(dir.path().join("@me/temper/task/old-task.md")).unwrap();
     assert!(content.contains("temper-id:"), "got:\n{content}");
     assert!(content.contains("temper-type:"));
     assert!(content.contains("temper-context:"));
@@ -297,7 +317,7 @@ fn test_doctor_fix_dry_run_does_not_modify() {
     // File with missing temper-id — dry run should count the set action but not apply it
     let original = "---\ntemper-type: task\ntemper-context: temper\ntemper-stage: backlog\ntemper-created: \"2026-04-03T21:23:32.026022-04:00\"\ntitle: \"Old task\"\nslug: old-task\n---\n\n# Old task\n";
 
-    write_vault_file(&dir, "temper/task/old-task.md", original);
+    write_vault_file(&dir, "@me/temper/task/old-task.md", original);
 
     let result = temper_cli::actions::doctor::fix(&config, None, true).unwrap();
     assert!(
@@ -305,7 +325,7 @@ fn test_doctor_fix_dry_run_does_not_modify() {
         "Dry run should count field sets (temper-id missing)"
     );
 
-    let content = fs::read_to_string(dir.path().join("temper/task/old-task.md")).unwrap();
+    let content = fs::read_to_string(dir.path().join("@me/temper/task/old-task.md")).unwrap();
     assert_eq!(content, original, "Dry run should not modify file");
 }
 
@@ -316,7 +336,7 @@ fn test_doctor_fix_backfills_temper_created_from_date() {
 
     write_vault_file(
         &dir,
-        "temper/session/my-session.md",
+        "@me/temper/session/my-session.md",
         "---\ntemper-id: \"019d5977-f476-7e41-b4aa-fc4bd2b24426\"\ntemper-type: session\ntemper-context: temper\ntitle: \"My session\"\ndate: \"2026-04-04\"\n---\n\n## Goal\n",
     );
 
@@ -328,8 +348,10 @@ fn test_doctor_fix_backfills_temper_created_from_date() {
 
     // The pipeline also renames the file to match the date-prefix convention.
     // Accept either the original name or the renamed file.
-    let orig_path = dir.path().join("temper/session/my-session.md");
-    let renamed_path = dir.path().join("temper/session/2026-04-04-my-session.md");
+    let orig_path = dir.path().join("@me/temper/session/my-session.md");
+    let renamed_path = dir
+        .path()
+        .join("@me/temper/session/2026-04-04-my-session.md");
     let content = if orig_path.exists() {
         fs::read_to_string(&orig_path).unwrap()
     } else {

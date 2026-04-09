@@ -21,6 +21,30 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
 
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
+    // Preflight: detect and warn about ownership mismatches.
+    let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
+    if !ownership_mismatches.is_empty() {
+        output::warning(format!(
+            "{} file(s) have ownership mismatches and will be skipped from upload:",
+            ownership_mismatches.len()
+        ));
+        for m in &ownership_mismatches {
+            output::warning(format!(
+                "  {} — frontmatter: {}, manifest: {}",
+                m.file_path, m.frontmatter_owner, m.manifest_owner
+            ));
+        }
+        output::hint(
+            "Ownership transfers require an explicit server action (not yet implemented). \
+             Revert the frontmatter edit or wait for `temper team transfer`.",
+        );
+    }
+
+    let mismatch_paths: std::collections::HashSet<String> = ownership_mismatches
+        .iter()
+        .map(|m| m.file_path.clone())
+        .collect();
+
     let (rt, client) = runtime::build_runtime_and_client()?;
 
     // Ensure profile exists before hitting sync endpoints
@@ -28,8 +52,15 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
 
     let progress = TerminalProgress::new();
     let result = rt.block_on(async {
-        sync_actions::sync_orchestration(&client, &mut manifest, &vault_root, contexts, &progress)
-            .await
+        sync_actions::sync_orchestration(
+            &client,
+            &mut manifest,
+            &vault_root,
+            contexts,
+            &progress,
+            &mismatch_paths,
+        )
+        .await
     })?;
 
     // Save manifest after successful sync
@@ -106,6 +137,9 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
 
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
+    // Preflight: surface ownership mismatches in the status diff.
+    let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
+
     let (rt, client) = runtime::build_runtime_and_client()?;
 
     let progress = TerminalProgress::new();
@@ -123,9 +157,20 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
             "to_pull": diff.to_pull.len(),
             "conflicts": diff.conflicts.len(),
             "removed": diff.removed.len(),
+            "ownership_mismatches": ownership_mismatches.len(),
         });
         output::plain(event);
     } else {
+        if !ownership_mismatches.is_empty() {
+            output::header("Ownership Mismatches");
+            for m in &ownership_mismatches {
+                output::warning(format!(
+                    "  {} — frontmatter: {}, manifest: {}",
+                    m.file_path, m.frontmatter_owner, m.manifest_owner
+                ));
+            }
+            output::blank();
+        }
         output::plain(format!(
             "  \u{2191} Push    {} resources",
             diff.to_push.len()

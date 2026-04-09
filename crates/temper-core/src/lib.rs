@@ -8,3 +8,4 @@ pub mod error;
 pub mod ids;
 pub mod schema;
 pub mod types;
+pub mod vault;

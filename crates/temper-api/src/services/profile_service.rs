@@ -22,6 +22,58 @@ pub fn validate_preferences_size(preferences: Option<&Value>) -> ApiResult<()> {
     Ok(())
 }
 
+/// Generate a unique profile slug from a display name.
+///
+/// Slugifies the name (lowercase, non-alnum → dash, trim dashes),
+/// then appends -2, -3, etc. if the slug already exists.
+pub async fn generate_profile_slug(pool: &PgPool, display_name: &str) -> ApiResult<String> {
+    let base: String = display_name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    // Collapse consecutive dashes (matches SQL backfill regex [^a-zA-Z0-9]+)
+    let base: String = base
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let base = if base.is_empty() {
+        "user".to_string()
+    } else {
+        base
+    };
+
+    // Check if the base slug is available
+    let exists = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE slug = $1) as \"exists!: bool\"",
+        &base,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !exists {
+        return Ok(base);
+    }
+
+    // Find next available suffix
+    let mut suffix = 2u32;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        let exists = sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM kb_profiles WHERE slug = $1) as \"exists!: bool\"",
+            &candidate,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if !exists {
+            return Ok(candidate);
+        }
+        suffix += 1;
+    }
+}
+
 /// Resolve a profile from JWT claims.
 ///
 /// Lookup order:
@@ -95,16 +147,18 @@ pub async fn resolve_from_claims(pool: &PgPool, claims: &AuthClaims) -> ApiResul
 
     // 5: brand new profile + auth link
     let display_name = claims.email.split('@').next().unwrap_or("user").to_string();
+    let slug = generate_profile_slug(pool, &display_name).await?;
 
     let profile_id = Uuid::now_v7();
     sqlx::query!(
         r#"
         INSERT INTO kb_profiles
-            (id, display_name, email, avatar_url, preferences, vault_config, is_active, created, updated)
-        VALUES ($1, $2, $3, null, '{}', '{}', true, now(), now())
+            (id, display_name, slug, email, avatar_url, preferences, vault_config, is_active, created, updated)
+        VALUES ($1, $2, $3, $4, null, '{}', '{}', true, now(), now())
         "#,
         profile_id,
         &display_name,
+        &slug,
         &claims.email as &str,
     )
     .execute(pool)
@@ -150,6 +204,7 @@ pub async fn get_by_id(pool: &PgPool, id: Uuid) -> ApiResult<Profile> {
         r#"
         SELECT id,
                display_name,
+               slug,
                email,
                avatar_url,
                preferences as "preferences: serde_json::Value",
@@ -246,6 +301,39 @@ mod tests {
     fn none_preferences_accepted() {
         let result = validate_preferences_size(None);
         assert!(result.is_ok());
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn generate_slug_from_display_name(pool: PgPool) {
+        let slug = generate_profile_slug(&pool, "Pete Taylor").await.unwrap();
+        assert_eq!(slug, "pete-taylor");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn generate_slug_handles_special_chars(pool: PgPool) {
+        let slug = generate_profile_slug(&pool, "José García-López")
+            .await
+            .unwrap();
+        assert_eq!(slug, "jos-garc-a-l-pez");
+    }
+
+    #[sqlx::test(migrations = "../../migrations")]
+    async fn generate_slug_handles_collision(pool: PgPool) {
+        // Create a profile that will own the "collider" slug
+        let claims = AuthClaims {
+            provider: "test".to_string(),
+            external_user_id: "slug-collision-1".to_string(),
+            email: "collider@example.com".to_string(),
+            email_verified: Some(true),
+            exp: 9_999_999_999,
+            iat: 1_000_000_000,
+        };
+        let profile = resolve_from_claims(&pool, &claims).await.unwrap();
+        assert_eq!(profile.slug, "collider");
+
+        // Now generate a slug for the same display name — should get -2
+        let slug = generate_profile_slug(&pool, "collider").await.unwrap();
+        assert_eq!(slug, "collider-2");
     }
 
     #[sqlx::test(migrations = "../../migrations")]

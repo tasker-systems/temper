@@ -9,6 +9,7 @@ fn test_check_valid_vault() {
         vault_root: dir.path().to_path_buf(),
         state_dir: dir.path().join(".temper"),
         contexts: vec!["default".to_string()],
+        subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
     };
 

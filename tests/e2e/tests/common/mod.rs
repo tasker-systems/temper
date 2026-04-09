@@ -28,6 +28,8 @@ use temper_core::types::config::{CloudSection, CloudVaultConfig, TemperConfig};
 pub const SYSTEM_PROFILE_ID: &str = "00000000-0000-0000-0004-000000000001";
 pub const TEMPER_CONTEXT_ID: &str = "00000000-0000-0000-0003-000000000001";
 pub const RESEARCH_DOC_TYPE_ID: &str = "00000000-0000-0000-0001-000000000004";
+pub const TEMPER_SYSTEM_TEAM_ID: &str = "00000000-0000-0000-0000-000000000002";
+pub const TEMPER_SYSTEM_GENERAL_CONTEXT_ID: &str = "00000000-0000-0000-0000-000000000003";
 
 /// A running e2e test environment with in-process API server and injected client.
 pub struct E2eTestApp {
@@ -100,6 +102,32 @@ pub fn generate_expired_jwt(sub: &str, email: &str) -> String {
         .expect("Failed to sign expired JWT")
 }
 
+/// Generate a JWT for a second test user (distinct from the primary e2e user).
+pub fn generate_second_user_jwt() -> String {
+    generate_test_jwt("e2e-second-user", "second@test.example.com")
+}
+
+/// Enable invite-only mode in tests by adding admin to temper-system team and flipping the setting.
+pub async fn enable_invite_only(pool: &PgPool, admin_profile_id: uuid::Uuid) {
+    sqlx::query(
+        "INSERT INTO kb_team_members (id, team_id, profile_id, role, joined_at)
+         VALUES (gen_random_uuid(), $1::uuid, $2, 'owner', now())
+         ON CONFLICT (team_id, profile_id) DO NOTHING",
+    )
+    .bind(uuid::Uuid::parse_str(TEMPER_SYSTEM_TEAM_ID).unwrap())
+    .bind(admin_profile_id)
+    .execute(pool)
+    .await
+    .expect("add admin to temper-system team");
+
+    sqlx::query(
+        "UPDATE kb_system_settings SET access_mode = 'invite_only', gating_team_slug = 'temper-system', updated = now()",
+    )
+    .execute(pool)
+    .await
+    .expect("enable invite_only mode");
+}
+
 /// Seed fixtures: delete test data, insert stable seed resource.
 async fn clean_and_seed(pool: &PgPool) {
     sqlx::query("DELETE FROM kb_resource_audits")
@@ -125,6 +153,17 @@ async fn clean_and_seed(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("clean kb_transfers");
+    // Reset system settings to open mode (before team cleanup)
+    sqlx::query("UPDATE kb_system_settings SET access_mode = 'open', gating_team_slug = NULL, updated = now()")
+        .execute(pool)
+        .await
+        .expect("reset kb_system_settings");
+
+    sqlx::query("DELETE FROM kb_join_requests")
+        .execute(pool)
+        .await
+        .expect("clean kb_join_requests");
+
     sqlx::query("DELETE FROM kb_team_invitations")
         .execute(pool)
         .await
@@ -133,11 +172,13 @@ async fn clean_and_seed(pool: &PgPool) {
         .execute(pool)
         .await
         .expect("clean kb_team_resources");
-    sqlx::query("DELETE FROM kb_team_members")
-        .execute(pool)
-        .await
-        .expect("clean kb_team_members");
-    sqlx::query("DELETE FROM kb_teams")
+    sqlx::query(
+        "DELETE FROM kb_team_members WHERE team_id != '00000000-0000-0000-0000-000000000002'::uuid",
+    )
+    .execute(pool)
+    .await
+    .expect("clean kb_team_members");
+    sqlx::query("DELETE FROM kb_teams WHERE id != '00000000-0000-0000-0000-000000000002'::uuid")
         .execute(pool)
         .await
         .expect("clean kb_teams");

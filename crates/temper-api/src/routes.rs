@@ -17,7 +17,32 @@ pub fn create_app(state: AppState) -> Router {
 
     let public = Router::new().route("/api/health", get(handlers::health::health_check));
 
-    let protected = Router::new()
+    // Authenticated but NOT gated by system access — profile and access endpoints.
+    let auth_only = Router::new()
+        .route(
+            "/api/profile",
+            get(handlers::profiles::get).patch(handlers::profiles::update),
+        )
+        .route(
+            "/api/profile/auth-links",
+            get(handlers::profiles::list_auth_links),
+        )
+        .route(
+            "/api/access/requests",
+            post(handlers::access::create_request),
+        )
+        .route(
+            "/api/access/requests/me",
+            get(handlers::access::get_own_request).delete(handlers::access::withdraw_request),
+        )
+        .route("/api/access/settings", get(handlers::access::get_settings))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::require_auth,
+        ));
+
+    // Authenticated AND system-access-gated — default-deny for all data routes.
+    let gated = Router::new()
         .route(
             "/api/resources",
             get(handlers::resources::list).post(handlers::resources::create),
@@ -34,14 +59,6 @@ pub fn create_app(state: AppState) -> Router {
         )
         .route("/api/resources/{id}/meta", put(handlers::meta::update_meta))
         .route(
-            "/api/profile",
-            get(handlers::profiles::get).patch(handlers::profiles::update),
-        )
-        .route(
-            "/api/profile/auth-links",
-            get(handlers::profiles::list_auth_links),
-        )
-        .route(
             "/api/contexts",
             get(handlers::contexts::list).post(handlers::contexts::create),
         )
@@ -53,6 +70,18 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/sync/status", post(handlers::sync::status))
         .route("/api/sync/complete", post(handlers::sync::complete))
         .route("/api/sync/manifest", get(handlers::sync::manifest))
+        .route(
+            "/api/access/admin/requests",
+            get(handlers::access::list_pending),
+        )
+        .route(
+            "/api/access/admin/requests/{id}",
+            axum::routing::patch(handlers::access::review_request),
+        )
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::middleware::system_access::require_system_access,
+        ))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::require_auth,
@@ -60,7 +89,7 @@ pub fn create_app(state: AppState) -> Router {
 
     let cors = cors_layer(&state);
 
-    let mut app = Router::new().merge(public).merge(protected);
+    let mut app = Router::new().merge(public).merge(auth_only).merge(gated);
 
     if state.config.enable_swagger {
         app = app

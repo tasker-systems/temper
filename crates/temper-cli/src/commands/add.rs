@@ -240,7 +240,7 @@ fn run_single_auto_file(
             .ingest()
             .create(&payload)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))
+            .map_err(crate::commands::client_err)
     })?;
 
     if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
@@ -321,13 +321,13 @@ fn promote_resource(
             .resources()
             .get(resource_id)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))?;
+            .map_err(crate::commands::client_err)?;
 
         let content_response = client
             .resources()
             .content(resource_id)
             .await
-            .map_err(|e| TemperError::Api(e.to_string()))?;
+            .map_err(crate::commands::client_err)?;
 
         Ok::<_, TemperError>((resource, content_response))
     })?;
@@ -889,7 +889,7 @@ async fn add_single_auto_file(
         .ingest()
         .create(&payload)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::commands::client_err)?;
 
     let slug = ingest::dedup_vault_slug(vault_root, &context, &doc_type, &slug);
 

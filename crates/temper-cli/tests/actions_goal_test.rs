@@ -9,6 +9,7 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["myapp".to_string()],
+        subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
     }
 }
@@ -73,7 +74,7 @@ fn test_actions_ensure_maintenance_creates_goal() {
     let slug = temper_cli::actions::goal::ensure_maintenance(&config, "myapp").unwrap();
     assert_eq!(slug, "myapp-maintenance");
 
-    let path = dir.path().join("myapp/goal/myapp-maintenance.md");
+    let path = dir.path().join("@me/myapp/goal/myapp-maintenance.md");
     assert!(path.exists(), "maintenance goal file should exist");
 }
 

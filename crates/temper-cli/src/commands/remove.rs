@@ -19,7 +19,7 @@ pub fn run(resource_id: &str, force: bool) -> crate::error::Result<()> {
                 .resources()
                 .delete(id)
                 .await
-                .map_err(|e| TemperError::Api(e.to_string()))?;
+                .map_err(crate::commands::client_err)?;
             output::success(format!("Deleted from cloud: {id}"));
 
             // Check if in manifest.

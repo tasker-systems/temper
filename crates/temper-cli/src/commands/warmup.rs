@@ -1,3 +1,5 @@
+use temper_core::vault::Vault;
+
 use crate::config::Config;
 use crate::error::Result;
 
@@ -117,7 +119,9 @@ fn collect_recent_sessions(
     project: &str,
     limit: usize,
 ) -> Vec<(String, String, std::path::PathBuf)> {
-    let sessions_dir = config.doc_type_dir(project, "session");
+    let vault_layout = Vault::new(&config.vault_root);
+    let owner = config.owner_for_context(project);
+    let sessions_dir = vault_layout.doc_type_dir(&owner, project, "session");
     if !sessions_dir.exists() {
         return vec![];
     }

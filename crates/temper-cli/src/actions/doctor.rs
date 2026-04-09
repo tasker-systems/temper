@@ -8,10 +8,11 @@ use temper_core::schema::{
     check_legacy_fields, check_unknown_temper_fields, validate_frontmatter, ValidationIssue,
     ValidationResult,
 };
+use temper_core::vault::Vault;
 
 use crate::actions::doctor_fix::{
     apply_manifest_actions, apply_plan, fix_filename, fix_manifest_for_moves, fix_missing_fields,
-    fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
+    fix_missing_owner, fix_relocation, fix_stale_manifest_entries, ApplyReport, FixPlan,
 };
 use crate::config::Config;
 use crate::error::Result;
@@ -27,7 +28,7 @@ pub struct DoctorReport {
     pub file_results: Vec<ValidationResult>,
 }
 
-/// Doc types whose files live at `{vault_root}/{context}/{doc_type}/`.
+/// Doc types whose files live at `{vault_root}/{owner}/{context}/{doc_type}/`.
 const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
 
 /// Scan the vault and validate all markdown frontmatter.
@@ -36,6 +37,13 @@ const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "conc
 /// contexts listed in `config.contexts` are scanned.
 pub fn scan(config: &Config, context_filter: Option<&str>) -> Result<DoctorReport> {
     let mut file_results: Vec<ValidationResult> = Vec::new();
+    let vault_layout = Vault::new(&config.vault_root);
+
+    // Load the manifest once so scan_directory can look up manifest_owner + is_provisional
+    // for each file. If the manifest cannot be loaded (e.g. fresh vault), fall back
+    // to treating every file as provisional.
+    let temper_dir = config.vault_root.join(".temper");
+    let manifest = manifest_io::load_manifest(&temper_dir, "doctor-scan").ok();
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
         vec![ctx.to_string()]
@@ -43,26 +51,22 @@ pub fn scan(config: &Config, context_filter: Option<&str>) -> Result<DoctorRepor
         config.contexts.clone()
     };
 
-    // Walk standard entity doc type directories
+    // Walk every entity doc_type directory under its owner-scoped path.
+    // research is included in ENTITY_DOC_TYPES — no special case required.
     for doc_type in ENTITY_DOC_TYPES {
         for ctx in &contexts_to_scan {
-            let dir = config.doc_type_dir(ctx, doc_type);
+            let owner = config.owner_for_context(ctx);
+            let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
             if !dir.is_dir() {
                 continue;
             }
-            scan_directory(&dir, doc_type, &mut file_results)?;
-        }
-    }
-
-    // Walk research directory: {vault_root}/research/{context}/
-    let research_root = config.vault_root.join("research");
-    if research_root.is_dir() {
-        for ctx in &contexts_to_scan {
-            let dir = research_root.join(ctx);
-            if !dir.is_dir() {
-                continue;
-            }
-            scan_directory(&dir, "research", &mut file_results)?;
+            scan_directory(
+                &dir,
+                doc_type,
+                &mut file_results,
+                &config.vault_root,
+                manifest.as_ref(),
+            )?;
         }
     }
 
@@ -91,6 +95,8 @@ fn scan_directory(
     dir: &Path,
     dir_doc_type: &str,
     results: &mut Vec<ValidationResult>,
+    vault_root: &Path,
+    manifest: Option<&temper_core::types::Manifest>,
 ) -> Result<()> {
     let md_files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
@@ -99,15 +105,74 @@ fn scan_directory(
         .collect();
 
     for file_path in md_files {
-        let result = scan_file(&file_path, dir_doc_type)?;
+        let rel = file_path
+            .strip_prefix(vault_root)
+            .unwrap_or(&file_path)
+            .to_string_lossy()
+            .to_string();
+
+        let manifest_entry = manifest.and_then(|m| m.entries.values().find(|e| e.path == rel));
+
+        let (manifest_owner, is_provisional) = match manifest_entry {
+            Some(entry) => {
+                let owner = Vault::parse_rel(&entry.path).map(|p| p.owner.to_string());
+                (owner, entry.provisional)
+            }
+            None => (None, true),
+        };
+
+        let result = scan_file(
+            &file_path,
+            dir_doc_type,
+            manifest_owner.as_deref(),
+            is_provisional,
+        )?;
         results.push(result);
     }
 
     Ok(())
 }
 
+/// Extract the `temper-owner` value from parsed frontmatter, if present.
+fn extract_temper_owner(frontmatter: &serde_yaml::Value) -> Option<String> {
+    frontmatter
+        .get("temper-owner")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Regex-free pattern check for owner sigils: `^[@+][a-z0-9][a-z0-9-]*$`.
+fn is_valid_owner_pattern(value: &str) -> bool {
+    let mut chars = value.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if first != '@' && first != '+' {
+        return false;
+    }
+    let second = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !second.is_ascii_lowercase() && !second.is_ascii_digit() {
+        return false;
+    }
+    for c in chars {
+        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+            return false;
+        }
+    }
+    true
+}
+
 /// Validate a single markdown file and return a `ValidationResult`.
-fn scan_file(file_path: &Path, dir_doc_type: &str) -> Result<ValidationResult> {
+fn scan_file(
+    file_path: &Path,
+    dir_doc_type: &str,
+    manifest_owner: Option<&str>,
+    is_provisional: bool,
+) -> Result<ValidationResult> {
     let file_path_str = file_path.display().to_string();
     let content = fs::read_to_string(file_path)?;
 
@@ -150,6 +215,51 @@ fn scan_file(file_path: &Path, dir_doc_type: &str) -> Result<ValidationResult> {
     // 4. Unknown temper-* fields
     issues.extend(check_unknown_temper_fields(frontmatter));
 
+    // 5. temper-owner validation
+    {
+        let owner_opt = extract_temper_owner(frontmatter);
+        match owner_opt {
+            None => {
+                if is_provisional || manifest_owner.is_none() {
+                    issues.push(ValidationIssue {
+                        path: "temper-owner".to_string(),
+                        message: "missing temper-owner (will default to @me on next sync)"
+                            .to_string(),
+                        auto_fixable: true,
+                    });
+                } else {
+                    issues.push(ValidationIssue {
+                        path: "temper-owner".to_string(),
+                        message: "missing temper-owner on a synced file — run `temper sync run` to reconcile from server".to_string(),
+                        auto_fixable: false,
+                    });
+                }
+            }
+            Some(ref value) if !is_valid_owner_pattern(value) => {
+                issues.push(ValidationIssue {
+                    path: "temper-owner".to_string(),
+                    message: format!(
+                        "invalid temper-owner pattern: {value} (expected @<slug> or +<slug>)"
+                    ),
+                    auto_fixable: false,
+                });
+            }
+            Some(ref value) => {
+                if let Some(expected) = manifest_owner {
+                    if value != expected {
+                        issues.push(ValidationIssue {
+                            path: "temper-owner".to_string(),
+                            message: format!(
+                                "temper-owner ({value}) disagrees with manifest ({expected}) — ownership transfers require an explicit server action"
+                            ),
+                            auto_fixable: false,
+                        });
+                    }
+                }
+            }
+        }
+    } // end temper-owner validation block
+
     Ok(ValidationResult {
         file_path: file_path_str,
         issues,
@@ -174,6 +284,12 @@ fn detect_doc_type(fm: &serde_yaml::Value, dir_doc_type: &str) -> Option<String>
 /// and updates the manifest to reflect any file moves.
 pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Result<ApplyReport> {
     let mut plan = FixPlan::new();
+    let vault_layout = Vault::new(&config.vault_root);
+
+    // Load manifest once so the fix plan can determine per-file provisionality
+    // (needed for fix_missing_owner) and later reconciliation can consume it.
+    let temper_dir = config.vault_root.join(".temper");
+    let manifest_result = manifest_io::load_manifest(&temper_dir, "doctor-fix");
 
     let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
         vec![ctx.to_string()]
@@ -181,32 +297,26 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
         config.contexts.clone()
     };
 
-    // Walk standard entity doc type directories
+    // Walk every entity doc_type directory under its owner-scoped path.
+    // research is included in ENTITY_DOC_TYPES — no special case required.
     for doc_type in ENTITY_DOC_TYPES {
         for ctx in &contexts_to_scan {
-            let dir = config.doc_type_dir(ctx, doc_type);
+            let owner = config.owner_for_context(ctx);
+            let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
             if !dir.is_dir() {
                 continue;
             }
-            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
+            collect_fixes_for_directory(
+                &dir,
+                &config.vault_root,
+                &owner,
+                manifest_result.as_ref().ok(),
+                &mut plan,
+            )?;
         }
     }
 
-    // Walk research directory: {vault_root}/research/{context}/
-    let research_root = config.vault_root.join("research");
-    if research_root.is_dir() {
-        for ctx in &contexts_to_scan {
-            let dir = research_root.join(ctx);
-            if !dir.is_dir() {
-                continue;
-            }
-            collect_fixes_for_directory(&dir, &config.vault_root, &mut plan)?;
-        }
-    }
-
-    // F5: Manifest reconciliation
-    let temper_dir = config.vault_root.join(".temper");
-    let manifest_result = manifest_io::load_manifest(&temper_dir, "doctor-fix");
+    // F5: Manifest reconciliation — manifest_result binding is still in scope.
     if let Ok(manifest) = &manifest_result {
         let move_actions: Vec<_> = plan
             .actions
@@ -240,7 +350,13 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
 }
 
 /// Collect fix actions for all `.md` files in `dir`.
-fn collect_fixes_for_directory(dir: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
+fn collect_fixes_for_directory(
+    dir: &Path,
+    vault_root: &Path,
+    owner: &str,
+    manifest: Option<&temper_core::types::Manifest>,
+    plan: &mut FixPlan,
+) -> Result<()> {
     let md_files: Vec<_> = fs::read_dir(dir)?
         .filter_map(|e| e.ok())
         .map(|e| e.path())
@@ -248,14 +364,33 @@ fn collect_fixes_for_directory(dir: &Path, vault_root: &Path, plan: &mut FixPlan
         .collect();
 
     for file_path in md_files {
-        collect_fixes_for_file(&file_path, vault_root, plan)?;
+        // Compute provisionality the same way scan_directory does.
+        let rel = file_path
+            .strip_prefix(vault_root)
+            .unwrap_or(&file_path)
+            .to_string_lossy()
+            .to_string();
+
+        let is_provisional = match manifest.and_then(|m| m.entries.values().find(|e| e.path == rel))
+        {
+            Some(entry) => entry.provisional,
+            None => true, // files not in manifest are treated as provisional
+        };
+
+        collect_fixes_for_file(&file_path, vault_root, owner, is_provisional, plan)?;
     }
 
     Ok(())
 }
 
 /// Collect fix actions for a single file and add them to the plan.
-fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPlan) -> Result<()> {
+fn collect_fixes_for_file(
+    file_path: &Path,
+    vault_root: &Path,
+    owner: &str,
+    is_provisional: bool,
+    plan: &mut FixPlan,
+) -> Result<()> {
     let mut content = fs::read_to_string(file_path)?;
 
     // Pre-pass: if frontmatter fails to parse, attempt dedup and rewrite.
@@ -270,7 +405,8 @@ fn collect_fixes_for_file(file_path: &Path, vault_root: &Path, plan: &mut FixPla
         return Ok(());
     };
     plan.extend(fix_missing_fields(file_path, &fm, vault_root));
-    plan.extend(fix_relocation(file_path, &fm, vault_root));
+    plan.extend(fix_missing_owner(file_path, &fm, is_provisional));
+    plan.extend(fix_relocation(file_path, &fm, vault_root, owner));
     plan.extend(fix_filename(file_path, &fm, vault_root));
     Ok(())
 }
@@ -386,5 +522,111 @@ mod tests {
     fn dedup_frontmatter_returns_none_when_no_frontmatter() {
         let content = "Just some markdown\n";
         assert!(dedup_frontmatter_keys(content).is_none());
+    }
+}
+
+#[cfg(test)]
+mod owner_validation_tests {
+    use super::*;
+    use std::io::Write;
+    use std::path::PathBuf;
+    use tempfile::TempDir;
+
+    fn write_fixture(dir: &std::path::Path, rel: &str, frontmatter: &str) -> PathBuf {
+        let path = dir.join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let content = format!("---\n{frontmatter}\n---\n\n# body\n");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(content.as_bytes()).unwrap();
+        path
+    }
+
+    #[test]
+    fn missing_temper_owner_on_provisional_is_auto_fixable() {
+        let tmp = TempDir::new().unwrap();
+        let file = write_fixture(
+            tmp.path(),
+            "@me/temper/task/p.md",
+            "temper-type: task\ntitle: p\nslug: p",
+        );
+        let result = scan_file(&file, "task", None, true).unwrap();
+        let owner_issue = result
+            .issues
+            .iter()
+            .find(|i| i.path == "temper-owner")
+            .unwrap();
+        assert!(owner_issue.auto_fixable);
+        assert!(owner_issue.message.contains("default to @me"));
+    }
+
+    #[test]
+    fn missing_temper_owner_on_synced_is_warning_not_fixable() {
+        let tmp = TempDir::new().unwrap();
+        let file = write_fixture(
+            tmp.path(),
+            "@me/temper/task/s.md",
+            "temper-type: task\ntitle: s\nslug: s",
+        );
+        let result = scan_file(&file, "task", Some("@me"), false).unwrap();
+        let owner_issue = result
+            .issues
+            .iter()
+            .find(|i| i.path == "temper-owner")
+            .unwrap();
+        assert!(!owner_issue.auto_fixable);
+        assert!(owner_issue.message.contains("run `temper sync run`"));
+    }
+
+    #[test]
+    fn invalid_temper_owner_pattern_is_error() {
+        let tmp = TempDir::new().unwrap();
+        let file = write_fixture(
+            tmp.path(),
+            "@me/temper/task/e.md",
+            "temper-type: task\ntitle: e\nslug: e\ntemper-owner: \"not-a-sigil\"",
+        );
+        let result = scan_file(&file, "task", Some("@me"), false).unwrap();
+        let owner_issue = result
+            .issues
+            .iter()
+            .find(|i| i.path == "temper-owner")
+            .unwrap();
+        assert!(!owner_issue.auto_fixable);
+        assert!(owner_issue.message.contains("invalid temper-owner pattern"));
+    }
+
+    #[test]
+    fn directory_mismatch_warns_never_fixes() {
+        let tmp = TempDir::new().unwrap();
+        let file = write_fixture(
+            tmp.path(),
+            "@me/temper/task/m.md",
+            "temper-type: task\ntitle: m\nslug: m\ntemper-owner: \"+team\"",
+        );
+        let result = scan_file(&file, "task", Some("@me"), false).unwrap();
+        let owner_issue = result
+            .issues
+            .iter()
+            .find(|i| i.path == "temper-owner")
+            .unwrap();
+        assert!(!owner_issue.auto_fixable);
+        assert!(owner_issue.message.contains("disagrees with manifest"));
+    }
+
+    #[test]
+    fn valid_temper_owner_matching_manifest_emits_no_issue() {
+        let tmp = TempDir::new().unwrap();
+        let file = write_fixture(
+            tmp.path(),
+            "@me/temper/task/v.md",
+            "temper-type: task\ntitle: v\nslug: v\ntemper-owner: \"@me\"",
+        );
+        let result = scan_file(&file, "task", Some("@me"), false).unwrap();
+        let owner_issues: Vec<_> = result
+            .issues
+            .iter()
+            .filter(|i| i.path == "temper-owner")
+            .collect();
+        assert!(owner_issues.is_empty(), "got {:?}", owner_issues);
     }
 }

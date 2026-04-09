@@ -9,6 +9,7 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["myapp".to_string()],
+        subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
     }
 }
@@ -32,7 +33,8 @@ fn test_task_create_includes_uuid_id() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(
         content.contains("id: \"0"),
         "should contain a UUIDv7 id field"
@@ -48,7 +50,7 @@ fn test_goal_create_and_task_create() {
         temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
     assert!(dir
         .path()
-        .join("myapp/goal")
+        .join("@me/myapp/goal")
         .join(format!("{g_slug}.md"))
         .exists());
 
@@ -64,13 +66,13 @@ fn test_goal_create_and_task_create() {
     .unwrap();
     assert!(dir
         .path()
-        .join("myapp/task")
+        .join("@me/myapp/task")
         .join(format!("{task_slug}.md"))
         .exists());
 
     let content = std::fs::read_to_string(
         dir.path()
-            .join("myapp/task")
+            .join("@me/myapp/task")
             .join(format!("{task_slug}.md")),
     )
     .unwrap();
@@ -108,7 +110,8 @@ fn test_task_move_to_in_progress() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(content.contains("stage: in-progress"));
 }
 
@@ -172,7 +175,8 @@ fn test_task_move_to_cancelled() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(content.contains("stage: cancelled"));
 }
 
@@ -214,7 +218,8 @@ fn test_task_move_and_done() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(content.contains("stage: done"));
     assert!(content.contains("feat/test"));
 }
@@ -227,7 +232,10 @@ fn test_goal_creates_in_context_subdir() {
     let g_slug =
         temper_cli::commands::goal::create(&config, "myapp", "v0.2", None, "text").unwrap();
 
-    let expected_path = dir.path().join("myapp/goal").join(format!("{g_slug}.md"));
+    let expected_path = dir
+        .path()
+        .join("@me/myapp/goal")
+        .join(format!("{g_slug}.md"));
     assert!(
         expected_path.exists(),
         "goal should be in context subdir: {}",
@@ -261,7 +269,8 @@ fn test_task_create_with_mode_and_effort() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(
         content.contains("mode: build"),
         "should contain mode: build"
@@ -291,7 +300,8 @@ fn test_task_create_without_mode_effort() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(content.contains("mode: null"), "should contain mode: null");
     assert!(
         content.contains("effort: null"),
@@ -340,7 +350,8 @@ fn test_task_move_with_effort() {
         .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(
         content.contains("effort: large"),
         "effort should be updated to large"
@@ -377,7 +388,8 @@ fn test_task_move_with_stage_and_mode() {
     .unwrap();
 
     let content =
-        std::fs::read_to_string(dir.path().join("myapp/task").join(format!("{slug}.md"))).unwrap();
+        std::fs::read_to_string(dir.path().join("@me/myapp/task").join(format!("{slug}.md")))
+            .unwrap();
     assert!(content.contains("stage: in-progress"));
     assert!(content.contains("mode: build"));
 }

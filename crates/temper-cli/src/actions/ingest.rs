@@ -7,6 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+use temper_core::vault::Vault;
 use uuid::Uuid;
 
 use crate::error::{Result, TemperError};
@@ -396,10 +397,9 @@ pub async fn ingest_url(
 /// The slug is a human-readable identifier derived from the resource title.
 /// Falls back to the UUID string when no slug is available.
 pub fn build_vault_path(vault_root: &Path, context: &str, doc_type: &str, slug: &str) -> PathBuf {
-    vault_root
-        .join(context)
-        .join(doc_type)
-        .join(format!("{slug}.md"))
+    // TODO(owner-scoped): thread owner through when subscriptions sync lands.
+    // Until then the stub matches Config::owner_for_context's @me fallback.
+    Vault::new(vault_root).doc_file("@me", context, doc_type, slug)
 }
 
 /// De-duplicate a vault slug by appending `-2`, `-3`, etc. when the target
@@ -550,49 +550,44 @@ pub fn write_vault_file_and_register(
 /// Infer context and doc_type for a vault file.
 ///
 /// Uses frontmatter overrides if provided, otherwise infers from the file's
-/// position in the vault directory hierarchy: `{vault}/{context}/{doc_type}/{slug}.md`.
+/// position in the owner-scoped vault hierarchy:
+/// `{vault}/{owner}/{context}/{doc_type}/{slug}.md`.
 pub fn infer_context_and_doctype(
     vault_root: &Path,
     file_path: &Path,
     fm_context: Option<&str>,
     fm_doc_type: Option<&str>,
 ) -> Result<(String, String)> {
-    let rel = file_path.strip_prefix(vault_root).map_err(|_| {
-        TemperError::Config(format!(
-            "file {} is not inside vault {}",
-            file_path.display(),
-            vault_root.display()
-        ))
-    })?;
+    let rel = file_path
+        .strip_prefix(vault_root)
+        .map_err(|_| {
+            TemperError::Config(format!(
+                "file {} is not inside vault {}",
+                file_path.display(),
+                vault_root.display()
+            ))
+        })?
+        .to_string_lossy()
+        .to_string();
 
-    let parts: Vec<&str> = rel
-        .components()
-        .filter_map(|c| c.as_os_str().to_str())
-        .collect();
-
-    let dir_context = parts.first().copied();
-    let dir_doc_type = if parts.len() >= 3 {
-        Some(parts[1])
-    } else {
-        None
-    };
+    let dir_parsed = Vault::parse_rel(&rel);
 
     let context = fm_context
-        .or(dir_context)
+        .map(|s| s.to_string())
+        .or_else(|| dir_parsed.as_ref().map(|p| p.context.to_string()))
         .ok_or_else(|| {
             TemperError::Config(format!("cannot infer context for {}", file_path.display()))
-        })?
-        .to_string();
+        })?;
 
     let doc_type = fm_doc_type
-        .or(dir_doc_type)
+        .map(|s| s.to_string())
+        .or_else(|| dir_parsed.as_ref().map(|p| p.doc_type.to_string()))
         .ok_or_else(|| {
             TemperError::Config(format!(
-            "cannot infer doc_type for {} (file must be at {{context}}/{{doc_type}}/{{slug}}.md)",
+            "cannot infer doc_type for {} (file must be at {{owner}}/{{context}}/{{doc_type}}/{{slug}}.md)",
             file_path.display()
         ))
-        })?
-        .to_string();
+        })?;
 
     Ok((context, doc_type))
 }
@@ -689,7 +684,7 @@ mod tests {
     fn build_vault_path_produces_correct_path() {
         let root = Path::new("/vault");
         let path = build_vault_path(root, "work", "note", "my-document");
-        assert_eq!(path, PathBuf::from("/vault/work/note/my-document.md"));
+        assert_eq!(path, PathBuf::from("/vault/@me/work/note/my-document.md"));
     }
 
     #[test]
@@ -698,7 +693,7 @@ mod tests {
         let path = build_vault_path(root, "personal", "resource", "research-paper");
         assert_eq!(
             path,
-            PathBuf::from("/home/user/kb/personal/resource/research-paper.md")
+            PathBuf::from("/home/user/kb/@me/personal/resource/research-paper.md")
         );
     }
 
@@ -865,7 +860,7 @@ created: 2026-03-23
     #[test]
     fn infer_context_doctype_from_path() {
         let vault = Path::new("/vault");
-        let file = Path::new("/vault/temper/research/my-notes.md");
+        let file = Path::new("/vault/@me/temper/research/my-notes.md");
         let (ctx, dt) = infer_context_and_doctype(vault, file, None, None).unwrap();
         assert_eq!(ctx, "temper");
         assert_eq!(dt, "research");
@@ -874,7 +869,7 @@ created: 2026-03-23
     #[test]
     fn infer_context_doctype_frontmatter_override() {
         let vault = Path::new("/vault");
-        let file = Path::new("/vault/temper/research/my-notes.md");
+        let file = Path::new("/vault/@me/temper/research/my-notes.md");
         let (ctx, dt) =
             infer_context_and_doctype(vault, file, Some("custom-context"), Some("session"))
                 .unwrap();

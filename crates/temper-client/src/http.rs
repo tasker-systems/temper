@@ -6,6 +6,7 @@ use reqwest::{
     Client, RequestBuilder, Response, StatusCode,
 };
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use serde_json::Value;
 
 use tracing::Instrument;
@@ -191,7 +192,20 @@ impl HttpClient {
 pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
     match status.as_u16() {
         401 => ClientError::NotAuthenticated,
-        403 => ClientError::Forbidden,
+        403 => {
+            if let Some(details) = parse_system_access_details(body) {
+                ClientError::SystemAccessRequired {
+                    email: details.email,
+                    display_name: details.display_name,
+                    access_mode: details.access_mode.unwrap_or_else(|| "unknown".to_string()),
+                    join_request_status: details.join_request_status,
+                    request_url: details.request_url,
+                    cli_command: details.cli_command,
+                }
+            } else {
+                ClientError::Forbidden
+            }
+        }
         404 => {
             let resource =
                 parse_error_field(body, "resource").unwrap_or_else(|| "unknown".to_owned());
@@ -224,6 +238,28 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
             ClientError::Server { status: s, message }
         }
     }
+}
+
+/// Details from a `SystemAccessRequired` 403 response.
+#[derive(Deserialize)]
+struct SystemAccessErrorDetails {
+    email: Option<String>,
+    display_name: Option<String>,
+    access_mode: Option<String>,
+    join_request_status: Option<String>,
+    request_url: Option<String>,
+    cli_command: Option<String>,
+}
+
+/// Try to parse `SystemAccessRequired` details from a 403 response body.
+fn parse_system_access_details(body: &str) -> Option<SystemAccessErrorDetails> {
+    let v: Value = serde_json::from_str(body).ok()?;
+    let code = v.get("error")?.get("code")?.as_str()?;
+    if code != "SYSTEM_ACCESS_REQUIRED" {
+        return None;
+    }
+    let details = v.get("error")?.get("details")?;
+    serde_json::from_value(details.clone()).ok()
 }
 
 /// Try to extract `{ "error": { "message": "..." } }` from an API error body.
@@ -360,6 +396,28 @@ mod tests {
         let result = client.resolve_token();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), token);
+    }
+
+    #[test]
+    fn test_403_system_access_required_parses_details() {
+        let body = r#"{"error":{"code":"SYSTEM_ACCESS_REQUIRED","message":"This system requires approved access.","details":{"email":"pete@example.com","display_name":"Pete Taylor","access_mode":"invite_only","join_request_status":"pending","request_url":"https://temperkb.io/request-access","cli_command":"temper team join --message \"...\""}}}"#;
+        let err = map_status_to_error(status(403), body);
+        match err {
+            ClientError::SystemAccessRequired {
+                email, access_mode, ..
+            } => {
+                assert_eq!(email.as_deref(), Some("pete@example.com"));
+                assert_eq!(access_mode, "invite_only");
+            }
+            other => panic!("expected SystemAccessRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_403_generic_falls_back_to_forbidden() {
+        let body = r#"{"error":{"code":"FORBIDDEN","message":"Forbidden"}}"#;
+        let err = map_status_to_error(status(403), body);
+        assert!(matches!(err, ClientError::Forbidden));
     }
 
     #[test]

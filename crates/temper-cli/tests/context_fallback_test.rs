@@ -6,6 +6,7 @@ fn test_config(vault_path: PathBuf) -> temper_cli::config::Config {
         vault_root: vault_path.clone(),
         state_dir: vault_path.join(".temper"),
         contexts: vec![],
+        subscriptions: Vec::new(),
         skill_output: PathBuf::from("/tmp/skill"),
     }
 }
@@ -26,7 +27,8 @@ fn test_resolve_context_with_fallback_uses_default_for_missing() {
 fn test_resolve_context_with_fallback_keeps_existing() {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("vault");
-    std::fs::create_dir_all(vault_path.join("myctx")).unwrap();
+    // Owner-scoped layout: <vault>/@me/<context>/
+    std::fs::create_dir_all(vault_path.join("@me").join("myctx")).unwrap();
 
     let config = test_config(vault_path);
 

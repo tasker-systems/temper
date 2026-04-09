@@ -20,6 +20,7 @@ use uuid::Uuid;
 pub struct Profile {
     pub id: Uuid,
     pub display_name: String,
+    pub slug: String,
     pub email: Option<String>,
     pub avatar_url: Option<String>,
     pub preferences: serde_json::Value,

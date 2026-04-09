@@ -13,6 +13,7 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["temper".to_string()],
+        subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
     }
 }
@@ -24,7 +25,7 @@ fn doctor_fix_pipeline_end_to_end() {
     let vault = dir.path();
 
     // Create a task with missing temper-* fields and non-slug filename (em-dash + spaces + punctuation)
-    let task_dir = vault.join("temper").join("task");
+    let task_dir = vault.join("@me").join("temper").join("task");
     fs::create_dir_all(&task_dir).unwrap();
     fs::write(
         task_dir.join("2026-04-05 \u{2014} My Feature!.md"),
@@ -33,7 +34,7 @@ fn doctor_fix_pipeline_end_to_end() {
     .unwrap();
 
     // Create a session with em-dash filename and missing fields
-    let session_dir = vault.join("temper").join("session");
+    let session_dir = vault.join("@me").join("temper").join("session");
     fs::create_dir_all(&session_dir).unwrap();
     fs::write(
         session_dir.join("2026-04-05 \u{2014} my-session.md"),
@@ -90,15 +91,24 @@ fn doctor_fix_pipeline_end_to_end() {
         "should have temper-stage; got:\n{task_content}"
     );
 
-    // Re-run doctor scan — all auto-fixable issues should be resolved
+    // Re-run doctor scan — all auto-fixable issues should be resolved after fix.
+    // Task 17 added SetOwnerField so temper-owner is now backfilled on provisional files.
     let scan = temper_cli::actions::doctor::scan(&config, None).unwrap();
+    let remaining_fixable: Vec<_> = scan
+        .file_results
+        .iter()
+        .flat_map(|r| r.issues.iter())
+        .filter(|i| i.auto_fixable)
+        .collect();
     assert_eq!(
-        scan.auto_fixable,
+        remaining_fixable.len(),
         0,
         "all auto-fixable issues should be resolved after fix; remaining: {:?}",
-        scan.file_results
-            .iter()
-            .flat_map(|r| r.issues.iter().filter(|i| i.auto_fixable))
-            .collect::<Vec<_>>()
+        remaining_fixable
+    );
+    // Also verify owner_backfilled was reported in the fix report
+    assert!(
+        report.owner_backfilled > 0,
+        "expected at least one owner backfill"
     );
 }

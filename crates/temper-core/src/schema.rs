@@ -62,6 +62,7 @@ static KNOWN_TEMPER_FIELDS: &[&str] = &[
     "temper-context",
     "temper-created",
     "temper-updated",
+    "temper-owner",
     "temper-source",
     // task
     "temper-stage",
@@ -272,6 +273,8 @@ pub static SYSTEM_MANAGED_FIELDS: &[&str] = &[
     "temper-id",
     "temper-provisional-id",
     "temper-type",
+    "temper-context",
+    "temper-owner",
     "temper-created",
     "temper-updated",
     "temper-source",

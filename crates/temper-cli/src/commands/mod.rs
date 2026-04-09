@@ -17,17 +17,46 @@ pub mod skill;
 pub mod status;
 pub mod sync_cmd;
 pub mod task;
+pub mod team;
 pub mod warmup;
 
 use std::borrow::Cow;
 
+/// Convert a ClientError to a TemperError, preserving SystemAccessRequired details.
+pub fn client_err(e: temper_client::error::ClientError) -> crate::error::TemperError {
+    match e {
+        temper_client::error::ClientError::SystemAccessRequired {
+            email,
+            display_name,
+            access_mode,
+            join_request_status,
+            request_url,
+            cli_command,
+        } => crate::error::TemperError::SystemAccessRequired(Box::new(
+            temper_core::error::CliAccessDetails {
+                email,
+                display_name,
+                access_mode,
+                join_request_status,
+                request_url,
+                cli_command,
+            },
+        )),
+        other => crate::error::TemperError::Api(other.to_string()),
+    }
+}
+
 /// Resolve a context name, falling back to "default" with a warning if the
 /// context directory doesn't exist in the vault.
+///
+/// Checks for the context under its owner-scoped path
+/// (`<vault_root>/<owner>/<context>/`), not the legacy flat layout.
 pub fn resolve_context_with_fallback<'a>(
     config: &crate::config::Config,
     context: &'a str,
 ) -> Cow<'a, str> {
-    let ctx_dir = config.vault_root.join(context);
+    let owner = config.owner_for_context(context);
+    let ctx_dir = config.vault_root.join(&owner).join(context);
     if ctx_dir.exists() {
         Cow::Borrowed(context)
     } else {
