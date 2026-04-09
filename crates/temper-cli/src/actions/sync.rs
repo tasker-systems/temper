@@ -1042,6 +1042,23 @@ pub fn backup_manifest(temper_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Extract the owner sigil (`@slug` or `+slug`) from a server manifest item's
+/// canonical `kb://` URI.
+///
+/// The server's `fetch_manifest` emits owner-scoped URIs via the
+/// `kb_resource_uri()` SQL function, so `Vault::parse_uri` reliably yields the
+/// authoritative owner — including for team contexts (`+slug`) where silently
+/// defaulting to `@me` would mis-route the resource into the personal vault
+/// directory and break ownership invariants downstream.
+///
+/// Returns `None` if the URI is malformed, rather than guessing. Callers are
+/// expected to skip the offending server item with a `tracing::warn!`, which
+/// matches the existing pattern for malformed local manifest paths in
+/// `build_status_request` (line ~175).
+fn owner_for_server_item(item: &temper_core::types::SyncManifestItem) -> Option<String> {
+    Vault::parse_uri(&item.uri).map(|parsed| parsed.owner.to_string())
+}
+
 /// Refresh: fetch server manifest and interleave into local manifest.
 ///
 /// - De-duplicate by resource UUID (server wins for matching IDs)
@@ -1118,11 +1135,29 @@ pub async fn sync_refresh(
                 matched += 1;
                 matched_server_ids.insert(item.resource_id);
             } else {
-                // Genuinely new from server — add as Pending (to pull on next sync)
+                // Genuinely new from server — add as Pending (to pull on next sync).
+                // Path must be the owner-scoped 4-segment form that Vault::parse_rel
+                // accepts. The owner segment is derived from the server-supplied
+                // canonical `kb://@<owner>/<ctx>/<type>/<ident>` URI, which
+                // kb_resource_uri() on the server now guarantees. A None return
+                // means the server sent a URI we can't parse — skip the entry
+                // rather than guess the owner and mis-route a team resource.
+                let Some(owner) = owner_for_server_item(item) else {
+                    tracing::warn!(
+                        "sync_refresh: skipping server item with unparseable URI {:?} \
+                         (resource_id: {})",
+                        item.uri,
+                        item.resource_id
+                    );
+                    continue;
+                };
                 manifest.entries.insert(
                     item.resource_id,
                     temper_core::types::ManifestEntry {
-                        path: format!("{}/{}/{}.md", item.context, item.doc_type, item.slug),
+                        path: format!(
+                            "{}/{}/{}/{}.md",
+                            owner, item.context, item.doc_type, item.slug
+                        ),
                         body_hash: String::new(),
                         remote_body_hash: item.content_hash.clone(),
                         managed_hash: String::new(),
@@ -1402,10 +1437,22 @@ pub async fn sync_reset(
 
     for item in &server.items {
         if !matched_server_ids.contains(&item.resource_id) {
+            let Some(owner) = owner_for_server_item(item) else {
+                tracing::warn!(
+                    "sync_reset: skipping server item with unparseable URI {:?} \
+                     (resource_id: {})",
+                    item.uri,
+                    item.resource_id
+                );
+                continue;
+            };
             new_manifest.entries.insert(
                 item.resource_id,
                 temper_core::types::ManifestEntry {
-                    path: format!("{}/{}/{}.md", item.context, item.doc_type, item.slug),
+                    path: format!(
+                        "{}/{}/{}/{}.md",
+                        owner, item.context, item.doc_type, item.slug
+                    ),
                     body_hash: String::new(),
                     remote_body_hash: item.content_hash.clone(),
                     managed_hash: String::new(),

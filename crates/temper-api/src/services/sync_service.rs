@@ -205,11 +205,20 @@ struct ManifestRow {
     body_hash: String,
     managed_hash: String,
     open_hash: String,
+    uri: String,
     last_audit_id: Option<Uuid>,
 }
 
 /// Fetch all active resources for a profile — metadata only, no content.
 /// Used by `GET /api/sync/manifest` for manifest recovery (refresh/reset).
+///
+/// URIs are built by the `kb_resource_uri()` SQL function (see
+/// `migrations/20260407000002_owner_scoped_uris.sql`) so there is a single
+/// source of truth for URI formatting on the server. Inline Rust-side
+/// formatting used to produce legacy no-sigil `kb://<ctx>/<type>/<uuid>`
+/// URIs that the drop-legacy migration (`20260408000001`) now rejects via
+/// `resource_for_uri()`; delegating to `kb_resource_uri()` keeps the emitted
+/// URIs consistent with what the server itself will accept.
 pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncManifestResponse> {
     let rows = sqlx::query_as!(
         ManifestRow,
@@ -221,6 +230,7 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
                COALESCE(m.body_hash, '') AS "body_hash!",
                COALESCE(m.managed_hash, '') AS "managed_hash!",
                COALESCE(m.open_hash, '') AS "open_hash!",
+               kb_resource_uri(r.id) AS "uri!",
                la.id AS "last_audit_id?"
           FROM kb_resources r
           JOIN kb_contexts c ON c.id = r.kb_context_id
@@ -244,22 +254,16 @@ pub async fn fetch_manifest(pool: &PgPool, profile_id: Uuid) -> ApiResult<SyncMa
 
     let items = rows
         .into_iter()
-        .map(|row| {
-            let uri = format!(
-                "kb://{}/{}/{}",
-                row.context_name, row.doc_type_name, row.resource_id
-            );
-            SyncManifestItem {
-                resource_id: ResourceId::from(row.resource_id),
-                context: row.context_name,
-                doc_type: row.doc_type_name,
-                slug: row.slug,
-                content_hash: row.body_hash,
-                managed_hash: row.managed_hash,
-                open_hash: row.open_hash,
-                uri,
-                last_audit_id: row.last_audit_id.map(ResourceAuditId::from),
-            }
+        .map(|row| SyncManifestItem {
+            resource_id: ResourceId::from(row.resource_id),
+            context: row.context_name,
+            doc_type: row.doc_type_name,
+            slug: row.slug,
+            content_hash: row.body_hash,
+            managed_hash: row.managed_hash,
+            open_hash: row.open_hash,
+            uri: row.uri,
+            last_audit_id: row.last_audit_id.map(ResourceAuditId::from),
         })
         .collect();
 
