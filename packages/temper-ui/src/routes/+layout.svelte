@@ -1,29 +1,28 @@
-<script>
-  import '../app.css';
-  import Nav from '$lib/components/landing/Nav.svelte';
+<script lang="ts">
+	import type { Snippet } from 'svelte';
+	import '../app.css';
 
-  let { children } = $props();
+	let { children }: { children: Snippet } = $props();
 </script>
 
-<svelte:head>
-  <title>temper — clarify your intention</title>
-  <meta name="description" content="A knowledge base for builders. Know what was decided, what's deferred, and what comes next. Every session builds on the last. Temper your context." />
-</svelte:head>
-
-<div class="app">
-  <Nav />
-  <main>
-    {@render children()}
-  </main>
+<div class="app-shell">
+	{@render children()}
 </div>
 
 <style>
-  .app {
-    min-height: 100vh;
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--serif);
-    line-height: 1.7;
-    -webkit-font-smoothing: antialiased;
-  }
+	/* Global app shell — dark "Quiet Instrument" base inherited by every
+	   route group. The (public) marketing pages keep this look directly;
+	   the authed (app) pages render lighter cards on top of it. */
+	.app-shell {
+		min-height: 100vh;
+		background: var(--bg);
+		color: var(--text);
+		font-family: var(--serif);
+		line-height: 1.7;
+		-webkit-font-smoothing: antialiased;
+	}
+
+	:global(body) {
+		background: var(--bg);
+	}
 </style>
