@@ -201,17 +201,20 @@ async fn resource_for_uri_resolves_new_format(pool: PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// 5. resource_for_uri resolves legacy format (no sigil, UUID identifier)
+// 5. resource_for_uri rejects legacy no-sigil URIs (post drop-legacy migration)
 // ---------------------------------------------------------------------------
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn resource_for_uri_resolves_legacy_format(pool: PgPool) {
-    let profile_id = create_test_profile(&pool, "Eve Test", "eve-test").await;
+async fn resource_for_uri_rejects_legacy_no_sigil_uri(pool: PgPool) {
+    let profile_id = create_test_profile(&pool, "Grace Test", "grace-test").await;
     let ctx_id = create_test_context(&pool, "my-vault", "kb_profiles", profile_id).await;
     let resource_id =
-        create_test_resource(&pool, ctx_id, "research", Some("legacy-note"), profile_id).await;
+        create_test_resource(&pool, ctx_id, "research", Some("rejected-note"), profile_id).await;
 
-    // Legacy format: kb://context/type/uuid (no owner sigil)
+    // Legacy format: kb://context/type/uuid (no owner sigil).
+    // Before the drop-legacy migration this resolved via the ELSE branch.
+    // After the migration it must return an empty result — clients are expected
+    // to upgrade to owner-scoped URIs.
     let uri = format!("kb://my-vault/research/{resource_id}");
 
     let resolved: Option<Uuid> =
@@ -223,9 +226,8 @@ async fn resource_for_uri_resolves_legacy_format(pool: PgPool) {
             .expect("resource_for_uri query");
 
     assert_eq!(
-        resolved,
-        Some(resource_id),
-        "resource_for_uri should resolve legacy-format URI to the correct resource"
+        resolved, None,
+        "legacy no-sigil URIs must return empty after drop-legacy migration"
     );
 }
 
