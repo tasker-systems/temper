@@ -172,6 +172,78 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
 }
 
 // ---------------------------------------------------------------------------
+// MCP create_resource via ingest() persists content retrievably
+// ---------------------------------------------------------------------------
+
+/// Creating a resource via `ingest()` (the path MCP now uses) with content
+/// should produce searchable chunks, not silently drop the body.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let profile_id = resolve_test_profile(&pool).await;
+
+    context_service::create(&pool, profile_id, "content-round-trip")
+        .await
+        .expect("context create");
+
+    let content = "# Session Note\n\nThis session covered the MCP content pipeline fix.";
+
+    // Build a payload the same way MCP create_resource now does
+    let payload = temper_core::types::ingest::IngestPayload {
+        title: "Content Round-Trip Test".to_string(),
+        origin_uri: "mcp://test/content-round-trip".to_string(),
+        context_name: "content-round-trip".to_string(),
+        doc_type_name: "session".to_string(),
+        content_hash: None,
+        slug: "content-round-trip-test".to_string(),
+        content: content.to_string(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
+        open_meta: None,
+        chunks_packed: None, // server-side pipeline should generate
+    };
+
+    let resource = ingest_service::ingest(&pool, profile_id, "mcp", payload)
+        .await
+        .expect("ingest should succeed");
+
+    // Verify chunks were created
+    let chunk_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND is_current = true",
+    )
+    .bind(*resource.id)
+    .fetch_one(&pool)
+    .await
+    .expect("chunk count");
+
+    assert!(
+        chunk_count > 0,
+        "ingest() with content should create chunks, got {chunk_count}"
+    );
+
+    // Verify content is retrievable
+    let retrieved =
+        temper_api::services::resource_service::get_content(&pool, *profile_id, *resource.id)
+            .await
+            .expect("get_content");
+
+    assert!(
+        !retrieved.is_empty(),
+        "get_content should return non-empty string"
+    );
+    assert!(
+        retrieved.contains("MCP content pipeline fix"),
+        "retrieved content should contain original text, got: {retrieved}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 30: describe_doc_type returns usable example
 // ---------------------------------------------------------------------------
 
