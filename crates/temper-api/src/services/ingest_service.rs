@@ -540,12 +540,19 @@ pub async fn update_resource_manifest(
 }
 
 /// Update an existing resource's content — re-chunk and re-embed.
+#[cfg_attr(
+    not(feature = "ingest-pipeline"),
+    allow(
+        unused_mut,
+        reason = "mut needed when ingest-pipeline feature is enabled"
+    )
+)]
 pub async fn update(
     pool: &PgPool,
     profile_id: ProfileId,
     resource_id: ResourceId,
     device_id: &str,
-    payload: IngestPayload,
+    mut payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // Verify the profile can modify this resource
     let can_modify = sqlx::query_scalar!(
@@ -558,6 +565,33 @@ pub async fn update(
 
     if can_modify.is_none() {
         return Err(ApiError::NotFound);
+    }
+
+    // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
+    #[cfg(feature = "ingest-pipeline")]
+    if payload.chunks_packed.is_none() {
+        let hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(payload.content.as_bytes());
+            hasher.finalize()
+        };
+        payload.content_hash = Some(format!("sha256:{:x}", hash));
+        let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
+            .map_err(|e| IngestError::Embed(e.to_string()))
+            .map_err(ApiError::from)?;
+        payload.chunks_packed = Some(
+            temper_core::types::ingest::pack_chunks(&packed_chunks)
+                .map_err(|e| IngestError::Pack(e.to_string()))
+                .map_err(ApiError::from)?,
+        );
+    }
+
+    // If ingest-pipeline feature is not enabled and chunks are missing, caller must provide them
+    #[cfg(not(feature = "ingest-pipeline"))]
+    if payload.chunks_packed.is_none() && !payload.content.is_empty() {
+        return Err(ApiError::BadRequest(
+            "chunks_packed required when server-side pipeline is not available".to_owned(),
+        ));
     }
 
     let chunks = if let Some(ref packed) = payload.chunks_packed {

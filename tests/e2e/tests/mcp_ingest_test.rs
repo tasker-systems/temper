@@ -288,6 +288,138 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
     assert_eq!(event_count, 1);
 }
 
+/// Helper: build a fake `PackedChunk` with a zero-vector embedding.
+fn fake_chunk(index: u32, header: &str, content: &str) -> temper_core::types::ingest::PackedChunk {
+    // Use a non-zero embedding: a unit vector with 1/sqrt(768) in each dimension
+    let val = 1.0_f32 / (768.0_f32).sqrt();
+    // content_hash column is VARCHAR(64), so use a short hash (hex only, no prefix)
+    let hash = &sha2_hex(content)[..16];
+    temper_core::types::ingest::PackedChunk {
+        chunk_index: index,
+        header_path: header.to_string(),
+        content: content.to_string(),
+        content_hash: hash.to_string(),
+        embedding: vec![val; 768],
+    }
+}
+
+/// Update replaces chunks atomically: update with new pre-packed chunks replaces old ones.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let profile_id = ProfileId::from(
+        sqlx::query_scalar!(
+            "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile lookup"),
+    );
+
+    context_service::create(&pool, profile_id, "chunk-update-test")
+        .await
+        .expect("context create");
+
+    let context = context_service::resolve_by_name(&pool, profile_id, "chunk-update-test")
+        .await
+        .expect("context resolve");
+    let doc_type_id = ingest_service::resolve_doc_type(&pool, "research")
+        .await
+        .expect("doc_type");
+
+    // 1. Create a resource with 1 pre-packed chunk
+    let original_content = "Original content for chunk update testing.";
+    let original_chunks = vec![fake_chunk(0, "Original Doc", original_content)];
+    let original_packed =
+        temper_core::types::ingest::pack_chunks(&original_chunks).expect("pack original chunks");
+    let original_hash = format!("sha256:{}", sha2_hex(original_content));
+    let empty = serde_json::json!({});
+
+    let resource = ingest_service::create_resource_with_manifest(
+        &pool,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "e2e-test-device",
+            context_id: context.id,
+            doc_type_id,
+            title: "Chunk Update Test",
+            slug: Some("chunk-update-test"),
+            origin_uri: "mcp://test/chunk-update",
+            content_hash: &original_hash,
+            managed_meta: &empty,
+            open_meta: &empty,
+            chunks_packed: Some(&original_packed),
+        },
+    )
+    .await
+    .expect("create resource with chunks");
+
+    // Verify initial chunks exist (1 current chunk)
+    let initial_chunk_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND is_current = true",
+    )
+    .bind(*resource.id)
+    .fetch_one(&pool)
+    .await
+    .expect("initial chunk count");
+    assert_eq!(initial_chunk_count, 1, "expected 1 initial chunk");
+
+    // 2. Update the resource via update() with 3 different pre-packed chunks
+    let updated_content = "New section B.\nSection C content.\nExtra trailing chunk.";
+    let updated_chunks = vec![
+        fake_chunk(0, "Updated Doc", "New section B."),
+        fake_chunk(1, "Updated Doc > Section C", "Section C content."),
+        fake_chunk(2, "Updated Doc", "Extra trailing chunk."),
+    ];
+    let updated_packed =
+        temper_core::types::ingest::pack_chunks(&updated_chunks).expect("pack updated chunks");
+
+    let update_payload = temper_core::types::ingest::IngestPayload {
+        title: "Chunk Update Test".to_string(),
+        origin_uri: "mcp://test/chunk-update".to_string(),
+        context_name: "chunk-update-test".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(format!("sha256:{}", sha2_hex(updated_content))),
+        slug: "chunk-update-test".to_string(),
+        content: updated_content.to_string(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(updated_packed),
+    };
+
+    let updated_resource = ingest_service::update(
+        &pool,
+        profile_id,
+        resource.id,
+        "e2e-test-device",
+        update_payload,
+    )
+    .await
+    .expect("ingest update");
+
+    assert_eq!(updated_resource.id, resource.id);
+
+    // 3. Verify chunks were atomically replaced: old 1 chunk retired, new 3 current chunks
+    let current_chunk_count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_chunks WHERE resource_id = $1 AND is_current = true",
+    )
+    .bind(*resource.id)
+    .fetch_one(&pool)
+    .await
+    .expect("current chunk count");
+    assert_eq!(
+        current_chunk_count, 3,
+        "expected 3 current chunks after update, got {current_chunk_count}"
+    );
+}
+
 /// Context auto-creation: resolve_by_name fails for unknown, create succeeds, then resolve finds it.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn context_auto_creation_for_ingest(pool: sqlx::PgPool) {
