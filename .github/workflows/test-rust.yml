@@ -138,4 +138,4 @@ jobs:
           cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1
 
       - name: Run MCP round-trip e2e tests
-        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 -E 'binary(mcp_round_trip)'
+        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 -E 'binary(mcp_round_trip_test)'
