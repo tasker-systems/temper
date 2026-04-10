@@ -1,10 +1,10 @@
 # ONNX Runtime Linking Strategy for temper-ingest
 
-## Decision: Static linking via vendored `libonnxruntime.a`
+## Decision: load-dynamic with bundled `libonnxruntime.so`
 
-Static linking produces a single self-contained binary with no runtime
-asset-loading overhead. This is the preferred mode for Vercel serverless
-functions.
+The static linking approach (`libonnxruntime.a`) was built against glibc 2.38+ but
+Vercel runs Amazon Linux 2 (glibc ~2.26), causing a glibc version mismatch at deploy
+time. The fallback strategy documented below is now the active approach.
 
 ## How It Works
 
@@ -17,90 +17,66 @@ three modes:
 |------|-------------|-----------|
 | **Prebuilt download** | `download-binaries` (default) | Downloads static `libonnxruntime.a` from pyke CDN at build time |
 | **User-supplied static** | (none) | `ORT_LIB_PATH` env var points at a directory containing `libonnxruntime.a` |
-| **Runtime dynamic** | `load-dynamic` | No compile-time linking; loads `libonnxruntime.so` at runtime via `ORT_DYLIB_PATH` |
+| **Runtime dynamic** | `load-dynamic` | No compile-time linking; loads `libonnxruntime.so` at runtime via `ort::init_from` |
 
 ### Chosen configuration
 
 ```toml
 # crates/temper-ingest/Cargo.toml
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["std", "ndarray", "tracing"], optional = true }
+ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "ndarray", "tracing", "api-18"], optional = true }
 ```
 
-Key: `default-features = false` disables `download-binaries` and `copy-dylibs`
-(both are only useful when the build has outbound network or needs dynamic
-libs). The `std`, `ndarray`, and `tracing` features are retained for runtime
-functionality.
+Key notes:
+- `load-dynamic` disables compile-time linking entirely and enables `ort::init_from`.
+- `api-18` is required alongside `load-dynamic` because the VitisAI execution provider
+  code is compiled in under `#[cfg(feature = "load-dynamic")]` and accesses
+  `SessionOptionsAppendExecutionProvider_VitisAI`, which is gated on `api-18` in
+  ort-sys. Without `api-18`, the crate fails to compile (ort v2.0.0-rc.12 bug).
+- `default-features = false` prevents `download-binaries` and `copy-dylibs`.
+
+### Runtime initialization
+
+At cold start, `embed.rs` writes the bundled `libonnxruntime.so` to `/tmp` and
+calls `ort::init_from` before any session is created:
+
+```rust
+static ORT_LIB_BYTES: &[u8] =
+    include_bytes!("../lib/x86_64-unknown-linux-gnu/libonnxruntime.so");
+
+fn init_ort_runtime() -> std::result::Result<(), String> {
+    // write .so to /tmp on first call, then init_from
+}
+```
+
+`ort::init_from(path)` returns `Result<EnvironmentBuilder>` and `.commit()` returns
+`bool` (true = committed, false = already set by a prior call). Both outcomes are fine.
+
+### Vendored library
+
+- Source: ONNX Runtime v1.24.2 official GitHub release
+  (`onnxruntime-linux-x64-1.24.2.tgz`, `lib/libonnxruntime.so.1.24.2`)
+- Location: `crates/temper-ingest/lib/x86_64-unknown-linux-gnu/libonnxruntime.so`
+- Size: ~21 MB (tracked via Git LFS)
+- glibc requirement: glibc 2.17+ (compatible with Amazon Linux 2 / glibc 2.26)
+
+The version 1.24.2 matches the pyke CDN artifacts (`ms@1.24.2`) that ort-sys
+v2.0.0-rc.12 uses for its `download-binaries` feature.
 
 ### Build-time requirements
 
-Set `ORT_LIB_PATH` to a directory containing the platform-appropriate static
-library:
-
-```bash
-# Local (macOS arm64)
-ORT_LIB_PATH=/path/to/ort-libs cargo build -p temper-ingest --features embed
-
-# Vercel build (Linux x86_64)
-ORT_LIB_PATH=./crates/temper-ingest/lib/x86_64-unknown-linux-gnu cargo build ...
-```
-
-The static lib source is pyke's prebuilt CDN artifacts (same ones
-`download-binaries` would fetch). They are ~74 MB per architecture. For
-Vercel, the Linux x86_64 variant should be vendored via Git LFS.
+No special environment variables needed. The `.so` is bundled via `include_bytes!`
+and written to `/tmp` at runtime.
 
 ### Environment variables
 
-| Variable | Purpose | When needed |
-|----------|---------|-------------|
-| `ORT_LIB_PATH` | Directory containing `libonnxruntime.a` | Always (build time) |
-| `ORT_SKIP_DOWNLOAD` | Prevents ort-sys from attempting CDN download | Optional safeguard |
-| `ORT_LIB_LOCATION` | Alias for `ORT_LIB_PATH` | Alternative |
+No `ORT_LIB_PATH` is needed (removed from `vercel.json`). The binary is self-contained
+modulo the `/tmp` write on cold start.
 
-### Verified build output
+### Cold start cost
 
-From the spike branch (commit `c6680ca`):
-
-```
-cargo:rustc-link-search=native=/tmp/ort-spike/lib
-cargo:rustc-link-lib=static=onnxruntime
-```
-
-`otool -L` on the release binary shows no `libonnxruntime` dynamic reference.
-Binary size: ~32 MB (temper-cli with embed feature, release profile).
-
-## Task 4 Workflow
-
-When implementing the `include_bytes!` model loading (Task 4), follow this
-sequence:
-
-1. Download the `x86_64-unknown-linux-gnu` static lib from pyke's CDN (or
-   extract from a local Linux build of ort). Place it under
-   `crates/temper-ingest/lib/x86_64-unknown-linux-gnu/libonnxruntime.a`.
-2. Track it with Git LFS (`.gitattributes` rule).
-3. Set `ORT_LIB_PATH` in `vercel.json` build env to point at the vendored
-   lib directory.
-4. The `build.rs` already declares `rerun-if-env-changed` for the relevant
-   variables.
-5. Verify with a Vercel preview deploy (Task 14/20).
-
-## Contingency: load-dynamic
-
-If static linking fails on Vercel (e.g., missing system libraries for the
-static link, or binary exceeds Vercel's 250 MB function size limit), the
-fallback is:
-
-```toml
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "ndarray", "tracing"], optional = true }
-```
-
-With `load-dynamic`, the binary compiles without any ONNX Runtime library.
-At runtime, `include_bytes!` the `libonnxruntime.so` into the binary, write
-it to `/tmp/libonnxruntime.so` on cold start, then call
-`ort::init_from("/tmp/libonnxruntime.so")` before any session creation.
-
-This adds cold-start latency (~50-100ms for the file write) but avoids all
-compile-time linking complexity. The `load-dynamic` feature was verified to
-compile in the spike.
+~50-100ms for the first `std::fs::write` of the 21 MB `.so` to `/tmp`. Subsequent
+invocations skip the write (`Path::exists()` check). The `OnceLock` ensures
+`init_ort_runtime()` is called at most once per process.
 
 ## Spike Branch
 
@@ -108,4 +84,5 @@ Branch: `jct/ort-static-linking-spike`
 Commit: `c6680ca`
 Remote: `origin/jct/ort-static-linking-spike`
 
-Do not merge this branch. It exists as a reference artifact.
+Do not merge this branch. It exists as a reference artifact for the static linking
+approach that was superseded.

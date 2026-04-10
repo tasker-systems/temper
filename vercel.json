@@ -4,8 +4,7 @@
   "installCommand": "cd packages/temper-cloud && bun install",
   "build": {
     "env": {
-      "SQLX_OFFLINE": "true",
-      "ORT_LIB_PATH": "/vercel/path0/crates/temper-ingest/lib/x86_64-unknown-linux-gnu"
+      "SQLX_OFFLINE": "true"
     }
   },
   "routes": [
