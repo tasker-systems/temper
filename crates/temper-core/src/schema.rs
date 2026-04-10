@@ -383,6 +383,86 @@ pub fn validate_field_value(
 }
 
 // ---------------------------------------------------------------------------
+// Schema introspection helpers
+// ---------------------------------------------------------------------------
+
+/// Known doc type names (the set of schemas we embed).
+pub static DOC_TYPE_NAMES: &[&str] =
+    &["concept", "decision", "goal", "research", "session", "task"];
+
+/// Return the raw JSON schema for a named doc type.
+///
+/// Unlike `load_schema` (which compiles a validator), this returns the
+/// `serde_json::Value` for introspection — extracting required fields,
+/// enum values, property descriptions, etc.
+pub fn schema_value(doc_type: &str) -> Result<serde_json::Value> {
+    let raw = match doc_type {
+        "task" => TASK_SCHEMA,
+        "goal" => GOAL_SCHEMA,
+        "session" => SESSION_SCHEMA,
+        "research" => RESEARCH_SCHEMA,
+        "decision" => DECISION_SCHEMA,
+        "concept" => CONCEPT_SCHEMA,
+        other => {
+            return Err(TemperError::Config(format!(
+                "unknown doctype '{other}'; expected one of: task, goal, session, research, decision, concept"
+            )))
+        }
+    };
+
+    serde_json::from_str(raw)
+        .map_err(|e| TemperError::Config(format!("{doc_type} schema JSON parse error: {e}")))
+}
+
+/// Return the `required` array from a doc type schema as `Vec<String>`.
+///
+/// This only returns the doc-type-level required fields (not the base
+/// schema's required fields, which are merged via `allOf` at validation
+/// time).
+pub fn required_fields(doc_type: &str) -> Result<Vec<String>> {
+    let schema = schema_value(doc_type)?;
+    Ok(extract_required_fields(&schema))
+}
+
+/// Extract enum values from schema properties as a `BTreeMap<field_name, Vec<values>>`.
+///
+/// Only includes properties that have an `enum` constraint with string values.
+pub fn enum_fields(doc_type: &str) -> Result<BTreeMap<String, Vec<String>>> {
+    let schema = schema_value(doc_type)?;
+    Ok(extract_enum_fields(&schema))
+}
+
+fn extract_required_fields(schema: &serde_json::Value) -> Vec<String> {
+    schema
+        .get("required")
+        .and_then(|r| r.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extract_enum_fields(schema: &serde_json::Value) -> BTreeMap<String, Vec<String>> {
+    let mut result = BTreeMap::new();
+    if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+        for (key, prop) in props {
+            if let Some(enum_values) = prop.get("enum").and_then(|e| e.as_array()) {
+                let values: Vec<String> = enum_values
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                if !values.is_empty() {
+                    result.insert(key.clone(), values);
+                }
+            }
+        }
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
 
