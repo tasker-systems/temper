@@ -44,10 +44,8 @@ pub fn prepare_markdown(content: &str) -> Result<Vec<PackedChunk>> {
 mod tests {
     use super::*;
 
-    // NOTE: These tests require the embed feature and ORT to be available.
-    // They run on CI/Vercel, not locally on macOS without the static lib.
-
     #[test]
+    #[cfg(feature = "test-embed")]
     fn prepare_markdown_produces_packed_chunks() {
         let content = "# Title\n\nThis is a paragraph.\n\n## Section\n\nMore text here.";
         let result = prepare_markdown(content);
@@ -69,6 +67,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "test-embed")]
     fn prepare_markdown_preserves_chunk_order() {
         let content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
         let chunks = prepare_markdown(content).expect("should succeed");

@@ -133,7 +133,9 @@ jobs:
         run: cargo sqlx migrate run
 
       - name: Run ingest pipeline tests
-        run: cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1
+        run: |
+          cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1
+          cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1
 
       - name: Run MCP round-trip e2e tests
-        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 -E 'test(mcp_round_trip)'
+        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 -E 'binary(mcp_round_trip)'
