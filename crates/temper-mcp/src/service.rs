@@ -227,7 +227,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "List all available document types in the knowledge base. Returns id and name for each type. Use these when creating resources to specify the correct doc_type_name."
+        description = "List all available document types with schema summaries. Returns id, name, has_schema, and required_fields for each type. Use describe_doc_type for full schema details."
     )]
     async fn list_doc_types(
         &self,
@@ -235,6 +235,18 @@ impl TemperMcpService {
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
         tools::doc_types::list_doc_types(self).await
+    }
+
+    #[tool(
+        description = "Describe a specific document type in detail. Returns the full JSON schema, required fields, enum field values, and an example managed_meta object showing the tier-3 fields agents should supply."
+    )]
+    async fn describe_doc_type(
+        &self,
+        Parameters(input): Parameters<tools::doc_types::DescribeDocTypeInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::doc_types::describe_doc_type(self, input).await
     }
 
     #[tool(
