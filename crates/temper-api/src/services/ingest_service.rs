@@ -8,11 +8,72 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
+use temper_core::schema::ValidationIssue;
 use temper_core::types::ids::{ContextId, EventId, ProfileId, ResourceAuditId, ResourceId};
 use temper_core::types::ingest::chunks_to_jsonb;
 
 use temper_core::types::ingest::{unpack_chunks, IngestPayload, PackedChunk};
 use temper_core::types::resource::ResourceRow;
+
+/// Domain errors for the ingest pipeline.
+///
+/// Converts to [`ApiError`] for HTTP responses via the `From` impl.
+#[derive(Debug, thiserror::Error)]
+pub enum IngestError {
+    /// Schema validation failed for managed_meta fields.
+    #[error("managed_meta validation failed for doc_type={doc_type}: {issues_count} issues", issues_count = .issues.len())]
+    Validation {
+        doc_type: String,
+        issues: Vec<ValidationIssue>,
+    },
+    /// Attempted a structural move (context, doc_type) via the ingest path.
+    #[error("structural move via field '{field}' is not supported: {message}")]
+    StructuralMoveNotSupported { field: String, message: String },
+    /// managed_meta has an invalid shape (not a JSON object, etc.).
+    #[error("invalid managed_meta shape: {0}")]
+    InvalidManagedMeta(String),
+    /// Database error during ingest.
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+    /// Embedding/pipeline error (only available with ingest-pipeline feature).
+    #[cfg(feature = "ingest-pipeline")]
+    #[error("embed failed: {0}")]
+    Embed(String),
+    /// Chunk packing error.
+    #[cfg(feature = "ingest-pipeline")]
+    #[error("chunks pack failed: {0}")]
+    Pack(String),
+}
+
+impl From<IngestError> for crate::error::ApiError {
+    fn from(err: IngestError) -> Self {
+        match err {
+            IngestError::Validation { doc_type, issues } => {
+                crate::error::ApiError::BadRequest(format!(
+                    "managed_meta validation failed for doc_type={doc_type}: {} issues",
+                    issues.len()
+                ))
+            }
+            IngestError::StructuralMoveNotSupported { field, message } => {
+                crate::error::ApiError::BadRequest(format!(
+                    "structural move via field '{field}' is not supported: {message}"
+                ))
+            }
+            IngestError::InvalidManagedMeta(msg) => {
+                crate::error::ApiError::BadRequest(format!("invalid managed_meta shape: {msg}"))
+            }
+            IngestError::Database(e) => crate::error::ApiError::from(e),
+            #[cfg(feature = "ingest-pipeline")]
+            IngestError::Embed(msg) => {
+                crate::error::ApiError::Internal(format!("embed failed: {msg}"))
+            }
+            #[cfg(feature = "ingest-pipeline")]
+            IngestError::Pack(msg) => {
+                crate::error::ApiError::Internal(format!("chunks pack failed: {msg}"))
+            }
+        }
+    }
+}
 
 /// Compute a `sha256:<hex>` hash of a JSON value (canonical form).
 ///
@@ -469,6 +530,60 @@ pub async fn update(
     tx.commit().await?;
 
     Ok(resource)
+}
+
+#[cfg(test)]
+mod tests_ingest_error {
+    use super::*;
+
+    #[test]
+    fn validation_error_carries_issues() {
+        let err = IngestError::Validation {
+            doc_type: "task".to_owned(),
+            issues: vec![ValidationIssue {
+                path: "temper-stage".to_owned(),
+                message: "temper-stage is required".to_owned(),
+                auto_fixable: false,
+            }],
+        };
+        match err {
+            IngestError::Validation { doc_type, issues } => {
+                assert_eq!(doc_type, "task");
+                assert_eq!(issues.len(), 1);
+                assert_eq!(issues[0].path, "temper-stage");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn structural_move_not_supported_carries_field() {
+        let err = IngestError::StructuralMoveNotSupported {
+            field: "temper-context".to_owned(),
+            message: "use `temper resource update --context-to` to move".to_owned(),
+        };
+        match err {
+            IngestError::StructuralMoveNotSupported { field, .. } => {
+                assert_eq!(field, "temper-context");
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn validation_error_converts_to_bad_request() {
+        let err = IngestError::Validation {
+            doc_type: "task".to_owned(),
+            issues: vec![],
+        };
+        let api_err: crate::error::ApiError = err.into();
+        match api_err {
+            crate::error::ApiError::BadRequest(msg) => {
+                assert!(msg.contains("task"));
+            }
+            _ => panic!("expected BadRequest"),
+        }
+    }
 }
 
 #[cfg(test)]
