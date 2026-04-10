@@ -134,7 +134,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::create_resource(self, input, &parts).await
+        tools::resources::create_resource(self, input).await
     }
 
     #[tool(
@@ -170,7 +170,7 @@ impl TemperMcpService {
         Extension(parts): Extension<http::request::Parts>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
         self.ensure_profile_from_parts(&parts).await?;
-        tools::resources::update_resource(self, input, &parts).await
+        tools::resources::update_resource(self, input).await
     }
 
     #[tool(

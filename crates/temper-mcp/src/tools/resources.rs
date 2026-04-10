@@ -31,6 +31,12 @@ pub struct CreateResourceInput {
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
     pub owner: Option<String>,
+    /// Managed frontmatter (temper-* fields) as JSON.
+    #[serde(default)]
+    pub managed_meta: Option<serde_json::Value>,
+    /// Open frontmatter (user-owned fields) as JSON.
+    #[serde(default)]
+    pub open_meta: Option<serde_json::Value>,
 }
 
 /// MCP input for get_resource.
@@ -69,8 +75,14 @@ pub struct UpdateResourceInput {
     /// New slug.
     pub slug: Option<String>,
     /// New markdown content. Replaces existing content and triggers
-    /// async re-processing.
+    /// re-processing.
     pub content: Option<String>,
+    /// Managed frontmatter (temper-* fields) as JSON.
+    #[serde(default)]
+    pub managed_meta: Option<serde_json::Value>,
+    /// Open frontmatter (user-owned fields) as JSON.
+    #[serde(default)]
+    pub open_meta: Option<serde_json::Value>,
 }
 
 /// MCP input for delete_resource.
@@ -176,64 +188,11 @@ fn content_hash(content: &str) -> String {
     format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
-fn extract_bearer_token(parts: &http::request::Parts) -> Option<String> {
-    let header = parts.headers.get(http::header::AUTHORIZATION)?;
-    let value = header.to_str().ok()?;
-    value.strip_prefix("Bearer ").map(|s| s.to_string())
-}
-
-fn spawn_content_ingest_post(
-    resource_id: ResourceId,
-    content: String,
-    replace: bool,
-    bearer_token: Option<String>,
-    context_id: String,
-    body_hash: String,
-) {
-    tokio::spawn(async move {
-        let base_url = match std::env::var("MCP_BASE_URL") {
-            Ok(url) => url,
-            Err(_) => {
-                tracing::warn!("MCP_BASE_URL not set; skipping content-ingest POST");
-                return;
-            }
-        };
-
-        let url = format!("{base_url}/api/content-ingest");
-        let payload = temper_core::types::ingest::ContentIngestRequest {
-            resource_id: resource_id.to_string(),
-            content,
-            replace,
-            context_id: Some(context_id),
-            body_hash: Some(body_hash),
-        };
-        let client = reqwest::Client::new();
-        let mut req = client.post(&url).json(&payload);
-
-        if let Some(token) = bearer_token {
-            req = req.bearer_auth(token);
-        }
-
-        match req.send().await {
-            Ok(resp) if resp.status().is_success() => {
-                tracing::debug!(resource_id = %resource_id, "content-ingest POST accepted");
-            }
-            Ok(resp) => {
-                tracing::warn!(resource_id = %resource_id, status = %resp.status(), "content-ingest POST returned non-success");
-            }
-            Err(e) => {
-                tracing::warn!(resource_id = %resource_id, error = %e, "content-ingest POST failed");
-            }
-        }
-    });
-}
-
 // ── Tool handlers ──────────────────────────────────────────────────
 
 pub async fn create_resource(
     svc: &TemperMcpService,
     input: CreateResourceInput,
-    parts: &http::request::Parts,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
@@ -306,6 +265,8 @@ pub async fn create_resource(
 
     // 5. Create resource + manifest + event
     let empty_json = serde_json::json!({});
+    let managed_meta = input.managed_meta.unwrap_or_else(|| empty_json.clone());
+    let open_meta = input.open_meta.unwrap_or_else(|| empty_json.clone());
     // SHA256 of empty string — used when no content is provided
     let hash_for_manifest = body_hash
         .as_deref()
@@ -322,10 +283,8 @@ pub async fn create_resource(
             slug: input.slug.as_deref(),
             origin_uri: &origin_uri,
             content_hash: hash_for_manifest,
-            managed_meta: &empty_json,
-            open_meta: &empty_json,
-            // No chunks here — chunk persistence happens later via the
-            // async content-ingest POST spawned below.
+            managed_meta: &managed_meta,
+            open_meta: &open_meta,
             chunks_packed: None,
         },
     )
@@ -333,19 +292,6 @@ pub async fn create_resource(
     .map_err(|e| {
         rmcp::ErrorData::internal_error(format!("Failed to create resource: {e}"), None)
     })?;
-
-    // 6. Fire content-ingest POST if content provided
-    if let (Some(content), Some(hash)) = (input.content, body_hash) {
-        let bearer_token = extract_bearer_token(parts);
-        spawn_content_ingest_post(
-            resource.id,
-            content,
-            false,
-            bearer_token,
-            context.id.to_string(),
-            hash,
-        );
-    }
 
     let enriched = enrich_resource(pool, profile_id, &resource).await?;
     let response = CreateResourceResponse {
@@ -487,7 +433,6 @@ pub async fn list_resources(
 pub async fn update_resource(
     svc: &TemperMcpService,
     input: UpdateResourceInput,
-    parts: &http::request::Parts,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
@@ -525,19 +470,21 @@ pub async fn update_resource(
     if let Some(content) = input.content {
         let body_hash = content_hash(&content);
         let empty_json = serde_json::json!({});
+        let managed_meta = input.managed_meta.unwrap_or_else(|| empty_json.clone());
+        let open_meta = input.open_meta.unwrap_or_else(|| empty_json.clone());
 
         let mut tx = pool.begin().await.map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to begin transaction: {e}"), None)
         })?;
 
-        let updated_row = ingest_service::update_resource_manifest(
+        let _updated_row = ingest_service::update_resource_manifest(
             &mut tx,
             profile_id,
             "mcp",
             resource_id,
             &body_hash,
-            &empty_json,
-            &empty_json,
+            &managed_meta,
+            &open_meta,
         )
         .await
         .map_err(|e| {
@@ -547,17 +494,6 @@ pub async fn update_resource(
         tx.commit()
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to commit: {e}"), None))?;
-
-        // Fire content-ingest POST using context_id from the manifest update response
-        let bearer_token = extract_bearer_token(parts);
-        spawn_content_ingest_post(
-            resource_id,
-            content,
-            true,
-            bearer_token,
-            updated_row.kb_context_id.to_string(),
-            body_hash,
-        );
     }
 
     // Return enriched current state
