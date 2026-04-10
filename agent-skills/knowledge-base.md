@@ -26,6 +26,7 @@ sessions, research, or wants to look up / store information across conversations
 | Check who you are | Tool: `get_profile` | Identity/settings |
 | Audit recent activity | Tool: `list_events` | Debugging, event history |
 | Discover valid document types | Tool: `list_doc_types` | Returns id and name for each type |
+| Get schema for a specific type | Tool: `describe_doc_type` | Returns JSON Schema and example_managed_meta |
 
 ## Session Start Pattern
 
@@ -71,10 +72,9 @@ All mutations go through tools. There are no writable resources.
 
 ### Creating Resources
 
-Use `create_resource` to write content to the knowledge base. The `content` field is
-optional — omit it to create a metadata-only shell, or include it to create a resource
-with full content in one call. Content processing (embedding for search) happens
-asynchronously in the background.
+Use `create_resource` to write content to the knowledge base. The server validates
+`managed_meta` against the doc type schema, runs chunking and embedding inline, and returns
+the fully processed resource in a single call. No polling, no intermediate state.
 
 ```
 Tool: create_resource
@@ -82,13 +82,35 @@ Input: {
   "context_name": "myproject",
   "doc_type_name": "session",
   "title": "Human-readable title",
-  "content": "Full markdown content goes here...",  // optional
-  "slug": "optional-kebab-case-slug",              // optional
-  "origin_uri": "optional source URL or reference" // optional
+  "slug": "url-safe-identifier",
+  "content": "Full markdown content goes here...",
+  "managed_meta": { ... },  // doc-type-specific frontmatter fields (optional)
+  "open_meta": { ... }      // free-form user fields (optional)
 }
 ```
 
-The resource is created immediately and returned with an `id`.
+The resource is created immediately and returned with an `id`. If `managed_meta` validation
+fails, the tool returns a structured error listing each issue with its field name — fix the
+fields and retry.
+
+### Discovering Document Types
+
+Before creating content, use `list_doc_types` to see available types and which have schemas.
+Common types include: `session`, `research`, `concept`, `task`, `goal`.
+
+```
+Tool: list_doc_types
+Input: {}
+```
+
+For a specific type's JSON Schema and a usable `example_managed_meta` template:
+
+```
+Tool: describe_doc_type
+Input: { "name": "task" }
+```
+
+Pass the `name` field as `doc_type_name` in `create_resource`.
 
 ### Context handling
 
@@ -97,19 +119,6 @@ The context must already exist — `create_resource` will fail if the context is
 Instead, ask the user: "I don't see a context named `{name}`. Would you like me to create
 it, or did you mean one of these: {list existing contexts}?" Use `list_contexts` to fetch
 the current list before asking.
-
-### Discovering Document Types
-
-Use `list_doc_types` to see what document types are available before creating content.
-Common types include: `session`, `research`, `concept`, `task`, `goal`. The tool returns
-an id and name for each type.
-
-```
-Tool: list_doc_types
-Input: {}
-```
-
-Pass the `name` field as `doc_type_name` in `create_resource`.
 
 ### Updating Resources
 
