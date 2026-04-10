@@ -58,10 +58,32 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
 
         #[cfg(not(target_os = "linux"))]
         {
-            // On macOS / other platforms, ORT's load-dynamic feature searches:
-            //   1. ORT_DYLIB_PATH env var
-            //   2. Standard library search paths (e.g. /opt/homebrew/lib)
-            // No explicit init needed — ort handles it on first session creation.
+            // On macOS, ORT's load-dynamic needs help finding the dylib.
+            // Search order:
+            //   1. ORT_DYLIB_PATH env var (explicit override)
+            //   2. Homebrew ARM64: /opt/homebrew/lib/libonnxruntime.dylib
+            //   3. Homebrew Intel: /usr/local/lib/libonnxruntime.dylib
+            let dylib_path = std::env::var("ORT_DYLIB_PATH").ok().or_else(|| {
+                [
+                    "/opt/homebrew/lib/libonnxruntime.dylib",
+                    "/usr/local/lib/libonnxruntime.dylib",
+                ]
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .map(|p| p.to_string())
+            });
+
+            if let Some(path) = dylib_path {
+                ort::init_from(path)
+                    .map_err(|e| format!("ort::init_from: {e}"))?
+                    .commit();
+            } else {
+                return Err(
+                    "ONNX Runtime not found. Install via `brew install onnxruntime` \
+                     or set ORT_DYLIB_PATH to the library location."
+                        .to_owned(),
+                );
+            }
         }
 
         Ok(())
