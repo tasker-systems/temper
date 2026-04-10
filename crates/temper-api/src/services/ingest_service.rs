@@ -375,7 +375,7 @@ pub async fn ingest(
     pool: &PgPool,
     profile_id: ProfileId,
     device_id: &str,
-    payload: IngestPayload,
+    mut payload: IngestPayload,
 ) -> ApiResult<ResourceRow> {
     // 1. Resolve context
     let context = context_service::resolve_by_name(pool, profile_id, &payload.context_name).await?;
@@ -383,6 +383,43 @@ pub async fn ingest(
 
     // 2. Resolve doc_type
     let doc_type_id = resolve_doc_type(pool, &payload.doc_type_name).await?;
+
+    // 2.5. Strip tier-1 fields and validate managed_meta
+    let stripped_managed_meta = payload.managed_meta.take().map(strip_system_managed_fields);
+    let validate_params = ValidateParams {
+        doc_type: &payload.doc_type_name,
+        managed_meta: stripped_managed_meta.as_ref(),
+        slug: &payload.slug,
+        title: &payload.title,
+        context_name: &payload.context_name,
+    };
+    validate_managed_meta(&validate_params).map_err(ApiError::from)?;
+    payload.managed_meta = stripped_managed_meta;
+
+    // 2.6. If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
+    #[cfg(feature = "ingest-pipeline")]
+    if payload.chunks_packed.is_none() {
+        let hash = {
+            let mut hasher = Sha256::new();
+            hasher.update(payload.content.as_bytes());
+            hasher.finalize()
+        };
+        payload.content_hash = Some(format!("sha256:{:x}", hash));
+        let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
+            .map_err(|e| ApiError::Internal(format!("embed failed: {e}")))?;
+        payload.chunks_packed = Some(
+            temper_core::types::ingest::pack_chunks(&packed_chunks)
+                .map_err(|e| ApiError::Internal(format!("chunk packing failed: {e}")))?,
+        );
+    }
+
+    // 2.7. If ingest-pipeline feature is not enabled and chunks are missing, caller must provide them
+    #[cfg(not(feature = "ingest-pipeline"))]
+    if payload.chunks_packed.is_none() && !payload.content.is_empty() {
+        return Err(ApiError::BadRequest(
+            "chunks_packed required when server-side pipeline is not available".to_owned(),
+        ));
+    }
 
     // 3. Body-hash dedup (only if caller supplied a hash)
     if let Some(ref hash) = payload.content_hash {
