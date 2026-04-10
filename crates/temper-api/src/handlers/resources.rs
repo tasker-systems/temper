@@ -6,7 +6,8 @@ use uuid::Uuid;
 use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::resource_service::{
-    self, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
+    self, ResolveByUriParams, ResourceCreateRequest, ResourceListParams, ResourceListResponse,
+    ResourceRow, ResourceUpdateRequest,
 };
 use crate::state::AppState;
 
@@ -20,7 +21,7 @@ use temper_core::types::resource::{ContentResponse, DeleteResponse};
     params(ResourceListParams),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "List of visible resources", body = Vec<ResourceRow>),
+        (status = 200, description = "Paginated list of visible resources with facets", body = ResourceListResponse),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -28,8 +29,30 @@ pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(params): Query<ResourceListParams>,
-) -> ApiResult<Json<Vec<ResourceRow>>> {
+) -> ApiResult<Json<ResourceListResponse>> {
     resource_service::list_visible(&state.pool, auth.0.profile.id, params)
+        .await
+        .map(Json)
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/resources/by-uri",
+    tag = "Resources",
+    params(ResolveByUriParams),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Resolved resource", body = ResourceRow),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
+pub async fn by_uri(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<ResolveByUriParams>,
+) -> ApiResult<Json<ResourceRow>> {
+    resource_service::resolve_by_uri(&state.pool, auth.0.profile.id, &params)
         .await
         .map(Json)
 }

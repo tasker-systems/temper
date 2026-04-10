@@ -6,8 +6,10 @@ use temper_core::types::api::{
     EventRow, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
     UnifiedSearchResultRow,
 };
+use temper_core::types::context::ContextRowWithCounts;
 use temper_core::types::resource::{
-    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceRow, ResourceUpdateRequest,
+    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets, ResourceListResponse,
+    ResourceRow, ResourceUpdateRequest,
 };
 
 #[derive(OpenApi)]
@@ -20,6 +22,7 @@ use temper_core::types::resource::{
         crate::handlers::resources::create,
         crate::handlers::resources::update,
         crate::handlers::resources::delete,
+        crate::handlers::resources::by_uri,
         crate::handlers::profiles::get,
         crate::handlers::profiles::update,
         crate::handlers::profiles::list_auth_links,
@@ -30,10 +33,13 @@ use temper_core::types::resource::{
     components(schemas(
         HealthResponse,
         ResourceRow,
+        ResourceListResponse,
+        ResourceFacets,
         ResourceCreateRequest,
         ResourceUpdateRequest,
         ContentResponse,
         DeleteResponse,
+        ContextRowWithCounts,
         ProfileUpdateRequest,
         EventRow,
         SearchParams,
@@ -99,6 +105,7 @@ mod tests {
         assert!(json.contains("/api/resources"));
         assert!(json.contains("/api/resources/{id}"));
         assert!(json.contains("/api/resources/{id}/content"));
+        assert!(json.contains("/api/resources/by-uri"));
         assert!(json.contains("/api/profile"));
         assert!(json.contains("/api/profile/auth-links"));
         assert!(json.contains("/api/events"));

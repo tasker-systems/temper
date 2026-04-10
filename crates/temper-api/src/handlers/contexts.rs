@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 use crate::error::ApiResult;
 use crate::middleware::auth::AuthUser;
-use crate::services::context_service::{self, ContextCreateRequest, ContextRow};
+use crate::services::context_service::{
+    self, ContextCreateRequest, ContextRow, ContextRowWithCounts,
+};
 use crate::state::AppState;
 use temper_core::types::ids::{ContextId, ProfileId};
 
@@ -15,13 +17,13 @@ use temper_core::types::ids::{ContextId, ProfileId};
     tag = "Contexts",
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "List of visible contexts", body = Vec<ContextRow>),
+        (status = 200, description = "List of visible contexts with resource counts", body = Vec<ContextRowWithCounts>),
     )
 )]
 pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> ApiResult<Json<Vec<ContextRow>>> {
+) -> ApiResult<Json<Vec<ContextRowWithCounts>>> {
     context_service::list_visible(&state.pool, ProfileId::from(auth.0.profile.id))
         .await
         .map(Json)

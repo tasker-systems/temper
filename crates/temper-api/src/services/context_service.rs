@@ -9,16 +9,22 @@ use sqlx::PgPool;
 use crate::error::{ApiError, ApiResult};
 use temper_core::types::ids::{ContextId, EventId, ProfileId};
 
-pub use temper_core::types::context::{ContextCreateRequest, ContextRow};
+pub use temper_core::types::context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 
-/// List all contexts visible to the profile (owned + team-shared).
-pub async fn list_visible(pool: &PgPool, profile_id: ProfileId) -> ApiResult<Vec<ContextRow>> {
+/// List all contexts visible to the profile (owned + team-shared), with resource counts.
+pub async fn list_visible(
+    pool: &PgPool,
+    profile_id: ProfileId,
+) -> ApiResult<Vec<ContextRowWithCounts>> {
     let rows = sqlx::query_as!(
-        ContextRow,
+        ContextRowWithCounts,
         r#"
-        SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
+        SELECT c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated,
+               COUNT(r.id) AS "resource_count!"
           FROM contexts_visible_to($1) cv
           JOIN kb_contexts c ON c.id = cv.id
+          LEFT JOIN kb_resources r ON r.kb_context_id = c.id AND r.is_active = true
+         GROUP BY c.id, c.name, c.kb_owner_table, c.kb_owner_id, c.created, c.updated
          ORDER BY c.name
         "#,
         *profile_id
