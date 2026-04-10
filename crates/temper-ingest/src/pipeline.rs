@@ -19,11 +19,13 @@ pub fn prepare_markdown(content: &str) -> Result<Vec<PackedChunk>> {
     }
     let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
     let embeddings = embed_texts(&texts)?;
-    assert_eq!(
-        chunks.len(),
-        embeddings.len(),
-        "chunk and embedding count must match"
-    );
+    if chunks.len() != embeddings.len() {
+        return Err(crate::error::EmbedError::Embedding(format!(
+            "chunk/embedding count mismatch: {} chunks, {} embeddings",
+            chunks.len(),
+            embeddings.len()
+        )));
+    }
     let packed: Vec<PackedChunk> = chunks
         .into_iter()
         .zip(embeddings)

@@ -406,10 +406,12 @@ pub async fn ingest(
         };
         payload.content_hash = Some(format!("sha256:{:x}", hash));
         let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
-            .map_err(|e| ApiError::Internal(format!("embed failed: {e}")))?;
+            .map_err(|e| IngestError::Embed(e.to_string()))
+            .map_err(ApiError::from)?;
         payload.chunks_packed = Some(
             temper_core::types::ingest::pack_chunks(&packed_chunks)
-                .map_err(|e| ApiError::Internal(format!("chunk packing failed: {e}")))?,
+                .map_err(|e| IngestError::Pack(e.to_string()))
+                .map_err(ApiError::from)?,
         );
     }
 
@@ -599,10 +601,6 @@ pub async fn update(
 }
 
 /// Parameters for schema validation at the service-layer boundary.
-// NOTE: #[allow] rather than #[expect] because --all-targets compiles both lib
-// and lib-test, and #[expect(dead_code)] would be unfulfilled in the test binary
-// where the test module uses these symbols.
-#[allow(dead_code)]
 pub(crate) struct ValidateParams<'a> {
     pub doc_type: &'a str,
     pub managed_meta: Option<&'a serde_json::Value>,
@@ -614,7 +612,6 @@ pub(crate) struct ValidateParams<'a> {
 /// Validate managed_meta against the doc_type schema, merging in top-level
 /// parameters so schema-required tier-2 fields (slug, temper-context, temper-type)
 /// are satisfied without the agent having to pass them inside managed_meta.
-#[allow(dead_code)]
 pub(crate) fn validate_managed_meta(params: &ValidateParams<'_>) -> Result<(), IngestError> {
     use serde_json::json;
 
