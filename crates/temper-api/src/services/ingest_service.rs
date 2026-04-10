@@ -75,6 +75,36 @@ impl From<IngestError> for crate::error::ApiError {
     }
 }
 
+/// Remove tier-1 identity/audit fields from input `managed_meta`.
+///
+/// Agents may echo these back from a `get_resource` call; they should not cause
+/// validation errors. Tier-2 fields (`temper-context`, `temper-type`, `slug`) are
+/// NOT stripped here — they remain present so we can detect structural-move
+/// attempts in the update path.
+#[expect(dead_code, reason = "used by MCP and update paths")]
+fn strip_system_managed_fields(mut meta: serde_json::Value) -> serde_json::Value {
+    const TIER1_FIELDS: &[&str] = &[
+        "temper-id",
+        "temper-provisional-id",
+        "temper-created",
+        "temper-updated",
+        "temper-owner",
+        "temper-source",
+        "temper-legacy-id",
+    ];
+    if let Some(obj) = meta.as_object_mut() {
+        for field in TIER1_FIELDS {
+            if obj.remove(*field).is_some() {
+                tracing::warn!(
+                    field = *field,
+                    "stripped tier-1 system-managed field from input managed_meta"
+                );
+            }
+        }
+    }
+    meta
+}
+
 /// Compute a `sha256:<hex>` hash of a JSON value (canonical form).
 ///
 /// Keys are sorted recursively to ensure deterministic output regardless
@@ -620,5 +650,52 @@ mod tests {
             hash,
             "sha256:d39e1380d3b0ce969fe93f1df8b2da5d1caabf90b33e2e30f01d661f2c3c4895"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests_strip_system_managed_fields {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn strips_tier1_fields() {
+        let input = json!({
+            "temper-id": "abc",
+            "temper-created": "2026-04-09",
+            "temper-owner": "@me",
+            "temper-stage": "backlog"
+        });
+        let stripped = strip_system_managed_fields(input);
+        let obj = stripped.as_object().unwrap();
+        assert!(!obj.contains_key("temper-id"));
+        assert!(!obj.contains_key("temper-created"));
+        assert!(!obj.contains_key("temper-owner"));
+        assert!(obj.contains_key("temper-stage"), "tier-3 fields preserved");
+    }
+
+    #[test]
+    fn strips_all_system_managed_fields() {
+        let input = json!({
+            "temper-id": "a",
+            "temper-provisional-id": "b",
+            "temper-created": "c",
+            "temper-updated": "d",
+            "temper-owner": "e",
+            "temper-source": "f",
+            "temper-legacy-id": "g",
+            "temper-stage": "backlog"
+        });
+        let stripped = strip_system_managed_fields(input);
+        let obj = stripped.as_object().unwrap();
+        assert_eq!(obj.len(), 1);
+        assert!(obj.contains_key("temper-stage"));
+    }
+
+    #[test]
+    fn handles_non_object_value() {
+        let input = serde_json::Value::Null;
+        let stripped = strip_system_managed_fields(input);
+        assert!(stripped.is_null());
     }
 }
