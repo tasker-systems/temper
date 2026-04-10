@@ -180,14 +180,18 @@ async fn list_visible_filters_by_doc_type(pool: sqlx::PgPool) {
         kb_context_id: Some(context.id.into()),
         kb_doc_type_id: Some(research_id.into()),
         limit: Some(50),
-        offset: None,
+        ..Default::default()
     };
-    let results = resource_service::list_visible(&pool, profile_id.into(), params)
+    let response = resource_service::list_visible(&pool, profile_id.into(), params)
         .await
         .expect("list_visible with doc_type filter");
 
-    assert_eq!(results.len(), 1, "should return only the research resource");
-    assert_eq!(results[0].title, "Research Doc");
+    assert_eq!(
+        response.rows.len(),
+        1,
+        "should return only the research resource"
+    );
+    assert_eq!(response.rows[0].title, "Research Doc");
 }
 
 /// get_name_by_id resolves a doc type UUID to its name.

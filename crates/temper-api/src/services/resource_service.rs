@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -6,120 +8,271 @@ use crate::services::ingest_service::insert_event_and_audit;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 pub use temper_core::types::resource::{
-    ContentChunk, ResourceCreateRequest, ResourceListParams, ResourceRow, ResourceUpdateRequest,
+    ContentChunk, ResourceCreateRequest, ResourceFacets, ResourceListParams, ResourceListResponse,
+    ResourceRow, ResourceSortField, ResourceUpdateRequest, SortOrder,
 };
+
+/// Query parameters for resolving a resource by its URI components.
+#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
+pub struct ResolveByUriParams {
+    pub owner: String,
+    pub context: String,
+    pub doc_type: String,
+    pub ident: String,
+}
+
+// ---------------------------------------------------------------------------
+// FilterBuilder — collects dynamic WHERE conditions
+// ---------------------------------------------------------------------------
+
+struct FilterBuilder {
+    /// SQL fragments like "vb.kb_context_id = $2"
+    conditions: Vec<String>,
+    /// Bind values, stored as strings (converted from Uuid/String as needed)
+    binds: Vec<BindValue>,
+    /// Next bind parameter index (starts at 2 because $1 is always profile_id)
+    next_param: usize,
+}
+
+#[derive(Debug)]
+enum BindValue {
+    Uuid(Uuid),
+    Text(String),
+}
+
+impl FilterBuilder {
+    fn new() -> Self {
+        Self {
+            conditions: Vec::new(),
+            binds: Vec::new(),
+            // $1 is profile_id, so we start at $2
+            next_param: 2,
+        }
+    }
+
+    fn push_uuid(&mut self, column: &str, value: Uuid) {
+        self.conditions
+            .push(format!("{column} = ${}", self.next_param));
+        self.binds.push(BindValue::Uuid(value));
+        self.next_param += 1;
+    }
+
+    fn push_text(&mut self, column: &str, value: &str) {
+        self.conditions
+            .push(format!("{column} = ${}", self.next_param));
+        self.binds.push(BindValue::Text(value.to_string()));
+        self.next_param += 1;
+    }
+
+    fn push_fts(&mut self, query: &str) {
+        self.conditions.push(format!(
+            "EXISTS (SELECT 1 FROM kb_resource_search_index fts WHERE fts.resource_id = vb.id AND fts.search_vector @@ plainto_tsquery('english', ${}))",
+            self.next_param
+        ));
+        self.binds.push(BindValue::Text(query.to_string()));
+        self.next_param += 1;
+    }
+
+    /// Push owner filter. "@me" matches profile-owned, "+slug" matches team-owned.
+    fn push_owner(&mut self, owner: &str, profile_id: Uuid) {
+        if owner == "@me" {
+            self.conditions.push(format!(
+                "(vb.kb_owner_table = 'kb_profiles' AND vb.kb_owner_id = ${})",
+                self.next_param
+            ));
+            self.binds.push(BindValue::Uuid(profile_id));
+            self.next_param += 1;
+        } else if let Some(slug) = owner.strip_prefix('+') {
+            self.conditions.push(format!(
+                "(vb.kb_owner_table = 'kb_teams' AND vb.team_slug = ${})",
+                self.next_param
+            ));
+            self.binds.push(BindValue::Text(slug.to_string()));
+            self.next_param += 1;
+        } else {
+            // Unrecognized owner format — match nothing.
+            self.conditions.push("false".to_string());
+        }
+    }
+
+    fn where_clause(&self) -> String {
+        if self.conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", self.conditions.join(" AND "))
+        }
+    }
+
+    /// Bind all accumulated values onto a query in order.
+    fn bind_all<'q, T: Send + Unpin>(
+        &'q self,
+        mut query: sqlx::query::QueryAs<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments>,
+    ) -> sqlx::query::QueryAs<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments> {
+        for bind in &self.binds {
+            match bind {
+                BindValue::Uuid(u) => query = query.bind(u),
+                BindValue::Text(t) => query = query.bind(t.as_str()),
+            }
+        }
+        query
+    }
+
+    fn bind_all_scalar<'q, T>(
+        &'q self,
+        mut query: sqlx::query::QueryScalar<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments>,
+    ) -> sqlx::query::QueryScalar<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments> {
+        for bind in &self.binds {
+            match bind {
+                BindValue::Uuid(u) => query = query.bind(u),
+                BindValue::Text(t) => query = query.bind(t.as_str()),
+            }
+        }
+        query
+    }
+}
+
+/// Build filters from request params, returning the FilterBuilder.
+fn build_filters(params: &ResourceListParams, profile_id: Uuid) -> FilterBuilder {
+    let mut fb = FilterBuilder::new();
+
+    if let Some(id) = params.kb_context_id {
+        fb.push_uuid("vb.kb_context_id", id);
+    }
+    if let Some(id) = params.kb_doc_type_id {
+        fb.push_uuid("vb.kb_doc_type_id", id);
+    }
+    if let Some(ref name) = params.context_name {
+        fb.push_text("vb.context_name", name);
+    }
+    if let Some(ref name) = params.doc_type_name {
+        fb.push_text("vb.doc_type_name", name);
+    }
+    if let Some(ref owner) = params.owner {
+        fb.push_owner(owner, profile_id);
+    }
+    if let Some(ref q) = params.q {
+        if !q.trim().is_empty() {
+            fb.push_fts(q);
+        }
+    }
+
+    fb
+}
+
+/// Map sort field + direction to an ORDER BY clause.
+fn order_clause(sort: Option<ResourceSortField>, order: Option<SortOrder>) -> String {
+    let column = match sort.unwrap_or_default() {
+        ResourceSortField::Updated => "vb.updated",
+        ResourceSortField::Created => "vb.created",
+        ResourceSortField::Title => "vb.title",
+        ResourceSortField::Stage => "vb.stage",
+        ResourceSortField::Seq => "vb.seq",
+        ResourceSortField::ContextName => "vb.context_name",
+        ResourceSortField::DocTypeName => "vb.doc_type_name",
+    };
+    let direction = match order.unwrap_or_default() {
+        SortOrder::Desc => "DESC",
+        SortOrder::Asc => "ASC",
+    };
+    let nulls = match sort.unwrap_or_default() {
+        ResourceSortField::Stage | ResourceSortField::Seq => " NULLS LAST",
+        _ => "",
+    };
+    format!(" ORDER BY {column} {direction}{nulls}")
+}
+
+/// Owner handle SQL expression (CASE ... END AS owner_handle).
+const OWNER_HANDLE_EXPR: &str = r#"CASE
+  WHEN vb.kb_owner_table = 'kb_profiles' AND vb.kb_owner_id = $1 THEN '@me'
+  WHEN vb.kb_owner_table = 'kb_teams' THEN '+' || vb.team_slug
+  ELSE '@unknown'
+END AS owner_handle"#;
+
+/// The SELECT columns for ResourceRow from the vault_resources_browse view.
+fn select_columns() -> String {
+    format!(
+        r#"vb.id, vb.kb_context_id, vb.kb_doc_type_id, vb.origin_uri, vb.title,
+       vb.slug, vb.originator_profile_id, vb.owner_profile_id, vb.is_active,
+       vb.created, vb.updated, vb.context_name, vb.doc_type_name,
+       {OWNER_HANDLE_EXPR},
+       vb.stage, vb.seq, vb.mode, vb.effort"#
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Facet row for internal deserialization
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, sqlx::FromRow)]
+struct FacetRow {
+    doc_type_name: String,
+    count: i64,
+}
 
 /// List resources visible to the given profile.
 ///
-/// Uses the `resources_visible_to(profile_id)` SQL function to scope results.
+/// Uses the `vault_resources_browse` view with dynamic filters.
+/// Returns `ResourceListResponse` with rows, total count, and facets.
 pub async fn list_visible(
     pool: &PgPool,
     profile_id: Uuid,
     params: ResourceListParams,
-) -> ApiResult<Vec<ResourceRow>> {
+) -> ApiResult<ResourceListResponse> {
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let rows = match (params.kb_context_id, params.kb_doc_type_id) {
-        (Some(ctx_id), Some(dt_id)) => {
-            sqlx::query_as!(
-                ResourceRow,
-                r#"
-                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                       r.slug,
-                       r.originator_profile_id, r.owner_profile_id, r.is_active,
-                       r.created, r.updated
-                  FROM kb_resources r
-                  JOIN visible v ON v.resource_id = r.id
-                 WHERE r.is_active = true
-                   AND r.kb_context_id = $2
-                   AND r.kb_doc_type_id = $3
-                 ORDER BY r.updated DESC
-                 LIMIT $4 OFFSET $5
-                "#,
-                profile_id,
-                ctx_id,
-                dt_id,
-                limit,
-                offset,
-            )
-            .fetch_all(pool)
-            .await?
-        }
-        (Some(ctx_id), None) => {
-            sqlx::query_as!(
-                ResourceRow,
-                r#"
-                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                       r.slug,
-                       r.originator_profile_id, r.owner_profile_id, r.is_active,
-                       r.created, r.updated
-                  FROM kb_resources r
-                  JOIN visible v ON v.resource_id = r.id
-                 WHERE r.is_active = true
-                   AND r.kb_context_id = $2
-                 ORDER BY r.updated DESC
-                 LIMIT $3 OFFSET $4
-                "#,
-                profile_id,
-                ctx_id,
-                limit,
-                offset,
-            )
-            .fetch_all(pool)
-            .await?
-        }
-        (None, Some(dt_id)) => {
-            sqlx::query_as!(
-                ResourceRow,
-                r#"
-                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                       r.slug,
-                       r.originator_profile_id, r.owner_profile_id, r.is_active,
-                       r.created, r.updated
-                  FROM kb_resources r
-                  JOIN visible v ON v.resource_id = r.id
-                 WHERE r.is_active = true
-                   AND r.kb_doc_type_id = $2
-                 ORDER BY r.updated DESC
-                 LIMIT $3 OFFSET $4
-                "#,
-                profile_id,
-                dt_id,
-                limit,
-                offset,
-            )
-            .fetch_all(pool)
-            .await?
-        }
-        (None, None) => {
-            sqlx::query_as!(
-                ResourceRow,
-                r#"
-                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-                SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-                       r.slug,
-                       r.originator_profile_id, r.owner_profile_id, r.is_active,
-                       r.created, r.updated
-                  FROM kb_resources r
-                  JOIN visible v ON v.resource_id = r.id
-                 WHERE r.is_active = true
-                 ORDER BY r.updated DESC
-                 LIMIT $2 OFFSET $3
-                "#,
-                profile_id,
-                limit,
-                offset,
-            )
-            .fetch_all(pool)
-            .await?
-        }
+    let fb = build_filters(&params, profile_id);
+    let where_clause = fb.where_clause();
+    let order = order_clause(params.sort, params.order);
+
+    // Rows query
+    let rows_sql = format!(
+        "SELECT {cols}\n  FROM vault_resources_browse vb\n  JOIN resources_visible_to($1) rv ON rv.resource_id = vb.id\n {where_clause}{order}\n LIMIT ${lim} OFFSET ${off}",
+        cols = select_columns(),
+        lim = fb.next_param,
+        off = fb.next_param + 1,
+    );
+
+    // Count query
+    let count_sql = format!(
+        "SELECT COUNT(*)::bigint\n  FROM vault_resources_browse vb\n  JOIN resources_visible_to($1) rv ON rv.resource_id = vb.id\n {where_clause}"
+    );
+
+    // Facets query
+    let facets_sql = format!(
+        "SELECT vb.doc_type_name, COUNT(*)::bigint AS count\n  FROM vault_resources_browse vb\n  JOIN resources_visible_to($1) rv ON rv.resource_id = vb.id\n {where_clause}\n GROUP BY vb.doc_type_name"
+    );
+
+    // Build all three queries and execute in parallel
+    let rows_query = fb
+        .bind_all(sqlx::query_as::<_, ResourceRow>(&rows_sql).bind(profile_id))
+        .bind(limit)
+        .bind(offset);
+
+    let count_query = fb.bind_all_scalar(sqlx::query_scalar::<_, i64>(&count_sql).bind(profile_id));
+
+    let facets_query_bound =
+        fb.bind_all(sqlx::query_as::<_, FacetRow>(&facets_sql).bind(profile_id));
+
+    let (rows, count_opt, facet_rows) = tokio::try_join!(
+        rows_query.fetch_all(pool),
+        count_query.fetch_one(pool),
+        facets_query_bound.fetch_all(pool),
+    )?;
+
+    let total = count_opt;
+    let facets = ResourceFacets {
+        doc_type: facet_rows
+            .into_iter()
+            .map(|r| (r.doc_type_name, r.count))
+            .collect::<HashMap<String, i64>>(),
     };
 
-    Ok(rows)
+    Ok(ResourceListResponse {
+        rows,
+        total,
+        facets,
+    })
 }
 
 /// Get a single resource by ID, scoped to profile visibility.
@@ -128,25 +281,17 @@ pub async fn get_visible(
     profile_id: Uuid,
     resource_id: Uuid,
 ) -> ApiResult<ResourceRow> {
-    let row = sqlx::query_as!(
-        ResourceRow,
-        r#"
-        WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug,
-               r.originator_profile_id, r.owner_profile_id, r.is_active,
-               r.created, r.updated
-          FROM kb_resources r
-          JOIN visible v ON v.resource_id = r.id
-         WHERE r.id = $2
-           AND r.is_active = true
-        "#,
-        profile_id,
-        resource_id,
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or(ApiError::NotFound)?;
+    let sql = format!(
+        "SELECT {cols}\n  FROM vault_resources_browse vb\n  JOIN resources_visible_to($1) rv ON rv.resource_id = vb.id\n WHERE vb.id = $2",
+        cols = select_columns(),
+    );
+
+    let row = sqlx::query_as::<_, ResourceRow>(&sql)
+        .bind(profile_id)
+        .bind(resource_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
     Ok(row)
 }
@@ -158,27 +303,62 @@ pub async fn get_by_slug(
     slug: &str,
     context_id: Uuid,
 ) -> ApiResult<ResourceRow> {
-    let row = sqlx::query_as!(
-        ResourceRow,
-        r#"
-        WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug,
-               r.originator_profile_id, r.owner_profile_id, r.is_active,
-               r.created, r.updated
-          FROM kb_resources r
-          JOIN visible v ON v.resource_id = r.id
-         WHERE r.slug = $2
-           AND r.kb_context_id = $3
-           AND r.is_active = true
-        "#,
-        profile_id,
-        slug,
-        context_id,
-    )
-    .fetch_optional(pool)
-    .await?
-    .ok_or(ApiError::NotFound)?;
+    let sql = format!(
+        "SELECT {cols}\n  FROM vault_resources_browse vb\n  JOIN resources_visible_to($1) rv ON rv.resource_id = vb.id\n WHERE vb.slug = $2\n   AND vb.kb_context_id = $3",
+        cols = select_columns(),
+    );
+
+    let row = sqlx::query_as::<_, ResourceRow>(&sql)
+        .bind(profile_id)
+        .bind(slug)
+        .bind(context_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(row)
+}
+
+/// Resolve a resource by its URI components (owner, context, doc_type, ident).
+///
+/// `ident` can be a UUID (matched against `id`) or a slug.
+pub async fn resolve_by_uri(
+    pool: &PgPool,
+    profile_id: Uuid,
+    params: &ResolveByUriParams,
+) -> ApiResult<ResourceRow> {
+    // Determine if ident is a UUID or slug
+    let by_id = Uuid::parse_str(&params.ident).ok();
+
+    let mut fb = FilterBuilder::new();
+
+    // Owner filter
+    fb.push_owner(&params.owner, profile_id);
+
+    // Context name
+    fb.push_text("vb.context_name", &params.context);
+
+    // Doc type name
+    fb.push_text("vb.doc_type_name", &params.doc_type);
+
+    // Ident — UUID or slug
+    if let Some(id) = by_id {
+        fb.push_uuid("vb.id", id);
+    } else {
+        fb.push_text("vb.slug", &params.ident);
+    }
+
+    let where_clause = fb.where_clause();
+    let sql = format!(
+        "SELECT {cols}\n  FROM vault_resources_browse vb\n  JOIN resources_visible_to($1) rv ON rv.resource_id = vb.id\n {where_clause}",
+        cols = select_columns(),
+    );
+
+    let row = fb
+        .bind_all(sqlx::query_as::<_, ResourceRow>(&sql).bind(profile_id))
+        .fetch_optional(pool)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
     Ok(row)
 }

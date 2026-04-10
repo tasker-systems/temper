@@ -16,6 +16,18 @@
 	--color-ink: #1a1a2e;
 	--color-chalk: #f8f9fa;
 
+	/* Quiet Instrument dark-theme palette — exposed as Tailwind utilities
+	   so authed pages can use `bg-quiet`, `text-quiet-fg`, `border-quiet-rule`
+	   etc. instead of inline CSS vars. */
+	--color-quiet: #0a0a0f;
+	--color-quiet-fg: #e8e4df;
+	--color-quiet-mid: rgba(255, 255, 255, 0.65);
+	--color-quiet-dim: rgba(255, 255, 255, 0.45);
+	--color-quiet-accent: #7eb8da;
+	--color-quiet-rule: rgba(255, 255, 255, 0.06);
+	--color-quiet-border: rgba(126, 184, 218, 0.25);
+	--color-quiet-card: rgba(255, 255, 255, 0.03);
+
 	--font-sans: "Inter", "system-ui", "sans-serif";
 	--font-mono: "JetBrains Mono", "Fira Code", "monospace";
 }
@@ -32,4 +44,227 @@
   --rule: rgba(255, 255, 255, 0.06);
   --mono: 'JetBrains Mono', 'Fira Code', monospace;
   --serif: 'Georgia', 'Times New Roman', serif;
+}
+
+/* ============================================================================
+   Editorial system — shared classes used by the authed app pages.
+   ============================================================================
+
+   These classes implement the "Daily Throughline" editorial language: dark
+   masthead, italic serif decks, left-rule sections evoking markdown blockquote
+   markers. Classes are prefixed `ed-` to avoid collision with the marketing
+   landing's `.hero` / `.nav` / `.footer` classes.
+
+   Page-specific list/grid styles (`.ledger`, `.library`, `.queue`) live in
+   each page's scoped <style> block. */
+
+.ed-masthead {
+  max-width: 52rem;
+}
+
+/* ─── Strip — masthead metadata bar at top of standalone pages ─── */
+
+.ed-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 0.6rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--color-quiet-rule);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--color-quiet-dim);
+}
+.ed-strip-em { color: var(--color-quiet-mid); }
+.ed-strip-accent { color: var(--color-quiet-accent); }
+.ed-strip-italic {
+  color: var(--color-quiet-accent);
+  text-transform: none;
+  font-style: italic;
+  letter-spacing: 0;
+  font-family: var(--serif);
+  font-size: 0.78rem;
+}
+.ed-strip-sep { opacity: 0.35; }
+.ed-strip-spacer { flex: 1; }
+.ed-strip-meta { color: var(--color-quiet-dim); font-size: 0.6rem; }
+
+/* ─── Hero — editorial header for any page ────────────────────── */
+
+.ed-hero {
+  margin-top: 4.5rem;
+  margin-bottom: 5rem;
+}
+.ed-hero-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--color-quiet-accent);
+  margin-bottom: 1.6rem;
+}
+.ed-hero-name {
+  font-family: var(--serif);
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.95;
+  color: var(--color-quiet-fg);
+  margin: 0;
+}
+.ed-hero-deck {
+  margin-top: 1.8rem;
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-style: italic;
+  color: var(--color-quiet-mid);
+  max-width: 36rem;
+  line-height: 1.55;
+}
+.ed-hero-num {
+  font-style: normal;
+  font-feature-settings: 'lnum', 'tnum';
+  color: var(--color-quiet-fg);
+  font-weight: 400;
+  padding: 0 0.05em;
+}
+.ed-hero-sep {
+  display: inline-block;
+  margin: 0 0.45em;
+  color: var(--color-quiet-dim);
+  font-style: normal;
+}
+.ed-hero-state {
+  color: var(--color-quiet-accent);
+  font-style: italic;
+}
+
+/* ─── Rail — left-border section, the markdown blockquote motif ── */
+
+.ed-rail {
+  position: relative;
+  padding-left: 1.8rem;
+  border-left: 2px solid var(--color-quiet-border);
+  margin-bottom: 4.5rem;
+}
+.ed-rail-marker {
+  margin-bottom: 1.8rem;
+}
+.ed-rail-label {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: var(--color-quiet-accent);
+  margin-bottom: 0.3rem;
+}
+.ed-rail-sub {
+  font-family: var(--serif);
+  font-style: italic;
+  font-size: 0.85rem;
+  color: var(--color-quiet-dim);
+}
+.ed-rail-empty {
+  font-family: var(--serif);
+  font-style: italic;
+  color: var(--color-quiet-dim);
+  font-size: 0.95rem;
+  line-height: 1.6;
+}
+.ed-rail-empty code {
+  font-family: var(--font-mono);
+  font-style: normal;
+  font-size: 0.78em;
+  padding: 0.1rem 0.45rem;
+  background: var(--color-quiet-card);
+  color: var(--color-quiet-accent);
+  border-radius: 2px;
+}
+
+/* ─── Notice — inline alert (errors, status hints) ────────────── */
+
+.ed-notice {
+  margin-bottom: 3rem;
+  border-left: 2px solid rgba(245, 158, 11, 0.55);
+  padding: 0.7rem 1.2rem;
+  background: rgba(245, 158, 11, 0.04);
+}
+.ed-notice-label {
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+  color: rgb(252, 211, 77);
+  margin-bottom: 0.4rem;
+}
+.ed-notice ul, .ed-notice p {
+  margin: 0;
+  padding-left: 0;
+  font-family: var(--serif);
+  font-size: 0.9rem;
+  font-style: italic;
+  color: rgba(254, 215, 170, 0.85);
+  line-height: 1.55;
+}
+.ed-notice ul { padding-left: 1rem; }
+.ed-notice p + p { margin-top: 0.4rem; }
+.ed-notice--success {
+  border-left-color: rgba(110, 231, 183, 0.55);
+  background: rgba(110, 231, 183, 0.04);
+}
+.ed-notice--success .ed-notice-label { color: rgb(167, 243, 208); }
+.ed-notice--success p { color: rgba(209, 250, 229, 0.85); }
+
+/* ─── Action buttons — text-only, accent on hover ─────────────── */
+
+.ed-action {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0.4rem 0;
+  transition: color 0.18s ease;
+}
+.ed-action--primary {
+  color: var(--color-quiet-accent);
+}
+.ed-action--primary:hover {
+  color: var(--color-quiet-fg);
+}
+.ed-action--ghost {
+  color: var(--color-quiet-dim);
+}
+.ed-action--ghost:hover {
+  color: var(--color-quiet-mid);
+}
+.ed-action-sep {
+  display: inline-block;
+  margin: 0 0.6rem;
+  color: var(--color-quiet-dim);
+  opacity: 0.4;
+}
+
+/* ─── Footer note — small mono signature line ─────────────────── */
+
+.ed-footnote {
+  margin-top: 6rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid var(--color-quiet-rule);
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--color-quiet-dim);
+}
+.ed-footnote a {
+  color: var(--color-quiet-accent);
+  text-decoration: none;
+  margin-left: 0.6rem;
+}
+.ed-footnote a:hover {
+  color: var(--color-quiet-fg);
 }

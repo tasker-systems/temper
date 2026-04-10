@@ -416,15 +416,16 @@ pub async fn list_resources(
         kb_doc_type_id: doc_type_id,
         limit: input.limit,
         offset: input.offset,
+        ..Default::default()
     };
 
-    let rows = resource_service::list_visible(pool, profile.id, params)
+    let response = resource_service::list_visible(pool, profile.id, params)
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
         })?;
 
-    let enriched = enrich_resources(pool, profile_id, &rows).await?;
+    let enriched = enrich_resources(pool, profile_id, &response.rows).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
     )]))
@@ -477,7 +478,7 @@ pub async fn update_resource(
             rmcp::ErrorData::internal_error(format!("Failed to begin transaction: {e}"), None)
         })?;
 
-        let _updated_row = ingest_service::update_resource_manifest(
+        ingest_service::update_resource_manifest(
             &mut tx,
             profile_id,
             "mcp",

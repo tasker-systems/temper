@@ -72,8 +72,9 @@ async fn test_create_and_list_resources(pool: PgPool) {
 
     assert_eq!(list_resp.status().as_u16(), 200, "list must return 200");
 
-    let list: Vec<Value> = list_resp.json().await.expect("expected JSON array");
-    let ids: Vec<&str> = list.iter().filter_map(|r| r["id"].as_str()).collect();
+    let list: Value = list_resp.json().await.expect("expected JSON");
+    let rows = list["rows"].as_array().expect("expected rows array");
+    let ids: Vec<&str> = rows.iter().filter_map(|r| r["id"].as_str()).collect();
 
     assert!(
         ids.contains(&resource_id),
@@ -127,8 +128,9 @@ async fn test_resource_visibility_scoping(pool: PgPool) {
 
     assert_eq!(list_resp.status().as_u16(), 200);
 
-    let list: Vec<Value> = list_resp.json().await.expect("expected JSON array");
-    let ids: Vec<&str> = list.iter().filter_map(|r| r["id"].as_str()).collect();
+    let list: Value = list_resp.json().await.expect("expected JSON");
+    let rows = list["rows"].as_array().expect("expected rows array");
+    let ids: Vec<&str> = rows.iter().filter_map(|r| r["id"].as_str()).collect();
 
     assert!(
         !ids.contains(&resource_id),

@@ -20,7 +20,8 @@
     <a href="/how-it-works">How it works</a>
     <a href="/builders">Builders</a>
     <a href="/agents">Agents</a>
-    <a href="/docs" class="cta">Get Started</a>
+    <a href="/docs">Docs</a>
+    <a href="/auth/login" class="cta">Get Started</a>
   </div>
 </nav>
 

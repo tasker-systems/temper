@@ -10,27 +10,32 @@ import type { ResourceId } from "./ResourceId";
 export type ContentResponse = { resource_id: ResourceId, markdown: string, };
 
 /**
- * Query parameters for listing visible resources.
+ * Aggregated doc-type facet counts for the current filter set.
  */
-export type ResourceListParams = { 
-/**
- * Filter by context ID.
- */
-kb_context_id: string | null, 
-/**
- * Filter by document type ID.
- */
-kb_doc_type_id: string | null, 
-/**
- * Maximum results to return (default 50, max 200).
- */
-limit: number | null, 
-/**
- * Offset for pagination.
- */
-offset: number | null, };
+export type ResourceFacets = { doc_type: { [key in string]?: bigint }, };
 
 /**
- * Row type matching the `kb_resources` table.
+ * Query parameters for listing visible resources.
  */
-export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, kb_doc_type_id: DocTypeId, origin_uri: string, title: string, slug: string | null, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, };
+export type ResourceListParams = { kb_context_id: string | null, kb_doc_type_id: string | null, context_name: string | null, doc_type_name: string | null, owner: string | null, q: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, };
+
+/**
+ * Paginated response for resource list endpoints, with doc-type facets.
+ */
+export type ResourceListResponse = { rows: Array<ResourceRow>, total: bigint, facets: ResourceFacets, };
+
+/**
+ * Row type for resource listings — includes joined display fields
+ * and managed_meta projections from `vault_resources_browse` view.
+ */
+export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, kb_doc_type_id: DocTypeId, origin_uri: string, title: string, slug: string | null, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, context_name: string, doc_type_name: string, owner_handle: string, stage: string | null, seq: number | null, mode: string | null, effort: string | null, };
+
+/**
+ * Sort field for resource listing.
+ */
+export type ResourceSortField = "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name";
+
+/**
+ * Sort direction.
+ */
+export type SortOrder = "desc" | "asc";

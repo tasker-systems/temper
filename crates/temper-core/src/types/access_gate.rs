@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Status of a join request in its lifecycle.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "join_request_status", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
@@ -16,6 +18,8 @@ pub enum JoinRequestStatus {
 }
 
 /// A user-initiated request to join a team (typically the gating team).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct JoinRequest {
     pub id: Uuid,
@@ -34,6 +38,8 @@ pub struct JoinRequest {
 }
 
 /// A join request with the requesting profile's display info (for admin queue).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct JoinRequestWithProfile {
     pub id: Uuid,
@@ -67,6 +73,8 @@ pub struct SystemSettings {
 }
 
 /// Public-facing system settings (no gating_team_slug — prevents info leakage).
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublicSystemSettings {
     pub access_mode: String,
@@ -88,6 +96,8 @@ impl From<SystemSettings> for PublicSystemSettings {
 
 /// Entitlements included in the profile response — tells the client
 /// what this profile is allowed to do at the system level.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[derive(Debug, Clone, Serialize)]
 pub struct Entitlements {
     pub system_access: bool,
@@ -101,6 +111,8 @@ pub struct Entitlements {
 /// because the caller already proved ownership of this identity through OAuth.
 /// We are reflecting the caller's own profile back — not disclosing another
 /// user's information. Do not add fields that reveal other users' data.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "access.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemAccessDetails {
     pub email: Option<String>,
