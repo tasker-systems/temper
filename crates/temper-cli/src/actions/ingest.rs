@@ -163,13 +163,13 @@ pub fn build_ingest_payload(
         origin_uri,
         context_name: context.to_owned(),
         doc_type_name: doc_type.to_owned(),
-        content_hash,
+        content_hash: Some(content_hash),
         slug,
         content: content.to_owned(),
         metadata,
         managed_meta: None,
         open_meta: None,
-        chunks_packed,
+        chunks_packed: Some(chunks_packed),
     })
 }
 

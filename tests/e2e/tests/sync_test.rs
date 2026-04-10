@@ -57,15 +57,16 @@ async fn sync_status_detects_server_resource(pool: sqlx::PgPool) {
         context_name: "sync-test".to_string(),
         doc_type_name: "research".to_string(),
 
-        content_hash: "synctest00000000000000000000000000000000000000000000000000000000"
-            .to_string(),
+        content_hash: Some(
+            "synctest00000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
         slug: "sync-test-doc".to_string(),
 
         content: "# Sync Test\n\nContent for sync testing.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     app.client
@@ -126,14 +127,14 @@ async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
         context_name: "sync-match".to_string(),
         doc_type_name: "research".to_string(),
 
-        content_hash: content_hash.clone(),
+        content_hash: Some(content_hash.clone()),
         slug: "sync-match-doc".to_string(),
 
         content: "# Match\n\nSame on both sides.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -220,13 +221,13 @@ async fn sync_status_round_trips_owner_scoped_manifest_entry(pool: sqlx::PgPool)
         origin_uri: "test://e2e/sync-owner-scoped".to_string(),
         context_name: "sync-owner-scoped".to_string(),
         doc_type_name: "research".to_string(),
-        content_hash: content_hash.clone(),
+        content_hash: Some(content_hash.clone()),
         slug: "sync-owner-scoped-doc".to_string(),
         content: "# Owner scoped\n\nBuilt via build_status_request.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -360,15 +361,16 @@ async fn sync_complete_updates_content_hash(pool: sqlx::PgPool) {
         context_name: "sync-complete".to_string(),
         doc_type_name: "research".to_string(),
 
-        content_hash: "old0000000000000000000000000000000000000000000000000000000000000"
-            .to_string(),
+        content_hash: Some(
+            "old0000000000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
         slug: "sync-complete-doc".to_string(),
 
         content: "# Complete\n\nFor sync complete testing.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -451,14 +453,14 @@ async fn sync_manifest_returns_resources(pool: sqlx::PgPool) {
         context_name: "mfst-res".to_string(),
         doc_type_name: "research".to_string(),
 
-        content_hash: content_hash.clone(),
+        content_hash: Some(content_hash.clone()),
         slug: "mfst-res-doc".to_string(),
 
         content: "# Manifest Test\n\nContent for manifest testing.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -647,14 +649,15 @@ async fn sync_manifest_handles_null_last_audit_id(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/mfst-null-audit".to_string(),
         context_name: "mfst-null-audit".to_string(),
         doc_type_name: "research".to_string(),
-        content_hash: "nullaudit0000000000000000000000000000000000000000000000000000000"
-            .to_string(),
+        content_hash: Some(
+            "nullaudit0000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
         slug: "no-audit-doc".to_string(),
         content: "# No Audit\n\nResource with audit rows removed.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -714,15 +717,16 @@ async fn sync_manifest_excludes_inactive(pool: sqlx::PgPool) {
         context_name: "manifest-inactive".to_string(),
         doc_type_name: "research".to_string(),
 
-        content_hash: "inactive00000000000000000000000000000000000000000000000000000000"
-            .to_string(),
+        content_hash: Some(
+            "inactive00000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
         slug: "will-be-deleted".to_string(),
 
         content: "# Will Be Deleted".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -792,13 +796,15 @@ async fn sync_refresh_produces_owner_scoped_path_for_server_only_resource(pool: 
         origin_uri: "test://e2e/refresh-path".to_string(),
         context_name: "refresh-path-ctx".to_string(),
         doc_type_name: "research".to_string(),
-        content_hash: "ref00000000000000000000000000000000000000000000000000000000000a".to_string(),
+        content_hash: Some(
+            "ref00000000000000000000000000000000000000000000000000000000000a".to_string(),
+        ),
         slug: "server-only-doc".to_string(),
         content: "# Server only\n\nnothing local yet.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -880,13 +886,15 @@ async fn sync_reset_produces_owner_scoped_path_for_server_only_resource(pool: sq
         origin_uri: "test://e2e/reset-path".to_string(),
         context_name: "reset-path-ctx".to_string(),
         doc_type_name: "research".to_string(),
-        content_hash: "rst00000000000000000000000000000000000000000000000000000000000b".to_string(),
+        content_hash: Some(
+            "rst00000000000000000000000000000000000000000000000000000000000b".to_string(),
+        ),
         slug: "reset-server-only".to_string(),
         content: "# Reset\n\nno local copy.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app

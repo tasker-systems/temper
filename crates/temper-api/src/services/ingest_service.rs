@@ -294,9 +294,11 @@ pub async fn ingest(
     // 2. Resolve doc_type
     let doc_type_id = resolve_doc_type(pool, &payload.doc_type_name).await?;
 
-    // 3. Body-hash dedup
-    if let Some(existing) = find_by_body_hash(pool, profile_id, &payload.content_hash).await? {
-        return Ok(existing);
+    // 3. Body-hash dedup (only if caller supplied a hash)
+    if let Some(ref hash) = payload.content_hash {
+        if let Some(existing) = find_by_body_hash(pool, profile_id, hash).await? {
+            return Ok(existing);
+        }
     }
 
     // 4. Compute meta
@@ -321,10 +323,10 @@ pub async fn ingest(
             title: &payload.title,
             slug: Some(payload.slug.as_str()),
             origin_uri: &payload.origin_uri,
-            content_hash: &payload.content_hash,
+            content_hash: payload.content_hash.as_deref().unwrap_or(""),
             managed_meta: &managed_meta,
             open_meta: &open_meta,
-            chunks_packed: Some(&payload.chunks_packed),
+            chunks_packed: payload.chunks_packed.as_deref(),
         },
     )
     .await?;
@@ -429,8 +431,12 @@ pub async fn update(
         return Err(ApiError::NotFound);
     }
 
-    let chunks = unpack_chunks(&payload.chunks_packed)
-        .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
+    let chunks = if let Some(ref packed) = payload.chunks_packed {
+        unpack_chunks(packed)
+            .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?
+    } else {
+        vec![]
+    };
 
     // Compute meta
     let empty_json = serde_json::json!({});
@@ -451,7 +457,7 @@ pub async fn update(
         profile_id,
         device_id,
         resource_id,
-        &payload.content_hash,
+        payload.content_hash.as_deref().unwrap_or(""),
         &managed_meta,
         &open_meta,
     )

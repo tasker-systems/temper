@@ -18,15 +18,15 @@ async fn ingest_test_resource(app: &common::E2eTestApp, suffix: &str) -> (uuid::
         origin_uri: format!("test://e2e/audit-{suffix}"),
         context_name: context_name.clone(),
         doc_type_name: "research".to_string(),
-        content_hash: format!(
+        content_hash: Some(format!(
             "audit{suffix}000000000000000000000000000000000000000000000000000000000"
-        ),
+        )),
         slug: format!("audit-test-{suffix}"),
         content: format!("# Audit Test {suffix}\n\nContent for audit testing."),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app
@@ -87,13 +87,15 @@ async fn audit_row_created_on_update(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/audit-update".to_string(),
         context_name: ctx,
         doc_type_name: "research".to_string(),
-        content_hash: "auditupd0000000000000000000000000000000000000000000000000000000".to_string(),
+        content_hash: Some(
+            "auditupd0000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
         slug: "audit-test-update".to_string(),
         content: "# Updated\n\nNew content.".to_string(),
         metadata: None,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     app.client
