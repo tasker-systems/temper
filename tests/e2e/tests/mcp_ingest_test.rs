@@ -506,6 +506,95 @@ async fn create_resource_dispatches_on_chunks_packed_presence(pool: sqlx::PgPool
     }
 }
 
+/// Tier-1 fields stripped: agent-supplied temper-id/temper-created/temper-owner are removed from managed_meta.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn create_resource_strips_tier1_fields_from_managed_meta(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let profile_id = ProfileId::from(
+        sqlx::query_scalar!(
+            "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile lookup"),
+    );
+
+    context_service::create(&pool, profile_id, "strip-test")
+        .await
+        .expect("context create");
+
+    let fake_agent_id = "00000000-0000-0000-0000-000000000001";
+    // Include tier-1 fields (to be stripped) alongside valid tier-3 fields.
+    // After stripping, {"date": "2026-04-10"} remains, which satisfies the
+    // research schema's required "date" field.
+    let managed_meta = serde_json::json!({
+        "temper-id": fake_agent_id,
+        "temper-created": "2020-01-01",
+        "temper-owner": "@someone-else",
+        "date": "2026-04-10",
+    });
+
+    let empty_chunks = temper_core::types::ingest::pack_chunks(&[]).expect("pack empty chunks");
+    let content = "# Strip Test\n\nContent for tier-1 field stripping test.";
+    let content_hash = format!("sha256:{}", sha2_hex(content));
+
+    let payload = temper_core::types::ingest::IngestPayload {
+        title: "Strip Tier-1 Test".to_string(),
+        origin_uri: "mcp://test/strip-tier1".to_string(),
+        context_name: "strip-test".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(content_hash),
+        slug: "strip-tier1-test".to_string(),
+        content: content.to_string(),
+        metadata: None,
+        managed_meta: Some(managed_meta),
+        open_meta: None,
+        chunks_packed: Some(empty_chunks),
+    };
+
+    let resource = ingest_service::ingest(&pool, profile_id, "e2e-test-device", payload)
+        .await
+        .expect("ingest should succeed despite tier-1 fields in managed_meta");
+
+    // The server-generated ID must not be the one the agent tried to inject
+    assert_ne!(
+        resource.id.to_string(),
+        fake_agent_id,
+        "server must not use agent-supplied temper-id"
+    );
+
+    // Verify tier-1 fields were stripped from the stored managed_meta
+    let stored_managed_meta: serde_json::Value = sqlx::query_scalar!(
+        "SELECT managed_meta FROM kb_resource_manifests WHERE resource_id = $1",
+        *resource.id,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("manifest lookup");
+
+    let obj = stored_managed_meta
+        .as_object()
+        .expect("managed_meta is object");
+    assert!(
+        !obj.contains_key("temper-id"),
+        "temper-id must be stripped from stored managed_meta"
+    );
+    assert!(
+        !obj.contains_key("temper-created"),
+        "temper-created must be stripped from stored managed_meta"
+    );
+    assert!(
+        !obj.contains_key("temper-owner"),
+        "temper-owner must be stripped from stored managed_meta"
+    );
+}
+
 /// Context auto-creation: resolve_by_name fails for unknown, create succeeds, then resolve finds it.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn context_auto_creation_for_ingest(pool: sqlx::PgPool) {
