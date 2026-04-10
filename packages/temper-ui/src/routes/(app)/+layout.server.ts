@@ -12,6 +12,8 @@
 
 import type { LayoutServerLoad } from './$types';
 import { redirect } from '@sveltejs/kit';
+import { apiGet } from '$lib/server/api';
+import type { ContextRowWithCounts } from '$lib/types';
 
 export const load: LayoutServerLoad = async ({ locals, url }) => {
 	if (!locals.user || !locals.accessToken) {
@@ -29,9 +31,15 @@ export const load: LayoutServerLoad = async ({ locals, url }) => {
 		throw redirect(303, '/request-access');
 	}
 
+	const contexts = await apiGet<ContextRowWithCounts[]>(
+		'/api/contexts',
+		locals.accessToken!
+	).catch(() => [] as ContextRowWithCounts[]);
+
 	return {
 		user: locals.user,
 		profile: locals.profile,
-		entitlements: locals.entitlements
+		entitlements: locals.entitlements,
+		contexts
 	};
 };
