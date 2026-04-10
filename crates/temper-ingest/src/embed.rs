@@ -1,7 +1,14 @@
 //! Text embedding using BAAI/bge-base-en-v1.5 via ONNX Runtime.
 //!
-//! Model loaded from bundled bytes at compile time (no runtime downloads).
-//! ONNX session created once per process via OnceLock.
+//! Model and tokenizer loaded from bundled bytes at compile time (no runtime
+//! downloads).  ONNX session created once per process via `OnceLock`.
+//!
+//! ORT runtime loading is platform-aware:
+//! - **Linux** (Vercel deploy): the bundled `libonnxruntime.so` is written to
+//!   `/tmp` and loaded via `ort::init_from`.
+//! - **Other platforms** (macOS dev): ORT is loaded from the system library
+//!   path.  Install via `brew install onnxruntime` and set `ORT_DYLIB_PATH`
+//!   if needed.
 //!
 //! Pipeline: tokenize -> build tensors -> inference -> mean pool -> normalize
 
@@ -19,22 +26,44 @@ pub const EMBEDDING_DIM: usize = 768;
 
 static MODEL_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/model_quantized.onnx");
 static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/tokenizer.json");
+
+/// Bundled Linux x86_64 libonnxruntime.so — only compiled into the binary on
+/// Linux targets (Vercel deploy).  On other platforms this is a zero-length
+/// slice and the system-installed ORT is used instead.
+#[cfg(target_os = "linux")]
 static ORT_LIB_BYTES: &[u8] = include_bytes!("../lib/x86_64-unknown-linux-gnu/libonnxruntime.so");
 
 // ---- ORT runtime initialization ----
 
 static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
+/// Initialize the ORT runtime.
+///
+/// On Linux: write the bundled `.so` to `/tmp` and load it explicitly.
+/// On other platforms: let ORT's `load-dynamic` search system paths
+/// (`ORT_DYLIB_PATH`, Homebrew, etc.).
 fn init_ort_runtime() -> std::result::Result<(), String> {
     ORT_INIT.get_or_init(|| {
-        let lib_path = std::path::Path::new("/tmp/libonnxruntime.so");
-        if !lib_path.exists() {
-            std::fs::write(lib_path, ORT_LIB_BYTES)
-                .map_err(|e| format!("write libonnxruntime.so to /tmp: {e}"))?;
+        #[cfg(target_os = "linux")]
+        {
+            let lib_path = std::path::Path::new("/tmp/libonnxruntime.so");
+            if !lib_path.exists() {
+                std::fs::write(lib_path, ORT_LIB_BYTES)
+                    .map_err(|e| format!("write libonnxruntime.so to /tmp: {e}"))?;
+            }
+            ort::init_from(lib_path)
+                .map_err(|e| format!("ort::init_from: {e}"))?
+                .commit();
         }
-        ort::init_from(lib_path)
-            .map_err(|e| format!("ort::init_from: {e}"))?
-            .commit();
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            // On macOS / other platforms, ORT's load-dynamic feature searches:
+            //   1. ORT_DYLIB_PATH env var
+            //   2. Standard library search paths (e.g. /opt/homebrew/lib)
+            // No explicit init needed — ort handles it on first session creation.
+        }
+
         Ok(())
     });
     match ORT_INIT.get() {
