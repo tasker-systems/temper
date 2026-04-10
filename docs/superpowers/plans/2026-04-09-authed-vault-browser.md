@@ -31,7 +31,7 @@ Before starting any task, the implementer must verify these items:
 
 | File | Responsibility |
 |---|---|
-| `migrations/20260410000001_index_resource_manifests_managed_meta.sql` | B-tree expression indexes + GIN on managed_meta |
+| `migrations/20260410000001_vault_browse_view_and_indexes.sql` | B-tree expression indexes + GIN on managed_meta |
 
 ### Rust — Modified Files
 
@@ -40,11 +40,11 @@ Before starting any task, the implementer must verify these items:
 | `crates/temper-core/src/types/resource.rs` | Add `ResourceSortField`, `SortOrder` enums; extend `ResourceListParams`; extend `ResourceRow`; add `ResourceListResponse`, `ResourceFacets` |
 | `crates/temper-core/src/types/context.rs` | Add `ContextRowWithCounts` |
 | `crates/temper-core/src/types/mod.rs` | Re-export new types if needed |
-| `crates/temper-api/src/services/resource_service.rs` | Rewrite `list_visible` with extended SQL, add `compute_facets`, add `resolve_by_uri` |
+| `crates/temper-api/src/services/resource_service.rs` | Rewrite `list_visible` against `vault_resources_browse` view (rows + count + facets in one call), add `resolve_by_uri` |
 | `crates/temper-api/src/services/context_service.rs` | Add `list_visible_with_counts` |
-| `crates/temper-api/src/handlers/resources.rs` | Update `list`, add `facets`, add `by_uri` |
+| `crates/temper-api/src/handlers/resources.rs` | Update `list` (returns `ResourceListResponse` with facets), add `by_uri` |
 | `crates/temper-api/src/handlers/contexts.rs` | `list` returns `Vec<ContextRowWithCounts>` |
-| `crates/temper-api/src/routes.rs` | Add `/api/resources/facets`, `/api/resources/by-uri` |
+| `crates/temper-api/src/routes.rs` | Add `/api/resources/by-uri` |
 | `crates/temper-api/src/openapi.rs` | Register new schemas/paths |
 | `crates/temper-client/src/resources.rs` | `list()` returns `ResourceListResponse` |
 | `crates/temper-client/src/contexts.rs` | `list()` returns `Vec<ContextRowWithCounts>` |
@@ -55,9 +55,8 @@ Before starting any task, the implementer must verify these items:
 | File | Tests |
 |---|---|
 | `crates/temper-api/tests/resources_browse_test.rs` | Extended list: filters, sort, pagination, total, FTS |
-| `crates/temper-api/tests/resources_facets_test.rs` | Facets endpoint |
 | `crates/temper-api/tests/resources_by_uri_test.rs` | URI resolution endpoint |
-| `crates/temper-e2e/tests/vault_browse_test.rs` | Full e2e: contexts with counts → resources → facets → by-uri |
+| `crates/temper-e2e/tests/vault_browse_test.rs` | Full e2e: contexts with counts → resources (with facets) → by-uri |
 
 ### SvelteKit — New Files
 
@@ -106,10 +105,10 @@ Before starting any task, the implementer must verify these items:
 
 ## Phase 0: Database Migration
 
-### Task 1: Add managed_meta indexes
+### Task 1: Add managed_meta indexes and vault_resources_browse view
 
 **Files:**
-- Create: `migrations/20260410000001_index_resource_manifests_managed_meta.sql`
+- Create: `migrations/20260410000001_vault_browse_view_and_indexes.sql`
 
 - [ ] **Step 1: Create the migration file**
 
@@ -129,6 +128,38 @@ CREATE INDEX idx_manifests_managed_doc_type
 -- GIN with jsonb_path_ops for future ad-hoc containment queries.
 CREATE INDEX idx_manifests_managed_meta_gin
     ON kb_resource_manifests USING gin (managed_meta jsonb_path_ops);
+
+-- Pre-joined view that every vault browse query uses.
+-- Encapsulates the 6-table join so service code only adds
+-- WHERE / ORDER BY / LIMIT / OFFSET against flat columns.
+CREATE VIEW vault_resources_browse AS
+SELECT r.id,
+       r.kb_context_id,
+       r.kb_doc_type_id,
+       r.origin_uri,
+       r.title,
+       r.slug,
+       r.originator_profile_id,
+       r.owner_profile_id,
+       r.is_active,
+       r.created,
+       r.updated,
+       c.name                                      AS context_name,
+       dt.name                                     AS doc_type_name,
+       c.kb_owner_table,
+       c.kb_owner_id,
+       COALESCE(t.slug, '')                        AS team_slug,
+       m.managed_meta->>'temper-stage'             AS stage,
+       (m.managed_meta->>'temper-seq')::bigint     AS seq,
+       m.managed_meta->>'temper-mode'              AS mode,
+       m.managed_meta->>'temper-effort'            AS effort
+  FROM kb_resources r
+  JOIN kb_contexts c   ON c.id  = r.kb_context_id
+  JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
+  JOIN kb_profiles p   ON p.id  = r.owner_profile_id
+  LEFT JOIN kb_resource_manifests m ON m.resource_id = r.id
+  LEFT JOIN kb_teams t ON c.kb_owner_table = 'kb_teams' AND t.id = c.kb_owner_id
+ WHERE r.is_active = true;
 ```
 
 - [ ] **Step 2: Run the migration against local dev DB**
@@ -151,7 +182,7 @@ Expected: `.sqlx/` files updated.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add migrations/20260410000001_index_resource_manifests_managed_meta.sql .sqlx/
+git add migrations/20260410000001_vault_browse_view_and_indexes.sql .sqlx/
 git commit -m "feat(db): add B-tree and GIN indexes on managed_meta"
 ```
 
@@ -291,7 +322,17 @@ pub struct ResourceRow {
 - [ ] **Step 2: Add ResourceListResponse**
 
 ```rust
+/// Aggregated doc-type facet counts for the current filter set.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ResourceFacets {
+    pub doc_type: std::collections::HashMap<String, i64>,
+}
+
 /// Paginated response for resource list endpoints.
+/// Includes doc-type facet counts so the UI gets everything in one request.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -299,20 +340,7 @@ pub struct ResourceRow {
 pub struct ResourceListResponse {
     pub rows: Vec<ResourceRow>,
     pub total: i64,
-}
-```
-
-- [ ] **Step 3: Add ResourceFacets**
-
-```rust
-/// Aggregated facet counts for the current filter set.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-pub struct ResourceFacets {
-    pub doc_type: std::collections::HashMap<String, i64>,
-    pub stage: std::collections::HashMap<String, i64>,
+    pub facets: ResourceFacets,
 }
 ```
 
@@ -370,13 +398,20 @@ git commit -m "feat(core): add vault browser types — extended ResourceRow, Res
 
 ## Phase 2: API Service Layer (TDD)
 
-### Task 5: Rewrite resource_service::list_visible with extended query
+### Task 5: Rewrite resource_service::list_visible using vault_resources_browse view
 
 **Files:**
 - Modify: `crates/temper-api/src/services/resource_service.rs`
 - Test: `crates/temper-api/tests/resources_browse_test.rs`
 
-This is the largest single task. The existing `list_visible` uses a 4-branch match on (context_id, doc_type_id) with repeated SQL. We replace it with one parameterized query using runtime `sqlx::query_as` (because the sort column is dynamic — compile-time macros can't parameterize `ORDER BY`).
+The existing `list_visible` uses a 4-branch match on (context_id, doc_type_id) with repeated SQL. We replace it with a single query against the `vault_resources_browse` view. All join complexity is in the view; the service just adds WHERE/ORDER/LIMIT/OFFSET.
+
+**Design principles for this rewrite:**
+- The `vault_resources_browse` view handles all joins — queries are flat and testable.
+- `order_clause()` is a pure function: two matches (column + direction), not a cartesian product.
+- Filter conditions are collected as a `Vec<String>` and joined — not deeply nested if-chains.
+- Count query shares the same WHERE clause — no duplicated bind logic.
+- Facets (doc_type counts) are computed alongside the main query and bundled into `ResourceListResponse`.
 
 - [ ] **Step 1: Write the failing integration test**
 
@@ -505,12 +540,142 @@ Expected: FAIL — the endpoint still returns `Vec<ResourceRow>`, not `ResourceL
 
 - [ ] **Step 3: Implement the extended list_visible**
 
-In `crates/temper-api/src/services/resource_service.rs`, replace the existing `list_visible` function. The new implementation uses runtime `sqlx::query_as` because the ORDER BY column is dynamic:
+In `crates/temper-api/src/services/resource_service.rs`, replace the existing `list_visible` function. The new implementation queries the `vault_resources_browse` view (all joins pre-computed), uses a clean `order_clause()` helper, and collects filter conditions as a vec.
 
 ```rust
+use std::collections::HashMap;
 use temper_core::types::resource::{
-    ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField, SortOrder,
+    ResourceFacets, ResourceListParams, ResourceListResponse, ResourceRow,
+    ResourceSortField, SortOrder,
 };
+
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/// Map sort field + direction to an ORDER BY fragment.
+/// Two matches — not a cartesian product.
+fn order_clause(sort: ResourceSortField, order: SortOrder) -> String {
+    let col = match sort {
+        ResourceSortField::Updated => "vb.updated",
+        ResourceSortField::Created => "vb.created",
+        ResourceSortField::Title   => "vb.title",
+        ResourceSortField::Stage   => "vb.stage",
+        ResourceSortField::Seq     => "vb.seq",
+    };
+    let dir = match order {
+        SortOrder::Asc  => "ASC",
+        SortOrder::Desc => "DESC",
+    };
+    let nulls = match sort {
+        ResourceSortField::Stage | ResourceSortField::Seq => " NULLS LAST",
+        _ => "",
+    };
+    format!("{col} {dir}{nulls}")
+}
+
+/// Accumulated WHERE conditions and sequential bind values.
+/// All string-typed values are stored; UUID values are converted to string
+/// for binding via `sqlx::query_as::<_, T>` with `$N` placeholders.
+struct FilterBuilder {
+    conditions: Vec<String>,
+    string_binds: Vec<String>,
+    param_count: usize,
+}
+
+impl FilterBuilder {
+    /// Starts with $1 reserved for profile_id.
+    fn new() -> Self {
+        Self { conditions: Vec::new(), param_count: 1, string_binds: Vec::new() }
+    }
+
+    fn push_str(&mut self, condition_template: &str, value: String) {
+        self.param_count += 1;
+        self.conditions.push(condition_template.replace("{}", &format!("${}", self.param_count)));
+        self.string_binds.push(value);
+    }
+
+    fn push_uuid(&mut self, condition_template: &str, value: Uuid) {
+        self.push_str(condition_template, value.to_string());
+    }
+
+    /// Adds a condition that references $1 (profile_id) — no extra bind.
+    fn push_static(&mut self, condition: &str) {
+        self.conditions.push(condition.to_string());
+    }
+
+    fn where_clause(&self) -> String {
+        if self.conditions.is_empty() {
+            "true".to_string()
+        } else {
+            self.conditions.join(" AND ")
+        }
+    }
+
+    /// Bind all accumulated values onto a query in order.
+    fn bind_all<'q, T: Send + Unpin>(
+        &'q self,
+        mut query: sqlx::query::QueryAs<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments>,
+    ) -> sqlx::query::QueryAs<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments> {
+        for val in &self.string_binds {
+            query = query.bind(val.as_str());
+        }
+        query
+    }
+
+    fn bind_all_scalar<'q>(
+        &'q self,
+        mut query: sqlx::query::QueryScalar<'q, sqlx::Postgres, i64, sqlx::postgres::PgArguments>,
+    ) -> sqlx::query::QueryScalar<'q, sqlx::Postgres, i64, sqlx::postgres::PgArguments> {
+        for val in &self.string_binds {
+            query = query.bind(val.as_str());
+        }
+        query
+    }
+}
+
+/// Build the shared filter set from ResourceListParams.
+fn build_filters(params: &ResourceListParams) -> FilterBuilder {
+    let mut fb = FilterBuilder::new();
+
+    // Simple filters: each optional param maps to one condition.
+    let simple_filters: Vec<(&str, Option<String>)> = vec![
+        ("vb.kb_context_id = {}::uuid", params.kb_context_id.map(|v| v.to_string())),
+        ("vb.kb_doc_type_id = {}::uuid", params.kb_doc_type_id.map(|v| v.to_string())),
+        ("vb.context_name = {}", params.context_name.clone()),
+        ("vb.doc_type_name = {}", params.doc_type_name.clone()),
+    ];
+
+    for (template, value) in simple_filters {
+        if let Some(v) = value {
+            fb.push_str(template, v);
+        }
+    }
+
+    // Owner filter: "@me" references $1 (no extra bind), "+slug" adds a bind.
+    if let Some(ref owner) = params.owner {
+        if owner == "@me" {
+            fb.push_static("(vb.kb_owner_table = 'kb_profiles' AND vb.kb_owner_id = $1)");
+        } else if let Some(slug) = owner.strip_prefix('+') {
+            fb.push_str("(vb.kb_owner_table = 'kb_teams' AND vb.team_slug = {})", slug.to_string());
+        }
+    }
+
+    // FTS query: grep for the actual FTS join/table name in the codebase.
+    // If FTS lives on kb_fts_index, add a JOIN in the query SQL.
+    // If FTS is on kb_chunks, adjust accordingly.
+    // For now, this uses a subquery against the FTS index.
+    if let Some(ref q) = params.q {
+        if !q.trim().is_empty() {
+            fb.push_str(
+                "EXISTS (SELECT 1 FROM kb_fts_index fts WHERE fts.resource_id = vb.id AND fts.tsvector @@ plainto_tsquery('english', {}))",
+                q.clone(),
+            );
+        }
+    }
+
+    fb
+}
+
+// ── Main function ────────────────────────────────────────────────────
 
 pub async fn list_visible(
     pool: &PgPool,
@@ -519,164 +684,92 @@ pub async fn list_visible(
 ) -> ApiResult<ResourceListResponse> {
     let limit = params.limit.unwrap_or(50).min(200);
     let offset = params.offset.unwrap_or(0).max(0);
-    let sort_field = params.sort.unwrap_or_default();
-    let sort_order = params.order.unwrap_or_default();
+    let sort = order_clause(
+        params.sort.unwrap_or_default(),
+        params.order.unwrap_or_default(),
+    );
 
-    // Build the ORDER BY clause based on the sort field.
-    let order_clause = match (sort_field, sort_order) {
-        (ResourceSortField::Updated, SortOrder::Desc) => "r.updated DESC",
-        (ResourceSortField::Updated, SortOrder::Asc) => "r.updated ASC",
-        (ResourceSortField::Created, SortOrder::Desc) => "r.created DESC",
-        (ResourceSortField::Created, SortOrder::Asc) => "r.created ASC",
-        (ResourceSortField::Title, SortOrder::Desc) => "r.title DESC",
-        (ResourceSortField::Title, SortOrder::Asc) => "r.title ASC",
-        (ResourceSortField::Stage, SortOrder::Desc) => "m.managed_meta->>'temper-stage' DESC NULLS LAST",
-        (ResourceSortField::Stage, SortOrder::Asc) => "m.managed_meta->>'temper-stage' ASC NULLS LAST",
-        (ResourceSortField::Seq, SortOrder::Desc) => "(m.managed_meta->>'temper-seq')::bigint DESC NULLS LAST",
-        (ResourceSortField::Seq, SortOrder::Asc) => "(m.managed_meta->>'temper-seq')::bigint ASC NULLS LAST",
-    };
+    let filters = build_filters(&params);
+    let where_clause = filters.where_clause();
 
-    // Build dynamic WHERE conditions.
-    // We use numbered bind params starting from $1=profile_id.
-    // This is necessarily runtime SQL — compile-time macros can't handle dynamic ORDER BY.
-    let mut conditions = vec!["r.is_active = true".to_string()];
-    let mut bind_offset = 1; // $1 is always profile_id
-
-    if params.kb_context_id.is_some() {
-        bind_offset += 1;
-        conditions.push(format!("r.kb_context_id = ${bind_offset}"));
-    }
-    if params.kb_doc_type_id.is_some() {
-        bind_offset += 1;
-        conditions.push(format!("r.kb_doc_type_id = ${bind_offset}"));
-    }
-    if params.context_name.is_some() {
-        bind_offset += 1;
-        conditions.push(format!("c.name = ${bind_offset}"));
-    }
-    if params.doc_type_name.is_some() {
-        bind_offset += 1;
-        conditions.push(format!("dt.name = ${bind_offset}"));
-    }
-    if params.owner.as_ref().is_some_and(|o| !o.is_empty()) {
-        // Owner filtering: "@me" → owner is the requesting profile;
-        // "+slug" → owner is the team with that slug.
-        let owner = params.owner.as_deref().unwrap();
-        if owner == "@me" {
-            conditions.push(format!(
-                "(c.kb_owner_table = 'kb_profiles' AND c.kb_owner_id = $1)"
-            ));
-        } else if let Some(slug) = owner.strip_prefix('+') {
-            bind_offset += 1;
-            conditions.push(format!(
-                "(c.kb_owner_table = 'kb_teams' AND t.slug = ${bind_offset})"
-            ));
-            // Note: slug is bound later
-            let _ = slug; // used in bind below
-        }
-    }
-    if params.q.as_ref().is_some_and(|q| !q.trim().is_empty()) {
-        bind_offset += 1;
-        conditions.push(format!(
-            "fts.tsvector @@ plainto_tsquery('english', ${bind_offset})"
-        ));
-    }
-
-    let where_clause = conditions.join(" AND ");
-
-    let sql = format!(
+    // ── Rows query ──
+    let rows_sql = format!(
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug, r.originator_profile_id, r.owner_profile_id, r.is_active,
-               r.created, r.updated,
-               c.name AS context_name,
-               dt.name AS doc_type_name,
+        SELECT vb.id, vb.kb_context_id, vb.kb_doc_type_id, vb.origin_uri,
+               vb.title, vb.slug, vb.originator_profile_id, vb.owner_profile_id,
+               vb.is_active, vb.created, vb.updated,
+               vb.context_name, vb.doc_type_name,
                CASE
-                 WHEN c.kb_owner_table = 'kb_profiles' AND c.kb_owner_id = $1 THEN '@me'
-                 WHEN c.kb_owner_table = 'kb_teams' THEN '+' || t.slug
+                 WHEN vb.kb_owner_table = 'kb_profiles' AND vb.kb_owner_id = $1 THEN '@me'
+                 WHEN vb.kb_owner_table = 'kb_teams' THEN '+' || vb.team_slug
                  ELSE '@unknown'
                END AS owner_handle,
-               m.managed_meta->>'temper-stage' AS stage,
-               (m.managed_meta->>'temper-seq')::bigint AS seq,
-               m.managed_meta->>'temper-mode' AS mode,
-               m.managed_meta->>'temper-effort' AS effort
-          FROM kb_resources r
-          JOIN visible v ON v.resource_id = r.id
-          JOIN kb_contexts c ON c.id = r.kb_context_id
-          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-          JOIN kb_profiles p ON p.id = r.owner_profile_id
-          LEFT JOIN kb_resource_manifests m ON m.resource_id = r.id
-          LEFT JOIN kb_teams t ON c.kb_owner_table = 'kb_teams' AND t.id = c.kb_owner_id
-          LEFT JOIN kb_fts_index fts ON fts.resource_id = r.id
+               vb.stage, vb.seq, vb.mode, vb.effort
+          FROM vault_resources_browse vb
+          JOIN visible v ON v.resource_id = vb.id
          WHERE {where_clause}
-         ORDER BY {order_clause}
+         ORDER BY {sort}
          LIMIT {limit} OFFSET {offset}
         "#
     );
 
-    // Build a matching COUNT query with the same WHERE.
+    // ── Count query (same WHERE, no ORDER/LIMIT) ──
     let count_sql = format!(
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT COUNT(*) as "count!"
-          FROM kb_resources r
-          JOIN visible v ON v.resource_id = r.id
-          JOIN kb_contexts c ON c.id = r.kb_context_id
-          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-          LEFT JOIN kb_resource_manifests m ON m.resource_id = r.id
-          LEFT JOIN kb_teams t ON c.kb_owner_table = 'kb_teams' AND t.id = c.kb_owner_id
-          LEFT JOIN kb_fts_index fts ON fts.resource_id = r.id
+        SELECT COUNT(*) AS "count!"
+          FROM vault_resources_browse vb
+          JOIN visible v ON v.resource_id = vb.id
          WHERE {where_clause}
         "#
     );
 
-    // Build and execute both queries with the same bindings.
-    let mut query = sqlx::query_as::<_, ResourceRow>(&sql).bind(profile_id);
-    let mut count_query = sqlx::query_scalar::<_, i64>(&count_sql).bind(profile_id);
+    // ── Facets query (doc_type counts, same WHERE) ──
+    let facets_sql = format!(
+        r#"
+        WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
+        SELECT vb.doc_type_name AS facet_key, COUNT(*) AS "count!"
+          FROM vault_resources_browse vb
+          JOIN visible v ON v.resource_id = vb.id
+         WHERE {where_clause}
+         GROUP BY vb.doc_type_name
+         ORDER BY "count!" DESC
+        "#
+    );
 
-    // Bind params in the same order as conditions were added.
-    if let Some(ctx_id) = params.kb_context_id {
-        query = query.bind(ctx_id);
-        count_query = count_query.bind(ctx_id);
-    }
-    if let Some(dt_id) = params.kb_doc_type_id {
-        query = query.bind(dt_id);
-        count_query = count_query.bind(dt_id);
-    }
-    if let Some(ref ctx_name) = params.context_name {
-        query = query.bind(ctx_name);
-        count_query = count_query.bind(ctx_name);
-    }
-    if let Some(ref dt_name) = params.doc_type_name {
-        query = query.bind(dt_name);
-        count_query = count_query.bind(dt_name);
-    }
-    if let Some(ref owner) = params.owner {
-        if let Some(slug) = owner.strip_prefix('+') {
-            query = query.bind(slug.to_string());
-            count_query = count_query.bind(slug.to_string());
-        }
-        // "@me" doesn't add a bind — it references $1 (profile_id)
-    }
-    if let Some(ref q) = params.q {
-        if !q.trim().is_empty() {
-            query = query.bind(q);
-            count_query = count_query.bind(q);
-        }
-    }
+    // ── Execute all three, sharing the same bind values ──
+    let rows_query = filters.bind_all(sqlx::query_as::<_, ResourceRow>(&rows_sql).bind(profile_id));
+    let count_query = filters.bind_all_scalar(sqlx::query_scalar::<_, i64>(&count_sql).bind(profile_id));
 
-    let rows = query.fetch_all(pool).await?;
-    let total = count_query.fetch_one(pool).await?;
+    #[derive(sqlx::FromRow)]
+    struct FacetRow { facet_key: String, count: i64 }
 
-    Ok(ResourceListResponse { rows, total })
+    let facets_query = filters.bind_all(sqlx::query_as::<_, FacetRow>(&facets_sql).bind(profile_id));
+
+    let (rows, total, facet_rows) = tokio::try_join!(
+        async { rows_query.fetch_all(pool).await.map_err(ApiError::from) },
+        async { count_query.fetch_one(pool).await.map_err(ApiError::from) },
+        async { facets_query.fetch_all(pool).await.map_err(ApiError::from) },
+    )?;
+
+    let facets = ResourceFacets {
+        doc_type: facet_rows.into_iter().map(|r| (r.facet_key, r.count)).collect(),
+    };
+
+    Ok(ResourceListResponse { rows, total, facets })
 }
 ```
 
-**Important notes for the implementer:**
-- This uses runtime `sqlx::query_as` (not `sqlx::query_as!` macro) because ORDER BY is dynamic. This is acceptable per CLAUDE.md: the search_service already uses this pattern for the same reason.
-- The `kb_fts_index` table name may be different — grep for `CREATE TABLE.*fts` in the migrations to find the actual name. If FTS is on `kb_chunks` directly, adjust the JOIN accordingly.
-- The bind-parameter numbering must match exactly. If the logic gets complex, consider using a query-builder crate like `sea-query` — but for this scope, string formatting with sequential binds is simpler.
+**Key design decisions:**
+- `vault_resources_browse` view handles all joins — queries are flat SELECT/WHERE against it.
+- `order_clause()` uses two matches (column + direction) — no cartesian product duplication.
+- `build_filters()` collects conditions as a `Vec<String>` via a `FilterBuilder` — no nested if-chains.
+- `bind_all()` applies accumulated bind values to any query — count, rows, and facets share the same filter logic without duplicating the bind chain.
+- Facets are computed in parallel with rows and count via `tokio::try_join!` and bundled into `ResourceListResponse`.
+- FTS uses a subquery `EXISTS (...)` rather than a JOIN, keeping the view simple.
+
+**Note for implementer:** The `FilterBuilder` type signatures for `bind_all` / `bind_all_scalar` may need adjustment for sqlx lifetime gymnastics. If the generic approach proves too finicky, fall back to binding each query individually using a `bind_to(query, &filters.string_binds)` helper function. The important thing is that `build_filters()` is the single source of truth — never duplicate the condition logic.
 
 - [ ] **Step 4: Run the tests**
 
@@ -712,181 +805,28 @@ git add crates/temper-api/src/ crates/temper-api/tests/
 git commit -m "feat(api): extend GET /api/resources with filters, sort, pagination, wrapped response"
 ```
 
-### Task 6: Add compute_facets service + endpoint
+### Task 6: Verify facets are bundled in list response (no separate endpoint)
 
-**Files:**
-- Modify: `crates/temper-api/src/services/resource_service.rs`
-- Modify: `crates/temper-api/src/handlers/resources.rs`
-- Modify: `crates/temper-api/src/routes.rs`
-- Test: `crates/temper-api/tests/resources_facets_test.rs`
+Facets (doc_type counts) are now computed inside `list_visible` and returned as part of `ResourceListResponse.facets`. There is **no separate `/api/resources/facets` endpoint** — that would be a broken REST pattern (adding a sub-resource where an `{id}` is expected).
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Add facets assertion to the existing test**
 
-Create `crates/temper-api/tests/resources_facets_test.rs`:
+In `crates/temper-api/tests/resources_browse_test.rs`, add to `test_list_resources_returns_wrapped_response`:
 
 ```rust
-#![cfg(feature = "test-db")]
-
-mod common;
-
-use serde_json::Value;
-use sqlx::PgPool;
-
-/// GET /api/resources/facets returns doc_type and stage counts.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn test_facets_returns_counts(pool: PgPool) {
-    let app = common::setup_test_app(pool).await;
-    let (token, _) = common::create_test_user(&app, "facets-user").await;
-
-    common::create_test_resource(
-        &app, &token, "Facet Resource",
-        common::fixtures::TEMPER_CONTEXT_ID,
-        common::fixtures::TASK_DOC_TYPE_ID,
-    ).await;
-
-    let resp = app
-        .client
-        .get(app.url("/api/resources/facets"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .unwrap();
-
-    assert_eq!(resp.status().as_u16(), 200);
-    let body: Value = resp.json().await.unwrap();
-    assert!(body["doc_type"].is_object(), "must have doc_type facets");
-    assert!(body["stage"].is_object(), "must have stage facets");
-}
+    // Facets must be present with doc_type counts.
+    assert!(body["facets"].is_object(), "response must have 'facets'");
+    assert!(body["facets"]["doc_type"].is_object(), "facets must have 'doc_type'");
+    // Stage is NOT included in facets — only relevant for tasks, not a global concern.
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 2: Run to verify it passes**
 
 ```bash
-cargo nextest run -p temper-api --features test-db test_facets_returns_counts
+cargo nextest run -p temper-api --features test-db test_list_resources_returns_wrapped_response
 ```
 
-Expected: FAIL — route doesn't exist yet.
-
-- [ ] **Step 3: Implement compute_facets**
-
-Add to `crates/temper-api/src/services/resource_service.rs`:
-
-```rust
-use temper_core::types::resource::ResourceFacets;
-use std::collections::HashMap;
-
-/// Row for facet aggregation.
-#[derive(Debug, sqlx::FromRow)]
-struct FacetRow {
-    facet_key: String,
-    facet_value: Option<String>,
-    count: i64,
-}
-
-pub async fn compute_facets(
-    pool: &PgPool,
-    profile_id: Uuid,
-    params: ResourceListParams,
-) -> ApiResult<ResourceFacets> {
-    // Use the same WHERE conditions as list_visible but GROUP BY instead of paginate.
-    // For simplicity, compute two queries: one for doc_type, one for stage.
-    let doc_type_rows = sqlx::query_as::<_, FacetRow>(
-        r#"
-        WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT dt.name AS facet_key, NULL AS facet_value,
-               COUNT(*) AS count
-          FROM kb_resources r
-          JOIN visible v ON v.resource_id = r.id
-          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-         WHERE r.is_active = true
-         GROUP BY dt.name
-         ORDER BY count DESC
-        "#,
-    )
-    .bind(profile_id)
-    .fetch_all(pool)
-    .await?;
-
-    let stage_rows = sqlx::query_as::<_, FacetRow>(
-        r#"
-        WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT COALESCE(m.managed_meta->>'temper-stage', 'none') AS facet_key,
-               NULL AS facet_value,
-               COUNT(*) AS count
-          FROM kb_resources r
-          JOIN visible v ON v.resource_id = r.id
-          LEFT JOIN kb_resource_manifests m ON m.resource_id = r.id
-         WHERE r.is_active = true
-         GROUP BY facet_key
-         ORDER BY count DESC
-        "#,
-    )
-    .bind(profile_id)
-    .fetch_all(pool)
-    .await?;
-
-    let doc_type: HashMap<String, i64> = doc_type_rows
-        .into_iter()
-        .map(|r| (r.facet_key, r.count))
-        .collect();
-
-    let stage: HashMap<String, i64> = stage_rows
-        .into_iter()
-        .map(|r| (r.facet_key, r.count))
-        .collect();
-
-    Ok(ResourceFacets { doc_type, stage })
-}
-```
-
-**Note:** This simplified version doesn't apply the context_name/doc_type_name/owner/q filters to the facet queries. For v1 this is acceptable — facets show the global distribution. If filtered facets are needed, add the same WHERE-clause builder from `list_visible`. The spec says "same access predicate, same WHERE filters" — implement that if time permits, or add a TODO and come back in a follow-up.
-
-- [ ] **Step 4: Add the handler**
-
-In `crates/temper-api/src/handlers/resources.rs`:
-
-```rust
-use temper_core::types::resource::ResourceFacets;
-
-#[utoipa::path(
-    get,
-    path = "/api/resources/facets",
-    tag = "Resources",
-    params(ResourceListParams),
-    security(("bearer_auth" = [])),
-    responses(
-        (status = 200, description = "Facet counts", body = ResourceFacets),
-        (status = 401, description = "Unauthorized", body = ErrorBody),
-    )
-)]
-pub async fn facets(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Query(params): Query<ResourceListParams>,
-) -> ApiResult<Json<ResourceFacets>> {
-    resource_service::compute_facets(&state.pool, auth.0.profile.id, params)
-        .await
-        .map(Json)
-}
-```
-
-- [ ] **Step 5: Wire the route**
-
-In `crates/temper-api/src/routes.rs`, inside the `gated` router, add before the existing `/api/resources` route:
-
-```rust
-.route("/api/resources/facets", get(handlers::resources::facets))
-```
-
-**Important:** This route must come BEFORE `/api/resources/{id}` to avoid path conflicts — `facets` would match as an `{id}` param otherwise.
-
-- [ ] **Step 6: Run tests, commit**
-
-```bash
-cargo nextest run -p temper-api --features test-db test_facets
-git add crates/temper-api/
-git commit -m "feat(api): add GET /api/resources/facets endpoint"
-```
+Expected: PASS (facets were implemented in Task 5's `list_visible` rewrite).
 
 ### Task 7: Add resolve_by_uri service + endpoint
 
@@ -964,7 +904,7 @@ cargo nextest run -p temper-api --features test-db test_resolve_by_uri
 
 - [ ] **Step 3: Implement resolve_by_uri**
 
-Add to `crates/temper-api/src/services/resource_service.rs`:
+Add to `crates/temper-api/src/services/resource_service.rs`. Uses the same `vault_resources_browse` view — no duplicated joins:
 
 ```rust
 /// Query params for the by-uri endpoint.
@@ -982,37 +922,26 @@ pub async fn resolve_by_uri(
     profile_id: Uuid,
     params: ResolveByUriParams,
 ) -> ApiResult<ResourceRow> {
-    // Try ident as UUID first, then as slug.
     let ident_uuid = Uuid::try_parse(&params.ident).ok();
 
     let row = sqlx::query_as::<_, ResourceRow>(
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug, r.originator_profile_id, r.owner_profile_id, r.is_active,
-               r.created, r.updated,
-               c.name AS context_name,
-               dt.name AS doc_type_name,
+        SELECT vb.id, vb.kb_context_id, vb.kb_doc_type_id, vb.origin_uri,
+               vb.title, vb.slug, vb.originator_profile_id, vb.owner_profile_id,
+               vb.is_active, vb.created, vb.updated,
+               vb.context_name, vb.doc_type_name,
                CASE
-                 WHEN c.kb_owner_table = 'kb_profiles' AND c.kb_owner_id = $1 THEN '@me'
-                 WHEN c.kb_owner_table = 'kb_teams' THEN '+' || t.slug
+                 WHEN vb.kb_owner_table = 'kb_profiles' AND vb.kb_owner_id = $1 THEN '@me'
+                 WHEN vb.kb_owner_table = 'kb_teams' THEN '+' || vb.team_slug
                  ELSE '@unknown'
                END AS owner_handle,
-               m.managed_meta->>'temper-stage' AS stage,
-               (m.managed_meta->>'temper-seq')::bigint AS seq,
-               m.managed_meta->>'temper-mode' AS mode,
-               m.managed_meta->>'temper-effort' AS effort
-          FROM kb_resources r
-          JOIN visible v ON v.resource_id = r.id
-          JOIN kb_contexts c ON c.id = r.kb_context_id
-          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-          JOIN kb_profiles p ON p.id = r.owner_profile_id
-          LEFT JOIN kb_resource_manifests m ON m.resource_id = r.id
-          LEFT JOIN kb_teams t ON c.kb_owner_table = 'kb_teams' AND t.id = c.kb_owner_id
-         WHERE r.is_active = true
-           AND c.name = $2
-           AND dt.name = $3
-           AND (r.id = $4 OR r.slug = $5)
+               vb.stage, vb.seq, vb.mode, vb.effort
+          FROM vault_resources_browse vb
+          JOIN visible v ON v.resource_id = vb.id
+         WHERE vb.context_name = $2
+           AND vb.doc_type_name = $3
+           AND (vb.id = $4 OR vb.slug = $5)
         "#,
     )
     .bind(profile_id)
@@ -1678,12 +1607,13 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     Object.fromEntries(url.searchParams)
   ).toString();
 
-  const [resources, facets] = await Promise.all([
-    apiGet(`/api/resources${qs ? `?${qs}` : ''}`, locals.accessToken),
-    apiGet(`/api/resources/facets${qs ? `?${qs}` : ''}`, locals.accessToken).catch(() => null),
-  ]);
+  // Single request — facets are bundled in the response.
+  const resources = await apiGet(
+    `/api/resources${qs ? `?${qs}` : ''}`,
+    locals.accessToken
+  );
 
-  return { resources, facets };
+  return { resources };
 };
 ```
 
@@ -1708,7 +1638,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     caption="{data.resources?.total ?? 0} resources"
   />
 
-  <FacetChips facets={data.facets?.doc_type ?? null} />
+  <FacetChips facets={data.resources?.facets?.doc_type ?? null} />
 
   {#if data.resources?.rows?.length > 0}
     <VaultGrid rows={data.resources.rows} total={data.resources.total} />
@@ -1735,12 +1665,9 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
   }).toString();
 
   try {
-    const [resources, facets] = await Promise.all([
-      apiGet(`/api/resources?${qs}`, locals.accessToken),
-      apiGet(`/api/resources/facets?${qs}`, locals.accessToken).catch(() => null),
-    ]);
-
-    return { resources, facets, contextName: params.context, owner: params.owner };
+    // Single request — facets bundled in response.
+    const resources = await apiGet(`/api/resources?${qs}`, locals.accessToken);
+    return { resources, contextName: params.context, owner: params.owner };
   } catch (e: any) {
     if (e?.status === 404) {
       error(404, `Context "${params.context}" not found`);
@@ -1771,7 +1698,7 @@ export const load: PageServerLoad = async ({ params, url, locals }) => {
     caption="{data.resources?.total ?? 0} resources"
   />
 
-  <FacetChips facets={data.facets?.doc_type ?? null} />
+  <FacetChips facets={data.resources?.facets?.doc_type ?? null} />
 
   {#if data.resources?.rows?.length > 0}
     <VaultGrid rows={data.resources.rows} total={data.resources.total} />
@@ -2202,12 +2129,9 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     ...Object.fromEntries(url.searchParams),
   }).toString();
 
-  const [resources, facets] = await Promise.all([
-    apiGet(`/api/resources?${qs}`, locals.accessToken),
-    apiGet(`/api/resources/facets?${qs}`, locals.accessToken).catch(() => null),
-  ]);
-
-  return { resources, facets, query: q };
+  // Single request — facets bundled in response.
+  const resources = await apiGet(`/api/resources?${qs}`, locals.accessToken);
+  return { resources, query: q };
 };
 ```
 
@@ -2233,7 +2157,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
     <a href="/vault/all" class="text-xs text-zinc-500 hover:text-zinc-300 ml-auto">&times; Clear</a>
   </div>
 
-  <FacetChips facets={data.facets?.doc_type ?? null} />
+  <FacetChips facets={data.resources?.facets?.doc_type ?? null} />
 
   {#if data.resources?.rows?.length > 0}
     <VaultGrid rows={data.resources.rows} total={data.resources.total} />
@@ -2356,9 +2280,9 @@ git commit -m "fix(temper-ui): smoke test fixes"
 
 | Phase | Tasks | Description |
 |---|---|---|
-| 0 | 1 | Database migration (JSONB indexes) |
+| 0 | 1 | Database migration (JSONB indexes + vault_resources_browse view) |
 | 1 | 2-4 | Shared types in temper-core |
-| 2 | 5-8 | API service layer + handlers (TDD) |
+| 2 | 5-8 | API service layer + handlers (TDD, queries use the view) |
 | 3 | 9-10 | Cascade fixes + ts-rs/sqlx regen |
 | 4 | 11-15 | SvelteKit shell (deps, components, sidebar layout) |
 | 5 | 16-18 | Vault grid pages (/vault/all, /vault/[owner]/[context]) |
