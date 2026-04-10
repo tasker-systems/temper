@@ -181,6 +181,17 @@ pub struct CreateResourceParams<'a> {
 /// This handles resource + manifest + event creation WITHOUT chunk insertion,
 /// making it reusable for both the full ingest path (CLI with pre-computed chunks)
 /// and the MCP content creation path (no chunks).
+///
+/// # Atomicity
+///
+/// All writes performed by this function — the `kb_resources` insert, the
+/// `kb_resource_manifests` insert, and the `kb_events` + `kb_resource_audits`
+/// rows produced by `insert_event_and_audit` — run inside a single
+/// `sqlx::Transaction` opened at the top of the function and committed at the
+/// end. A mid-call failure aborts the transaction and leaves no partial state
+/// in any of those tables. Callers that need additional writes (e.g. chunk
+/// persistence) must handle them separately; this function does not extend
+/// its transaction across the call boundary.
 pub async fn create_resource_with_manifest(
     pool: &PgPool,
     params: &CreateResourceParams<'_>,
