@@ -66,7 +66,7 @@ impl FilterBuilder {
 
     fn push_fts(&mut self, query: &str) {
         self.conditions.push(format!(
-            "EXISTS (SELECT 1 FROM kb_fts_index fts WHERE fts.resource_id = vb.id AND fts.search_vector @@ plainto_tsquery('english', ${}))",
+            "EXISTS (SELECT 1 FROM kb_resource_search_index fts WHERE fts.resource_id = vb.id AND fts.search_vector @@ plainto_tsquery('english', ${}))",
             self.next_param
         ));
         self.binds.push(BindValue::Text(query.to_string()));
@@ -89,6 +89,9 @@ impl FilterBuilder {
             ));
             self.binds.push(BindValue::Text(slug.to_string()));
             self.next_param += 1;
+        } else {
+            // Unrecognized owner format — match nothing.
+            self.conditions.push("false".to_string());
         }
     }
 
@@ -101,15 +104,10 @@ impl FilterBuilder {
     }
 
     /// Bind all accumulated values onto a query in order.
-    fn bind_all<'q>(
+    fn bind_all<'q, T: Send + Unpin>(
         &'q self,
-        mut query: sqlx::query::QueryAs<
-            'q,
-            sqlx::Postgres,
-            ResourceRow,
-            sqlx::postgres::PgArguments,
-        >,
-    ) -> sqlx::query::QueryAs<'q, sqlx::Postgres, ResourceRow, sqlx::postgres::PgArguments> {
+        mut query: sqlx::query::QueryAs<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments>,
+    ) -> sqlx::query::QueryAs<'q, sqlx::Postgres, T, sqlx::postgres::PgArguments> {
         for bind in &self.binds {
             match bind {
                 BindValue::Uuid(u) => query = query.bind(u),
@@ -174,7 +172,11 @@ fn order_clause(sort: Option<ResourceSortField>, order: Option<SortOrder>) -> St
         SortOrder::Desc => "DESC",
         SortOrder::Asc => "ASC",
     };
-    format!(" ORDER BY {column} {direction}")
+    let nulls = match sort.unwrap_or_default() {
+        ResourceSortField::Stage | ResourceSortField::Seq => " NULLS LAST",
+        _ => "",
+    };
+    format!(" ORDER BY {column} {direction}{nulls}")
 }
 
 /// Owner handle SQL expression (CASE ... END AS owner_handle).
@@ -247,16 +249,8 @@ pub async fn list_visible(
 
     let count_query = fb.bind_all_scalar(sqlx::query_scalar::<_, i64>(&count_sql).bind(profile_id));
 
-    let facets_query_bound = {
-        let mut q = sqlx::query_as::<_, FacetRow>(&facets_sql).bind(profile_id);
-        for bind in &fb.binds {
-            match bind {
-                BindValue::Uuid(u) => q = q.bind(u),
-                BindValue::Text(t) => q = q.bind(t.as_str()),
-            }
-        }
-        q
-    };
+    let facets_query_bound =
+        fb.bind_all(sqlx::query_as::<_, FacetRow>(&facets_sql).bind(profile_id));
 
     let (rows, count_opt, facet_rows) = tokio::try_join!(
         rows_query.fetch_all(pool),
