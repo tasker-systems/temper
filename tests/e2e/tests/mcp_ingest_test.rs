@@ -630,3 +630,93 @@ async fn context_auto_creation_for_ingest(pool: sqlx::PgPool) {
         .expect("should find created context");
     assert_eq!(found.id, created.id);
 }
+
+/// Update rejects tier-2 structural fields (temper-context, temper-type) in managed_meta.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn update_resource_rejects_tier2_fields_in_managed_meta(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let profile_id = ProfileId::from(
+        sqlx::query_scalar!(
+            "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile lookup"),
+    );
+
+    context_service::create(&pool, profile_id, "tier2-reject-test")
+        .await
+        .expect("context create");
+
+    let context = context_service::resolve_by_name(&pool, profile_id, "tier2-reject-test")
+        .await
+        .expect("context resolve");
+    let doc_type_id = ingest_service::resolve_doc_type(&pool, "research")
+        .await
+        .expect("doc_type");
+
+    // Create a resource first
+    let content = "# Tier-2 Test\n\nContent for tier-2 rejection test.";
+    let body_hash = format!("sha256:{}", sha2_hex(content));
+    let empty = serde_json::json!({});
+
+    let resource = ingest_service::create_resource_with_manifest(
+        &pool,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "e2e-test-device",
+            context_id: context.id,
+            doc_type_id,
+            title: "Tier-2 Rejection Test",
+            slug: Some("tier2-rejection-test"),
+            origin_uri: "mcp://test/tier2-reject",
+            content_hash: &body_hash,
+            managed_meta: &empty,
+            open_meta: &empty,
+            chunks_packed: None,
+        },
+    )
+    .await
+    .expect("create resource");
+
+    // Attempt update with tier-2 field temper-context
+    let empty_chunks = temper_core::types::ingest::pack_chunks(&[]).expect("pack empty chunks");
+    let update_payload = temper_core::types::ingest::IngestPayload {
+        title: "Tier-2 Rejection Test".to_string(),
+        origin_uri: "mcp://test/tier2-reject".to_string(),
+        context_name: "tier2-reject-test".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(body_hash.clone()),
+        slug: "tier2-rejection-test".to_string(),
+        content: content.to_string(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({"temper-context": "other-context"})),
+        open_meta: None,
+        chunks_packed: Some(empty_chunks),
+    };
+
+    let result = ingest_service::update(
+        &pool,
+        profile_id,
+        resource.id,
+        "e2e-test-device",
+        update_payload,
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "should reject tier-2 field in managed_meta"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("temper-context") || err_msg.contains("structural move"),
+        "error should mention the field or structural move: {err_msg}"
+    );
+}

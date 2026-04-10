@@ -567,6 +567,23 @@ pub async fn update(
         return Err(ApiError::NotFound);
     }
 
+    // Strip tier-1 fields and check for tier-2 structural moves
+    let stripped_managed_meta = payload.managed_meta.take().map(strip_system_managed_fields);
+    if let Some(ref meta) = stripped_managed_meta {
+        if let Some(obj) = meta.as_object() {
+            for field in &["temper-context", "temper-type"] {
+                if obj.contains_key(*field) {
+                    return Err(IngestError::StructuralMoveNotSupported {
+                        field: field.to_string(),
+                        message: format!("use dedicated move command to change {field}"),
+                    }
+                    .into());
+                }
+            }
+        }
+    }
+    payload.managed_meta = stripped_managed_meta;
+
     // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
     #[cfg(feature = "ingest-pipeline")]
     if payload.chunks_packed.is_none() {
