@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { marked } from 'marked';
+	import { browser } from '$app/environment';
 
 	interface Props {
 		markdown: string;
@@ -7,11 +8,20 @@
 
 	let { markdown }: Props = $props();
 
-	// NOTE: DOMPurify is skipped for L0. Content comes from our own API (vault
-	// markdown authored by the user). Adding sanitization is a defense-in-depth
-	// improvement for a future pass — it requires SSR-compatible setup (jsdom or
-	// client-only rendering).
-	let html = $derived(markdown ? marked.parse(markdown, { async: false }) as string : '');
+	let sanitizer: ((dirty: string) => string) | null = $state(null);
+
+	// Load DOMPurify on the client only — it requires a DOM.
+	if (browser) {
+		import('dompurify').then((mod) => {
+			sanitizer = (dirty: string) => mod.default.sanitize(dirty);
+		});
+	}
+
+	let html = $derived.by(() => {
+		if (!markdown) return '';
+		const raw = marked.parse(markdown, { async: false }) as string;
+		return sanitizer ? sanitizer(raw) : raw;
+	});
 </script>
 
 {#if markdown}
