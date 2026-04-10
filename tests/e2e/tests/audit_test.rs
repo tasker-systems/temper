@@ -24,7 +24,7 @@ async fn ingest_test_resource(app: &common::E2eTestApp, suffix: &str) -> (uuid::
         slug: format!("audit-test-{suffix}"),
         content: format!("# Audit Test {suffix}\n\nContent for audit testing."),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -93,7 +93,7 @@ async fn audit_row_created_on_update(pool: sqlx::PgPool) {
         slug: "audit-test-update".to_string(),
         content: "# Updated\n\nNew content.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };

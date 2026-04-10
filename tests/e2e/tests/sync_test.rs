@@ -64,7 +64,7 @@ async fn sync_status_detects_server_resource(pool: sqlx::PgPool) {
 
         content: "# Sync Test\n\nContent for sync testing.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -132,7 +132,7 @@ async fn sync_status_matching_hash_no_diff(pool: sqlx::PgPool) {
 
         content: "# Match\n\nSame on both sides.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -225,7 +225,7 @@ async fn sync_status_round_trips_owner_scoped_manifest_entry(pool: sqlx::PgPool)
         slug: "sync-owner-scoped-doc".to_string(),
         content: "# Owner scoped\n\nBuilt via build_status_request.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -368,7 +368,7 @@ async fn sync_complete_updates_content_hash(pool: sqlx::PgPool) {
 
         content: "# Complete\n\nFor sync complete testing.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -458,7 +458,7 @@ async fn sync_manifest_returns_resources(pool: sqlx::PgPool) {
 
         content: "# Manifest Test\n\nContent for manifest testing.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -655,7 +655,7 @@ async fn sync_manifest_handles_null_last_audit_id(pool: sqlx::PgPool) {
         slug: "no-audit-doc".to_string(),
         content: "# No Audit\n\nResource with audit rows removed.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -724,7 +724,7 @@ async fn sync_manifest_excludes_inactive(pool: sqlx::PgPool) {
 
         content: "# Will Be Deleted".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -802,7 +802,7 @@ async fn sync_refresh_produces_owner_scoped_path_for_server_only_resource(pool: 
         slug: "server-only-doc".to_string(),
         content: "# Server only\n\nnothing local yet.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
@@ -892,7 +892,7 @@ async fn sync_reset_produces_owner_scoped_path_for_server_only_resource(pool: sq
         slug: "reset-server-only".to_string(),
         content: "# Reset\n\nno local copy.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };

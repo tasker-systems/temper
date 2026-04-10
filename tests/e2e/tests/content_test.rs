@@ -43,7 +43,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         slug: "content-retrieval-doc".to_string(),
         content: chunk_content.to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&chunks).expect("encode chunks")),
     };

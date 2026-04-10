@@ -65,7 +65,7 @@ async fn events_appear_after_resource_creation(pool: sqlx::PgPool) {
         slug: "e2e-events-test-doc".to_string(),
         content: "# E2E Events Test\n\nThis document is used for events e2e testing.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };

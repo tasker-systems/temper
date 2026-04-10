@@ -36,7 +36,7 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         slug: "e2e-test-document".to_string(),
         content: "# E2E Test\n\nThis is a test document for e2e testing.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };

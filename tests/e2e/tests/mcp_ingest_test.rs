@@ -389,7 +389,7 @@ async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
         slug: "chunk-update-test".to_string(),
         content: updated_content.to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
         chunks_packed: Some(updated_packed),
     };
