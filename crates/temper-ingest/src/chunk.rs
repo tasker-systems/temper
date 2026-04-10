@@ -532,6 +532,6 @@ mod tests {
     fn estimate_tokens_reasonable() {
         // "hello world" = 11 chars → ~3 tokens at 3.5 c/t
         let tokens = estimate_tokens("hello world");
-        assert!(tokens >= 2 && tokens <= 5, "got {tokens}");
+        assert!((2..=5).contains(&tokens), "got {tokens}");
     }
 }

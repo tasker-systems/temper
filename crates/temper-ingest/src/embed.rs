@@ -1,6 +1,6 @@
 //! Text embedding using BAAI/bge-base-en-v1.5 via ONNX Runtime.
 //!
-//! Model downloaded on first use via hf-hub, cached at ~/.cache/huggingface/.
+//! Model loaded from bundled bytes at compile time (no runtime downloads).
 //! ONNX session created once per process via OnceLock.
 //!
 //! Pipeline: tokenize -> build tensors -> inference -> mean pool -> normalize
@@ -17,7 +17,8 @@ use crate::error::{EmbedError, Result};
 /// Embedding dimension for bge-base-en-v1.5.
 pub const EMBEDDING_DIM: usize = 768;
 
-const MODEL_REPO: &str = "BAAI/bge-base-en-v1.5";
+static MODEL_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/model_quantized.onnx");
+static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/tokenizer.json");
 
 // ---- Model management ----
 
@@ -30,25 +31,15 @@ static MODEL: OnceLock<std::result::Result<Model, String>> = OnceLock::new();
 
 fn load_model() -> Result<&'static Model> {
     let result = MODEL.get_or_init(|| {
-        let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
-        let repo = api.model(MODEL_REPO.to_string());
-
-        let model_path = repo
-            .get("onnx/model.onnx")
-            .map_err(|e| format!("download model: {e}"))?;
-        let tokenizer_path = repo
-            .get("tokenizer.json")
-            .map_err(|e| format!("download tokenizer: {e}"))?;
-
         let session = Session::builder()
             .map_err(|e| format!("ort session builder: {e}"))?
             .with_intra_threads(1)
             .map_err(|e| format!("ort threads: {e}"))?
-            .commit_from_file(&model_path)
+            .commit_from_memory(MODEL_BYTES)
             .map_err(|e| format!("ort load: {e}"))?;
 
         let tokenizer =
-            Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("load tokenizer: {e}"))?;
+            Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
 
         Ok(Model {
             session: Mutex::new(session),
