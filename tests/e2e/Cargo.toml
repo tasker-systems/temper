@@ -15,6 +15,7 @@ temper-api = { path = "../../crates/temper-api" }
 temper-cli = { path = "../../crates/temper-cli" }
 temper-client = { path = "../../crates/temper-client" }
 temper-core = { path = "../../crates/temper-core" }
+temper-mcp = { path = "../../crates/temper-mcp" }
 tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migrate"] }
 reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
@@ -31,3 +32,4 @@ base64 = "0.22"
 rmp-serde = "1"
 sha2 = "0.10"
 hex = "0.4"
+serde_yaml = "0.9"
