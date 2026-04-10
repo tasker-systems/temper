@@ -81,7 +81,6 @@ impl From<IngestError> for crate::error::ApiError {
 /// validation errors. Tier-2 fields (`temper-context`, `temper-type`, `slug`) are
 /// NOT stripped here — they remain present so we can detect structural-move
 /// attempts in the update path.
-#[expect(dead_code, reason = "used by MCP and update paths")]
 fn strip_system_managed_fields(mut meta: serde_json::Value) -> serde_json::Value {
     const TIER1_FIELDS: &[&str] = &[
         "temper-id",
@@ -560,6 +559,174 @@ pub async fn update(
     tx.commit().await?;
 
     Ok(resource)
+}
+
+/// Parameters for schema validation at the service-layer boundary.
+// NOTE: #[allow] rather than #[expect] because --all-targets compiles both lib
+// and lib-test, and #[expect(dead_code)] would be unfulfilled in the test binary
+// where the test module uses these symbols.
+#[allow(dead_code)]
+pub(crate) struct ValidateParams<'a> {
+    pub doc_type: &'a str,
+    pub managed_meta: Option<&'a serde_json::Value>,
+    pub slug: &'a str,
+    pub title: &'a str,
+    pub context_name: &'a str,
+}
+
+/// Validate managed_meta against the doc_type schema, merging in top-level
+/// parameters so schema-required tier-2 fields (slug, temper-context, temper-type)
+/// are satisfied without the agent having to pass them inside managed_meta.
+#[allow(dead_code)]
+pub(crate) fn validate_managed_meta(params: &ValidateParams<'_>) -> Result<(), IngestError> {
+    use serde_json::json;
+
+    // 1. Start with managed_meta (or empty object)
+    let mut synthetic: serde_json::Value =
+        params.managed_meta.cloned().unwrap_or_else(|| json!({}));
+
+    // 2. Strip tier-1 fields (defensive)
+    synthetic = strip_system_managed_fields(synthetic);
+
+    // 3. Ensure it's an object
+    if !synthetic.is_object() {
+        return Err(IngestError::InvalidManagedMeta(
+            "managed_meta must be a JSON object".to_owned(),
+        ));
+    }
+
+    let obj = synthetic.as_object_mut().unwrap();
+
+    // 4. Inject tier-2 fields and tier-1 placeholders for schema required checks
+    obj.insert("slug".to_owned(), json!(params.slug));
+    obj.insert("title".to_owned(), json!(params.title));
+    obj.insert("temper-context".to_owned(), json!(params.context_name));
+    obj.insert("temper-type".to_owned(), json!(params.doc_type));
+    obj.insert(
+        "temper-id".to_owned(),
+        json!("00000000-0000-0000-0000-000000000000"),
+    );
+    obj.insert("temper-created".to_owned(), json!("2000-01-01T00:00:00Z"));
+
+    // 5. Convert JSON → serde_yaml::Value for validate_frontmatter
+    let yaml_value: serde_yaml::Value = serde_yaml::to_value(&synthetic)
+        .map_err(|e| IngestError::InvalidManagedMeta(format!("JSON→YAML conversion: {e}")))?;
+
+    // 6. Validate
+    let issues = temper_core::schema::validate_frontmatter(params.doc_type, &yaml_value)
+        .map_err(|e| IngestError::InvalidManagedMeta(format!("schema load: {e}")))?;
+
+    if issues.is_empty() {
+        Ok(())
+    } else {
+        Err(IngestError::Validation {
+            doc_type: params.doc_type.to_owned(),
+            issues,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests_validate_managed_meta {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn validates_task_with_complete_managed_meta() {
+        let managed_meta =
+            json!({"temper-stage": "backlog", "temper-mode": "build", "temper-effort": "medium"});
+        let params = ValidateParams {
+            doc_type: "task",
+            managed_meta: Some(&managed_meta),
+            slug: "test-task",
+            title: "Test Task",
+            context_name: "ctx",
+        };
+        let result = validate_managed_meta(&params);
+        assert!(
+            result.is_ok(),
+            "task with complete meta should validate: {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_task_missing_temper_stage() {
+        let managed_meta = json!({"temper-mode": "build"});
+        let params = ValidateParams {
+            doc_type: "task",
+            managed_meta: Some(&managed_meta),
+            slug: "test-task",
+            title: "Test Task",
+            context_name: "ctx",
+        };
+        let result = validate_managed_meta(&params);
+        match result {
+            Err(IngestError::Validation { doc_type, issues }) => {
+                assert_eq!(doc_type, "task");
+                assert!(
+                    issues
+                        .iter()
+                        .any(|i| i.path.contains("temper-stage")
+                            || i.message.contains("temper-stage")),
+                    "should mention temper-stage: {issues:?}"
+                );
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validates_session_with_date_in_managed_meta() {
+        let managed_meta = json!({"date": "2026-04-10"});
+        let params = ValidateParams {
+            doc_type: "session",
+            managed_meta: Some(&managed_meta),
+            slug: "test-session",
+            title: "Test Session",
+            context_name: "ctx",
+        };
+        let result = validate_managed_meta(&params);
+        assert!(
+            result.is_ok(),
+            "session with date in managed_meta should validate: {result:?}"
+        );
+    }
+
+    #[test]
+    fn synthetic_merge_injects_slug_from_params() {
+        let managed_meta = json!({"temper-stage": "backlog"});
+        let params = ValidateParams {
+            doc_type: "task",
+            managed_meta: Some(&managed_meta),
+            slug: "slug-from-params",
+            title: "T",
+            context_name: "ctx",
+        };
+        let result = validate_managed_meta(&params);
+        assert!(
+            result.is_ok(),
+            "slug from params should satisfy schema: {result:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_enum_value() {
+        let managed_meta = json!({"temper-stage": "bogus-stage"});
+        let params = ValidateParams {
+            doc_type: "task",
+            managed_meta: Some(&managed_meta),
+            slug: "t",
+            title: "T",
+            context_name: "ctx",
+        };
+        let result = validate_managed_meta(&params);
+        match result {
+            Err(IngestError::Validation { issues, .. }) => {
+                assert!(!issues.is_empty(), "should have validation issues");
+            }
+            other => panic!("expected Validation error, got {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
