@@ -53,6 +53,7 @@ These are available as function calls during conversation:
 - `get_resource` — get one resource by ID or slug (pass `include_content: true` for full markdown)
 - `search` — semantic search across all resources
 - `list_doc_types` — discover available document types
+- `describe_doc_type` — get the JSON Schema and example_managed_meta for a specific type
 
 **Write operations:**
 - `create_resource` — add a new document to the knowledge base (include `content` field to write markdown in one call)
@@ -87,10 +88,10 @@ These are available as function calls during conversation:
 ### "Write content to the knowledge base"
 
 1. Use `list_doc_types` to see available document types
-2. Use `list_contexts` to check existing contexts
-3. Ask Claude to use `create_resource` with your content, context, and doc type
-4. The resource is created immediately and becomes searchable shortly after
-5. Use the returned `id` to reference the content later
+2. Optionally use `describe_doc_type` to get the JSON Schema and an `example_managed_meta` template
+3. Use `list_contexts` to check existing contexts
+4. Ask Claude to use `create_resource` with your content, context, doc type, and any `managed_meta` fields
+5. The resource is created, validated, and embedded in a single call — returned immediately with an `id`
 
 ### "Update my notes"
 
