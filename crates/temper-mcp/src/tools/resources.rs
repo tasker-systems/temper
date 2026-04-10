@@ -324,6 +324,9 @@ pub async fn create_resource(
             content_hash: hash_for_manifest,
             managed_meta: &empty_json,
             open_meta: &empty_json,
+            // No chunks here — chunk persistence happens later via the
+            // async content-ingest POST spawned below.
+            chunks_packed: None,
         },
     )
     .await

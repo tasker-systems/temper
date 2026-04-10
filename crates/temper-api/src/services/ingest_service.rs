@@ -161,7 +161,8 @@ async fn replace_chunks(
     Ok(count)
 }
 
-/// Everything needed to create a resource with its manifest in one transaction.
+/// Everything needed to create a resource with its manifest (and optional chunks)
+/// in one transaction.
 #[derive(Debug)]
 pub struct CreateResourceParams<'a> {
     pub profile_id: ProfileId,
@@ -174,24 +175,29 @@ pub struct CreateResourceParams<'a> {
     pub content_hash: &'a str,
     pub managed_meta: &'a serde_json::Value,
     pub open_meta: &'a serde_json::Value,
+    /// Wire-format (`base64`-encoded MessagePack) packed chunks. `None` for
+    /// callers that have no chunks to persist (e.g. the MCP create-resource
+    /// path, which delegates content ingest to a follow-up async POST).
+    pub chunks_packed: Option<&'a str>,
 }
 
-/// Create a resource with its manifest and event/audit trail in a single transaction.
+/// Create a resource with its manifest, event/audit trail, and chunk rows in
+/// a single transaction.
 ///
-/// This handles resource + manifest + event creation WITHOUT chunk insertion,
-/// making it reusable for both the full ingest path (CLI with pre-computed chunks)
-/// and the MCP content creation path (no chunks).
+/// This handles resource + manifest + event creation, plus optional chunk
+/// persistence, making it reusable for both the full ingest path (CLI with
+/// pre-computed chunks) and the MCP content creation path (no chunks).
 ///
 /// # Atomicity
 ///
 /// All writes performed by this function — the `kb_resources` insert, the
-/// `kb_resource_manifests` insert, and the `kb_events` + `kb_resource_audits`
-/// rows produced by `insert_event_and_audit` — run inside a single
+/// `kb_resource_manifests` insert, the `kb_events` + `kb_resource_audits` rows
+/// produced by `insert_event_and_audit`, and the `kb_resource_chunks` rows
+/// inserted via `persist_resource_chunks` — run inside a single
 /// `sqlx::Transaction` opened at the top of the function and committed at the
-/// end. A mid-call failure aborts the transaction and leaves no partial state
-/// in any of those tables. Callers that need additional writes (e.g. chunk
-/// persistence) must handle them separately; this function does not extend
-/// its transaction across the call boundary.
+/// end. A mid-call failure aborts the transaction and leaves no partial state.
+/// Callers do not need (and cannot) extend the transaction across the call
+/// boundary — every write that belongs with the resource is included.
 pub async fn create_resource_with_manifest(
     pool: &PgPool,
     params: &CreateResourceParams<'_>,
@@ -259,6 +265,16 @@ pub async fn create_resource_with_manifest(
     )
     .await?;
 
+    // Persist chunks (if any) inside the same transaction so the full
+    // resource + manifest + event + chunks write is one atomic unit.
+    if let Some(packed) = params.chunks_packed {
+        let chunks = unpack_chunks(packed)
+            .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
+        if !chunks.is_empty() {
+            persist_chunks(&mut tx, resource_id, &chunks).await?;
+        }
+    }
+
     tx.commit().await?;
 
     Ok(resource)
@@ -283,11 +299,7 @@ pub async fn ingest(
         return Ok(existing);
     }
 
-    // 4. Decode chunks
-    let chunks = unpack_chunks(&payload.chunks_packed)
-        .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
-
-    // 5. Compute meta
+    // 4. Compute meta
     let empty_json = serde_json::json!({});
     let managed_meta = payload
         .managed_meta
@@ -298,7 +310,7 @@ pub async fn ingest(
         .clone()
         .unwrap_or_else(|| empty_json.clone());
 
-    // 6. Create resource + manifest + event
+    // 5. Create resource + manifest + event + chunks atomically
     let resource = create_resource_with_manifest(
         pool,
         &CreateResourceParams {
@@ -312,55 +324,12 @@ pub async fn ingest(
             content_hash: &payload.content_hash,
             managed_meta: &managed_meta,
             open_meta: &open_meta,
+            chunks_packed: Some(&payload.chunks_packed),
         },
     )
     .await?;
 
-    // 7. Insert chunks in a separate transaction (if any)
-    if !chunks.is_empty() {
-        let mut tx = pool.begin().await?;
-        persist_chunks(&mut tx, resource.id, &chunks).await?;
-        tx.commit().await?;
-    }
-
     Ok(resource)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hash_empty_object() {
-        let hash = hash_json_value(&serde_json::json!({}));
-        assert_eq!(
-            hash,
-            "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
-        );
-    }
-
-    #[test]
-    fn hash_key_order_independent() {
-        let a = hash_json_value(&serde_json::json!({"b": 2, "a": 1}));
-        let b = hash_json_value(&serde_json::json!({"a": 1, "b": 2}));
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn hash_json_shared_fixture() {
-        let fixture = serde_json::json!({
-            "temper-type": "task",
-            "temper-stage": "in-progress",
-            "temper-seq": 42,
-            "title": "Test task"
-        });
-        let hash = hash_json_value(&fixture);
-        // This exact value must match the TypeScript canonicalJsonHash test
-        assert_eq!(
-            hash,
-            "sha256:d39e1380d3b0ce969fe93f1df8b2da5d1caabf90b33e2e30f01d661f2c3c4895"
-        );
-    }
 }
 
 /// Update a resource's manifest (body hash, metadata hashes) and fire an event.
@@ -494,4 +463,41 @@ pub async fn update(
     tx.commit().await?;
 
     Ok(resource)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hash_empty_object() {
+        let hash = hash_json_value(&serde_json::json!({}));
+        assert_eq!(
+            hash,
+            "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+        );
+    }
+
+    #[test]
+    fn hash_key_order_independent() {
+        let a = hash_json_value(&serde_json::json!({"b": 2, "a": 1}));
+        let b = hash_json_value(&serde_json::json!({"a": 1, "b": 2}));
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn hash_json_shared_fixture() {
+        let fixture = serde_json::json!({
+            "temper-type": "task",
+            "temper-stage": "in-progress",
+            "temper-seq": 42,
+            "title": "Test task"
+        });
+        let hash = hash_json_value(&fixture);
+        // This exact value must match the TypeScript canonicalJsonHash test
+        assert_eq!(
+            hash,
+            "sha256:d39e1380d3b0ce969fe93f1df8b2da5d1caabf90b33e2e30f01d661f2c3c4895"
+        );
+    }
 }
