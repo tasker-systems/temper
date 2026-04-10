@@ -61,6 +61,7 @@ async fn create_resource_with_manifest_inserts_all_records(pool: sqlx::PgPool) {
             content_hash: &body_hash,
             managed_meta: &empty,
             open_meta: &empty,
+            chunks_packed: None,
         },
     )
     .await
@@ -139,6 +140,7 @@ async fn find_by_body_hash_returns_existing(pool: sqlx::PgPool) {
             content_hash: &body_hash,
             managed_meta: &empty,
             open_meta: &empty,
+            chunks_packed: None,
         },
     )
     .await
@@ -205,6 +207,7 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
             content_hash: &original_hash,
             managed_meta: &empty,
             open_meta: &empty,
+            chunks_packed: None,
         },
     )
     .await
