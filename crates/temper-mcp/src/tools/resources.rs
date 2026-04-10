@@ -467,15 +467,16 @@ pub async fn list_resources(
         kb_doc_type_id: doc_type_id,
         limit: input.limit,
         offset: input.offset,
+        ..Default::default()
     };
 
-    let rows = resource_service::list_visible(pool, profile.id, params)
+    let response = resource_service::list_visible(pool, profile.id, params)
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
         })?;
 
-    let enriched = enrich_resources(pool, profile_id, &rows).await?;
+    let enriched = enrich_resources(pool, profile_id, &response.rows).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
     )]))
@@ -527,7 +528,7 @@ pub async fn update_resource(
             rmcp::ErrorData::internal_error(format!("Failed to begin transaction: {e}"), None)
         })?;
 
-        let updated_row = ingest_service::update_resource_manifest(
+        ingest_service::update_resource_manifest(
             &mut tx,
             profile_id,
             "mcp",
@@ -545,7 +546,14 @@ pub async fn update_resource(
             .await
             .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to commit: {e}"), None))?;
 
-        // Fire content-ingest POST using context_id from the manifest update response
+        // Re-fetch to get the context_id for content-ingest POST
+        let updated_row = resource_service::get_visible(pool, profile.id, input.id)
+            .await
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+            })?;
+
+        // Fire content-ingest POST using context_id from the re-fetched row
         let bearer_token = extract_bearer_token(parts);
         spawn_content_ingest_post(
             resource_id,

@@ -6,3 +6,39 @@
  * Maps directly to the `access_level` Postgres enum.
  */
 export type AccessLevel = "Vault" | "Mutable" | "Immutable";
+
+/**
+ * Entitlements included in the profile response — tells the client
+ * what this profile is allowed to do at the system level.
+ */
+export type Entitlements = { system_access: boolean, is_admin: boolean, join_request_status: JoinRequestStatus | null, };
+
+/**
+ * A user-initiated request to join a team (typically the gating team).
+ */
+export type JoinRequest = { id: string, team_id: string, requesting_profile_id: string, status: JoinRequestStatus, message: string | null, source: string, accepted_terms_version: string | null, accepted_terms_at: string | null, reviewed_by_profile_id: string | null, reviewed_at: string | null, decision_note: string | null, created: string, updated: string, };
+
+/**
+ * Status of a join request in its lifecycle.
+ */
+export type JoinRequestStatus = "pending" | "approved" | "rejected" | "withdrawn";
+
+/**
+ * A join request with the requesting profile's display info (for admin queue).
+ */
+export type JoinRequestWithProfile = { id: string, team_id: string, requesting_profile_id: string, status: JoinRequestStatus, message: string | null, source: string, accepted_terms_version: string | null, accepted_terms_at: string | null, reviewed_by_profile_id: string | null, reviewed_at: string | null, decision_note: string | null, created: string, updated: string, display_name: string, email: string | null, };
+
+/**
+ * Public-facing system settings (no gating_team_slug — prevents info leakage).
+ */
+export type PublicSystemSettings = { access_mode: string, terms_version: string | null, terms_resource_uri: string | null, instance_name: string | null, };
+
+/**
+ * Details included in the SystemAccessRequired error response.
+ *
+ * SECURITY NOTE: The `email` and `display_name` fields are safe to include
+ * because the caller already proved ownership of this identity through OAuth.
+ * We are reflecting the caller's own profile back — not disclosing another
+ * user's information. Do not add fields that reveal other users' data.
+ */
+export type SystemAccessDetails = { email: string | null, display_name: string | null, access_mode: string, join_request_status: JoinRequestStatus | null, request_url: string | null, cli_command: string | null, };

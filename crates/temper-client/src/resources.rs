@@ -6,8 +6,8 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::resource::{
-    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams, ResourceRow,
-    ResourceUpdateRequest,
+    ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
+    ResourceListResponse, ResourceRow, ResourceUpdateRequest,
 };
 
 /// Sub-client for resource CRUD operations.
@@ -27,7 +27,7 @@ impl<'a> ResourceClient<'a> {
     }
 
     /// List visible resources, optionally filtered by context.
-    pub async fn list(&self, params: &ResourceListParams) -> Result<Vec<ResourceRow>> {
+    pub async fn list(&self, params: &ResourceListParams) -> Result<ResourceListResponse> {
         let token = self.http.resolve_token()?;
         let req = self.http.get("/api/resources").query(params);
         self.http

@@ -25,20 +25,19 @@ pub async fn list_resources(
 ) -> Result<ListResourcesResult, rmcp::ErrorData> {
     // Fetch all visible resources (no filters, reasonable limit for browsing).
     let params = temper_core::types::resource::ResourceListParams {
-        kb_context_id: None,
-        kb_doc_type_id: None,
         limit: Some(200),
-        offset: None,
+        ..Default::default()
     };
 
-    let rows =
+    let response =
         temper_api::services::resource_service::list_visible(&state.pool, profile.id, params)
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
             })?;
 
-    let resources = rows
+    let resources = response
+        .rows
         .into_iter()
         .map(|r| {
             RawResource::new(format!("temper://resources/{}", r.id), &r.title)
@@ -168,12 +167,11 @@ pub async fn read_resource(
 
         let params = temper_core::types::resource::ResourceListParams {
             kb_context_id: Some(uuid::Uuid::from(context.id)),
-            kb_doc_type_id: None,
             limit: Some(200),
-            offset: None,
+            ..Default::default()
         };
 
-        let rows =
+        let response =
             temper_api::services::resource_service::list_visible(&state.pool, profile.id, params)
                 .await
                 .map_err(|e| {
@@ -183,7 +181,7 @@ pub async fn read_resource(
                     )
                 })?;
 
-        let json = serde_json::to_string_pretty(&rows).unwrap_or_default();
+        let json = serde_json::to_string_pretty(&response.rows).unwrap_or_default();
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
             json, uri,
         )

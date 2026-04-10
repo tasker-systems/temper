@@ -14,6 +14,21 @@ use temper_core::types::ingest::chunks_to_jsonb;
 use temper_core::types::ingest::{unpack_chunks, IngestPayload, PackedChunk};
 use temper_core::types::resource::ResourceRow;
 
+use super::resource_service;
+
+/// Lightweight row type for ingest-internal INSERT/UPDATE RETURNING queries.
+///
+/// `ResourceRow` now includes joined display fields from the browse view
+/// that aren't available during in-transaction INSERT/UPDATE RETURNING.
+/// This struct captures only the base columns needed within the transaction,
+/// and the public-facing functions re-fetch the full `ResourceRow` via the view.
+#[derive(Debug, sqlx::FromRow)]
+struct ResourceRowBase {
+    #[expect(dead_code, reason = "required by FromRow derive for RETURNING query")]
+    id: ResourceId,
+    kb_context_id: ContextId,
+}
+
 /// Compute a `sha256:<hex>` hash of a JSON value (canonical form).
 ///
 /// Keys are sorted recursively to ensure deterministic output regardless
@@ -89,20 +104,17 @@ pub async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
     id.ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type: '{name}'")))
 }
 
-/// Check for body-hash dedup — returns existing resource if hash matches.
+/// Check for body-hash dedup — returns existing resource ID if hash matches.
 pub async fn find_by_body_hash(
     pool: &PgPool,
     profile_id: ProfileId,
     body_hash: &str,
 ) -> ApiResult<Option<ResourceRow>> {
-    let row = sqlx::query_as!(
-        ResourceRow,
+    // Find the resource ID via a lightweight query, then fetch the full row via the view.
+    let maybe_id = sqlx::query_scalar!(
         r#"
         WITH visible AS (SELECT resource_id FROM resources_visible_to($1))
-        SELECT r.id, r.kb_context_id, r.kb_doc_type_id, r.origin_uri, r.title,
-               r.slug as "slug: _",
-               r.originator_profile_id, r.owner_profile_id, r.is_active,
-               r.created, r.updated
+        SELECT r.id
           FROM kb_resources r
           JOIN visible v ON v.resource_id = r.id
           JOIN kb_resource_manifests m ON m.resource_id = r.id
@@ -116,7 +128,13 @@ pub async fn find_by_body_hash(
     .fetch_optional(pool)
     .await?;
 
-    Ok(row)
+    match maybe_id {
+        Some(id) => {
+            let row = resource_service::get_visible(pool, *profile_id, id).await?;
+            Ok(Some(row))
+        }
+        None => Ok(None),
+    }
 }
 
 /// Batch-insert chunks for a new resource via SQL function.
@@ -191,8 +209,7 @@ pub async fn create_resource_with_manifest(
     let mut tx = pool.begin().await?;
 
     let resource_id = ResourceId::new();
-    let resource = sqlx::query_as!(
-        ResourceRow,
+    sqlx::query!(
         r#"
         INSERT INTO kb_resources (
             id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
@@ -200,10 +217,6 @@ pub async fn create_resource_with_manifest(
             created, updated
         )
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
-        RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
-                  slug as "slug: _",
-                  originator_profile_id, owner_profile_id, is_active,
-                  created, updated
         "#,
         *resource_id,
         *params.context_id,
@@ -214,7 +227,7 @@ pub async fn create_resource_with_manifest(
         *params.profile_id,
         *params.profile_id,
     )
-    .fetch_one(&mut *tx)
+    .execute(&mut *tx)
     .await?;
 
     // Insert manifest row
@@ -250,7 +263,8 @@ pub async fn create_resource_with_manifest(
 
     tx.commit().await?;
 
-    Ok(resource)
+    // Re-fetch via the view to get full ResourceRow with joined fields
+    resource_service::get_visible(pool, *params.profile_id, *resource_id).await
 }
 
 /// Process a full ingest payload: resolve names, dedup, insert resource + chunks.
@@ -373,20 +387,17 @@ pub async fn update_resource_manifest(
     content_hash: &str,
     managed_meta: &serde_json::Value,
     open_meta: &serde_json::Value,
-) -> ApiResult<ResourceRow> {
+) -> ApiResult<()> {
     let managed_hash = hash_json_value(managed_meta);
     let open_hash = hash_json_value(open_meta);
 
-    let resource = sqlx::query_as!(
-        ResourceRow,
+    let base = sqlx::query_as!(
+        ResourceRowBase,
         r#"
         UPDATE kb_resources
         SET updated = now()
         WHERE id = $1
-        RETURNING id, kb_context_id, kb_doc_type_id, origin_uri, title,
-                  slug as "slug: _",
-                  originator_profile_id, owner_profile_id, is_active,
-                  created, updated
+        RETURNING id, kb_context_id
         "#,
         *resource_id,
     )
@@ -415,7 +426,7 @@ pub async fn update_resource_manifest(
         tx,
         profile_id,
         device_id,
-        resource.kb_context_id,
+        base.kb_context_id,
         resource_id,
         "body_updated",
         "update_body",
@@ -425,7 +436,7 @@ pub async fn update_resource_manifest(
     )
     .await?;
 
-    Ok(resource)
+    Ok(())
 }
 
 /// Update an existing resource's content — re-chunk and re-embed.
@@ -466,7 +477,7 @@ pub async fn update(
     let mut tx = pool.begin().await?;
 
     // Update manifest + fire event (context_id derived from resource row)
-    let resource = update_resource_manifest(
+    update_resource_manifest(
         &mut tx,
         profile_id,
         device_id,
@@ -482,5 +493,6 @@ pub async fn update(
 
     tx.commit().await?;
 
-    Ok(resource)
+    // Re-fetch via the view to get full ResourceRow with joined fields
+    resource_service::get_visible(pool, *profile_id, *resource_id).await
 }

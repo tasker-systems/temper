@@ -68,14 +68,12 @@ async fn resource_list() {
         return;
     };
     let params = ResourceListParams {
-        kb_context_id: None,
-        kb_doc_type_id: None,
         limit: Some(5),
-        offset: None,
+        ..Default::default()
     };
     match c.resources().list(&params).await {
         Ok(r) => {
-            assert!(r.len() <= 5, "should return at most 5 resources");
+            assert!(r.rows.len() <= 5, "should return at most 5 resources");
         }
         Err(e) if should_skip(&e) => {
             eprintln!("skipping: {e}");

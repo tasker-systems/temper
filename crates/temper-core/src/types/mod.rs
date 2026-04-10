@@ -50,7 +50,7 @@ pub use config::{
     SyncSubscriptions, TemperConfig, UnifiedConfig, UnifiedSyncConfig,
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
-pub use context::{ContextCreateRequest, ContextRow};
+pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 pub use device::DeviceSyncState;
 pub use event::{EventQuery, EventResponse};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId};
@@ -62,8 +62,9 @@ pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
 pub use resource::{
-    ContentChunk, ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
-    ResourceRow, ResourceUpdateRequest,
+    ContentChunk, ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets,
+    ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
+    ResourceUpdateRequest, SortOrder,
 };
 pub use sync::{
     MergedResource, ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,

@@ -22,6 +22,12 @@
 
 extend = "./tools/cargo-make/main.toml"
 
+# Load `.env` for every task. This is the dev-only path for env vars like
+# DATABASE_URL, AUTH0_*, SESSION_SECRET — production deployments (Vercel) set
+# their env vars natively and never go through cargo-make. The `.env` file is
+# gitignored; copy from `.env.template` to bootstrap.
+env_files = ["./.env"]
+
 [config]
 default_to_workspace = false
 skip_core_tasks = true

@@ -7,7 +7,8 @@ use uuid::Uuid;
 
 use super::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
 
-/// Row type matching the `kb_resources` table.
+/// Row type for resource listings — includes joined display fields
+/// and managed_meta projections from `vault_resources_browse` view.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
@@ -25,25 +26,86 @@ pub struct ResourceRow {
     pub is_active: bool,
     pub created: DateTime<Utc>,
     pub updated: DateTime<Utc>,
+    // Joined display fields
+    pub context_name: String,
+    pub doc_type_name: String,
+    pub owner_handle: String,
+    // Managed meta projections
+    pub stage: Option<String>,
+    #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
+    pub seq: Option<i64>,
+    pub mode: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// Sort field for resource listing.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceSortField {
+    #[default]
+    Updated,
+    Created,
+    Title,
+    Stage,
+    Seq,
+}
+
+/// Sort direction.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum SortOrder {
+    #[default]
+    Desc,
+    Asc,
 }
 
 /// Query parameters for listing visible resources.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListParams {
-    /// Filter by context ID.
     pub kb_context_id: Option<Uuid>,
-    /// Filter by document type ID.
     pub kb_doc_type_id: Option<Uuid>,
-    /// Maximum results to return (default 50, max 200).
+    pub context_name: Option<String>,
+    pub doc_type_name: Option<String>,
+    pub owner: Option<String>,
+    pub q: Option<String>,
+    pub sort: Option<ResourceSortField>,
+    pub order: Option<SortOrder>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub limit: Option<i64>,
-    /// Offset for pagination.
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
+}
+
+/// Aggregated doc-type facet counts for the current filter set.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ResourceFacets {
+    pub doc_type: std::collections::HashMap<String, i64>,
+}
+
+/// Paginated response for resource list endpoints, with doc-type facets.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ResourceListResponse {
+    pub rows: Vec<ResourceRow>,
+    pub total: i64,
+    pub facets: ResourceFacets,
 }
 
 /// Request body for creating a resource.
