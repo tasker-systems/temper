@@ -420,6 +420,92 @@ async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
     );
 }
 
+/// Precomputed-path dispatch: chunks_packed provided → stored verbatim, no re-computation.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn create_resource_dispatches_on_chunks_packed_presence(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let profile_id = ProfileId::from(
+        sqlx::query_scalar!(
+            "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("profile lookup"),
+    );
+
+    context_service::create(&pool, profile_id, "precomputed-test")
+        .await
+        .expect("context create");
+
+    let context = context_service::resolve_by_name(&pool, profile_id, "precomputed-test")
+        .await
+        .expect("context resolve");
+    let doc_type_id = ingest_service::resolve_doc_type(&pool, "research")
+        .await
+        .expect("doc_type");
+
+    // Build pre-computed chunks with known content_hash values.
+    let chunks = vec![
+        fake_chunk(0, "Section A", "First precomputed chunk content."),
+        fake_chunk(1, "Section B", "Second precomputed chunk content."),
+        fake_chunk(2, "Section C", "Third precomputed chunk content."),
+    ];
+    let expected_hashes: Vec<String> = chunks.iter().map(|c| c.content_hash.clone()).collect();
+    let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
+
+    let content = "First precomputed chunk content.\nSecond precomputed chunk content.\nThird precomputed chunk content.";
+    let body_hash = format!("sha256:{}", sha2_hex(content));
+    let empty = serde_json::json!({});
+
+    let resource = ingest_service::create_resource_with_manifest(
+        &pool,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "precomputed-test-device",
+            context_id: context.id,
+            doc_type_id,
+            title: "Precomputed Chunks Test",
+            slug: Some("precomputed-chunks-test"),
+            origin_uri: "mcp://test/precomputed",
+            content_hash: &body_hash,
+            managed_meta: &empty,
+            open_meta: &empty,
+            chunks_packed: Some(&packed),
+        },
+    )
+    .await
+    .expect("create_resource_with_manifest");
+
+    // Query stored chunks and verify content_hash values match exactly what was sent.
+    let stored_chunks = sqlx::query!(
+        "SELECT content_hash, chunk_index FROM kb_chunks WHERE resource_id = $1 AND is_current = true ORDER BY chunk_index",
+        *resource.id
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("chunk lookup");
+
+    assert_eq!(
+        stored_chunks.len(),
+        3,
+        "expected 3 stored chunks, got {}",
+        stored_chunks.len()
+    );
+
+    for (i, stored) in stored_chunks.iter().enumerate() {
+        assert_eq!(
+            stored.content_hash, expected_hashes[i],
+            "chunk {i} content_hash mismatch: server must store precomputed chunks verbatim"
+        );
+    }
+}
+
 /// Context auto-creation: resolve_by_name fails for unknown, create succeeds, then resolve finds it.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn context_auto_creation_for_ingest(pool: sqlx::PgPool) {
