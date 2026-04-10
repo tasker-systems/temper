@@ -16,7 +16,7 @@ pub struct IngestPayload {
     pub context_name: String,
     pub doc_type_name: String,
     /// `"sha256:<hex>"` — server computes if absent.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
     pub slug: String,
     /// Full extracted markdown content.
@@ -31,7 +31,7 @@ pub struct IngestPayload {
     pub open_meta: Option<serde_json::Value>,
     /// Base64-encoded MessagePack of `Vec<PackedChunk>`.
     /// Server computes via `temper_ingest::pipeline::prepare_markdown` if absent.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chunks_packed: Option<String>,
 }
 
