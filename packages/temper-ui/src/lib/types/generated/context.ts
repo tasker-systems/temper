@@ -5,3 +5,8 @@ import type { ContextId } from "./ContextId";
  * Response row for context endpoints.
  */
 export type ContextRow = { id: ContextId, name: string, kb_owner_table: string, kb_owner_id: string, created: string, updated: string, };
+
+/**
+ * Context with resource count — used by the list endpoint.
+ */
+export type ContextRowWithCounts = { id: ContextId, name: string, kb_owner_table: string, kb_owner_id: string, created: string, updated: string, resource_count: bigint, };
