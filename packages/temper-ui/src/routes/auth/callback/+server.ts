@@ -4,7 +4,7 @@
  * Validates the CSRF `state` parameter against the value stashed in the PKCE
  * cookie, exchanges the authorization code for tokens, and writes an
  * encrypted session cookie before redirecting to the user's original
- * destination (or /dashboard).
+ * destination (or /vault/all).
  *
  * On any error in the exchange (state mismatch, expired code, Auth0 down),
  * we send the user to /?error=auth_failed rather than throwing — the user

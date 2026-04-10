@@ -19,7 +19,7 @@ function base64url(buf: Buffer): string {
 
 export const GET: RequestHandler = async ({ url, cookies, locals }) => {
 	// If already authenticated, send the user where they were headed.
-	const returnTo = url.searchParams.get('returnTo') ?? '/dashboard';
+	const returnTo = url.searchParams.get('returnTo') ?? '/vault/all';
 	if (locals.user) {
 		throw redirect(303, returnTo);
 	}

@@ -8,7 +8,7 @@
  *
  * The load function requires a session (else → /auth/login) but does NOT
  * require system_access. If the user already has system access (e.g. they
- * navigate here directly after approval), bounce them to /dashboard.
+ * navigate here directly after approval), bounce them to /vault/all.
  *
  * Form actions:
  *   - default `submit` → POST /api/access/requests
@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	}
 
 	if (locals.entitlements?.system_access) {
-		throw redirect(303, '/dashboard');
+		throw redirect(303, '/vault/all');
 	}
 
 	const [ownRequest, settings] = await Promise.all([

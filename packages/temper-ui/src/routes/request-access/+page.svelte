@@ -23,7 +23,7 @@
 
 	$effect(() => {
 		if (data.ownRequest?.status === 'approved') {
-			goto('/dashboard');
+			goto('/vault/all');
 		}
 	});
 
