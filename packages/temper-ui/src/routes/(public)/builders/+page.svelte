@@ -18,7 +18,7 @@
     what's been done, what's up next, what the agent needs to know.
   </p>
   <div class="hero-ctas">
-    <a href="/docs" class="primary">Get Started</a>
+    <a href="/auth/login" class="primary">Get Started</a>
     <a href="https://github.com/tasker-systems/temper" class="secondary">View on GitHub</a>
   </div>
   <div class="cli-wrapper">

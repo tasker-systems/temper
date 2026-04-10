@@ -14,7 +14,7 @@
   <h1>Context that's always <em>ready to hand</em></h1>
   <p class="tagline">Your agent is powerful — but every session, it starts from zero. Temper gives agents what they lack: a persistent, structured, searchable context layer that makes the throughline legible.</p>
   <div class="hero-ctas">
-    <a href="/docs" class="primary">Get Started</a>
+    <a href="/auth/login" class="primary">Get Started</a>
     <a href="https://github.com/tasker-systems/temper" class="secondary">View on GitHub</a>
   </div>
   <div class="cli-wrapper">

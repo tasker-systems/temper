@@ -115,7 +115,7 @@
 			</div>
 			{#if total > results.length}
 				<button
-					class="w-full text-left px-4 py-2 text-xs text-yellow-500 hover:bg-zinc-800/50 border-t border-zinc-800"
+					class="w-full text-left px-4 py-2 text-xs text-quiet-accent hover:bg-zinc-800/50 border-t border-zinc-800"
 					onclick={() => {
 						goto(`/vault/search?q=${encodeURIComponent(query)}`);
 						open = false;

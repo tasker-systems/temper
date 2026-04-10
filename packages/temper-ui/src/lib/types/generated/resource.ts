@@ -33,7 +33,7 @@ export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, kb_doc_typ
 /**
  * Sort field for resource listing.
  */
-export type ResourceSortField = "updated" | "created" | "title" | "stage" | "seq";
+export type ResourceSortField = "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name";
 
 /**
  * Sort direction.

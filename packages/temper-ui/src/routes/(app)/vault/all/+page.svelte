@@ -20,5 +20,5 @@
 		<FacetChips facets={data.facets} />
 	</div>
 
-	<VaultGrid rows={data.rows} total={data.total} />
+	<VaultGrid rows={data.rows} total={data.total} limit={data.limit} offset={data.offset} />
 </div>

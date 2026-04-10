@@ -18,6 +18,9 @@
 #   cargo make docker-up   Start PostgreSQL
 #   cargo make docker-down Stop PostgreSQL
 #
+# Dev Data:
+#   cargo make seed        Seed local DB with UI preview data
+#
 # See: docs/superpowers/specs/2026-03-28-cargo-make-tooling-and-security-audit-design.md
 
 extend = "./tools/cargo-make/main.toml"
@@ -58,5 +61,20 @@ echo "Docker:"
 echo "  cargo make docker-up   Start PostgreSQL"
 echo "  cargo make docker-down Stop PostgreSQL"
 echo ""
+echo "Dev Data:"
+echo "  cargo make seed        Seed local DB with UI preview data"
+echo ""
 echo "Run 'cargo make --list-all-steps' for all tasks"
+'''
+
+[tasks.seed]
+description = "Seed local dev database with UI preview data. Pass email: cargo make seed you@example.com"
+script = '''
+# Resolve email: first arg > SEED_EMAIL env var > default in SQL
+EMAIL="${1:-${SEED_EMAIL:-}}"
+if [ -n "$EMAIL" ]; then
+  psql "${DATABASE_URL}" -v seed_email="'${EMAIL}'" -f scripts/seed-dev-data.sql
+else
+  psql "${DATABASE_URL}" -f scripts/seed-dev-data.sql
+fi
 '''

@@ -1,9 +1,9 @@
 <svelte:head>
-  <title>Getting Started — temper</title>
+  <title>Docs — temper</title>
 </svelte:head>
 
 <div class="docs">
-  <h1>Getting Started</h1>
+  <h1>Docs</h1>
   <p class="lede">
     Temper gives your work a throughline — the connective thread across sessions,
     decisions, and evolving understanding. Everything resolves to markdown.

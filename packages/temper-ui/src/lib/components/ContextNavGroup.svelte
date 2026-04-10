@@ -23,11 +23,11 @@
 		href="/vault/{ownerPrefix}/{ctx.name}"
 		class="flex items-center gap-2 px-3 py-1.5 text-sm transition-colors
 		       {isActive(ctx)
-			? 'border-l-2 border-yellow-500 bg-zinc-800/50 text-zinc-100 pl-[calc(0.75rem-2px)]'
+			? 'border-l-2 border-quiet-accent bg-zinc-800/50 text-zinc-100 pl-[calc(0.75rem-2px)]'
 			: 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/30'}"
 	>
 		<span
-			class="w-1.5 h-1.5 rounded-sm {isActive(ctx) ? 'bg-yellow-500' : 'bg-zinc-600'}"
+			class="w-1.5 h-1.5 rounded-sm {isActive(ctx) ? 'bg-quiet-accent' : 'bg-zinc-600'}"
 		></span>
 		<span class="flex-1 truncate">{ctx.name}</span>
 		<span class="text-xs text-zinc-600">{ctx.resource_count}</span>

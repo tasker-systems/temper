@@ -52,6 +52,8 @@ pub enum ResourceSortField {
     Title,
     Stage,
     Seq,
+    ContextName,
+    DocTypeName,
 }
 
 /// Sort direction.

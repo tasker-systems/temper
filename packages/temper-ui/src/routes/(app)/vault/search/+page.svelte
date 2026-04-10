@@ -19,7 +19,7 @@
 	<FacetChips facets={data.facets ?? null} />
 
 	{#if data.rows?.length > 0}
-		<VaultGrid rows={data.rows} total={data.total} />
+		<VaultGrid rows={data.rows} total={data.total} limit={data.limit} offset={data.offset} />
 	{:else}
 		<EmptyState
 			message='No results for &ldquo;{data.query}&rdquo;'
