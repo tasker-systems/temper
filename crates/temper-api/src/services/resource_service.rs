@@ -167,6 +167,8 @@ fn order_clause(sort: Option<ResourceSortField>, order: Option<SortOrder>) -> St
         ResourceSortField::Title => "vb.title",
         ResourceSortField::Stage => "vb.stage",
         ResourceSortField::Seq => "vb.seq",
+        ResourceSortField::ContextName => "vb.context_name",
+        ResourceSortField::DocTypeName => "vb.doc_type_name",
     };
     let direction = match order.unwrap_or_default() {
         SortOrder::Desc => "DESC",

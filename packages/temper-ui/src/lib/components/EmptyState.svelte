@@ -12,7 +12,7 @@
 	{#if action}
 		<a
 			href={action.href}
-			class="text-xs text-yellow-500 hover:text-yellow-400 border border-zinc-700 rounded px-3 py-1"
+			class="text-xs text-quiet-accent hover:text-quiet-fg border border-zinc-700 rounded px-3 py-1"
 		>
 			{action.label}
 		</a>

@@ -28,7 +28,7 @@
 	/>
 	<main class="flex-1 overflow-y-auto">
 		<header
-			class="sticky top-0 z-10 flex items-center gap-3 px-6 py-3 bg-zinc-950/80 backdrop-blur border-b border-zinc-800"
+			class="sticky top-0 z-10 flex items-center gap-3 px-6 py-3 bg-zinc-950 border-b border-zinc-800"
 		>
 			<button
 				onclick={() => palette.toggle()}

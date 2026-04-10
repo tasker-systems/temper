@@ -36,12 +36,12 @@
 			<button
 				class="inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-mono tracking-wide transition-colors
 					{activeFilter === name
-					? 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/40'
+					? 'bg-quiet-accent/15 text-quiet-accent border border-quiet-border'
 					: 'bg-zinc-800/50 text-zinc-400 border border-zinc-700/50 hover:text-zinc-200 hover:border-zinc-600'}"
 				onclick={() => toggle(name)}
 			>
 				{name}
-				<span class="text-[10px] {activeFilter === name ? 'text-yellow-500/70' : 'text-zinc-600'}"
+				<span class="text-[10px] {activeFilter === name ? 'text-quiet-accent/70' : 'text-zinc-600'}"
 					>{count}</span
 				>
 			</button>
