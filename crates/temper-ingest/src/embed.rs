@@ -19,6 +19,30 @@ pub const EMBEDDING_DIM: usize = 768;
 
 static MODEL_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/model_quantized.onnx");
 static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/tokenizer.json");
+static ORT_LIB_BYTES: &[u8] = include_bytes!("../lib/x86_64-unknown-linux-gnu/libonnxruntime.so");
+
+// ---- ORT runtime initialization ----
+
+static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
+fn init_ort_runtime() -> std::result::Result<(), String> {
+    ORT_INIT.get_or_init(|| {
+        let lib_path = std::path::Path::new("/tmp/libonnxruntime.so");
+        if !lib_path.exists() {
+            std::fs::write(lib_path, ORT_LIB_BYTES)
+                .map_err(|e| format!("write libonnxruntime.so to /tmp: {e}"))?;
+        }
+        ort::init_from(lib_path)
+            .map_err(|e| format!("ort::init_from: {e}"))?
+            .commit();
+        Ok(())
+    });
+    match ORT_INIT.get() {
+        Some(Ok(())) => Ok(()),
+        Some(Err(e)) => Err(e.clone()),
+        None => Err("ORT_INIT not initialized".to_owned()),
+    }
+}
 
 // ---- Model management ----
 
@@ -31,6 +55,8 @@ static MODEL: OnceLock<std::result::Result<Model, String>> = OnceLock::new();
 
 fn load_model() -> Result<&'static Model> {
     let result = MODEL.get_or_init(|| {
+        init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
+
         let session = Session::builder()
             .map_err(|e| format!("ort session builder: {e}"))?
             .with_intra_threads(1)
