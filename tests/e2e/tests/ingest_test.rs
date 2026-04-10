@@ -56,16 +56,15 @@ async fn ingest_creates_resource(pool: sqlx::PgPool) {
         .client
         .resources()
         .list(&temper_core::types::resource::ResourceListParams {
-            kb_context_id: None,
-            kb_doc_type_id: None,
             limit: Some(50),
-            offset: None,
+            ..Default::default()
         })
         .await
         .expect("list resources failed");
 
     assert!(
         resources
+            .rows
             .iter()
             .any(|r| r.origin_uri == "test://e2e/ingest-test"),
         "ingested resource not found in list"

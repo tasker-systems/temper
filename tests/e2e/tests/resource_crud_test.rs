@@ -175,15 +175,14 @@ async fn resource_delete(pool: sqlx::PgPool) {
         .resources()
         .list(&ResourceListParams {
             kb_context_id: Some(context.id.into()),
-            kb_doc_type_id: None,
             limit: Some(50),
-            offset: None,
+            ..Default::default()
         })
         .await
         .expect("resource list after delete failed");
 
     assert!(
-        !resources.iter().any(|r| r.id == created.id),
+        !resources.rows.iter().any(|r| r.id == created.id),
         "deleted resource should not appear in list"
     );
 }
@@ -227,17 +226,16 @@ async fn resource_list_pagination(pool: sqlx::PgPool) {
         .resources()
         .list(&ResourceListParams {
             kb_context_id: Some(context.id.into()),
-            kb_doc_type_id: None,
             limit: Some(2),
-            offset: None,
+            ..Default::default()
         })
         .await
         .expect("resource list with limit failed");
 
     assert_eq!(
-        page.len(),
+        page.rows.len(),
         2,
         "expected 2 resources with limit=2, got {}",
-        page.len()
+        page.rows.len()
     );
 }
