@@ -31,14 +31,15 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/meta-test".to_string(),
         context_name: "meta-test".to_string(),
         doc_type_name: "research".to_string(),
-        content_hash: "meta0test0000000000000000000000000000000000000000000000000000000"
-            .to_string(),
+        content_hash: Some(
+            "meta0test0000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
         slug: "meta-test-doc".to_string(),
         content: "# Meta Test\n\nContent for meta testing.".to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
-        chunks_packed: pack_chunks(&[]).expect("encode empty chunks"),
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
 
     let resource = app

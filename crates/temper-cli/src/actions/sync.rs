@@ -754,7 +754,7 @@ async fn push_resource(
 
     if let Some(e) = manifest.entries.get_mut(&server_id) {
         // After push, server hashes match what we sent
-        e.remote_body_hash = payload.content_hash.clone();
+        e.remote_body_hash = payload.content_hash.clone().unwrap_or_default();
         e.remote_managed_hash = pushed_managed_hash;
         e.remote_open_hash = pushed_open_hash;
         e.state = ManifestEntryState::Clean;
@@ -994,7 +994,7 @@ async fn merge_and_push_resource(
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
         e.body_hash = ingest::compute_content_hash(merged_body);
         // After push, server hashes match what we sent
-        e.remote_body_hash = payload.content_hash.clone();
+        e.remote_body_hash = payload.content_hash.clone().unwrap_or_default();
         e.remote_managed_hash = pushed_managed_hash;
         e.remote_open_hash = pushed_open_hash;
         e.state = ManifestEntryState::Clean;

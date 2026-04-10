@@ -37,14 +37,15 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
         origin_uri: "test://e2e/content-test".to_string(),
         context_name: "content-test".to_string(),
         doc_type_name: "research".to_string(),
-        content_hash: "cont0test0000000000000000000000000000000000000000000000000000000"
-            .to_string(),
+        content_hash: Some(
+            "cont0test0000000000000000000000000000000000000000000000000000000".to_string(),
+        ),
         slug: "content-retrieval-doc".to_string(),
         content: chunk_content.to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
-        chunks_packed: pack_chunks(&chunks).expect("encode chunks"),
+        chunks_packed: Some(pack_chunks(&chunks).expect("encode chunks")),
     };
 
     let resource = app

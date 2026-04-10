@@ -85,3 +85,57 @@ jobs:
 
       - name: Run integration & E2E tests
         run: cargo nextest run --workspace --features test-db --locked
+
+  test-rust-embed:
+    name: Embed & MCP Round-Trip Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-trixie
+        env:
+          POSTGRES_DB: temper_development
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U temper -d temper_development"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: test-embed-v1
+
+      - name: Install cargo-nextest and cargo-sqlx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,sqlx-cli
+
+      - name: Run migrations
+        run: cargo sqlx migrate run
+
+      - name: Run ingest pipeline tests
+        run: |
+          cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1
+          cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1
+
+      - name: Run MCP round-trip e2e tests
+        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 -E 'binary(mcp_round_trip_test)'

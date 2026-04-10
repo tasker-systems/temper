@@ -1,7 +1,14 @@
 //! Text embedding using BAAI/bge-base-en-v1.5 via ONNX Runtime.
 //!
-//! Model downloaded on first use via hf-hub, cached at ~/.cache/huggingface/.
-//! ONNX session created once per process via OnceLock.
+//! Model and tokenizer loaded from bundled bytes at compile time (no runtime
+//! downloads).  ONNX session created once per process via `OnceLock`.
+//!
+//! ORT runtime loading is platform-aware:
+//! - **Linux** (Vercel deploy): the bundled `libonnxruntime.so` is written to
+//!   `/tmp` and loaded via `ort::init_from`.
+//! - **Other platforms** (macOS dev): ORT is loaded from the system library
+//!   path.  Install via `brew install onnxruntime` and set `ORT_DYLIB_PATH`
+//!   if needed.
 //!
 //! Pipeline: tokenize -> build tensors -> inference -> mean pool -> normalize
 
@@ -17,7 +24,76 @@ use crate::error::{EmbedError, Result};
 /// Embedding dimension for bge-base-en-v1.5.
 pub const EMBEDDING_DIM: usize = 768;
 
-const MODEL_REPO: &str = "BAAI/bge-base-en-v1.5";
+static MODEL_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/model_quantized.onnx");
+static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/tokenizer.json");
+
+/// Bundled Linux x86_64 libonnxruntime.so — only compiled into the binary on
+/// Linux targets (Vercel deploy).  On other platforms this is a zero-length
+/// slice and the system-installed ORT is used instead.
+#[cfg(target_os = "linux")]
+static ORT_LIB_BYTES: &[u8] = include_bytes!("../lib/x86_64-unknown-linux-gnu/libonnxruntime.so");
+
+// ---- ORT runtime initialization ----
+
+static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+
+/// Initialize the ORT runtime.
+///
+/// On Linux: write the bundled `.so` to `/tmp` and load it explicitly.
+/// On other platforms: let ORT's `load-dynamic` search system paths
+/// (`ORT_DYLIB_PATH`, Homebrew, etc.).
+fn init_ort_runtime() -> std::result::Result<(), String> {
+    ORT_INIT.get_or_init(|| {
+        #[cfg(target_os = "linux")]
+        {
+            let lib_path = std::path::Path::new("/tmp/libonnxruntime.so");
+            if !lib_path.exists() {
+                std::fs::write(lib_path, ORT_LIB_BYTES)
+                    .map_err(|e| format!("write libonnxruntime.so to /tmp: {e}"))?;
+            }
+            ort::init_from(lib_path)
+                .map_err(|e| format!("ort::init_from: {e}"))?
+                .commit();
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            // On macOS, ORT's load-dynamic needs help finding the dylib.
+            // Search order:
+            //   1. ORT_DYLIB_PATH env var (explicit override)
+            //   2. Homebrew ARM64: /opt/homebrew/lib/libonnxruntime.dylib
+            //   3. Homebrew Intel: /usr/local/lib/libonnxruntime.dylib
+            let dylib_path = std::env::var("ORT_DYLIB_PATH").ok().or_else(|| {
+                [
+                    "/opt/homebrew/lib/libonnxruntime.dylib",
+                    "/usr/local/lib/libonnxruntime.dylib",
+                ]
+                .iter()
+                .find(|p| std::path::Path::new(p).exists())
+                .map(|p| p.to_string())
+            });
+
+            if let Some(path) = dylib_path {
+                ort::init_from(path)
+                    .map_err(|e| format!("ort::init_from: {e}"))?
+                    .commit();
+            } else {
+                return Err(
+                    "ONNX Runtime not found. Install via `brew install onnxruntime` \
+                     or set ORT_DYLIB_PATH to the library location."
+                        .to_owned(),
+                );
+            }
+        }
+
+        Ok(())
+    });
+    match ORT_INIT.get() {
+        Some(Ok(())) => Ok(()),
+        Some(Err(e)) => Err(e.clone()),
+        None => Err("ORT_INIT not initialized".to_owned()),
+    }
+}
 
 // ---- Model management ----
 
@@ -30,25 +106,17 @@ static MODEL: OnceLock<std::result::Result<Model, String>> = OnceLock::new();
 
 fn load_model() -> Result<&'static Model> {
     let result = MODEL.get_or_init(|| {
-        let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
-        let repo = api.model(MODEL_REPO.to_string());
-
-        let model_path = repo
-            .get("onnx/model.onnx")
-            .map_err(|e| format!("download model: {e}"))?;
-        let tokenizer_path = repo
-            .get("tokenizer.json")
-            .map_err(|e| format!("download tokenizer: {e}"))?;
+        init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
 
         let session = Session::builder()
             .map_err(|e| format!("ort session builder: {e}"))?
             .with_intra_threads(1)
             .map_err(|e| format!("ort threads: {e}"))?
-            .commit_from_file(&model_path)
+            .commit_from_memory(MODEL_BYTES)
             .map_err(|e| format!("ort load: {e}"))?;
 
         let tokenizer =
-            Tokenizer::from_file(&tokenizer_path).map_err(|e| format!("load tokenizer: {e}"))?;
+            Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
 
         Ok(Model {
             session: Mutex::new(session),

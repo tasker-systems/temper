@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// The CLI performs extract → chunk → embed locally and sends everything
 /// in a single request. `chunks_packed` is a base64-encoded MessagePack
-/// blob containing `Vec<PackedChunk>`.
+/// blob containing `Vec<PackedChunk>`. Both `content_hash` and `chunks_packed`
+/// are optional: if absent the server computes them via the ingest pipeline.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct IngestPayload {
@@ -14,8 +15,9 @@ pub struct IngestPayload {
     pub origin_uri: String,
     pub context_name: String,
     pub doc_type_name: String,
-    /// `"sha256:<hex>"`
-    pub content_hash: String,
+    /// `"sha256:<hex>"` — server computes if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
     pub slug: String,
     /// Full extracted markdown content.
     pub content: String,
@@ -28,31 +30,9 @@ pub struct IngestPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub open_meta: Option<serde_json::Value>,
     /// Base64-encoded MessagePack of `Vec<PackedChunk>`.
-    pub chunks_packed: String,
-}
-
-/// Wire payload for POST /api/content-ingest — markdown content for async
-/// chunk → embed → store processing.
-///
-/// Sent by the MCP `ingest_content` / `update_resource_content` tools to
-/// the TypeScript content-ingest endpoint. Both sides share this type:
-/// Rust via `serde`, TypeScript via ts-rs codegen.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "ingest.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContentIngestRequest {
-    /// UUID of the resource (already created by the MCP tool).
-    pub resource_id: String,
-    /// Markdown content body.
-    pub content: String,
-    /// If true, replaces existing chunks; if false, persists new chunks.
-    pub replace: bool,
-    /// Context UUID — avoids a DB lookup in the workflow.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub context_id: Option<String>,
-    /// `"sha256:<hex>"` body hash — avoids a DB lookup in the workflow.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body_hash: Option<String>,
+    /// Server computes via `temper_ingest::pipeline::prepare_markdown` if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_packed: Option<String>,
 }
 
 /// A single chunk with its embedding, serialized via MessagePack inside
@@ -199,13 +179,13 @@ mod tests {
             origin_uri: "kb://ctx/task/test".to_owned(),
             context_name: "ctx".to_owned(),
             doc_type_name: "task".to_owned(),
-            content_hash: "sha256:abc".to_owned(),
+            content_hash: Some("sha256:abc".to_owned()),
             slug: "test".to_owned(),
             content: "# Test".to_owned(),
             metadata: None,
             managed_meta: Some(serde_json::json!({"temper-stage": "backlog"})),
             open_meta: Some(serde_json::json!({"tags": ["rust"]})),
-            chunks_packed: pack_chunks(&sample_chunks()).unwrap(),
+            chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
         };
 
         let json = serde_json::to_string(&payload).unwrap();
@@ -221,8 +201,63 @@ mod tests {
             Some(serde_json::json!({"tags": ["rust"]}))
         );
 
-        let chunks = unpack_chunks(&deserialized.chunks_packed).unwrap();
+        let chunks = unpack_chunks(&deserialized.chunks_packed.unwrap()).unwrap();
         assert_eq!(chunks.len(), 2);
+    }
+
+    #[test]
+    fn payload_serializes_with_optional_chunks_absent() {
+        let payload = IngestPayload {
+            title: "Test".to_owned(),
+            origin_uri: "kb://ctx/task/test".to_owned(),
+            context_name: "ctx".to_owned(),
+            doc_type_name: "task".to_owned(),
+            slug: "test".to_owned(),
+            content: "# Test".to_owned(),
+            content_hash: None,
+            metadata: None,
+            managed_meta: None,
+            open_meta: None,
+            chunks_packed: None,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(
+            !json.contains("chunks_packed"),
+            "absent field should not serialize"
+        );
+        assert!(
+            !json.contains("content_hash"),
+            "absent field should not serialize"
+        );
+    }
+
+    #[test]
+    fn payload_deserializes_with_optional_chunks_absent() {
+        let json = r#"{"title":"Test","origin_uri":"kb://ctx/task/test","context_name":"ctx","doc_type_name":"task","slug":"test","content":"Heading"}"#;
+        let payload: IngestPayload = serde_json::from_str(json).unwrap();
+        assert!(payload.chunks_packed.is_none());
+        assert!(payload.content_hash.is_none());
+    }
+
+    #[test]
+    fn payload_with_chunks_present_roundtrips() {
+        let payload = IngestPayload {
+            title: "Test".to_owned(),
+            origin_uri: "kb://ctx/task/test".to_owned(),
+            context_name: "ctx".to_owned(),
+            doc_type_name: "task".to_owned(),
+            slug: "test".to_owned(),
+            content: "# Test".to_owned(),
+            content_hash: Some("sha256:abc".to_owned()),
+            metadata: None,
+            managed_meta: None,
+            open_meta: None,
+            chunks_packed: Some(pack_chunks(&sample_chunks()).unwrap()),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let deserialized: IngestPayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.content_hash, Some("sha256:abc".to_owned()));
+        assert!(deserialized.chunks_packed.is_some());
     }
 
     #[test]

@@ -61,6 +61,7 @@ async fn get_by_slug_finds_resource(pool: sqlx::PgPool) {
             content_hash: &body_hash,
             managed_meta: &empty,
             open_meta: &empty,
+            chunks_packed: None,
         },
     )
     .await
@@ -148,6 +149,7 @@ async fn list_visible_filters_by_doc_type(pool: sqlx::PgPool) {
             content_hash: &body_hash,
             managed_meta: &empty,
             open_meta: &empty,
+            chunks_packed: None,
         },
     )
     .await
@@ -167,6 +169,7 @@ async fn list_visible_filters_by_doc_type(pool: sqlx::PgPool) {
             content_hash: &body_hash,
             managed_meta: &empty,
             open_meta: &empty,
+            chunks_packed: None,
         },
     )
     .await

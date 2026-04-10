@@ -11,3 +11,6 @@ pub mod merge;
 
 #[cfg(feature = "embed")]
 pub mod embed;
+
+#[cfg(feature = "embed")]
+pub mod pipeline;

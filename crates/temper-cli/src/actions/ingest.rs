@@ -145,34 +145,15 @@ pub fn build_ingest_payload(
     doc_type: &str,
     metadata: Option<serde_json::Value>,
 ) -> Result<temper_core::types::IngestPayload> {
-    use temper_core::types::ingest::{pack_chunks, PackedChunk};
-    use temper_ingest::chunk::chunk_markdown;
-    use temper_ingest::embed::embed_texts;
+    use temper_core::types::ingest::pack_chunks;
+    use temper_ingest::pipeline::prepare_markdown;
 
     let content_hash = compute_content_hash(content);
     let slug = slug_from_title(title);
     let origin_uri = build_uri(context, doc_type, &slug);
 
-    // Chunk
-    let chunk_data = chunk_markdown(content);
-
-    // Embed
-    let texts: Vec<&str> = chunk_data.iter().map(|c| c.content.as_str()).collect();
-    let embeddings = embed_texts(&texts)
+    let packed_chunks = prepare_markdown(content)
         .map_err(|e| TemperError::Extraction(format!("embedding failed: {e}")))?;
-
-    // Pack
-    let packed_chunks: Vec<PackedChunk> = chunk_data
-        .into_iter()
-        .zip(embeddings)
-        .map(|(cd, emb)| PackedChunk {
-            chunk_index: cd.chunk_index,
-            header_path: cd.header_path,
-            content: cd.content,
-            content_hash: cd.content_hash,
-            embedding: emb,
-        })
-        .collect();
 
     let chunks_packed = pack_chunks(&packed_chunks)
         .map_err(|e| TemperError::Extraction(format!("chunk packing failed: {e}")))?;
@@ -182,13 +163,13 @@ pub fn build_ingest_payload(
         origin_uri,
         context_name: context.to_owned(),
         doc_type_name: doc_type.to_owned(),
-        content_hash,
+        content_hash: Some(content_hash),
         slug,
         content: content.to_owned(),
         metadata,
         managed_meta: None,
         open_meta: None,
-        chunks_packed,
+        chunks_packed: Some(chunks_packed),
     })
 }
 

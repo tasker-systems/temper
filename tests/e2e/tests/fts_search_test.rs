@@ -24,13 +24,13 @@ async fn ingest_with_chunks(
         origin_uri: format!("test://fts/{slug}"),
         context_name: context_name.to_string(),
         doc_type_name: "research".to_string(),
-        content_hash: format!("{:0>64x}", title.len()),
+        content_hash: Some(format!("{:0>64x}", title.len())),
         slug: slug.to_string(),
         content: content.to_string(),
         metadata: None,
-        managed_meta: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
-        chunks_packed: pack_chunks(&[chunk]).expect("pack chunks"),
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
     };
     app.client
         .ingest()
