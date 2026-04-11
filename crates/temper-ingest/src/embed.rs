@@ -111,17 +111,11 @@ struct Model {
 
 static MODEL: OnceLock<std::result::Result<Model, String>> = OnceLock::new();
 
-#[cfg(all(feature = "embed", not(feature = "embed-download")))]
 fn load_model() -> Result<&'static Model> {
     let result = MODEL.get_or_init(|| {
         init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
 
-        let session = Session::builder()
-            .map_err(|e| format!("ort session builder: {e}"))?
-            .with_intra_threads(1)
-            .map_err(|e| format!("ort threads: {e}"))?
-            .commit_from_memory(MODEL_BYTES)
-            .map_err(|e| format!("ort load: {e}"))?;
+        let session = build_session()?;
 
         let tokenizer =
             Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
@@ -138,37 +132,32 @@ fn load_model() -> Result<&'static Model> {
     }
 }
 
+/// Build ORT session from bundled model bytes.
+#[cfg(all(feature = "embed", not(feature = "embed-download")))]
+fn build_session() -> std::result::Result<Session, String> {
+    Session::builder()
+        .map_err(|e| format!("ort session builder: {e}"))?
+        .with_intra_threads(1)
+        .map_err(|e| format!("ort threads: {e}"))?
+        .commit_from_memory(MODEL_BYTES)
+        .map_err(|e| format!("ort load: {e}"))
+}
+
+/// Build ORT session by downloading model from Hugging Face Hub.
 #[cfg(feature = "embed-download")]
-fn load_model() -> Result<&'static Model> {
-    let result = MODEL.get_or_init(|| {
-        init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
+fn build_session() -> std::result::Result<Session, String> {
+    let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
+    let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
+    let model_path = repo
+        .get("onnx/model_quantized.onnx")
+        .map_err(|e| format!("download model: {e}"))?;
 
-        let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub api init: {e}"))?;
-        let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
-        let model_path = repo
-            .get("onnx/model_quantized.onnx")
-            .map_err(|e| format!("hf-hub download model: {e}"))?;
-
-        let session = Session::builder()
-            .map_err(|e| format!("ort session builder: {e}"))?
-            .with_intra_threads(1)
-            .map_err(|e| format!("ort threads: {e}"))?
-            .commit_from_file(&model_path)
-            .map_err(|e| format!("ort load: {e}"))?;
-
-        let tokenizer =
-            Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
-
-        Ok(Model {
-            session: Mutex::new(session),
-            tokenizer,
-        })
-    });
-
-    match result {
-        Ok(m) => Ok(m),
-        Err(e) => Err(EmbedError::Embedding(format!("model init: {e}"))),
-    }
+    Session::builder()
+        .map_err(|e| format!("ort session builder: {e}"))?
+        .with_intra_threads(1)
+        .map_err(|e| format!("ort threads: {e}"))?
+        .commit_from_file(&model_path)
+        .map_err(|e| format!("ort load: {e}"))
 }
 
 // ---- Tokenization ----
