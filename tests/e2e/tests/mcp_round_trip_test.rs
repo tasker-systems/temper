@@ -175,8 +175,8 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
 // MCP create_resource via ingest() persists content retrievably
 // ---------------------------------------------------------------------------
 
-/// Creating a resource via `ingest()` (the path MCP now uses) with content
-/// should produce searchable chunks, not silently drop the body.
+/// Creating a resource via `ingest()` (the path MCP now uses) with pre-packed
+/// chunks stores them and makes content retrievable via `get_content`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -192,21 +192,25 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
         .await
         .expect("context create");
 
-    let content = "# Session Note\n\nThis session covered the MCP content pipeline fix.";
+    let body = "This session covered the MCP content pipeline fix.";
+    let content = format!("# Session Note\n\n{body}");
 
-    // Build a payload the same way MCP create_resource now does
+    // Pre-pack chunks (avoids ONNX model load; pipeline is tested separately)
+    let chunks = vec![fake_chunk(0, "Session Note", body)];
+    let packed = temper_core::types::ingest::pack_chunks(&chunks).expect("pack chunks");
+
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Content Round-Trip Test".to_string(),
         origin_uri: "mcp://test/content-round-trip".to_string(),
         context_name: "content-round-trip".to_string(),
         doc_type_name: "session".to_string(),
-        content_hash: None,
+        content_hash: Some(format!("sha256:{}", sha2_hex(&content))),
         slug: "content-round-trip-test".to_string(),
-        content: content.to_string(),
+        content,
         metadata: None,
         managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
         open_meta: None,
-        chunks_packed: None, // server-side pipeline should generate
+        chunks_packed: Some(packed),
     };
 
     let resource = ingest_service::ingest(&pool, profile_id, "mcp", payload)

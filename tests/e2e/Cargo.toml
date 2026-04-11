@@ -11,7 +11,7 @@ test-db = []
 ignored = ["base64", "rmp-serde", "serde_json"]
 
 [dev-dependencies]
-temper-api = { path = "../../crates/temper-api", features = ["ingest-pipeline"] }
+temper-api = { path = "../../crates/temper-api" }
 temper-cli = { path = "../../crates/temper-cli" }
 temper-client = { path = "../../crates/temper-client" }
 temper-core = { path = "../../crates/temper-core" }
