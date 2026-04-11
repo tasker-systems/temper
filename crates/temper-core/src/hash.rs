@@ -165,6 +165,33 @@ pub fn split_frontmatter_tiers(
 }
 
 // ---------------------------------------------------------------------------
+// Convenience helper
+// ---------------------------------------------------------------------------
+
+/// Convenience: parse frontmatter, split tiers, and compute both hashes.
+///
+/// Returns `(managed_hash, open_hash)`. If frontmatter is `None` or not a
+/// valid mapping, hashes are computed over empty objects (with doc-type
+/// defaults still applied for the managed hash).
+pub fn compute_frontmatter_hashes_from_yaml(
+    frontmatter: Option<&serde_yaml::Value>,
+    doc_type: &str,
+) -> (String, String) {
+    if let Some(fm) = frontmatter {
+        let (managed_meta, open_meta) = split_frontmatter_tiers(fm, doc_type);
+        (
+            compute_managed_hash(doc_type, &managed_meta),
+            compute_open_hash(&open_meta),
+        )
+    } else {
+        (
+            compute_managed_hash(doc_type, &serde_json::json!({})),
+            compute_open_hash(&serde_json::json!({})),
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
 
@@ -390,5 +417,144 @@ title: "My Task"
         let api_hash = compute_managed_hash("task", &api_json);
 
         assert_eq!(cli_hash, api_hash);
+    }
+
+    // 17. round_trip_hash_agreement_all_doc_types
+    //
+    // For each doc type, simulate the CLI path (YAML with tier-1 fields ->
+    // split -> hash) and API path (JSON without tier-1 fields -> hash).
+    // Both must produce the same managed hash.
+    #[test]
+    fn round_trip_hash_agreement_all_doc_types() {
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+        let cases: Vec<(&str, String, serde_json::Value)> = vec![
+            (
+                "task",
+                format!(
+                    r#"
+temper-id: "abc"
+temper-type: "task"
+temper-context: "ctx"
+temper-created: "2026-01-01T00:00:00Z"
+temper-stage: "in-progress"
+title: "My Task"
+custom-tag: "user-value"
+"#
+                ),
+                json!({"temper-stage": "in-progress", "title": "My Task"}),
+            ),
+            (
+                "goal",
+                format!(
+                    r#"
+temper-id: "def"
+temper-type: "goal"
+temper-context: "ctx"
+temper-status: "achieved"
+title: "Ship v1"
+"#
+                ),
+                json!({"temper-status": "achieved", "title": "Ship v1"}),
+            ),
+            (
+                "session",
+                format!(
+                    r#"
+temper-id: "ghi"
+temper-type: "session"
+temper-context: "ctx"
+date: "{today}"
+title: "Planning"
+"#
+                ),
+                json!({"date": today.clone(), "title": "Planning"}),
+            ),
+            (
+                "research",
+                format!(
+                    r#"
+temper-id: "jkl"
+temper-type: "research"
+temper-context: "ctx"
+date: "{today}"
+title: "Survey"
+"#
+                ),
+                json!({"date": today, "title": "Survey"}),
+            ),
+        ];
+
+        for (doc_type, yaml_str, api_json) in &cases {
+            let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+            let (managed_from_yaml, _) = split_frontmatter_tiers(&fm, doc_type);
+            let cli_hash = compute_managed_hash(doc_type, &managed_from_yaml);
+            let api_hash = compute_managed_hash(doc_type, api_json);
+
+            assert_eq!(
+                cli_hash, api_hash,
+                "CLI and API managed hashes must agree for doc_type={doc_type}"
+            );
+        }
+    }
+
+    // 18. defaults_make_hashes_converge
+    //
+    // A goal without `temper-status` hashes the same as a goal with
+    // `temper-status: active` (the default).
+    #[test]
+    fn defaults_make_hashes_converge() {
+        let without = json!({"title": "Ship v1"});
+        let with_default = json!({"title": "Ship v1", "temper-status": "active"});
+        assert_eq!(
+            compute_managed_hash("goal", &without),
+            compute_managed_hash("goal", &with_default),
+        );
+    }
+
+    // 19. convenience_helper_matches_manual_steps
+    //
+    // `compute_frontmatter_hashes_from_yaml` produces the same result as
+    // manually calling split_frontmatter_tiers + compute_managed_hash +
+    // compute_open_hash.
+    #[test]
+    fn convenience_helper_matches_manual_steps() {
+        let yaml_str = r#"
+temper-id: "abc"
+temper-type: "task"
+temper-stage: "in-progress"
+title: "My Task"
+custom-field: "value"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+
+        // Manual path
+        let (managed_meta, open_meta) = split_frontmatter_tiers(&fm, "task");
+        let manual_managed = compute_managed_hash("task", &managed_meta);
+        let manual_open = compute_open_hash(&open_meta);
+
+        // Convenience helper
+        let (helper_managed, helper_open) = compute_frontmatter_hashes_from_yaml(Some(&fm), "task");
+
+        assert_eq!(manual_managed, helper_managed);
+        assert_eq!(manual_open, helper_open);
+    }
+
+    // 20. convenience_helper_none_frontmatter
+    //
+    // `None` frontmatter produces valid (non-empty) hashes.
+    #[test]
+    fn convenience_helper_none_frontmatter() {
+        let (managed, open) = compute_frontmatter_hashes_from_yaml(None, "task");
+        assert!(managed.starts_with("sha256:"), "managed hash must be valid");
+        assert!(open.starts_with("sha256:"), "open hash must be valid");
+        assert!(managed.len() > 10, "managed hash must not be empty");
+        assert!(open.len() > 10, "open hash must not be empty");
+
+        // Should be the same as hashing empty objects with defaults
+        let expected_managed = compute_managed_hash("task", &json!({}));
+        let expected_open = compute_open_hash(&json!({}));
+        assert_eq!(managed, expected_managed);
+        assert_eq!(open, expected_open);
     }
 }

@@ -133,20 +133,10 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
         // Compute frontmatter tier hashes
         let doc_type =
             temper_core::hash::doc_type_from_vault_path(&entry.path).unwrap_or("unknown");
-        let (managed_hash, open_hash) = if let Some(fm) = crate::vault::parse_frontmatter(&content)
-        {
-            let (managed_meta, open_meta) =
-                temper_core::hash::split_frontmatter_tiers(&fm, doc_type);
-            (
-                temper_core::hash::compute_managed_hash(doc_type, &managed_meta),
-                temper_core::hash::compute_open_hash(&open_meta),
-            )
-        } else {
-            (
-                temper_core::hash::compute_managed_hash(doc_type, &serde_json::json!({})),
-                temper_core::hash::compute_open_hash(&serde_json::json!({})),
-            )
-        };
+        let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
+            crate::vault::parse_frontmatter(&content).as_ref(),
+            doc_type,
+        );
 
         entry.mtime_secs = Some(file_mtime);
 
@@ -362,20 +352,10 @@ pub fn scan_vault_for_untracked(
         let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
-        let (managed_hash, open_hash) =
-            if let Some(fm) = crate::vault::parse_frontmatter(&full_content) {
-                let (managed_meta, open_meta) =
-                    temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
-                (
-                    temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
-                    temper_core::hash::compute_open_hash(&open_meta),
-                )
-            } else {
-                (
-                    temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
-                    temper_core::hash::compute_open_hash(&serde_json::json!({})),
-                )
-            };
+        let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
+            crate::vault::parse_frontmatter(&full_content).as_ref(),
+            &doc_type,
+        );
 
         manifest.entries.insert(
             resource_id,
@@ -724,19 +704,10 @@ async fn push_resource(
     // Compute frontmatter hashes so we can record them as the remote values
     let (pushed_managed_hash, pushed_open_hash) = {
         let current = std::fs::read_to_string(&file_path)?;
-        if let Some(fm) = crate::vault::parse_frontmatter(&current) {
-            let (managed_meta, open_meta) =
-                temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
-            (
-                temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
-                temper_core::hash::compute_open_hash(&open_meta),
-            )
-        } else {
-            (
-                temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
-                temper_core::hash::compute_open_hash(&serde_json::json!({})),
-            )
-        }
+        temper_core::hash::compute_frontmatter_hashes_from_yaml(
+            crate::vault::parse_frontmatter(&current).as_ref(),
+            &doc_type,
+        )
     };
 
     if let Some(e) = manifest.entries.get_mut(&server_id) {
@@ -830,19 +801,10 @@ async fn pull_resource(
         .to_string();
 
     // Compute frontmatter tier hashes from the written file
-    let (managed_hash, open_hash) = if let Some(fm) = crate::vault::parse_frontmatter(&full_content)
-    {
-        let (managed_meta, open_meta) = temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
-        (
-            temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
-            temper_core::hash::compute_open_hash(&open_meta),
-        )
-    } else {
-        (
-            temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
-            temper_core::hash::compute_open_hash(&serde_json::json!({})),
-        )
-    };
+    let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
+        crate::vault::parse_frontmatter(&full_content).as_ref(),
+        &doc_type,
+    );
 
     let mtime_secs = file_mtime_secs(&vault_path).ok();
 
@@ -978,20 +940,11 @@ async fn merge_and_push_resource(
         .map_err(crate::commands::client_err)?;
 
     // 8. Compute frontmatter hashes from the merged file
-    let (pushed_managed_hash, pushed_open_hash) = if let Some(fm) =
-        crate::vault::parse_frontmatter(&new_file_content)
-    {
-        let (managed_meta, open_meta) = temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
-        (
-            temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
-            temper_core::hash::compute_open_hash(&open_meta),
-        )
-    } else {
-        (
-            temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
-            temper_core::hash::compute_open_hash(&serde_json::json!({})),
-        )
-    };
+    let (pushed_managed_hash, pushed_open_hash) =
+        temper_core::hash::compute_frontmatter_hashes_from_yaml(
+            crate::vault::parse_frontmatter(&new_file_content).as_ref(),
+            &doc_type,
+        );
 
     // 9. Update manifest entry
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
@@ -1286,19 +1239,10 @@ pub async fn sync_reset(
         let reset_doc_type =
             temper_core::hash::doc_type_from_vault_path(&rel_path).unwrap_or("unknown");
         let (local_managed_hash, local_open_hash) =
-            if let Some(fm_val) = crate::vault::parse_frontmatter(&content) {
-                let (managed_meta, open_meta) =
-                    temper_core::hash::split_frontmatter_tiers(&fm_val, reset_doc_type);
-                (
-                    temper_core::hash::compute_managed_hash(reset_doc_type, &managed_meta),
-                    temper_core::hash::compute_open_hash(&open_meta),
-                )
-            } else {
-                (
-                    temper_core::hash::compute_managed_hash(reset_doc_type, &serde_json::json!({})),
-                    temper_core::hash::compute_open_hash(&serde_json::json!({})),
-                )
-            };
+            temper_core::hash::compute_frontmatter_hashes_from_yaml(
+                crate::vault::parse_frontmatter(&content).as_ref(),
+                reset_doc_type,
+            );
 
         let fm = ingest::parse_source_frontmatter(&content);
 
