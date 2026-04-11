@@ -164,7 +164,7 @@ fn build_session() -> std::result::Result<Session, String> {
     let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
     let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
     let model_path = repo
-        .get("onnx/model_quantized.onnx")
+        .get("onnx/model.onnx")
         .map_err(|e| format!("download model: {e}"))?;
 
     Session::builder()
