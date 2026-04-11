@@ -214,23 +214,57 @@ pub fn build_complete_request(device_id: &str, merged: Vec<MergedResource>) -> S
     }
 }
 
-/// Split parsed frontmatter into managed (temper-* + title + slug) and open tiers.
-fn split_frontmatter_tiers(fm: &serde_yaml::Value) -> (serde_json::Value, serde_json::Value) {
+/// Fields that are tracked structurally by the server and must never appear
+/// in the `managed_meta` payload sent to the API.  Tier-1 identity fields
+/// (`temper-id`, `temper-provisional-id`) plus tier-2 structural fields
+/// (`temper-context`, `temper-type`) that the API rejects as "structural move"
+/// attempts on updates.
+const SKIP_FROM_MANAGED: &[&str] = &[
+    "temper-id",
+    "temper-provisional-id",
+    "temper-context",
+    "temper-type",
+];
+
+/// Split parsed frontmatter into managed and open tiers for the API payload.
+///
+/// **Managed tier** receives: `temper-*` fields (minus structural/identity
+/// fields in `SKIP_FROM_MANAGED`), `title`, `slug`, and any properties defined
+/// in the doc-type schema (e.g. `date` for sessions).
+///
+/// **Open tier** receives everything else.
+fn split_frontmatter_tiers(
+    fm: &serde_yaml::Value,
+    doc_type: &str,
+) -> (serde_json::Value, serde_json::Value) {
     let Some(mapping) = fm.as_mapping() else {
         return (serde_json::json!({}), serde_json::json!({}));
     };
+
+    // Collect doc-type schema property names so non-temper-* schema fields
+    // (like `date` for sessions) route to managed_meta instead of open_meta.
+    let schema_keys: std::collections::HashSet<String> =
+        temper_core::schema::schema_value(doc_type)
+            .ok()
+            .and_then(|v| v.get("properties")?.as_object().cloned())
+            .map(|props| props.keys().cloned().collect())
+            .unwrap_or_default();
+
     let mut managed = serde_json::Map::new();
     let mut open = serde_json::Map::new();
     for (key, value) in mapping {
         let Some(key_str) = key.as_str() else {
             continue;
         };
-        // Skip identity fields — tracked structurally, not as metadata
-        if key_str == "temper-id" || key_str == "temper-provisional-id" {
+        if SKIP_FROM_MANAGED.contains(&key_str) {
             continue;
         }
         let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-        if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
+        if key_str.starts_with("temper-")
+            || key_str == "title"
+            || key_str == "slug"
+            || schema_keys.contains(key_str)
+        {
             managed.insert(key_str.to_string(), json_value);
         } else {
             open.insert(key_str.to_string(), json_value);
@@ -646,32 +680,21 @@ async fn push_resource(
     let content = std::fs::read_to_string(&file_path)?;
     let body = strip_frontmatter(&content);
 
-    // Parse frontmatter and split into managed/open tiers
-    let (managed_meta, open_meta) = if let Some(fm) = crate::vault::parse_frontmatter(&content) {
-        let (m, o) = split_frontmatter_tiers(&fm);
-        (Some(m), Some(o))
-    } else {
-        (None, None)
-    };
-
     let (context, doc_type) = match Vault::parse_rel(&entry.path) {
         Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
         None => ("default".to_string(), "resource".to_string()),
     };
+
+    // Parse frontmatter and split into managed/open tiers
+    let (managed_meta, open_meta) = if let Some(fm) = crate::vault::parse_frontmatter(&content) {
+        let (m, o) = split_frontmatter_tiers(&fm, &doc_type);
+        (Some(m), Some(o))
+    } else {
+        (None, None)
+    };
     let title = ingest::title_from_path(&file_path);
 
     let mut payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, None)?;
-    // Strip identity fields from managed_meta before sending — the server
-    // tracks resource identity via kb_resources.id, not as metadata fields.
-    // Including them would cause managed_hash divergence between client and
-    // server after provisional IDs are replaced with authoritative ones.
-    let managed_meta = managed_meta.map(|mut m| {
-        if let Some(obj) = m.as_object_mut() {
-            obj.remove("temper-id");
-            obj.remove("temper-provisional-id");
-        }
-        m
-    });
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 
@@ -1735,6 +1758,93 @@ mod tests {
 
         assert!(!file_path.exists());
         assert!(!manifest.entries.contains_key(&id));
+    }
+
+    // --- split_frontmatter_tiers tests ---
+
+    fn yaml(s: &str) -> serde_yaml::Value {
+        serde_yaml::from_str(s).unwrap()
+    }
+
+    #[test]
+    fn split_tiers_excludes_structural_fields() {
+        let fm = yaml(
+            r#"
+temper-id: "019d7900-a767-7283-8677-33b094604b01"
+temper-provisional-id: "019d7800-a767-7283-8677-33b094604aff"
+temper-type: session
+temper-context: temper
+temper-stage: in-progress
+title: "Test Session"
+"#,
+        );
+        let (managed, open) = split_frontmatter_tiers(&fm, "session");
+        let m = managed.as_object().unwrap();
+
+        // Tier-1 identity and tier-2 structural fields must be excluded
+        assert!(!m.contains_key("temper-id"));
+        assert!(!m.contains_key("temper-provisional-id"));
+        assert!(!m.contains_key("temper-context"));
+        assert!(!m.contains_key("temper-type"));
+
+        // Other temper-* and title should be present
+        assert!(m.contains_key("temper-stage"));
+        assert!(m.contains_key("title"));
+        assert_eq!(m["title"], "Test Session");
+
+        // Open tier should be empty in this case
+        assert!(open.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn split_tiers_routes_schema_properties_to_managed() {
+        let fm = yaml(
+            r#"
+temper-type: session
+temper-context: temper
+title: "My Session"
+date: "2026-04-10"
+custom_field: "hello"
+"#,
+        );
+        let (managed, open) = split_frontmatter_tiers(&fm, "session");
+        let m = managed.as_object().unwrap();
+        let o = open.as_object().unwrap();
+
+        // `date` is defined in session.schema.json — must be in managed
+        assert!(m.contains_key("date"), "date should be in managed tier");
+        assert_eq!(m["date"], "2026-04-10");
+
+        // `custom_field` is not in any schema — goes to open
+        assert!(o.contains_key("custom_field"));
+        assert!(!m.contains_key("custom_field"));
+
+        // structural fields still excluded
+        assert!(!m.contains_key("temper-context"));
+        assert!(!m.contains_key("temper-type"));
+    }
+
+    #[test]
+    fn split_tiers_unknown_doc_type_falls_back_to_prefix_routing() {
+        let fm = yaml(
+            r#"
+temper-stage: backlog
+title: "Fallback"
+date: "2026-04-10"
+notes: "some notes"
+"#,
+        );
+        let (managed, open) = split_frontmatter_tiers(&fm, "unknown_type");
+        let m = managed.as_object().unwrap();
+        let o = open.as_object().unwrap();
+
+        // temper-* and title still routed to managed
+        assert!(m.contains_key("temper-stage"));
+        assert!(m.contains_key("title"));
+
+        // Without a schema, non-temper fields go to open
+        assert!(o.contains_key("date"));
+        assert!(o.contains_key("notes"));
     }
 
     // --- Frontmatter hash fix tests ---

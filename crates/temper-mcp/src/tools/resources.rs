@@ -3,7 +3,6 @@
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use temper_api::services::{context_service, doc_type_service, ingest_service, resource_service};
@@ -22,8 +21,8 @@ pub struct CreateResourceInput {
     pub doc_type_name: String,
     /// Resource title.
     pub title: String,
-    /// Optional markdown content body. If provided, triggers async
-    /// chunk/embed processing.
+    /// Optional markdown content body. Processed through the ingest
+    /// pipeline (chunk + embed) synchronously on create.
     pub content: Option<String>,
     /// Optional URL-friendly slug.
     pub slug: Option<String>,
@@ -182,12 +181,6 @@ fn to_text<T: serde::Serialize>(value: &T) -> String {
     serde_json::to_string_pretty(value).unwrap_or_else(|_| "{}".to_string())
 }
 
-fn content_hash(content: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    format!("sha256:{}", hex::encode(hasher.finalize()))
-}
-
 // ── Tool handlers ──────────────────────────────────────────────────
 
 pub async fn create_resource(
@@ -208,90 +201,53 @@ pub async fn create_resource(
         }
     }
 
-    // 1. Resolve context by name — error if not found
-    let context = context_service::resolve_by_name(pool, profile_id, &input.context_name)
-        .await
-        .map_err(|e| match e {
-            temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
-                format!(
-                    "Context '{}' not found. Use create_context to create it first.",
-                    input.context_name
-                ),
-                None,
-            ),
-            other => {
-                rmcp::ErrorData::internal_error(format!("Failed to resolve context: {other}"), None)
-            }
-        })?;
+    // Build slug from title if not provided
+    let slug = input.slug.unwrap_or_else(|| {
+        input
+            .title
+            .to_lowercase()
+            .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
+            .trim_matches('-')
+            .to_owned()
+    });
 
-    // 2. Resolve doc type by name
-    let doc_type_id = ingest_service::resolve_doc_type(pool, &input.doc_type_name)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::invalid_params(
-                format!(
-                    "Unknown doc_type '{}'. Use list_doc_types to see available types. Error: {e}",
-                    input.doc_type_name
-                ),
-                None,
-            )
-        })?;
-
-    // 3. Content handling — hash, dedup, ingest post
-    let body_hash = input.content.as_ref().map(|c| content_hash(c));
-
-    if let Some(ref hash) = body_hash {
-        if let Some(existing) = ingest_service::find_by_body_hash(pool, profile_id, hash)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to check body hash: {e}"), None)
-            })?
-        {
-            let enriched = enrich_resource(pool, profile_id, &existing).await?;
-            let response = CreateResourceResponse {
-                resource: enriched,
-                status: CreateStatus::Existing,
-            };
-            return Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-                to_text(&response),
-            )]));
-        }
-    }
-
-    // 4. Default origin_uri
     let origin_uri = input
         .origin_uri
         .unwrap_or_else(|| format!("mcp://agent/{}", Uuid::new_v4()));
 
-    // 5. Create resource + manifest + event
-    let empty_json = serde_json::json!({});
-    let managed_meta = input.managed_meta.unwrap_or_else(|| empty_json.clone());
-    let open_meta = input.open_meta.unwrap_or_else(|| empty_json.clone());
-    // SHA256 of empty string — used when no content is provided
-    let hash_for_manifest = body_hash
-        .as_deref()
-        .unwrap_or("sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    let content = input.content.unwrap_or_default();
 
-    let resource = ingest_service::create_resource_with_manifest(
-        pool,
-        &ingest_service::CreateResourceParams {
-            profile_id,
-            device_id: "mcp",
-            context_id: context.id,
-            doc_type_id,
-            title: &input.title,
-            slug: input.slug.as_deref(),
-            origin_uri: &origin_uri,
-            content_hash: hash_for_manifest,
-            managed_meta: &managed_meta,
-            open_meta: &open_meta,
-            chunks_packed: None,
-        },
-    )
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("Failed to create resource: {e}"), None)
-    })?;
+    // Route through the ingest service — handles validation, chunking,
+    // embedding, dedup, and resource creation atomically.
+    let payload = temper_core::types::IngestPayload {
+        title: input.title,
+        origin_uri,
+        context_name: input.context_name,
+        doc_type_name: input.doc_type_name,
+        content_hash: None, // ingest() computes if needed
+        slug,
+        content,
+        metadata: None,
+        managed_meta: input.managed_meta,
+        open_meta: input.open_meta,
+        chunks_packed: None, // server-side pipeline will generate
+    };
+
+    let resource = ingest_service::ingest(pool, profile_id, "mcp", payload)
+        .await
+        .map_err(|e| match e {
+            temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
+                "Context or doc_type not found. Use create_context / list_doc_types to verify."
+                    .to_string(),
+                None,
+            ),
+            temper_api::error::ApiError::BadRequest(msg) => {
+                rmcp::ErrorData::invalid_params(msg, None)
+            }
+            other => {
+                rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
+            }
+        })?;
 
     let enriched = enrich_resource(pool, profile_id, &resource).await?;
     let response = CreateResourceResponse {
@@ -467,34 +423,41 @@ pub async fn update_resource(
             })?;
     }
 
-    // Update content if provided
+    // Update content if provided — route through the ingest service update
+    // which handles managed_meta validation, chunking, and embedding.
     if let Some(content) = input.content {
-        let body_hash = content_hash(&content);
-        let empty_json = serde_json::json!({});
-        let managed_meta = input.managed_meta.unwrap_or_else(|| empty_json.clone());
-        let open_meta = input.open_meta.unwrap_or_else(|| empty_json.clone());
-
-        let mut tx = pool.begin().await.map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to begin transaction: {e}"), None)
-        })?;
-
-        ingest_service::update_resource_manifest(
-            &mut tx,
-            profile_id,
-            "mcp",
-            resource_id,
-            &body_hash,
-            &managed_meta,
-            &open_meta,
-        )
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to update manifest: {e}"), None)
-        })?;
-
-        tx.commit()
+        // Fetch the existing resource to get context/doc_type names for the payload
+        let existing = resource_service::get_visible(pool, profile.id, input.id)
             .await
-            .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to commit: {e}"), None))?;
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+            })?;
+
+        let payload = temper_core::types::IngestPayload {
+            title: input.title.clone().unwrap_or(existing.title),
+            origin_uri: existing.origin_uri,
+            context_name: existing.context_name,
+            doc_type_name: existing.doc_type_name,
+            content_hash: None,
+            slug: existing.slug.unwrap_or_default(),
+            content,
+            metadata: None,
+            managed_meta: input.managed_meta,
+            open_meta: input.open_meta,
+            chunks_packed: None,
+        };
+
+        ingest_service::update(pool, profile_id, resource_id, "mcp", payload)
+            .await
+            .map_err(|e| match e {
+                temper_api::error::ApiError::BadRequest(msg) => {
+                    rmcp::ErrorData::invalid_params(msg, None)
+                }
+                other => rmcp::ErrorData::internal_error(
+                    format!("Failed to update resource: {other}"),
+                    None,
+                ),
+            })?;
     }
 
     // Return enriched current state
