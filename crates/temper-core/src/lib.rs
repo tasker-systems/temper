@@ -4,8 +4,10 @@
 //! temper-client, temper-cloud, temper-ingest, and temper-mcp. It contains domain types,
 //! error definitions, and ID generation utilities.
 
+pub mod defaults;
 pub mod error;
 pub mod ids;
 pub mod schema;
 pub mod types;
+pub mod validation;
 pub mod vault;

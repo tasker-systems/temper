@@ -141,29 +141,9 @@ fn extract_temper_owner(frontmatter: &serde_yaml::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Regex-free pattern check for owner sigils: `^[@+][a-z0-9][a-z0-9-]*$`.
+/// Validate owner pattern using shared logic from temper-core.
 fn is_valid_owner_pattern(value: &str) -> bool {
-    let mut chars = value.chars();
-    let first = match chars.next() {
-        Some(c) => c,
-        None => return false,
-    };
-    if first != '@' && first != '+' {
-        return false;
-    }
-    let second = match chars.next() {
-        Some(c) => c,
-        None => return false,
-    };
-    if !second.is_ascii_lowercase() && !second.is_ascii_digit() {
-        return false;
-    }
-    for c in chars {
-        if !(c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
-            return false;
-        }
-    }
-    true
+    temper_core::validation::validate_owner_pattern(value).is_ok()
 }
 
 /// Validate a single markdown file and return a `ValidationResult`.
