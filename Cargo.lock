@@ -4431,13 +4431,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "chrono",
- "hex",
  "jsonwebtoken",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "serde_yaml",
- "sha2",
  "sqlx",
  "temper-core",
  "temper-ingest",
