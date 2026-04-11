@@ -55,6 +55,7 @@ async fn create_resource_with_manifest_inserts_all_records(pool: sqlx::PgPool) {
             device_id: "mcp-test",
             context_id: context.id,
             doc_type_id,
+            doc_type_name: "research",
             title: "MCP Test Resource",
             slug: Some("mcp-test-resource"),
             origin_uri: "mcp://test/create",
@@ -134,6 +135,7 @@ async fn find_by_body_hash_returns_existing(pool: sqlx::PgPool) {
             device_id: "test",
             context_id: context.id,
             doc_type_id,
+            doc_type_name: "research",
             title: "First",
             slug: None,
             origin_uri: "mcp://test/dedup-1",
@@ -201,6 +203,7 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
             device_id: "update-test",
             context_id: context.id,
             doc_type_id,
+            doc_type_name: "research",
             title: "Update Test Resource",
             slug: Some("update-test-resource"),
             origin_uri: "mcp://test/update",
@@ -216,8 +219,8 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
     // Now simulate the update flow (same SQL as the MCP tool uses)
     let updated_content = "# Updated\n\nUpdated content after edit.";
     let updated_hash = format!("sha256:{}", sha2_hex(updated_content));
-    let managed_hash = ingest_service::hash_json_value(&empty);
-    let open_hash = ingest_service::hash_json_value(&empty);
+    let managed_hash = temper_core::hash::compute_managed_hash("research", &empty);
+    let open_hash = temper_core::hash::compute_open_hash(&empty);
 
     let mut tx = pool.begin().await.expect("begin tx");
 
@@ -349,6 +352,7 @@ async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
             device_id: "e2e-test-device",
             context_id: context.id,
             doc_type_id,
+            doc_type_name: "research",
             title: "Chunk Update Test",
             slug: Some("chunk-update-test"),
             origin_uri: "mcp://test/chunk-update",
@@ -471,6 +475,7 @@ async fn create_resource_dispatches_on_chunks_packed_presence(pool: sqlx::PgPool
             device_id: "precomputed-test-device",
             context_id: context.id,
             doc_type_id,
+            doc_type_name: "research",
             title: "Precomputed Chunks Test",
             slug: Some("precomputed-chunks-test"),
             origin_uri: "mcp://test/precomputed",
@@ -674,6 +679,7 @@ async fn update_resource_rejects_tier2_fields_in_managed_meta(pool: sqlx::PgPool
             device_id: "e2e-test-device",
             context_id: context.id,
             doc_type_id,
+            doc_type_name: "research",
             title: "Tier-2 Rejection Test",
             slug: Some("tier2-rejection-test"),
             origin_uri: "mcp://test/tier2-reject",

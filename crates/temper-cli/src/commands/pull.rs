@@ -59,7 +59,8 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                 std::fs::write(&vault_path, &full_content)?;
 
                 // Update manifest entry.
-                let content_hash = ingest::compute_content_hash(&full_content);
+                let body = crate::actions::sync::strip_frontmatter(&full_content);
+                let content_hash = temper_core::hash::compute_body_hash(body);
                 entry.body_hash = content_hash.clone();
                 // After pull, local content matches server — hashes are identical
                 entry.remote_body_hash = content_hash;

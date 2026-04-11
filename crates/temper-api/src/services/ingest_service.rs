@@ -2,13 +2,15 @@
 //! embeddings) and writes resource + chunks to the database in a single
 //! transaction.
 
-use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
 use temper_core::defaults::apply_doc_type_defaults;
+#[cfg(feature = "ingest-pipeline")]
+use temper_core::hash::compute_body_hash;
+use temper_core::hash::{compute_managed_hash, compute_open_hash};
 use temper_core::schema::ValidationIssue;
 use temper_core::types::ids::{ContextId, EventId, ProfileId, ResourceAuditId, ResourceId};
 use temper_core::types::ingest::chunks_to_jsonb;
@@ -82,28 +84,31 @@ impl From<IngestError> for crate::error::ApiError {
     }
 }
 
-/// Remove tier-1 identity/audit fields from input `managed_meta`.
+/// Remove identity and tier-1 audit fields from input `managed_meta`.
 ///
 /// Agents may echo these back from a `get_resource` call; they should not cause
-/// validation errors. Tier-2 fields (`temper-context`, `temper-type`, `slug`) are
-/// NOT stripped here — they remain present so we can detect structural-move
-/// attempts in the update path.
+/// validation errors.
+///
+/// Uses `IDENTITY_FIELDS` from `temper_core::hash` plus a subset of
+/// `TIER1_SYSTEM_FIELDS`. Intentionally does NOT strip `temper-context` or
+/// `temper-type` — those remain so the update path can detect structural-move
+/// attempts (see `update()` lines that check for context/type changes).
 fn strip_system_managed_fields(mut meta: serde_json::Value) -> serde_json::Value {
-    const TIER1_FIELDS: &[&str] = &[
-        "temper-id",
-        "temper-provisional-id",
-        "temper-created",
-        "temper-updated",
-        "temper-owner",
-        "temper-source",
-        "temper-legacy-id",
-    ];
+    use temper_core::hash::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
+
+    // temper-context and temper-type are kept for structural-move detection.
+    const KEEP_FOR_MOVE_DETECTION: &[&str] = &["temper-context", "temper-type"];
+
     if let Some(obj) = meta.as_object_mut() {
-        for field in TIER1_FIELDS {
+        for field in IDENTITY_FIELDS
+            .iter()
+            .chain(TIER1_SYSTEM_FIELDS.iter())
+            .filter(|f| !KEEP_FOR_MOVE_DETECTION.contains(f))
+        {
             if obj.remove(*field).is_some() {
                 tracing::warn!(
                     field = *field,
-                    "stripped tier-1 system-managed field from input managed_meta"
+                    "stripped system field from input managed_meta"
                 );
             }
         }
@@ -122,34 +127,6 @@ struct ResourceRowBase {
     #[expect(dead_code, reason = "required by FromRow derive for RETURNING query")]
     id: ResourceId,
     kb_context_id: ContextId,
-}
-
-/// Compute a `sha256:<hex>` hash of a JSON value (canonical form).
-///
-/// Keys are sorted recursively to ensure deterministic output regardless
-/// of the insertion order of `serde_json::Map`.
-pub fn hash_json_value(value: &serde_json::Value) -> String {
-    let canonical = canonicalize_json(value);
-    let serialized = serde_json::to_string(&canonical).unwrap_or_else(|_| "{}".to_string());
-    let mut hasher = Sha256::new();
-    hasher.update(serialized.as_bytes());
-    format!("sha256:{}", hex::encode(hasher.finalize()))
-}
-
-fn canonicalize_json(value: &serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let sorted: std::collections::BTreeMap<String, serde_json::Value> = map
-                .iter()
-                .map(|(k, v)| (k.clone(), canonicalize_json(v)))
-                .collect();
-            serde_json::to_value(sorted).unwrap_or(serde_json::Value::Object(map.clone()))
-        }
-        serde_json::Value::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(canonicalize_json).collect())
-        }
-        other => other.clone(),
-    }
 }
 
 /// Insert an event and audit trail row atomically via the SQL function.
@@ -282,6 +259,7 @@ pub struct CreateResourceParams<'a> {
     pub device_id: &'a str,
     pub context_id: ContextId,
     pub doc_type_id: Uuid,
+    pub doc_type_name: &'a str,
     pub title: &'a str,
     pub slug: Option<&'a str>,
     pub origin_uri: &'a str,
@@ -315,8 +293,8 @@ pub async fn create_resource_with_manifest(
     pool: &PgPool,
     params: &CreateResourceParams<'_>,
 ) -> ApiResult<ResourceRow> {
-    let managed_hash = hash_json_value(params.managed_meta);
-    let open_hash = hash_json_value(params.open_meta);
+    let managed_hash = compute_managed_hash(params.doc_type_name, params.managed_meta);
+    let open_hash = compute_open_hash(params.open_meta);
 
     let mut tx = pool.begin().await?;
 
@@ -423,12 +401,7 @@ pub async fn ingest(
     // 2.6. If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
     #[cfg(feature = "ingest-pipeline")]
     if payload.chunks_packed.is_none() {
-        let hash = {
-            let mut hasher = Sha256::new();
-            hasher.update(payload.content.as_bytes());
-            hasher.finalize()
-        };
-        payload.content_hash = Some(format!("sha256:{:x}", hash));
+        payload.content_hash = Some(compute_body_hash(&payload.content));
         let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
             .map_err(|e| IngestError::Embed(e.to_string()))
             .map_err(ApiError::from)?;
@@ -473,6 +446,7 @@ pub async fn ingest(
             device_id,
             context_id,
             doc_type_id,
+            doc_type_name: &payload.doc_type_name,
             title: &payload.title,
             slug: Some(payload.slug.as_str()),
             origin_uri: &payload.origin_uri,
@@ -487,11 +461,18 @@ pub async fn ingest(
     Ok(resource)
 }
 
-/// Update a resource's manifest (body hash, metadata hashes) and fire an event.
-///
-/// Updates the resource timestamp, upserts the manifest row, and inserts
-/// a `body_updated` event + audit trail atomically. Does NOT handle chunks —
-/// callers add chunk operations to the same transaction or separately.
+/// Parameters for updating a resource's manifest hashes.
+#[derive(Debug)]
+pub struct UpdateManifestParams<'a> {
+    pub profile_id: ProfileId,
+    pub device_id: &'a str,
+    pub resource_id: ResourceId,
+    pub doc_type_name: &'a str,
+    pub content_hash: &'a str,
+    pub managed_meta: &'a serde_json::Value,
+    pub open_meta: &'a serde_json::Value,
+}
+
 /// Update a resource's manifest (body hash, metadata hashes) and fire an event.
 ///
 /// Updates the resource timestamp, upserts the manifest row, and inserts
@@ -502,15 +483,10 @@ pub async fn ingest(
 /// transaction or trigger async processing separately.
 pub async fn update_resource_manifest(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    profile_id: ProfileId,
-    device_id: &str,
-    resource_id: ResourceId,
-    content_hash: &str,
-    managed_meta: &serde_json::Value,
-    open_meta: &serde_json::Value,
+    params: &UpdateManifestParams<'_>,
 ) -> ApiResult<()> {
-    let managed_hash = hash_json_value(managed_meta);
-    let open_hash = hash_json_value(open_meta);
+    let managed_hash = compute_managed_hash(params.doc_type_name, params.managed_meta);
+    let open_hash = compute_open_hash(params.open_meta);
 
     let base = sqlx::query_as!(
         ResourceRowBase,
@@ -520,7 +496,7 @@ pub async fn update_resource_manifest(
         WHERE id = $1
         RETURNING id, kb_context_id
         "#,
-        *resource_id,
+        *params.resource_id,
     )
     .fetch_one(&mut **tx)
     .await?;
@@ -533,10 +509,10 @@ pub async fn update_resource_manifest(
         DO UPDATE SET body_hash = $2, managed_meta = $3, open_meta = $4,
                       managed_hash = $5, open_hash = $6, updated = now()
         "#,
-        *resource_id,
-        content_hash,
-        managed_meta,
-        open_meta,
+        *params.resource_id,
+        params.content_hash,
+        params.managed_meta,
+        params.open_meta,
         managed_hash,
         open_hash,
     )
@@ -545,13 +521,13 @@ pub async fn update_resource_manifest(
 
     insert_event_and_audit(
         tx,
-        profile_id,
-        device_id,
+        params.profile_id,
+        params.device_id,
         base.kb_context_id,
-        resource_id,
+        params.resource_id,
         "body_updated",
         "update_body",
-        content_hash,
+        params.content_hash,
         &managed_hash,
         &open_hash,
     )
@@ -611,12 +587,7 @@ pub async fn update(
     // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
     #[cfg(feature = "ingest-pipeline")]
     if payload.chunks_packed.is_none() {
-        let hash = {
-            let mut hasher = Sha256::new();
-            hasher.update(payload.content.as_bytes());
-            hasher.finalize()
-        };
-        payload.content_hash = Some(format!("sha256:{:x}", hash));
+        payload.content_hash = Some(compute_body_hash(&payload.content));
         let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
             .map_err(|e| IngestError::Embed(e.to_string()))
             .map_err(ApiError::from)?;
@@ -658,12 +629,15 @@ pub async fn update(
     // Update manifest + fire event (context_id derived from resource row)
     update_resource_manifest(
         &mut tx,
-        profile_id,
-        device_id,
-        resource_id,
-        payload.content_hash.as_deref().unwrap_or(""),
-        &managed_meta,
-        &open_meta,
+        &UpdateManifestParams {
+            profile_id,
+            device_id,
+            resource_id,
+            doc_type_name: &payload.doc_type_name,
+            content_hash: payload.content_hash.as_deref().unwrap_or(""),
+            managed_meta: &managed_meta,
+            open_meta: &open_meta,
+        },
     )
     .await?;
 
@@ -917,43 +891,6 @@ mod tests_ingest_error {
             }
             _ => panic!("expected BadRequest"),
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn hash_empty_object() {
-        let hash = hash_json_value(&serde_json::json!({}));
-        assert_eq!(
-            hash,
-            "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
-        );
-    }
-
-    #[test]
-    fn hash_key_order_independent() {
-        let a = hash_json_value(&serde_json::json!({"b": 2, "a": 1}));
-        let b = hash_json_value(&serde_json::json!({"a": 1, "b": 2}));
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn hash_json_shared_fixture() {
-        let fixture = serde_json::json!({
-            "temper-type": "task",
-            "temper-stage": "in-progress",
-            "temper-seq": 42,
-            "title": "Test task"
-        });
-        let hash = hash_json_value(&fixture);
-        // This exact value must match the TypeScript canonicalJsonHash test
-        assert_eq!(
-            hash,
-            "sha256:d39e1380d3b0ce969fe93f1df8b2da5d1caabf90b33e2e30f01d661f2c3c4895"
-        );
     }
 }
 
