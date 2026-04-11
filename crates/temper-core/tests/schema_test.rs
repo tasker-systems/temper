@@ -1,7 +1,7 @@
 use serde_yaml::Value;
+use temper_core::hash;
 use temper_core::schema::{
-    check_legacy_fields, check_unknown_temper_fields, compute_frontmatter_hashes, load_schema,
-    validate_frontmatter,
+    check_legacy_fields, check_unknown_temper_fields, load_schema, validate_frontmatter,
 };
 
 fn yaml(s: &str) -> Value {
@@ -235,11 +235,11 @@ fn test_check_unknown_temper_fields_known_fields_ok() {
 }
 
 // ---------------------------------------------------------------------------
-// compute_frontmatter_hashes tests
+// hash tier tests (using temper_core::hash)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn test_compute_frontmatter_hashes_separates_tiers() {
+fn test_hash_tiers_separate_managed_and_open() {
     let fm1 = yaml(
         r#"
 temper-id: "01930000-0000-7000-8000-000000000040"
@@ -261,13 +261,18 @@ open-field: "hello"
 "#,
     );
 
-    let (meta1, open1) = compute_frontmatter_hashes(&fm1);
-    let (meta2, open2) = compute_frontmatter_hashes(&fm2);
+    let (managed1, open1_meta) = hash::split_frontmatter_tiers(&fm1, "task");
+    let meta1 = hash::compute_managed_hash("task", &managed1);
+    let open1 = hash::compute_open_hash(&open1_meta);
 
-    // meta hash should change when temper-type changes
+    let (managed2, open2_meta) = hash::split_frontmatter_tiers(&fm2, "goal");
+    let meta2 = hash::compute_managed_hash("goal", &managed2);
+    let open2 = hash::compute_open_hash(&open2_meta);
+
+    // managed hash should differ because doc-type defaults differ
     assert_ne!(
         meta1, meta2,
-        "meta_hash should differ when temper-type changes"
+        "managed_hash should differ when doc_type changes"
     );
 
     // open hash should be the same (same non-temper fields)
@@ -279,7 +284,7 @@ open-field: "hello"
     // hashes should be prefixed with sha256:
     assert!(
         meta1.starts_with("sha256:"),
-        "meta_hash should start with 'sha256:'"
+        "managed_hash should start with 'sha256:'"
     );
     assert!(
         open1.starts_with("sha256:"),
@@ -288,7 +293,7 @@ open-field: "hello"
 }
 
 #[test]
-fn test_compute_frontmatter_hashes_open_hash_changes_with_open_fields() {
+fn test_hash_tiers_open_hash_changes_with_open_fields() {
     let fm1 = yaml(
         r#"
 temper-id: "01930000-0000-7000-8000-000000000050"
@@ -306,8 +311,11 @@ custom: "world"
 "#,
     );
 
-    let (_meta1, open1) = compute_frontmatter_hashes(&fm1);
-    let (_meta2, open2) = compute_frontmatter_hashes(&fm2);
+    let (_, open1_meta) = hash::split_frontmatter_tiers(&fm1, "task");
+    let open1 = hash::compute_open_hash(&open1_meta);
+
+    let (_, open2_meta) = hash::split_frontmatter_tiers(&fm2, "task");
+    let open2 = hash::compute_open_hash(&open2_meta);
 
     assert_ne!(
         open1, open2,

@@ -128,14 +128,24 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
 
         let content = std::fs::read_to_string(&file_path)?;
         let body = strip_frontmatter(&content);
-        let current_hash = ingest::compute_content_hash(body);
+        let current_hash = temper_core::hash::compute_body_hash(body);
 
         // Compute frontmatter tier hashes
+        let doc_type =
+            temper_core::hash::doc_type_from_vault_path(&entry.path).unwrap_or("unknown");
         let (managed_hash, open_hash) = if let Some(fm) = crate::vault::parse_frontmatter(&content)
         {
-            temper_core::schema::compute_frontmatter_hashes(&fm)
+            let (managed_meta, open_meta) =
+                temper_core::hash::split_frontmatter_tiers(&fm, doc_type);
+            (
+                temper_core::hash::compute_managed_hash(doc_type, &managed_meta),
+                temper_core::hash::compute_open_hash(&open_meta),
+            )
         } else {
-            (String::new(), String::new())
+            (
+                temper_core::hash::compute_managed_hash(doc_type, &serde_json::json!({})),
+                temper_core::hash::compute_open_hash(&serde_json::json!({})),
+            )
         };
 
         entry.mtime_secs = Some(file_mtime);
@@ -212,68 +222,6 @@ pub fn build_complete_request(device_id: &str, merged: Vec<MergedResource>) -> S
         device_id: device_id.to_string(),
         merged_resources: merged,
     }
-}
-
-/// Fields that are tracked structurally by the server and must never appear
-/// in the `managed_meta` payload sent to the API.  Tier-1 identity fields
-/// (`temper-id`, `temper-provisional-id`) plus tier-2 structural fields
-/// (`temper-context`, `temper-type`) that the API rejects as "structural move"
-/// attempts on updates.
-const SKIP_FROM_MANAGED: &[&str] = &[
-    "temper-id",
-    "temper-provisional-id",
-    "temper-context",
-    "temper-type",
-];
-
-/// Split parsed frontmatter into managed and open tiers for the API payload.
-///
-/// **Managed tier** receives: `temper-*` fields (minus structural/identity
-/// fields in `SKIP_FROM_MANAGED`), `title`, `slug`, and any properties defined
-/// in the doc-type schema (e.g. `date` for sessions).
-///
-/// **Open tier** receives everything else.
-fn split_frontmatter_tiers(
-    fm: &serde_yaml::Value,
-    doc_type: &str,
-) -> (serde_json::Value, serde_json::Value) {
-    let Some(mapping) = fm.as_mapping() else {
-        return (serde_json::json!({}), serde_json::json!({}));
-    };
-
-    // Collect doc-type schema property names so non-temper-* schema fields
-    // (like `date` for sessions) route to managed_meta instead of open_meta.
-    let schema_keys: std::collections::HashSet<String> =
-        temper_core::schema::schema_value(doc_type)
-            .ok()
-            .and_then(|v| v.get("properties")?.as_object().cloned())
-            .map(|props| props.keys().cloned().collect())
-            .unwrap_or_default();
-
-    let mut managed = serde_json::Map::new();
-    let mut open = serde_json::Map::new();
-    for (key, value) in mapping {
-        let Some(key_str) = key.as_str() else {
-            continue;
-        };
-        if SKIP_FROM_MANAGED.contains(&key_str) {
-            continue;
-        }
-        let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-        if key_str.starts_with("temper-")
-            || key_str == "title"
-            || key_str == "slug"
-            || schema_keys.contains(key_str)
-        {
-            managed.insert(key_str.to_string(), json_value);
-        } else {
-            open.insert(key_str.to_string(), json_value);
-        }
-    }
-    (
-        serde_json::Value::Object(managed),
-        serde_json::Value::Object(open),
-    )
 }
 
 /// Strip YAML frontmatter from vault file content.
@@ -411,14 +359,22 @@ pub fn scan_vault_for_untracked(
 
         let full_content = std::fs::read_to_string(path)?;
         let body = strip_frontmatter(&full_content);
-        let content_hash = ingest::compute_content_hash(body);
+        let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
         let (managed_hash, open_hash) =
             if let Some(fm) = crate::vault::parse_frontmatter(&full_content) {
-                temper_core::schema::compute_frontmatter_hashes(&fm)
+                let (managed_meta, open_meta) =
+                    temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
+                (
+                    temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
+                    temper_core::hash::compute_open_hash(&open_meta),
+                )
             } else {
-                (String::new(), String::new())
+                (
+                    temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
+                    temper_core::hash::compute_open_hash(&serde_json::json!({})),
+                )
             };
 
         manifest.entries.insert(
@@ -687,7 +643,7 @@ async fn push_resource(
 
     // Parse frontmatter and split into managed/open tiers
     let (managed_meta, open_meta) = if let Some(fm) = crate::vault::parse_frontmatter(&content) {
-        let (m, o) = split_frontmatter_tiers(&fm, &doc_type);
+        let (m, o) = temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
         (Some(m), Some(o))
     } else {
         (None, None)
@@ -769,9 +725,17 @@ async fn push_resource(
     let (pushed_managed_hash, pushed_open_hash) = {
         let current = std::fs::read_to_string(&file_path)?;
         if let Some(fm) = crate::vault::parse_frontmatter(&current) {
-            temper_core::schema::compute_frontmatter_hashes(&fm)
+            let (managed_meta, open_meta) =
+                temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
+            (
+                temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
+                temper_core::hash::compute_open_hash(&open_meta),
+            )
         } else {
-            (String::new(), String::new())
+            (
+                temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
+                temper_core::hash::compute_open_hash(&serde_json::json!({})),
+            )
         }
     };
 
@@ -858,7 +822,7 @@ async fn pull_resource(
     // separator between frontmatter and body.
     let full_content = std::fs::read_to_string(&vault_path)?;
     let body = strip_frontmatter(&full_content);
-    let content_hash = ingest::compute_content_hash(body);
+    let content_hash = temper_core::hash::compute_body_hash(body);
     let rel_path = vault_path
         .strip_prefix(vault_root)
         .unwrap_or(&vault_path)
@@ -868,9 +832,16 @@ async fn pull_resource(
     // Compute frontmatter tier hashes from the written file
     let (managed_hash, open_hash) = if let Some(fm) = crate::vault::parse_frontmatter(&full_content)
     {
-        temper_core::schema::compute_frontmatter_hashes(&fm)
+        let (managed_meta, open_meta) = temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
+        (
+            temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
+            temper_core::hash::compute_open_hash(&open_meta),
+        )
     } else {
-        (String::new(), String::new())
+        (
+            temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
+            temper_core::hash::compute_open_hash(&serde_json::json!({})),
+        )
     };
 
     let mtime_secs = file_mtime_secs(&vault_path).ok();
@@ -1007,16 +978,24 @@ async fn merge_and_push_resource(
         .map_err(crate::commands::client_err)?;
 
     // 8. Compute frontmatter hashes from the merged file
-    let (pushed_managed_hash, pushed_open_hash) =
-        if let Some(fm) = crate::vault::parse_frontmatter(&new_file_content) {
-            temper_core::schema::compute_frontmatter_hashes(&fm)
-        } else {
-            (String::new(), String::new())
-        };
+    let (pushed_managed_hash, pushed_open_hash) = if let Some(fm) =
+        crate::vault::parse_frontmatter(&new_file_content)
+    {
+        let (managed_meta, open_meta) = temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
+        (
+            temper_core::hash::compute_managed_hash(&doc_type, &managed_meta),
+            temper_core::hash::compute_open_hash(&open_meta),
+        )
+    } else {
+        (
+            temper_core::hash::compute_managed_hash(&doc_type, &serde_json::json!({})),
+            temper_core::hash::compute_open_hash(&serde_json::json!({})),
+        )
+    };
 
     // 9. Update manifest entry
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
-        e.body_hash = ingest::compute_content_hash(merged_body);
+        e.body_hash = temper_core::hash::compute_body_hash(merged_body);
         // After push, server hashes match what we sent
         e.remote_body_hash = payload.content_hash.clone().unwrap_or_default();
         e.remote_managed_hash = pushed_managed_hash;
@@ -1300,15 +1279,25 @@ pub async fn sync_reset(
 
         let content = std::fs::read_to_string(path)?;
         let body = strip_frontmatter(&content);
-        let content_hash = ingest::compute_content_hash(body);
+        let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
         // Compute local frontmatter tier hashes
+        let reset_doc_type =
+            temper_core::hash::doc_type_from_vault_path(&rel_path).unwrap_or("unknown");
         let (local_managed_hash, local_open_hash) =
             if let Some(fm_val) = crate::vault::parse_frontmatter(&content) {
-                temper_core::schema::compute_frontmatter_hashes(&fm_val)
+                let (managed_meta, open_meta) =
+                    temper_core::hash::split_frontmatter_tiers(&fm_val, reset_doc_type);
+                (
+                    temper_core::hash::compute_managed_hash(reset_doc_type, &managed_meta),
+                    temper_core::hash::compute_open_hash(&open_meta),
+                )
             } else {
-                (String::new(), String::new())
+                (
+                    temper_core::hash::compute_managed_hash(reset_doc_type, &serde_json::json!({})),
+                    temper_core::hash::compute_open_hash(&serde_json::json!({})),
+                )
             };
 
         let fm = ingest::parse_source_frontmatter(&content);
@@ -1591,7 +1580,7 @@ mod tests {
         // File with frontmatter so we can compute all three hashes
         let content = "---\ntemper-type: task\ntitle: Test\ndate: 2026-01-01\n---\ntest content";
         let body = strip_frontmatter(content);
-        let hash = ingest::compute_content_hash(body);
+        let hash = temper_core::hash::compute_body_hash(body);
 
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get_mut(&id).unwrap();
@@ -1630,7 +1619,7 @@ mod tests {
 
         let content = "---\ntemper-type: task\ntitle: Test\ndate: 2026-01-01\n---\ntest content";
         let body = strip_frontmatter(content);
-        let hash = ingest::compute_content_hash(body);
+        let hash = temper_core::hash::compute_body_hash(body);
 
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get_mut(&id).unwrap();
@@ -1761,93 +1750,6 @@ mod tests {
         assert!(!manifest.entries.contains_key(&id));
     }
 
-    // --- split_frontmatter_tiers tests ---
-
-    fn yaml(s: &str) -> serde_yaml::Value {
-        serde_yaml::from_str(s).unwrap()
-    }
-
-    #[test]
-    fn split_tiers_excludes_structural_fields() {
-        let fm = yaml(
-            r#"
-temper-id: "019d7900-a767-7283-8677-33b094604b01"
-temper-provisional-id: "019d7800-a767-7283-8677-33b094604aff"
-temper-type: session
-temper-context: temper
-temper-stage: in-progress
-title: "Test Session"
-"#,
-        );
-        let (managed, open) = split_frontmatter_tiers(&fm, "session");
-        let m = managed.as_object().unwrap();
-
-        // Tier-1 identity and tier-2 structural fields must be excluded
-        assert!(!m.contains_key("temper-id"));
-        assert!(!m.contains_key("temper-provisional-id"));
-        assert!(!m.contains_key("temper-context"));
-        assert!(!m.contains_key("temper-type"));
-
-        // Other temper-* and title should be present
-        assert!(m.contains_key("temper-stage"));
-        assert!(m.contains_key("title"));
-        assert_eq!(m["title"], "Test Session");
-
-        // Open tier should be empty in this case
-        assert!(open.as_object().unwrap().is_empty());
-    }
-
-    #[test]
-    fn split_tiers_routes_schema_properties_to_managed() {
-        let fm = yaml(
-            r#"
-temper-type: session
-temper-context: temper
-title: "My Session"
-date: "2026-04-10"
-custom_field: "hello"
-"#,
-        );
-        let (managed, open) = split_frontmatter_tiers(&fm, "session");
-        let m = managed.as_object().unwrap();
-        let o = open.as_object().unwrap();
-
-        // `date` is defined in session.schema.json — must be in managed
-        assert!(m.contains_key("date"), "date should be in managed tier");
-        assert_eq!(m["date"], "2026-04-10");
-
-        // `custom_field` is not in any schema — goes to open
-        assert!(o.contains_key("custom_field"));
-        assert!(!m.contains_key("custom_field"));
-
-        // structural fields still excluded
-        assert!(!m.contains_key("temper-context"));
-        assert!(!m.contains_key("temper-type"));
-    }
-
-    #[test]
-    fn split_tiers_unknown_doc_type_falls_back_to_prefix_routing() {
-        let fm = yaml(
-            r#"
-temper-stage: backlog
-title: "Fallback"
-date: "2026-04-10"
-notes: "some notes"
-"#,
-        );
-        let (managed, open) = split_frontmatter_tiers(&fm, "unknown_type");
-        let m = managed.as_object().unwrap();
-        let o = open.as_object().unwrap();
-
-        // temper-* and title still routed to managed
-        assert!(m.contains_key("temper-stage"));
-        assert!(m.contains_key("title"));
-
-        // Without a schema, non-temper fields go to open
-        assert!(o.contains_key("date"));
-        assert!(o.contains_key("notes"));
-    }
-
     // --- Frontmatter hash fix tests ---
 
     #[test]
@@ -1860,10 +1762,12 @@ notes: "some notes"
         let file_v2 = "---\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
 
         // Compute hashes for v1
-        let body_hash = ingest::compute_content_hash(strip_frontmatter(file_v1));
+        let body_hash = temper_core::hash::compute_body_hash(strip_frontmatter(file_v1));
         let fm_v1 = crate::vault::parse_frontmatter(file_v1).unwrap();
-        let (managed_hash_v1, open_hash_v1) =
-            temper_core::schema::compute_frontmatter_hashes(&fm_v1);
+        let (managed_meta_v1, open_meta_v1) =
+            temper_core::hash::split_frontmatter_tiers(&fm_v1, "task");
+        let managed_hash_v1 = temper_core::hash::compute_managed_hash("task", &managed_meta_v1);
+        let open_hash_v1 = temper_core::hash::compute_open_hash(&open_meta_v1);
 
         let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
@@ -1917,7 +1821,7 @@ notes: "some notes"
         let original = "---\ntitle: Test\n---\n\n# Original body\n";
         let modified = "---\ntitle: Test\n---\n\n# Modified body\n";
 
-        let original_body_hash = ingest::compute_content_hash(strip_frontmatter(original));
+        let original_body_hash = temper_core::hash::compute_body_hash(strip_frontmatter(original));
 
         let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
@@ -2021,7 +1925,7 @@ notes: "some notes"
             id,
             ManifestEntry {
                 path: "@me/temper/task/12345678-1234-1234-1234-123456789abc.md".to_string(),
-                body_hash: ingest::compute_content_hash("body content"),
+                body_hash: temper_core::hash::compute_body_hash("body content"),
                 remote_body_hash: String::new(),
                 // Empty hashes — must backfill even though mtime matches
                 managed_hash: String::new(),
@@ -2227,7 +2131,7 @@ notes: "some notes"
             resource_id,
             ManifestEntry {
                 path: "@me/temper/task/my-document.md".to_string(),
-                body_hash: ingest::compute_content_hash("Old content"),
+                body_hash: temper_core::hash::compute_body_hash("Old content"),
                 remote_body_hash: "remote-hash-1".to_string(),
                 managed_hash: String::new(),
                 open_hash: String::new(),
@@ -2254,7 +2158,7 @@ notes: "some notes"
         fs::write(&existing_path, &vault_content).unwrap();
 
         // Update manifest entry (matches what pull_resource now does).
-        let content_hash = ingest::compute_content_hash("Updated content");
+        let content_hash = temper_core::hash::compute_body_hash("Updated content");
         manifest.entries.insert(
             resource_id,
             ManifestEntry {

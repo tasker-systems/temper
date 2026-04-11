@@ -6,28 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
 use temper_core::vault::Vault;
 use uuid::Uuid;
 
 use crate::error::{Result, TemperError};
-
-// ---------------------------------------------------------------------------
-// Content hashing
-// ---------------------------------------------------------------------------
-
-/// Compute the SHA-256 content hash of a UTF-8 string, returned as a lowercase
-/// hex string.
-pub fn compute_content_hash(content: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    let bytes = hasher.finalize();
-    let hex = bytes.iter().fold(String::new(), |mut acc, b| {
-        acc.push_str(&format!("{b:02x}"));
-        acc
-    });
-    format!("sha256:{hex}")
-}
 
 // ---------------------------------------------------------------------------
 // Title / URI helpers
@@ -148,7 +130,7 @@ pub fn build_ingest_payload(
     use temper_core::types::ingest::pack_chunks;
     use temper_ingest::pipeline::prepare_markdown;
 
-    let content_hash = compute_content_hash(content);
+    let content_hash = temper_core::hash::compute_body_hash(content);
     let slug = slug_from_title(title);
     let origin_uri = build_uri(context, doc_type, &slug);
 
@@ -562,7 +544,7 @@ pub fn write_vault_file_and_register(
     let device_id_str = crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id_str)?;
 
-    let content_hash = compute_content_hash(content);
+    let content_hash = temper_core::hash::compute_body_hash(content);
     // After ingest, server body_hash matches our local content_hash
     let remote_hash = content_hash.clone();
     let rel_path = vault_path
@@ -676,8 +658,8 @@ mod tests {
     #[test]
     fn content_hash_is_deterministic() {
         let content = "# Hello\n\nThis is a test document.\n";
-        let hash1 = compute_content_hash(content);
-        let hash2 = compute_content_hash(content);
+        let hash1 = temper_core::hash::compute_body_hash(content);
+        let hash2 = temper_core::hash::compute_body_hash(content);
         assert_eq!(hash1, hash2);
         assert!(hash1.starts_with("sha256:"));
         // "sha256:" prefix (7 chars) + 64 hex chars = 71 total
@@ -686,14 +668,14 @@ mod tests {
 
     #[test]
     fn content_hash_differs_for_different_content() {
-        let hash_a = compute_content_hash("content A");
-        let hash_b = compute_content_hash("content B");
+        let hash_a = temper_core::hash::compute_body_hash("content A");
+        let hash_b = temper_core::hash::compute_body_hash("content B");
         assert_ne!(hash_a, hash_b);
     }
 
     #[test]
     fn content_hash_has_sha256_prefix() {
-        let hash = compute_content_hash("test");
+        let hash = temper_core::hash::compute_body_hash("test");
         assert!(hash.starts_with("sha256:"));
         let hex_part = &hash[7..];
         assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));

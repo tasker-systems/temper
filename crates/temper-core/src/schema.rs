@@ -1,13 +1,11 @@
 //! Schema validation for temper vault frontmatter.
 //!
 //! Loads JSON Schema files embedded at compile time, validates YAML frontmatter
-//! against them, detects legacy field names, finds unknown temper-* fields, and
-//! computes three-tier frontmatter hashes.
+//! against them, detects legacy field names, and finds unknown temper-* fields.
 
 use crate::error::{Result, TemperError};
 use jsonschema::{Resource, Validator};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
 
 // ---------------------------------------------------------------------------
@@ -230,40 +228,6 @@ pub fn check_unknown_temper_fields(frontmatter: &serde_yaml::Value) -> Vec<Valid
     issues
 }
 
-/// Compute SHA-256 hashes for the two tiers of frontmatter.
-///
-/// - **meta_hash** — hash of all `temper-*` fields (sorted for determinism).
-/// - **open_hash** — hash of all other fields (sorted for determinism).
-///
-/// Both hashes are returned as `"sha256:{lowercase_hex}"` strings.
-pub fn compute_frontmatter_hashes(frontmatter: &serde_yaml::Value) -> (String, String) {
-    let Some(mapping) = frontmatter.as_mapping() else {
-        return (hash_map(&BTreeMap::new()), hash_map(&BTreeMap::new()));
-    };
-
-    let mut meta: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-    let mut open: BTreeMap<String, serde_json::Value> = BTreeMap::new();
-
-    for (key, value) in mapping {
-        let Some(key_str) = key.as_str() else {
-            continue;
-        };
-        let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-        // Skip identity fields — the resource ID is tracked structurally
-        // (manifest key / kb_resources.id), not as hashed metadata.
-        if key_str == "temper-id" || key_str == "temper-provisional-id" {
-            continue;
-        }
-        if key_str.starts_with("temper-") || key_str == "title" || key_str == "slug" {
-            meta.insert(key_str.to_string(), json_value);
-        } else {
-            open.insert(key_str.to_string(), json_value);
-        }
-    }
-
-    (hash_map(&meta), hash_map(&open))
-}
-
 // ---------------------------------------------------------------------------
 // Updatable field helpers
 // ---------------------------------------------------------------------------
@@ -466,15 +430,6 @@ fn extract_enum_fields(schema: &serde_json::Value) -> BTreeMap<String, Vec<Strin
 // Private helpers
 // ---------------------------------------------------------------------------
 
-fn hash_map(fields: &BTreeMap<String, serde_json::Value>) -> String {
-    // Serialize to canonical JSON (BTreeMap keys are already sorted)
-    let serialized = serde_json::to_string(fields).unwrap_or_else(|_| "{}".to_string());
-    let mut hasher = Sha256::new();
-    hasher.update(serialized.as_bytes());
-    let result = hasher.finalize();
-    format!("sha256:{}", hex::encode(result))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -668,37 +623,5 @@ mod tests {
     #[test]
     fn display_fields_unknown_type_errors() {
         assert!(display_fields("widget").is_err());
-    }
-
-    // -------------------------------------------------------------------------
-    // Existing test preserved below
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn test_identity_fields_excluded_from_managed_hash() {
-        // temper-id and temper-provisional-id are identity fields tracked
-        // structurally, not as hashed metadata.
-        let yaml1: serde_yaml::Value =
-            serde_yaml::from_str("temper-id: \"aaa\"\ntitle: \"Test\"\ncustom-field: \"value\"")
-                .unwrap();
-        let yaml2: serde_yaml::Value =
-            serde_yaml::from_str("temper-id: \"bbb\"\ntitle: \"Test\"\ncustom-field: \"value\"")
-                .unwrap();
-        let yaml3: serde_yaml::Value = serde_yaml::from_str(
-            "temper-provisional-id: \"ccc\"\ntitle: \"Test\"\ncustom-field: \"value\"",
-        )
-        .unwrap();
-
-        let (m1, o1) = compute_frontmatter_hashes(&yaml1);
-        let (m2, o2) = compute_frontmatter_hashes(&yaml2);
-        let (m3, o3) = compute_frontmatter_hashes(&yaml3);
-
-        assert_eq!(
-            m1, m2,
-            "different temper-id values should produce same managed hash"
-        );
-        assert_eq!(m1, m3, "temper-provisional-id should also be excluded");
-        assert_eq!(o1, o2, "open hash should match");
-        assert_eq!(o1, o3, "open hash should match");
     }
 }
