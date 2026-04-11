@@ -10,7 +10,8 @@ SELECT c.id, c.resource_id, c.chunk_index, c.version, c.header_path, c.heading_d
        cc.content, c.content_hash, c.embedding, c.created
   FROM kb_chunks c
   LEFT JOIN kb_chunk_content cc ON cc.chunk_id = c.id
- WHERE c.is_current = true;
+ WHERE c.is_current = true
+ ORDER BY c.resource_id, c.chunk_index;
 
 -- Update persist_resource_chunks to include heading_depth
 CREATE OR REPLACE FUNCTION persist_resource_chunks(
