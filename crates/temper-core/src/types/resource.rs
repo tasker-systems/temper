@@ -149,6 +149,10 @@ pub struct ContentChunk {
 pub struct ContentResponse {
     pub resource_id: ResourceId,
     pub markdown: String,
+    /// Server-side managed_meta from kb_resource_manifests.
+    /// Used by CLI sync pull to reconstruct complete frontmatter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_meta: Option<serde_json::Value>,
 }
 
 /// Response body for resource deletion.

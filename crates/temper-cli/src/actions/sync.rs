@@ -814,13 +814,11 @@ async fn pull_resource(
         let existing_path = vault_root.join(&existing.path);
         if existing_path.exists() {
             // Overwrite the existing file in place — no slug dedup needed.
-            let frontmatter = ingest::build_frontmatter(
-                resource.id,
-                &resource.title,
+            let frontmatter = ingest::build_frontmatter_from_resource(
+                &resource,
                 &ctx,
                 &doc_type,
-                None,
-                None,
+                content_response.managed_meta.as_ref(),
             );
             let vault_content = format!("{frontmatter}{}", &content_response.markdown);
             std::fs::write(&existing_path, &vault_content)?;
@@ -836,6 +834,7 @@ async fn pull_resource(
                 &slug,
                 &resource,
                 &content_response.markdown,
+                content_response.managed_meta.as_ref(),
             )?
         }
     } else {
@@ -849,6 +848,7 @@ async fn pull_resource(
             &slug,
             &resource,
             &content_response.markdown,
+            content_response.managed_meta.as_ref(),
         )?
     };
 
@@ -907,6 +907,7 @@ fn write_pulled_file(
     slug: &str,
     resource: &temper_core::types::ResourceRow,
     content: &str,
+    managed_meta: Option<&serde_json::Value>,
 ) -> Result<std::path::PathBuf> {
     let vault_path = ingest::build_vault_path(vault_root, context, doc_type, slug);
 
@@ -915,7 +916,7 @@ fn write_pulled_file(
     }
 
     let frontmatter =
-        ingest::build_frontmatter(resource.id, &resource.title, context, doc_type, None, None);
+        ingest::build_frontmatter_from_resource(resource, context, doc_type, managed_meta);
     let vault_content = format!("{frontmatter}{content}");
     std::fs::write(&vault_path, &vault_content)?;
 

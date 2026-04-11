@@ -409,6 +409,24 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     Ok(markdown)
 }
 
+/// Fetch the managed_meta JSONB for a resource from its manifest.
+pub async fn get_managed_meta(
+    pool: &PgPool,
+    resource_id: Uuid,
+) -> ApiResult<Option<serde_json::Value>> {
+    let row = sqlx::query_scalar!(
+        r#"SELECT managed_meta as "managed_meta: serde_json::Value"
+             FROM kb_resource_manifests
+            WHERE resource_id = $1"#,
+        resource_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    // fetch_optional returns None if no manifest row exists.
+    Ok(row)
+}
+
 /// Check whether the profile can modify a resource. Returns Forbidden if not.
 pub async fn check_can_modify(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiResult<()> {
     let can_modify = sqlx::query_scalar!(
