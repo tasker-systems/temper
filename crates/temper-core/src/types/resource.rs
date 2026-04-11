@@ -136,6 +136,7 @@ pub struct ResourceUpdateRequest {
 pub struct ContentChunk {
     pub chunk_index: i32,
     pub header_path: String,
+    pub heading_depth: i16,
     pub content: String,
 }
 

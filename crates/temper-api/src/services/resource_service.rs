@@ -371,7 +371,10 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     let chunks = sqlx::query_as!(
         ContentChunk,
         r#"
-        SELECT chunk_index as "chunk_index!: i32", header_path as "header_path!: String", content as "content!: String"
+        SELECT chunk_index as "chunk_index!: i32",
+               header_path as "header_path!: String",
+               heading_depth as "heading_depth!: i16",
+               content as "content!: String"
           FROM kb_current_chunks
          WHERE resource_id = $1
          ORDER BY chunk_index
@@ -384,10 +387,13 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     let markdown = chunks
         .into_iter()
         .map(|c| {
-            if c.header_path.is_empty() {
+            if c.heading_depth == 0 || c.header_path.is_empty() {
                 c.content
             } else {
-                format!("{}\n\n{}", c.header_path, c.content)
+                // Extract the innermost heading title from the breadcrumb
+                let title = c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path);
+                let hashes = "#".repeat(c.heading_depth as usize);
+                format!("{hashes} {title}\n\n{}", c.content)
             }
         })
         .collect::<Vec<_>>()
