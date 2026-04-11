@@ -1,7 +1,13 @@
 //! Text embedding using BAAI/bge-base-en-v1.5 via ONNX Runtime.
 //!
-//! Model and tokenizer loaded from bundled bytes at compile time (no runtime
-//! downloads).  ONNX session created once per process via `OnceLock`.
+//! Two model-loading strategies, selected at compile time by feature flags:
+//!
+//! - **`embed`** (default): model bundled via `include_bytes!()` at compile
+//!   time (no runtime downloads).  Requires git-lfs checkout.
+//! - **`embed-download`**: model downloaded at runtime from Hugging Face via
+//!   hf-hub.  Safe on machines without git-lfs; used by the CLI.
+//!
+//! ONNX session created once per process via `OnceLock`.
 //!
 //! ORT runtime loading is platform-aware:
 //! - **Linux** (Vercel deploy): the bundled `libonnxruntime.so` is written to
@@ -24,6 +30,7 @@ use crate::error::{EmbedError, Result};
 /// Embedding dimension for bge-base-en-v1.5.
 pub const EMBEDDING_DIM: usize = 768;
 
+#[cfg(all(feature = "embed", not(feature = "embed-download")))]
 static MODEL_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/model_quantized.onnx");
 static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/tokenizer.json");
 
@@ -104,6 +111,7 @@ struct Model {
 
 static MODEL: OnceLock<std::result::Result<Model, String>> = OnceLock::new();
 
+#[cfg(all(feature = "embed", not(feature = "embed-download")))]
 fn load_model() -> Result<&'static Model> {
     let result = MODEL.get_or_init(|| {
         init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
@@ -113,6 +121,39 @@ fn load_model() -> Result<&'static Model> {
             .with_intra_threads(1)
             .map_err(|e| format!("ort threads: {e}"))?
             .commit_from_memory(MODEL_BYTES)
+            .map_err(|e| format!("ort load: {e}"))?;
+
+        let tokenizer =
+            Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
+
+        Ok(Model {
+            session: Mutex::new(session),
+            tokenizer,
+        })
+    });
+
+    match result {
+        Ok(m) => Ok(m),
+        Err(e) => Err(EmbedError::Embedding(format!("model init: {e}"))),
+    }
+}
+
+#[cfg(feature = "embed-download")]
+fn load_model() -> Result<&'static Model> {
+    let result = MODEL.get_or_init(|| {
+        init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
+
+        let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub api init: {e}"))?;
+        let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
+        let model_path = repo
+            .get("onnx/model_quantized.onnx")
+            .map_err(|e| format!("hf-hub download model: {e}"))?;
+
+        let session = Session::builder()
+            .map_err(|e| format!("ort session builder: {e}"))?
+            .with_intra_threads(1)
+            .map_err(|e| format!("ort threads: {e}"))?
+            .commit_from_file(&model_path)
             .map_err(|e| format!("ort load: {e}"))?;
 
         let tokenizer =
@@ -305,6 +346,20 @@ pub fn embed_texts(texts: &[&str]) -> Result<Vec<Vec<f32>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Feature guard tests ----
+
+    #[test]
+    #[cfg(all(feature = "embed", not(feature = "embed-download")))]
+    fn bundled_model_bytes_are_not_lfs_pointer() {
+        let header = &super::MODEL_BYTES[..std::cmp::min(30, super::MODEL_BYTES.len())];
+        let header_str = String::from_utf8_lossy(header);
+        assert!(
+            !header_str.starts_with("version https://git-lfs"),
+            "MODEL_BYTES contains a git-lfs pointer, not the actual model binary. \
+             Run `git lfs pull` or use the `embed-download` feature instead."
+        );
+    }
 
     // ---- Unit tests (no model download needed) ----
 

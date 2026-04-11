@@ -15,12 +15,14 @@ kreuzberg = { version = "4.6.3", optional = true, features = ["tokio-runtime"] }
 ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "ndarray", "tracing", "api-18"], optional = true }
 tokenizers = { version = "0.22", optional = true }
 ndarray = { version = "0.17", optional = true }
+hf-hub = { version = "0.4", optional = true }
 html-to-markdown-rs = "3.1.0"
 
 [features]
 default = ["extract", "embed"]
 extract = ["dep:kreuzberg"]
 embed = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+embed-download = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:hf-hub"]
 test-embed = ["embed"]
 
 [dev-dependencies]
