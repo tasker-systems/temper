@@ -6,3 +6,4 @@ target/
 .env
 .vercel
 node_modules
+.neon

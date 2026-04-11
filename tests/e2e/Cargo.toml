@@ -4,32 +4,40 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
-[features]
-test-db = []
-
 [package.metadata.cargo-machete]
 ignored = ["base64", "rmp-serde", "serde_json"]
 
 [dev-dependencies]
+axum = "0.8"
+base64 = "0.22"
+chrono = "0.4"
+hex = "0.4"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+sqlx = { version = "0.8", features = [
+  "migrate",
+  "postgres",
+  "runtime-tokio-rustls"
+] }
 temper-api = { path = "../../crates/temper-api" }
 temper-cli = { path = "../../crates/temper-cli" }
 temper-client = { path = "../../crates/temper-client" }
 temper-core = { path = "../../crates/temper-core" }
 temper-mcp = { path = "../../crates/temper-mcp" }
-tokio = { version = "1", features = ["full"] }
-sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "migrate"] }
-reqwest = { version = "0.12", features = ["rustls-tls", "json"] }
-axum = "0.8"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-chrono = "0.4"
-uuid = { version = "1", features = ["v4", "v7"] }
-jsonwebtoken = "9"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
 tempfile = "3"
-base64 = "0.22"
-rmp-serde = "1"
-sha2 = "0.10"
-hex = "0.4"
-serde_yaml = "0.9"
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [
+  "env-filter",
+  "json",
+  "registry"
+] }
+uuid = { version = "1", features = ["v4", "v7"] }
+
+[features]
+test-db = []

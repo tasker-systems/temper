@@ -12,17 +12,30 @@ extend = "./base-tasks.toml"
 
 [tasks.check]
 description = "Run all quality checks (Rust + TypeScript)"
-dependencies = ["rust-fmt-check", "rust-clippy", "rust-docs", "rust-machete", "ts-check"]
+dependencies = [
+  "rust-fmt-check",
+  "rust-clippy",
+  "rust-docs",
+  "rust-machete",
+  "ts-check"
+]
 
 [tasks.test]
 description = "Run tests (unit tests, no feature flags)"
 command = "cargo"
-args = ["nextest", "run", "--workspace"]
+args = ["nextest", "run", "--workspace", "--no-fail-fast"]
 
 [tasks.test-db]
 description = "Run tests including database integration tests (requires Docker Postgres)"
 command = "cargo"
-args = ["nextest", "run", "--workspace", "--features", "test-db"]
+args = [
+  "nextest",
+  "run",
+  "--workspace",
+  "--features",
+  "test-db",
+  "--no-fail-fast"
+]
 
 [tasks.test-all]
 description = "Run all test tiers including embedder and TypeScript tests"
@@ -31,12 +44,27 @@ dependencies = ["test-all-rust", "ts-test", "ts-test-integration"]
 [tasks.test-e2e]
 description = "Run E2E tests only (requires Docker Postgres)"
 command = "cargo"
-args = ["nextest", "run", "--manifest-path", "tests/e2e/Cargo.toml", "--features", "test-db"]
+args = [
+  "nextest",
+  "run",
+  "--manifest-path",
+  "tests/e2e/Cargo.toml",
+  "--features",
+  "test-db",
+  "--no-fail-fast"
+]
 
 [tasks.test-all-rust]
 description = "Run all Rust test tiers"
 command = "cargo"
-args = ["nextest", "run", "--workspace", "--features", "test-db,test-embed"]
+args = [
+  "nextest",
+  "run",
+  "--workspace",
+  "--features",
+  "test-db,test-embed",
+  "--no-fail-fast"
+]
 
 [tasks.fix]
 description = "Auto-fix formatting and lint issues (Rust + TypeScript)"
@@ -79,7 +107,14 @@ args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
 [tasks.rust-clippy-fix]
 description = "Fix Clippy issues"
 command = "cargo"
-args = ["clippy", "--all-targets", "--all-features", "--fix", "--allow-dirty", "--allow-staged"]
+args = [
+  "clippy",
+  "--all-targets",
+  "--all-features",
+  "--fix",
+  "--allow-dirty",
+  "--allow-staged"
+]
 
 [tasks.rust-docs]
 description = "Check documentation builds"
@@ -136,12 +171,12 @@ args = ["run", "test:integration"]
 [tasks.generate-ts-types]
 description = "Generate TypeScript types from temper-core Rust structs via ts-rs"
 script = [
-    "mkdir -p ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated",
-    "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-core --features typescript",
-    "generated=$(ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts 2>/dev/null | wc -l | tr -d ' ')",
-    "if [ \"$generated\" -eq 0 ]; then echo 'ERROR: No TypeScript files were generated'; exit 1; fi",
-    "echo \"TypeScript types generated: $generated file(s) in packages/temper-ui/src/lib/types/generated/\"",
-    "ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts"
+  "mkdir -p ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated",
+  "TS_RS_EXPORT_DIR=${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated cargo test -p temper-core --features typescript",
+  "generated=$(ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts 2>/dev/null | wc -l | tr -d ' ')",
+  "if [ \"$generated\" -eq 0 ]; then echo 'ERROR: No TypeScript files were generated'; exit 1; fi",
+  "echo \"TypeScript types generated: $generated file(s) in packages/temper-ui/src/lib/types/generated/\"",
+  "ls ${CARGO_MAKE_WORKING_DIRECTORY}/packages/temper-ui/src/lib/types/generated/*.ts"
 ]
 
 # =============================================================================

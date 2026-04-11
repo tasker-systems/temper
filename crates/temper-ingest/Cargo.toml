@@ -4,30 +4,36 @@ version = "0.1.0"
 edition = "2021"
 description = "Embedding and extraction pipeline for temper knowledge base"
 
+[package.metadata.cargo-machete]
+ignored = ["temper-core"]
+
 [dependencies]
-temper-core = { path = "../temper-core" }
-thiserror = "2"
-sha2 = "0.10"
-regex = "1"
-similar = "2"
 chrono = { version = "0.4", features = ["serde"] }
-kreuzberg = { version = "4.6.3", optional = true, features = ["tokio-runtime"] }
-ort = { version = "2.0.0-rc.12", default-features = false, features = ["load-dynamic", "std", "ndarray", "tracing", "api-18"], optional = true }
-tokenizers = { version = "0.22", optional = true }
-ndarray = { version = "0.17", optional = true }
 hf-hub = { version = "0.4", optional = true }
 html-to-markdown-rs = "3.1.0"
-
-[features]
-default = ["extract", "embed"]
-extract = ["dep:kreuzberg"]
-embed = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
-embed-download = ["dep:ort", "dep:tokenizers", "dep:ndarray", "dep:hf-hub"]
-test-embed = ["embed"]
+kreuzberg = { version = "4.6.3", features = ["tokio-runtime"], optional = true }
+ndarray = { version = "0.17", optional = true }
+ort = { version = "2.0.0-rc.12", default-features = false, features = [
+  "api-18",
+  "load-dynamic",
+  "ndarray",
+  "std",
+  "tracing"
+], optional = true }
+regex = "1"
+sha2 = "0.10"
+similar = "2"
+temper-core = { path = "../temper-core" }
+thiserror = "2"
+tokenizers = { version = "0.22", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt"] }
 
-[package.metadata.cargo-machete]
-ignored = ["temper-core"]
+[features]
+default = ["embed", "extract"]
+embed = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
+embed-download = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:tokenizers"]
+extract = ["dep:kreuzberg"]
+test-embed = ["embed"]

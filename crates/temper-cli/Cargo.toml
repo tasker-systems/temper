@@ -4,45 +4,47 @@ version = "0.1.0"
 edition = "2021"
 description = "Developer workflow tool for agent-assisted development"
 
+[package.metadata.cargo-machete]
+ignored = ["indicatif"]
+
 [[bin]]
 name = "temper"
 path = "src/main.rs"
 
 [dependencies]
-temper-core = { path = "../temper-core" }
-temper-client = { path = "../temper-client" }
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+anstream = "0.6"
+anstyle = "1"
+askama = "0.12"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
+dialoguer = "0.12"
+dirs = "5"
+ignore = "0.4"
+indicatif = "0.17"
+regex = "1"
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls"
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
+sha2 = "0.10"
+shell-words = "1"
+temper-client = { path = "../temper-client" }
+temper-core = { path = "../temper-core" }
+temper-ingest = { path = "../temper-ingest" }
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anstream = "0.6"
-anstyle = "1"
-chrono = { version = "0.4", features = ["serde"] }
-sha2 = "0.10"
-dirs = "5"
-base64 = "0.22"
-uuid = { version = "1", features = ["v7", "serde"] }
-temper-ingest = { path = "../temper-ingest" }
-ignore = "0.4"
-indicatif = "0.17"
-reqwest = { version = "0.12", features = ["rustls-tls"], default-features = false }
-tempfile = "3"
-askama = "0.12"
-regex = "1"
-dialoguer = "0.12"
+uuid = { version = "1", features = ["serde", "v7"] }
 validator = { version = "0.20", features = ["derive"] }
-shell-words = "1"
-
-[features]
-default = ["extract", "embed"]
-extract = ["temper-ingest/extract"]
-embed = ["temper-ingest/embed-download"]
-
-[package.metadata.cargo-machete]
-ignored = ["indicatif"]
 
 [dev-dependencies]
+
+[features]
+default = ["embed", "extract"]
+embed = ["temper-ingest/embed-download"]
+extract = ["temper-ingest/extract"]
