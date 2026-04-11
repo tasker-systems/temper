@@ -387,12 +387,19 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     let markdown = chunks
         .into_iter()
         .map(|c| {
-            if c.heading_depth == 0 || c.header_path.is_empty() {
+            if c.heading_depth == 0 {
+                // Preamble or unheaded content — emit body only.
                 c.content
             } else {
-                // Extract the innermost heading title from the breadcrumb
-                let title = c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path);
-                let hashes = "#".repeat(c.heading_depth as usize);
+                // Extract the innermost heading title from the breadcrumb.
+                // rsplit always yields at least one element on non-empty input.
+                let title = if c.header_path.is_empty() {
+                    "Untitled"
+                } else {
+                    c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path)
+                };
+                let depth = (c.heading_depth as usize).min(6);
+                let hashes = "#".repeat(depth);
                 format!("{hashes} {title}\n\n{}", c.content)
             }
         })

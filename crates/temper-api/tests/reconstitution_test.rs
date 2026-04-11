@@ -2,9 +2,9 @@
 
 mod common;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::PgPool;
-use temper_core::types::ingest::{pack_chunks, PackedChunk};
+use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 
 /// Round-trip test: ingest markdown with headings, read back via get_content,
 /// verify heading markers (##, ###) are preserved in the reconstituted output.
@@ -67,16 +67,19 @@ async fn test_reconstitution_preserves_heading_markers(pool: PgPool) {
 
     // Ingest via POST /api/ingest
     let origin_uri = format!("test://reconstitution-{}", uuid::Uuid::new_v4());
-    let ingest_payload = json!({
-        "title": "Reconstitution Test Doc",
-        "origin_uri": origin_uri,
-        "context_name": "default",
-        "doc_type_name": "research",
-        "slug": "reconstitution-test",
-        "content": "Preamble text.\n\n## Decision\n\nWe chose option B.\n\n### Rationale\n\nIt was simpler.\n\n## Implementation\n\nCode goes here.",
-        "managed_meta": {"date": "2026-04-10"},
-        "chunks_packed": chunks_packed,
-    });
+    let ingest_payload = IngestPayload {
+        title: "Reconstitution Test Doc".to_string(),
+        origin_uri,
+        context_name: "default".to_string(),
+        doc_type_name: "research".to_string(),
+        slug: "reconstitution-test".to_string(),
+        content: "Preamble text.\n\n## Decision\n\nWe chose option B.\n\n### Rationale\n\nIt was simpler.\n\n## Implementation\n\nCode goes here.".to_string(),
+        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
+        chunks_packed: Some(chunks_packed),
+        content_hash: None,
+        metadata: None,
+        open_meta: None,
+    };
 
     let create_resp = app
         .client
