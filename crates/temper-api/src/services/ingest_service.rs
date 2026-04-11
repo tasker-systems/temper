@@ -84,28 +84,31 @@ impl From<IngestError> for crate::error::ApiError {
     }
 }
 
-/// Remove tier-1 identity/audit fields from input `managed_meta`.
+/// Remove identity and tier-1 audit fields from input `managed_meta`.
 ///
 /// Agents may echo these back from a `get_resource` call; they should not cause
-/// validation errors. Tier-2 fields (`temper-context`, `temper-type`, `slug`) are
-/// NOT stripped here — they remain present so we can detect structural-move
-/// attempts in the update path.
+/// validation errors.
+///
+/// Uses `IDENTITY_FIELDS` from `temper_core::hash` plus a subset of
+/// `TIER1_SYSTEM_FIELDS`. Intentionally does NOT strip `temper-context` or
+/// `temper-type` — those remain so the update path can detect structural-move
+/// attempts (see `update()` lines that check for context/type changes).
 fn strip_system_managed_fields(mut meta: serde_json::Value) -> serde_json::Value {
-    const TIER1_FIELDS: &[&str] = &[
-        "temper-id",
-        "temper-provisional-id",
-        "temper-created",
-        "temper-updated",
-        "temper-owner",
-        "temper-source",
-        "temper-legacy-id",
-    ];
+    use temper_core::hash::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
+
+    // temper-context and temper-type are kept for structural-move detection.
+    const KEEP_FOR_MOVE_DETECTION: &[&str] = &["temper-context", "temper-type"];
+
     if let Some(obj) = meta.as_object_mut() {
-        for field in TIER1_FIELDS {
+        for field in IDENTITY_FIELDS
+            .iter()
+            .chain(TIER1_SYSTEM_FIELDS.iter())
+            .filter(|f| !KEEP_FOR_MOVE_DETECTION.contains(f))
+        {
             if obj.remove(*field).is_some() {
                 tracing::warn!(
                     field = *field,
-                    "stripped tier-1 system-managed field from input managed_meta"
+                    "stripped system field from input managed_meta"
                 );
             }
         }
@@ -458,11 +461,18 @@ pub async fn ingest(
     Ok(resource)
 }
 
-/// Update a resource's manifest (body hash, metadata hashes) and fire an event.
-///
-/// Updates the resource timestamp, upserts the manifest row, and inserts
-/// a `body_updated` event + audit trail atomically. Does NOT handle chunks —
-/// callers add chunk operations to the same transaction or separately.
+/// Parameters for updating a resource's manifest hashes.
+#[derive(Debug)]
+pub struct UpdateManifestParams<'a> {
+    pub profile_id: ProfileId,
+    pub device_id: &'a str,
+    pub resource_id: ResourceId,
+    pub doc_type_name: &'a str,
+    pub content_hash: &'a str,
+    pub managed_meta: &'a serde_json::Value,
+    pub open_meta: &'a serde_json::Value,
+}
+
 /// Update a resource's manifest (body hash, metadata hashes) and fire an event.
 ///
 /// Updates the resource timestamp, upserts the manifest row, and inserts
@@ -471,22 +481,12 @@ pub async fn ingest(
 ///
 /// Does NOT handle chunks — callers add chunk operations to the same
 /// transaction or trigger async processing separately.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "manifest update requires all hash inputs plus resource/profile identifiers"
-)]
 pub async fn update_resource_manifest(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    profile_id: ProfileId,
-    device_id: &str,
-    resource_id: ResourceId,
-    doc_type_name: &str,
-    content_hash: &str,
-    managed_meta: &serde_json::Value,
-    open_meta: &serde_json::Value,
+    params: &UpdateManifestParams<'_>,
 ) -> ApiResult<()> {
-    let managed_hash = compute_managed_hash(doc_type_name, managed_meta);
-    let open_hash = compute_open_hash(open_meta);
+    let managed_hash = compute_managed_hash(params.doc_type_name, params.managed_meta);
+    let open_hash = compute_open_hash(params.open_meta);
 
     let base = sqlx::query_as!(
         ResourceRowBase,
@@ -496,7 +496,7 @@ pub async fn update_resource_manifest(
         WHERE id = $1
         RETURNING id, kb_context_id
         "#,
-        *resource_id,
+        *params.resource_id,
     )
     .fetch_one(&mut **tx)
     .await?;
@@ -509,10 +509,10 @@ pub async fn update_resource_manifest(
         DO UPDATE SET body_hash = $2, managed_meta = $3, open_meta = $4,
                       managed_hash = $5, open_hash = $6, updated = now()
         "#,
-        *resource_id,
-        content_hash,
-        managed_meta,
-        open_meta,
+        *params.resource_id,
+        params.content_hash,
+        params.managed_meta,
+        params.open_meta,
         managed_hash,
         open_hash,
     )
@@ -521,13 +521,13 @@ pub async fn update_resource_manifest(
 
     insert_event_and_audit(
         tx,
-        profile_id,
-        device_id,
+        params.profile_id,
+        params.device_id,
         base.kb_context_id,
-        resource_id,
+        params.resource_id,
         "body_updated",
         "update_body",
-        content_hash,
+        params.content_hash,
         &managed_hash,
         &open_hash,
     )
@@ -629,13 +629,15 @@ pub async fn update(
     // Update manifest + fire event (context_id derived from resource row)
     update_resource_manifest(
         &mut tx,
-        profile_id,
-        device_id,
-        resource_id,
-        &payload.doc_type_name,
-        payload.content_hash.as_deref().unwrap_or(""),
-        &managed_meta,
-        &open_meta,
+        &UpdateManifestParams {
+            profile_id,
+            device_id,
+            resource_id,
+            doc_type_name: &payload.doc_type_name,
+            content_hash: payload.content_hash.as_deref().unwrap_or(""),
+            managed_meta: &managed_meta,
+            open_meta: &open_meta,
+        },
     )
     .await?;
 
