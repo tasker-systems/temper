@@ -26,6 +26,7 @@ async fn resource_content_retrieval(pool: sqlx::PgPool) {
     let chunks = vec![PackedChunk {
         chunk_index: 0,
         header_path: String::new(),
+        heading_depth: 0,
         content: chunk_content.to_string(),
         content_hash: "cont0test0000000000000000000000000000000000000000000000000000000"
             .to_string(),

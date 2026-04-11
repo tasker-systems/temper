@@ -68,6 +68,8 @@ pub struct ChunkData {
     pub chunk_index: u32,
     /// Heading breadcrumb trail, e.g. `"Design > API > Auth"`.
     pub header_path: String,
+    /// Depth of the innermost heading: 0 = no heading, 1 = `#`, 2 = `##`, etc.
+    pub heading_depth: u8,
     pub content: String,
     /// Lowercase hex SHA-256 of `content.trim()`.
     pub content_hash: String,
@@ -80,6 +82,8 @@ pub struct ChunkData {
 /// A heading-delimited section before token splitting.
 struct RawSection {
     header_path: String,
+    /// Depth of the innermost heading: 0 = no heading, 1 = `#`, 2 = `##`, etc.
+    heading_depth: u8,
     /// Lines of body content (no heading line).
     lines: Vec<String>,
 }
@@ -102,8 +106,10 @@ fn collect_sections(text: &str) -> Vec<RawSection> {
             .map(|(_, t)| t.as_str())
             .collect::<Vec<_>>()
             .join(" > ");
+        let depth = stack.last().map(|(l, _)| *l as u8).unwrap_or(0);
         out.push(RawSection {
             header_path: path,
+            heading_depth: depth,
             lines: std::mem::take(lines),
         });
     };
@@ -332,6 +338,7 @@ pub fn chunk_markdown(text: &str) -> Vec<ChunkData> {
                 chunks.push(ChunkData {
                     chunk_index,
                     header_path: section.header_path.clone(),
+                    heading_depth: section.heading_depth,
                     content: trimmed.to_string(),
                     content_hash: sha256_hex(trimmed),
                 });

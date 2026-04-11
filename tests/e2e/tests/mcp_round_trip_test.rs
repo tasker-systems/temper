@@ -20,6 +20,7 @@ fn fake_chunk(index: u32, header: &str, content: &str) -> temper_core::types::in
     temper_core::types::ingest::PackedChunk {
         chunk_index: index,
         header_path: header.to_string(),
+        heading_depth: 0,
         content: content.to_string(),
         content_hash: hash.to_string(),
         embedding: vec![val; 768],
