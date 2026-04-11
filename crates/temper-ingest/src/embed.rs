@@ -35,9 +35,13 @@ static MODEL_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/model_qua
 static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/tokenizer.json");
 
 /// Bundled Linux x86_64 libonnxruntime.so — only compiled into the binary on
-/// Linux targets (Vercel deploy).  On other platforms this is a zero-length
-/// slice and the system-installed ORT is used instead.
-#[cfg(target_os = "linux")]
+/// Linux embed targets (Vercel deploy).  On other platforms this is unused
+/// and the system-installed ORT is loaded instead.
+#[cfg(all(
+    target_os = "linux",
+    feature = "embed",
+    not(feature = "embed-download")
+))]
 static ORT_LIB_BYTES: &[u8] = include_bytes!("../lib/x86_64-unknown-linux-gnu/libonnxruntime.so");
 
 // ---- ORT runtime initialization ----
@@ -51,7 +55,12 @@ static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// (`ORT_DYLIB_PATH`, Homebrew, etc.).
 fn init_ort_runtime() -> std::result::Result<(), String> {
     ORT_INIT.get_or_init(|| {
-        #[cfg(target_os = "linux")]
+        // Bundled Linux deploy: write the bundled .so to /tmp and load it.
+        #[cfg(all(
+            target_os = "linux",
+            feature = "embed",
+            not(feature = "embed-download")
+        ))]
         {
             let lib_path = std::path::Path::new("/tmp/libonnxruntime.so");
             if !lib_path.exists() {
@@ -63,17 +72,23 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
                 .commit();
         }
 
-        #[cfg(not(target_os = "linux"))]
+        // All other cases (macOS, Linux with embed-download): search system paths.
+        #[cfg(not(all(
+            target_os = "linux",
+            feature = "embed",
+            not(feature = "embed-download")
+        )))]
         {
-            // On macOS, ORT's load-dynamic needs help finding the dylib.
             // Search order:
             //   1. ORT_DYLIB_PATH env var (explicit override)
             //   2. Homebrew ARM64: /opt/homebrew/lib/libonnxruntime.dylib
             //   3. Homebrew Intel: /usr/local/lib/libonnxruntime.dylib
+            //   4. Linux system: /usr/lib/libonnxruntime.so
             let dylib_path = std::env::var("ORT_DYLIB_PATH").ok().or_else(|| {
                 [
                     "/opt/homebrew/lib/libonnxruntime.dylib",
                     "/usr/local/lib/libonnxruntime.dylib",
+                    "/usr/lib/libonnxruntime.so",
                 ]
                 .iter()
                 .find(|p| std::path::Path::new(p).exists())
