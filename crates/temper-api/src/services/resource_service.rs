@@ -410,6 +410,12 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
 }
 
 /// Fetch the managed_meta JSONB for a resource from its manifest.
+///
+/// # Safety (authorization)
+///
+/// This function does NOT perform a visibility check. Callers MUST verify
+/// resource access (e.g., via [`get_visible`] or [`get_content`]) before
+/// calling this function.
 pub async fn get_managed_meta(
     pool: &PgPool,
     resource_id: Uuid,

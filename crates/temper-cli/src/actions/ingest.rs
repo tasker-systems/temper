@@ -461,17 +461,20 @@ pub fn build_frontmatter_from_resource(
          temper-created: {}\ntitle: \"{}\"\n",
         resource.id,
         resource.created.to_rfc3339(),
-        resource.title,
+        yaml_escape_string(&resource.title),
     );
 
     // Slug from resource
     if let Some(ref slug) = resource.slug {
-        fm.push_str(&format!("slug: \"{slug}\"\n"));
+        fm.push_str(&format!("slug: \"{}\"\n", yaml_escape_string(slug)));
     }
 
     // Owner handle
     if !resource.owner_handle.is_empty() {
-        fm.push_str(&format!("temper-owner: \"{}\"\n", resource.owner_handle));
+        fm.push_str(&format!(
+            "temper-owner: \"{}\"\n",
+            yaml_escape_string(&resource.owner_handle)
+        ));
     }
 
     // Managed meta fields (stage, mode, effort, date, goal, etc.)
@@ -495,17 +498,26 @@ pub fn build_frontmatter_from_resource(
                 continue;
             }
             match value {
-                serde_json::Value::String(s) => fm.push_str(&format!("{key}: \"{s}\"\n")),
+                serde_json::Value::String(s) => {
+                    fm.push_str(&format!("{key}: \"{}\"\n", yaml_escape_string(s)));
+                }
                 serde_json::Value::Number(n) => fm.push_str(&format!("{key}: {n}\n")),
                 serde_json::Value::Bool(b) => fm.push_str(&format!("{key}: {b}\n")),
                 serde_json::Value::Null => fm.push_str(&format!("{key}: null\n")),
-                _ => fm.push_str(&format!("{key}: {value}\n")),
+                _ => {} // Skip arrays/objects — not representable as scalar YAML fields
             }
         }
     }
 
     fm.push_str("---\n\n");
     fm
+}
+
+/// Escape a string for safe inclusion in a YAML double-quoted scalar.
+fn yaml_escape_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
 }
 
 /// Write a vault file and register the resource in the manifest.
