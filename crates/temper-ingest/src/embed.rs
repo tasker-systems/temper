@@ -1,7 +1,13 @@
 //! Text embedding using BAAI/bge-base-en-v1.5 via ONNX Runtime.
 //!
-//! Model and tokenizer loaded from bundled bytes at compile time (no runtime
-//! downloads).  ONNX session created once per process via `OnceLock`.
+//! Two model-loading strategies, selected at compile time by feature flags:
+//!
+//! - **`embed`** (default): model bundled via `include_bytes!()` at compile
+//!   time (no runtime downloads).  Requires git-lfs checkout.
+//! - **`embed-download`**: model downloaded at runtime from Hugging Face via
+//!   hf-hub.  Safe on machines without git-lfs; used by the CLI.
+//!
+//! ONNX session created once per process via `OnceLock`.
 //!
 //! ORT runtime loading is platform-aware:
 //! - **Linux** (Vercel deploy): the bundled `libonnxruntime.so` is written to
@@ -24,13 +30,18 @@ use crate::error::{EmbedError, Result};
 /// Embedding dimension for bge-base-en-v1.5.
 pub const EMBEDDING_DIM: usize = 768;
 
+#[cfg(all(feature = "embed", not(feature = "embed-download")))]
 static MODEL_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/model_quantized.onnx");
 static TOKENIZER_BYTES: &[u8] = include_bytes!("../models/bge-base-en-v1.5/tokenizer.json");
 
 /// Bundled Linux x86_64 libonnxruntime.so — only compiled into the binary on
-/// Linux targets (Vercel deploy).  On other platforms this is a zero-length
-/// slice and the system-installed ORT is used instead.
-#[cfg(target_os = "linux")]
+/// Linux embed targets (Vercel deploy).  On other platforms this is unused
+/// and the system-installed ORT is loaded instead.
+#[cfg(all(
+    target_os = "linux",
+    feature = "embed",
+    not(feature = "embed-download")
+))]
 static ORT_LIB_BYTES: &[u8] = include_bytes!("../lib/x86_64-unknown-linux-gnu/libonnxruntime.so");
 
 // ---- ORT runtime initialization ----
@@ -44,7 +55,12 @@ static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// (`ORT_DYLIB_PATH`, Homebrew, etc.).
 fn init_ort_runtime() -> std::result::Result<(), String> {
     ORT_INIT.get_or_init(|| {
-        #[cfg(target_os = "linux")]
+        // Bundled Linux deploy: write the bundled .so to /tmp and load it.
+        #[cfg(all(
+            target_os = "linux",
+            feature = "embed",
+            not(feature = "embed-download")
+        ))]
         {
             let lib_path = std::path::Path::new("/tmp/libonnxruntime.so");
             if !lib_path.exists() {
@@ -56,17 +72,23 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
                 .commit();
         }
 
-        #[cfg(not(target_os = "linux"))]
+        // All other cases (macOS, Linux with embed-download): search system paths.
+        #[cfg(not(all(
+            target_os = "linux",
+            feature = "embed",
+            not(feature = "embed-download")
+        )))]
         {
-            // On macOS, ORT's load-dynamic needs help finding the dylib.
             // Search order:
             //   1. ORT_DYLIB_PATH env var (explicit override)
             //   2. Homebrew ARM64: /opt/homebrew/lib/libonnxruntime.dylib
             //   3. Homebrew Intel: /usr/local/lib/libonnxruntime.dylib
+            //   4. Linux system: /usr/lib/libonnxruntime.so
             let dylib_path = std::env::var("ORT_DYLIB_PATH").ok().or_else(|| {
                 [
                     "/opt/homebrew/lib/libonnxruntime.dylib",
                     "/usr/local/lib/libonnxruntime.dylib",
+                    "/usr/lib/libonnxruntime.so",
                 ]
                 .iter()
                 .find(|p| std::path::Path::new(p).exists())
@@ -108,12 +130,7 @@ fn load_model() -> Result<&'static Model> {
     let result = MODEL.get_or_init(|| {
         init_ort_runtime().map_err(|e| format!("ort runtime init: {e}"))?;
 
-        let session = Session::builder()
-            .map_err(|e| format!("ort session builder: {e}"))?
-            .with_intra_threads(1)
-            .map_err(|e| format!("ort threads: {e}"))?
-            .commit_from_memory(MODEL_BYTES)
-            .map_err(|e| format!("ort load: {e}"))?;
+        let session = build_session()?;
 
         let tokenizer =
             Tokenizer::from_bytes(TOKENIZER_BYTES).map_err(|e| format!("load tokenizer: {e}"))?;
@@ -128,6 +145,34 @@ fn load_model() -> Result<&'static Model> {
         Ok(m) => Ok(m),
         Err(e) => Err(EmbedError::Embedding(format!("model init: {e}"))),
     }
+}
+
+/// Build ORT session from bundled model bytes.
+#[cfg(all(feature = "embed", not(feature = "embed-download")))]
+fn build_session() -> std::result::Result<Session, String> {
+    Session::builder()
+        .map_err(|e| format!("ort session builder: {e}"))?
+        .with_intra_threads(1)
+        .map_err(|e| format!("ort threads: {e}"))?
+        .commit_from_memory(MODEL_BYTES)
+        .map_err(|e| format!("ort load: {e}"))
+}
+
+/// Build ORT session by downloading model from Hugging Face Hub.
+#[cfg(feature = "embed-download")]
+fn build_session() -> std::result::Result<Session, String> {
+    let api = hf_hub::api::sync::Api::new().map_err(|e| format!("hf-hub init: {e}"))?;
+    let repo = api.model("BAAI/bge-base-en-v1.5".to_owned());
+    let model_path = repo
+        .get("onnx/model.onnx")
+        .map_err(|e| format!("download model: {e}"))?;
+
+    Session::builder()
+        .map_err(|e| format!("ort session builder: {e}"))?
+        .with_intra_threads(1)
+        .map_err(|e| format!("ort threads: {e}"))?
+        .commit_from_file(&model_path)
+        .map_err(|e| format!("ort load: {e}"))
 }
 
 // ---- Tokenization ----
@@ -305,6 +350,20 @@ pub fn embed_texts(texts: &[&str]) -> Result<Vec<Vec<f32>>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- Feature guard tests ----
+
+    #[test]
+    #[cfg(all(feature = "embed", not(feature = "embed-download")))]
+    fn bundled_model_bytes_are_not_lfs_pointer() {
+        let header = &super::MODEL_BYTES[..std::cmp::min(30, super::MODEL_BYTES.len())];
+        let header_str = String::from_utf8_lossy(header);
+        assert!(
+            !header_str.starts_with("version https://git-lfs"),
+            "MODEL_BYTES contains a git-lfs pointer, not the actual model binary. \
+             Run `git lfs pull` or use the `embed-download` feature instead."
+        );
+    }
 
     // ---- Unit tests (no model download needed) ----
 

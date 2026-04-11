@@ -41,6 +41,9 @@ pub struct IngestPayload {
 pub struct PackedChunk {
     pub chunk_index: u32,
     pub header_path: String,
+    /// Depth of the innermost heading: 0 = no heading, 1 = `#`, 2 = `##`, etc.
+    #[serde(default)]
+    pub heading_depth: u8,
     pub content: String,
     pub content_hash: String,
     /// 768-dimensional embedding vector.
@@ -68,6 +71,7 @@ pub fn format_embedding(embedding: &[f32]) -> String {
 pub struct ChunkRowJsonb {
     pub chunk_index: u32,
     pub header_path: String,
+    pub heading_depth: u32,
     pub content: String,
     pub content_hash: String,
     /// Pre-formatted pgvector literal: `[0.1,0.2,...]`
@@ -79,6 +83,7 @@ impl ChunkRowJsonb {
         Self {
             chunk_index: chunk.chunk_index,
             header_path: chunk.header_path.clone(),
+            heading_depth: chunk.heading_depth as u32,
             content: chunk.content.clone(),
             content_hash: chunk.content_hash.clone(),
             embedding: format_embedding(&chunk.embedding),
@@ -128,6 +133,7 @@ mod tests {
             PackedChunk {
                 chunk_index: 0,
                 header_path: "Title".to_owned(),
+                heading_depth: 1,
                 content: "Hello world".to_owned(),
                 content_hash: "abc123".to_owned(),
                 embedding: vec![0.1; 768],
@@ -135,6 +141,7 @@ mod tests {
             PackedChunk {
                 chunk_index: 1,
                 header_path: "Title > Section".to_owned(),
+                heading_depth: 2,
                 content: "Section content".to_owned(),
                 content_hash: "def456".to_owned(),
                 embedding: vec![0.2; 768],
@@ -276,12 +283,14 @@ mod tests {
         let packed = PackedChunk {
             chunk_index: 0,
             header_path: "Title > Section".to_owned(),
+            heading_depth: 2,
             content: "Hello world".to_owned(),
             content_hash: "abc123".to_owned(),
             embedding: vec![0.1, 0.2, 0.3],
         };
         let row = ChunkRowJsonb::from_packed(&packed);
         assert_eq!(row.chunk_index, 0);
+        assert_eq!(row.heading_depth, 2);
         assert_eq!(row.embedding, "[0.1,0.2,0.3]");
         assert_eq!(row.content, "Hello world");
     }
@@ -292,6 +301,7 @@ mod tests {
             PackedChunk {
                 chunk_index: 0,
                 header_path: "A".into(),
+                heading_depth: 0,
                 content: "first".into(),
                 content_hash: "h1".into(),
                 embedding: vec![0.1, 0.2],
@@ -299,6 +309,7 @@ mod tests {
             PackedChunk {
                 chunk_index: 1,
                 header_path: "B".into(),
+                heading_depth: 0,
                 content: "second".into(),
                 content_hash: "h2".into(),
                 embedding: vec![0.3, 0.4],

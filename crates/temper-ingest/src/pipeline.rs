@@ -32,6 +32,7 @@ pub fn prepare_markdown(content: &str) -> Result<Vec<PackedChunk>> {
         .map(|(chunk, embedding)| PackedChunk {
             chunk_index: chunk.chunk_index,
             header_path: chunk.header_path,
+            heading_depth: chunk.heading_depth,
             content: chunk.content,
             content_hash: chunk.content_hash,
             embedding,

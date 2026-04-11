@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
+use temper_core::defaults::apply_doc_type_defaults;
 use temper_core::schema::ValidationIssue;
 use temper_core::types::ids::{ContextId, EventId, ProfileId, ResourceAuditId, ResourceId};
 use temper_core::types::ingest::chunks_to_jsonb;
@@ -51,9 +52,13 @@ impl From<IngestError> for crate::error::ApiError {
     fn from(err: IngestError) -> Self {
         match err {
             IngestError::Validation { doc_type, issues } => {
+                let detail: Vec<String> = issues
+                    .iter()
+                    .map(|i| format!("{}: {}", i.path, i.message))
+                    .collect();
                 crate::error::ApiError::BadRequest(format!(
-                    "managed_meta validation failed for doc_type={doc_type}: {} issues",
-                    issues.len()
+                    "managed_meta validation failed for doc_type={doc_type}: {}",
+                    detail.join("; ")
                 ))
             }
             IngestError::StructuralMoveNotSupported { field, message } => {
@@ -398,17 +403,22 @@ pub async fn ingest(
     // 2. Resolve doc_type
     let doc_type_id = resolve_doc_type(pool, &payload.doc_type_name).await?;
 
-    // 2.5. Strip tier-1 fields and validate managed_meta
-    let stripped_managed_meta = payload.managed_meta.take().map(strip_system_managed_fields);
+    // 2.5. Strip tier-1 fields, apply doc-type defaults, and validate managed_meta
+    let mut managed = payload
+        .managed_meta
+        .take()
+        .map(strip_system_managed_fields)
+        .unwrap_or_else(|| serde_json::json!({}));
+    apply_doc_type_defaults(&payload.doc_type_name, &mut managed);
     let validate_params = ValidateParams {
         doc_type: &payload.doc_type_name,
-        managed_meta: stripped_managed_meta.as_ref(),
+        managed_meta: Some(&managed),
         slug: &payload.slug,
         title: &payload.title,
         context_name: &payload.context_name,
     };
     validate_managed_meta(&validate_params).map_err(ApiError::from)?;
-    payload.managed_meta = stripped_managed_meta;
+    payload.managed_meta = Some(managed);
 
     // 2.6. If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
     #[cfg(feature = "ingest-pipeline")]
@@ -578,22 +588,25 @@ pub async fn update(
         return Err(ApiError::NotFound);
     }
 
-    // Strip tier-1 fields and check for tier-2 structural moves
-    let stripped_managed_meta = payload.managed_meta.take().map(strip_system_managed_fields);
-    if let Some(ref meta) = stripped_managed_meta {
-        if let Some(obj) = meta.as_object() {
-            for field in &["temper-context", "temper-type"] {
-                if obj.contains_key(*field) {
-                    return Err(IngestError::StructuralMoveNotSupported {
-                        field: field.to_string(),
-                        message: format!("use dedicated move command to change {field}"),
-                    }
-                    .into());
+    // Strip tier-1 fields, apply doc-type defaults, and check for tier-2 structural moves
+    let mut managed = payload
+        .managed_meta
+        .take()
+        .map(strip_system_managed_fields)
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let Some(obj) = managed.as_object() {
+        for field in &["temper-context", "temper-type"] {
+            if obj.contains_key(*field) {
+                return Err(IngestError::StructuralMoveNotSupported {
+                    field: field.to_string(),
+                    message: format!("use dedicated move command to change {field}"),
                 }
+                .into());
             }
         }
     }
-    payload.managed_meta = stripped_managed_meta;
+    apply_doc_type_defaults(&payload.doc_type_name, &mut managed);
+    payload.managed_meta = Some(managed);
 
     // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
     #[cfg(feature = "ingest-pipeline")]
@@ -823,6 +836,33 @@ mod tests_validate_managed_meta {
             }
             other => panic!("expected Validation error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn validation_error_includes_field_details() {
+        // Task with no managed_meta — should fail validation because temper-stage is required
+        let params = ValidateParams {
+            doc_type: "task",
+            managed_meta: None,
+            slug: "test",
+            title: "test",
+            context_name: "test",
+        };
+
+        let err = validate_managed_meta(&params).unwrap_err();
+        // Convert to ApiError to test the user-facing message
+        let api_err = crate::error::ApiError::from(err);
+        let msg = format!("{api_err}");
+        // The error message should include field-level detail, not just a count
+        assert!(
+            !msg.contains(" issues"),
+            "error should not just show a count: {msg}"
+        );
+        // Should include at least one field path
+        assert!(
+            msg.contains(':'),
+            "error should include field: message detail: {msg}"
+        );
     }
 }
 

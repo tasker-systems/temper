@@ -447,6 +447,21 @@ fn infer_temper_stage(ctx: &InferContext<'_>) -> Option<(String, String, String)
     ))
 }
 
+fn infer_temper_status(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
+    if fm_str(ctx.fm, "temper-status").is_some() {
+        return None;
+    }
+    let dt = ctx.effective_doc_type.as_deref()?;
+    if dt != "goal" {
+        return None;
+    }
+    Some((
+        "temper-status".to_string(),
+        "active".to_string(),
+        "goals default to active status".to_string(),
+    ))
+}
+
 /// All registered inference rules, applied in order.
 const INFER_RULES: &[InferFn] = &[
     infer_temper_id,
@@ -457,6 +472,7 @@ const INFER_RULES: &[InferFn] = &[
     infer_date,
     infer_temper_created,
     infer_temper_stage,
+    infer_temper_status,
 ];
 
 // ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ async fn ingest_with_chunks(
     let chunk = PackedChunk {
         chunk_index: 0,
         header_path: title.to_string(),
+        heading_depth: 0,
         content: content.to_string(),
         content_hash: format!("{:0>64x}", slug.len()),
         embedding: vec![0.1_f32; 768],

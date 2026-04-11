@@ -20,6 +20,7 @@ fn fake_chunk(index: u32, header: &str, content: &str) -> temper_core::types::in
     temper_core::types::ingest::PackedChunk {
         chunk_index: index,
         header_path: header.to_string(),
+        heading_depth: 0,
         content: content.to_string(),
         content_hash: hash.to_string(),
         embedding: vec![val; 768],
@@ -132,7 +133,10 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
 
     let empty_chunks = temper_core::types::ingest::pack_chunks(&[]).expect("pack empty chunks");
 
-    // Build a task payload WITHOUT temper-stage (required by the task schema)
+    // Build a task payload with an INVALID temper-stage enum value.
+    // (Previously this tested missing temper-stage, but apply_doc_type_defaults
+    // now auto-fills it to "backlog". Testing an invalid enum value still
+    // exercises the validation pipeline and error detail surfacing.)
     let payload = temper_core::types::ingest::IngestPayload {
         title: "Validation Test Task".to_string(),
         origin_uri: "mcp://test/validation".to_string(),
@@ -142,14 +146,19 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
         slug: "validation-test-task".to_string(),
         content: "validation test content".to_string(),
         metadata: None,
-        managed_meta: Some(serde_json::json!({"temper-mode": "build"})),
+        managed_meta: Some(
+            serde_json::json!({"temper-stage": "not-a-real-stage", "temper-mode": "build"}),
+        ),
         open_meta: None,
         chunks_packed: Some(empty_chunks),
     };
 
     let result = ingest_service::ingest(&pool, profile_id, "e2e-test-device", payload).await;
 
-    assert!(result.is_err(), "should reject task missing temper-stage");
+    assert!(
+        result.is_err(),
+        "should reject task with invalid temper-stage enum"
+    );
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
         err_msg.contains("validation failed") || err_msg.contains("temper-stage"),

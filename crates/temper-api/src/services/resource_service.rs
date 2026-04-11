@@ -371,7 +371,10 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     let chunks = sqlx::query_as!(
         ContentChunk,
         r#"
-        SELECT chunk_index as "chunk_index!: i32", header_path as "header_path!: String", content as "content!: String"
+        SELECT chunk_index as "chunk_index!: i32",
+               header_path as "header_path!: String",
+               heading_depth as "heading_depth!: i16",
+               content as "content!: String"
           FROM kb_current_chunks
          WHERE resource_id = $1
          ORDER BY chunk_index
@@ -384,16 +387,50 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
     let markdown = chunks
         .into_iter()
         .map(|c| {
-            if c.header_path.is_empty() {
+            if c.heading_depth == 0 {
+                // Preamble or unheaded content — emit body only.
                 c.content
             } else {
-                format!("{}\n\n{}", c.header_path, c.content)
+                // Extract the innermost heading title from the breadcrumb.
+                // rsplit always yields at least one element on non-empty input.
+                let title = if c.header_path.is_empty() {
+                    "Untitled"
+                } else {
+                    c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path)
+                };
+                let depth = (c.heading_depth as usize).min(6);
+                let hashes = "#".repeat(depth);
+                format!("{hashes} {title}\n\n{}", c.content)
             }
         })
         .collect::<Vec<_>>()
         .join("\n\n");
 
     Ok(markdown)
+}
+
+/// Fetch the managed_meta JSONB for a resource from its manifest.
+///
+/// # Safety (authorization)
+///
+/// This function does NOT perform a visibility check. Callers MUST verify
+/// resource access (e.g., via [`get_visible`] or [`get_content`]) before
+/// calling this function.
+pub async fn get_managed_meta(
+    pool: &PgPool,
+    resource_id: Uuid,
+) -> ApiResult<Option<serde_json::Value>> {
+    let row = sqlx::query_scalar!(
+        r#"SELECT managed_meta as "managed_meta: serde_json::Value"
+             FROM kb_resource_manifests
+            WHERE resource_id = $1"#,
+        resource_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    // fetch_optional returns None if no manifest row exists.
+    Ok(row)
 }
 
 /// Check whether the profile can modify a resource. Returns Forbidden if not.

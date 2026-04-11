@@ -445,6 +445,81 @@ pub fn build_frontmatter(
     fm
 }
 
+/// Generate YAML frontmatter for a vault file from server data.
+///
+/// Combines resource-level fields (id, type, context, created, title) with
+/// managed_meta fields (stage, mode, effort, date, etc.) for complete
+/// frontmatter that matches what the CLI would produce locally.
+pub fn build_frontmatter_from_resource(
+    resource: &temper_core::types::ResourceRow,
+    context: &str,
+    doc_type: &str,
+    managed_meta: Option<&serde_json::Value>,
+) -> String {
+    let mut fm = format!(
+        "---\ntemper-id: {}\ntemper-type: {doc_type}\ntemper-context: {context}\n\
+         temper-created: {}\ntitle: \"{}\"\n",
+        resource.id,
+        resource.created.to_rfc3339(),
+        yaml_escape_string(&resource.title),
+    );
+
+    // Slug from resource
+    if let Some(ref slug) = resource.slug {
+        fm.push_str(&format!("slug: \"{}\"\n", yaml_escape_string(slug)));
+    }
+
+    // Owner handle
+    if !resource.owner_handle.is_empty() {
+        fm.push_str(&format!(
+            "temper-owner: \"{}\"\n",
+            yaml_escape_string(&resource.owner_handle)
+        ));
+    }
+
+    // Managed meta fields (stage, mode, effort, date, goal, etc.)
+    if let Some(meta) = managed_meta.and_then(|m| m.as_object()) {
+        // Fields already rendered above — skip them
+        let skip = [
+            "temper-id",
+            "temper-type",
+            "temper-context",
+            "temper-created",
+            "temper-updated",
+            "temper-owner",
+            "temper-provisional-id",
+            "temper-source",
+            "temper-legacy-id",
+            "title",
+            "slug",
+        ];
+        for (key, value) in meta {
+            if skip.contains(&key.as_str()) {
+                continue;
+            }
+            match value {
+                serde_json::Value::String(s) => {
+                    fm.push_str(&format!("{key}: \"{}\"\n", yaml_escape_string(s)));
+                }
+                serde_json::Value::Number(n) => fm.push_str(&format!("{key}: {n}\n")),
+                serde_json::Value::Bool(b) => fm.push_str(&format!("{key}: {b}\n")),
+                serde_json::Value::Null => fm.push_str(&format!("{key}: null\n")),
+                _ => {} // Skip arrays/objects — not representable as scalar YAML fields
+            }
+        }
+    }
+
+    fm.push_str("---\n\n");
+    fm
+}
+
+/// Escape a string for safe inclusion in a YAML double-quoted scalar.
+fn yaml_escape_string(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+}
+
 /// Write a vault file and register the resource in the manifest.
 ///
 /// `slug` determines the vault filename (`{slug}.md`).  Pass

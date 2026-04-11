@@ -49,8 +49,12 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     None => ("default".to_string(), "resource".to_string()),
                 };
 
-                let frontmatter =
-                    ingest::build_frontmatter(id, &resource.title, &ctx, &dtype, None, None);
+                let frontmatter = ingest::build_frontmatter_from_resource(
+                    &resource,
+                    &ctx,
+                    &dtype,
+                    content_response.managed_meta.as_ref(),
+                );
                 let full_content = format!("{frontmatter}{}", content_response.markdown);
                 std::fs::write(&vault_path, &full_content)?;
 

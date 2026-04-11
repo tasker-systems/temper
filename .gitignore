@@ -1,4 +1,4 @@
-/target
+target/
 *.swp
 *.swo
 .DS_Store
@@ -6,3 +6,4 @@
 .env
 .vercel
 node_modules
+.neon

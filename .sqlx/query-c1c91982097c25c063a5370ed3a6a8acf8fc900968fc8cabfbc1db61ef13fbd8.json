@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT managed_meta as \"managed_meta: serde_json::Value\"\n             FROM kb_resource_manifests\n            WHERE resource_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "managed_meta: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "c1c91982097c25c063a5370ed3a6a8acf8fc900968fc8cabfbc1db61ef13fbd8"
+}

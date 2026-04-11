@@ -98,9 +98,11 @@ pub async fn get_content(
 ) -> ApiResult<Json<ContentResponse>> {
     let markdown =
         resource_service::get_content(&state.pool, auth.0.profile.id, resource_id).await?;
+    let managed_meta = resource_service::get_managed_meta(&state.pool, resource_id).await?;
     Ok(Json(ContentResponse {
         resource_id: ResourceId::from(resource_id),
         markdown,
+        managed_meta,
     }))
 }
 
