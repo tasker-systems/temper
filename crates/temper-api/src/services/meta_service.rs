@@ -145,5 +145,29 @@ pub async fn update_meta(
 
     tx.commit().await?;
 
+    // Reconcile edges from updated open_meta frontmatter.
+    // The edge service reads declarations from open_meta and diffs against
+    // existing frontmatter-provenance edges; manual edges are untouched.
+    // Errors are logged, not propagated: the meta update itself succeeded.
+    // `context_id` reflects the post-cascade state (any `temper-context`
+    // change in managed_meta was applied earlier in the same tx), so we can
+    // reuse the local directly instead of re-querying.
+    let ctx_id = ContextId::from(context_id);
+    if let Err(e) = super::edge_service::reconcile_edges(
+        pool,
+        &profile_id,
+        &ctx_id,
+        &resource_id,
+        &payload.open_meta,
+    )
+    .await
+    {
+        tracing::warn!(
+            resource_id = %resource_id,
+            error = %e,
+            "edge reconciliation failed during meta update"
+        );
+    }
+
     Ok(serde_json::json!({"updated": true, "resource_id": resource_id}))
 }

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT open_meta as \"open_meta: serde_json::Value\"\n             FROM kb_resource_manifests\n            WHERE resource_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "open_meta: serde_json::Value",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "67e82590e34acae771a6087ec838409465c4139fc6f4b417d98e057b1d1b73bd"
+}

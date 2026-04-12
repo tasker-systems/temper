@@ -37,11 +37,30 @@ pub struct SyncStatusRequest {
     pub contexts: Vec<SyncContextEntries>,
 }
 
+/// Whether a sync item is a full-body push/pull or a metadata-only update.
+///
+/// `Body` means chunks or content differ and a full re-ingest is needed.
+/// `MetaOnly` means only managed_meta/open_meta (frontmatter) changed and
+/// the server can update without re-chunking.
+///
+/// Server-only wire type — matches the rest of sync.rs, which has no
+/// ts-rs/utoipa/schemars derives because the sync endpoints aren't
+/// exposed to the UI or MCP surfaces.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncItemKind {
+    #[default]
+    Body,
+    MetaOnly,
+}
+
 /// A resource the client should push (local-only or locally modified).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncPushItem {
     pub uri: String,
     pub resource_id: Option<ResourceId>,
+    #[serde(default)]
+    pub kind: SyncItemKind,
 }
 
 /// A resource the client should pull (server has newer or new resource).
@@ -50,6 +69,8 @@ pub struct SyncPullItem {
     pub uri: String,
     pub resource_id: ResourceId,
     pub content_hash: String,
+    #[serde(default)]
+    pub kind: SyncItemKind,
 }
 
 /// A resource with conflicting changes on both sides.
@@ -258,10 +279,66 @@ mod tests {
         let item = SyncPushItem {
             uri: "kb://temper/note/new-uuid".to_string(),
             resource_id: None,
+            kind: SyncItemKind::Body,
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("null"));
         let parsed: SyncPushItem = serde_json::from_str(&json).unwrap();
         assert!(parsed.resource_id.is_none());
+    }
+
+    #[test]
+    fn sync_item_kind_default_is_body() {
+        let kind = SyncItemKind::default();
+        assert_eq!(kind, SyncItemKind::Body);
+    }
+
+    #[test]
+    fn sync_push_item_default_kind_body() {
+        // Old wire payloads without a `kind` field must deserialize to Body.
+        let json = r#"{"uri":"kb://temper/task/abc","resource_id":null}"#;
+        let parsed: SyncPushItem = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.kind, SyncItemKind::Body);
+    }
+
+    #[test]
+    fn sync_push_item_meta_only_roundtrip() {
+        let item = SyncPushItem {
+            uri: "kb://temper/task/abc".to_string(),
+            resource_id: None,
+            kind: SyncItemKind::MetaOnly,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            json.contains("\"kind\":\"meta_only\""),
+            "expected snake_case meta_only in {json}"
+        );
+        let parsed: SyncPushItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.kind, SyncItemKind::MetaOnly);
+    }
+
+    #[test]
+    fn sync_pull_item_default_kind_body() {
+        // Old wire payloads without a `kind` field must deserialize to Body.
+        let json = r#"{"uri":"kb://temper/task/abc","resource_id":"00000000-0000-0000-0000-000000000000","content_hash":"sha256:abc"}"#;
+        let parsed: SyncPullItem = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.kind, SyncItemKind::Body);
+    }
+
+    #[test]
+    fn sync_pull_item_meta_only_roundtrip() {
+        let item = SyncPullItem {
+            uri: "kb://temper/task/abc".to_string(),
+            resource_id: ResourceId::from(Uuid::nil()),
+            content_hash: "sha256:abc".to_string(),
+            kind: SyncItemKind::MetaOnly,
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            json.contains("\"kind\":\"meta_only\""),
+            "expected snake_case meta_only in {json}"
+        );
+        let parsed: SyncPullItem = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.kind, SyncItemKind::MetaOnly);
     }
 }

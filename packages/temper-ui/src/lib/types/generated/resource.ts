@@ -13,7 +13,14 @@ export type ContentResponse = { resource_id: ResourceId, markdown: string,
  * Server-side managed_meta from kb_resource_manifests.
  * Used by CLI sync pull to reconstruct complete frontmatter.
  */
-managed_meta: JsonValue | null, };
+managed_meta: JsonValue | null, 
+/**
+ * Server-side open_meta from kb_resource_manifests.
+ * Used by CLI sync pull to reconstruct complete frontmatter
+ * (both tiers — managed_meta is the temper-* fields, open_meta
+ * is user-defined fields including relationship declarations).
+ */
+open_meta: JsonValue | null, };
 
 /**
  * Aggregated doc-type facet counts for the current filter set.

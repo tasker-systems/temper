@@ -12,7 +12,7 @@ use crate::error::ApiResult;
 
 use temper_core::types::ids::{ResourceAuditId, ResourceId};
 use temper_core::types::sync::{
-    SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem, SyncManifestItem,
+    SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem, SyncItemKind, SyncManifestItem,
     SyncManifestResponse, SyncPullItem, SyncPushItem, SyncRemovedItem, SyncStatusRequest,
     SyncStatusResponse,
 };
@@ -25,12 +25,12 @@ struct DiffRow {
     body_hash: String,
     #[expect(
         dead_code,
-        reason = "returned by SQL; will be used for three-tier sync"
+        reason = "returned by SQL for diagnostics; categorization branches on diff_type"
     )]
     managed_hash: String,
     #[expect(
         dead_code,
-        reason = "returned by SQL; will be used for three-tier sync"
+        reason = "returned by SQL for diagnostics; categorization branches on diff_type"
     )]
     open_hash: String,
     #[expect(dead_code, reason = "returned by SQL but not used in categorization")]
@@ -48,16 +48,36 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
 
     for row in rows {
         match row.diff_type.as_str() {
-            "to_push" | "to_push_body" | "to_push_meta" => to_push.push(SyncPushItem {
+            // "to_push" is a forward-compat fallback — current SQL migrations
+            // emit "to_push_body"/"to_push_meta" only; the un-suffixed name is
+            // retained so older DB snapshots still classify correctly.
+            "to_push" | "to_push_body" => to_push.push(SyncPushItem {
                 uri: row.kb_uri,
                 resource_id: row.resource_id.map(ResourceId::from),
+                kind: SyncItemKind::Body,
             }),
-            "to_pull" | "to_pull_body" | "to_pull_meta" => to_pull.push(SyncPullItem {
+            "to_push_meta" => to_push.push(SyncPushItem {
+                uri: row.kb_uri,
+                resource_id: row.resource_id.map(ResourceId::from),
+                kind: SyncItemKind::MetaOnly,
+            }),
+            // "to_pull" is actively emitted by sync_diff_for_device() for the
+            // untracked-pull branch (server-only resources). Do NOT delete.
+            "to_pull" | "to_pull_body" => to_pull.push(SyncPullItem {
                 uri: row.kb_uri,
                 resource_id: ResourceId::from(
                     row.resource_id.expect("to_pull must have resource_id"),
                 ),
                 content_hash: row.body_hash,
+                kind: SyncItemKind::Body,
+            }),
+            "to_pull_meta" => to_pull.push(SyncPullItem {
+                uri: row.kb_uri,
+                resource_id: ResourceId::from(
+                    row.resource_id.expect("to_pull_meta must have resource_id"),
+                ),
+                content_hash: row.body_hash,
+                kind: SyncItemKind::MetaOnly,
             }),
             "conflict" => conflicts.push(SyncConflictItem {
                 uri: row.kb_uri,
@@ -347,10 +367,37 @@ mod tests {
         assert_eq!(result.to_pull.len(), 3); // to_pull + to_pull_body + to_pull_meta
         assert_eq!(result.conflicts.len(), 1);
         assert_eq!(result.removed.len(), 1);
+
+        // to_push_body first (row a), then to_push_meta (row e).
         assert_eq!(result.to_push[0].uri, "kb://@me/ctx/task/a");
+        assert_eq!(result.to_push[0].kind, SyncItemKind::Body);
         assert_eq!(result.to_push[1].uri, "kb://@me/ctx/task/e");
+        assert_eq!(result.to_push[1].kind, SyncItemKind::MetaOnly);
+
+        // Legacy "to_pull" → Body, "to_pull_body" → Body, "to_pull_meta" → MetaOnly.
         assert_eq!(result.to_pull[0].uri, "kb://@me/ctx/task/b");
+        assert_eq!(result.to_pull[0].kind, SyncItemKind::Body);
         assert_eq!(result.to_pull[1].uri, "kb://@me/ctx/task/f");
+        assert_eq!(result.to_pull[1].kind, SyncItemKind::Body);
         assert_eq!(result.to_pull[2].uri, "kb://@me/ctx/task/g");
+        assert_eq!(result.to_pull[2].kind, SyncItemKind::MetaOnly);
+    }
+
+    #[test]
+    fn categorize_diff_rows_legacy_to_push_maps_to_body() {
+        // Forward-compat: legacy "to_push" (no _body/_meta suffix) → Body.
+        let rows = vec![DiffRow {
+            resource_id: Some(Uuid::nil()),
+            kb_uri: "kb://@me/ctx/task/legacy".to_owned(),
+            body_hash: "h".to_owned(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            updated: None,
+            diff_type: "to_push".to_owned(),
+        }];
+
+        let result = categorize_diff_rows(rows);
+        assert_eq!(result.to_push.len(), 1);
+        assert_eq!(result.to_push[0].kind, SyncItemKind::Body);
     }
 }

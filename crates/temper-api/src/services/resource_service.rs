@@ -433,6 +433,30 @@ pub async fn get_managed_meta(
     Ok(row)
 }
 
+/// Fetch the open_meta JSONB for a resource from its manifest.
+///
+/// # Safety (authorization)
+///
+/// This function does NOT perform a visibility check. Callers MUST verify
+/// resource access (e.g., via [`get_visible`] or [`get_content`]) before
+/// calling this function.
+pub async fn get_open_meta(
+    pool: &PgPool,
+    resource_id: Uuid,
+) -> ApiResult<Option<serde_json::Value>> {
+    let row = sqlx::query_scalar!(
+        r#"SELECT open_meta as "open_meta: serde_json::Value"
+             FROM kb_resource_manifests
+            WHERE resource_id = $1"#,
+        resource_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    // fetch_optional returns None if no manifest row exists.
+    Ok(row)
+}
+
 /// Check whether the profile can modify a resource. Returns Forbidden if not.
 pub async fn check_can_modify(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiResult<()> {
     let can_modify = sqlx::query_scalar!(
