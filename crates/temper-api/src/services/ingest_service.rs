@@ -458,6 +458,44 @@ pub async fn ingest(
     )
     .await?;
 
+    // 6. Extract and upsert edges from frontmatter relationship fields
+    if let Some(ref open) = payload.open_meta {
+        if let Err(e) = super::edge_service::extract_and_upsert_edges(
+            pool,
+            &profile_id,
+            &context_id,
+            &resource.id,
+            open,
+        )
+        .await
+        {
+            // Edge extraction is non-fatal — log and continue
+            tracing::warn!(
+                resource_id = %resource.id,
+                error = %e,
+                "edge extraction failed during ingest"
+            );
+        }
+    }
+
+    // 7. Attempt to resolve deferred edges targeting this new resource
+    if let Some(ref slug) = resource.slug {
+        if let Err(e) = super::edge_service::resolve_deferred_edges(
+            pool,
+            &resource.id,
+            Some(slug.as_str()),
+            &profile_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                resource_id = %resource.id,
+                error = %e,
+                "deferred edge resolution failed"
+            );
+        }
+    }
+
     Ok(resource)
 }
 
@@ -645,6 +683,28 @@ pub async fn update(
     replace_chunks(&mut tx, resource_id, &chunks).await?;
 
     tx.commit().await?;
+
+    // Reconcile edges from updated frontmatter
+    if let Some(ref open) = payload.open_meta {
+        let ctx_id = sqlx::query_scalar!(
+            "SELECT kb_context_id FROM kb_resources WHERE id = $1",
+            *resource_id,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        let ctx_id = ContextId::from(ctx_id);
+        if let Err(e) =
+            super::edge_service::reconcile_edges(pool, &profile_id, &ctx_id, &resource_id, open)
+                .await
+        {
+            tracing::warn!(
+                resource_id = %resource_id,
+                error = %e,
+                "edge reconciliation failed during update"
+            );
+        }
+    }
 
     // Re-fetch via the view to get full ResourceRow with joined fields
     resource_service::get_visible(pool, *profile_id, *resource_id).await

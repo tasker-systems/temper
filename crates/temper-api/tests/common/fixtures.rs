@@ -189,6 +189,50 @@ pub async fn create_test_resource(
     id
 }
 
+/// Create a test resource with a manifest row (including open_meta) and return its UUID.
+pub async fn create_test_resource_with_manifest(
+    pool: &PgPool,
+    owner_id: uuid::Uuid,
+    title: &str,
+    slug: &str,
+    open_meta: serde_json::Value,
+) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    let context_id = uuid::Uuid::parse_str(TEMPER_CONTEXT_ID).unwrap();
+    let doc_type_id = uuid::Uuid::parse_str(RESEARCH_DOC_TYPE_ID).unwrap();
+    let origin_uri = format!("test://{slug}");
+
+    sqlx::query(
+        r#"INSERT INTO kb_resources
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+             originator_profile_id, owner_profile_id, is_active, created, updated)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())"#,
+    )
+    .bind(id)
+    .bind(context_id)
+    .bind(doc_type_id)
+    .bind(&origin_uri)
+    .bind(title)
+    .bind(slug)
+    .bind(owner_id)
+    .execute(pool)
+    .await
+    .expect("create test resource");
+
+    sqlx::query(
+        r#"INSERT INTO kb_resource_manifests
+            (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
+           VALUES ($1, 'test-hash', '{}', $2, 'test-mhash', 'test-ohash', now())"#,
+    )
+    .bind(id)
+    .bind(&open_meta)
+    .execute(pool)
+    .await
+    .expect("create test manifest");
+
+    id
+}
+
 /// Insert a directed edge between two resources.
 pub async fn create_test_edge(
     pool: &PgPool,
