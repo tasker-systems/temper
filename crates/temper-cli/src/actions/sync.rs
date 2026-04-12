@@ -10,8 +10,10 @@ use uuid::Uuid;
 use crate::actions::ingest;
 use crate::actions::progress::SyncProgress;
 use crate::error::{Result, TemperError};
+use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::sync::SyncItemKind;
 use temper_core::types::{
-    Manifest, ManifestEntryState, MergeResult, MergedResource, PushKind, ResourceId,
+    Manifest, ManifestEntry, ManifestEntryState, MergeResult, MergedResource, PushKind, ResourceId,
     SyncCompleteRequest, SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem,
     SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
@@ -774,6 +776,106 @@ async fn push_resource(
     vault_root: &Path,
     item: &SyncPushItem,
 ) -> Result<()> {
+    match item.kind {
+        SyncItemKind::Body => push_resource_body(client, manifest, vault_root, item).await,
+        SyncItemKind::MetaOnly => push_resource_meta_only(client, manifest, vault_root, item).await,
+    }
+}
+
+/// Build a meta-only update payload from an in-memory frontmatter mapping.
+///
+/// Splits frontmatter into managed/open tiers, computes their hashes, and
+/// returns a typed `MetaUpdatePayload` ready to send to the server.
+fn build_meta_update_payload(
+    fm: &serde_yaml::Value,
+    doc_type: &str,
+    resource_id: Uuid,
+) -> MetaUpdatePayload {
+    let (managed_meta, open_meta) = temper_core::hash::split_frontmatter_tiers(fm, doc_type);
+    let (managed_hash, open_hash) =
+        temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(fm), doc_type);
+    MetaUpdatePayload {
+        resource_id: ResourceId::from(resource_id),
+        managed_meta,
+        open_meta,
+        managed_hash,
+        open_hash,
+    }
+}
+
+async fn push_resource_meta_only(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPushItem,
+) -> Result<()> {
+    let entry_id = match item.resource_id {
+        Some(id) => id,
+        None => extract_resource_id(&item.uri)?,
+    };
+
+    let entry = manifest
+        .entries
+        .get(&entry_id)
+        .ok_or_else(|| TemperError::NotFound(format!("manifest entry not found: {entry_id}")))?;
+
+    let file_path = vault_root.join(&entry.path);
+    if !file_path.exists() {
+        return Err(TemperError::NotFound(format!(
+            "vault file not found: {}",
+            file_path.display()
+        )));
+    }
+
+    let content = std::fs::read_to_string(&file_path)?;
+
+    // Unlike the body push path, we cannot fall back to a default doc_type
+    // here — `split_frontmatter_tiers` uses the doc_type schema to decide
+    // which fields are managed vs open, and a wrong doc_type would
+    // misclassify fields and corrupt the server-side meta state.
+    let doc_type = Vault::parse_rel(&entry.path)
+        .map(|parsed| parsed.doc_type.to_string())
+        .ok_or_else(|| {
+            TemperError::Config(format!(
+                "meta-only push: manifest path does not parse: {}",
+                entry.path
+            ))
+        })?;
+
+    let fm = crate::vault::parse_frontmatter(&content).ok_or_else(|| {
+        TemperError::Config(format!(
+            "meta-only push requires frontmatter: {}",
+            file_path.display()
+        ))
+    })?;
+
+    let payload = build_meta_update_payload(&fm, &doc_type, entry_id.into());
+
+    client
+        .resources()
+        .update_meta(entry_id.into(), &payload)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    // body_hash / remote_body_hash intentionally untouched: the diff was
+    // meta-only, so the body on disk is identical to what the server holds.
+    if let Some(e) = manifest.entries.get_mut(&entry_id) {
+        e.remote_managed_hash = payload.managed_hash.clone();
+        e.remote_open_hash = payload.open_hash.clone();
+        e.state = ManifestEntryState::Clean;
+        e.synced_at = chrono::Utc::now();
+        e.mtime_secs = file_mtime_secs(&file_path).ok();
+    }
+
+    Ok(())
+}
+
+async fn push_resource_body(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPushItem,
+) -> Result<()> {
     // Resolve the manifest entry ID — for new resources this is embedded in the URI,
     // for existing resources the server provides the resource_id directly.
     let entry_id = match item.resource_id {
@@ -905,6 +1007,220 @@ async fn push_resource(
 }
 
 async fn pull_resource(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPullItem,
+) -> Result<()> {
+    match item.kind {
+        SyncItemKind::Body => pull_resource_body(client, manifest, vault_root, item).await,
+        SyncItemKind::MetaOnly => pull_resource_meta_only(client, manifest, vault_root, item).await,
+    }
+}
+
+/// Relocation guard for meta-only pulls.
+///
+/// A meta-only pull must not change the file's vault location — doing so
+/// would require moving the file on disk and updating the manifest path.
+/// If the incoming managed_meta carries a `temper-context` that disagrees
+/// with the current on-disk context, reject with a user-facing error so
+/// the caller can run a full body pull (which takes the slug-dedup path)
+/// or use `temper move` explicitly.
+fn check_relocation_guard(
+    current_ctx: &str,
+    new_managed_meta: Option<&serde_json::Value>,
+) -> Result<()> {
+    let Some(meta) = new_managed_meta else {
+        return Ok(());
+    };
+    let Some(new_ctx) = meta.get("temper-context").and_then(|v| v.as_str()) else {
+        return Ok(());
+    };
+    if new_ctx == current_ctx {
+        return Ok(());
+    }
+    Err(TemperError::Config(format!(
+        "meta-only pull would change temper-context from {current_ctx} to {new_ctx}; \
+         file relocation via meta-only pull is not supported in v1. \
+         Run a full body pull or use temper-move instead."
+    )))
+}
+
+/// Rebuild a file's content with server-sourced frontmatter, preserving the
+/// local body.
+///
+/// `build_frontmatter_from_resource` already terminates with `---\n\n` — the
+/// blank separator line is part of the frontmatter block. `strip_frontmatter`,
+/// however, returns everything after the closing `---\n`, so a `local_body`
+/// derived from a well-formed file starts with a leading `\n` (the blank
+/// separator). Concatenating naively would double that newline and, because
+/// the next pull re-strips and re-rebuilds, drift one extra blank line per
+/// pull cycle. Strip a single leading `\n` from `local_body` before concat to
+/// make the operation idempotent.
+fn rebuild_file_with_new_meta(
+    local_body: &str,
+    resource: &temper_core::types::ResourceRow,
+    ctx: &str,
+    doc_type: &str,
+    managed_meta: Option<&serde_json::Value>,
+    open_meta: Option<&serde_json::Value>,
+) -> String {
+    let frontmatter =
+        ingest::build_frontmatter_from_resource(resource, ctx, doc_type, managed_meta, open_meta);
+    let body_after_separator = local_body.strip_prefix('\n').unwrap_or(local_body);
+    format!("{frontmatter}{body_after_separator}")
+}
+
+/// Parameters for the pure (non-async) half of `pull_resource_meta_only`.
+///
+/// The async wrapper fetches `resource` and meta blobs via the HTTP client;
+/// this struct groups everything the disk-write + hash-recompute + manifest
+/// update needs. Factored out so we can unit-test the disk/hash/manifest
+/// logic without a live server.
+struct ApplyPullMetaOnly<'a> {
+    file_path: &'a Path,
+    local_body: &'a str,
+    resource: &'a temper_core::types::ResourceRow,
+    ctx: &'a str,
+    doc_type: &'a str,
+    managed_meta: Option<&'a serde_json::Value>,
+    open_meta: Option<&'a serde_json::Value>,
+}
+
+/// Write the rebuilt file, normalize it to enforce doc-type invariants,
+/// and update the manifest entry in place with post-normalize hashes.
+///
+/// body_hash / remote_body_hash are intentionally NOT touched: the body
+/// agreed before the pull (precondition for a MetaOnly diff), and
+/// normalize_file only rewrites frontmatter, so the body is byte-identical
+/// after this call.
+fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry) -> Result<()> {
+    let ApplyPullMetaOnly {
+        file_path,
+        local_body,
+        resource,
+        ctx,
+        doc_type,
+        managed_meta,
+        open_meta,
+    } = params;
+
+    let rebuilt =
+        rebuild_file_with_new_meta(local_body, resource, ctx, doc_type, managed_meta, open_meta);
+    std::fs::write(file_path, &rebuilt)?;
+
+    let outcome = temper_core::normalize::normalize_file(file_path, doc_type)?;
+    if !outcome.issues.is_empty() {
+        let summary = outcome
+            .issues
+            .iter()
+            .map(|i| format!("{}: {}", i.path, i.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(TemperError::Config(format!(
+            "meta-only pull: normalize reported issues for {}: {summary}",
+            file_path.display()
+        )));
+    }
+
+    let final_content = std::fs::read_to_string(file_path)?;
+    let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
+        crate::vault::parse_frontmatter(&final_content).as_ref(),
+        doc_type,
+    );
+
+    entry.managed_hash = managed_hash.clone();
+    entry.open_hash = open_hash.clone();
+    entry.remote_managed_hash = managed_hash;
+    entry.remote_open_hash = open_hash;
+    entry.state = ManifestEntryState::Clean;
+    entry.synced_at = chrono::Utc::now();
+    entry.mtime_secs = file_mtime_secs(file_path).ok();
+
+    Ok(())
+}
+
+async fn pull_resource_meta_only(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPullItem,
+) -> Result<()> {
+    // A MetaOnly diff presupposes the client already knows this resource
+    // — if we have no manifest entry, the server's body-hash agreement
+    // claim cannot hold. Fall-through to the body path would risk slug
+    // dedup collisions. Surface the inconsistency instead.
+    let existing = manifest.entries.get(&item.resource_id).ok_or_else(|| {
+        TemperError::NotFound(format!(
+            "meta-only pull requires existing manifest entry; got none for {}",
+            item.resource_id
+        ))
+    })?;
+
+    let file_path = vault_root.join(&existing.path);
+    if !file_path.exists() {
+        return Err(TemperError::NotFound(format!(
+            "meta-only pull: local file missing at {}",
+            file_path.display()
+        )));
+    }
+
+    // Use the manifest path as the source of truth for (ctx, doc_type) —
+    // that's where the file actually lives on disk, which is what the
+    // relocation guard must compare against.
+    let parsed = Vault::parse_rel(&existing.path).ok_or_else(|| {
+        TemperError::Config(format!(
+            "meta-only pull: manifest path does not parse: {}",
+            existing.path
+        ))
+    })?;
+    let ctx = parsed.context.to_string();
+    let doc_type = parsed.doc_type.to_string();
+
+    let resource = client
+        .resources()
+        .get(Uuid::from(item.resource_id))
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    // NOTE: content_response.markdown is ignored — a dedicated
+    // /api/resources/{id}/meta GET endpoint would avoid the server-side
+    // chunk reconstruction. Out of scope for E1b.
+    let content_response = client
+        .resources()
+        .content(Uuid::from(item.resource_id))
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    check_relocation_guard(&ctx, content_response.managed_meta.as_ref())?;
+
+    let existing_content = std::fs::read_to_string(&file_path)?;
+    let local_body = strip_frontmatter(&existing_content).to_string();
+
+    let entry = manifest.entries.get_mut(&item.resource_id).ok_or_else(|| {
+        TemperError::NotFound(format!(
+            "meta-only pull: manifest entry vanished mid-pull: {}",
+            item.resource_id
+        ))
+    })?;
+
+    apply_pull_meta_only(
+        ApplyPullMetaOnly {
+            file_path: &file_path,
+            local_body: &local_body,
+            resource: &resource,
+            ctx: &ctx,
+            doc_type: &doc_type,
+            managed_meta: content_response.managed_meta.as_ref(),
+            open_meta: content_response.open_meta.as_ref(),
+        },
+        entry,
+    )?;
+
+    Ok(())
+}
+
+async fn pull_resource_body(
     client: &temper_client::TemperClient,
     manifest: &mut Manifest,
     vault_root: &Path,
@@ -2775,5 +3091,254 @@ mod tests {
         assert_eq!(entry.body_hash, outcome.body_hash);
         assert_eq!(entry.managed_hash, outcome.managed_hash);
         assert_eq!(entry.open_hash, outcome.open_hash);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase E1b: meta-only push/pull
+    // -----------------------------------------------------------------
+
+    fn meta_test_resource_row(id: ResourceId) -> temper_core::types::ResourceRow {
+        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId};
+        temper_core::types::ResourceRow {
+            id,
+            kb_context_id: ContextId(Uuid::nil()),
+            kb_doc_type_id: DocTypeId(Uuid::nil()),
+            origin_uri: format!("kb://@me/temper/task/{id}"),
+            title: "Meta Test".to_string(),
+            slug: Some("meta-test".to_string()),
+            originator_profile_id: ProfileId(Uuid::nil()),
+            owner_profile_id: ProfileId(Uuid::nil()),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            context_name: "temper".to_string(),
+            doc_type_name: "task".to_string(),
+            owner_handle: "@me".to_string(),
+            stage: Some("backlog".to_string()),
+            seq: Some(1),
+            mode: None,
+            effort: None,
+        }
+    }
+
+    #[test]
+    fn push_meta_only_payload_roundtrip() {
+        let id = ResourceId::from(Uuid::now_v7());
+        let fm_text = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             title: Payload Roundtrip\n\
+             slug: payload-roundtrip\n\
+             temper-stage: backlog\n\
+             tags: [rust, meta]\n\
+             notes: hello\n\
+             ---\n\
+             body\n",
+        );
+        let fm = crate::vault::parse_frontmatter(&fm_text).expect("parse fm");
+
+        let payload = build_meta_update_payload(&fm, "task", id.into());
+
+        // Direct comparison against the hashing helper — same input must
+        // produce identical hashes.
+        let (expected_managed, expected_open) =
+            temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(&fm), "task");
+        assert_eq!(payload.managed_hash, expected_managed);
+        assert_eq!(payload.open_hash, expected_open);
+
+        // Direct comparison against split_frontmatter_tiers.
+        let (expected_managed_meta, expected_open_meta) =
+            temper_core::hash::split_frontmatter_tiers(&fm, "task");
+        assert_eq!(payload.managed_meta, expected_managed_meta);
+        assert_eq!(payload.open_meta, expected_open_meta);
+
+        // resource_id round-trips through ResourceId::from(Uuid).
+        assert_eq!(payload.resource_id, id);
+
+        // Structural checks: title + temper-stage are in managed;
+        // tags + notes are in open.
+        assert_eq!(payload.managed_meta["title"], "Payload Roundtrip");
+        assert_eq!(payload.managed_meta["temper-stage"], "backlog");
+        assert!(payload.open_meta.get("tags").is_some());
+        assert_eq!(payload.open_meta["notes"], "hello");
+    }
+
+    #[test]
+    fn pull_meta_only_rebuild_preserves_body() {
+        let id = ResourceId::from(Uuid::now_v7());
+        let resource = meta_test_resource_row(id);
+
+        // Build a realistic existing vault file, then derive its body the
+        // same way `pull_resource_meta_only` does — via `strip_frontmatter`.
+        // This is the ground-truth "local body" that must round-trip.
+        //
+        // The body carries edge characters: blank lines, a trailing newline,
+        // and a YAML-looking fake-frontmatter block inside a code fence that
+        // must NOT be mistaken for real frontmatter.
+        let original_file = "---\n\
+                             temper-id: \"019d0000-0000-7000-8000-000000000001\"\n\
+                             temper-type: task\n\
+                             title: Original\n\
+                             ---\n\
+                             \n\
+                             # Heading\n\
+                             \n\
+                             Some prose with `inline` code.\n\
+                             \n\
+                             ```yaml\n\
+                             ---\n\
+                             fake: frontmatter\n\
+                             ---\n\
+                             ```\n\
+                             \n\
+                             Trailing paragraph.\n";
+        let local_body = strip_frontmatter(original_file).to_string();
+        // Sanity: the code-fence "frontmatter" is still intact inside the body.
+        assert!(local_body.contains("fake: frontmatter"));
+        assert!(local_body.contains("# Heading"));
+
+        let managed = serde_json::json!({
+            "temper-type": "task",
+            "temper-context": "temper",
+            "temper-stage": "in_progress",
+            "title": "Meta Test",
+            "slug": "meta-test",
+        });
+        let open = serde_json::json!({
+            "tags": ["rust", "graph"],
+        });
+
+        let rebuilt = rebuild_file_with_new_meta(
+            &local_body,
+            &resource,
+            "temper",
+            "task",
+            Some(&managed),
+            Some(&open),
+        );
+
+        // After rebuild, stripping the new file must yield the same body
+        // byte-for-byte — no normalization, no swallowed lines, no
+        // characters absorbed into the frontmatter block.
+        let stripped = strip_frontmatter(&rebuilt);
+        assert_eq!(stripped, local_body);
+
+        // Both meta tiers must appear in the rebuilt frontmatter block.
+        let block = extract_frontmatter_block(&rebuilt);
+        assert!(
+            block.contains("temper-stage"),
+            "managed tier missing:\n{block}"
+        );
+        assert!(block.contains("tags:"), "open tier missing:\n{block}");
+    }
+
+    #[test]
+    fn pull_meta_only_relocation_guard() {
+        // (a) None → Ok
+        assert!(check_relocation_guard("temper", None).is_ok());
+
+        // (b) Some without temper-context → Ok
+        let meta = serde_json::json!({"title": "No ctx here"});
+        assert!(check_relocation_guard("temper", Some(&meta)).is_ok());
+
+        // (c) Some with matching temper-context → Ok
+        let meta = serde_json::json!({"temper-context": "temper", "title": "match"});
+        assert!(check_relocation_guard("temper", Some(&meta)).is_ok());
+
+        // (d) Some with differing temper-context → Err, and the error
+        // message must contain both the old and new context names.
+        let meta = serde_json::json!({"temper-context": "research", "title": "moved"});
+        let err = check_relocation_guard("temper", Some(&meta)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("temper"), "err missing old ctx: {msg}");
+        assert!(msg.contains("research"), "err missing new ctx: {msg}");
+    }
+
+    #[test]
+    fn pull_meta_only_advances_mtime() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        let abs = vault_root.join(&rel_path);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+
+        let initial = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Initial\n\
+             slug: initial\n\
+             temper-stage: backlog\n\
+             ---\n\
+             initial body\n",
+        );
+        fs::write(&abs, &initial).unwrap();
+
+        // Baseline normalize so the starting file is canonical —
+        // apply_pull_meta_only will re-normalize after its rewrite, and
+        // we want to ensure it is the normalize call, not disk-flush
+        // timing, that advances mtime.
+        let _ = temper_core::normalize::normalize_file(&abs, "task").unwrap();
+
+        let mut entry = blank_entry(&rel_path);
+        // Deliberately stale mtime so we can assert it advances.
+        entry.mtime_secs = Some(0);
+
+        let resource = meta_test_resource_row(id);
+        let managed = serde_json::json!({
+            "temper-type": "task",
+            "temper-context": "temper",
+            "temper-stage": "in-progress",
+            "title": "Initial",
+            "slug": "initial",
+        });
+        let open = serde_json::json!({});
+
+        let local_content = fs::read_to_string(&abs).unwrap();
+        let local_body = strip_frontmatter(&local_content).to_string();
+
+        // Small sleep to guarantee a distinct filesystem mtime even on
+        // coarse-granularity platforms.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        apply_pull_meta_only(
+            ApplyPullMetaOnly {
+                file_path: &abs,
+                local_body: &local_body,
+                resource: &resource,
+                ctx: "temper",
+                doc_type: "task",
+                managed_meta: Some(&managed),
+                open_meta: Some(&open),
+            },
+            &mut entry,
+        )
+        .unwrap();
+
+        let new_mtime = entry.mtime_secs.expect("mtime must be set");
+        assert!(
+            new_mtime > 0,
+            "mtime_secs must advance past the stale sentinel 0, got {new_mtime}"
+        );
+
+        // The manifest entry hashes are now populated and state is Clean.
+        assert_eq!(entry.state, ManifestEntryState::Clean);
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
+        assert_eq!(entry.managed_hash, entry.remote_managed_hash);
+        assert_eq!(entry.open_hash, entry.remote_open_hash);
+
+        // And on-disk content still contains the local body.
+        let final_content = fs::read_to_string(&abs).unwrap();
+        assert!(
+            final_content.contains("initial body"),
+            "body must be preserved across meta-only pull"
+        );
     }
 }
