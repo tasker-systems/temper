@@ -54,6 +54,7 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     &ctx,
                     &dtype,
                     content_response.managed_meta.as_ref(),
+                    content_response.open_meta.as_ref(),
                 );
                 let full_content = format!("{frontmatter}{}", content_response.markdown);
                 std::fs::write(&vault_path, &full_content)?;

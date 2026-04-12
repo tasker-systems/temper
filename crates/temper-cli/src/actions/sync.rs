@@ -935,6 +935,7 @@ async fn pull_resource(
                 &ctx,
                 &doc_type,
                 content_response.managed_meta.as_ref(),
+                content_response.open_meta.as_ref(),
             );
             let vault_content = format!("{frontmatter}{}", &content_response.markdown);
             std::fs::write(&existing_path, &vault_content)?;
@@ -951,6 +952,7 @@ async fn pull_resource(
                 &resource,
                 &content_response.markdown,
                 content_response.managed_meta.as_ref(),
+                content_response.open_meta.as_ref(),
             )?
         }
     } else {
@@ -965,6 +967,7 @@ async fn pull_resource(
             &resource,
             &content_response.markdown,
             content_response.managed_meta.as_ref(),
+            content_response.open_meta.as_ref(),
         )?
     };
 
@@ -1022,6 +1025,7 @@ fn write_pulled_file(
     resource: &temper_core::types::ResourceRow,
     content: &str,
     managed_meta: Option<&serde_json::Value>,
+    open_meta: Option<&serde_json::Value>,
 ) -> Result<std::path::PathBuf> {
     let vault_path = ingest::build_vault_path(vault_root, context, doc_type, slug);
 
@@ -1029,8 +1033,13 @@ fn write_pulled_file(
         std::fs::create_dir_all(parent)?;
     }
 
-    let frontmatter =
-        ingest::build_frontmatter_from_resource(resource, context, doc_type, managed_meta);
+    let frontmatter = ingest::build_frontmatter_from_resource(
+        resource,
+        context,
+        doc_type,
+        managed_meta,
+        open_meta,
+    );
     let vault_content = format!("{frontmatter}{content}");
     std::fs::write(&vault_path, &vault_content)?;
 

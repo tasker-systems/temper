@@ -427,16 +427,65 @@ pub fn build_frontmatter(
     fm
 }
 
+/// Identity/structural frontmatter fields that are always rendered from the
+/// `ResourceRow` (not from the meta tier maps). We skip them inside the tier
+/// emit loops as defense in depth against duplicate keys, even though
+/// `split_frontmatter_tiers` normally keeps them out of both tiers.
+const SKIP_IDENTITY_FIELDS: &[&str] = &[
+    "temper-id",
+    "temper-type",
+    "temper-context",
+    "temper-created",
+    "temper-updated",
+    "temper-owner",
+    "temper-provisional-id",
+    "temper-source",
+    "temper-legacy-id",
+    "title",
+    "slug",
+];
+
+/// Emit the keys of a single frontmatter tier (managed_meta or open_meta)
+/// to `fm`, using the same type-dispatch rules the CLI uses when writing
+/// local files. Keys listed in `SKIP_IDENTITY_FIELDS` are skipped.
+fn emit_meta_tier(fm: &mut String, meta: Option<&serde_json::Value>) {
+    let Some(obj) = meta.and_then(|m| m.as_object()) else {
+        return;
+    };
+    for (key, value) in obj {
+        if SKIP_IDENTITY_FIELDS.contains(&key.as_str()) {
+            continue;
+        }
+        match value {
+            serde_json::Value::String(s) => {
+                fm.push_str(&format!("{key}: \"{}\"\n", yaml_escape_string(s)));
+            }
+            serde_json::Value::Number(n) => fm.push_str(&format!("{key}: {n}\n")),
+            serde_json::Value::Bool(b) => fm.push_str(&format!("{key}: {b}\n")),
+            serde_json::Value::Null => fm.push_str(&format!("{key}: null\n")),
+            serde_json::Value::Array(_) => {
+                fm.push_str(&format!("{key}: {}\n", json_value_to_yaml(value, 0)));
+            }
+            serde_json::Value::Object(_) => {
+                fm.push_str(&format!("{key}:{}\n", json_value_to_yaml(value, 0)));
+            }
+        }
+    }
+}
+
 /// Generate YAML frontmatter for a vault file from server data.
 ///
 /// Combines resource-level fields (id, type, context, created, title) with
-/// managed_meta fields (stage, mode, effort, date, etc.) for complete
-/// frontmatter that matches what the CLI would produce locally.
+/// managed_meta fields (temper-* keys, stage, mode, effort, etc.) and
+/// open_meta fields (user-defined keys: tags, relates_to, extends,
+/// depends_on, and any other custom frontmatter) for complete frontmatter
+/// that matches what the CLI would produce locally.
 pub fn build_frontmatter_from_resource(
     resource: &temper_core::types::ResourceRow,
     context: &str,
     doc_type: &str,
     managed_meta: Option<&serde_json::Value>,
+    open_meta: Option<&serde_json::Value>,
 ) -> String {
     let mut fm = format!(
         "---\ntemper-id: {}\ntemper-type: {doc_type}\ntemper-context: {context}\n\
@@ -459,42 +508,12 @@ pub fn build_frontmatter_from_resource(
         ));
     }
 
-    // Managed meta fields (stage, mode, effort, date, goal, etc.)
-    if let Some(meta) = managed_meta.and_then(|m| m.as_object()) {
-        // Fields already rendered above — skip them
-        let skip = [
-            "temper-id",
-            "temper-type",
-            "temper-context",
-            "temper-created",
-            "temper-updated",
-            "temper-owner",
-            "temper-provisional-id",
-            "temper-source",
-            "temper-legacy-id",
-            "title",
-            "slug",
-        ];
-        for (key, value) in meta {
-            if skip.contains(&key.as_str()) {
-                continue;
-            }
-            match value {
-                serde_json::Value::String(s) => {
-                    fm.push_str(&format!("{key}: \"{}\"\n", yaml_escape_string(s)));
-                }
-                serde_json::Value::Number(n) => fm.push_str(&format!("{key}: {n}\n")),
-                serde_json::Value::Bool(b) => fm.push_str(&format!("{key}: {b}\n")),
-                serde_json::Value::Null => fm.push_str(&format!("{key}: null\n")),
-                serde_json::Value::Array(_) => {
-                    fm.push_str(&format!("{key}: {}\n", json_value_to_yaml(value, 0)));
-                }
-                serde_json::Value::Object(_) => {
-                    fm.push_str(&format!("{key}:{}\n", json_value_to_yaml(value, 0)));
-                }
-            }
-        }
-    }
+    // managed_meta and open_meta are guaranteed disjoint by
+    // split_frontmatter_tiers, so we can emit them sequentially without
+    // deduping. Managed tier first to match the order the CLI would
+    // produce locally via normalize::split_and_merge.
+    emit_meta_tier(&mut fm, managed_meta);
+    emit_meta_tier(&mut fm, open_meta);
 
     fm.push_str("---\n\n");
     fm
@@ -1080,11 +1099,9 @@ created: 2026-03-23
         assert_eq!(fm.provisional_id.as_deref(), Some("bbb"));
     }
 
-    #[test]
-    fn test_build_frontmatter_from_resource_preserves_arrays_and_objects() {
+    fn test_resource_row() -> temper_core::types::ResourceRow {
         use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
-
-        let resource = temper_core::types::ResourceRow {
+        temper_core::types::ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
             kb_context_id: ContextId(uuid::Uuid::nil()),
             kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
@@ -1103,7 +1120,12 @@ created: 2026-03-23
             seq: None,
             mode: None,
             effort: None,
-        };
+        }
+    }
+
+    #[test]
+    fn test_build_frontmatter_from_resource_preserves_arrays_and_objects() {
+        let resource = test_resource_row();
 
         let meta = serde_json::json!({
             "depends_on": ["slug-a", "slug-b"],
@@ -1112,7 +1134,8 @@ created: 2026-03-23
             "config": {"key": "value", "nested": true}
         });
 
-        let fm = build_frontmatter_from_resource(&resource, "temper", "research", Some(&meta));
+        let fm =
+            build_frontmatter_from_resource(&resource, "temper", "research", Some(&meta), None);
 
         assert!(
             fm.contains("depends_on:"),
@@ -1133,6 +1156,168 @@ created: 2026-03-23
         assert!(
             fm.contains("config:"),
             "config object should be present. Got:\n{fm}"
+        );
+    }
+
+    #[test]
+    fn test_build_frontmatter_emits_open_meta_arrays() {
+        let resource = test_resource_row();
+
+        let open_meta = serde_json::json!({
+            "relates_to": ["task://foo", "task://bar"],
+            "tags": ["alpha", "beta"],
+        });
+
+        let fm = build_frontmatter_from_resource(
+            &resource,
+            "temper",
+            "research",
+            None,
+            Some(&open_meta),
+        );
+
+        assert!(
+            fm.contains("relates_to:"),
+            "relates_to key should be present. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("\"task://foo\""),
+            "relates_to should contain task://foo. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("\"task://bar\""),
+            "relates_to should contain task://bar. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("tags:"),
+            "tags key should be present. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("\"alpha\""),
+            "tags should contain alpha. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("\"beta\""),
+            "tags should contain beta. Got:\n{fm}"
+        );
+    }
+
+    #[test]
+    fn test_build_frontmatter_emits_open_meta_nested_objects() {
+        let resource = test_resource_row();
+
+        let open_meta = serde_json::json!({
+            "custom_block": {"key": "value", "nested": {"inner": true}},
+        });
+
+        let fm = build_frontmatter_from_resource(
+            &resource,
+            "temper",
+            "research",
+            None,
+            Some(&open_meta),
+        );
+
+        assert!(
+            fm.contains("custom_block:"),
+            "custom_block key should be present. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("key: \"value\""),
+            "nested key/value should be present. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("inner: true"),
+            "deeply nested inner should be present. Got:\n{fm}"
+        );
+    }
+
+    #[test]
+    fn test_build_frontmatter_emits_both_tiers() {
+        let resource = test_resource_row();
+
+        let managed_meta = serde_json::json!({
+            "stage": "draft",
+            "effort": "M",
+        });
+        let open_meta = serde_json::json!({
+            "relates_to": ["task://alpha"],
+            "custom_tag": "hello",
+        });
+
+        let fm = build_frontmatter_from_resource(
+            &resource,
+            "temper",
+            "research",
+            Some(&managed_meta),
+            Some(&open_meta),
+        );
+
+        // Both tiers present
+        assert!(fm.contains("stage:"), "managed stage missing. Got:\n{fm}");
+        assert!(fm.contains("effort:"), "managed effort missing. Got:\n{fm}");
+        assert!(
+            fm.contains("relates_to:"),
+            "open relates_to missing. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("custom_tag:"),
+            "open custom_tag missing. Got:\n{fm}"
+        );
+
+        // Order: managed tier keys before open tier keys.
+        let stage_pos = fm.find("stage:").expect("stage: present");
+        let effort_pos = fm.find("effort:").expect("effort: present");
+        let relates_pos = fm.find("relates_to:").expect("relates_to: present");
+        let custom_pos = fm.find("custom_tag:").expect("custom_tag: present");
+
+        let max_managed = stage_pos.max(effort_pos);
+        let min_open = relates_pos.min(custom_pos);
+        assert!(
+            max_managed < min_open,
+            "managed_meta keys must come before open_meta keys. Got:\n{fm}"
+        );
+    }
+
+    #[test]
+    fn test_build_frontmatter_tolerates_none_open_meta() {
+        let resource = test_resource_row();
+
+        let managed_meta = serde_json::json!({
+            "stage": "draft",
+            "effort": "M",
+        });
+
+        let fm_with_none = build_frontmatter_from_resource(
+            &resource,
+            "temper",
+            "research",
+            Some(&managed_meta),
+            None,
+        );
+
+        // Should not contain blank lines between frontmatter body — the only
+        // blank line is the one that follows the closing `---`.
+        let inside = fm_with_none
+            .strip_prefix("---\n")
+            .expect("leading ---")
+            .split("\n---\n")
+            .next()
+            .expect("closing ---");
+        for line in inside.lines() {
+            assert!(
+                !line.trim().is_empty(),
+                "no blank lines expected inside frontmatter. Got:\n{fm_with_none}"
+            );
+        }
+
+        assert!(
+            fm_with_none.contains("stage: \"draft\""),
+            "stage should be rendered. Got:\n{fm_with_none}"
+        );
+        assert!(
+            fm_with_none.contains("effort: \"M\""),
+            "effort should be rendered. Got:\n{fm_with_none}"
         );
     }
 }
