@@ -523,6 +523,29 @@ struct ExistingEdgeRow {
     edge_type: String,
 }
 
+// ─── Listing ────────────────────────────────────────────────────────────────
+
+/// List all edges connected to a resource, checking visibility.
+pub async fn list_resource_edges(
+    pool: &PgPool,
+    profile_id: Uuid,
+    resource_id: Uuid,
+) -> ApiResult<Vec<temper_core::types::graph::GraphEdgeRow>> {
+    // Verify the resource is visible to this profile
+    let _resource =
+        crate::services::resource_service::get_visible(pool, profile_id, resource_id).await?;
+
+    let rows = sqlx::query_as::<_, temper_core::types::graph::GraphEdgeRow>(
+        "SELECT * FROM graph_resource_edges($1, $2)",
+    )
+    .bind(profile_id)
+    .bind(resource_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

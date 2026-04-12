@@ -159,17 +159,7 @@ mod tests {
     #[test]
     fn validate_rejects_neither_query_nor_embedding() {
         let params = SearchParams {
-            query: None,
-            embedding: None,
-            search_config: "english".into(),
-            context_name: None,
-            doc_type: None,
-            limit: None,
-            offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         assert!(validate_params(&params).is_err());
     }
@@ -178,16 +168,7 @@ mod tests {
     fn validate_accepts_query_only() {
         let params = SearchParams {
             query: Some("test".into()),
-            embedding: None,
-            search_config: "english".into(),
-            context_name: None,
-            doc_type: None,
-            limit: None,
-            offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         assert_eq!(validate_params(&params).unwrap(), DEFAULT_LIMIT);
     }
@@ -195,17 +176,8 @@ mod tests {
     #[test]
     fn validate_accepts_embedding_only() {
         let params = SearchParams {
-            query: None,
             embedding: Some(vec![0.0; 768]),
-            search_config: "english".into(),
-            context_name: None,
-            doc_type: None,
-            limit: None,
-            offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         assert!(validate_params(&params).is_ok());
     }
@@ -213,17 +185,8 @@ mod tests {
     #[test]
     fn validate_rejects_wrong_dimension() {
         let params = SearchParams {
-            query: None,
             embedding: Some(vec![0.0; 100]),
-            search_config: "english".into(),
-            context_name: None,
-            doc_type: None,
-            limit: None,
-            offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         assert!(validate_params(&params).is_err());
     }
@@ -232,16 +195,8 @@ mod tests {
     fn validate_clamps_limit() {
         let params = SearchParams {
             query: Some("test".into()),
-            embedding: None,
-            search_config: "english".into(),
-            context_name: None,
-            doc_type: None,
             limit: Some(200),
-            offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         assert_eq!(validate_params(&params).unwrap(), MAX_LIMIT);
     }
@@ -249,17 +204,8 @@ mod tests {
     #[test]
     fn validate_accepts_seed_ids_only() {
         let params = SearchParams {
-            query: None,
-            embedding: None,
-            search_config: "english".into(),
-            context_name: None,
-            doc_type: None,
-            limit: None,
-            offset: None,
             seed_ids: Some(vec![uuid::Uuid::nil()]),
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         assert!(validate_params(&params).is_ok());
     }
@@ -268,16 +214,7 @@ mod tests {
     fn validate_rejects_empty_query_with_no_embedding() {
         let params = SearchParams {
             query: Some("".into()),
-            embedding: None,
-            search_config: "english".into(),
-            context_name: None,
-            doc_type: None,
-            limit: None,
-            offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         assert!(validate_params(&params).is_err());
     }

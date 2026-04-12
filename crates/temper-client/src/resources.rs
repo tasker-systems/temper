@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::error::Result;
 use crate::http::HttpClient;
+use temper_core::types::graph::GraphEdgeRow;
 use temper_core::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
     ResourceListResponse, ResourceRow, ResourceUpdateRequest,
@@ -71,6 +72,16 @@ impl<'a> ResourceClient<'a> {
         let req = self.http.delete(&path);
         self.http
             .send_json(&Method::DELETE, &path, req, Some(&token))
+            .await
+    }
+
+    /// List edges connected to a resource.
+    pub async fn edges(&self, resource_id: Uuid) -> Result<Vec<GraphEdgeRow>> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{resource_id}/edges");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
             .await
     }
 

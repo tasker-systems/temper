@@ -93,6 +93,24 @@ pub struct SearchParams {
     pub graph_expand: bool,
 }
 
+impl Default for SearchParams {
+    fn default() -> Self {
+        Self {
+            embedding: None,
+            query: None,
+            search_config: default_search_config(),
+            context_name: None,
+            doc_type: None,
+            limit: None,
+            offset: None,
+            seed_ids: None,
+            edge_types: None,
+            graph_depth: None,
+            graph_expand: default_graph_expand(),
+        }
+    }
+}
+
 /// A single search result.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "search.ts"))]

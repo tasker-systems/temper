@@ -535,6 +535,43 @@ async fn test_edge_cascade_on_resource_delete(pool: PgPool) {
     assert_eq!(count.0, 0, "all edges touching r2 should cascade on delete");
 }
 
+/// list_resource_edges returns correct edges through the service layer.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_list_resource_edges_service(pool: PgPool) {
+    common::fixtures::clean_and_seed(&pool).await;
+
+    let profile = common::fixtures::create_test_profile(&pool, "list-edges@test.com").await;
+    let r_b = common::fixtures::create_test_resource(&pool, profile, "Base Doc", "base-doc").await;
+    let r_a =
+        common::fixtures::create_test_resource(&pool, profile, "Dependent Doc", "dependent-doc")
+            .await;
+
+    // A depends_on B
+    common::fixtures::create_test_edge(&pool, r_a, r_b, "depends_on", profile).await;
+
+    // Call the service function for resource A
+    let edges = temper_api::services::edge_service::list_resource_edges(&pool, profile, r_a)
+        .await
+        .expect("list_resource_edges for A");
+
+    assert_eq!(edges.len(), 1, "A should have 1 edge");
+    assert_eq!(edges[0].edge_type, EdgeType::DependsOn);
+    assert_eq!(edges[0].direction, "outgoing");
+    assert_eq!(edges[0].peer_slug, "base-doc");
+    assert_eq!(edges[0].peer_resource_id, r_b);
+
+    // Call the service function for resource B (incoming edge)
+    let edges_b = temper_api::services::edge_service::list_resource_edges(&pool, profile, r_b)
+        .await
+        .expect("list_resource_edges for B");
+
+    assert_eq!(edges_b.len(), 1, "B should have 1 incoming edge");
+    assert_eq!(edges_b[0].edge_type, EdgeType::DependsOn);
+    assert_eq!(edges_b[0].direction, "incoming");
+    assert_eq!(edges_b[0].peer_slug, "dependent-doc");
+    assert_eq!(edges_b[0].peer_resource_id, r_a);
+}
+
 /// FromRow alignment: verify Rust types deserialize correctly from SQL function results.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn test_from_row_alignment(pool: PgPool) {

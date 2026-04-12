@@ -59,15 +59,10 @@ impl<'a> SearchClient<'a> {
         let params = SearchParams {
             query,
             embedding,
-            search_config: "english".into(),
             context_name,
             doc_type,
             limit,
-            offset: None,
-            seed_ids: None,
-            edge_types: None,
-            graph_depth: None,
-            graph_expand: true,
+            ..SearchParams::default()
         };
         let req = self.http.post("/api/search").json(&params);
         self.http

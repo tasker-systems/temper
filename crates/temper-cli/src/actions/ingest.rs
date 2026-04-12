@@ -486,13 +486,61 @@ pub fn build_frontmatter_from_resource(
                 serde_json::Value::Number(n) => fm.push_str(&format!("{key}: {n}\n")),
                 serde_json::Value::Bool(b) => fm.push_str(&format!("{key}: {b}\n")),
                 serde_json::Value::Null => fm.push_str(&format!("{key}: null\n")),
-                _ => {} // Skip arrays/objects — not representable as scalar YAML fields
+                serde_json::Value::Array(_) => {
+                    fm.push_str(&format!("{key}: {}\n", json_value_to_yaml(value, 0)));
+                }
+                serde_json::Value::Object(_) => {
+                    fm.push_str(&format!("{key}:{}\n", json_value_to_yaml(value, 0)));
+                }
             }
         }
     }
 
     fm.push_str("---\n\n");
     fm
+}
+
+/// Serialize a JSON value to a YAML string fragment (no trailing newline).
+/// Arrays use flow style: ["a", "b"]
+/// Objects use block style with 2-space indent.
+fn json_value_to_yaml(value: &serde_json::Value, indent: usize) -> String {
+    match value {
+        serde_json::Value::String(s) => format!("\"{}\"", yaml_escape_string(s)),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Array(arr) => {
+            let items: Vec<String> = arr.iter().map(|v| json_value_to_yaml(v, indent)).collect();
+            format!("[{}]", items.join(", "))
+        }
+        serde_json::Value::Object(obj) => {
+            let prefix = " ".repeat(indent + 2);
+            let mut lines = Vec::new();
+            for (k, v) in obj {
+                match v {
+                    serde_json::Value::Object(_) => {
+                        lines.push(format!("{prefix}{k}:"));
+                        if let serde_json::Value::Object(inner) = v {
+                            for (ik, iv) in inner {
+                                let nested_prefix = " ".repeat(indent + 4);
+                                lines.push(format!(
+                                    "{nested_prefix}{ik}: {}",
+                                    json_value_to_yaml(iv, indent + 4)
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        lines.push(format!(
+                            "{prefix}{k}: {}",
+                            json_value_to_yaml(v, indent + 2)
+                        ));
+                    }
+                }
+            }
+            format!("\n{}", lines.join("\n"))
+        }
+    }
 }
 
 /// Escape a string for safe inclusion in a YAML double-quoted scalar.
@@ -1030,5 +1078,61 @@ created: 2026-03-23
         let fm = parse_source_frontmatter(content).unwrap();
         assert_eq!(fm.legacy_id.as_deref(), Some("aaa"));
         assert_eq!(fm.provisional_id.as_deref(), Some("bbb"));
+    }
+
+    #[test]
+    fn test_build_frontmatter_from_resource_preserves_arrays_and_objects() {
+        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+
+        let resource = temper_core::types::ResourceRow {
+            id: ResourceId(uuid::Uuid::nil()),
+            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            title: "Test".to_string(),
+            slug: Some("test-slug".to_string()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            context_name: "temper".to_string(),
+            doc_type_name: "research".to_string(),
+            owner_handle: "@me".to_string(),
+            stage: None,
+            seq: None,
+            mode: None,
+            effort: None,
+        };
+
+        let meta = serde_json::json!({
+            "depends_on": ["slug-a", "slug-b"],
+            "extends": ["parent-doc"],
+            "tags": ["rust", "graph"],
+            "config": {"key": "value", "nested": true}
+        });
+
+        let fm = build_frontmatter_from_resource(&resource, "temper", "research", Some(&meta));
+
+        assert!(
+            fm.contains("depends_on:"),
+            "depends_on array should be present. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("slug-a"),
+            "depends_on should contain slug-a. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("slug-b"),
+            "depends_on should contain slug-b. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("extends:"),
+            "extends array should be present. Got:\n{fm}"
+        );
+        assert!(
+            fm.contains("config:"),
+            "config object should be present. Got:\n{fm}"
+        );
     }
 }
