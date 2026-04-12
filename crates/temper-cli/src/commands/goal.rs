@@ -26,8 +26,7 @@ pub fn create(
         let seq = crate::actions::goal::load_goals(config, Some(context))?
             .into_iter()
             .find(|m| m.slug == slug)
-            .map(|m| m.seq)
-            .unwrap_or(0);
+            .and_then(|m| m.seq);
         let info = GoalInfo {
             title: title.to_string(),
             slug: slug.clone(),

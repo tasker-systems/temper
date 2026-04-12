@@ -1,5 +1,6 @@
 pub mod access;
 pub mod contexts;
+pub mod edges;
 pub mod events;
 pub mod health;
 pub mod ingest;

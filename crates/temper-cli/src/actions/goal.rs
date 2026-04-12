@@ -50,19 +50,25 @@ pub fn load_goals(config: &Config, context: Option<&str>) -> Result<Vec<GoalInfo
             };
             let info: GoalInfo = match serde_yaml::from_value(fm) {
                 Ok(i) => i,
-                Err(_) => continue,
+                Err(e) => {
+                    tracing::warn!(
+                        "skipping {}: frontmatter deserialization failed: {e}",
+                        path.display()
+                    );
+                    continue;
+                }
             };
             goals.push(info);
         }
     }
-    goals.sort_by_key(|m| m.seq);
+    goals.sort_by_key(|m| m.seq.unwrap_or(u32::MAX));
     Ok(goals)
 }
 
 /// Get the next seq value for a new goal in a context (max seq + 10, minimum 10).
 pub fn next_seq(config: &Config, context: &str) -> Result<u32> {
     let goals = load_goals(config, Some(context))?;
-    let max_seq = goals.iter().map(|m| m.seq).max().unwrap_or(0);
+    let max_seq = goals.iter().filter_map(|m| m.seq).max().unwrap_or(0);
     Ok(max_seq + 10)
 }
 

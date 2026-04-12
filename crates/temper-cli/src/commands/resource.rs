@@ -515,6 +515,7 @@ pub fn show(
     slug: &str,
     context: Option<&str>,
     format: &str,
+    edges: bool,
 ) -> Result<()> {
     validate_doc_type(doc_type)?;
 
@@ -522,7 +523,13 @@ pub fn show(
         "task" => crate::commands::task::show(config, slug, context, format),
         "session" => crate::commands::session::show(config, slug, context, format),
         _ => show_generic(config, doc_type, slug, context, format),
+    }?;
+
+    if edges {
+        show_edges(slug, format)?;
     }
+
+    Ok(())
 }
 
 /// Show a generic resource (goal, research, concept, decision) by finding and
@@ -570,6 +577,80 @@ fn show_generic(
     }
 
     print!("{content}");
+    Ok(())
+}
+
+/// Fetch and display edges for a resource via the API.
+fn show_edges(slug: &str, format: &str) -> Result<()> {
+    use crate::actions::runtime;
+
+    let vault_root = crate::config::resolve_vault(None)?;
+    let temper_dir = vault_root.join(".temper");
+    let device_id = runtime::require_device_id()?;
+    let manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
+
+    let resource_id = manifest
+        .entries
+        .iter()
+        .find(|(_, entry)| {
+            entry
+                .path
+                .strip_suffix(".md")
+                .and_then(|p| p.rsplit('/').next())
+                == Some(slug)
+        })
+        .map(|(id, _)| uuid::Uuid::from(*id))
+        .ok_or_else(|| {
+            TemperError::Vault(format!(
+                "resource '{slug}' not found in manifest — sync first to use --edges"
+            ))
+        })?;
+
+    let edges: Vec<temper_core::types::graph::GraphEdgeRow> = runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .edges(resource_id)
+                .await
+                .map_err(crate::commands::client_err)
+        })
+    })?;
+
+    if edges.is_empty() {
+        if format != "json" {
+            println!("\nEdges: (none)");
+        }
+        return Ok(());
+    }
+
+    if format == "json" {
+        let json = serde_json::to_string_pretty(&edges).unwrap_or_default();
+        println!("{json}");
+    } else {
+        println!("\nEdges:");
+        let outgoing: Vec<_> = edges.iter().filter(|e| e.direction == "outgoing").collect();
+        let incoming: Vec<_> = edges.iter().filter(|e| e.direction == "incoming").collect();
+
+        if !outgoing.is_empty() {
+            println!("  outgoing:");
+            for e in &outgoing {
+                println!(
+                    "    {} \u{2192} {} ({})",
+                    e.edge_type, e.peer_slug, e.peer_title
+                );
+            }
+        }
+        if !incoming.is_empty() {
+            println!("  incoming:");
+            for e in &incoming {
+                println!(
+                    "    {} \u{2190} {} ({})",
+                    e.edge_type, e.peer_slug, e.peer_title
+                );
+            }
+        }
+    }
+
     Ok(())
 }
 

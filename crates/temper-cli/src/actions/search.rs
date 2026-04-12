@@ -3,7 +3,7 @@
 //! All testable functions. The CLI command is a thin wrapper over these.
 
 use serde::Serialize;
-use temper_core::types::api::UnifiedSearchResultRow;
+use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 use temper_core::types::{Manifest, ResourceId};
 use uuid::Uuid;
 
@@ -42,32 +42,51 @@ pub fn embed_query(_text: &str) -> Result<Vec<f32>> {
     ))
 }
 
-/// Call the search API with a pre-computed embedding.
-pub async fn query_api(
-    client: &temper_client::TemperClient,
-    embedding: Vec<f32>,
-    context_name: Option<String>,
-    doc_type: Option<String>,
-    limit: Option<i64>,
-) -> Result<Vec<UnifiedSearchResultRow>> {
-    client
-        .search()
-        .query(embedding, context_name, doc_type, limit)
-        .await
-        .map_err(crate::commands::client_err)
+/// CLI search arguments — bundles domain params for `build_search_params`.
+pub struct CliSearchArgs<'a> {
+    pub query: &'a str,
+    pub embedding: Option<Vec<f32>>,
+    pub context: Option<&'a str>,
+    pub doc_type: Option<&'a str>,
+    pub limit: Option<i64>,
+    pub seed_ids: Vec<uuid::Uuid>,
+    pub edge_types: Vec<String>,
+    pub depth: Option<i32>,
+    pub no_graph: bool,
 }
 
-/// Call the search API with a plain text query (no embedding needed).
-pub async fn text_query_api(
+/// Build a SearchParams from CLI arguments.
+pub fn build_search_params(args: CliSearchArgs<'_>) -> SearchParams {
+    SearchParams {
+        query: Some(args.query.to_string()),
+        embedding: args.embedding,
+        context_name: args.context.map(String::from),
+        doc_type: args.doc_type.map(String::from),
+        limit: args.limit,
+        seed_ids: if args.seed_ids.is_empty() {
+            None
+        } else {
+            Some(args.seed_ids)
+        },
+        edge_types: if args.edge_types.is_empty() {
+            None
+        } else {
+            Some(args.edge_types)
+        },
+        graph_depth: args.depth,
+        graph_expand: !args.no_graph,
+        ..SearchParams::default()
+    }
+}
+
+/// Call the search API with full SearchParams.
+pub async fn search_api(
     client: &temper_client::TemperClient,
-    query: &str,
-    context_name: Option<String>,
-    doc_type: Option<String>,
-    limit: Option<i64>,
+    params: SearchParams,
 ) -> Result<Vec<UnifiedSearchResultRow>> {
     client
         .search()
-        .text_query(query, context_name, doc_type, limit)
+        .search_with_params(&params)
         .await
         .map_err(crate::commands::client_err)
 }

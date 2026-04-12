@@ -59,13 +59,24 @@ impl<'a> SearchClient<'a> {
         let params = SearchParams {
             query,
             embedding,
-            search_config: "english".into(),
             context_name,
             doc_type,
             limit,
-            offset: None,
+            ..SearchParams::default()
         };
         let req = self.http.post("/api/search").json(&params);
+        self.http
+            .send_json(&Method::POST, "/api/search", req, Some(&token))
+            .await
+    }
+
+    /// Run a search with full control over all parameters including graph expansion.
+    pub async fn search_with_params(
+        &self,
+        params: &SearchParams,
+    ) -> Result<Vec<UnifiedSearchResultRow>> {
+        let token = self.http.resolve_token()?;
+        let req = self.http.post("/api/search").json(params);
         self.http
             .send_json(&Method::POST, "/api/search", req, Some(&token))
             .await

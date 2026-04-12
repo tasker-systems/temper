@@ -7,16 +7,16 @@ pub struct TaskInfo {
     pub slug: String,
     #[serde(alias = "context", alias = "temper-context")]
     pub context: String,
-    #[serde(alias = "goal", alias = "temper-goal")]
-    pub goal: String,
+    #[serde(default, alias = "goal", alias = "temper-goal")]
+    pub goal: Option<String>,
     #[serde(alias = "stage", alias = "temper-stage")]
     pub stage: String,
     #[serde(alias = "mode", alias = "temper-mode")]
     pub mode: Option<String>,
     #[serde(alias = "effort", alias = "temper-effort")]
     pub effort: Option<String>,
-    #[serde(alias = "seq", alias = "temper-seq")]
-    pub seq: u32,
+    #[serde(default, alias = "seq", alias = "temper-seq")]
+    pub seq: Option<u32>,
     #[serde(alias = "branch", alias = "temper-branch")]
     pub branch: Option<String>,
     #[serde(alias = "pr", alias = "temper-pr")]
@@ -30,8 +30,8 @@ pub struct GoalInfo {
     pub slug: String,
     #[serde(alias = "context", alias = "temper-context")]
     pub context: String,
-    #[serde(alias = "seq", alias = "temper-seq")]
-    pub seq: u32,
+    #[serde(default, alias = "seq", alias = "temper-seq")]
+    pub seq: Option<u32>,
     #[serde(alias = "status", alias = "temper-status")]
     pub status: String,
 }

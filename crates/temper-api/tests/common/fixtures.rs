@@ -18,6 +18,16 @@ pub const RESEARCH_DOC_TYPE_ID: &str = "00000000-0000-0000-0001-000000000004";
 pub async fn clean_and_seed(pool: &PgPool) {
     // Delete in reverse FK order. Leave kb_doc_types, kb_contexts,
     // and the two seed profiles intact.
+    sqlx::query("DELETE FROM kb_deferred_edges")
+        .execute(pool)
+        .await
+        .expect("clean kb_deferred_edges");
+
+    sqlx::query("DELETE FROM kb_resource_edges")
+        .execute(pool)
+        .await
+        .expect("clean kb_resource_edges");
+
     sqlx::query(
         "DELETE FROM kb_events WHERE profile_id NOT IN (
             '00000000-0000-0000-0004-000000000001',
@@ -115,4 +125,137 @@ pub async fn clean_and_seed(pool: &PgPool) {
     .execute(pool)
     .await
     .expect("seed resource");
+}
+
+/// Create a test profile and return its UUID.
+pub async fn create_test_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    let sub = format!("test|{id}");
+    let slug = email.split('@').next().unwrap_or("test-user");
+    let unique_slug = format!("{slug}-{}", &id.to_string()[..8]);
+    sqlx::query(
+        r#"INSERT INTO kb_profiles (id, display_name, email, slug)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (id) DO NOTHING"#,
+    )
+    .bind(id)
+    .bind(email)
+    .bind(email)
+    .bind(&unique_slug)
+    .execute(pool)
+    .await
+    .expect("create test profile");
+
+    sqlx::query(
+        r#"INSERT INTO kb_profile_auth_links (id, profile_id, auth_provider, auth_provider_user_id)
+           VALUES ($1, $2, 'test-provider', $3)
+           ON CONFLICT DO NOTHING"#,
+    )
+    .bind(uuid::Uuid::now_v7())
+    .bind(id)
+    .bind(&sub)
+    .execute(pool)
+    .await
+    .expect("create test auth link");
+
+    id
+}
+
+/// Create a test resource owned by the given profile and return its UUID.
+pub async fn create_test_resource(
+    pool: &PgPool,
+    owner_id: uuid::Uuid,
+    title: &str,
+    slug: &str,
+) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_resources
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+             originator_profile_id, owner_profile_id, is_active, created, updated)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())"#,
+    )
+    .bind(id)
+    .bind(uuid::Uuid::parse_str(TEMPER_CONTEXT_ID).unwrap())
+    .bind(uuid::Uuid::parse_str(RESEARCH_DOC_TYPE_ID).unwrap())
+    .bind(format!("test://{slug}"))
+    .bind(title)
+    .bind(slug)
+    .bind(owner_id)
+    .execute(pool)
+    .await
+    .expect("create test resource");
+
+    id
+}
+
+/// Create a test resource with a manifest row (including open_meta) and return its UUID.
+pub async fn create_test_resource_with_manifest(
+    pool: &PgPool,
+    owner_id: uuid::Uuid,
+    title: &str,
+    slug: &str,
+    open_meta: serde_json::Value,
+) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    let context_id = uuid::Uuid::parse_str(TEMPER_CONTEXT_ID).unwrap();
+    let doc_type_id = uuid::Uuid::parse_str(RESEARCH_DOC_TYPE_ID).unwrap();
+    let origin_uri = format!("test://{slug}");
+
+    sqlx::query(
+        r#"INSERT INTO kb_resources
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+             originator_profile_id, owner_profile_id, is_active, created, updated)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())"#,
+    )
+    .bind(id)
+    .bind(context_id)
+    .bind(doc_type_id)
+    .bind(&origin_uri)
+    .bind(title)
+    .bind(slug)
+    .bind(owner_id)
+    .execute(pool)
+    .await
+    .expect("create test resource");
+
+    sqlx::query(
+        r#"INSERT INTO kb_resource_manifests
+            (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
+           VALUES ($1, 'test-hash', '{}', $2, 'test-mhash', 'test-ohash', now())"#,
+    )
+    .bind(id)
+    .bind(&open_meta)
+    .execute(pool)
+    .await
+    .expect("create test manifest");
+
+    id
+}
+
+/// Insert a directed edge between two resources.
+pub async fn create_test_edge(
+    pool: &PgPool,
+    source_id: uuid::Uuid,
+    target_id: uuid::Uuid,
+    edge_type: &str,
+    profile_id: uuid::Uuid,
+) -> uuid::Uuid {
+    let id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_resource_edges
+            (id, source_resource_id, target_resource_id, edge_type,
+             weight, metadata, created_by_profile_id)
+           VALUES ($1, $2, $3, $4::edge_type, 1.0, '{}', $5)"#,
+    )
+    .bind(id)
+    .bind(source_id)
+    .bind(target_id)
+    .bind(edge_type)
+    .bind(profile_id)
+    .execute(pool)
+    .await
+    .expect("create test edge");
+
+    id
 }

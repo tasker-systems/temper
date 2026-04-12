@@ -3,6 +3,7 @@
 use crate::actions::{runtime, search as search_actions};
 use crate::error::Result;
 use crate::format::OutputFormat;
+use uuid::Uuid;
 
 pub fn run(
     query: &str,
@@ -11,6 +12,10 @@ pub fn run(
     limit: Option<i64>,
     format: &str,
     text_only: bool,
+    seed_ids: Vec<Uuid>,
+    edge_types: Vec<String>,
+    depth: Option<i32>,
+    no_graph: bool,
 ) -> Result<()> {
     let fmt = OutputFormat::parse(format);
     let vault_root = crate::config::resolve_vault(None)?;
@@ -18,29 +23,26 @@ pub fn run(
     let device_id = runtime::require_device_id()?;
     let manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
-    let results = if text_only {
-        // Text-only search — no local embedding needed
-        runtime::with_client(|client| {
-            let query_text = query.to_string();
-            let context_name = context.map(String::from);
-            let doc_type = doc_type.map(String::from);
-            Box::pin(async move {
-                search_actions::text_query_api(client, &query_text, context_name, doc_type, limit)
-                    .await
-            })
-        })?
+    let embedding = if text_only {
+        None
     } else {
-        // Embed locally, then search with embedding
-        let embedding = search_actions::embed_query(query)?;
-        runtime::with_client(|client| {
-            let embedding = embedding.clone();
-            let context_name = context.map(String::from);
-            let doc_type = doc_type.map(String::from);
-            Box::pin(async move {
-                search_actions::query_api(client, embedding, context_name, doc_type, limit).await
-            })
-        })?
+        Some(search_actions::embed_query(query)?)
     };
+
+    let results = runtime::with_client(|client| {
+        let params = search_actions::build_search_params(search_actions::CliSearchArgs {
+            query,
+            embedding: embedding.clone(),
+            context,
+            doc_type,
+            limit,
+            seed_ids: seed_ids.clone(),
+            edge_types: edge_types.clone(),
+            depth,
+            no_graph,
+        });
+        Box::pin(async move { search_actions::search_api(client, params).await })
+    })?;
 
     let enriched = search_actions::enrich_results(results, &manifest);
 

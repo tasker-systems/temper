@@ -171,6 +171,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     r#type,
                     context,
                     format,
+                    edges,
                 } => {
                     let format = temper_cli::format::resolve_format_str(format.as_deref());
                     temper_cli::commands::resource::show(
@@ -179,6 +180,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         &slug,
                         context.as_deref(),
                         format,
+                        edges,
                     )
                 }
                 ResourceAction::Update {
@@ -362,6 +364,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             limit,
             format,
             text_only,
+            seed_ids,
+            edge_types,
+            depth,
+            no_graph,
         } => {
             let format = temper_cli::format::resolve_format_str(format.as_deref());
             commands::search_cmd::run(
@@ -371,6 +377,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 limit,
                 format,
                 text_only,
+                seed_ids,
+                edge_types,
+                depth,
+                no_graph,
             )
         }
     }

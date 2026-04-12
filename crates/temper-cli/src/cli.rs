@@ -163,6 +163,18 @@ pub enum Commands {
         /// Use text-only search (no local embedding needed)
         #[arg(long)]
         text_only: bool,
+        /// Explicit seed resource IDs for graph expansion (repeatable)
+        #[arg(long = "seed")]
+        seed_ids: Vec<uuid::Uuid>,
+        /// Edge type filter for graph expansion (repeatable)
+        #[arg(long = "edge-type")]
+        edge_types: Vec<String>,
+        /// Max hops for graph traversal (default 2, max 10)
+        #[arg(long)]
+        depth: Option<i32>,
+        /// Disable graph expansion (enabled by default)
+        #[arg(long)]
+        no_graph: bool,
     },
 }
 
@@ -237,6 +249,9 @@ pub enum ResourceAction {
         /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
         #[arg(long)]
         format: Option<String>,
+        /// Show graph edges connected to this resource
+        #[arg(long)]
+        edges: bool,
     },
     /// Update a resource's frontmatter fields
     Update {

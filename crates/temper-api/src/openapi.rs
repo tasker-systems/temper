@@ -29,6 +29,7 @@ use temper_core::types::resource::{
         crate::handlers::events::list,
         crate::handlers::search::search,
         crate::handlers::meta::update_meta,
+        crate::handlers::edges::list,
     ),
     components(schemas(
         HealthResponse,
@@ -49,6 +50,7 @@ use temper_core::types::resource::{
         temper_core::types::managed_meta::ManagedMeta,
         ErrorBody,
         ErrorDetail,
+        temper_core::types::graph::GraphEdgeRow,
         temper_core::types::Profile,
         temper_core::types::ProfileAuthLink,
     )),
@@ -111,6 +113,7 @@ mod tests {
         assert!(json.contains("/api/events"));
         assert!(json.contains("/api/search"));
         assert!(json.contains("/api/resources/{id}/meta"));
+        assert!(json.contains("/api/resources/{id}/edges"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));

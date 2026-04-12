@@ -464,7 +464,7 @@ fn test_find_task_by_seq_number() {
     let task = temper_cli::commands::task::find_task(&config, &slug, None)
         .unwrap()
         .expect("task should exist by slug");
-    let seq = task.seq;
+    let seq = task.seq.expect("task should have a seq");
 
     // Look up by seq number string
     let found = temper_cli::commands::task::find_task(&config, &seq.to_string(), None)
