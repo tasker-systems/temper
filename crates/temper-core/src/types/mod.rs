@@ -17,6 +17,7 @@ pub mod conflict;
 pub mod context;
 pub mod device;
 pub mod event;
+pub mod graph;
 pub mod ids;
 pub mod ingest;
 pub mod invitation;
@@ -53,6 +54,10 @@ pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
 pub use device::DeviceSyncState;
 pub use event::{EventQuery, EventResponse};
+pub use graph::{
+    EdgeReconciliation, EdgeType, GraphEdgeRow, GraphNeighborRow, GraphTraversalRow, ResolvedEdge,
+    ResourceRelationships, TargetRef,
+};
 pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
