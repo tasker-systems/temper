@@ -98,6 +98,187 @@ pub struct SyncResult {
 // Pure functions (no client, no async — fully unit-testable)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// normalize_all_entries report
+// ---------------------------------------------------------------------------
+
+/// Summary of a full vault normalize pass.
+///
+/// Returned by [`normalize_all_entries`]. Counts are cumulative over every
+/// manifest entry the function iterated over. `issues_by_path` preserves the
+/// iteration order of the manifest so callers can print the first few blocked
+/// files without re-sorting.
+#[derive(Debug, Default)]
+pub struct NormalizeReport {
+    /// Number of manifest entries processed (regardless of outcome).
+    pub scanned: usize,
+    /// Number of files rewritten to disk by normalize.
+    pub rewritten: usize,
+    /// Number of files that had at least one non-auto-fixable issue.
+    /// These files still had their hashes updated to reflect on-disk
+    /// reality, but sync must block them until the user resolves the
+    /// issues.
+    pub blocked: usize,
+    /// Number of entries whose underlying file was missing on disk.
+    pub missing: usize,
+    /// Per-file issues keyed by the manifest entry's relative path.
+    /// Order is preserved from the iteration order of the manifest.
+    pub issues_by_path: Vec<(String, Vec<temper_core::schema::ValidationIssue>)>,
+}
+
+/// Normalize every manifest entry's vault file in place, persisting the
+/// manifest to disk after each entry so an interrupt loses at most one
+/// file's work.
+///
+/// For each entry:
+/// 1. Resolve the entry's path against `vault_root`. If the file is missing,
+///    mark the entry `LocalModified` with an empty `body_hash` and continue.
+/// 2. Derive doc_type from the entry's vault path via
+///    [`temper_core::hash::doc_type_from_vault_path`]. If the path does not
+///    yield a known doc type, skip with a warning.
+/// 3. Call [`temper_core::normalize::normalize_file`]. On Err, record the
+///    error on the report as a "blocked" entry with a synthetic issue
+///    containing the error message, and continue.
+/// 4. Update the entry's `body_hash`, `managed_hash`, `open_hash`,
+///    `mtime_secs`, and `state` from the
+///    [`temper_core::normalize::NormalizeOutcome`].
+/// 5. Persist the manifest to disk immediately via
+///    [`crate::manifest_io::save_manifest`].
+/// 6. If the outcome has non-empty `issues`, increment `report.blocked` and
+///    record the issues.
+///
+/// Returns a [`NormalizeReport`]; does not return an error for per-file
+/// problems. Only returns `Err` for problems that prevent iteration itself.
+pub fn normalize_all_entries(
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    temper_dir: &Path,
+    progress: Option<&dyn SyncProgress>,
+) -> Result<NormalizeReport> {
+    let mut report = NormalizeReport::default();
+
+    // Snapshot the resource ids in iteration order so we can mutate entries
+    // without juggling the iterator.
+    let ids: Vec<ResourceId> = manifest.entries.keys().copied().collect();
+    let total = ids.len();
+
+    for (idx, id) in ids.iter().enumerate() {
+        report.scanned += 1;
+
+        // Clone out the fields we need up-front so we can drop the borrow
+        // before calling save_manifest.
+        let (rel_path, prior_remote_body, prior_remote_managed, prior_remote_open) = {
+            let Some(entry) = manifest.entries.get(id) else {
+                continue;
+            };
+            (
+                entry.path.clone(),
+                entry.remote_body_hash.clone(),
+                entry.remote_managed_hash.clone(),
+                entry.remote_open_hash.clone(),
+            )
+        };
+
+        let abs_path = vault_root.join(&rel_path);
+
+        // Missing file: mirror rehash_manifest's prior behavior.
+        if !abs_path.exists() {
+            report.missing += 1;
+            if let Some(entry) = manifest.entries.get_mut(id) {
+                if entry.state != ManifestEntryState::LocalModified {
+                    entry.state = ManifestEntryState::LocalModified;
+                }
+                entry.body_hash = String::new();
+                entry.mtime_secs = None;
+            }
+            crate::manifest_io::save_manifest(temper_dir, manifest)?;
+            if let Some(p) = progress {
+                p.rehash_progress(idx + 1, total, 0);
+            }
+            continue;
+        }
+
+        // Derive doc type from the vault path. Unknown types: warn and skip.
+        let Some(doc_type) = temper_core::hash::doc_type_from_vault_path(&rel_path) else {
+            tracing::warn!(
+                "normalize_all_entries: skipping {} — cannot derive doc_type from path",
+                rel_path
+            );
+            if let Some(p) = progress {
+                p.rehash_progress(idx + 1, total, 0);
+            }
+            continue;
+        };
+        let doc_type = doc_type.to_string();
+
+        // Run the normalize primitive.
+        match temper_core::normalize::normalize_file(&abs_path, &doc_type) {
+            Ok(outcome) => {
+                if outcome.changed {
+                    report.rewritten += 1;
+                }
+                let has_issues = !outcome.issues.is_empty();
+                if has_issues {
+                    report.blocked += 1;
+                    report
+                        .issues_by_path
+                        .push((rel_path.clone(), outcome.issues.clone()));
+                }
+
+                let new_mtime = file_mtime_secs(&abs_path).ok();
+
+                if let Some(entry) = manifest.entries.get_mut(id) {
+                    entry.body_hash = outcome.body_hash.clone();
+                    entry.managed_hash = outcome.managed_hash.clone();
+                    entry.open_hash = outcome.open_hash.clone();
+                    entry.mtime_secs = new_mtime;
+
+                    // Only touch state when it is Clean or LocalModified;
+                    // leave Conflict / Pending / RemoteModified markers
+                    // alone. Match the hashes against the known remote
+                    // triple to decide between Clean and LocalModified.
+                    let touches_state = matches!(
+                        entry.state,
+                        ManifestEntryState::Clean | ManifestEntryState::LocalModified
+                    );
+                    if touches_state {
+                        let remote_matches = !prior_remote_body.is_empty()
+                            && outcome.body_hash == prior_remote_body
+                            && outcome.managed_hash == prior_remote_managed
+                            && outcome.open_hash == prior_remote_open;
+                        entry.state = if remote_matches {
+                            ManifestEntryState::Clean
+                        } else {
+                            ManifestEntryState::LocalModified
+                        };
+                    }
+                }
+            }
+            Err(e) => {
+                // Record the error as a synthetic blocked issue.
+                report.blocked += 1;
+                let issue = temper_core::schema::ValidationIssue {
+                    path: rel_path.clone(),
+                    message: format!("normalize_file failed: {e}"),
+                    auto_fixable: false,
+                };
+                report.issues_by_path.push((rel_path.clone(), vec![issue]));
+            }
+        }
+
+        // Per-entry atomic save. If we're interrupted after this point, at
+        // most the NEXT entry's normalize is lost — everything up to here
+        // is durably persisted.
+        crate::manifest_io::save_manifest(temper_dir, manifest)?;
+
+        if let Some(p) = progress {
+            p.rehash_progress(idx + 1, total, 0);
+        }
+    }
+
+    Ok(report)
+}
+
 /// Rehash manifest entries by reading vault files and computing SHA-256.
 /// Skips files whose mtime hasn't changed since the last manifest update.
 /// Returns the count of entries whose state changed.
@@ -2299,5 +2480,291 @@ mod tests {
 
         let mismatches = preflight_ownership_check(&manifest, vault);
         assert!(mismatches.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // normalize_all_entries tests
+    // -----------------------------------------------------------------
+
+    /// Build a minimal manifest entry pointing at `rel_path` with all
+    /// string fields empty (no remote hashes, no mtime, Clean state).
+    fn blank_entry(rel_path: &str) -> ManifestEntry {
+        ManifestEntry {
+            path: rel_path.to_string(),
+            body_hash: String::new(),
+            remote_body_hash: String::new(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs: None,
+            last_audit_id: None,
+            provisional: false,
+        }
+    }
+
+    /// Create `<vault>/<rel_path>` with the given content, creating parents.
+    fn write_vault_file(vault_root: &Path, rel_path: &str, content: &str) {
+        let abs = vault_root.join(rel_path);
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&abs, content).unwrap();
+    }
+
+    #[test]
+    fn normalize_all_entries_rewrites_missing_defaults() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        let content = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Test\n\
+             slug: test\n\
+             ---\n\
+             body\n",
+        );
+        write_vault_file(vault_root, &rel_path, &content);
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id, blank_entry(&rel_path));
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.rewritten, 1);
+        assert_eq!(report.blocked, 0);
+        assert_eq!(report.missing, 0);
+
+        let on_disk = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+        assert!(
+            on_disk.contains("temper-stage: backlog"),
+            "file should contain temper-stage: backlog, got:\n{on_disk}"
+        );
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert!(entry.body_hash.starts_with("sha256:"));
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn normalize_all_entries_blocks_invalid_enum() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        let content = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Test\n\
+             slug: test\n\
+             temper-stage: frobnicate\n\
+             ---\n\
+             body\n",
+        );
+        write_vault_file(vault_root, &rel_path, &content);
+        let before = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id, blank_entry(&rel_path));
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        let after = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+        assert_eq!(before, after, "file should not be rewritten on block");
+
+        assert_eq!(report.blocked, 1);
+        assert_eq!(report.rewritten, 0);
+        assert_eq!(report.issues_by_path.len(), 1);
+        assert_eq!(report.issues_by_path[0].0, rel_path);
+        assert!(!report.issues_by_path[0].1.is_empty());
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert!(
+            entry.body_hash.starts_with("sha256:"),
+            "hashes still populated on block"
+        );
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn normalize_all_entries_persists_per_entry() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        // File A: canonical, clean.
+        let id_a = ResourceId::from(Uuid::now_v7());
+        let rel_a = format!("@me/temper/task/{id_a}.md");
+        let content_a = format!(
+            "---\n\
+             temper-id: \"{id_a}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: A\n\
+             slug: a\n\
+             temper-stage: backlog\n\
+             ---\n\
+             body A\n",
+        );
+        write_vault_file(vault_root, &rel_a, &content_a);
+
+        // File B: missing temper-stage, triggers rewrite.
+        let id_b = ResourceId::from(Uuid::now_v7());
+        let rel_b = format!("@me/temper/task/{id_b}.md");
+        let content_b = format!(
+            "---\n\
+             temper-id: \"{id_b}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: B\n\
+             slug: b\n\
+             ---\n\
+             body B\n",
+        );
+        write_vault_file(vault_root, &rel_b, &content_b);
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id_a, blank_entry(&rel_a));
+        manifest.entries.insert(id_b, blank_entry(&rel_b));
+
+        normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        // Read manifest back from disk — both entries should have
+        // post-normalize hashes. This proves save happened before return.
+        let reloaded = crate::manifest_io::load_manifest(&temper_dir, "device-test").unwrap();
+        assert_eq!(reloaded.entries.len(), 2);
+        for (reloaded_id, reloaded_entry) in &reloaded.entries {
+            assert!(
+                reloaded_entry.body_hash.starts_with("sha256:"),
+                "entry {reloaded_id} body_hash missing on disk"
+            );
+            assert!(
+                reloaded_entry.managed_hash.starts_with("sha256:"),
+                "entry {reloaded_id} managed_hash missing on disk"
+            );
+            assert!(
+                reloaded_entry.open_hash.starts_with("sha256:"),
+                "entry {reloaded_id} open_hash missing on disk"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_all_entries_marks_missing_files() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        // Note: file is NOT created on disk.
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id, blank_entry(&rel_path));
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.missing, 1);
+        assert_eq!(report.rewritten, 0);
+        assert_eq!(report.blocked, 0);
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(entry.state, ManifestEntryState::LocalModified);
+        assert!(entry.body_hash.is_empty());
+    }
+
+    #[test]
+    fn normalize_all_entries_preserves_clean_entries() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+
+        // Use normalize_file against a throwaway path to compute what the
+        // canonical hashes will be after normalize runs (we want to seed
+        // the remote triple so state resolves to Clean).
+        let scratch_dir = TempDir::new().unwrap();
+        let scratch_rel = format!("@me/temper/task/{id}.md");
+        let canonical_content = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Test\n\
+             slug: test\n\
+             temper-stage: backlog\n\
+             ---\n\
+             body\n",
+        );
+        write_vault_file(scratch_dir.path(), &scratch_rel, &canonical_content);
+        // First normalize: may rewrite to match the YAML emitter's format.
+        let _ =
+            temper_core::normalize::normalize_file(&scratch_dir.path().join(&scratch_rel), "task")
+                .expect("scratch normalize ok");
+        // Second normalize: stable canonical form.
+        let outcome =
+            temper_core::normalize::normalize_file(&scratch_dir.path().join(&scratch_rel), "task")
+                .expect("scratch normalize ok");
+        assert!(!outcome.changed, "second normalize should be a no-op");
+        let stable_content = fs::read_to_string(scratch_dir.path().join(&scratch_rel)).unwrap();
+
+        // Write the stable canonical content to the real vault.
+        write_vault_file(vault_root, &rel_path, &stable_content);
+        let before = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let mut entry = blank_entry(&rel_path);
+        entry.body_hash = outcome.body_hash.clone();
+        entry.managed_hash = outcome.managed_hash.clone();
+        entry.open_hash = outcome.open_hash.clone();
+        entry.remote_body_hash = outcome.body_hash.clone();
+        entry.remote_managed_hash = outcome.managed_hash.clone();
+        entry.remote_open_hash = outcome.open_hash.clone();
+        entry.state = ManifestEntryState::Clean;
+        manifest.entries.insert(id, entry);
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.rewritten, 0, "clean canonical file must not rewrite");
+        assert_eq!(report.blocked, 0);
+        assert_eq!(report.missing, 0);
+
+        let after = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+        assert_eq!(before, after, "canonical file byte-identical");
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(entry.state, ManifestEntryState::Clean);
+        assert_eq!(entry.body_hash, outcome.body_hash);
+        assert_eq!(entry.managed_hash, outcome.managed_hash);
+        assert_eq!(entry.open_hash, outcome.open_hash);
     }
 }

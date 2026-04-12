@@ -329,6 +329,79 @@ fn test_doctor_fix_dry_run_does_not_modify() {
     assert_eq!(content, original, "Dry run should not modify file");
 }
 
+/// Regression for the "doctor errors on provisional files" bug.
+///
+/// A task with only `temper-provisional-id` (never synced) must scan clean:
+/// no schema violations, no "would rewrite" hints, no issues at all. This
+/// exercises the normalize pipeline path used by `scan_file` post-consolidation.
+#[test]
+fn doctor_scan_provisional_task_reports_no_issues() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    write_vault_file(
+        &dir,
+        "@me/temper/task/provisional-task.md",
+        "---\n\
+         temper-provisional-id: \"01900000-0000-7000-8000-0000000000aa\"\n\
+         temper-type: task\n\
+         temper-context: temper\n\
+         temper-created: \"2026-01-01T00:00:00Z\"\n\
+         temper-owner: \"@me\"\n\
+         title: \"Provisional task\"\n\
+         temper-stage: backlog\n\
+         slug: provisional-task\n\
+         ---\n\n\
+         Body.\n",
+    );
+
+    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
+
+    assert_eq!(report.files_checked, 1);
+    assert_eq!(
+        report.total_issues,
+        0,
+        "provisional task with all required fields should scan clean; got: {:?}",
+        report
+            .file_results
+            .iter()
+            .flat_map(|r| &r.issues)
+            .collect::<Vec<_>>()
+    );
+}
+
+/// Regression for default materialization. `doctor fix` must materialize
+/// doc-type defaults (here: `temper-stage: backlog` for tasks) via the
+/// normalize primitive, not via a bespoke inference rule. The file on disk
+/// must contain the default after `fix` runs.
+#[test]
+fn doctor_fix_materializes_defaults_via_normalize() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    write_vault_file(
+        &dir,
+        "@me/temper/task/needs-stage.md",
+        "---\n\
+         temper-id: \"01900000-0000-7000-8000-0000000000bb\"\n\
+         temper-type: task\n\
+         temper-context: temper\n\
+         temper-created: \"2026-01-01T00:00:00Z\"\n\
+         temper-owner: \"@me\"\n\
+         title: \"Needs stage\"\n\
+         slug: needs-stage\n\
+         ---\n\n\
+         Body.\n",
+    );
+
+    let _report = temper_cli::actions::doctor::fix(&config, None, false).unwrap();
+
+    let content = fs::read_to_string(dir.path().join("@me/temper/task/needs-stage.md"))
+        .expect("file should still exist");
+    assert!(
+        content.contains("temper-stage: backlog"),
+        "fix should materialize temper-stage: backlog default, got:\n{content}"
+    );
+}
+
 #[test]
 fn test_doctor_fix_backfills_temper_created_from_date() {
     let dir = TempDir::new().unwrap();

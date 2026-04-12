@@ -56,6 +56,7 @@ pub struct ValidationResult {
 /// Used to detect possible typos in temper-* fields.
 static KNOWN_TEMPER_FIELDS: &[&str] = &[
     "temper-id",
+    "temper-provisional-id",
     "temper-type",
     "temper-context",
     "temper-created",
@@ -175,6 +176,45 @@ pub fn validate_frontmatter(
         .collect();
 
     Ok(issues)
+}
+
+/// CLI-facing validator that accepts `temper-provisional-id` as a stand-in
+/// for `temper-id`.
+///
+/// Provisional files exist only on the client before their first sync. The
+/// server never sees `temper-provisional-id` and `base.schema.json` has no
+/// knowledge of it — it remains server-authoritative. This wrapper clones
+/// the frontmatter, substitutes `temper-id` with the provisional UUID when
+/// needed, removes `temper-provisional-id` from the clone, and delegates to
+/// [`validate_frontmatter`] with the clone. The original frontmatter is not
+/// mutated.
+///
+/// Use this from CLI code paths (`temper doctor`, `temper sync` normalize).
+/// Server code paths should continue to call [`validate_frontmatter`] directly.
+///
+/// # Errors
+/// Propagates any error from [`validate_frontmatter`].
+pub fn validate_allowing_provisional(
+    doc_type: &str,
+    frontmatter: &serde_yaml::Value,
+) -> Result<Vec<ValidationIssue>> {
+    let mut clone = frontmatter.clone();
+
+    if let Some(mapping) = clone.as_mapping_mut() {
+        let provisional_key = serde_yaml::Value::String("temper-provisional-id".to_string());
+        let id_key = serde_yaml::Value::String("temper-id".to_string());
+
+        let provisional_value = mapping.get(&provisional_key).cloned();
+
+        if let Some(provisional) = provisional_value {
+            if !mapping.contains_key(&id_key) {
+                mapping.insert(id_key, provisional);
+            }
+        }
+        mapping.remove(&provisional_key);
+    }
+
+    validate_frontmatter(doc_type, &clone)
 }
 
 /// Check for legacy field names that have been superseded by temper-* names.
@@ -623,5 +663,190 @@ mod tests {
     #[test]
     fn display_fields_unknown_type_errors() {
         assert!(display_fields("widget").is_err());
+    }
+
+    // -------------------------------------------------------------------------
+    // validate_allowing_provisional tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn validate_allowing_provisional_accepts_provisional_only_task() {
+        let yaml_str = r#"
+temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: "task"
+temper-context: "temper"
+temper-created: "2026-04-12T00:00:00Z"
+temper-stage: "backlog"
+title: "Test task"
+slug: "test-task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let issues = validate_allowing_provisional("task", &fm).unwrap();
+        assert!(
+            issues.is_empty(),
+            "provisional-only task should validate clean, got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_allowing_provisional_accepts_both_ids() {
+        let yaml_str = r#"
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62886"
+temper-type: "task"
+temper-context: "temper"
+temper-created: "2026-04-12T00:00:00Z"
+temper-stage: "backlog"
+title: "Test task"
+slug: "test-task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let issues = validate_allowing_provisional("task", &fm).unwrap();
+        assert!(
+            issues.is_empty(),
+            "task with both ids should validate clean (temper-id wins, provisional is stripped from clone), got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_allowing_provisional_ignores_invalid_provisional_when_id_present() {
+        // When temper-id is present and valid, the wrapper must NOT overwrite
+        // it with a (potentially invalid) temper-provisional-id. Proves the
+        // swap only fires when temper-id is absent.
+        let yaml_str = r#"
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-provisional-id: "not-a-uuid-at-all"
+temper-type: "task"
+temper-context: "temper"
+temper-created: "2026-04-12T00:00:00Z"
+temper-stage: "backlog"
+title: "Test task"
+slug: "test-task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let issues = validate_allowing_provisional("task", &fm).unwrap();
+        assert!(
+            issues.is_empty(),
+            "when temper-id is present and valid, an invalid temper-provisional-id should be silently stripped (not copied over temper-id), got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn validate_allowing_provisional_copies_provisional_when_id_absent() {
+        // When temper-id is absent, the provisional value is copied into the
+        // temper-id slot on the clone. If the provisional fails the UUID
+        // pattern, the delegated validator sees that failure — proving the
+        // copy happened (not the strip).
+        let yaml_str = r#"
+temper-provisional-id: "not-a-uuid-at-all"
+temper-type: "task"
+temper-context: "temper"
+temper-created: "2026-04-12T00:00:00Z"
+temper-stage: "backlog"
+title: "Test task"
+slug: "test-task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let issues = validate_allowing_provisional("task", &fm).unwrap();
+        assert!(
+            !issues.is_empty(),
+            "invalid provisional-id copied into temper-id slot must surface as a pattern validation error"
+        );
+        // The validator emits the instance path (e.g., "/temper-id") and a
+        // message like `"not-a-uuid-at-all" does not match "^[0-9a-f]..."`.
+        // Join both into one string to assert the failure landed on the
+        // right field for the right reason.
+        let joined = issues
+            .iter()
+            .map(|i| format!("{} {}", i.path, i.message))
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            joined.contains("temper-id") && joined.contains("not-a-uuid-at-all"),
+            "error should mention temper-id (the field) and the invalid value (proving the provisional value was copied over, not stripped), got: {joined}"
+        );
+    }
+
+    #[test]
+    fn validate_allowing_provisional_rejects_neither_id() {
+        let yaml_str = r#"
+temper-type: "task"
+temper-context: "temper"
+temper-created: "2026-04-12T00:00:00Z"
+temper-stage: "backlog"
+title: "Test task"
+slug: "test-task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let issues = validate_allowing_provisional("task", &fm).unwrap();
+        assert!(
+            !issues.is_empty(),
+            "task with neither id must report missing temper-id"
+        );
+        let joined = issues
+            .iter()
+            .map(|i| i.message.clone())
+            .collect::<Vec<_>>()
+            .join(" | ");
+        assert!(
+            joined.contains("temper-id"),
+            "error should mention temper-id, got: {joined}"
+        );
+    }
+
+    #[test]
+    fn validate_allowing_provisional_does_not_mutate_input() {
+        let yaml_str = r#"
+temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: "task"
+temper-context: "temper"
+temper-created: "2026-04-12T00:00:00Z"
+temper-stage: "backlog"
+title: "Test task"
+slug: "test-task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let _ = validate_allowing_provisional("task", &fm).unwrap();
+        let mapping = fm.as_mapping().expect("original should still be mapping");
+        assert!(
+            mapping.contains_key(serde_yaml::Value::String(
+                "temper-provisional-id".to_string()
+            )),
+            "original frontmatter must still contain temper-provisional-id after validation"
+        );
+    }
+
+    #[test]
+    fn validate_allowing_provisional_preserves_other_errors() {
+        let yaml_str = r#"
+temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: "task"
+temper-context: "temper"
+temper-created: "2026-04-12T00:00:00Z"
+temper-stage: "nonsense"
+title: "Test task"
+slug: "test-task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let issues = validate_allowing_provisional("task", &fm).unwrap();
+        assert!(
+            !issues.is_empty(),
+            "invalid enum value must still be reported"
+        );
+    }
+
+    #[test]
+    fn check_unknown_temper_fields_accepts_provisional_id() {
+        let yaml_str = r#"
+temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: "task"
+title: "Test task"
+"#;
+        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
+        let issues = check_unknown_temper_fields(&fm);
+        assert!(
+            issues.is_empty(),
+            "temper-provisional-id should be a known field, got: {issues:?}"
+        );
     }
 }

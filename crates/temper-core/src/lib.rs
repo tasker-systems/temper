@@ -8,6 +8,7 @@ pub mod defaults;
 pub mod error;
 pub mod hash;
 pub mod ids;
+pub mod normalize;
 pub mod schema;
 pub mod types;
 pub mod validation;

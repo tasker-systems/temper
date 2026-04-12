@@ -4,9 +4,9 @@ use std::fs;
 use std::path::Path;
 
 use serde::Serialize;
+use temper_core::normalize::normalize_file_inspect;
 use temper_core::schema::{
-    check_legacy_fields, check_unknown_temper_fields, validate_frontmatter, ValidationIssue,
-    ValidationResult,
+    check_legacy_fields, check_unknown_temper_fields, ValidationIssue, ValidationResult,
 };
 use temper_core::vault::Vault;
 
@@ -172,18 +172,42 @@ fn scan_file(
         });
     };
 
-    // 1. Legacy field check
+    // 1. Legacy field check — normalize does not touch legacy field detection.
     issues.extend(check_legacy_fields(frontmatter));
 
-    // 2. Detect effective doc type from frontmatter or directory name
+    // 2. Detect effective doc type from frontmatter or directory name.
     let effective_doc_type =
         detect_doc_type(frontmatter, dir_doc_type).unwrap_or_else(|| dir_doc_type.to_string());
 
-    // 3. Schema validation (only for known doc types; skip unknown gracefully)
-    match validate_frontmatter(&effective_doc_type, frontmatter) {
-        Ok(schema_issues) => issues.extend(schema_issues),
+    // 3. Schema validation + default-materialization preview via the normalize
+    //    primitive. Dry-run (`_inspect`) variant never writes. Its issues are
+    //    the same `ValidationIssue` type, so they extend our list directly.
+    //    `normalize_file_inspect` uses `validate_allowing_provisional` under
+    //    the hood, so provisional files (with `temper-provisional-id`) scan
+    //    clean here even though the server schema still requires `temper-id`.
+    //
+    //    We only surface `changed` as an issue when it reflects a *material*
+    //    default-materialization (a missing doc-type default field). Pure
+    //    YAML re-serialization — the kind of cosmetic reformatting the
+    //    emitter does when round-tripping through `serde_yaml` — does not
+    //    produce a user-visible issue.
+    match normalize_file_inspect(file_path, &effective_doc_type) {
+        Ok(outcome) => {
+            issues.extend(outcome.issues);
+            if outcome.changed
+                && temper_core::normalize::is_missing_default(frontmatter, &effective_doc_type)
+            {
+                issues.push(ValidationIssue {
+                    path: String::new(),
+                    message: "frontmatter is missing a doc-type default field \
+                              (run `temper doctor fix` to materialize it)"
+                        .to_string(),
+                    auto_fixable: true,
+                });
+            }
+        }
         Err(e) => {
-            // Unknown doc type or schema load failure — report as an issue
+            // Unknown doc type or schema load failure — report as an issue.
             issues.push(ValidationIssue {
                 path: "temper-type".to_string(),
                 message: format!("schema validation skipped: {e}"),
@@ -192,7 +216,9 @@ fn scan_file(
         }
     }
 
-    // 4. Unknown temper-* fields
+    // 4. Unknown temper-* fields — not covered by normalize (its underlying
+    //    JSON Schema validator does not flag typo-d temper-* keys). Keep this
+    //    as a separate doctor-only check.
     issues.extend(check_unknown_temper_fields(frontmatter));
 
     // 5. temper-owner validation
@@ -315,13 +341,23 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
     // Apply
     let report = apply_plan(&mut plan, dry_run)?;
 
-    // Apply manifest changes, rehash modified files, and save
+    // Apply manifest changes, re-normalize every entry so defaults are
+    // materialized and hashes reflect the content changes doctor fix just
+    // made, then save. `normalize_all_entries` replaces the historical
+    // `rehash_manifest` call here — it does the same hash update work and
+    // additionally writes any doc-type defaults the fix pipeline did not
+    // already set. It persists the manifest per-entry, so no explicit
+    // `save_manifest` is required for the normalize pass itself; the
+    // trailing save covers the `apply_manifest_actions` mutations.
     if !dry_run {
         if let Ok(mut manifest) = manifest_result {
             apply_manifest_actions(&plan, &mut manifest);
-            // Rehash all entries so body/managed/open hashes reflect
-            // the content changes doctor fix just made.
-            crate::actions::sync::rehash_manifest(&mut manifest, &config.vault_root)?;
+            crate::actions::sync::normalize_all_entries(
+                &mut manifest,
+                &config.vault_root,
+                &temper_dir,
+                None,
+            )?;
             manifest_io::save_manifest(&temper_dir, &manifest)?;
         }
     }
