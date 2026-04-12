@@ -49,8 +49,8 @@ fn test_actions_load_tasks_returns_correct_results() {
     assert_eq!(tasks.len(), 2, "should load both tasks");
     assert_eq!(tasks[0].title, "First task");
     assert_eq!(tasks[1].title, "Second task");
-    assert_eq!(tasks[0].goal, g_slug);
-    assert_eq!(tasks[1].goal, g_slug);
+    assert_eq!(tasks[0].goal.as_deref(), Some(g_slug.as_str()));
+    assert_eq!(tasks[1].goal.as_deref(), Some(g_slug.as_str()));
 }
 
 #[test]
