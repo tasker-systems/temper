@@ -38,6 +38,45 @@ struct DiffRow {
     diff_type: String,
 }
 
+/// Typed diff classification used by [`categorize_diff_rows`].
+///
+/// Kept as a private enum rather than a wire type because the only
+/// producer is `sync_diff_for_device()` and the only consumer is this
+/// file's categorization pass. Adding a new SQL diff value without
+/// extending this enum becomes a compile error in `categorize_diff_rows`
+/// — which is the point.
+///
+/// The `ToPushBody` / `ToPullBody` variants accept the legacy,
+/// un-suffixed `to_push` / `to_pull` strings as aliases. Current SQL
+/// migrations emit the suffixed names, but `to_pull` is still actively
+/// produced for the untracked-pull branch (server-only resources), and
+/// older DB snapshots may still emit `to_push`.
+#[derive(Debug, Clone, Copy)]
+enum DiffType {
+    ToPushBody,
+    ToPushMeta,
+    ToPullBody,
+    ToPullMeta,
+    Conflict,
+    Removed,
+}
+
+impl std::str::FromStr for DiffType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "to_push" | "to_push_body" => Ok(Self::ToPushBody),
+            "to_push_meta" => Ok(Self::ToPushMeta),
+            "to_pull" | "to_pull_body" => Ok(Self::ToPullBody),
+            "to_pull_meta" => Ok(Self::ToPullMeta),
+            "conflict" => Ok(Self::Conflict),
+            "removed" => Ok(Self::Removed),
+            _ => Err(()),
+        }
+    }
+}
+
 /// Categorize raw diff rows into typed response buckets.
 /// Port of TypeScript `categorizeDiffRows()` — pure function.
 fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
@@ -47,23 +86,30 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
     let mut removed = Vec::new();
 
     for row in rows {
-        match row.diff_type.as_str() {
-            // "to_push" is a forward-compat fallback — current SQL migrations
-            // emit "to_push_body"/"to_push_meta" only; the un-suffixed name is
-            // retained so older DB snapshots still classify correctly.
-            "to_push" | "to_push_body" => to_push.push(SyncPushItem {
+        // Parse the stringy SQL `diff_type` once, then let the compiler
+        // enforce exhaustive handling below. Unknown values are dropped
+        // at the parse step rather than falling through a `_` arm.
+        let Ok(diff_type) = row.diff_type.parse::<DiffType>() else {
+            tracing::debug!(
+                diff_type = %row.diff_type,
+                resource_id = ?row.resource_id,
+                "sync diff row has unknown diff_type; dropping"
+            );
+            continue;
+        };
+
+        match diff_type {
+            DiffType::ToPushBody => to_push.push(SyncPushItem {
                 uri: row.kb_uri,
                 resource_id: row.resource_id.map(ResourceId::from),
                 kind: SyncItemKind::Body,
             }),
-            "to_push_meta" => to_push.push(SyncPushItem {
+            DiffType::ToPushMeta => to_push.push(SyncPushItem {
                 uri: row.kb_uri,
                 resource_id: row.resource_id.map(ResourceId::from),
                 kind: SyncItemKind::MetaOnly,
             }),
-            // "to_pull" is actively emitted by sync_diff_for_device() for the
-            // untracked-pull branch (server-only resources). Do NOT delete.
-            "to_pull" | "to_pull_body" => to_pull.push(SyncPullItem {
+            DiffType::ToPullBody => to_pull.push(SyncPullItem {
                 uri: row.kb_uri,
                 resource_id: ResourceId::from(
                     row.resource_id.expect("to_pull must have resource_id"),
@@ -71,7 +117,7 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
                 content_hash: row.body_hash,
                 kind: SyncItemKind::Body,
             }),
-            "to_pull_meta" => to_pull.push(SyncPullItem {
+            DiffType::ToPullMeta => to_pull.push(SyncPullItem {
                 uri: row.kb_uri,
                 resource_id: ResourceId::from(
                     row.resource_id.expect("to_pull_meta must have resource_id"),
@@ -79,20 +125,19 @@ fn categorize_diff_rows(rows: Vec<DiffRow>) -> SyncStatusResponse {
                 content_hash: row.body_hash,
                 kind: SyncItemKind::MetaOnly,
             }),
-            "conflict" => conflicts.push(SyncConflictItem {
+            DiffType::Conflict => conflicts.push(SyncConflictItem {
                 uri: row.kb_uri,
                 resource_id: ResourceId::from(
                     row.resource_id.expect("conflict must have resource_id"),
                 ),
                 server_hash: row.body_hash,
             }),
-            "removed" => removed.push(SyncRemovedItem {
+            DiffType::Removed => removed.push(SyncRemovedItem {
                 uri: row.kb_uri,
                 resource_id: ResourceId::from(
                     row.resource_id.expect("removed must have resource_id"),
                 ),
             }),
-            _ => {} // ignore unknown diff types
         }
     }
 
