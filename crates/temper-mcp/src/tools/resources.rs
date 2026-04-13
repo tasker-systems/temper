@@ -343,7 +343,7 @@ pub async fn get_resource(
     let enriched = enrich_resource(pool, profile_id, &row).await?;
 
     if input.include_content.unwrap_or(false) {
-        let markdown = resource_service::get_content(pool, profile.id, row.id.into())
+        let content = resource_service::get_content(pool, profile.id, row.id.into())
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
@@ -351,7 +351,7 @@ pub async fn get_resource(
 
         Ok(CallToolResult::success(vec![
             rmcp::model::Content::text(to_text(&enriched)),
-            rmcp::model::Content::text(markdown),
+            rmcp::model::Content::text(content.markdown),
         ]))
     } else {
         Ok(CallToolResult::success(vec![rmcp::model::Content::text(

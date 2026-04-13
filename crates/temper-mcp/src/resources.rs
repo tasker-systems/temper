@@ -102,7 +102,7 @@ pub async fn read_resource(
         .and_then(|rest| rest.strip_suffix("/content"))
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let markdown =
+        let content =
             temper_api::services::resource_service::get_content(&state.pool, profile.id, id)
                 .await
                 .map_err(|e| {
@@ -113,7 +113,8 @@ pub async fn read_resource(
                 })?;
 
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
-            markdown, uri,
+            content.markdown,
+            uri,
         )
         .with_mime_type("text/markdown")]));
     }
@@ -129,7 +130,7 @@ pub async fn read_resource(
                 rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
             })?;
 
-        let markdown =
+        let content =
             temper_api::services::resource_service::get_content(&state.pool, profile.id, id)
                 .await
                 .map_err(|e| {
@@ -143,7 +144,7 @@ pub async fn read_resource(
         let meta_json = serde_json::to_string_pretty(&row).unwrap_or_default();
         return Ok(ReadResourceResult::new(vec![
             ResourceContents::text(meta_json, uri).with_mime_type("application/json"),
-            ResourceContents::text(markdown, uri).with_mime_type("text/markdown"),
+            ResourceContents::text(content.markdown, uri).with_mime_type("text/markdown"),
         ]));
     }
 

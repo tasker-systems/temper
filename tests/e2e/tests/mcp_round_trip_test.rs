@@ -249,12 +249,13 @@ async fn mcp_ingest_persists_content_as_chunks(pool: sqlx::PgPool) {
             .expect("get_content");
 
     assert!(
-        !retrieved.is_empty(),
-        "get_content should return non-empty string"
+        !retrieved.markdown.is_empty(),
+        "get_content should return non-empty markdown"
     );
     assert!(
-        retrieved.contains("MCP content pipeline fix"),
-        "retrieved content should contain original text, got: {retrieved}"
+        retrieved.markdown.contains("MCP content pipeline fix"),
+        "retrieved content should contain original text, got: {}",
+        retrieved.markdown,
     );
 }
 

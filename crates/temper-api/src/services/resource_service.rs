@@ -8,8 +8,8 @@ use crate::services::ingest_service::insert_event_and_audit;
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 pub use temper_core::types::resource::{
-    ContentChunk, ResourceCreateRequest, ResourceFacets, ResourceListParams, ResourceListResponse,
-    ResourceRow, ResourceSortField, ResourceUpdateRequest, SortOrder,
+    ContentChunk, ContentResponse, ResourceCreateRequest, ResourceFacets, ResourceListParams,
+    ResourceListResponse, ResourceRow, ResourceSortField, ResourceUpdateRequest, SortOrder,
 };
 
 /// Query parameters for resolving a resource by its URI components.
@@ -363,12 +363,26 @@ pub async fn resolve_by_uri(
     Ok(row)
 }
 
-/// Reconstitute resource content from `kb_current_chunks`, returning markdown.
-pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> ApiResult<String> {
-    // Visibility check first.
+/// Fetch a resource's full content response: reconstituted markdown body
+/// plus managed_meta and open_meta from the manifest. Runs the visibility
+/// check up front and owns every subsequent query, so there is no way for
+/// a caller to assemble a partial response that skips authorization.
+///
+/// Replaces the previous `get_content` + `get_managed_meta` + `get_open_meta`
+/// split. Those helpers ran unauthenticated reads that relied on the
+/// handler to have already called `get_visible` — a convention-based
+/// safety model that is one careless new handler away from a data leak.
+pub async fn get_content(
+    pool: &PgPool,
+    profile_id: Uuid,
+    resource_id: Uuid,
+) -> ApiResult<ContentResponse> {
+    // Visibility / auth gate. Returns NotFound for missing or not-visible.
     get_visible(pool, profile_id, resource_id).await?;
 
-    let chunks = sqlx::query_as!(
+    // Chunks and manifest meta come from different tables and are both
+    // cheap; fetch them concurrently on the same pool.
+    let chunks_fut = sqlx::query_as!(
         ContentChunk,
         r#"
         SELECT chunk_index as "chunk_index!: i32",
@@ -381,8 +395,18 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
         "#,
         resource_id,
     )
-    .fetch_all(pool)
-    .await?;
+    .fetch_all(pool);
+
+    let meta_fut = sqlx::query!(
+        r#"SELECT managed_meta as "managed_meta: serde_json::Value",
+                  open_meta    as "open_meta: serde_json::Value"
+             FROM kb_resource_manifests
+            WHERE resource_id = $1"#,
+        resource_id,
+    )
+    .fetch_optional(pool);
+
+    let (chunks, meta_row) = tokio::try_join!(chunks_fut, meta_fut)?;
 
     let markdown = chunks
         .into_iter()
@@ -406,55 +430,17 @@ pub async fn get_content(pool: &PgPool, profile_id: Uuid, resource_id: Uuid) -> 
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    Ok(markdown)
-}
+    let (managed_meta, open_meta) = match meta_row {
+        Some(row) => (Some(row.managed_meta), Some(row.open_meta)),
+        None => (None, None),
+    };
 
-/// Fetch the managed_meta JSONB for a resource from its manifest.
-///
-/// # Safety (authorization)
-///
-/// This function does NOT perform a visibility check. Callers MUST verify
-/// resource access (e.g., via [`get_visible`] or [`get_content`]) before
-/// calling this function.
-pub async fn get_managed_meta(
-    pool: &PgPool,
-    resource_id: Uuid,
-) -> ApiResult<Option<serde_json::Value>> {
-    let row = sqlx::query_scalar!(
-        r#"SELECT managed_meta as "managed_meta: serde_json::Value"
-             FROM kb_resource_manifests
-            WHERE resource_id = $1"#,
-        resource_id,
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    // fetch_optional returns None if no manifest row exists.
-    Ok(row)
-}
-
-/// Fetch the open_meta JSONB for a resource from its manifest.
-///
-/// # Safety (authorization)
-///
-/// This function does NOT perform a visibility check. Callers MUST verify
-/// resource access (e.g., via [`get_visible`] or [`get_content`]) before
-/// calling this function.
-pub async fn get_open_meta(
-    pool: &PgPool,
-    resource_id: Uuid,
-) -> ApiResult<Option<serde_json::Value>> {
-    let row = sqlx::query_scalar!(
-        r#"SELECT open_meta as "open_meta: serde_json::Value"
-             FROM kb_resource_manifests
-            WHERE resource_id = $1"#,
-        resource_id,
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    // fetch_optional returns None if no manifest row exists.
-    Ok(row)
+    Ok(ContentResponse {
+        resource_id: ResourceId::from(resource_id),
+        markdown,
+        managed_meta,
+        open_meta,
+    })
 }
 
 /// Check whether the profile can modify a resource. Returns Forbidden if not.
