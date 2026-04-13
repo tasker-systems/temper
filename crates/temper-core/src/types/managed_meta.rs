@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -8,8 +10,22 @@ use super::ids::ResourceId;
 ///
 /// All fields use `temper-*` YAML/JSON key names via `serde(rename)`.
 /// `None` fields are omitted from serialized output.
+///
+/// The `extra` bucket collects any keys the typed fields above don't
+/// name — most notably doc-type-schema fields like `date` (sessions)
+/// and any server-injected fields the ingest pipeline populates. This
+/// makes `ManagedMeta` a round-trip-lossless representation of the
+/// JSONB column: deserialize → re-serialize produces byte-equivalent
+/// JSON (up to canonicalization) no matter what lives in the blob.
+///
+/// Without this bucket, the default serde "ignore unknown fields"
+/// behavior would silently drop anything not in the typed set, which
+/// would break hash stability across a typed round-trip.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "managed_meta.ts"))]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ManagedMeta {
     /// Document type (e.g., "task", "goal", "research")
     #[serde(rename = "temper-type", skip_serializing_if = "Option::is_none")]
@@ -66,21 +82,72 @@ pub struct ManagedMeta {
     /// URL-safe slug (identity transport, no rename)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
+
+    /// Any additional keys not named by the typed fields above. Includes
+    /// doc-type-schema fields the registry knows about (e.g. `date` for
+    /// sessions) and any future temper-managed fields added before this
+    /// struct catches up. Critically, this bucket is what keeps the
+    /// typed round-trip lossless — without it, serde silently drops
+    /// unknown fields on deserialize.
+    #[serde(flatten)]
+    #[cfg_attr(feature = "typescript", ts(skip))]
+    #[cfg_attr(feature = "mcp", schemars(skip))]
+    pub extra: HashMap<String, Value>,
+}
+
+/// Response body for the metadata-only GET endpoint.
+///
+/// Returns the current managed_meta / open_meta / hashes from a
+/// resource's manifest row without reconstructing the markdown body
+/// from `kb_chunks`. Used by the CLI sync pull path to fetch just the
+/// meta tier when the body side already agrees.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "managed_meta.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ResourceMetaResponse {
+    /// UUID of the resource
+    pub resource_id: ResourceId,
+    /// Typed managed (temper-*) frontmatter from the manifest. The
+    /// typed fields cover everything temper knows about; any extras
+    /// the server stored round-trip through `ManagedMeta::extra`.
+    /// `None` only if the manifest row predates meta population.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_meta: Option<ManagedMeta>,
+    /// Open (user-defined) frontmatter fields from the manifest.
+    /// Intentionally untyped — open_meta is the free-form tier. Typed
+    /// extraction of relationship fields lives in `ResourceRelationships`
+    /// (see `temper-core::types::graph`), which parses this value on
+    /// demand and ignores anything it doesn't recognize.
+    /// `None` only if the manifest row predates meta population.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meta: Option<Value>,
+    /// SHA-256 hash of the managed_meta JSON
+    pub managed_hash: String,
+    /// SHA-256 hash of the open_meta JSON
+    pub open_hash: String,
 }
 
 /// Payload for meta-only sync updates that do not require re-chunking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct MetaUpdatePayload {
     /// UUID of the resource being updated
     pub resource_id: ResourceId,
-    /// Serialized managed (temper-*) frontmatter fields
-    pub managed_meta: Value,
-    /// Serialized open (user-defined) frontmatter fields
+    /// Typed managed (temper-*) frontmatter. The typed fields cover
+    /// everything temper knows about; extras round-trip through
+    /// `ManagedMeta::extra` without loss. Hash stability is preserved
+    /// because `managed_hash` is computed over the canonicalized form.
+    pub managed_meta: ManagedMeta,
+    /// Serialized open (user-defined) frontmatter fields. Intentionally
+    /// untyped — the open tier is the free-form bucket. Edge-relevant
+    /// fields are parsed on demand via `ResourceRelationships`.
     pub open_meta: Value,
-    /// SHA-256 hash of the managed_meta JSON
+    /// SHA-256 hash of the managed_meta JSON (computed over canonical form)
     pub managed_hash: String,
-    /// SHA-256 hash of the open_meta JSON
+    /// SHA-256 hash of the open_meta JSON (computed over canonical form)
     pub open_hash: String,
 }
 
@@ -183,7 +250,10 @@ mod tests {
     fn meta_update_payload_serde() {
         let payload = MetaUpdatePayload {
             resource_id: ResourceId::from(Uuid::nil()),
-            managed_meta: serde_json::json!({"temper-type": "task"}),
+            managed_meta: ManagedMeta {
+                doc_type: Some("task".to_string()),
+                ..Default::default()
+            },
             open_meta: serde_json::json!({"tags": ["rust"]}),
             managed_hash: "sha256:abc123".to_string(),
             open_hash: "sha256:def456".to_string(),
@@ -195,7 +265,32 @@ mod tests {
         assert_eq!(parsed.resource_id, ResourceId::from(Uuid::nil()));
         assert_eq!(parsed.managed_hash, "sha256:abc123");
         assert_eq!(parsed.open_hash, "sha256:def456");
-        assert_eq!(parsed.managed_meta["temper-type"], "task");
+        assert_eq!(parsed.managed_meta.doc_type.as_deref(), Some("task"));
         assert_eq!(parsed.open_meta["tags"][0], "rust");
+    }
+
+    #[test]
+    fn managed_meta_extras_bucket_round_trips_unknown_fields() {
+        // The flatten extras bucket is what makes the typed representation
+        // lossless: a field the server wrote but the typed struct doesn't
+        // name (e.g. `date` on a session) must survive a full round-trip.
+        let json = r#"{"temper-type":"session","title":"test","date":"2026-04-13"}"#;
+        let parsed: ManagedMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.doc_type.as_deref(), Some("session"));
+        assert_eq!(parsed.title.as_deref(), Some("test"));
+        assert_eq!(
+            parsed.extra.get("date"),
+            Some(&serde_json::json!("2026-04-13")),
+            "unknown fields must land in the extras bucket",
+        );
+
+        // Re-serialize and deserialize again — `date` must survive.
+        let reserialized = serde_json::to_string(&parsed).unwrap();
+        let reparsed: ManagedMeta = serde_json::from_str(&reserialized).unwrap();
+        assert_eq!(
+            reparsed.extra.get("date"),
+            Some(&serde_json::json!("2026-04-13")),
+            "round-trip must preserve extras",
+        );
     }
 }

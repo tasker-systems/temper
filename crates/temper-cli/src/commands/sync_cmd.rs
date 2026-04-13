@@ -12,6 +12,32 @@ use crate::error::Result;
 use crate::format::OutputFormat;
 use crate::output;
 
+/// Emit a human-readable warning listing the first few blocked paths from a
+/// normalize pass. Used by sync subcommands to surface schema violations the
+/// user needs to fix before those files can be synced.
+fn warn_blocked_paths(report: &sync_actions::NormalizeReport) {
+    if report.blocked == 0 {
+        return;
+    }
+    output::warning(format!(
+        "{} file(s) have schema violations and will be skipped from sync:",
+        report.blocked
+    ));
+    for (path, issues) in report.issues_by_path.iter().take(5) {
+        let first_message = issues
+            .first()
+            .map(|i| i.message.as_str())
+            .unwrap_or("unknown issue");
+        output::warning(format!("  {path} — {first_message}"));
+    }
+    if report.issues_by_path.len() > 5 {
+        output::warning(format!(
+            "  ... and {} more (run `temper doctor` for the full list)",
+            report.issues_by_path.len() - 5
+        ));
+    }
+}
+
 /// Run a full sync cycle.
 pub fn run(contexts: &[String], format: &str) -> Result<()> {
     let fmt = OutputFormat::parse(format);
@@ -20,6 +46,18 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
     let device_id = runtime::require_device_id()?;
 
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
+
+    // Phase A invariant: normalize every manifest entry's file before any
+    // other sync logic. Per-entry atomic save ensures an interrupt loses at
+    // most one file's work.
+    let progress = TerminalProgress::new();
+    let normalize_report = sync_actions::normalize_all_entries(
+        &mut manifest,
+        &vault_root,
+        &temper_dir,
+        Some(&progress),
+    )?;
+    warn_blocked_paths(&normalize_report);
 
     // Preflight: detect and warn about ownership mismatches.
     let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
@@ -40,17 +78,21 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
         );
     }
 
-    let mismatch_paths: std::collections::HashSet<String> = ownership_mismatches
+    let mut mismatch_paths: std::collections::HashSet<String> = ownership_mismatches
         .iter()
         .map(|m| m.file_path.clone())
         .collect();
+    // Blocked-by-normalize entries are also excluded from the push set —
+    // sync must never ship a file with unresolved schema violations.
+    for (path, _) in &normalize_report.issues_by_path {
+        mismatch_paths.insert(path.clone());
+    }
 
     let (rt, client) = runtime::build_runtime_and_client()?;
 
     // Ensure profile exists before hitting sync endpoints
     rt.block_on(runtime::ensure_profile(&client))?;
 
-    let progress = TerminalProgress::new();
     let result = rt.block_on(async {
         sync_actions::sync_orchestration(
             &client,
@@ -77,6 +119,9 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
             "merge_conflict": result.merge_conflict_count,
             "removed": result.removed_count,
             "errors": result.error_count,
+            "normalized_rewritten": normalize_report.rewritten,
+            "normalized_blocked": normalize_report.blocked,
+            "normalized_missing": normalize_report.missing,
         });
         output::plain(event);
     } else {
@@ -137,12 +182,21 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
 
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
+    // Phase A invariant: normalize every entry before any other logic.
+    let progress = TerminalProgress::new();
+    let normalize_report = sync_actions::normalize_all_entries(
+        &mut manifest,
+        &vault_root,
+        &temper_dir,
+        Some(&progress),
+    )?;
+    warn_blocked_paths(&normalize_report);
+
     // Preflight: surface ownership mismatches in the status diff.
     let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
 
     let (rt, client) = runtime::build_runtime_and_client()?;
 
-    let progress = TerminalProgress::new();
     let diff = rt.block_on(async {
         sync_actions::sync_status_check(&client, &mut manifest, &vault_root, contexts, &progress)
             .await
@@ -158,6 +212,9 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
             "conflicts": diff.conflicts.len(),
             "removed": diff.removed.len(),
             "ownership_mismatches": ownership_mismatches.len(),
+            "normalized_rewritten": normalize_report.rewritten,
+            "normalized_blocked": normalize_report.blocked,
+            "normalized_missing": normalize_report.missing,
         });
         output::plain(event);
     } else {
@@ -201,6 +258,17 @@ pub fn refresh(format: &str) -> Result<()> {
 
     let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
+    // Phase A invariant: normalize every entry before interleaving the
+    // server manifest. Ensures the local side is clean before the merge.
+    let progress = TerminalProgress::new();
+    let normalize_report = sync_actions::normalize_all_entries(
+        &mut manifest,
+        &vault_root,
+        &temper_dir,
+        Some(&progress),
+    )?;
+    warn_blocked_paths(&normalize_report);
+
     let (rt, client) = runtime::build_runtime_and_client()?;
 
     // Ensure profile exists before hitting sync endpoints
@@ -220,6 +288,9 @@ pub fn refresh(format: &str) -> Result<()> {
             "added": result.added,
             "orphaned": result.orphaned,
             "pending_preserved": result.pending_preserved,
+            "normalized_rewritten": normalize_report.rewritten,
+            "normalized_blocked": normalize_report.blocked,
+            "normalized_missing": normalize_report.missing,
         });
         output::plain(event);
     } else {
@@ -260,10 +331,23 @@ pub fn reset(format: &str) -> Result<()> {
     // Backup before reset
     sync_actions::backup_manifest(&temper_dir)?;
 
-    let (new_manifest, result) =
+    let (mut new_manifest, result) =
         rt.block_on(async { sync_actions::sync_reset(&client, &manifest, &vault_root).await })?;
 
-    // Save rebuilt manifest
+    // Phase A invariant: normalize every entry on the freshly rebuilt
+    // manifest so its hashes reflect the canonical on-disk form. This is
+    // called after rebuild so the new manifest's entries exist to iterate.
+    let progress = TerminalProgress::new();
+    let normalize_report = sync_actions::normalize_all_entries(
+        &mut new_manifest,
+        &vault_root,
+        &temper_dir,
+        Some(&progress),
+    )?;
+    warn_blocked_paths(&normalize_report);
+
+    // Save rebuilt manifest (normalize already persisted per-entry, but
+    // this final save is a belt-and-suspenders no-op).
     crate::manifest_io::save_manifest(&temper_dir, &new_manifest)?;
 
     if fmt == OutputFormat::Json {
@@ -273,6 +357,9 @@ pub fn reset(format: &str) -> Result<()> {
             "matched_by_hash": result.matched_by_hash,
             "unmatched_local": result.unmatched_local,
             "unmatched_remote": result.unmatched_remote,
+            "normalized_rewritten": normalize_report.rewritten,
+            "normalized_blocked": normalize_report.blocked,
+            "normalized_missing": normalize_report.missing,
         });
         output::plain(event);
     } else {

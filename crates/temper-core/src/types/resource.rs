@@ -6,6 +6,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+use super::managed_meta::ManagedMeta;
 
 /// Row type for resource listings — includes joined display fields
 /// and managed_meta projections from `vault_resources_browse` view.
@@ -149,10 +150,19 @@ pub struct ContentChunk {
 pub struct ContentResponse {
     pub resource_id: ResourceId,
     pub markdown: String,
-    /// Server-side managed_meta from kb_resource_manifests.
+    /// Typed server-side managed_meta from kb_resource_manifests. The
+    /// typed fields name everything temper knows about; any extras the
+    /// server stored round-trip through `ManagedMeta::extra`.
     /// Used by CLI sync pull to reconstruct complete frontmatter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_meta: Option<serde_json::Value>,
+    pub managed_meta: Option<ManagedMeta>,
+    /// Server-side open_meta from kb_resource_manifests. Intentionally
+    /// untyped — open_meta is the free-form tier. Typed extraction of
+    /// relationship fields lives in `ResourceRelationships` (see
+    /// `types::graph`), which parses this value on demand and ignores
+    /// anything it doesn't recognize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meta: Option<serde_json::Value>,
 }
 
 /// Response body for resource deletion.
@@ -160,4 +170,81 @@ pub struct ContentResponse {
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct DeleteResponse {
     pub deleted: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `ContentResponse` with both managed_meta and open_meta populated
+    /// must roundtrip through serde cleanly, preserving both tiers.
+    #[test]
+    fn content_response_roundtrips_with_both_meta_tiers() {
+        let resource_id = ResourceId::from(Uuid::nil());
+        let managed_meta = ManagedMeta {
+            stage: Some("draft".to_string()),
+            ..Default::default()
+        };
+        let open_meta = serde_json::json!({
+            "tags": ["one", "two"],
+            "related": ["res_999"],
+        });
+        let original = ContentResponse {
+            resource_id,
+            markdown: "# Hello".to_string(),
+            managed_meta: Some(managed_meta.clone()),
+            open_meta: Some(open_meta.clone()),
+        };
+
+        let json = serde_json::to_value(&original).expect("serialize");
+        let roundtrip: ContentResponse = serde_json::from_value(json.clone()).expect("deserialize");
+
+        assert_eq!(roundtrip.markdown, "# Hello");
+        assert_eq!(roundtrip.managed_meta, Some(managed_meta));
+        assert_eq!(roundtrip.open_meta, Some(open_meta));
+    }
+
+    /// `ContentResponse` with `open_meta: None` must omit the field
+    /// entirely from the serialized JSON (not emit `"open_meta": null`),
+    /// matching the `skip_serializing_if = "Option::is_none"` contract
+    /// used by `managed_meta`. This preserves wire compatibility with
+    /// older clients that don't know about `open_meta`.
+    #[test]
+    fn content_response_omits_open_meta_when_none() {
+        let resource_id = ResourceId::from(Uuid::nil());
+        let original = ContentResponse {
+            resource_id,
+            markdown: "body".to_string(),
+            managed_meta: None,
+            open_meta: None,
+        };
+
+        let json = serde_json::to_value(&original).expect("serialize");
+        let obj = json.as_object().expect("object");
+
+        assert!(
+            !obj.contains_key("open_meta"),
+            "open_meta should be omitted when None, got: {json}"
+        );
+        assert!(
+            !obj.contains_key("managed_meta"),
+            "managed_meta should be omitted when None, got: {json}"
+        );
+    }
+
+    /// Old clients (no `open_meta` field in their request) must still
+    /// deserialize a `ContentResponse` from servers that omit it.
+    /// This is the `#[serde(default)]` contract.
+    #[test]
+    fn content_response_deserializes_without_open_meta() {
+        let json = serde_json::json!({
+            "resource_id": Uuid::nil(),
+            "markdown": "hi",
+        });
+
+        let parsed: ContentResponse = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(parsed.markdown, "hi");
+        assert!(parsed.managed_meta.is_none());
+        assert!(parsed.open_meta.is_none());
+    }
 }

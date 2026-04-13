@@ -49,11 +49,19 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     None => ("default".to_string(), "resource".to_string()),
                 };
 
+                // Serialize the typed ManagedMeta back to JSON Value for
+                // the generic frontmatter emitter. Lossless round-trip
+                // via ManagedMeta::extra.
+                let managed_value = content_response
+                    .managed_meta
+                    .as_ref()
+                    .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
                 let frontmatter = ingest::build_frontmatter_from_resource(
                     &resource,
                     &ctx,
                     &dtype,
-                    content_response.managed_meta.as_ref(),
+                    managed_value.as_ref(),
+                    content_response.open_meta.as_ref(),
                 );
                 let full_content = format!("{frontmatter}{}", content_response.markdown);
                 std::fs::write(&vault_path, &full_content)?;

@@ -84,7 +84,13 @@ jobs:
         run: cargo sqlx migrate run
 
       - name: Run integration & E2E tests
-        run: cargo nextest run --workspace --features test-db --locked
+        # sync_run_push_body_round_trip is excluded here because it drives
+        # the server-side ingest pipeline (no pre-packed chunks), which
+        # invokes ort at runtime. This runner does not have ONNX Runtime
+        # installed; the test runs instead in the "Embed & MCP Round-Trip
+        # Tests" job, which installs libonnxruntime.so and sets
+        # ORT_DYLIB_PATH.
+        run: cargo nextest run --workspace --features test-db --locked -E '!test(=sync_run_push_body_round_trip)'
 
   test-rust-embed:
     name: Embed & MCP Round-Trip Tests
@@ -129,6 +135,21 @@ jobs:
         with:
           tool: nextest,sqlx-cli
 
+      - name: Install ONNX Runtime
+        # ort 2.0.0-rc.12 uses `load-dynamic` with API 18, so we need the
+        # ONNX Runtime 1.18.x shared library at runtime. Download the
+        # prebuilt Linux x64 tarball from microsoft/onnxruntime and point
+        # ORT_DYLIB_PATH at the .so so the ort crate can find it. Without
+        # this, any test that actually initializes ort (e.g. a real
+        # ingest-pipeline embed pass) fails with "ONNX Runtime not found".
+        run: |
+          set -euo pipefail
+          ORT_VERSION=1.18.1
+          curl -sSL -o onnxruntime.tgz \
+            "https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VERSION}/onnxruntime-linux-x64-${ORT_VERSION}.tgz"
+          tar -xzf onnxruntime.tgz
+          echo "ORT_DYLIB_PATH=${PWD}/onnxruntime-linux-x64-${ORT_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+
       - name: Run migrations
         run: cargo sqlx migrate run
 
@@ -137,5 +158,9 @@ jobs:
           cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1
           cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1
 
-      - name: Run MCP round-trip e2e tests
-        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test)'
+      - name: Run MCP round-trip + ingest-pipeline e2e tests
+        # Combined filter: the mcp_round_trip_test binary (all tests) plus
+        # sync_run_push_body_round_trip specifically — the one sync_test
+        # case that drives the server-side embed path by pushing an
+        # un-pre-packed body.
+        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=sync_run_push_body_round_trip)'

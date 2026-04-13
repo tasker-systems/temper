@@ -10,8 +10,10 @@ use uuid::Uuid;
 use crate::actions::ingest;
 use crate::actions::progress::SyncProgress;
 use crate::error::{Result, TemperError};
+use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::sync::SyncItemKind;
 use temper_core::types::{
-    Manifest, ManifestEntryState, MergeResult, MergedResource, PushKind, ResourceId,
+    Manifest, ManifestEntry, ManifestEntryState, MergeResult, MergedResource, PushKind, ResourceId,
     SyncCompleteRequest, SyncConflictItem, SyncContextEntries, SyncManifestEntry, SyncPullItem,
     SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
@@ -97,6 +99,187 @@ pub struct SyncResult {
 // ---------------------------------------------------------------------------
 // Pure functions (no client, no async — fully unit-testable)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// normalize_all_entries report
+// ---------------------------------------------------------------------------
+
+/// Summary of a full vault normalize pass.
+///
+/// Returned by [`normalize_all_entries`]. Counts are cumulative over every
+/// manifest entry the function iterated over. `issues_by_path` preserves the
+/// iteration order of the manifest so callers can print the first few blocked
+/// files without re-sorting.
+#[derive(Debug, Default)]
+pub struct NormalizeReport {
+    /// Number of manifest entries processed (regardless of outcome).
+    pub scanned: usize,
+    /// Number of files rewritten to disk by normalize.
+    pub rewritten: usize,
+    /// Number of files that had at least one non-auto-fixable issue.
+    /// These files still had their hashes updated to reflect on-disk
+    /// reality, but sync must block them until the user resolves the
+    /// issues.
+    pub blocked: usize,
+    /// Number of entries whose underlying file was missing on disk.
+    pub missing: usize,
+    /// Per-file issues keyed by the manifest entry's relative path.
+    /// Order is preserved from the iteration order of the manifest.
+    pub issues_by_path: Vec<(String, Vec<temper_core::schema::ValidationIssue>)>,
+}
+
+/// Normalize every manifest entry's vault file in place, persisting the
+/// manifest to disk after each entry so an interrupt loses at most one
+/// file's work.
+///
+/// For each entry:
+/// 1. Resolve the entry's path against `vault_root`. If the file is missing,
+///    mark the entry `LocalModified` with an empty `body_hash` and continue.
+/// 2. Derive doc_type from the entry's vault path via
+///    [`temper_core::hash::doc_type_from_vault_path`]. If the path does not
+///    yield a known doc type, skip with a warning.
+/// 3. Call [`temper_core::normalize::normalize_file`]. On Err, record the
+///    error on the report as a "blocked" entry with a synthetic issue
+///    containing the error message, and continue.
+/// 4. Update the entry's `body_hash`, `managed_hash`, `open_hash`,
+///    `mtime_secs`, and `state` from the
+///    [`temper_core::normalize::NormalizeOutcome`].
+/// 5. Persist the manifest to disk immediately via
+///    [`crate::manifest_io::save_manifest`].
+/// 6. If the outcome has non-empty `issues`, increment `report.blocked` and
+///    record the issues.
+///
+/// Returns a [`NormalizeReport`]; does not return an error for per-file
+/// problems. Only returns `Err` for problems that prevent iteration itself.
+pub fn normalize_all_entries(
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    temper_dir: &Path,
+    progress: Option<&dyn SyncProgress>,
+) -> Result<NormalizeReport> {
+    let mut report = NormalizeReport::default();
+
+    // Snapshot the resource ids in iteration order so we can mutate entries
+    // without juggling the iterator.
+    let ids: Vec<ResourceId> = manifest.entries.keys().copied().collect();
+    let total = ids.len();
+
+    for (idx, id) in ids.iter().enumerate() {
+        report.scanned += 1;
+
+        // Clone out the fields we need up-front so we can drop the borrow
+        // before calling save_manifest.
+        let (rel_path, prior_remote_body, prior_remote_managed, prior_remote_open) = {
+            let Some(entry) = manifest.entries.get(id) else {
+                continue;
+            };
+            (
+                entry.path.clone(),
+                entry.remote_body_hash.clone(),
+                entry.remote_managed_hash.clone(),
+                entry.remote_open_hash.clone(),
+            )
+        };
+
+        let abs_path = vault_root.join(&rel_path);
+
+        // Missing file: mirror rehash_manifest's prior behavior.
+        if !abs_path.exists() {
+            report.missing += 1;
+            if let Some(entry) = manifest.entries.get_mut(id) {
+                if entry.state != ManifestEntryState::LocalModified {
+                    entry.state = ManifestEntryState::LocalModified;
+                }
+                entry.body_hash = String::new();
+                entry.mtime_secs = None;
+            }
+            crate::manifest_io::save_manifest(temper_dir, manifest)?;
+            if let Some(p) = progress {
+                p.rehash_progress(idx + 1, total, 0);
+            }
+            continue;
+        }
+
+        // Derive doc type from the vault path. Unknown types: warn and skip.
+        let Some(doc_type) = temper_core::hash::doc_type_from_vault_path(&rel_path) else {
+            tracing::warn!(
+                "normalize_all_entries: skipping {} — cannot derive doc_type from path",
+                rel_path
+            );
+            if let Some(p) = progress {
+                p.rehash_progress(idx + 1, total, 0);
+            }
+            continue;
+        };
+        let doc_type = doc_type.to_string();
+
+        // Run the normalize primitive.
+        match temper_core::normalize::normalize_file(&abs_path, &doc_type) {
+            Ok(outcome) => {
+                if outcome.changed {
+                    report.rewritten += 1;
+                }
+                let has_issues = !outcome.issues.is_empty();
+                if has_issues {
+                    report.blocked += 1;
+                    report
+                        .issues_by_path
+                        .push((rel_path.clone(), outcome.issues.clone()));
+                }
+
+                let new_mtime = file_mtime_secs(&abs_path).ok();
+
+                if let Some(entry) = manifest.entries.get_mut(id) {
+                    entry.body_hash = outcome.body_hash.clone();
+                    entry.managed_hash = outcome.managed_hash.clone();
+                    entry.open_hash = outcome.open_hash.clone();
+                    entry.mtime_secs = new_mtime;
+
+                    // Only touch state when it is Clean or LocalModified;
+                    // leave Conflict / Pending / RemoteModified markers
+                    // alone. Match the hashes against the known remote
+                    // triple to decide between Clean and LocalModified.
+                    let touches_state = matches!(
+                        entry.state,
+                        ManifestEntryState::Clean | ManifestEntryState::LocalModified
+                    );
+                    if touches_state {
+                        let remote_matches = !prior_remote_body.is_empty()
+                            && outcome.body_hash == prior_remote_body
+                            && outcome.managed_hash == prior_remote_managed
+                            && outcome.open_hash == prior_remote_open;
+                        entry.state = if remote_matches {
+                            ManifestEntryState::Clean
+                        } else {
+                            ManifestEntryState::LocalModified
+                        };
+                    }
+                }
+            }
+            Err(e) => {
+                // Record the error as a synthetic blocked issue.
+                report.blocked += 1;
+                let issue = temper_core::schema::ValidationIssue {
+                    path: rel_path.clone(),
+                    message: format!("normalize_file failed: {e}"),
+                    auto_fixable: false,
+                };
+                report.issues_by_path.push((rel_path.clone(), vec![issue]));
+            }
+        }
+
+        // Per-entry atomic save. If we're interrupted after this point, at
+        // most the NEXT entry's normalize is lost — everything up to here
+        // is durably persisted.
+        crate::manifest_io::save_manifest(temper_dir, manifest)?;
+
+        if let Some(p) = progress {
+            p.rehash_progress(idx + 1, total, 0);
+        }
+    }
+
+    Ok(report)
+}
 
 /// Rehash manifest entries by reading vault files and computing SHA-256.
 /// Skips files whose mtime hasn't changed since the last manifest update.
@@ -593,6 +776,115 @@ async fn push_resource(
     vault_root: &Path,
     item: &SyncPushItem,
 ) -> Result<()> {
+    match item.kind {
+        SyncItemKind::Body => push_resource_body(client, manifest, vault_root, item).await,
+        SyncItemKind::MetaOnly => push_resource_meta_only(client, manifest, vault_root, item).await,
+    }
+}
+
+/// Build a meta-only update payload from an in-memory frontmatter mapping.
+///
+/// Splits frontmatter into managed/open tiers, computes their hashes, and
+/// returns a typed `MetaUpdatePayload` ready to send to the server.
+///
+/// The managed tier is deserialized from its JSON form into the typed
+/// `ManagedMeta`. The `extra` flatten bucket on ManagedMeta catches any
+/// doc-type-schema fields (e.g. `date` for sessions) that the typed
+/// fields don't name, so the round-trip is lossless and `managed_hash`
+/// — computed over the canonical form of the pre-deserialized JSON —
+/// stays stable for the peer client.
+fn build_meta_update_payload(
+    fm: &serde_yaml::Value,
+    doc_type: &str,
+    resource_id: Uuid,
+) -> MetaUpdatePayload {
+    let (managed_meta_json, open_meta) = temper_core::hash::split_frontmatter_tiers(fm, doc_type);
+    let (managed_hash, open_hash) =
+        temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(fm), doc_type);
+    let managed_meta: temper_core::types::managed_meta::ManagedMeta =
+        serde_json::from_value(managed_meta_json).unwrap_or_default();
+    MetaUpdatePayload {
+        resource_id: ResourceId::from(resource_id),
+        managed_meta,
+        open_meta,
+        managed_hash,
+        open_hash,
+    }
+}
+
+async fn push_resource_meta_only(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPushItem,
+) -> Result<()> {
+    let entry_id = match item.resource_id {
+        Some(id) => id,
+        None => extract_resource_id(&item.uri)?,
+    };
+
+    let entry = manifest
+        .entries
+        .get(&entry_id)
+        .ok_or_else(|| TemperError::NotFound(format!("manifest entry not found: {entry_id}")))?;
+
+    let file_path = vault_root.join(&entry.path);
+    if !file_path.exists() {
+        return Err(TemperError::NotFound(format!(
+            "vault file not found: {}",
+            file_path.display()
+        )));
+    }
+
+    let content = std::fs::read_to_string(&file_path)?;
+
+    // Unlike the body push path, we cannot fall back to a default doc_type
+    // here — `split_frontmatter_tiers` uses the doc_type schema to decide
+    // which fields are managed vs open, and a wrong doc_type would
+    // misclassify fields and corrupt the server-side meta state.
+    let doc_type = Vault::parse_rel(&entry.path)
+        .map(|parsed| parsed.doc_type.to_string())
+        .ok_or_else(|| {
+            TemperError::Config(format!(
+                "meta-only push: manifest path does not parse: {}",
+                entry.path
+            ))
+        })?;
+
+    let fm = crate::vault::parse_frontmatter(&content).ok_or_else(|| {
+        TemperError::Config(format!(
+            "meta-only push requires frontmatter: {}",
+            file_path.display()
+        ))
+    })?;
+
+    let payload = build_meta_update_payload(&fm, &doc_type, entry_id.into());
+
+    client
+        .resources()
+        .update_meta(entry_id.into(), &payload)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    // body_hash / remote_body_hash intentionally untouched: the diff was
+    // meta-only, so the body on disk is identical to what the server holds.
+    if let Some(e) = manifest.entries.get_mut(&entry_id) {
+        e.remote_managed_hash = payload.managed_hash.clone();
+        e.remote_open_hash = payload.open_hash.clone();
+        e.state = ManifestEntryState::Clean;
+        e.synced_at = chrono::Utc::now();
+        e.mtime_secs = file_mtime_secs(&file_path).ok();
+    }
+
+    Ok(())
+}
+
+async fn push_resource_body(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPushItem,
+) -> Result<()> {
     // Resolve the manifest entry ID — for new resources this is embedded in the URI,
     // for existing resources the server provides the resource_id directly.
     let entry_id = match item.resource_id {
@@ -729,6 +1021,237 @@ async fn pull_resource(
     vault_root: &Path,
     item: &SyncPullItem,
 ) -> Result<()> {
+    match item.kind {
+        SyncItemKind::Body => pull_resource_body(client, manifest, vault_root, item).await,
+        SyncItemKind::MetaOnly => pull_resource_meta_only(client, manifest, vault_root, item).await,
+    }
+}
+
+/// Relocation guard for meta-only pulls.
+///
+/// A meta-only pull must not change the file's vault location — doing so
+/// would require moving the file on disk and updating the manifest path.
+/// If the incoming managed_meta carries a `temper-context` that disagrees
+/// with the current on-disk context, reject with a user-facing error so
+/// the caller can run a full body pull (which takes the slug-dedup path)
+/// or use `temper move` explicitly.
+fn check_relocation_guard(
+    current_ctx: &str,
+    new_managed_meta: Option<&temper_core::types::managed_meta::ManagedMeta>,
+) -> Result<()> {
+    let Some(meta) = new_managed_meta else {
+        return Ok(());
+    };
+    let Some(new_ctx) = meta.context.as_deref() else {
+        return Ok(());
+    };
+    if new_ctx == current_ctx {
+        return Ok(());
+    }
+    Err(TemperError::Config(format!(
+        "meta-only pull would change temper-context from {current_ctx} to {new_ctx}; \
+         file relocation via meta-only pull is not supported in v1. \
+         Run a full body pull or use temper-move instead."
+    )))
+}
+
+/// Convert an optional typed `ManagedMeta` into an optional JSON
+/// `Value` for the generic frontmatter-emitter callers in this
+/// module (`build_frontmatter_from_resource`, `apply_pull_meta_only`,
+/// `write_pulled_file`). Those functions take `Option<&Value>` because
+/// they also need to emit arbitrary per-doc-type fields from the
+/// flatten bucket and from open_meta via the same YAML path.
+///
+/// This is a pure boundary shim — it does not affect hash stability
+/// because the hash travels alongside the meta as its own field.
+fn managed_meta_to_value(
+    meta: Option<&temper_core::types::managed_meta::ManagedMeta>,
+) -> Option<serde_json::Value> {
+    meta.map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
+}
+
+/// Rebuild a file's content with server-sourced frontmatter, preserving the
+/// local body.
+///
+/// `build_frontmatter_from_resource` already terminates with `---\n\n` — the
+/// blank separator line is part of the frontmatter block. `strip_frontmatter`,
+/// however, returns everything after the closing `---\n`, so a `local_body`
+/// derived from a well-formed file starts with a leading `\n` (the blank
+/// separator). Concatenating naively would double that newline and, because
+/// the next pull re-strips and re-rebuilds, drift one extra blank line per
+/// pull cycle. Strip a single leading `\n` from `local_body` before concat to
+/// make the operation idempotent.
+fn rebuild_file_with_new_meta(
+    local_body: &str,
+    resource: &temper_core::types::ResourceRow,
+    ctx: &str,
+    doc_type: &str,
+    managed_meta: Option<&serde_json::Value>,
+    open_meta: Option<&serde_json::Value>,
+) -> String {
+    let frontmatter =
+        ingest::build_frontmatter_from_resource(resource, ctx, doc_type, managed_meta, open_meta);
+    let body_after_separator = local_body.strip_prefix('\n').unwrap_or(local_body);
+    format!("{frontmatter}{body_after_separator}")
+}
+
+/// Parameters for the pure (non-async) half of `pull_resource_meta_only`.
+///
+/// The async wrapper fetches `resource` and meta blobs via the HTTP client;
+/// this struct groups everything the disk-write + hash-recompute + manifest
+/// update needs. Factored out so we can unit-test the disk/hash/manifest
+/// logic without a live server.
+struct ApplyPullMetaOnly<'a> {
+    file_path: &'a Path,
+    local_body: &'a str,
+    resource: &'a temper_core::types::ResourceRow,
+    ctx: &'a str,
+    doc_type: &'a str,
+    managed_meta: Option<&'a serde_json::Value>,
+    open_meta: Option<&'a serde_json::Value>,
+}
+
+/// Write the rebuilt file, normalize it to enforce doc-type invariants,
+/// and update the manifest entry in place with post-normalize hashes.
+///
+/// body_hash / remote_body_hash are intentionally NOT touched: the body
+/// agreed before the pull (precondition for a MetaOnly diff), and
+/// normalize_file only rewrites frontmatter, so the body is byte-identical
+/// after this call.
+fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry) -> Result<()> {
+    let ApplyPullMetaOnly {
+        file_path,
+        local_body,
+        resource,
+        ctx,
+        doc_type,
+        managed_meta,
+        open_meta,
+    } = params;
+
+    let rebuilt =
+        rebuild_file_with_new_meta(local_body, resource, ctx, doc_type, managed_meta, open_meta);
+    std::fs::write(file_path, &rebuilt)?;
+
+    let outcome = temper_core::normalize::normalize_file(file_path, doc_type)?;
+    if !outcome.issues.is_empty() {
+        let summary = outcome
+            .issues
+            .iter()
+            .map(|i| format!("{}: {}", i.path, i.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(TemperError::Config(format!(
+            "meta-only pull: normalize reported issues for {}: {summary}",
+            file_path.display()
+        )));
+    }
+
+    let final_content = std::fs::read_to_string(file_path)?;
+    let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
+        crate::vault::parse_frontmatter(&final_content).as_ref(),
+        doc_type,
+    );
+
+    entry.managed_hash = managed_hash.clone();
+    entry.open_hash = open_hash.clone();
+    entry.remote_managed_hash = managed_hash;
+    entry.remote_open_hash = open_hash;
+    entry.state = ManifestEntryState::Clean;
+    entry.synced_at = chrono::Utc::now();
+    entry.mtime_secs = file_mtime_secs(file_path).ok();
+
+    Ok(())
+}
+
+async fn pull_resource_meta_only(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPullItem,
+) -> Result<()> {
+    // A MetaOnly diff presupposes the client already knows this resource
+    // — if we have no manifest entry, the server's body-hash agreement
+    // claim cannot hold. Fall-through to the body path would risk slug
+    // dedup collisions. Surface the inconsistency instead.
+    let existing = manifest.entries.get(&item.resource_id).ok_or_else(|| {
+        TemperError::NotFound(format!(
+            "meta-only pull requires existing manifest entry; got none for {}",
+            item.resource_id
+        ))
+    })?;
+
+    let file_path = vault_root.join(&existing.path);
+    if !file_path.exists() {
+        return Err(TemperError::NotFound(format!(
+            "meta-only pull: local file missing at {}",
+            file_path.display()
+        )));
+    }
+
+    // Use the manifest path as the source of truth for (ctx, doc_type) —
+    // that's where the file actually lives on disk, which is what the
+    // relocation guard must compare against.
+    let parsed = Vault::parse_rel(&existing.path).ok_or_else(|| {
+        TemperError::Config(format!(
+            "meta-only pull: manifest path does not parse: {}",
+            existing.path
+        ))
+    })?;
+    let ctx = parsed.context.to_string();
+    let doc_type = parsed.doc_type.to_string();
+
+    let resource = client
+        .resources()
+        .get(Uuid::from(item.resource_id))
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    let meta_response = client
+        .resources()
+        .get_meta(Uuid::from(item.resource_id))
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    check_relocation_guard(&ctx, meta_response.managed_meta.as_ref())?;
+
+    let existing_content = std::fs::read_to_string(&file_path)?;
+    let local_body = strip_frontmatter(&existing_content).to_string();
+
+    let entry = manifest.entries.get_mut(&item.resource_id).ok_or_else(|| {
+        TemperError::NotFound(format!(
+            "meta-only pull: manifest entry vanished mid-pull: {}",
+            item.resource_id
+        ))
+    })?;
+
+    // Serialize the typed ManagedMeta back to JSON Value for the
+    // generic frontmatter emitter below. The `extra` flatten bucket
+    // on ManagedMeta makes this round-trip lossless.
+    let managed_value = managed_meta_to_value(meta_response.managed_meta.as_ref());
+
+    apply_pull_meta_only(
+        ApplyPullMetaOnly {
+            file_path: &file_path,
+            local_body: &local_body,
+            resource: &resource,
+            ctx: &ctx,
+            doc_type: &doc_type,
+            managed_meta: managed_value.as_ref(),
+            open_meta: meta_response.open_meta.as_ref(),
+        },
+        entry,
+    )?;
+
+    Ok(())
+}
+
+async fn pull_resource_body(
+    client: &temper_client::TemperClient,
+    manifest: &mut Manifest,
+    vault_root: &Path,
+    item: &SyncPullItem,
+) -> Result<()> {
     let resource = client
         .resources()
         .get(Uuid::from(item.resource_id))
@@ -743,6 +1266,11 @@ async fn pull_resource(
 
     let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
 
+    // Serialize the typed ManagedMeta back to JSON Value once for the
+    // generic frontmatter emitter callsites below. Lossless via the
+    // `extra` flatten bucket on ManagedMeta.
+    let managed_value = managed_meta_to_value(content_response.managed_meta.as_ref());
+
     // If the resource is already in the manifest, overwrite the existing file
     // instead of creating a deduplicated copy (slug-2, slug-3, etc.).
     let vault_path = if let Some(existing) = manifest.entries.get(&item.resource_id) {
@@ -753,7 +1281,8 @@ async fn pull_resource(
                 &resource,
                 &ctx,
                 &doc_type,
-                content_response.managed_meta.as_ref(),
+                managed_value.as_ref(),
+                content_response.open_meta.as_ref(),
             );
             let vault_content = format!("{frontmatter}{}", &content_response.markdown);
             std::fs::write(&existing_path, &vault_content)?;
@@ -769,7 +1298,8 @@ async fn pull_resource(
                 &slug,
                 &resource,
                 &content_response.markdown,
-                content_response.managed_meta.as_ref(),
+                managed_value.as_ref(),
+                content_response.open_meta.as_ref(),
             )?
         }
     } else {
@@ -783,7 +1313,8 @@ async fn pull_resource(
             &slug,
             &resource,
             &content_response.markdown,
-            content_response.managed_meta.as_ref(),
+            managed_value.as_ref(),
+            content_response.open_meta.as_ref(),
         )?
     };
 
@@ -841,6 +1372,7 @@ fn write_pulled_file(
     resource: &temper_core::types::ResourceRow,
     content: &str,
     managed_meta: Option<&serde_json::Value>,
+    open_meta: Option<&serde_json::Value>,
 ) -> Result<std::path::PathBuf> {
     let vault_path = ingest::build_vault_path(vault_root, context, doc_type, slug);
 
@@ -848,8 +1380,13 @@ fn write_pulled_file(
         std::fs::create_dir_all(parent)?;
     }
 
-    let frontmatter =
-        ingest::build_frontmatter_from_resource(resource, context, doc_type, managed_meta);
+    let frontmatter = ingest::build_frontmatter_from_resource(
+        resource,
+        context,
+        doc_type,
+        managed_meta,
+        open_meta,
+    );
     let vault_content = format!("{frontmatter}{content}");
     std::fs::write(&vault_path, &vault_content)?;
 
@@ -2299,5 +2836,564 @@ mod tests {
 
         let mismatches = preflight_ownership_check(&manifest, vault);
         assert!(mismatches.is_empty());
+    }
+
+    // -----------------------------------------------------------------
+    // normalize_all_entries tests
+    // -----------------------------------------------------------------
+
+    /// Build a minimal manifest entry pointing at `rel_path` with all
+    /// string fields empty (no remote hashes, no mtime, Clean state).
+    fn blank_entry(rel_path: &str) -> ManifestEntry {
+        ManifestEntry {
+            path: rel_path.to_string(),
+            body_hash: String::new(),
+            remote_body_hash: String::new(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs: None,
+            last_audit_id: None,
+            provisional: false,
+        }
+    }
+
+    /// Create `<vault>/<rel_path>` with the given content, creating parents.
+    fn write_vault_file(vault_root: &Path, rel_path: &str, content: &str) {
+        let abs = vault_root.join(rel_path);
+        if let Some(parent) = abs.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(&abs, content).unwrap();
+    }
+
+    #[test]
+    fn normalize_all_entries_rewrites_missing_defaults() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        let content = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Test\n\
+             slug: test\n\
+             ---\n\
+             body\n",
+        );
+        write_vault_file(vault_root, &rel_path, &content);
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id, blank_entry(&rel_path));
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.rewritten, 1);
+        assert_eq!(report.blocked, 0);
+        assert_eq!(report.missing, 0);
+
+        let on_disk = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+        assert!(
+            on_disk.contains("temper-stage: backlog"),
+            "file should contain temper-stage: backlog, got:\n{on_disk}"
+        );
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert!(entry.body_hash.starts_with("sha256:"));
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn normalize_all_entries_blocks_invalid_enum() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        let content = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Test\n\
+             slug: test\n\
+             temper-stage: frobnicate\n\
+             ---\n\
+             body\n",
+        );
+        write_vault_file(vault_root, &rel_path, &content);
+        let before = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id, blank_entry(&rel_path));
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        let after = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+        assert_eq!(before, after, "file should not be rewritten on block");
+
+        assert_eq!(report.blocked, 1);
+        assert_eq!(report.rewritten, 0);
+        assert_eq!(report.issues_by_path.len(), 1);
+        assert_eq!(report.issues_by_path[0].0, rel_path);
+        assert!(!report.issues_by_path[0].1.is_empty());
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert!(
+            entry.body_hash.starts_with("sha256:"),
+            "hashes still populated on block"
+        );
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn normalize_all_entries_persists_per_entry() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        // File A: canonical, clean.
+        let id_a = ResourceId::from(Uuid::now_v7());
+        let rel_a = format!("@me/temper/task/{id_a}.md");
+        let content_a = format!(
+            "---\n\
+             temper-id: \"{id_a}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: A\n\
+             slug: a\n\
+             temper-stage: backlog\n\
+             ---\n\
+             body A\n",
+        );
+        write_vault_file(vault_root, &rel_a, &content_a);
+
+        // File B: missing temper-stage, triggers rewrite.
+        let id_b = ResourceId::from(Uuid::now_v7());
+        let rel_b = format!("@me/temper/task/{id_b}.md");
+        let content_b = format!(
+            "---\n\
+             temper-id: \"{id_b}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: B\n\
+             slug: b\n\
+             ---\n\
+             body B\n",
+        );
+        write_vault_file(vault_root, &rel_b, &content_b);
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id_a, blank_entry(&rel_a));
+        manifest.entries.insert(id_b, blank_entry(&rel_b));
+
+        normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        // Read manifest back from disk — both entries should have
+        // post-normalize hashes. This proves save happened before return.
+        let reloaded = crate::manifest_io::load_manifest(&temper_dir, "device-test").unwrap();
+        assert_eq!(reloaded.entries.len(), 2);
+        for (reloaded_id, reloaded_entry) in &reloaded.entries {
+            assert!(
+                reloaded_entry.body_hash.starts_with("sha256:"),
+                "entry {reloaded_id} body_hash missing on disk"
+            );
+            assert!(
+                reloaded_entry.managed_hash.starts_with("sha256:"),
+                "entry {reloaded_id} managed_hash missing on disk"
+            );
+            assert!(
+                reloaded_entry.open_hash.starts_with("sha256:"),
+                "entry {reloaded_id} open_hash missing on disk"
+            );
+        }
+    }
+
+    #[test]
+    fn normalize_all_entries_marks_missing_files() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        // Note: file is NOT created on disk.
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        manifest.entries.insert(id, blank_entry(&rel_path));
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.missing, 1);
+        assert_eq!(report.rewritten, 0);
+        assert_eq!(report.blocked, 0);
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(entry.state, ManifestEntryState::LocalModified);
+        assert!(entry.body_hash.is_empty());
+    }
+
+    #[test]
+    fn normalize_all_entries_preserves_clean_entries() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+
+        // Use normalize_file against a throwaway path to compute what the
+        // canonical hashes will be after normalize runs (we want to seed
+        // the remote triple so state resolves to Clean).
+        let scratch_dir = TempDir::new().unwrap();
+        let scratch_rel = format!("@me/temper/task/{id}.md");
+        let canonical_content = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Test\n\
+             slug: test\n\
+             temper-stage: backlog\n\
+             ---\n\
+             body\n",
+        );
+        write_vault_file(scratch_dir.path(), &scratch_rel, &canonical_content);
+        // First normalize: may rewrite to match the YAML emitter's format.
+        let _ =
+            temper_core::normalize::normalize_file(&scratch_dir.path().join(&scratch_rel), "task")
+                .expect("scratch normalize ok");
+        // Second normalize: stable canonical form.
+        let outcome =
+            temper_core::normalize::normalize_file(&scratch_dir.path().join(&scratch_rel), "task")
+                .expect("scratch normalize ok");
+        assert!(!outcome.changed, "second normalize should be a no-op");
+        let stable_content = fs::read_to_string(scratch_dir.path().join(&scratch_rel)).unwrap();
+
+        // Write the stable canonical content to the real vault.
+        write_vault_file(vault_root, &rel_path, &stable_content);
+        let before = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+
+        let mut manifest = Manifest::new("device-test".to_string());
+        let mut entry = blank_entry(&rel_path);
+        entry.body_hash = outcome.body_hash.clone();
+        entry.managed_hash = outcome.managed_hash.clone();
+        entry.open_hash = outcome.open_hash.clone();
+        entry.remote_body_hash = outcome.body_hash.clone();
+        entry.remote_managed_hash = outcome.managed_hash.clone();
+        entry.remote_open_hash = outcome.open_hash.clone();
+        entry.state = ManifestEntryState::Clean;
+        manifest.entries.insert(id, entry);
+
+        let report = normalize_all_entries(&mut manifest, vault_root, &temper_dir, None).unwrap();
+
+        assert_eq!(report.scanned, 1);
+        assert_eq!(report.rewritten, 0, "clean canonical file must not rewrite");
+        assert_eq!(report.blocked, 0);
+        assert_eq!(report.missing, 0);
+
+        let after = fs::read_to_string(vault_root.join(&rel_path)).unwrap();
+        assert_eq!(before, after, "canonical file byte-identical");
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(entry.state, ManifestEntryState::Clean);
+        assert_eq!(entry.body_hash, outcome.body_hash);
+        assert_eq!(entry.managed_hash, outcome.managed_hash);
+        assert_eq!(entry.open_hash, outcome.open_hash);
+    }
+
+    // -----------------------------------------------------------------
+    // Phase E1b: meta-only push/pull
+    // -----------------------------------------------------------------
+
+    fn meta_test_resource_row(id: ResourceId) -> temper_core::types::ResourceRow {
+        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId};
+        temper_core::types::ResourceRow {
+            id,
+            kb_context_id: ContextId(Uuid::nil()),
+            kb_doc_type_id: DocTypeId(Uuid::nil()),
+            origin_uri: format!("kb://@me/temper/task/{id}"),
+            title: "Meta Test".to_string(),
+            slug: Some("meta-test".to_string()),
+            originator_profile_id: ProfileId(Uuid::nil()),
+            owner_profile_id: ProfileId(Uuid::nil()),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            context_name: "temper".to_string(),
+            doc_type_name: "task".to_string(),
+            owner_handle: "@me".to_string(),
+            stage: Some("backlog".to_string()),
+            seq: Some(1),
+            mode: None,
+            effort: None,
+        }
+    }
+
+    #[test]
+    fn push_meta_only_payload_roundtrip() {
+        let id = ResourceId::from(Uuid::now_v7());
+        let fm_text = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             title: Payload Roundtrip\n\
+             slug: payload-roundtrip\n\
+             temper-stage: backlog\n\
+             tags: [rust, meta]\n\
+             notes: hello\n\
+             ---\n\
+             body\n",
+        );
+        let fm = crate::vault::parse_frontmatter(&fm_text).expect("parse fm");
+
+        let payload = build_meta_update_payload(&fm, "task", id.into());
+
+        // Direct comparison against the hashing helper — same input must
+        // produce identical hashes.
+        let (expected_managed, expected_open) =
+            temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(&fm), "task");
+        assert_eq!(payload.managed_hash, expected_managed);
+        assert_eq!(payload.open_hash, expected_open);
+
+        // Direct comparison against split_frontmatter_tiers. Round-trip
+        // the managed side through the typed ManagedMeta via the flatten
+        // extras bucket so the hash stays stable.
+        let (expected_managed_meta_json, expected_open_meta) =
+            temper_core::hash::split_frontmatter_tiers(&fm, "task");
+        let expected_managed_meta: temper_core::types::managed_meta::ManagedMeta =
+            serde_json::from_value(expected_managed_meta_json).expect("expected → typed");
+        assert_eq!(payload.managed_meta, expected_managed_meta);
+        assert_eq!(payload.open_meta, expected_open_meta);
+
+        // resource_id round-trips through ResourceId::from(Uuid).
+        assert_eq!(payload.resource_id, id);
+
+        // Structural checks via the typed accessors — title + stage are
+        // managed tier, tags + notes are open tier.
+        assert_eq!(
+            payload.managed_meta.title.as_deref(),
+            Some("Payload Roundtrip")
+        );
+        assert_eq!(payload.managed_meta.stage.as_deref(), Some("backlog"));
+        assert!(payload.open_meta.get("tags").is_some());
+        assert_eq!(payload.open_meta["notes"], "hello");
+    }
+
+    #[test]
+    fn pull_meta_only_rebuild_preserves_body() {
+        let id = ResourceId::from(Uuid::now_v7());
+        let resource = meta_test_resource_row(id);
+
+        // Build a realistic existing vault file, then derive its body the
+        // same way `pull_resource_meta_only` does — via `strip_frontmatter`.
+        // This is the ground-truth "local body" that must round-trip.
+        //
+        // The body carries edge characters: blank lines, a trailing newline,
+        // and a YAML-looking fake-frontmatter block inside a code fence that
+        // must NOT be mistaken for real frontmatter.
+        let original_file = "---\n\
+                             temper-id: \"019d0000-0000-7000-8000-000000000001\"\n\
+                             temper-type: task\n\
+                             title: Original\n\
+                             ---\n\
+                             \n\
+                             # Heading\n\
+                             \n\
+                             Some prose with `inline` code.\n\
+                             \n\
+                             ```yaml\n\
+                             ---\n\
+                             fake: frontmatter\n\
+                             ---\n\
+                             ```\n\
+                             \n\
+                             Trailing paragraph.\n";
+        let local_body = strip_frontmatter(original_file).to_string();
+        // Sanity: the code-fence "frontmatter" is still intact inside the body.
+        assert!(local_body.contains("fake: frontmatter"));
+        assert!(local_body.contains("# Heading"));
+
+        // The rebuild helper takes JSON Values (same shape that
+        // `build_frontmatter_from_resource` consumes), so construct the
+        // meta directly as Values here. The typed `ManagedMeta` path is
+        // exercised by `build_meta_update_payload_roundtrip` above.
+        let managed = serde_json::json!({
+            "temper-type": "task",
+            "temper-context": "temper",
+            "temper-stage": "in_progress",
+            "title": "Meta Test",
+            "slug": "meta-test",
+        });
+        let open = serde_json::json!({
+            "tags": ["rust", "graph"],
+        });
+
+        let rebuilt = rebuild_file_with_new_meta(
+            &local_body,
+            &resource,
+            "temper",
+            "task",
+            Some(&managed),
+            Some(&open),
+        );
+
+        // After rebuild, stripping the new file must yield the same body
+        // byte-for-byte — no normalization, no swallowed lines, no
+        // characters absorbed into the frontmatter block.
+        let stripped = strip_frontmatter(&rebuilt);
+        assert_eq!(stripped, local_body);
+
+        // Both meta tiers must appear in the rebuilt frontmatter block.
+        let block = extract_frontmatter_block(&rebuilt);
+        assert!(
+            block.contains("temper-stage"),
+            "managed tier missing:\n{block}"
+        );
+        assert!(block.contains("tags:"), "open tier missing:\n{block}");
+    }
+
+    #[test]
+    fn pull_meta_only_relocation_guard() {
+        use temper_core::types::managed_meta::ManagedMeta;
+
+        // (a) None → Ok
+        assert!(check_relocation_guard("temper", None).is_ok());
+
+        // (b) Some without temper-context → Ok
+        let meta = ManagedMeta {
+            title: Some("No ctx here".to_string()),
+            ..Default::default()
+        };
+        assert!(check_relocation_guard("temper", Some(&meta)).is_ok());
+
+        // (c) Some with matching temper-context → Ok
+        let meta = ManagedMeta {
+            context: Some("temper".to_string()),
+            title: Some("match".to_string()),
+            ..Default::default()
+        };
+        assert!(check_relocation_guard("temper", Some(&meta)).is_ok());
+
+        // (d) Some with differing temper-context → Err, and the error
+        // message must contain both the old and new context names.
+        let meta = ManagedMeta {
+            context: Some("research".to_string()),
+            title: Some("moved".to_string()),
+            ..Default::default()
+        };
+        let err = check_relocation_guard("temper", Some(&meta)).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("temper"), "err missing old ctx: {msg}");
+        assert!(msg.contains("research"), "err missing new ctx: {msg}");
+    }
+
+    #[test]
+    fn pull_meta_only_advances_mtime() {
+        let dir = TempDir::new().unwrap();
+        let vault_root = dir.path();
+
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel_path = format!("@me/temper/task/{id}.md");
+        let abs = vault_root.join(&rel_path);
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+
+        let initial = format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-type: task\n\
+             temper-context: temper\n\
+             temper-created: \"2026-04-12T00:00:00Z\"\n\
+             title: Initial\n\
+             slug: initial\n\
+             temper-stage: backlog\n\
+             ---\n\
+             initial body\n",
+        );
+        fs::write(&abs, &initial).unwrap();
+
+        // Baseline normalize so the starting file is canonical —
+        // apply_pull_meta_only will re-normalize after its rewrite, and
+        // we want to ensure it is the normalize call, not disk-flush
+        // timing, that advances mtime.
+        let _ = temper_core::normalize::normalize_file(&abs, "task").unwrap();
+
+        let mut entry = blank_entry(&rel_path);
+        // Deliberately stale mtime so we can assert it advances.
+        entry.mtime_secs = Some(0);
+
+        let resource = meta_test_resource_row(id);
+        let managed = serde_json::json!({
+            "temper-type": "task",
+            "temper-context": "temper",
+            "temper-stage": "in-progress",
+            "title": "Initial",
+            "slug": "initial",
+        });
+        let open = serde_json::json!({});
+
+        let local_content = fs::read_to_string(&abs).unwrap();
+        let local_body = strip_frontmatter(&local_content).to_string();
+
+        // Small sleep to guarantee a distinct filesystem mtime even on
+        // coarse-granularity platforms.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        apply_pull_meta_only(
+            ApplyPullMetaOnly {
+                file_path: &abs,
+                local_body: &local_body,
+                resource: &resource,
+                ctx: "temper",
+                doc_type: "task",
+                managed_meta: Some(&managed),
+                open_meta: Some(&open),
+            },
+            &mut entry,
+        )
+        .unwrap();
+
+        let new_mtime = entry.mtime_secs.expect("mtime must be set");
+        assert!(
+            new_mtime > 0,
+            "mtime_secs must advance past the stale sentinel 0, got {new_mtime}"
+        );
+
+        // The manifest entry hashes are now populated and state is Clean.
+        assert_eq!(entry.state, ManifestEntryState::Clean);
+        assert!(entry.managed_hash.starts_with("sha256:"));
+        assert!(entry.open_hash.starts_with("sha256:"));
+        assert_eq!(entry.managed_hash, entry.remote_managed_hash);
+        assert_eq!(entry.open_hash, entry.remote_open_hash);
+
+        // And on-disk content still contains the local body.
+        let final_content = fs::read_to_string(&abs).unwrap();
+        assert!(
+            final_content.contains("initial body"),
+            "body must be preserved across meta-only pull"
+        );
     }
 }

@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::graph::GraphEdgeRow;
+use temper_core::types::managed_meta::{MetaUpdatePayload, ResourceMetaResponse};
 use temper_core::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
     ResourceListResponse, ResourceRow, ResourceUpdateRequest,
@@ -92,6 +93,39 @@ impl<'a> ResourceClient<'a> {
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/resources/{id}/meta — fetch just the manifest meta tier
+    /// (managed_meta, open_meta, managed_hash, open_hash) without
+    /// reconstructing markdown from chunks. Used by the metadata-only
+    /// sync pull path to avoid paying for server-side body reconstruction
+    /// when only the meta side has drifted.
+    pub async fn get_meta(&self, id: Uuid) -> Result<ResourceMetaResponse> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{id}/meta");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// PUT /api/resources/{id}/meta — update managed_meta and open_meta
+    /// without re-chunking. Used by the metadata-only sync path.
+    ///
+    /// The server reconciles frontmatter-provenance edges from the new
+    /// open_meta on success; errors during reconciliation are logged
+    /// server-side and do not fail this call.
+    pub async fn update_meta(
+        &self,
+        id: Uuid,
+        payload: &MetaUpdatePayload,
+    ) -> Result<serde_json::Value> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{id}/meta");
+        let req = self.http.put(&path).json(payload);
+        self.http
+            .send_json(&Method::PUT, &path, req, Some(&token))
             .await
     }
 }
