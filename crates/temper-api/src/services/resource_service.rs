@@ -430,8 +430,16 @@ pub async fn get_content(
         .collect::<Vec<_>>()
         .join("\n\n");
 
+    // Deserialize the JSONB managed_meta into the typed `ManagedMeta`.
+    // The `extra` flatten bucket on `ManagedMeta` captures any fields
+    // the typed struct doesn't name (e.g. doc-type-schema fields like
+    // `date` for sessions), so this round-trip is lossless.
     let (managed_meta, open_meta) = match meta_row {
-        Some(row) => (Some(row.managed_meta), Some(row.open_meta)),
+        Some(row) => {
+            let typed: temper_core::types::managed_meta::ManagedMeta =
+                serde_json::from_value(row.managed_meta).unwrap_or_default();
+            (Some(typed), Some(row.open_meta))
+        }
         None => (None, None),
     };
 

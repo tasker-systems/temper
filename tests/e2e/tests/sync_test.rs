@@ -3,7 +3,7 @@
 mod common;
 
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
-use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 use temper_core::types::sync::{
     MergedResource, SyncCompleteRequest, SyncContextEntries, SyncItemKind, SyncManifestEntry,
     SyncStatusRequest,
@@ -1008,10 +1008,11 @@ async fn sync_status_returns_meta_only_kind_for_meta_drift(pool: sqlx::PgPool) {
     // advance, while body_hash stays fixed.
     let new_meta_payload = MetaUpdatePayload {
         resource_id: resource.id,
-        managed_meta: serde_json::json!({
-            "temper-type": "research",
-            "title": "Meta Drift Doc New Title",
-        }),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            title: Some("Meta Drift Doc New Title".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({"tags": ["drift"]}),
         managed_hash: "sha256:server_managed_new".to_string(),
         open_hash: "sha256:server_open_new".to_string(),
@@ -1236,11 +1237,17 @@ async fn seed_synced_manifest_entry(
     // blank means `strip_frontmatter` on this file will return a body that
     // starts with `\n` — matching what `rebuild_file_with_new_meta`
     // preserves across meta-only pulls.
+    // Convert the typed ManagedMeta back to a JSON Value for the
+    // generic frontmatter emitter (lossless via ManagedMeta::extra).
+    let managed_value = content_response
+        .managed_meta
+        .as_ref()
+        .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
     let frontmatter = temper_cli::actions::ingest::build_frontmatter_from_resource(
         &resource,
         context,
         doc_type,
-        content_response.managed_meta.as_ref(),
+        managed_value.as_ref(),
         content_response.open_meta.as_ref(),
     );
     let vault_content = format!("{frontmatter}{}", content_response.markdown);
@@ -1277,9 +1284,15 @@ async fn seed_synced_manifest_entry(
     // the server's managed_hash — computed from the skeletal `managed_meta`
     // that `IngestPayload` carried — won't match the file-derived hash, and
     // the first sync_orchestration round will see a spurious meta drift.
+    //
+    // `managed_meta_split` is a JSON Value from `split_frontmatter_tiers`;
+    // deserialize into the typed `ManagedMeta` via the flatten extras
+    // bucket so the hash stays stable through the round-trip.
+    let managed_meta_typed: ManagedMeta =
+        serde_json::from_value(managed_meta_split).expect("managed_meta_split → typed");
     let seed_payload = MetaUpdatePayload {
         resource_id,
-        managed_meta: managed_meta_split,
+        managed_meta: managed_meta_typed,
         open_meta: open_meta_split,
         managed_hash: managed_hash.clone(),
         open_hash: open_hash.clone(),
@@ -1627,10 +1640,11 @@ async fn sync_run_pull_meta_only_round_trip(pool: sqlx::PgPool) {
     // Server-side meta update: bump both managed and open meta.
     let new_meta = MetaUpdatePayload {
         resource_id: resource.id,
-        managed_meta: serde_json::json!({
-            "temper-type": "research",
-            "title": "Pull Meta Doc Retitled",
-        }),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            title: Some("Pull Meta Doc Retitled".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({
             "tags": ["server-side"],
         }),
@@ -2230,7 +2244,10 @@ async fn sync_run_meta_pull_preserves_body_bytes_across_compounding_pulls(pool: 
     for (i, tag) in ["one", "two", "three"].iter().enumerate() {
         let new_meta = MetaUpdatePayload {
             resource_id: resource.id,
-            managed_meta: serde_json::json!({"temper-type": "research"}),
+            managed_meta: ManagedMeta {
+                doc_type: Some("research".to_string()),
+                ..Default::default()
+            },
             open_meta: serde_json::json!({"tags": [tag]}),
             managed_hash: format!("sha256:compound_managed_{i}"),
             open_hash: format!("sha256:compound_open_{i}"),

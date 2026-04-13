@@ -9,7 +9,7 @@ use temper_api::services::{
     context_service, doc_type_service, ingest_service, meta_service, resource_service,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
 use crate::service::TemperMcpService;
 
@@ -92,17 +92,26 @@ pub struct UpdateResourceInput {
 /// Use when the caller wants to change only a resource's frontmatter
 /// (managed_meta / open_meta) without re-chunking or re-embedding the
 /// body. This is the MCP peer of `PUT /api/resources/{id}/meta`.
+///
+/// `managed_meta` is typed: agents get a schema-validated shape for
+/// the fields temper knows about, and the `extra` flatten bucket on
+/// `ManagedMeta` accepts any additional keys (doc-type-schema fields
+/// like `date`, plus forward-compat unknowns) without dropping them.
+/// `open_meta` stays a free-form JSON value by design — the open tier
+/// is intentionally untyped.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct UpdateResourceMetaInput {
     /// UUID of the resource to update.
     pub id: Uuid,
-    /// New managed (temper-*) frontmatter as JSON.
-    pub managed_meta: serde_json::Value,
+    /// New managed (temper-*) frontmatter. Typed fields cover every
+    /// key temper governs; extras round-trip through `ManagedMeta::extra`.
+    pub managed_meta: ManagedMeta,
     /// New open (user-defined) frontmatter as JSON.
     pub open_meta: serde_json::Value,
     /// SHA-256 hash of the managed_meta JSON. The caller computes this
-    /// the same way the CLI sync path does; the server writes it
-    /// verbatim into `kb_resource_manifests.managed_hash`.
+    /// the same way the CLI sync path does (over the canonical form);
+    /// the server writes it verbatim into
+    /// `kb_resource_manifests.managed_hash`.
     pub managed_hash: String,
     /// SHA-256 hash of the open_meta JSON. Stored verbatim.
     pub open_hash: String,

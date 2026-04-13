@@ -786,14 +786,23 @@ async fn push_resource(
 ///
 /// Splits frontmatter into managed/open tiers, computes their hashes, and
 /// returns a typed `MetaUpdatePayload` ready to send to the server.
+///
+/// The managed tier is deserialized from its JSON form into the typed
+/// `ManagedMeta`. The `extra` flatten bucket on ManagedMeta catches any
+/// doc-type-schema fields (e.g. `date` for sessions) that the typed
+/// fields don't name, so the round-trip is lossless and `managed_hash`
+/// — computed over the canonical form of the pre-deserialized JSON —
+/// stays stable for the peer client.
 fn build_meta_update_payload(
     fm: &serde_yaml::Value,
     doc_type: &str,
     resource_id: Uuid,
 ) -> MetaUpdatePayload {
-    let (managed_meta, open_meta) = temper_core::hash::split_frontmatter_tiers(fm, doc_type);
+    let (managed_meta_json, open_meta) = temper_core::hash::split_frontmatter_tiers(fm, doc_type);
     let (managed_hash, open_hash) =
         temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(fm), doc_type);
+    let managed_meta: temper_core::types::managed_meta::ManagedMeta =
+        serde_json::from_value(managed_meta_json).unwrap_or_default();
     MetaUpdatePayload {
         resource_id: ResourceId::from(resource_id),
         managed_meta,
@@ -1028,12 +1037,12 @@ async fn pull_resource(
 /// or use `temper move` explicitly.
 fn check_relocation_guard(
     current_ctx: &str,
-    new_managed_meta: Option<&serde_json::Value>,
+    new_managed_meta: Option<&temper_core::types::managed_meta::ManagedMeta>,
 ) -> Result<()> {
     let Some(meta) = new_managed_meta else {
         return Ok(());
     };
-    let Some(new_ctx) = meta.get("temper-context").and_then(|v| v.as_str()) else {
+    let Some(new_ctx) = meta.context.as_deref() else {
         return Ok(());
     };
     if new_ctx == current_ctx {
@@ -1044,6 +1053,21 @@ fn check_relocation_guard(
          file relocation via meta-only pull is not supported in v1. \
          Run a full body pull or use temper-move instead."
     )))
+}
+
+/// Convert an optional typed `ManagedMeta` into an optional JSON
+/// `Value` for the generic frontmatter-emitter callers in this
+/// module (`build_frontmatter_from_resource`, `apply_pull_meta_only`,
+/// `write_pulled_file`). Those functions take `Option<&Value>` because
+/// they also need to emit arbitrary per-doc-type fields from the
+/// flatten bucket and from open_meta via the same YAML path.
+///
+/// This is a pure boundary shim — it does not affect hash stability
+/// because the hash travels alongside the meta as its own field.
+fn managed_meta_to_value(
+    meta: Option<&temper_core::types::managed_meta::ManagedMeta>,
+) -> Option<serde_json::Value> {
+    meta.map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null))
 }
 
 /// Rebuild a file's content with server-sourced frontmatter, preserving the
@@ -1201,6 +1225,11 @@ async fn pull_resource_meta_only(
         ))
     })?;
 
+    // Serialize the typed ManagedMeta back to JSON Value for the
+    // generic frontmatter emitter below. The `extra` flatten bucket
+    // on ManagedMeta makes this round-trip lossless.
+    let managed_value = managed_meta_to_value(meta_response.managed_meta.as_ref());
+
     apply_pull_meta_only(
         ApplyPullMetaOnly {
             file_path: &file_path,
@@ -1208,7 +1237,7 @@ async fn pull_resource_meta_only(
             resource: &resource,
             ctx: &ctx,
             doc_type: &doc_type,
-            managed_meta: meta_response.managed_meta.as_ref(),
+            managed_meta: managed_value.as_ref(),
             open_meta: meta_response.open_meta.as_ref(),
         },
         entry,
@@ -1237,6 +1266,11 @@ async fn pull_resource_body(
 
     let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
 
+    // Serialize the typed ManagedMeta back to JSON Value once for the
+    // generic frontmatter emitter callsites below. Lossless via the
+    // `extra` flatten bucket on ManagedMeta.
+    let managed_value = managed_meta_to_value(content_response.managed_meta.as_ref());
+
     // If the resource is already in the manifest, overwrite the existing file
     // instead of creating a deduplicated copy (slug-2, slug-3, etc.).
     let vault_path = if let Some(existing) = manifest.entries.get(&item.resource_id) {
@@ -1247,7 +1281,7 @@ async fn pull_resource_body(
                 &resource,
                 &ctx,
                 &doc_type,
-                content_response.managed_meta.as_ref(),
+                managed_value.as_ref(),
                 content_response.open_meta.as_ref(),
             );
             let vault_content = format!("{frontmatter}{}", &content_response.markdown);
@@ -1264,7 +1298,7 @@ async fn pull_resource_body(
                 &slug,
                 &resource,
                 &content_response.markdown,
-                content_response.managed_meta.as_ref(),
+                managed_value.as_ref(),
                 content_response.open_meta.as_ref(),
             )?
         }
@@ -1279,7 +1313,7 @@ async fn pull_resource_body(
             &slug,
             &resource,
             &content_response.markdown,
-            content_response.managed_meta.as_ref(),
+            managed_value.as_ref(),
             content_response.open_meta.as_ref(),
         )?
     };
@@ -3145,19 +3179,26 @@ mod tests {
         assert_eq!(payload.managed_hash, expected_managed);
         assert_eq!(payload.open_hash, expected_open);
 
-        // Direct comparison against split_frontmatter_tiers.
-        let (expected_managed_meta, expected_open_meta) =
+        // Direct comparison against split_frontmatter_tiers. Round-trip
+        // the managed side through the typed ManagedMeta via the flatten
+        // extras bucket so the hash stays stable.
+        let (expected_managed_meta_json, expected_open_meta) =
             temper_core::hash::split_frontmatter_tiers(&fm, "task");
+        let expected_managed_meta: temper_core::types::managed_meta::ManagedMeta =
+            serde_json::from_value(expected_managed_meta_json).expect("expected → typed");
         assert_eq!(payload.managed_meta, expected_managed_meta);
         assert_eq!(payload.open_meta, expected_open_meta);
 
         // resource_id round-trips through ResourceId::from(Uuid).
         assert_eq!(payload.resource_id, id);
 
-        // Structural checks: title + temper-stage are in managed;
-        // tags + notes are in open.
-        assert_eq!(payload.managed_meta["title"], "Payload Roundtrip");
-        assert_eq!(payload.managed_meta["temper-stage"], "backlog");
+        // Structural checks via the typed accessors — title + stage are
+        // managed tier, tags + notes are open tier.
+        assert_eq!(
+            payload.managed_meta.title.as_deref(),
+            Some("Payload Roundtrip")
+        );
+        assert_eq!(payload.managed_meta.stage.as_deref(), Some("backlog"));
         assert!(payload.open_meta.get("tags").is_some());
         assert_eq!(payload.open_meta["notes"], "hello");
     }
@@ -3196,6 +3237,10 @@ mod tests {
         assert!(local_body.contains("fake: frontmatter"));
         assert!(local_body.contains("# Heading"));
 
+        // The rebuild helper takes JSON Values (same shape that
+        // `build_frontmatter_from_resource` consumes), so construct the
+        // meta directly as Values here. The typed `ManagedMeta` path is
+        // exercised by `build_meta_update_payload_roundtrip` above.
         let managed = serde_json::json!({
             "temper-type": "task",
             "temper-context": "temper",
@@ -3233,20 +3278,33 @@ mod tests {
 
     #[test]
     fn pull_meta_only_relocation_guard() {
+        use temper_core::types::managed_meta::ManagedMeta;
+
         // (a) None → Ok
         assert!(check_relocation_guard("temper", None).is_ok());
 
         // (b) Some without temper-context → Ok
-        let meta = serde_json::json!({"title": "No ctx here"});
+        let meta = ManagedMeta {
+            title: Some("No ctx here".to_string()),
+            ..Default::default()
+        };
         assert!(check_relocation_guard("temper", Some(&meta)).is_ok());
 
         // (c) Some with matching temper-context → Ok
-        let meta = serde_json::json!({"temper-context": "temper", "title": "match"});
+        let meta = ManagedMeta {
+            context: Some("temper".to_string()),
+            title: Some("match".to_string()),
+            ..Default::default()
+        };
         assert!(check_relocation_guard("temper", Some(&meta)).is_ok());
 
         // (d) Some with differing temper-context → Err, and the error
         // message must contain both the old and new context names.
-        let meta = serde_json::json!({"temper-context": "research", "title": "moved"});
+        let meta = ManagedMeta {
+            context: Some("research".to_string()),
+            title: Some("moved".to_string()),
+            ..Default::default()
+        };
         let err = check_relocation_guard("temper", Some(&meta)).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("temper"), "err missing old ctx: {msg}");

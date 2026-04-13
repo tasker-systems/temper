@@ -3,6 +3,81 @@ import type { JsonValue } from "./serde_json/JsonValue";
 import type { ResourceId } from "./ResourceId";
 
 /**
+ * Temper-governed frontmatter fields for a vault resource.
+ *
+ * All fields use `temper-*` YAML/JSON key names via `serde(rename)`.
+ * `None` fields are omitted from serialized output.
+ *
+ * The `extra` bucket collects any keys the typed fields above don't
+ * name — most notably doc-type-schema fields like `date` (sessions)
+ * and any server-injected fields the ingest pipeline populates. This
+ * makes `ManagedMeta` a round-trip-lossless representation of the
+ * JSONB column: deserialize → re-serialize produces byte-equivalent
+ * JSON (up to canonicalization) no matter what lives in the blob.
+ *
+ * Without this bucket, the default serde "ignore unknown fields"
+ * behavior would silently drop anything not in the typed set, which
+ * would break hash stability across a typed round-trip.
+ */
+export type ManagedMeta = { 
+/**
+ * Document type (e.g., "task", "goal", "research")
+ */
+doc_type: string | null, 
+/**
+ * Vault context / namespace
+ */
+context: string | null, 
+/**
+ * ISO 8601 timestamp of last managed update
+ */
+updated: string | null, 
+/**
+ * Source URL or reference
+ */
+source: string | null, 
+/**
+ * Task workflow stage (task only)
+ */
+stage: string | null, 
+/**
+ * Task execution mode (task only)
+ */
+mode: string | null, 
+/**
+ * Task effort estimate (task only)
+ */
+effort: string | null, 
+/**
+ * Parent goal reference (task only)
+ */
+goal: string | null, 
+/**
+ * Sequence number for ordering (task/goal)
+ */
+seq: bigint | null, 
+/**
+ * Git branch associated with the task (task only)
+ */
+branch: string | null, 
+/**
+ * Pull request reference (task only)
+ */
+pr: string | null, 
+/**
+ * Goal lifecycle status (goal only)
+ */
+status: string | null, 
+/**
+ * Human-readable title (identity transport, no rename)
+ */
+title: string | null, 
+/**
+ * URL-safe slug (identity transport, no rename)
+ */
+slug: string | null, };
+
+/**
  * Response body for the metadata-only GET endpoint.
  *
  * Returns the current managed_meta / open_meta / hashes from a
@@ -16,12 +91,18 @@ export type ResourceMetaResponse = {
  */
 resource_id: ResourceId, 
 /**
- * Serialized managed (temper-*) frontmatter fields from the manifest.
+ * Typed managed (temper-*) frontmatter from the manifest. The
+ * typed fields cover everything temper knows about; any extras
+ * the server stored round-trip through `ManagedMeta::extra`.
  * `None` only if the manifest row predates meta population.
  */
-managed_meta: JsonValue | null, 
+managed_meta: ManagedMeta | null, 
 /**
- * Serialized open (user-defined) frontmatter fields from the manifest.
+ * Open (user-defined) frontmatter fields from the manifest.
+ * Intentionally untyped — open_meta is the free-form tier. Typed
+ * extraction of relationship fields lives in `ResourceRelationships`
+ * (see `temper-core::types::graph`), which parses this value on
+ * demand and ignores anything it doesn't recognize.
  * `None` only if the manifest row predates meta population.
  */
 open_meta: JsonValue | null, 

@@ -4,7 +4,7 @@ mod common;
 
 use temper_api::services::{context_service, ingest_service, meta_service};
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
 /// Helper: SHA256 hex digest of content.
 fn sha2_hex(content: &str) -> String {
@@ -561,10 +561,11 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     // The input→payload conversion in `tools::resources::update_resource_meta`
     // is a direct 5-field copy, so constructing `MetaUpdatePayload`
     // here is equivalent to invoking the tool with the same fields.
-    let new_managed = serde_json::json!({
-        "temper-type": "research",
-        "title": "MCP Meta Parity (updated)",
-    });
+    let new_managed = ManagedMeta {
+        doc_type: Some("research".to_string()),
+        title: Some("MCP Meta Parity (updated)".to_string()),
+        ..Default::default()
+    };
     let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
     let payload = MetaUpdatePayload {
         resource_id: ResourceId::from(*resource.id),

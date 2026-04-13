@@ -3,7 +3,7 @@
 mod common;
 
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
-use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
 /// Ingest a resource, then update its meta via PUT /api/resources/:id/meta,
 /// verifying the response and that title cascades to kb_resources.
@@ -52,10 +52,11 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
     assert_eq!(resource.title, "Meta Test Doc");
 
     // Build meta update payload with a new title in managed_meta.
-    let managed_meta = serde_json::json!({
-        "temper-type": "research",
-        "title": "Updated Meta Title",
-    });
+    let managed_meta = ManagedMeta {
+        doc_type: Some("research".to_string()),
+        title: Some("Updated Meta Title".to_string()),
+        ..Default::default()
+    };
     let open_meta = serde_json::json!({
         "tags": ["test", "meta"],
     });
@@ -194,10 +195,11 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
     // PUT new meta with a fresh title (cascade) and some open_meta.
     let meta_payload = MetaUpdatePayload {
         resource_id: resource.id,
-        managed_meta: serde_json::json!({
-            "temper-type": "research",
-            "title": "Chunks Still Preserved",
-        }),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            title: Some("Chunks Still Preserved".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({
             "tags": ["e2e", "chunks"],
         }),
@@ -348,7 +350,10 @@ async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
     // --- Step 1: add relates_to [r2] → expect one row in kb_resource_edges ---
     let payload_add = MetaUpdatePayload {
         resource_id: r1.id,
-        managed_meta: serde_json::json!({"temper-type": "research"}),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({
             "relates_to": [r2_ref.clone()],
         }),
@@ -388,7 +393,10 @@ async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
     // --- Step 2: clear relates_to → row removed ---
     let payload_remove = MetaUpdatePayload {
         resource_id: r1.id,
-        managed_meta: serde_json::json!({"temper-type": "research"}),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({
             "relates_to": [],
         }),
@@ -423,7 +431,10 @@ async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
     // --- Step 3: re-add → edge reappears (idempotent reconcile) ---
     let payload_readd = MetaUpdatePayload {
         resource_id: r1.id,
-        managed_meta: serde_json::json!({"temper-type": "research"}),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({
             "relates_to": [r2_ref.clone()],
         }),
@@ -505,7 +516,10 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     let second_token = common::generate_second_user_jwt();
     let valid_payload = MetaUpdatePayload {
         resource_id: resource.id,
-        managed_meta: serde_json::json!({"temper-type": "research"}),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:second_user".to_string(),
         open_hash: "sha256:second_user".to_string(),
@@ -528,7 +542,10 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     let ghost_id = uuid::Uuid::now_v7();
     let ghost_payload = MetaUpdatePayload {
         resource_id: temper_core::types::ResourceId::from(ghost_id),
-        managed_meta: serde_json::json!({"temper-type": "research"}),
+        managed_meta: ManagedMeta {
+            doc_type: Some("research".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:ghost".to_string(),
         open_hash: "sha256:ghost".to_string(),
@@ -558,9 +575,10 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
     // --- (3) Unknown doc_type → 400 ---
     let bad_doctype_payload = MetaUpdatePayload {
         resource_id: resource.id,
-        managed_meta: serde_json::json!({
-            "temper-type": "definitely-not-a-real-type",
-        }),
+        managed_meta: ManagedMeta {
+            doc_type: Some("definitely-not-a-real-type".to_string()),
+            ..Default::default()
+        },
         open_meta: serde_json::json!({}),
         managed_hash: "sha256:bad_doctype".to_string(),
         open_hash: "sha256:bad_doctype".to_string(),
@@ -691,10 +709,16 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         .expect("get_meta failed");
 
     assert_eq!(meta.resource_id, resource.id);
+    // The manifest row (fetched as JSON) round-trips into a typed
+    // `ManagedMeta` for comparison against the service response. The
+    // `extra` flatten bucket makes this lossless, so if the service's
+    // deserialize drops or mangles a field, this assertion fails.
+    let manifest_managed_typed: ManagedMeta =
+        serde_json::from_value(manifest_managed_meta).expect("manifest → typed");
     assert_eq!(
         meta.managed_meta.as_ref(),
-        Some(&manifest_managed_meta),
-        "managed_meta must match the manifest row exactly",
+        Some(&manifest_managed_typed),
+        "typed managed_meta must match the manifest row exactly",
     );
     assert_eq!(
         meta.open_meta.as_ref(),
@@ -709,12 +733,12 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
         meta.open_hash, manifest_open_hash,
         "open_hash must match the manifest row",
     );
-    // And verify the seeded-by-caller fields survived (sanity check that
-    // we're not just proving "the endpoint echoes the DB" for a
-    // degenerate empty blob).
+    // And verify the seeded-by-caller fields survived, now via the
+    // typed accessors (this is the whole point of the typed refactor —
+    // no more `.get("title").and_then(|v| v.as_str())` stringy lookups).
     assert_eq!(
-        meta.managed_meta.as_ref().and_then(|v| v.get("title")),
-        Some(&serde_json::json!("Get Meta Doc")),
+        meta.managed_meta.as_ref().and_then(|m| m.title.as_deref()),
+        Some("Get Meta Doc"),
         "caller-provided title should be present in managed_meta",
     );
     assert_eq!(

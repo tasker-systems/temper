@@ -6,6 +6,7 @@ use sqlx::FromRow;
 use uuid::Uuid;
 
 use super::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+use super::managed_meta::ManagedMeta;
 
 /// Row type for resource listings — includes joined display fields
 /// and managed_meta projections from `vault_resources_browse` view.
@@ -149,14 +150,17 @@ pub struct ContentChunk {
 pub struct ContentResponse {
     pub resource_id: ResourceId,
     pub markdown: String,
-    /// Server-side managed_meta from kb_resource_manifests.
+    /// Typed server-side managed_meta from kb_resource_manifests. The
+    /// typed fields name everything temper knows about; any extras the
+    /// server stored round-trip through `ManagedMeta::extra`.
     /// Used by CLI sync pull to reconstruct complete frontmatter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub managed_meta: Option<serde_json::Value>,
-    /// Server-side open_meta from kb_resource_manifests.
-    /// Used by CLI sync pull to reconstruct complete frontmatter
-    /// (both tiers — managed_meta is the temper-* fields, open_meta
-    /// is user-defined fields including relationship declarations).
+    pub managed_meta: Option<ManagedMeta>,
+    /// Server-side open_meta from kb_resource_manifests. Intentionally
+    /// untyped — open_meta is the free-form tier. Typed extraction of
+    /// relationship fields lives in `ResourceRelationships` (see
+    /// `types::graph`), which parses this value on demand and ignores
+    /// anything it doesn't recognize.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub open_meta: Option<serde_json::Value>,
 }
@@ -177,10 +181,10 @@ mod tests {
     #[test]
     fn content_response_roundtrips_with_both_meta_tiers() {
         let resource_id = ResourceId::from(Uuid::nil());
-        let managed_meta = serde_json::json!({
-            "temper-id": "res_123",
-            "temper-stage": "draft",
-        });
+        let managed_meta = ManagedMeta {
+            stage: Some("draft".to_string()),
+            ..Default::default()
+        };
         let open_meta = serde_json::json!({
             "tags": ["one", "two"],
             "related": ["res_999"],

@@ -2,6 +2,7 @@
 import type { ContextId } from "./ContextId";
 import type { DocTypeId } from "./DocTypeId";
 import type { JsonValue } from "./serde_json/JsonValue";
+import type { ManagedMeta } from "./managed_meta";
 import type { ProfileId } from "./ProfileId";
 import type { ResourceId } from "./ResourceId";
 
@@ -10,15 +11,18 @@ import type { ResourceId } from "./ResourceId";
  */
 export type ContentResponse = { resource_id: ResourceId, markdown: string, 
 /**
- * Server-side managed_meta from kb_resource_manifests.
+ * Typed server-side managed_meta from kb_resource_manifests. The
+ * typed fields name everything temper knows about; any extras the
+ * server stored round-trip through `ManagedMeta::extra`.
  * Used by CLI sync pull to reconstruct complete frontmatter.
  */
-managed_meta: JsonValue | null, 
+managed_meta: ManagedMeta | null, 
 /**
- * Server-side open_meta from kb_resource_manifests.
- * Used by CLI sync pull to reconstruct complete frontmatter
- * (both tiers — managed_meta is the temper-* fields, open_meta
- * is user-defined fields including relationship declarations).
+ * Server-side open_meta from kb_resource_manifests. Intentionally
+ * untyped — open_meta is the free-form tier. Typed extraction of
+ * relationship fields lives in `ResourceRelationships` (see
+ * `types::graph`), which parses this value on demand and ignores
+ * anything it doesn't recognize.
  */
 open_meta: JsonValue | null, };
 

@@ -14,14 +14,14 @@ use serde_json::json;
 use sqlx::PgPool;
 use temper_core::types::ids::ProfileId;
 use temper_core::types::ids::ResourceId;
-use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
 /// Build a MetaUpdatePayload with the given open_meta value. Uses stable
 /// dummy hashes — the service just stores them, it does not validate.
 fn meta_payload(resource_id: uuid::Uuid, open_meta: serde_json::Value) -> MetaUpdatePayload {
     MetaUpdatePayload {
         resource_id: ResourceId::from(resource_id),
-        managed_meta: json!({}),
+        managed_meta: ManagedMeta::default(),
         open_meta,
         managed_hash: "test-mhash".to_string(),
         open_hash: "test-ohash".to_string(),
