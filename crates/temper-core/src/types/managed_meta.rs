@@ -68,6 +68,34 @@ pub struct ManagedMeta {
     pub slug: Option<String>,
 }
 
+/// Response body for the metadata-only GET endpoint.
+///
+/// Returns the current managed_meta / open_meta / hashes from a
+/// resource's manifest row without reconstructing the markdown body
+/// from `kb_chunks`. Used by the CLI sync pull path to fetch just the
+/// meta tier when the body side already agrees.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "managed_meta.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ResourceMetaResponse {
+    /// UUID of the resource
+    pub resource_id: ResourceId,
+    /// Serialized managed (temper-*) frontmatter fields from the manifest.
+    /// `None` only if the manifest row predates meta population.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_meta: Option<Value>,
+    /// Serialized open (user-defined) frontmatter fields from the manifest.
+    /// `None` only if the manifest row predates meta population.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meta: Option<Value>,
+    /// SHA-256 hash of the managed_meta JSON
+    pub managed_hash: String,
+    /// SHA-256 hash of the open_meta JSON
+    pub open_hash: String,
+}
+
 /// Payload for meta-only sync updates that do not require re-chunking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]

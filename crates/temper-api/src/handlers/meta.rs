@@ -10,7 +10,33 @@ use crate::services::meta_service;
 use crate::state::AppState;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::managed_meta::{MetaUpdatePayload, ResourceMetaResponse};
+
+#[utoipa::path(
+    get,
+    path = "/api/resources/{id}/meta",
+    tag = "Meta",
+    params(("id" = Uuid, Path, description = "Resource ID")),
+    security(("bearer_auth" = [])),
+    responses(
+        (status = 200, description = "Current managed/open meta for the resource", body = ResourceMetaResponse),
+        (status = 401, description = "Unauthorized", body = ErrorBody),
+        (status = 404, description = "Not found", body = ErrorBody),
+    )
+)]
+pub async fn get_meta(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(resource_id): Path<Uuid>,
+) -> ApiResult<Json<ResourceMetaResponse>> {
+    meta_service::get_meta(
+        &state.pool,
+        ProfileId::from(auth.0.profile.id),
+        ResourceId::from(resource_id),
+    )
+    .await
+    .map(Json)
+}
 
 #[utoipa::path(
     put,

@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::graph::GraphEdgeRow;
-use temper_core::types::managed_meta::MetaUpdatePayload;
+use temper_core::types::managed_meta::{MetaUpdatePayload, ResourceMetaResponse};
 use temper_core::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
     ResourceListResponse, ResourceRow, ResourceUpdateRequest,
@@ -90,6 +90,20 @@ impl<'a> ResourceClient<'a> {
     pub async fn content(&self, id: Uuid) -> Result<ContentResponse> {
         let token = self.http.resolve_token()?;
         let path = format!("/api/resources/{id}/content");
+        let req = self.http.get(&path);
+        self.http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await
+    }
+
+    /// GET /api/resources/{id}/meta — fetch just the manifest meta tier
+    /// (managed_meta, open_meta, managed_hash, open_hash) without
+    /// reconstructing markdown from chunks. Used by the metadata-only
+    /// sync pull path to avoid paying for server-side body reconstruction
+    /// when only the meta side has drifted.
+    pub async fn get_meta(&self, id: Uuid) -> Result<ResourceMetaResponse> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/resources/{id}/meta");
         let req = self.http.get(&path);
         self.http
             .send_json(&Method::GET, &path, req, Some(&token))

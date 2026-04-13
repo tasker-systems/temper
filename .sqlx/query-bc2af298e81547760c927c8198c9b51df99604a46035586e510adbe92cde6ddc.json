@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT managed_meta as \"managed_meta: Value\",\n                  open_meta as \"open_meta: Value\",\n                  managed_hash,\n                  open_hash\n             FROM kb_resource_manifests\n            WHERE resource_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "managed_meta: Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "open_meta: Value",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 2,
+        "name": "managed_hash",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "open_hash",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bc2af298e81547760c927c8198c9b51df99604a46035586e510adbe92cde6ddc"
+}

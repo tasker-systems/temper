@@ -1183,16 +1183,13 @@ async fn pull_resource_meta_only(
         .await
         .map_err(crate::commands::client_err)?;
 
-    // NOTE: content_response.markdown is ignored — a dedicated
-    // /api/resources/{id}/meta GET endpoint would avoid the server-side
-    // chunk reconstruction. Out of scope for E1b.
-    let content_response = client
+    let meta_response = client
         .resources()
-        .content(Uuid::from(item.resource_id))
+        .get_meta(Uuid::from(item.resource_id))
         .await
         .map_err(crate::commands::client_err)?;
 
-    check_relocation_guard(&ctx, content_response.managed_meta.as_ref())?;
+    check_relocation_guard(&ctx, meta_response.managed_meta.as_ref())?;
 
     let existing_content = std::fs::read_to_string(&file_path)?;
     let local_body = strip_frontmatter(&existing_content).to_string();
@@ -1211,8 +1208,8 @@ async fn pull_resource_meta_only(
             resource: &resource,
             ctx: &ctx,
             doc_type: &doc_type,
-            managed_meta: content_response.managed_meta.as_ref(),
-            open_meta: content_response.open_meta.as_ref(),
+            managed_meta: meta_response.managed_meta.as_ref(),
+            open_meta: meta_response.open_meta.as_ref(),
         },
         entry,
     )?;

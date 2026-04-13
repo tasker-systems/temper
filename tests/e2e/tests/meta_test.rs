@@ -579,3 +579,198 @@ async fn meta_patch_authorization_and_errors(pool: sqlx::PgPool) {
         "unknown doc_type must map to 400"
     );
 }
+
+/// `GET /api/resources/{id}/meta` must return the current manifest meta
+/// tier (managed_meta, open_meta, managed_hash, open_hash) without
+/// reconstructing markdown from chunks. Asserted: response fields match
+/// the seeded values, `kb_chunks` rows are byte-identical before and
+/// after the GET, and auth scoping works (second user → 404, ghost id →
+/// 404; the READ path uses `get_visible`, which does not leak existence).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("meta-get")
+        .await
+        .expect("context create failed");
+
+    // Seed two real packed chunks so we can prove the GET path does not
+    // touch the body side.
+    let chunk_a = PackedChunk {
+        chunk_index: 0,
+        header_path: "Section A".to_string(),
+        heading_depth: 1,
+        content: "# Section A\n\nBody for A.".to_string(),
+        content_hash: format!("{:0>64}", "a"),
+        embedding: vec![0.1_f32; 768],
+    };
+    let chunk_b = PackedChunk {
+        chunk_index: 1,
+        header_path: "Section B".to_string(),
+        heading_depth: 1,
+        content: "# Section B\n\nBody for B.".to_string(),
+        content_hash: format!("{:0>64}", "b"),
+        embedding: vec![0.2_f32; 768],
+    };
+
+    let seeded_managed = serde_json::json!({
+        "temper-type": "research",
+        "title": "Get Meta Doc",
+    });
+    let seeded_open = serde_json::json!({
+        "tags": ["get", "meta"],
+    });
+
+    let payload = IngestPayload {
+        title: "Get Meta Doc".to_string(),
+        origin_uri: "test://e2e/meta-get".to_string(),
+        context_name: "meta-get".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(format!("{:0>64}", "c")),
+        slug: "get-meta-doc".to_string(),
+        content: "# Section A\n\nBody for A.\n\n# Section B\n\nBody for B.".to_string(),
+        metadata: None,
+        managed_meta: Some(seeded_managed.clone()),
+        open_meta: Some(seeded_open.clone()),
+        chunks_packed: Some(pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks")),
+    };
+
+    let resource = app
+        .client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("ingest create failed");
+
+    // Baseline chunk state.
+    let chunks_before: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
+         WHERE resource_id = $1 ORDER BY chunk_index",
+    )
+    .bind(resource.id)
+    .fetch_all(&pool)
+    .await
+    .expect("fetch chunks before");
+    assert_eq!(chunks_before.len(), 2, "expected two seed chunks");
+
+    // Authoritative manifest row — the GET must return these exactly.
+    // Note: ingest augments managed_meta server-side (e.g. adding `date`),
+    // so the assertion must compare against the post-ingest manifest row,
+    // not the seeded input. The _ bindings keep the seeded values alive
+    // for readability and so the seeded tag is referenced somewhere in
+    // the test.
+    let _ = (&seeded_managed, &seeded_open);
+    let (manifest_managed_meta, manifest_open_meta, manifest_managed_hash, manifest_open_hash): (
+        serde_json::Value,
+        serde_json::Value,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "SELECT managed_meta, open_meta, managed_hash, open_hash \
+         FROM kb_resource_manifests WHERE resource_id = $1",
+    )
+    .bind(resource.id)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch manifest row");
+
+    // --- (1) Happy path: client.get_meta returns the current meta tier ---
+    let meta = app
+        .client
+        .resources()
+        .get_meta(resource.id.into())
+        .await
+        .expect("get_meta failed");
+
+    assert_eq!(meta.resource_id, resource.id);
+    assert_eq!(
+        meta.managed_meta.as_ref(),
+        Some(&manifest_managed_meta),
+        "managed_meta must match the manifest row exactly",
+    );
+    assert_eq!(
+        meta.open_meta.as_ref(),
+        Some(&manifest_open_meta),
+        "open_meta must match the manifest row exactly",
+    );
+    assert_eq!(
+        meta.managed_hash, manifest_managed_hash,
+        "managed_hash must match the manifest row",
+    );
+    assert_eq!(
+        meta.open_hash, manifest_open_hash,
+        "open_hash must match the manifest row",
+    );
+    // And verify the seeded-by-caller fields survived (sanity check that
+    // we're not just proving "the endpoint echoes the DB" for a
+    // degenerate empty blob).
+    assert_eq!(
+        meta.managed_meta.as_ref().and_then(|v| v.get("title")),
+        Some(&serde_json::json!("Get Meta Doc")),
+        "caller-provided title should be present in managed_meta",
+    );
+    assert_eq!(
+        meta.open_meta.as_ref().and_then(|v| v.get("tags")),
+        Some(&serde_json::json!(["get", "meta"])),
+        "caller-provided tags should be present in open_meta",
+    );
+
+    // --- (2) Chunks untouched by the GET ---
+    let chunks_after: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
+         WHERE resource_id = $1 ORDER BY chunk_index",
+    )
+    .bind(resource.id)
+    .fetch_all(&pool)
+    .await
+    .expect("fetch chunks after");
+    assert_eq!(
+        chunks_after, chunks_before,
+        "GET /meta must not disturb chunk rows",
+    );
+
+    // --- (3) Second user → 404 ---
+    //
+    // `resource_service::get_visible` maps "not visible to caller" to
+    // `ApiError::NotFound` (see meta_service::get_meta). That is stricter
+    // than `update_meta`'s 403-via-`can_modify_resource` behavior, and it
+    // is the correct REST pattern for a READ: don't leak existence across
+    // visibility boundaries. If this mapping is later refined, this test
+    // will fail loudly so the author can decide.
+    let second_token = common::generate_second_user_jwt();
+    let resp = app
+        .reqwest_client
+        .get(app.url(&format!("/api/resources/{}/meta", resource.id)))
+        .header("Authorization", format!("Bearer {second_token}"))
+        .send()
+        .await
+        .expect("second-user get_meta request failed");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "second user must see 404 (not 403) for a resource they cannot see",
+    );
+
+    // --- (4) Ghost resource id → 404 ---
+    let ghost_id = uuid::Uuid::now_v7();
+    let resp = app
+        .reqwest_client
+        .get(app.url(&format!("/api/resources/{ghost_id}/meta")))
+        .header("Authorization", format!("Bearer {}", app.token))
+        .send()
+        .await
+        .expect("ghost get_meta request failed");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "unknown resource id must map to 404 on the READ path",
+    );
+}
