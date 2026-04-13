@@ -5,8 +5,11 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::services::{context_service, doc_type_service, ingest_service, resource_service};
+use temper_api::services::{
+    context_service, doc_type_service, ingest_service, meta_service, resource_service,
+};
 use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::managed_meta::MetaUpdatePayload;
 
 use crate::service::TemperMcpService;
 
@@ -84,6 +87,27 @@ pub struct UpdateResourceInput {
     pub open_meta: Option<serde_json::Value>,
 }
 
+/// MCP input for update_resource_meta.
+///
+/// Use when the caller wants to change only a resource's frontmatter
+/// (managed_meta / open_meta) without re-chunking or re-embedding the
+/// body. This is the MCP peer of `PUT /api/resources/{id}/meta`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateResourceMetaInput {
+    /// UUID of the resource to update.
+    pub id: Uuid,
+    /// New managed (temper-*) frontmatter as JSON.
+    pub managed_meta: serde_json::Value,
+    /// New open (user-defined) frontmatter as JSON.
+    pub open_meta: serde_json::Value,
+    /// SHA-256 hash of the managed_meta JSON. The caller computes this
+    /// the same way the CLI sync path does; the server writes it
+    /// verbatim into `kb_resource_manifests.managed_hash`.
+    pub managed_hash: String,
+    /// SHA-256 hash of the open_meta JSON. Stored verbatim.
+    pub open_hash: String,
+}
+
 /// MCP input for delete_resource.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct DeleteResourceInput {
@@ -112,6 +136,13 @@ pub struct CreateResourceResponse {
 #[derive(Debug, serde::Serialize)]
 pub struct DeleteResourceResponse {
     pub deleted: bool,
+    pub id: Uuid,
+}
+
+/// Typed response for update_resource_meta.
+#[derive(Debug, serde::Serialize)]
+pub struct UpdateResourceMetaResponse {
+    pub updated: bool,
     pub id: Uuid,
 }
 
@@ -470,6 +501,56 @@ pub async fn update_resource(
     let enriched = enrich_resource(pool, profile_id, &row).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
+    )]))
+}
+
+pub async fn update_resource_meta(
+    svc: &TemperMcpService,
+    input: UpdateResourceMetaInput,
+) -> Result<CallToolResult, rmcp::ErrorData> {
+    let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+    let profile_id = ProfileId::from(profile.id);
+    let resource_id = ResourceId::from(input.id);
+
+    // Delegate to the shared service used by the REST PUT handler.
+    // `meta_service::update_meta` runs its own `can_modify_resource`
+    // check, updates the manifest, cascades identity fields, writes
+    // the event + audit, and reconciles edges. The MCP tool does not
+    // duplicate any of that.
+    let payload = MetaUpdatePayload {
+        resource_id,
+        managed_meta: input.managed_meta,
+        open_meta: input.open_meta,
+        managed_hash: input.managed_hash,
+        open_hash: input.open_hash,
+    };
+
+    meta_service::update_meta(pool, profile_id, resource_id, "mcp", payload)
+        .await
+        .map_err(|e| match e {
+            temper_api::error::ApiError::Forbidden => rmcp::ErrorData::invalid_params(
+                "Resource not found or not modifiable".to_string(),
+                None,
+            ),
+            temper_api::error::ApiError::NotFound => {
+                rmcp::ErrorData::invalid_params("Resource not found".to_string(), None)
+            }
+            temper_api::error::ApiError::BadRequest(msg) => {
+                rmcp::ErrorData::invalid_params(msg, None)
+            }
+            other => rmcp::ErrorData::internal_error(
+                format!("Failed to update resource meta: {other}"),
+                None,
+            ),
+        })?;
+
+    let response = UpdateResourceMetaResponse {
+        updated: true,
+        id: input.id,
+    };
+    Ok(CallToolResult::success(vec![rmcp::model::Content::text(
+        to_text(&response),
     )]))
 }
 

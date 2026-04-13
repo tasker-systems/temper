@@ -174,6 +174,18 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Update a resource's frontmatter (managed_meta and open_meta) without re-chunking or re-embedding. Use for metadata-only edits like stage, tags, or relationship declarations. For content changes, use update_resource. Requires current managed_hash and open_hash for the updated payloads."
+    )]
+    async fn update_resource_meta(
+        &self,
+        Parameters(input): Parameters<tools::resources::UpdateResourceMetaInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::resources::update_resource_meta(self, input).await
+    }
+
+    #[tool(
         description = "Soft-delete a resource by ID. The resource is deactivated, not permanently removed."
     )]
     async fn delete_resource(

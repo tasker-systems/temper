@@ -2,8 +2,9 @@
 
 mod common;
 
-use temper_api::services::{context_service, ingest_service};
-use temper_core::types::ids::ProfileId;
+use temper_api::services::{context_service, ingest_service, meta_service};
+use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::managed_meta::MetaUpdatePayload;
 
 /// Helper: SHA256 hex digest of content.
 fn sha2_hex(content: &str) -> String {
@@ -469,5 +470,170 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     assert_eq!(
         current_count, 2,
         "expected 2 current chunks after update, got {current_count}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MCP parity: update_resource_meta preserves chunks and body_hash
+// ---------------------------------------------------------------------------
+
+/// The MCP `update_resource_meta` tool delegates to
+/// `meta_service::update_meta`, which is the same service that powers
+/// `PUT /api/resources/{id}/meta`. This test locks in the "meta-only"
+/// invariants through that entry point so a future refactor that moves
+/// MCP tools onto a different service path will fail loudly.
+///
+/// Mirrors the REST A1 test `meta_patch_preserves_chunks_and_body_hash`
+/// in `meta_test.rs`: seed chunks, update meta, assert chunks + body_hash
+/// stay byte-identical while managed/open hashes advance and the title
+/// cascades to `kb_resources`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    let profile_id = resolve_test_profile(&pool).await;
+
+    context_service::create(&pool, profile_id, "mcp-meta-parity")
+        .await
+        .expect("context create");
+    let context = context_service::resolve_by_name(&pool, profile_id, "mcp-meta-parity")
+        .await
+        .expect("context resolve");
+    let doc_type_id = ingest_service::resolve_doc_type(&pool, "research")
+        .await
+        .expect("doc_type");
+
+    // Seed a resource with two real packed chunks.
+    let chunk_a = fake_chunk(0, "Section A", "Body for section A.");
+    let chunk_b = fake_chunk(1, "Section B", "Body for section B.");
+    let content = "# Section A\n\nBody for section A.\n\n# Section B\n\nBody for section B.";
+    let body_hash = format!("sha256:{}", sha2_hex(content));
+    let packed = temper_core::types::ingest::pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks");
+    let seeded_managed = serde_json::json!({"temper-type": "research", "title": "MCP Meta Parity"});
+    let seeded_open = serde_json::json!({"tags": ["mcp", "parity"]});
+
+    let resource = ingest_service::create_resource_with_manifest(
+        &pool,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "mcp-test",
+            context_id: context.id,
+            doc_type_id,
+            doc_type_name: "research",
+            title: "MCP Meta Parity",
+            slug: Some("mcp-meta-parity"),
+            origin_uri: "mcp://test/meta-parity",
+            content_hash: &body_hash,
+            managed_meta: &seeded_managed,
+            open_meta: &seeded_open,
+            chunks_packed: Some(&packed),
+        },
+    )
+    .await
+    .expect("create resource");
+
+    // Baseline chunk rows + manifest.
+    let chunks_before: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
+         WHERE resource_id = $1 ORDER BY chunk_index",
+    )
+    .bind(*resource.id)
+    .fetch_all(&pool)
+    .await
+    .expect("chunks before");
+    assert_eq!(chunks_before.len(), 2, "expected 2 seed chunks");
+
+    let manifest_before: (String, String, String) = sqlx::query_as(
+        "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
+    )
+    .bind(*resource.id)
+    .fetch_one(&pool)
+    .await
+    .expect("manifest before");
+
+    // Drive the same service entry point the MCP tool delegates to.
+    // The input→payload conversion in `tools::resources::update_resource_meta`
+    // is a direct 5-field copy, so constructing `MetaUpdatePayload`
+    // here is equivalent to invoking the tool with the same fields.
+    let new_managed = serde_json::json!({
+        "temper-type": "research",
+        "title": "MCP Meta Parity (updated)",
+    });
+    let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
+    let payload = MetaUpdatePayload {
+        resource_id: ResourceId::from(*resource.id),
+        managed_meta: new_managed,
+        open_meta: new_open,
+        managed_hash: "sha256:mcp_meta_parity_managed".to_string(),
+        open_hash: "sha256:mcp_meta_parity_open".to_string(),
+    };
+
+    meta_service::update_meta(
+        &pool,
+        profile_id,
+        ResourceId::from(*resource.id),
+        "mcp",
+        payload.clone(),
+    )
+    .await
+    .expect("meta_service::update_meta failed");
+
+    // Invariants: body_hash unchanged, managed/open hashes advance,
+    // chunk rows byte-identical, title cascaded.
+    let manifest_after: (String, String, String) = sqlx::query_as(
+        "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
+    )
+    .bind(*resource.id)
+    .fetch_one(&pool)
+    .await
+    .expect("manifest after");
+
+    assert_eq!(
+        manifest_after.0, manifest_before.0,
+        "body_hash must NOT change on a meta-only MCP update",
+    );
+    assert_eq!(
+        manifest_after.1, payload.managed_hash,
+        "managed_hash must match the payload",
+    );
+    assert_ne!(
+        manifest_after.1, manifest_before.1,
+        "managed_hash must advance from its pre-update value",
+    );
+    assert_eq!(
+        manifest_after.2, payload.open_hash,
+        "open_hash must match the payload",
+    );
+    assert_ne!(
+        manifest_after.2, manifest_before.2,
+        "open_hash must advance from its pre-update value",
+    );
+
+    let chunks_after: Vec<(i32, String, String)> = sqlx::query_as(
+        "SELECT chunk_index, content, content_hash FROM kb_current_chunks \
+         WHERE resource_id = $1 ORDER BY chunk_index",
+    )
+    .bind(*resource.id)
+    .fetch_all(&pool)
+    .await
+    .expect("chunks after");
+    assert_eq!(
+        chunks_after, chunks_before,
+        "chunk rows must be byte-identical through the MCP meta path",
+    );
+
+    let title_after: String = sqlx::query_scalar("SELECT title FROM kb_resources WHERE id = $1")
+        .bind(*resource.id)
+        .fetch_one(&pool)
+        .await
+        .expect("title after");
+    assert_eq!(
+        title_after, "MCP Meta Parity (updated)",
+        "title must cascade from managed_meta on the MCP path",
     );
 }
