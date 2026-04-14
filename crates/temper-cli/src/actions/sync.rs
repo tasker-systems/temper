@@ -1092,14 +1092,17 @@ fn managed_meta_to_value(
 /// Rebuild a file's content with server-sourced frontmatter, preserving the
 /// local body.
 ///
-/// `build_frontmatter_from_resource` already terminates with `---\n\n` — the
-/// blank separator line is part of the frontmatter block. `strip_frontmatter`,
-/// however, returns everything after the closing `---\n`, so a `local_body`
-/// derived from a well-formed file starts with a leading `\n` (the blank
-/// separator). Concatenating naively would double that newline and, because
-/// the next pull re-strips and re-rebuilds, drift one extra blank line per
-/// pull cycle. Strip a single leading `\n` from `local_body` before concat to
-/// make the operation idempotent.
+/// `Frontmatter::serialize()` produces `---\n<yaml>---\n{body}`, so the
+/// blank separator line between the closing fence and the first content
+/// line must live at the start of the body. `strip_frontmatter`, however,
+/// returns everything after the closing `---\n`, so a `local_body` derived
+/// from a well-formed file starts with a leading `\n` (the blank separator).
+/// Passing that straight to `normalize_body_for_vault` would leave it alone
+/// (it already starts with `\n`); but on subsequent pulls the separator
+/// would accumulate (one extra blank line per pull cycle) unless we make
+/// the stripping idempotent. Strip a single leading `\n` from `local_body`,
+/// then let `normalize_body_for_vault` re-add exactly one `\n` so the
+/// operation is a fixed point.
 fn rebuild_file_with_new_meta(
     local_body: &str,
     resource: &temper_core::types::ResourceRow,
@@ -1108,9 +1111,6 @@ fn rebuild_file_with_new_meta(
     managed_meta: Option<&serde_json::Value>,
     open_meta: Option<&serde_json::Value>,
 ) -> Result<String> {
-    // Strip the leading `\n` that strip_frontmatter returns when the file
-    // had a blank separator line — normalize_body_for_vault re-adds it so
-    // the separator is preserved in the serialized form.
     let body_after_separator = local_body.strip_prefix('\n').unwrap_or(local_body);
     let fm = ingest::build_frontmatter_from_resource(
         resource,
@@ -1120,7 +1120,9 @@ fn rebuild_file_with_new_meta(
         managed_meta,
         open_meta,
     )?;
-    fm.serialize().map_err(Into::into)
+    fm.serialize().map_err(|e| {
+        crate::error::TemperError::Vault(format!("rebuild_file_with_new_meta serialize: {e}"))
+    })
 }
 
 /// Parameters for the pure (non-async) half of `pull_resource_meta_only`.
@@ -1311,7 +1313,12 @@ async fn pull_resource_body(
                 managed_value.as_ref(),
                 content_response.open_meta.as_ref(),
             )?;
-            fm.write_to(&existing_path)?;
+            fm.write_to(&existing_path).map_err(|e| {
+                crate::error::TemperError::Vault(format!(
+                    "pull_resource_body write {}: {e}",
+                    existing_path.display()
+                ))
+            })?;
             existing_path
         } else {
             // Manifest entry exists but file is missing — write to expected path.
@@ -1412,7 +1419,12 @@ fn write_pulled_file(
         managed_meta,
         open_meta,
     )?;
-    fm.write_to(&vault_path)?;
+    fm.write_to(&vault_path).map_err(|e| {
+        crate::error::TemperError::Vault(format!(
+            "write_pulled_file write {}: {e}",
+            vault_path.display()
+        ))
+    })?;
 
     Ok(vault_path)
 }

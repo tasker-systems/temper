@@ -483,9 +483,16 @@ pub fn build_frontmatter_from_resource(
     }
     if let Some(obj) = managed_meta.and_then(|m| m.as_object()) {
         for (k, v) in obj {
-            // System fields are set above; skip them as defense-in-depth
-            // against double-application.
-            if temper_core::frontmatter::fields::SYSTEM_MANAGED_FIELDS.contains(&k.as_str()) {
+            // System fields plus `title` are set above from resource-row
+            // columns; skip them as defense-in-depth so a drifted
+            // managed_meta payload can't overwrite the canonical values.
+            //
+            // `title` is not part of SYSTEM_MANAGED_FIELDS (that constant
+            // describes fields the CLI user cannot edit, not fields that
+            // are resource-row-sourced) — we hardcode the skip locally.
+            if temper_core::frontmatter::fields::SYSTEM_MANAGED_FIELDS.contains(&k.as_str())
+                || k == "title"
+            {
                 continue;
             }
             fm.set_managed_field(k, v.clone());
@@ -553,7 +560,9 @@ pub fn write_vault_file_and_register(
         ingestion_source,
         extra_fields,
     )?;
-    fm.write_to(&vault_path)?;
+    fm.write_to(&vault_path).map_err(|e| {
+        crate::error::TemperError::Vault(format!("ingest write {}: {e}", vault_path.display()))
+    })?;
 
     // Register in manifest.
     let temper_dir = vault_root.join(".temper");

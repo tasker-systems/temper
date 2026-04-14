@@ -64,7 +64,9 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     managed_value.as_ref(),
                     content_response.open_meta.as_ref(),
                 )?;
-                fm.write_to(&vault_path)?;
+                fm.write_to(&vault_path).map_err(|e| {
+                    TemperError::Vault(format!("pull write {}: {e}", vault_path.display()))
+                })?;
 
                 // Update manifest entry.
                 let content_hash = temper_core::hash::compute_body_hash(fm.body());
