@@ -27,9 +27,9 @@ pub fn save(
 
     if note_path.exists() {
         if let Some(body) = stdin_content {
-            let existing = std::fs::read_to_string(&note_path)?;
-            let updated = vault::replace_body(&existing, body);
-            std::fs::write(&note_path, updated)?;
+            let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
+            fm.set_body(body.to_string());
+            fm.write_to(&note_path)?;
             let relative = note_path
                 .strip_prefix(&config.vault_root)
                 .unwrap_or(&note_path);
@@ -46,17 +46,23 @@ pub fn save(
         project: context_name,
         slug: &slug,
     };
-    let mut content = tmpl
+    let rendered = tmpl
         .render()
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
-    content = vault::set_frontmatter_field(&content, "temper-context", context_name);
-
+    let mut fm = temper_core::frontmatter::Frontmatter::try_from(rendered.as_str())?;
+    fm.set_managed_field(
+        "temper-context",
+        serde_json::Value::String(context_name.to_string()),
+    );
     if let Some(body) = stdin_content {
-        content = vault::replace_body(&content, body);
+        fm.set_body(body.to_string());
     }
 
-    vault::write_note(&note_path, &content)?;
+    if let Some(parent) = note_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    fm.write_to(&note_path)?;
 
     let relative = note_path
         .strip_prefix(&config.vault_root)
