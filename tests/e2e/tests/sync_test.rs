@@ -1257,16 +1257,24 @@ async fn seed_synced_manifest_entry(
     std::fs::create_dir_all(abs_path.parent().unwrap()).expect("create parent dirs");
     std::fs::write(&abs_path, &vault_content).expect("write vault file");
 
-    // Compute hashes the same way `rehash_manifest` / `pull_resource_body` do.
+    // Compute hashes via the authoritative frontmatter module.
     let body = temper_cli::actions::sync::strip_frontmatter(&vault_content);
     let local_body_hash = temper_core::hash::compute_body_hash(body);
-    let fm_yaml = temper_cli::vault::parse_frontmatter(&vault_content);
-    let (managed_meta_split, open_meta_split) = match fm_yaml.as_ref() {
-        Some(fm) => temper_core::hash::split_frontmatter_tiers(fm, doc_type),
-        None => (serde_json::json!({}), serde_json::json!({})),
-    };
-    let (managed_hash, open_hash) =
-        temper_core::hash::compute_frontmatter_hashes_from_yaml(fm_yaml.as_ref(), doc_type);
+    let (managed_meta_split, open_meta_split, managed_hash, open_hash) =
+        match temper_core::frontmatter::Frontmatter::try_from(vault_content.as_str()) {
+            Ok(fm) => {
+                let managed = fm.managed_json();
+                let open = fm.open_json();
+                let (mh, oh) = fm.hashes();
+                (managed, open, mh, oh)
+            }
+            Err(_) => (
+                serde_json::json!({}),
+                serde_json::json!({}),
+                temper_core::hash::compute_managed_hash(doc_type, &serde_json::json!({})),
+                temper_core::hash::compute_open_hash(&serde_json::json!({})),
+            ),
+        };
 
     // Overwrite the server's body_hash directly so it matches the
     // leading-`\n`-prefixed body the vault file produces via
@@ -1285,7 +1293,7 @@ async fn seed_synced_manifest_entry(
     // that `IngestPayload` carried — won't match the file-derived hash, and
     // the first sync_orchestration round will see a spurious meta drift.
     //
-    // `managed_meta_split` is a JSON Value from `split_frontmatter_tiers`;
+    // `managed_meta_split` is a JSON Value from `Frontmatter::managed_json`;
     // deserialize into the typed `ManagedMeta` via the flatten extras
     // bucket so the hash stays stable through the round-trip.
     let managed_meta_typed: ManagedMeta =
