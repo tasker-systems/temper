@@ -5,7 +5,7 @@
 //! JSON columns on the server side, provided the same defaults are applied.
 
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -100,95 +100,6 @@ pub fn compute_managed_hash(doc_type: &str, managed_meta: &serde_json::Value) ->
 /// Hash open (user-defined) metadata — canonical JSON, no defaults.
 pub fn compute_open_hash(open_meta: &serde_json::Value) -> String {
     hash_canonical_json(open_meta)
-}
-
-// ---------------------------------------------------------------------------
-// Frontmatter splitting
-// ---------------------------------------------------------------------------
-
-/// Split YAML frontmatter into (managed, open) JSON values.
-///
-/// - **Identity fields** (`temper-id`, `temper-provisional-id`) and
-///   **tier-1 system fields** (`temper-context`, `temper-type`, …) are
-///   excluded from both tiers.
-/// - `temper-*` prefixed keys, `title`, `slug`, and any properties defined
-///   in the doc-type schema go to **managed**.
-/// - Everything else goes to **open**.
-pub fn split_frontmatter_tiers(
-    fm: &serde_yaml::Value,
-    doc_type: &str,
-) -> (serde_json::Value, serde_json::Value) {
-    let Some(mapping) = fm.as_mapping() else {
-        return (serde_json::json!({}), serde_json::json!({}));
-    };
-
-    let skip: HashSet<&str> = IDENTITY_FIELDS
-        .iter()
-        .chain(TIER1_SYSTEM_FIELDS.iter())
-        .copied()
-        .collect();
-
-    // Collect doc-type schema property names so non-temper-* schema fields
-    // (like `date` for sessions) route to managed_meta instead of open_meta.
-    let schema_keys: HashSet<String> = crate::schema::schema_value(doc_type)
-        .ok()
-        .and_then(|v| v.get("properties")?.as_object().cloned())
-        .map(|props| props.keys().cloned().collect())
-        .unwrap_or_default();
-
-    let mut managed = serde_json::Map::new();
-    let mut open = serde_json::Map::new();
-
-    for (key, value) in mapping {
-        let Some(key_str) = key.as_str() else {
-            continue;
-        };
-        if skip.contains(key_str) {
-            continue;
-        }
-        let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
-        if key_str.starts_with("temper-")
-            || key_str == "title"
-            || key_str == "slug"
-            || schema_keys.contains(key_str)
-        {
-            managed.insert(key_str.to_string(), json_value);
-        } else {
-            open.insert(key_str.to_string(), json_value);
-        }
-    }
-
-    (
-        serde_json::Value::Object(managed),
-        serde_json::Value::Object(open),
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Convenience helper
-// ---------------------------------------------------------------------------
-
-/// Convenience: parse frontmatter, split tiers, and compute both hashes.
-///
-/// Returns `(managed_hash, open_hash)`. If frontmatter is `None` or not a
-/// valid mapping, hashes are computed over empty objects (with doc-type
-/// defaults still applied for the managed hash).
-pub fn compute_frontmatter_hashes_from_yaml(
-    frontmatter: Option<&serde_yaml::Value>,
-    doc_type: &str,
-) -> (String, String) {
-    if let Some(fm) = frontmatter {
-        let (managed_meta, open_meta) = split_frontmatter_tiers(fm, doc_type);
-        (
-            compute_managed_hash(doc_type, &managed_meta),
-            compute_open_hash(&open_meta),
-        )
-    } else {
-        (
-            compute_managed_hash(doc_type, &serde_json::json!({})),
-            compute_open_hash(&serde_json::json!({})),
-        )
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -312,54 +223,9 @@ mod tests {
         );
     }
 
-    // 11. split_tiers_partitions_correctly
-    #[test]
-    fn split_tiers_partitions_correctly() {
-        let yaml_str = r#"
-temper-id: "abc123"
-temper-type: "task"
-temper-context: "ctx"
-temper-stage: "backlog"
-title: "My Task"
-slug: "my-task"
-custom-field: "value"
-"#;
-        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-        let (managed, open) = split_frontmatter_tiers(&fm, "task");
-
-        // temper-stage, title, slug → managed
-        assert!(managed.get("temper-stage").is_some());
-        assert!(managed.get("title").is_some());
-        assert!(managed.get("slug").is_some());
-
-        // custom-field → open
-        assert!(open.get("custom-field").is_some());
-
-        // identity and tier-1 system fields → neither
-        assert!(managed.get("temper-id").is_none());
-        assert!(open.get("temper-id").is_none());
-        assert!(managed.get("temper-type").is_none());
-        assert!(open.get("temper-type").is_none());
-        assert!(managed.get("temper-context").is_none());
-        assert!(open.get("temper-context").is_none());
-    }
-
-    // 12. split_tiers_routes_schema_properties_to_managed
-    #[test]
-    fn split_tiers_routes_schema_properties_to_managed() {
-        let yaml_str = r#"
-date: "2026-01-15"
-custom: "stuff"
-"#;
-        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-        let (managed, open) = split_frontmatter_tiers(&fm, "session");
-
-        assert!(
-            managed.get("date").is_some(),
-            "date should be managed for sessions"
-        );
-        assert!(open.get("custom").is_some(), "custom should be open");
-    }
+    // Tier-split partitioning tests previously here moved to
+    // `crate::frontmatter::tiers::tests`. Removed in task 11 of session 2
+    // when `split_frontmatter_tiers` was deleted.
 
     // 13. doc_type_from_vault_path_valid
     #[test]
@@ -377,43 +243,67 @@ custom: "stuff"
     }
 
     // 15. cli_and_api_path_produce_same_managed_hash
+    //
+    // The CLI parses YAML via Frontmatter::managed_json (which strips
+    // identity + tier-1 fields) and hashes the result. The API receives
+    // pre-split JSON and hashes it directly. Both paths must converge.
     #[test]
     fn cli_and_api_path_produce_same_managed_hash() {
-        // Simulate CLI path: YAML with tier-1 fields → split → hash managed
-        let yaml_str = r#"
-temper-id: "abc"
-temper-type: "task"
-temper-context: "ctx"
+        use crate::frontmatter::Frontmatter;
+
+        let content = r#"---
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: task
+temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
 temper-updated: "2026-01-01T00:00:00Z"
-temper-owner: "user1"
-temper-stage: "in-progress"
+temper-owner: user1
 title: "My Task"
+slug: my-task
+temper-stage: in-progress
+---
 "#;
-        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-        let (managed_from_yaml, _) = split_frontmatter_tiers(&fm, "task");
-        let cli_hash = compute_managed_hash("task", &managed_from_yaml);
+        let fm = Frontmatter::try_from(content).unwrap();
+        let cli_hash = compute_managed_hash("task", &fm.managed_json());
 
         // Simulate API path: JSON without tier-1 fields
-        let api_json = json!({"temper-stage": "in-progress", "title": "My Task"});
+        let api_json = json!({
+            "temper-stage": "in-progress",
+            "title": "My Task",
+            "slug": "my-task",
+        });
         let api_hash = compute_managed_hash("task", &api_json);
 
         assert_eq!(cli_hash, api_hash);
     }
 
     // 16. cli_and_api_agree_when_defaults_absent_locally
+    //
+    // A CLI file missing temper-stage must hash the same as an API JSON
+    // with temper-stage explicitly set to the default — `compute_managed_hash`
+    // applies defaults at hash time.
     #[test]
     fn cli_and_api_agree_when_defaults_absent_locally() {
-        // CLI: YAML missing temper-stage
-        let yaml_str = r#"
+        use crate::frontmatter::Frontmatter;
+
+        let content = r#"---
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: task
+temper-context: ctx
+temper-created: "2026-01-01T00:00:00Z"
 title: "My Task"
+slug: my-task
+---
 "#;
-        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-        let (managed_from_yaml, _) = split_frontmatter_tiers(&fm, "task");
-        let cli_hash = compute_managed_hash("task", &managed_from_yaml);
+        let fm = Frontmatter::try_from(content).unwrap();
+        let cli_hash = compute_managed_hash("task", &fm.managed_json());
 
         // API: JSON with explicit default temper-stage: "backlog"
-        let api_json = json!({"title": "My Task", "temper-stage": "backlog"});
+        let api_json = json!({
+            "title": "My Task",
+            "slug": "my-task",
+            "temper-stage": "backlog",
+        });
         let api_hash = compute_managed_hash("task", &api_json);
 
         assert_eq!(cli_hash, api_hash);
@@ -421,74 +311,101 @@ title: "My Task"
 
     // 17. round_trip_hash_agreement_all_doc_types
     //
-    // For each doc type, simulate the CLI path (YAML with tier-1 fields ->
-    // split -> hash) and API path (JSON without tier-1 fields -> hash).
-    // Both must produce the same managed hash.
+    // For each doc type, the CLI path (YAML parsed via Frontmatter, then
+    // fm.managed_json() hashed) must produce the same managed hash as the
+    // API path (pre-split JSON hashed directly).
     #[test]
     fn round_trip_hash_agreement_all_doc_types() {
+        use crate::frontmatter::Frontmatter;
+
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
         let cases: Vec<(&str, String, serde_json::Value)> = vec![
             (
                 "task",
                 format!(
-                    r#"
-temper-id: "abc"
-temper-type: "task"
-temper-context: "ctx"
+                    r#"---
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: task
+temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
-temper-stage: "in-progress"
 title: "My Task"
-custom-tag: "user-value"
+slug: my-task
+temper-stage: in-progress
+---
 "#
                 ),
-                json!({"temper-stage": "in-progress", "title": "My Task"}),
+                json!({
+                    "temper-stage": "in-progress",
+                    "title": "My Task",
+                    "slug": "my-task",
+                }),
             ),
             (
                 "goal",
                 format!(
-                    r#"
-temper-id: "def"
-temper-type: "goal"
-temper-context: "ctx"
-temper-status: "achieved"
+                    r#"---
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: goal
+temper-context: ctx
+temper-created: "2026-01-01T00:00:00Z"
 title: "Ship v1"
+slug: ship-v1
+temper-status: achieved
+---
 "#
                 ),
-                json!({"temper-status": "achieved", "title": "Ship v1"}),
+                json!({
+                    "temper-status": "achieved",
+                    "title": "Ship v1",
+                    "slug": "ship-v1",
+                }),
             ),
             (
                 "session",
                 format!(
-                    r#"
-temper-id: "ghi"
-temper-type: "session"
-temper-context: "ctx"
-date: "{today}"
+                    r#"---
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: session
+temper-context: ctx
+temper-created: "2026-01-01T00:00:00Z"
 title: "Planning"
+slug: planning
+date: "{today}"
+---
 "#
                 ),
-                json!({"date": today.clone(), "title": "Planning"}),
+                json!({
+                    "date": today.clone(),
+                    "title": "Planning",
+                    "slug": "planning",
+                }),
             ),
             (
                 "research",
                 format!(
-                    r#"
-temper-id: "jkl"
-temper-type: "research"
-temper-context: "ctx"
-date: "{today}"
+                    r#"---
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: research
+temper-context: ctx
+temper-created: "2026-01-01T00:00:00Z"
 title: "Survey"
+slug: survey
+date: "{today}"
+---
 "#
                 ),
-                json!({"date": today, "title": "Survey"}),
+                json!({
+                    "date": today,
+                    "title": "Survey",
+                    "slug": "survey",
+                }),
             ),
         ];
 
-        for (doc_type, yaml_str, api_json) in &cases {
-            let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-            let (managed_from_yaml, _) = split_frontmatter_tiers(&fm, doc_type);
-            let cli_hash = compute_managed_hash(doc_type, &managed_from_yaml);
+        for (doc_type, content, api_json) in &cases {
+            let fm = Frontmatter::try_from(content.as_str()).unwrap();
+            let cli_hash = compute_managed_hash(doc_type, &fm.managed_json());
             let api_hash = compute_managed_hash(doc_type, api_json);
 
             assert_eq!(
@@ -512,49 +429,10 @@ title: "Survey"
         );
     }
 
-    // 19. convenience_helper_matches_manual_steps
-    //
-    // `compute_frontmatter_hashes_from_yaml` produces the same result as
-    // manually calling split_frontmatter_tiers + compute_managed_hash +
-    // compute_open_hash.
-    #[test]
-    fn convenience_helper_matches_manual_steps() {
-        let yaml_str = r#"
-temper-id: "abc"
-temper-type: "task"
-temper-stage: "in-progress"
-title: "My Task"
-custom-field: "value"
-"#;
-        let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-
-        // Manual path
-        let (managed_meta, open_meta) = split_frontmatter_tiers(&fm, "task");
-        let manual_managed = compute_managed_hash("task", &managed_meta);
-        let manual_open = compute_open_hash(&open_meta);
-
-        // Convenience helper
-        let (helper_managed, helper_open) = compute_frontmatter_hashes_from_yaml(Some(&fm), "task");
-
-        assert_eq!(manual_managed, helper_managed);
-        assert_eq!(manual_open, helper_open);
-    }
-
-    // 20. convenience_helper_none_frontmatter
-    //
-    // `None` frontmatter produces valid (non-empty) hashes.
-    #[test]
-    fn convenience_helper_none_frontmatter() {
-        let (managed, open) = compute_frontmatter_hashes_from_yaml(None, "task");
-        assert!(managed.starts_with("sha256:"), "managed hash must be valid");
-        assert!(open.starts_with("sha256:"), "open hash must be valid");
-        assert!(managed.len() > 10, "managed hash must not be empty");
-        assert!(open.len() > 10, "open hash must not be empty");
-
-        // Should be the same as hashing empty objects with defaults
-        let expected_managed = compute_managed_hash("task", &json!({}));
-        let expected_open = compute_open_hash(&json!({}));
-        assert_eq!(managed, expected_managed);
-        assert_eq!(open, expected_open);
-    }
+    // Tests for the deleted `compute_frontmatter_hashes_from_yaml` helper
+    // previously here (convenience_helper_matches_manual_steps,
+    // convenience_helper_none_frontmatter) were removed in task 11 of
+    // session 2. The equivalent coverage for Frontmatter::hashes() lives
+    // in `crate::frontmatter::document::tests` and the golden-hash
+    // regression tests in `crates/temper-core/tests/frontmatter_test.rs`.
 }

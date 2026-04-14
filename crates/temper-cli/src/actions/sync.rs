@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::actions::ingest;
 use crate::actions::progress::SyncProgress;
 use crate::error::{Result, TemperError};
+use temper_core::frontmatter::Frontmatter;
 use temper_core::types::managed_meta::MetaUpdatePayload;
 use temper_core::types::sync::SyncItemKind;
 use temper_core::types::{
@@ -313,13 +314,11 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
         let body = strip_frontmatter(&content);
         let current_hash = temper_core::hash::compute_body_hash(body);
 
-        // Compute frontmatter tier hashes
+        // Compute frontmatter tier hashes via the authoritative module.
         let doc_type =
             temper_core::hash::doc_type_from_vault_path(&entry.path).unwrap_or("unknown");
-        let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-            crate::vault::parse_frontmatter(&content).as_ref(),
-            doc_type,
-        );
+        let (managed_hash, open_hash) =
+            empty_hashes_fallback(Frontmatter::try_from(content.as_str()), doc_type);
 
         entry.mtime_secs = Some(file_mtime);
 
@@ -347,6 +346,23 @@ fn file_mtime_secs(path: &Path) -> Result<i64> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64)
+}
+
+/// Behavior-preserving wrapper: returns `Frontmatter::hashes()` on
+/// successful parse, or the hashes of empty `{}` JSON on parse failure.
+///
+/// Matches the legacy `compute_frontmatter_hashes_from_yaml(None, ..)`
+/// semantics of silently treating files-without-frontmatter as empty.
+/// Sync callers depend on this silent-swallow behavior; surfacing the
+/// error is a separate cleanup.
+fn empty_hashes_fallback(parsed: Result<Frontmatter>, doc_type: &str) -> (String, String) {
+    match parsed {
+        Ok(fm) => fm.hashes(),
+        Err(_) => (
+            temper_core::hash::compute_managed_hash(doc_type, &serde_json::json!({})),
+            temper_core::hash::compute_open_hash(&serde_json::json!({})),
+        ),
+    }
 }
 
 /// Build a SyncStatusRequest from the manifest, optionally filtered by contexts.
@@ -535,10 +551,8 @@ pub fn scan_vault_for_untracked(
         let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
-        let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-            crate::vault::parse_frontmatter(&full_content).as_ref(),
-            &doc_type,
-        );
+        let (managed_hash, open_hash) =
+            empty_hashes_fallback(Frontmatter::try_from(full_content.as_str()), &doc_type);
 
         manifest.entries.insert(
             resource_id,
@@ -782,25 +796,22 @@ async fn push_resource(
     }
 }
 
-/// Build a meta-only update payload from an in-memory frontmatter mapping.
+/// Build a meta-only update payload from a parsed Frontmatter.
 ///
 /// Splits frontmatter into managed/open tiers, computes their hashes, and
-/// returns a typed `MetaUpdatePayload` ready to send to the server.
+/// returns a typed `MetaUpdatePayload` ready to send to the server. The
+/// managed tier round-trips through `ManagedMeta`'s `extra` flatten bucket
+/// so the pre-deserialized JSON hash stays stable.
 ///
-/// The managed tier is deserialized from its JSON form into the typed
-/// `ManagedMeta`. The `extra` flatten bucket on ManagedMeta catches any
-/// doc-type-schema fields (e.g. `date` for sessions) that the typed
-/// fields don't name, so the round-trip is lossless and `managed_hash`
-/// — computed over the canonical form of the pre-deserialized JSON —
-/// stays stable for the peer client.
-fn build_meta_update_payload(
-    fm: &serde_yaml::Value,
-    doc_type: &str,
-    resource_id: Uuid,
-) -> MetaUpdatePayload {
-    let (managed_meta_json, open_meta) = temper_core::hash::split_frontmatter_tiers(fm, doc_type);
-    let (managed_hash, open_hash) =
-        temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(fm), doc_type);
+/// **Caller contract:** `fm.doc_type()` is the authoritative doctype for
+/// the resulting payload's tier routing. Callers that derive a separate
+/// `doc_type` from elsewhere (e.g. manifest path) must verify the two
+/// agree before calling — see `push_resource_meta_only` for the reference
+/// guard pattern.
+fn build_meta_update_payload(fm: &Frontmatter, resource_id: Uuid) -> MetaUpdatePayload {
+    let managed_meta_json = fm.managed_json();
+    let open_meta = fm.open_json();
+    let (managed_hash, open_hash) = fm.hashes();
     let managed_meta: temper_core::types::managed_meta::ManagedMeta =
         serde_json::from_value(managed_meta_json).unwrap_or_default();
     MetaUpdatePayload {
@@ -839,8 +850,8 @@ async fn push_resource_meta_only(
     let content = std::fs::read_to_string(&file_path)?;
 
     // Unlike the body push path, we cannot fall back to a default doc_type
-    // here — `split_frontmatter_tiers` uses the doc_type schema to decide
-    // which fields are managed vs open, and a wrong doc_type would
+    // here — `Frontmatter::managed_json` uses the parsed doctype to decide
+    // which fields are managed vs open, and a doc_type mismatch would
     // misclassify fields and corrupt the server-side meta state.
     let doc_type = Vault::parse_rel(&entry.path)
         .map(|parsed| parsed.doc_type.to_string())
@@ -851,14 +862,27 @@ async fn push_resource_meta_only(
             ))
         })?;
 
-    let fm = crate::vault::parse_frontmatter(&content).ok_or_else(|| {
+    let fm = Frontmatter::try_from(content.as_str()).map_err(|e| {
         TemperError::Config(format!(
-            "meta-only push requires frontmatter: {}",
+            "meta-only push requires parseable frontmatter at {}: {e}",
             file_path.display()
         ))
     })?;
 
-    let payload = build_meta_update_payload(&fm, &doc_type, entry_id.into());
+    // Sanity check: the manifest-derived doc_type should agree with the
+    // parsed frontmatter. Mismatch here means the manifest path is out
+    // of sync with file contents — refuse the push rather than corrupt
+    // the server's tier routing.
+    if fm.doc_type().as_str() != doc_type {
+        return Err(TemperError::Config(format!(
+            "meta-only push: manifest path says doc_type '{}' but file frontmatter says '{}': {}",
+            doc_type,
+            fm.doc_type().as_str(),
+            file_path.display()
+        )));
+    }
+
+    let payload = build_meta_update_payload(&fm, entry_id.into());
 
     client
         .resources()
@@ -913,12 +937,10 @@ async fn push_resource_body(
         None => ("default".to_string(), "resource".to_string()),
     };
 
-    // Parse frontmatter and split into managed/open tiers
-    let (managed_meta, open_meta) = if let Some(fm) = crate::vault::parse_frontmatter(&content) {
-        let (m, o) = temper_core::hash::split_frontmatter_tiers(&fm, &doc_type);
-        (Some(m), Some(o))
-    } else {
-        (None, None)
+    // Parse frontmatter and split into managed/open tiers.
+    let (managed_meta, open_meta) = match Frontmatter::try_from(content.as_str()) {
+        Ok(fm) => (Some(fm.managed_json()), Some(fm.open_json())),
+        Err(_) => (None, None),
     };
     let title = ingest::title_from_path(&file_path);
 
@@ -993,13 +1015,10 @@ async fn push_resource_body(
         }
     }
 
-    // Compute frontmatter hashes so we can record them as the remote values
+    // Compute frontmatter hashes so we can record them as the remote values.
     let (pushed_managed_hash, pushed_open_hash) = {
         let current = std::fs::read_to_string(&file_path)?;
-        temper_core::hash::compute_frontmatter_hashes_from_yaml(
-            crate::vault::parse_frontmatter(&current).as_ref(),
-            &doc_type,
-        )
+        empty_hashes_fallback(Frontmatter::try_from(current.as_str()), &doc_type)
     };
 
     if let Some(e) = manifest.entries.get_mut(&server_id) {
@@ -1148,10 +1167,8 @@ fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry
     }
 
     let final_content = std::fs::read_to_string(file_path)?;
-    let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-        crate::vault::parse_frontmatter(&final_content).as_ref(),
-        doc_type,
-    );
+    let (managed_hash, open_hash) =
+        empty_hashes_fallback(Frontmatter::try_from(final_content.as_str()), doc_type);
 
     entry.managed_hash = managed_hash.clone();
     entry.open_hash = open_hash.clone();
@@ -1331,11 +1348,9 @@ async fn pull_resource_body(
         .to_string_lossy()
         .to_string();
 
-    // Compute frontmatter tier hashes from the written file
-    let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-        crate::vault::parse_frontmatter(&full_content).as_ref(),
-        &doc_type,
-    );
+    // Compute frontmatter tier hashes from the written file.
+    let (managed_hash, open_hash) =
+        empty_hashes_fallback(Frontmatter::try_from(full_content.as_str()), &doc_type);
 
     let mtime_secs = file_mtime_secs(&vault_path).ok();
 
@@ -1478,10 +1493,7 @@ async fn merge_and_push_resource(
 
     // 8. Compute frontmatter hashes from the merged file
     let (pushed_managed_hash, pushed_open_hash) =
-        temper_core::hash::compute_frontmatter_hashes_from_yaml(
-            crate::vault::parse_frontmatter(&new_file_content).as_ref(),
-            &doc_type,
-        );
+        empty_hashes_fallback(Frontmatter::try_from(new_file_content.as_str()), &doc_type);
 
     // 9. Update manifest entry
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
@@ -1772,14 +1784,11 @@ pub async fn sync_reset(
         let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
-        // Compute local frontmatter tier hashes
+        // Compute local frontmatter tier hashes.
         let reset_doc_type =
             temper_core::hash::doc_type_from_vault_path(&rel_path).unwrap_or("unknown");
         let (local_managed_hash, local_open_hash) =
-            temper_core::hash::compute_frontmatter_hashes_from_yaml(
-                crate::vault::parse_frontmatter(&content).as_ref(),
-                reset_doc_type,
-            );
+            empty_hashes_fallback(Frontmatter::try_from(content.as_str()), reset_doc_type);
 
         let fm = ingest::parse_source_frontmatter(&content);
 
@@ -2239,16 +2248,14 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let file_v1 = "---\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
-        let file_v2 = "---\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
+        // Fixtures carry temper-type so Frontmatter::try_from succeeds.
+        let file_v1 = "---\ntemper-type: task\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
+        let file_v2 = "---\ntemper-type: task\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
 
-        // Compute hashes for v1
+        // Compute hashes for v1 via the authoritative frontmatter module.
         let body_hash = temper_core::hash::compute_body_hash(strip_frontmatter(file_v1));
-        let fm_v1 = crate::vault::parse_frontmatter(file_v1).unwrap();
-        let (managed_meta_v1, open_meta_v1) =
-            temper_core::hash::split_frontmatter_tiers(&fm_v1, "task");
-        let managed_hash_v1 = temper_core::hash::compute_managed_hash("task", &managed_meta_v1);
-        let open_hash_v1 = temper_core::hash::compute_open_hash(&open_meta_v1);
+        let fm_v1 = Frontmatter::try_from(file_v1).expect("parse v1");
+        let (managed_hash_v1, open_hash_v1) = fm_v1.hashes();
 
         let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
@@ -3168,22 +3175,20 @@ mod tests {
              ---\n\
              body\n",
         );
-        let fm = crate::vault::parse_frontmatter(&fm_text).expect("parse fm");
+        let fm = Frontmatter::try_from(fm_text.as_str()).expect("parse fm");
+        let payload = build_meta_update_payload(&fm, id.into());
 
-        let payload = build_meta_update_payload(&fm, "task", id.into());
-
-        // Direct comparison against the hashing helper — same input must
-        // produce identical hashes.
-        let (expected_managed, expected_open) =
-            temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(&fm), "task");
+        // Direct comparison against the parsed Frontmatter's hashes —
+        // same input must produce identical (managed_hash, open_hash).
+        let (expected_managed, expected_open) = fm.hashes();
         assert_eq!(payload.managed_hash, expected_managed);
         assert_eq!(payload.open_hash, expected_open);
 
-        // Direct comparison against split_frontmatter_tiers. Round-trip
-        // the managed side through the typed ManagedMeta via the flatten
-        // extras bucket so the hash stays stable.
-        let (expected_managed_meta_json, expected_open_meta) =
-            temper_core::hash::split_frontmatter_tiers(&fm, "task");
+        // Direct comparison against the Frontmatter tier projections.
+        // Round-trip the managed side through the typed ManagedMeta via
+        // the flatten extras bucket so the hash stays stable.
+        let expected_managed_meta_json = fm.managed_json();
+        let expected_open_meta = fm.open_json();
         let expected_managed_meta: temper_core::types::managed_meta::ManagedMeta =
             serde_json::from_value(expected_managed_meta_json).expect("expected → typed");
         assert_eq!(payload.managed_meta, expected_managed_meta);

@@ -5,14 +5,16 @@
 //! the invariant that on-disk file state matches the normalized form its
 //! doc-type schema declares.
 //!
-//! See [`normalize_file`] for the canonical entry point and
-//! [`normalize_file_inspect`] for the read-only dry-run variant. Both share
-//! the same validation, default-materialization, and hash-computation logic;
-//! only the dry-run variant skips the disk write.
+//! This module is now a thin orchestrator over [`crate::frontmatter::Frontmatter`].
+//! All YAML parsing, tier splitting, hashing, canonical serialization, and
+//! atomic write logic lives in that module; `normalize_file` adds exactly one
+//! responsibility on top: apply doc-type-specific defaults to the parsed
+//! value before validating and writing back.
 
 use crate::error::{Result, TemperError};
-use crate::hash::{compute_body_hash, compute_frontmatter_hashes_from_yaml};
-use crate::schema::{validate_allowing_provisional, ValidationIssue};
+use crate::frontmatter::{DocType, Frontmatter};
+use crate::hash::compute_body_hash;
+use crate::schema::ValidationIssue;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -87,47 +89,49 @@ pub fn normalize_file_inspect(path: &Path, doc_type: &str) -> Result<NormalizeOu
 /// When `write` is `false`, the on-disk file is never modified — the
 /// returned `changed` flag indicates only what *would* happen.
 fn normalize_impl(path: &Path, doc_type: &str, write: bool) -> Result<NormalizeOutcome> {
+    // Single read — reused for both parsing and the change-comparison below.
     let original = std::fs::read_to_string(path)
         .map_err(|e| TemperError::Config(format!("failed to read {}: {e}", path.display())))?;
+    let mut fm = Frontmatter::try_from(original.as_str())?;
 
-    let (yaml_text, body) = split_frontmatter_block(&original, path)?;
-
-    let original_value: serde_yaml::Value = serde_yaml::from_str(yaml_text).map_err(|e| {
+    // Sanity check: the filesystem-inferred doc_type should agree with
+    // what the frontmatter declares. Parse the caller-supplied string into a
+    // typed DocType so an unknown caller string surfaces as a clean error
+    // rather than a misleading mismatch.
+    let expected = DocType::from_str(doc_type).map_err(|e| {
         TemperError::Config(format!(
-            "failed to parse YAML frontmatter in {}: {e}",
+            "normalize_file called with unknown doctype '{doc_type}' for {}: {e}",
             path.display()
         ))
     })?;
+    if fm.doc_type() != expected {
+        return Err(TemperError::Config(format!(
+            "doc_type mismatch for {}: frontmatter says '{}', caller says '{}'",
+            path.display(),
+            fm.doc_type().as_str(),
+            doc_type
+        )));
+    }
 
-    let original_mapping = original_value
-        .as_mapping()
-        .ok_or_else(|| {
-            TemperError::Config(format!(
-                "frontmatter in {} is not a YAML mapping",
-                path.display()
-            ))
-        })?
-        .clone();
+    let body_hash = compute_body_hash(fm.body());
 
-    // Apply defaults to a working copy. Key insertion order is preserved
-    // because `serde_yaml::Mapping` is backed by an insertion-ordered
-    // `IndexMap`.
-    let mut normalized_mapping = original_mapping.clone();
-    apply_doc_type_defaults_yaml(doc_type, &mut normalized_mapping);
+    // Snapshot hashes BEFORE applying defaults. We need these if validation
+    // fails, so the caller's manifest can record on-disk reality.
+    let pre_defaults_hashes = fm.hashes();
 
-    // Validate the post-defaults state. Defaults satisfy required-field
-    // checks; what remains is genuinely user-attention-required.
-    let normalized_value = serde_yaml::Value::Mapping(normalized_mapping.clone());
-    let issues = validate_allowing_provisional(doc_type, &normalized_value)?;
+    // Apply doc-type-specific defaults by mutating the YAML mapping in place.
+    // The `Frontmatter` type's alias-normalized + mapping invariant still
+    // holds because we only insert canonical keys.
+    if let Some(mapping) = fm.value_mut().as_mapping_mut() {
+        apply_doc_type_defaults_yaml(doc_type, mapping);
+    }
 
-    let body_hash = compute_body_hash(body);
+    // Validate the post-defaults state.
+    let issues = fm.validate()?;
 
     if !issues.is_empty() {
-        // Non-conformant: do not rewrite. Hashes describe on-disk reality,
-        // so the caller can update its manifest while still blocking sync.
-        let original_value_for_hash = serde_yaml::Value::Mapping(original_mapping);
-        let (managed_hash, open_hash) =
-            compute_frontmatter_hashes_from_yaml(Some(&original_value_for_hash), doc_type);
+        // Non-conformant: don't rewrite. Hashes describe pre-defaults state.
+        let (managed_hash, open_hash) = pre_defaults_hashes;
         return Ok(NormalizeOutcome {
             changed: false,
             body_hash,
@@ -137,25 +141,23 @@ fn normalize_impl(path: &Path, doc_type: &str, write: bool) -> Result<NormalizeO
         });
     }
 
-    // Recompose the file from the normalized mapping. If the result differs
-    // from the original on-disk text, that's a "changed" — either defaults
-    // were inserted or YAML reserialization shifted bytes.
-    let new_content = compose_file(&normalized_value, body)?;
+    // Compare canonical-serialized output against the on-disk text.
+    // If they differ, write atomically via `Frontmatter::write_to`.
+    let new_content = fm.serialize()?;
     let changed = new_content != original;
 
     if changed && write {
-        write_atomic(path, &new_content)?;
+        fm.write_to(path)?;
     }
 
-    let (managed_hash, open_hash) =
-        compute_frontmatter_hashes_from_yaml(Some(&normalized_value), doc_type);
+    let (managed_hash, open_hash) = fm.hashes();
 
     Ok(NormalizeOutcome {
         changed,
         body_hash,
         managed_hash,
         open_hash,
-        issues,
+        issues: Vec::new(),
     })
 }
 
@@ -235,114 +237,13 @@ fn apply_doc_type_defaults_yaml(doc_type: &str, mapping: &mut serde_yaml::Mappin
 }
 
 // ---------------------------------------------------------------------------
-// Internal: file composition / decomposition
-// ---------------------------------------------------------------------------
-
-/// Split a vault file into its YAML frontmatter text and the body that
-/// follows. Returns an error if the file does not begin with a `---`
-/// frontmatter block.
-fn split_frontmatter_block<'a>(content: &'a str, path: &Path) -> Result<(&'a str, &'a str)> {
-    // Strip an optional UTF-8 BOM but otherwise require the file to begin
-    // with `---` followed by a newline.
-    let stripped = content.strip_prefix('\u{feff}').unwrap_or(content);
-
-    let after_open = stripped
-        .strip_prefix("---\n")
-        .or_else(|| stripped.strip_prefix("---\r\n"))
-        .ok_or_else(|| {
-            TemperError::Config(format!(
-                "missing frontmatter block in {}: file must begin with '---'",
-                path.display()
-            ))
-        })?;
-
-    // Find the closing `---` line.
-    let close_idx = find_closing_fence(after_open).ok_or_else(|| {
-        TemperError::Config(format!(
-            "unterminated frontmatter block in {}: missing closing '---'",
-            path.display()
-        ))
-    })?;
-
-    let yaml_text = &after_open[..close_idx];
-    let after_yaml = &after_open[close_idx..];
-
-    // Skip past the closing fence + its trailing newline (or EOF).
-    let body = after_yaml
-        .strip_prefix("---\n")
-        .or_else(|| after_yaml.strip_prefix("---\r\n"))
-        .or_else(|| after_yaml.strip_prefix("---"))
-        .unwrap_or("");
-
-    Ok((yaml_text, body))
-}
-
-/// Locate the byte offset of a `---` line in `after_open` (which begins
-/// with the YAML body). Returns the offset of the `-` character.
-fn find_closing_fence(after_open: &str) -> Option<usize> {
-    let mut search_from = 0;
-    while let Some(rel) = after_open[search_from..].find("---") {
-        let abs = search_from + rel;
-        // Must be at the start of a line (preceded by `\n` or be at the
-        // very start, which we've already consumed via strip_prefix).
-        let at_line_start = abs == 0 || after_open.as_bytes()[abs - 1] == b'\n';
-        // Must be followed by `\n`, `\r\n`, or EOF — to avoid matching
-        // `---x` mid-document.
-        let after = &after_open[abs + 3..];
-        let at_line_end = after.is_empty() || after.starts_with('\n') || after.starts_with("\r\n");
-        if at_line_start && at_line_end {
-            return Some(abs);
-        }
-        search_from = abs + 3;
-    }
-    None
-}
-
-/// Recompose a file from a YAML frontmatter value and a body. Format is
-/// `---\n<yaml>---\n<body>` — the YAML emitter terminates with `\n` so a
-/// closing fence on its own line follows naturally.
-fn compose_file(frontmatter: &serde_yaml::Value, body: &str) -> Result<String> {
-    let yaml_text = serde_yaml::to_string(frontmatter)
-        .map_err(|e| TemperError::Config(format!("failed to serialize frontmatter: {e}")))?;
-    // serde_yaml's emitter ends with a single `\n`. Guard against future
-    // behavior changes by ensuring exactly one trailing newline before the
-    // closing fence.
-    let mut yaml_normalized = yaml_text.trim_end_matches('\n').to_string();
-    yaml_normalized.push('\n');
-    Ok(format!("---\n{yaml_normalized}---\n{body}"))
-}
-
-/// Atomically replace `path` with `content` by writing to a sibling temp
-/// file and renaming.
-fn write_atomic(path: &Path, content: &str) -> Result<()> {
-    let parent = path.parent().ok_or_else(|| {
-        TemperError::Config(format!("path has no parent directory: {}", path.display()))
-    })?;
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .ok_or_else(|| TemperError::Config(format!("invalid file name: {}", path.display())))?;
-    let tmp_path = parent.join(format!(".{file_name}.normalize.tmp"));
-
-    std::fs::write(&tmp_path, content)
-        .map_err(|e| TemperError::Config(format!("failed to write {}: {e}", tmp_path.display())))?;
-    std::fs::rename(&tmp_path, path).map_err(|e| {
-        TemperError::Config(format!(
-            "failed to rename {} -> {}: {e}",
-            tmp_path.display(),
-            path.display()
-        ))
-    })?;
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontmatter::Frontmatter;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -400,20 +301,22 @@ body
     #[test]
     fn normalize_task_already_canonical_is_noop() {
         let dir = tempdir().unwrap();
-        // Construct content via compose_file so the YAML emitter format
-        // matches what normalize would produce.
-        let yaml_str = r#"
-temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
-temper-type: task
+        // Inline canonical form matches the order emitted by
+        // Frontmatter::serialize — identity → tier1 (temper-context before
+        // temper-type per TIER1_SYSTEM_FIELDS order) → managed in schema order.
+        // serde_yaml serializes UUID and datetime strings without quotes.
+        let canonical = r#"---
+temper-id: 019d8110-8ff3-70c2-85ae-57e04ed62885
 temper-context: temper
-temper-created: "2026-04-12T00:00:00Z"
+temper-type: task
+temper-created: 2026-04-12T00:00:00Z
 title: Test
 slug: test
 temper-stage: in-progress
+---
+body content
 "#;
-        let value: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-        let canonical = compose_file(&value, "body content\n").unwrap();
-        let path = write_file(dir.path(), "task.md", &canonical);
+        let path = write_file(dir.path(), "task.md", canonical);
         let before = read_file(&path);
 
         let outcome = normalize_file(&path, "task").expect("normalize ok");
@@ -575,7 +478,7 @@ slug: x
         );
         assert!(
             pos_slug < pos_stage,
-            "slug should appear before temper-stage (default appended last):\n{on_disk}"
+            "slug should appear before temper-stage (canonical display ordering places managed fields after open fields):\n{on_disk}"
         );
     }
 
@@ -601,9 +504,10 @@ slug: test
         assert!(outcome.changed, "missing temper-stage triggers rewrite");
 
         let on_disk = read_file(&path);
-        let (_, on_disk_body) = split_frontmatter_block(&on_disk, &path).unwrap();
+        let fm_on_disk = Frontmatter::try_from(on_disk.as_str()).expect("parse normalized file");
         assert_eq!(
-            on_disk_body, body,
+            fm_on_disk.body(),
+            body,
             "body should be byte-identical after normalize"
         );
     }
@@ -645,30 +549,33 @@ body
         );
     }
 
-    // 11. normalize_hash_matches_direct_hash_helper
+    // 11. normalize_hash_matches_frontmatter_hashes_helper
     #[test]
-    fn normalize_hash_matches_direct_hash_helper() {
+    fn normalize_hash_matches_frontmatter_hashes_helper() {
         let dir = tempdir().unwrap();
-        let yaml_str = r#"
-temper-id: "019d8110-8ff3-70c2-85ae-57e04ed6288b"
-temper-type: task
+        // Canonical form: serde_yaml serializes UUIDs and datetimes unquoted;
+        // tier1 order: temper-context before temper-type per TIER1_SYSTEM_FIELDS.
+        let canonical_text = r#"---
+temper-id: 019d8110-8ff3-70c2-85ae-57e04ed6288b
 temper-context: temper
-temper-created: "2026-04-12T00:00:00Z"
+temper-type: task
+temper-created: 2026-04-12T00:00:00Z
 title: Test
 slug: test
 temper-stage: backlog
+---
+hello body
 "#;
-        let value: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
-        let body = "hello body\n";
-        let content = compose_file(&value, body).unwrap();
-        let path = write_file(dir.path(), "task.md", &content);
+        let path = write_file(dir.path(), "task.md", canonical_text);
 
         let outcome = normalize_file(&path, "task").expect("normalize ok");
         assert!(!outcome.changed);
 
-        let direct_body = compute_body_hash(body);
-        let (direct_managed, direct_open) =
-            compute_frontmatter_hashes_from_yaml(Some(&value), "task");
+        // Compare against a fresh Frontmatter parse of the same canonical text.
+        let fm = Frontmatter::try_from(canonical_text).expect("parse ok");
+        let (direct_managed, direct_open) = fm.hashes();
+        let direct_body = compute_body_hash(fm.body());
+
         assert_eq!(outcome.body_hash, direct_body);
         assert_eq!(outcome.managed_hash, direct_managed);
         assert_eq!(outcome.open_hash, direct_open);
