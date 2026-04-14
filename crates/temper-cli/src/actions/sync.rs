@@ -2258,16 +2258,14 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let file_v1 = "---\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
-        let file_v2 = "---\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
+        // Fixtures carry temper-type so Frontmatter::try_from succeeds.
+        let file_v1 = "---\ntemper-type: task\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
+        let file_v2 = "---\ntemper-type: task\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
 
-        // Compute hashes for v1
+        // Compute hashes for v1 via the authoritative frontmatter module.
         let body_hash = temper_core::hash::compute_body_hash(strip_frontmatter(file_v1));
-        let fm_v1 = crate::vault::parse_frontmatter(file_v1).unwrap();
-        let (managed_meta_v1, open_meta_v1) =
-            temper_core::hash::split_frontmatter_tiers(&fm_v1, "task");
-        let managed_hash_v1 = temper_core::hash::compute_managed_hash("task", &managed_meta_v1);
-        let open_hash_v1 = temper_core::hash::compute_open_hash(&open_meta_v1);
+        let fm_v1 = Frontmatter::try_from(file_v1).expect("parse v1");
+        let (managed_hash_v1, open_hash_v1) = fm_v1.hashes();
 
         let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
