@@ -13,13 +13,10 @@ use std::collections::{BTreeMap, HashSet};
 // Embedded schemas
 // ---------------------------------------------------------------------------
 
+/// The base schema is referenced by every doc-type schema via
+/// `{ "$ref": "base.schema.json" }`. The doc-type schema text itself is
+/// owned by `DocType::schema_json()`.
 const BASE_SCHEMA: &str = include_str!("../schemas/base.schema.json");
-const TASK_SCHEMA: &str = include_str!("../schemas/task.schema.json");
-const GOAL_SCHEMA: &str = include_str!("../schemas/goal.schema.json");
-const SESSION_SCHEMA: &str = include_str!("../schemas/session.schema.json");
-const RESEARCH_SCHEMA: &str = include_str!("../schemas/research.schema.json");
-const DECISION_SCHEMA: &str = include_str!("../schemas/decision.schema.json");
-const CONCEPT_SCHEMA: &str = include_str!("../schemas/concept.schema.json");
 
 /// URI used as the `$id` in base.schema.json — must match what the doctype
 /// schemas reference via `{ "$ref": "base.schema.json" }`.
@@ -62,19 +59,7 @@ pub struct ValidationResult {
 /// Returns [`TemperError::Config`] if `doc_type` is not one of the six known
 /// values, or if schema compilation fails.
 pub fn load_schema(doc_type: &str) -> Result<Validator> {
-    let doc_schema_str = match doc_type {
-        "task" => TASK_SCHEMA,
-        "goal" => GOAL_SCHEMA,
-        "session" => SESSION_SCHEMA,
-        "research" => RESEARCH_SCHEMA,
-        "decision" => DECISION_SCHEMA,
-        "concept" => CONCEPT_SCHEMA,
-        other => {
-            return Err(TemperError::Config(format!(
-                "unknown doctype '{other}'; expected one of: task, goal, session, research, decision, concept"
-            )))
-        }
-    };
+    let doc_schema_str = crate::frontmatter::DocType::from_str(doc_type)?.schema_json();
 
     let base_json: serde_json::Value = serde_json::from_str(BASE_SCHEMA)
         .map_err(|e| TemperError::Config(format!("base schema JSON parse error: {e}")))?;
@@ -228,15 +213,7 @@ pub fn check_unknown_temper_fields(frontmatter: &serde_yaml::Value) -> Vec<Valid
 /// Get the updatable field names for a doctype by reading the schema properties
 /// and excluding system-managed fields.
 pub fn updatable_fields(doc_type: &str) -> Result<Vec<(String, serde_json::Value)>> {
-    let schema_str = match doc_type {
-        "task" => TASK_SCHEMA,
-        "goal" => GOAL_SCHEMA,
-        "session" => SESSION_SCHEMA,
-        "research" => RESEARCH_SCHEMA,
-        "decision" => DECISION_SCHEMA,
-        "concept" => CONCEPT_SCHEMA,
-        other => return Err(TemperError::Config(format!("unknown doctype '{other}'"))),
-    };
+    let schema_str = crate::frontmatter::DocType::from_str(doc_type)?.schema_json();
 
     let schema: serde_json::Value = serde_json::from_str(schema_str)
         .map_err(|e| TemperError::Config(format!("schema parse error: {e}")))?;
@@ -339,19 +316,7 @@ pub static DOC_TYPE_NAMES: &[&str] =
 /// `serde_json::Value` for introspection — extracting required fields,
 /// enum values, property descriptions, etc.
 pub fn schema_value(doc_type: &str) -> Result<serde_json::Value> {
-    let raw = match doc_type {
-        "task" => TASK_SCHEMA,
-        "goal" => GOAL_SCHEMA,
-        "session" => SESSION_SCHEMA,
-        "research" => RESEARCH_SCHEMA,
-        "decision" => DECISION_SCHEMA,
-        "concept" => CONCEPT_SCHEMA,
-        other => {
-            return Err(TemperError::Config(format!(
-                "unknown doctype '{other}'; expected one of: task, goal, session, research, decision, concept"
-            )))
-        }
-    };
+    let raw = crate::frontmatter::DocType::from_str(doc_type)?.schema_json();
 
     serde_json::from_str(raw)
         .map_err(|e| TemperError::Config(format!("{doc_type} schema JSON parse error: {e}")))
