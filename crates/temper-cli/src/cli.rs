@@ -144,12 +144,6 @@ pub enum Commands {
         action: ConfigAction,
     },
 
-    /// Build, inspect, or manage the knowledge graph from vault frontmatter
-    Graph {
-        #[command(subcommand)]
-        action: GraphAction,
-    },
-
     /// Search the knowledge base
     Search {
         /// Search query text
@@ -181,6 +175,12 @@ pub enum Commands {
         /// Disable graph expansion (enabled by default)
         #[arg(long)]
         no_graph: bool,
+    },
+
+    /// Build, inspect, or manage the knowledge graph from vault frontmatter
+    Graph {
+        #[command(subcommand)]
+        action: GraphAction,
     },
 }
 
