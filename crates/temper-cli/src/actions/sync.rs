@@ -357,10 +357,7 @@ fn file_mtime_secs(path: &Path) -> Result<i64> {
 /// semantics of silently treating files-without-frontmatter as empty.
 /// Sync callers depend on this silent-swallow behavior; surfacing the
 /// error is a separate cleanup.
-fn empty_hashes_fallback(
-    parsed: temper_core::error::Result<Frontmatter>,
-    doc_type: &str,
-) -> (String, String) {
+fn empty_hashes_fallback(parsed: Result<Frontmatter>, doc_type: &str) -> (String, String) {
     match parsed {
         Ok(fm) => fm.hashes(),
         Err(_) => (
@@ -809,6 +806,12 @@ async fn push_resource(
 /// returns a typed `MetaUpdatePayload` ready to send to the server. The
 /// managed tier round-trips through `ManagedMeta`'s `extra` flatten bucket
 /// so the pre-deserialized JSON hash stays stable.
+///
+/// **Caller contract:** `fm.doc_type()` is the authoritative doctype for
+/// the resulting payload's tier routing. Callers that derive a separate
+/// `doc_type` from elsewhere (e.g. manifest path) must verify the two
+/// agree before calling — see `push_resource_meta_only` for the reference
+/// guard pattern.
 fn build_meta_update_payload(fm: &Frontmatter, resource_id: Uuid) -> MetaUpdatePayload {
     let managed_meta_json = fm.managed_json();
     let open_meta = fm.open_json();
