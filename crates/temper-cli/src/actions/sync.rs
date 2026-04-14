@@ -314,13 +314,11 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
         let body = strip_frontmatter(&content);
         let current_hash = temper_core::hash::compute_body_hash(body);
 
-        // Compute frontmatter tier hashes
+        // Compute frontmatter tier hashes via the authoritative module.
         let doc_type =
             temper_core::hash::doc_type_from_vault_path(&entry.path).unwrap_or("unknown");
-        let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-            crate::vault::parse_frontmatter(&content).as_ref(),
-            doc_type,
-        );
+        let (managed_hash, open_hash) =
+            empty_hashes_fallback(Frontmatter::try_from(content.as_str()), doc_type);
 
         entry.mtime_secs = Some(file_mtime);
 
@@ -553,10 +551,8 @@ pub fn scan_vault_for_untracked(
         let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
-        let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-            crate::vault::parse_frontmatter(&full_content).as_ref(),
-            &doc_type,
-        );
+        let (managed_hash, open_hash) =
+            empty_hashes_fallback(Frontmatter::try_from(full_content.as_str()), &doc_type);
 
         manifest.entries.insert(
             resource_id,
