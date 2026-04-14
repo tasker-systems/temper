@@ -1493,10 +1493,7 @@ async fn merge_and_push_resource(
 
     // 8. Compute frontmatter hashes from the merged file
     let (pushed_managed_hash, pushed_open_hash) =
-        temper_core::hash::compute_frontmatter_hashes_from_yaml(
-            crate::vault::parse_frontmatter(&new_file_content).as_ref(),
-            &doc_type,
-        );
+        empty_hashes_fallback(Frontmatter::try_from(new_file_content.as_str()), &doc_type);
 
     // 9. Update manifest entry
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
@@ -1787,14 +1784,11 @@ pub async fn sync_reset(
         let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
-        // Compute local frontmatter tier hashes
+        // Compute local frontmatter tier hashes.
         let reset_doc_type =
             temper_core::hash::doc_type_from_vault_path(&rel_path).unwrap_or("unknown");
         let (local_managed_hash, local_open_hash) =
-            temper_core::hash::compute_frontmatter_hashes_from_yaml(
-                crate::vault::parse_frontmatter(&content).as_ref(),
-                reset_doc_type,
-            );
+            empty_hashes_fallback(Frontmatter::try_from(content.as_str()), reset_doc_type);
 
         let fm = ingest::parse_source_frontmatter(&content);
 
