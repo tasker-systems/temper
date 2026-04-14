@@ -2,14 +2,14 @@ use std::path::Path;
 
 use crate::actions::types::VaultDocument;
 use crate::error::{Result, TemperError};
-use crate::vault::parse_frontmatter;
 
 /// Read a vault markdown file and return a VaultDocument with parsed frontmatter and body.
 pub fn read_document(path: &Path) -> Result<VaultDocument> {
     let raw = std::fs::read_to_string(path)
         .map_err(|e| TemperError::Vault(format!("Failed to read {}: {e}", path.display())))?;
 
-    let frontmatter = parse_frontmatter(&raw).unwrap_or(serde_yaml::Value::Null);
+    let frontmatter =
+        temper_core::frontmatter::parse_yaml_block(&raw).unwrap_or(serde_yaml::Value::Null);
 
     let note_type = frontmatter
         .get("temper-type")

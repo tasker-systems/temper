@@ -4,6 +4,30 @@
 use crate::error::{Result, TemperError};
 use crate::frontmatter::registry::{lookup, KnownOpenField};
 
+/// Lenient YAML frontmatter parse.
+///
+/// Unlike [`super::Frontmatter::try_from`], this function imposes no
+/// semantic requirements on the parsed value — no `temper-type` check, no
+/// doctype validation, no alias normalization. It returns the raw YAML
+/// mapping as [`serde_yaml::Value`] on success or `None` for any of:
+/// missing opening `---`, missing closing `---`, or YAML parse failure.
+///
+/// Intended for validator-style code that needs to inspect potentially
+/// malformed or legacy-format files (e.g. the `temper doctor` scanner
+/// that flags files with `type:` instead of `temper-type:`) and for
+/// ingest discovery readers that process foreign markdown files that may
+/// not yet carry any temper-* frontmatter at all.
+pub fn parse_yaml_block(content: &str) -> Option<serde_yaml::Value> {
+    let content = content.trim_start();
+    if !content.starts_with("---") {
+        return None;
+    }
+    let rest = &content[3..];
+    let end = rest.find("---")?;
+    let yaml_str = &rest[..end];
+    serde_yaml::from_str(yaml_str).ok()
+}
+
 /// Split a vault file into (yaml_frontmatter_text, body).
 ///
 /// Requires the file to begin with `---` (optionally preceded by a UTF-8 BOM)

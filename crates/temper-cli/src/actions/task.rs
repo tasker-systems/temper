@@ -50,11 +50,11 @@ pub fn load_tasks(
             }
             let content = fs::read_to_string(&path)
                 .map_err(|e| TemperError::Vault(format!("reading {}: {e}", path.display())))?;
-            let fm = match vault::parse_frontmatter(&content) {
-                Some(fm) => fm,
-                None => continue,
+            let fm = match temper_core::frontmatter::Frontmatter::try_from(content.as_str()) {
+                Ok(fm) => fm,
+                Err(_) => continue,
             };
-            let info: TaskInfo = match serde_yaml::from_value(fm) {
+            let info: TaskInfo = match serde_yaml::from_value(fm.value().clone()) {
                 Ok(i) => i,
                 Err(e) => {
                     tracing::warn!(

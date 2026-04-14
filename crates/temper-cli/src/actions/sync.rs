@@ -59,10 +59,11 @@ pub fn preflight_ownership_check(manifest: &Manifest, vault_root: &Path) -> Vec<
             Ok(c) => c,
             Err(_) => continue,
         };
-        let Some(fm) = crate::vault::parse_frontmatter(&content) else {
+        let Ok(fm) = temper_core::frontmatter::Frontmatter::try_from(content.as_str()) else {
             continue;
         };
         let frontmatter_owner = fm
+            .value()
             .get("temper-owner")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())

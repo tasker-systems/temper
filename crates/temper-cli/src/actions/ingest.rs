@@ -59,7 +59,7 @@ pub struct ParsedFrontmatter {
 /// metadata.  Maps legacy field names (`type` → `doc_type`, `id` →
 /// `legacy_id`).
 pub fn parse_source_frontmatter(content: &str) -> Option<ParsedFrontmatter> {
-    let yaml = crate::vault::parse_frontmatter(content)?;
+    let yaml = temper_core::frontmatter::parse_yaml_block(content)?;
 
     let s = |key: &str| yaml.get(key).and_then(|v| v.as_str()).map(String::from);
 

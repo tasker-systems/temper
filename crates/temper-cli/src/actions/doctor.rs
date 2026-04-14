@@ -17,7 +17,6 @@ use crate::actions::doctor_fix::{
 use crate::config::Config;
 use crate::error::Result;
 use crate::manifest_io;
-use crate::vault;
 
 /// Aggregated report from a vault doctor scan.
 #[derive(Debug, Clone, Serialize)]
@@ -156,7 +155,7 @@ fn scan_file(
     let file_path_str = file_path.display().to_string();
     let content = fs::read_to_string(file_path)?;
 
-    let fm = vault::parse_frontmatter(&content);
+    let fm = temper_core::frontmatter::parse_yaml_block(&content);
 
     let mut issues: Vec<ValidationIssue> = Vec::new();
 
@@ -410,14 +409,14 @@ fn collect_fixes_for_file(
     let mut content = fs::read_to_string(file_path)?;
 
     // Pre-pass: if frontmatter fails to parse, attempt dedup and rewrite.
-    if vault::parse_frontmatter(&content).is_none() {
+    if temper_core::frontmatter::parse_yaml_block(&content).is_none() {
         if let Some(deduped) = dedup_frontmatter_keys(&content) {
             fs::write(file_path, &deduped)?;
             content = deduped;
         }
     }
 
-    let Some(fm) = vault::parse_frontmatter(&content) else {
+    let Some(fm) = temper_core::frontmatter::parse_yaml_block(&content) else {
         return Ok(());
     };
     plan.extend(fix_missing_fields(file_path, &fm, vault_root));
