@@ -338,12 +338,12 @@ pub fn scan_rows(
 /// `ResourceRow`. Files without valid frontmatter are skipped (`Ok(None)`).
 fn parse_row(path: &std::path::Path, vault_root: &std::path::Path) -> Result<Option<ResourceRow>> {
     let content = std::fs::read_to_string(path).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let Some(yaml) = vault::parse_frontmatter(&content) else {
+    let Ok(fm) = temper_core::frontmatter::Frontmatter::try_from(content.as_str()) else {
         return Ok(None);
     };
     // Convert YAML value -> JSON value so downstream code can use
     // the existing `serde_json::Value`-based column registry.
-    let frontmatter = serde_json::to_value(&yaml)
+    let frontmatter = serde_json::to_value(fm.value())
         .map_err(|e| TemperError::Vault(format!("frontmatter YAML→JSON: {e}")))?;
     let relative = path.strip_prefix(vault_root).unwrap_or(path);
     Ok(Some(ResourceRow {
@@ -546,10 +546,10 @@ fn show_generic(
     let content = std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
 
     if format == "json" {
-        let fm = vault::parse_frontmatter(&content);
+        let fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str()).ok();
         let title = fm
             .as_ref()
-            .and_then(|v| v.get("title"))
+            .and_then(|f| f.value().get("title"))
             .and_then(|v| v.as_str())
             .unwrap_or(slug);
         let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);

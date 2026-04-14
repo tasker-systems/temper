@@ -155,16 +155,16 @@ fn link_session_to_task(
 
     // Extract the session's id from its frontmatter
     let session_content = std::fs::read_to_string(session_path)?;
-    let session_id = if let Some(fm) = vault::parse_frontmatter(&session_content) {
-        fm.get("temper-id")
-            .or_else(|| fm.get("temper-provisional-id"))
-            .or_else(|| fm.get("id"))
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    let session_id = temper_core::frontmatter::Frontmatter::try_from(session_content.as_str())
+        .ok()
+        .and_then(|fm| {
+            fm.value()
+                .get("temper-id")
+                .or_else(|| fm.value().get("temper-provisional-id"))
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
+        .unwrap_or_default();
 
     // Read the task file
     let task_vault = temper_core::vault::Vault::new(&config.vault_root);
@@ -339,8 +339,8 @@ struct SessionEntry {
 
 fn parse_date_from_file(path: &std::path::Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
-    let fm = vault::parse_frontmatter(&content)?;
-    let date = fm.get("date")?;
+    let fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str()).ok()?;
+    let date = fm.value().get("date")?;
     Some(date.as_str()?.to_string())
 }
 
