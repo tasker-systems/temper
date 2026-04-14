@@ -20,8 +20,5 @@ pub mod projections;
 pub mod registry;
 pub mod tiers;
 
-// Session 1 Task 1 stub — Tasks 3/7 uncomment:
-// pub use document::{DocType, Frontmatter};
-// pub use registry::{
-//     FieldCategory, KnownOpenField, OpenFieldType, KNOWN_OPEN_FIELDS,
-// };
+pub use document::{DocType, Frontmatter};
+pub use registry::{FieldCategory, KnownOpenField, OpenFieldType, KNOWN_OPEN_FIELDS};
