@@ -144,6 +144,12 @@ pub enum Commands {
         action: ConfigAction,
     },
 
+    /// Build, inspect, or manage the knowledge graph from vault frontmatter
+    Graph {
+        #[command(subcommand)]
+        action: GraphAction,
+    },
+
     /// Search the knowledge base
     Search {
         /// Search query text
@@ -451,5 +457,21 @@ pub enum DoctorAction {
         /// Preview fixes without writing (dry run)
         #[arg(long)]
         dry_run: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum GraphAction {
+    /// Seed the vault with graph relationships discovered from markdown bodies
+    Build {
+        /// Scope to a single context (default: all contexts)
+        #[arg(long)]
+        context: Option<String>,
+        /// Preview changes without writing files
+        #[arg(long)]
+        dry_run: bool,
+        /// Include per-file edge detail in the report
+        #[arg(short, long)]
+        verbose: bool,
     },
 }
