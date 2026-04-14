@@ -1107,11 +1107,20 @@ fn rebuild_file_with_new_meta(
     doc_type: &str,
     managed_meta: Option<&serde_json::Value>,
     open_meta: Option<&serde_json::Value>,
-) -> String {
-    let frontmatter =
-        ingest::build_frontmatter_from_resource(resource, ctx, doc_type, managed_meta, open_meta);
+) -> Result<String> {
+    // Strip the leading `\n` that strip_frontmatter returns when the file
+    // had a blank separator line — normalize_body_for_vault re-adds it so
+    // the separator is preserved in the serialized form.
     let body_after_separator = local_body.strip_prefix('\n').unwrap_or(local_body);
-    format!("{frontmatter}{body_after_separator}")
+    let fm = ingest::build_frontmatter_from_resource(
+        resource,
+        ctx,
+        doc_type,
+        ingest::normalize_body_for_vault(body_after_separator),
+        managed_meta,
+        open_meta,
+    )?;
+    fm.serialize().map_err(Into::into)
 }
 
 /// Parameters for the pure (non-async) half of `pull_resource_meta_only`.
@@ -1149,7 +1158,7 @@ fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry
     } = params;
 
     let rebuilt =
-        rebuild_file_with_new_meta(local_body, resource, ctx, doc_type, managed_meta, open_meta);
+        rebuild_file_with_new_meta(local_body, resource, ctx, doc_type, managed_meta, open_meta)?;
     std::fs::write(file_path, &rebuilt)?;
 
     let outcome = temper_core::normalize::normalize_file(file_path, doc_type)?;
@@ -1294,15 +1303,15 @@ async fn pull_resource_body(
         let existing_path = vault_root.join(&existing.path);
         if existing_path.exists() {
             // Overwrite the existing file in place — no slug dedup needed.
-            let frontmatter = ingest::build_frontmatter_from_resource(
+            let fm = ingest::build_frontmatter_from_resource(
                 &resource,
                 &ctx,
                 &doc_type,
+                ingest::normalize_body_for_vault(&content_response.markdown),
                 managed_value.as_ref(),
                 content_response.open_meta.as_ref(),
-            );
-            let vault_content = format!("{frontmatter}{}", &content_response.markdown);
-            std::fs::write(&existing_path, &vault_content)?;
+            )?;
+            fm.write_to(&existing_path)?;
             existing_path
         } else {
             // Manifest entry exists but file is missing — write to expected path.
@@ -1395,15 +1404,15 @@ fn write_pulled_file(
         std::fs::create_dir_all(parent)?;
     }
 
-    let frontmatter = ingest::build_frontmatter_from_resource(
+    let fm = ingest::build_frontmatter_from_resource(
         resource,
         context,
         doc_type,
+        ingest::normalize_body_for_vault(content),
         managed_meta,
         open_meta,
-    );
-    let vault_content = format!("{frontmatter}{content}");
-    std::fs::write(&vault_path, &vault_content)?;
+    )?;
+    fm.write_to(&vault_path)?;
 
     Ok(vault_path)
 }
@@ -2640,10 +2649,17 @@ mod tests {
 
         // Overwrite in place (this is what the fixed pull_resource does
         // when it finds an existing manifest entry with a valid path).
-        let frontmatter =
-            ingest::build_frontmatter(resource_id, "My Document", "temper", "task", None, None);
-        let vault_content = format!("{frontmatter}Updated content");
-        fs::write(&existing_path, &vault_content).unwrap();
+        let fm = ingest::build_frontmatter(
+            resource_id,
+            "My Document",
+            "temper",
+            "task",
+            ingest::normalize_body_for_vault("Updated content"),
+            None,
+            None,
+        )
+        .unwrap();
+        fm.write_to(&existing_path).unwrap();
 
         // Update manifest entry (matches what pull_resource now does).
         let content_hash = temper_core::hash::compute_body_hash("Updated content");
@@ -3264,7 +3280,8 @@ mod tests {
             "task",
             Some(&managed),
             Some(&open),
-        );
+        )
+        .unwrap();
 
         // After rebuild, stripping the new file must yield the same body
         // byte-for-byte — no normalization, no swallowed lines, no

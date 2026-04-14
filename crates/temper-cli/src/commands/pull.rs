@@ -56,19 +56,18 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     .managed_meta
                     .as_ref()
                     .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
-                let frontmatter = ingest::build_frontmatter_from_resource(
+                let fm = ingest::build_frontmatter_from_resource(
                     &resource,
                     &ctx,
                     &dtype,
+                    ingest::normalize_body_for_vault(&content_response.markdown),
                     managed_value.as_ref(),
                     content_response.open_meta.as_ref(),
-                );
-                let full_content = format!("{frontmatter}{}", content_response.markdown);
-                std::fs::write(&vault_path, &full_content)?;
+                )?;
+                fm.write_to(&vault_path)?;
 
                 // Update manifest entry.
-                let body = crate::actions::sync::strip_frontmatter(&full_content);
-                let content_hash = temper_core::hash::compute_body_hash(body);
+                let content_hash = temper_core::hash::compute_body_hash(fm.body());
                 entry.body_hash = content_hash.clone();
                 // After pull, local content matches server — hashes are identical
                 entry.remote_body_hash = content_hash;

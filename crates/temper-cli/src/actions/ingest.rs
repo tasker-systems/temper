@@ -399,78 +399,45 @@ pub fn build_provisional_frontmatter(
     )
 }
 
-/// Generate YAML frontmatter for a vault file.
+/// Construct a fresh `Frontmatter` for a vault file. Caller can mutate
+/// further or write to disk via `Frontmatter::write_to`.
 ///
-/// `extra_fields` allows callers to inject additional key-value pairs (e.g.
-/// `legacy_id`, `goal`, `stage`) without bloating this function's signature.
+/// `extra_fields` allows callers to inject additional managed-tier
+/// key-value pairs (e.g. `temper-stage`, `temper-mode`) without bloating
+/// the signature.
 pub fn build_frontmatter(
     id: impl std::fmt::Display,
     title: &str,
     context: &str,
     doc_type: &str,
+    body: String,
     ingestion_source: Option<&str>,
     extra_fields: Option<&[(&str, &str)]>,
-) -> String {
+) -> crate::error::Result<temper_core::frontmatter::Frontmatter> {
+    use temper_core::frontmatter::{DocType, Frontmatter};
+
+    let dt = DocType::from_str(doc_type)?;
     let now = chrono::Utc::now().to_rfc3339();
-    let mut fm = format!(
-        "---\ntemper-id: {id}\ntemper-type: {doc_type}\ntemper-context: {context}\ntemper-created: {now}\ntitle: \"{title}\"\n"
+    let mut fm = Frontmatter::new(dt, body);
+    fm.set_managed_field("temper-id", serde_json::Value::String(id.to_string()));
+    fm.set_managed_field(
+        "temper-context",
+        serde_json::Value::String(context.to_string()),
     );
+    fm.set_managed_field("temper-created", serde_json::Value::String(now));
+    fm.set_managed_field("title", serde_json::Value::String(title.to_string()));
     if let Some(source) = ingestion_source {
-        fm.push_str(&format!("temper-source: \"{source}\"\n"));
+        fm.set_managed_field(
+            "temper-source",
+            serde_json::Value::String(source.to_string()),
+        );
     }
     if let Some(fields) = extra_fields {
         for (key, value) in fields {
-            fm.push_str(&format!("{key}: \"{value}\"\n"));
+            fm.set_managed_field(key, serde_json::Value::String(value.to_string()));
         }
     }
-    fm.push_str("---\n\n");
-    fm
-}
-
-/// Identity/structural frontmatter fields that are always rendered from the
-/// `ResourceRow` (not from the meta tier maps). We skip them inside the tier
-/// emit loops as defense in depth against duplicate keys, even though
-/// `split_frontmatter_tiers` normally keeps them out of both tiers.
-const SKIP_IDENTITY_FIELDS: &[&str] = &[
-    "temper-id",
-    "temper-type",
-    "temper-context",
-    "temper-created",
-    "temper-updated",
-    "temper-owner",
-    "temper-provisional-id",
-    "temper-source",
-    "temper-legacy-id",
-    "title",
-    "slug",
-];
-
-/// Emit the keys of a single frontmatter tier (managed_meta or open_meta)
-/// to `fm`, using the same type-dispatch rules the CLI uses when writing
-/// local files. Keys listed in `SKIP_IDENTITY_FIELDS` are skipped.
-fn emit_meta_tier(fm: &mut String, meta: Option<&serde_json::Value>) {
-    let Some(obj) = meta.and_then(|m| m.as_object()) else {
-        return;
-    };
-    for (key, value) in obj {
-        if SKIP_IDENTITY_FIELDS.contains(&key.as_str()) {
-            continue;
-        }
-        match value {
-            serde_json::Value::String(s) => {
-                fm.push_str(&format!("{key}: \"{}\"\n", yaml_escape_string(s)));
-            }
-            serde_json::Value::Number(n) => fm.push_str(&format!("{key}: {n}\n")),
-            serde_json::Value::Bool(b) => fm.push_str(&format!("{key}: {b}\n")),
-            serde_json::Value::Null => fm.push_str(&format!("{key}: null\n")),
-            serde_json::Value::Array(_) => {
-                fm.push_str(&format!("{key}: {}\n", json_value_to_yaml(value, 0)));
-            }
-            serde_json::Value::Object(_) => {
-                fm.push_str(&format!("{key}:{}\n", json_value_to_yaml(value, 0)));
-            }
-        }
-    }
+    Ok(fm)
 }
 
 /// Generate YAML frontmatter for a vault file from server data.
@@ -484,89 +451,71 @@ pub fn build_frontmatter_from_resource(
     resource: &temper_core::types::ResourceRow,
     context: &str,
     doc_type: &str,
+    body: String,
     managed_meta: Option<&serde_json::Value>,
     open_meta: Option<&serde_json::Value>,
-) -> String {
-    let mut fm = format!(
-        "---\ntemper-id: {}\ntemper-type: {doc_type}\ntemper-context: {context}\n\
-         temper-created: {}\ntitle: \"{}\"\n",
-        resource.id,
-        resource.created.to_rfc3339(),
-        yaml_escape_string(&resource.title),
+) -> crate::error::Result<temper_core::frontmatter::Frontmatter> {
+    use temper_core::frontmatter::{DocType, Frontmatter};
+
+    let dt = DocType::from_str(doc_type)?;
+    let mut fm = Frontmatter::new(dt, body);
+    fm.set_managed_field(
+        "temper-id",
+        serde_json::Value::String(resource.id.to_string()),
     );
-
-    // Slug from resource
-    if let Some(ref slug) = resource.slug {
-        fm.push_str(&format!("slug: \"{}\"\n", yaml_escape_string(slug)));
+    fm.set_managed_field(
+        "temper-context",
+        serde_json::Value::String(context.to_string()),
+    );
+    fm.set_managed_field(
+        "temper-created",
+        serde_json::Value::String(resource.created.to_rfc3339()),
+    );
+    fm.set_managed_field("title", serde_json::Value::String(resource.title.clone()));
+    if let Some(slug) = &resource.slug {
+        fm.set_managed_field("slug", serde_json::Value::String(slug.clone()));
     }
-
-    // Owner handle
     if !resource.owner_handle.is_empty() {
-        fm.push_str(&format!(
-            "temper-owner: \"{}\"\n",
-            yaml_escape_string(&resource.owner_handle)
-        ));
+        fm.set_managed_field(
+            "temper-owner",
+            serde_json::Value::String(resource.owner_handle.clone()),
+        );
     }
-
-    // managed_meta and open_meta are guaranteed disjoint by
-    // split_frontmatter_tiers, so we can emit them sequentially without
-    // deduping. Managed tier first to match the order the CLI would
-    // produce locally via normalize::split_and_merge.
-    emit_meta_tier(&mut fm, managed_meta);
-    emit_meta_tier(&mut fm, open_meta);
-
-    fm.push_str("---\n\n");
-    fm
-}
-
-/// Serialize a JSON value to a YAML string fragment (no trailing newline).
-/// Arrays use flow style: ["a", "b"]
-/// Objects use block style with 2-space indent.
-fn json_value_to_yaml(value: &serde_json::Value, indent: usize) -> String {
-    match value {
-        serde_json::Value::String(s) => format!("\"{}\"", yaml_escape_string(s)),
-        serde_json::Value::Number(n) => n.to_string(),
-        serde_json::Value::Bool(b) => b.to_string(),
-        serde_json::Value::Null => "null".to_string(),
-        serde_json::Value::Array(arr) => {
-            let items: Vec<String> = arr.iter().map(|v| json_value_to_yaml(v, indent)).collect();
-            format!("[{}]", items.join(", "))
-        }
-        serde_json::Value::Object(obj) => {
-            let prefix = " ".repeat(indent + 2);
-            let mut lines = Vec::new();
-            for (k, v) in obj {
-                match v {
-                    serde_json::Value::Object(_) => {
-                        lines.push(format!("{prefix}{k}:"));
-                        if let serde_json::Value::Object(inner) = v {
-                            for (ik, iv) in inner {
-                                let nested_prefix = " ".repeat(indent + 4);
-                                lines.push(format!(
-                                    "{nested_prefix}{ik}: {}",
-                                    json_value_to_yaml(iv, indent + 4)
-                                ));
-                            }
-                        }
-                    }
-                    _ => {
-                        lines.push(format!(
-                            "{prefix}{k}: {}",
-                            json_value_to_yaml(v, indent + 2)
-                        ));
-                    }
-                }
+    if let Some(obj) = managed_meta.and_then(|m| m.as_object()) {
+        for (k, v) in obj {
+            // System fields are set above; skip them as defense-in-depth
+            // against double-application.
+            if temper_core::frontmatter::fields::SYSTEM_MANAGED_FIELDS.contains(&k.as_str()) {
+                continue;
             }
-            format!("\n{}", lines.join("\n"))
+            fm.set_managed_field(k, v.clone());
         }
     }
+    if let Some(obj) = open_meta.and_then(|m| m.as_object()) {
+        for (k, v) in obj {
+            fm.set_open_field(k, v.clone());
+        }
+    }
+    Ok(fm)
 }
 
-/// Escape a string for safe inclusion in a YAML double-quoted scalar.
-fn yaml_escape_string(s: &str) -> String {
-    s.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
+/// Normalize the markdown body to include the blank-line separator the
+/// historical text-level `build_frontmatter` emitted between the closing
+/// `---` and the first content line.
+///
+/// Old flow: `format!("---\n<yaml>---\n\n{content}")` — always a blank
+/// line between the frontmatter fence and the body.
+///
+/// New flow: `Frontmatter::serialize()` produces `---\n<yaml>---\n{body}`,
+/// so the caller must include the leading newline to preserve the
+/// separator. This helper does that normalization conservatively: prepend
+/// `\n` only if the content doesn't already start with one.
+pub fn normalize_body_for_vault(content: &str) -> String {
+    if content.is_empty() || content.starts_with('\n') {
+        content.to_string()
+    } else {
+        format!("\n{content}")
+    }
 }
 
 /// Write a vault file and register the resource in the manifest.
@@ -595,16 +544,16 @@ pub fn write_vault_file_and_register(
         std::fs::create_dir_all(parent)?;
     }
 
-    let frontmatter = build_frontmatter(
+    let fm = build_frontmatter(
         resource.id,
         &resource.title,
         context,
         doc_type,
+        normalize_body_for_vault(content),
         ingestion_source,
         extra_fields,
-    );
-    let vault_content = format!("{frontmatter}{content}");
-    std::fs::write(&vault_path, &vault_content)?;
+    )?;
+    fm.write_to(&vault_path)?;
 
     // Register in manifest.
     let temper_dir = vault_root.join(".temper");
@@ -807,14 +756,37 @@ mod tests {
     #[test]
     fn build_frontmatter_includes_required_fields() {
         let id = Uuid::nil();
-        let fm = build_frontmatter(id, "My Title", "work", "note", None, None);
-        assert!(fm.contains("temper-id:"));
-        assert!(fm.contains("title: \"My Title\""));
-        assert!(fm.contains("temper-context: work"));
-        assert!(fm.contains("temper-type: note"));
-        assert!(fm.contains("temper-created:"));
-        assert!(fm.starts_with("---\n"));
-        assert!(fm.contains("\n---\n"));
+        let fm = build_frontmatter(
+            id,
+            "My Title",
+            "work",
+            "research",
+            String::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        let v = fm.value();
+        assert!(
+            v.get("temper-id").is_some(),
+            "temper-id missing. value:\n{v:?}"
+        );
+        assert_eq!(
+            v.get("title").and_then(|x| x.as_str()),
+            Some("My Title"),
+            "title mismatch"
+        );
+        assert_eq!(
+            v.get("temper-context").and_then(|x| x.as_str()),
+            Some("work"),
+            "temper-context mismatch"
+        );
+        assert_eq!(
+            v.get("temper-type").and_then(|x| x.as_str()),
+            Some("research"),
+            "temper-type mismatch"
+        );
+        assert!(v.get("temper-created").is_some(), "temper-created missing");
     }
 
     #[test]
@@ -824,23 +796,37 @@ mod tests {
             id,
             "My Title",
             "work",
-            "note",
+            "research",
+            String::new(),
             Some("/home/user/file.pdf"),
             None,
-        );
-        assert!(
-            fm.contains("temper-source: \"/home/user/file.pdf\""),
-            "expected temper-source in frontmatter:\n{fm}"
+        )
+        .unwrap();
+        let v = fm.value();
+        assert_eq!(
+            v.get("temper-source").and_then(|x| x.as_str()),
+            Some("/home/user/file.pdf"),
+            "expected temper-source in frontmatter"
         );
     }
 
     #[test]
     fn build_frontmatter_omits_ingestion_source_when_absent() {
         let id = Uuid::nil();
-        let fm = build_frontmatter(id, "My Title", "work", "note", None, None);
+        let fm = build_frontmatter(
+            id,
+            "My Title",
+            "work",
+            "research",
+            String::new(),
+            None,
+            None,
+        )
+        .unwrap();
+        let v = fm.value();
         assert!(
-            !fm.contains("temper-source"),
-            "unexpected temper-source in frontmatter:\n{fm}"
+            v.get("temper-source").is_none(),
+            "unexpected temper-source in frontmatter"
         );
     }
 
@@ -848,9 +834,27 @@ mod tests {
     fn build_frontmatter_includes_extra_fields() {
         let id = Uuid::nil();
         let extras = [("legacy_id", "abc-123"), ("goal", "temper-cloud")];
-        let fm = build_frontmatter(id, "Title", "work", "task", None, Some(&extras));
-        assert!(fm.contains("legacy_id: \"abc-123\""));
-        assert!(fm.contains("goal: \"temper-cloud\""));
+        let fm = build_frontmatter(
+            id,
+            "Title",
+            "work",
+            "task",
+            String::new(),
+            None,
+            Some(&extras),
+        )
+        .unwrap();
+        let v = fm.value();
+        assert_eq!(
+            v.get("legacy_id").and_then(|x| x.as_str()),
+            Some("abc-123"),
+            "legacy_id mismatch"
+        );
+        assert_eq!(
+            v.get("goal").and_then(|x| x.as_str()),
+            Some("temper-cloud"),
+            "goal mismatch"
+        );
     }
 
     // --- parse_source_frontmatter ---
@@ -1134,28 +1138,37 @@ created: 2026-03-23
             "config": {"key": "value", "nested": true}
         });
 
-        let fm =
-            build_frontmatter_from_resource(&resource, "temper", "research", Some(&meta), None);
+        let fm = build_frontmatter_from_resource(
+            &resource,
+            "temper",
+            "research",
+            String::new(),
+            Some(&meta),
+            None,
+        )
+        .unwrap();
+        let v = fm.value();
 
+        let depends = v
+            .get("depends_on")
+            .and_then(|x| x.as_sequence())
+            .expect("depends_on should be a sequence");
+        let slugs: Vec<&str> = depends.iter().filter_map(|x| x.as_str()).collect();
         assert!(
-            fm.contains("depends_on:"),
-            "depends_on array should be present. Got:\n{fm}"
+            slugs.contains(&"slug-a"),
+            "depends_on should contain slug-a. Got:\n{v:?}"
         );
         assert!(
-            fm.contains("slug-a"),
-            "depends_on should contain slug-a. Got:\n{fm}"
+            slugs.contains(&"slug-b"),
+            "depends_on should contain slug-b. Got:\n{v:?}"
         );
         assert!(
-            fm.contains("slug-b"),
-            "depends_on should contain slug-b. Got:\n{fm}"
+            v.get("extends").is_some(),
+            "extends array should be present. Got:\n{v:?}"
         );
         assert!(
-            fm.contains("extends:"),
-            "extends array should be present. Got:\n{fm}"
-        );
-        assert!(
-            fm.contains("config:"),
-            "config object should be present. Got:\n{fm}"
+            v.get("config").is_some(),
+            "config object should be present. Got:\n{v:?}"
         );
     }
 
@@ -1172,33 +1185,38 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            String::new(),
             None,
             Some(&open_meta),
-        );
+        )
+        .unwrap();
+        let v = fm.value();
 
+        let relates = v
+            .get("relates_to")
+            .and_then(|x| x.as_sequence())
+            .expect("relates_to should be a sequence");
+        let entries: Vec<&str> = relates.iter().filter_map(|x| x.as_str()).collect();
         assert!(
-            fm.contains("relates_to:"),
-            "relates_to key should be present. Got:\n{fm}"
+            entries.contains(&"task://foo"),
+            "relates_to should contain task://foo. Got:\n{v:?}"
         );
         assert!(
-            fm.contains("\"task://foo\""),
-            "relates_to should contain task://foo. Got:\n{fm}"
+            entries.contains(&"task://bar"),
+            "relates_to should contain task://bar. Got:\n{v:?}"
+        );
+        let tags = v
+            .get("tags")
+            .and_then(|x| x.as_sequence())
+            .expect("tags should be a sequence");
+        let tag_strs: Vec<&str> = tags.iter().filter_map(|x| x.as_str()).collect();
+        assert!(
+            tag_strs.contains(&"alpha"),
+            "tags should contain alpha. Got:\n{v:?}"
         );
         assert!(
-            fm.contains("\"task://bar\""),
-            "relates_to should contain task://bar. Got:\n{fm}"
-        );
-        assert!(
-            fm.contains("tags:"),
-            "tags key should be present. Got:\n{fm}"
-        );
-        assert!(
-            fm.contains("\"alpha\""),
-            "tags should contain alpha. Got:\n{fm}"
-        );
-        assert!(
-            fm.contains("\"beta\""),
-            "tags should contain beta. Got:\n{fm}"
+            tag_strs.contains(&"beta"),
+            "tags should contain beta. Got:\n{v:?}"
         );
     }
 
@@ -1214,21 +1232,26 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            String::new(),
             None,
             Some(&open_meta),
-        );
+        )
+        .unwrap();
+        let v = fm.value();
 
-        assert!(
-            fm.contains("custom_block:"),
-            "custom_block key should be present. Got:\n{fm}"
+        let block = v
+            .get("custom_block")
+            .expect("custom_block should be present");
+        assert_eq!(
+            block.get("key").and_then(|x| x.as_str()),
+            Some("value"),
+            "nested key should be 'value'. Got:\n{block:?}"
         );
-        assert!(
-            fm.contains("key: \"value\""),
-            "nested key/value should be present. Got:\n{fm}"
-        );
-        assert!(
-            fm.contains("inner: true"),
-            "deeply nested inner should be present. Got:\n{fm}"
+        let nested = block.get("nested").expect("nested should be present");
+        assert_eq!(
+            nested.get("inner").and_then(|x| x.as_bool()),
+            Some(true),
+            "deeply nested inner should be true. Got:\n{nested:?}"
         );
     }
 
@@ -1249,33 +1272,44 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            String::new(),
             Some(&managed_meta),
             Some(&open_meta),
-        );
+        )
+        .unwrap();
+        let v = fm.value();
 
         // Both tiers present
-        assert!(fm.contains("stage:"), "managed stage missing. Got:\n{fm}");
-        assert!(fm.contains("effort:"), "managed effort missing. Got:\n{fm}");
         assert!(
-            fm.contains("relates_to:"),
-            "open relates_to missing. Got:\n{fm}"
+            v.get("stage").is_some(),
+            "managed stage missing. Got:\n{v:?}"
         );
         assert!(
-            fm.contains("custom_tag:"),
-            "open custom_tag missing. Got:\n{fm}"
+            v.get("effort").is_some(),
+            "managed effort missing. Got:\n{v:?}"
+        );
+        assert!(
+            v.get("relates_to").is_some(),
+            "open relates_to missing. Got:\n{v:?}"
+        );
+        assert!(
+            v.get("custom_tag").is_some(),
+            "open custom_tag missing. Got:\n{v:?}"
         );
 
-        // Order: managed tier keys before open tier keys.
-        let stage_pos = fm.find("stage:").expect("stage: present");
-        let effort_pos = fm.find("effort:").expect("effort: present");
-        let relates_pos = fm.find("relates_to:").expect("relates_to: present");
-        let custom_pos = fm.find("custom_tag:").expect("custom_tag: present");
-
-        let max_managed = stage_pos.max(effort_pos);
-        let min_open = relates_pos.min(custom_pos);
+        // Canonical serialization places known open fields (Tier 3) before
+        // schema-extra managed fields (Tier 4). Verify that identity/system
+        // fields come before everything else — that's the invariant the
+        // canonical ordering function guarantees.
+        let serialized = fm.serialize().unwrap();
+        let id_pos = serialized.find("temper-id:").expect("temper-id: present");
+        let stage_pos = serialized.find("stage:").expect("stage: present");
+        let effort_pos = serialized.find("effort:").expect("effort: present");
+        let relates_pos = serialized.find("relates_to:").expect("relates_to: present");
+        // Identity field must precede all data fields.
         assert!(
-            max_managed < min_open,
-            "managed_meta keys must come before open_meta keys. Got:\n{fm}"
+            id_pos < stage_pos.min(effort_pos).min(relates_pos),
+            "identity fields must precede data fields. Got:\n{serialized}"
         );
     }
 
@@ -1288,17 +1322,30 @@ created: 2026-03-23
             "effort": "M",
         });
 
-        let fm_with_none = build_frontmatter_from_resource(
+        let fm = build_frontmatter_from_resource(
             &resource,
             "temper",
             "research",
+            String::new(),
             Some(&managed_meta),
             None,
-        );
+        )
+        .unwrap();
+        let v = fm.value();
 
-        // Should not contain blank lines between frontmatter body — the only
-        // blank line is the one that follows the closing `---`.
-        let inside = fm_with_none
+        assert_eq!(
+            v.get("stage").and_then(|x| x.as_str()),
+            Some("draft"),
+            "stage should be rendered. Got:\n{v:?}"
+        );
+        assert_eq!(
+            v.get("effort").and_then(|x| x.as_str()),
+            Some("M"),
+            "effort should be rendered. Got:\n{v:?}"
+        );
+        // Serialized form should have no blank lines inside the frontmatter block.
+        let serialized = fm.serialize().unwrap();
+        let inside = serialized
             .strip_prefix("---\n")
             .expect("leading ---")
             .split("\n---\n")
@@ -1307,17 +1354,8 @@ created: 2026-03-23
         for line in inside.lines() {
             assert!(
                 !line.trim().is_empty(),
-                "no blank lines expected inside frontmatter. Got:\n{fm_with_none}"
+                "no blank lines expected inside frontmatter. Got:\n{serialized}"
             );
         }
-
-        assert!(
-            fm_with_none.contains("stage: \"draft\""),
-            "stage should be rendered. Got:\n{fm_with_none}"
-        );
-        assert!(
-            fm_with_none.contains("effort: \"M\""),
-            "effort should be rendered. Got:\n{fm_with_none}"
-        );
     }
 }
