@@ -7,7 +7,7 @@ import type { JsonValue } from "./serde_json/JsonValue";
  * All edges are directed: `source_resource_id → target_resource_id`.
  * Symmetric queries (e.g., `relates_to`) union forward + reverse scans.
  */
-export type EdgeType = "relates_to" | "extends" | "depends_on" | "references" | "parent_of" | "tagged_with" | "preceded_by" | "derived_from";
+export type EdgeType = "relates_to" | "extends" | "depends_on" | "references" | "parent_of" | "preceded_by" | "derived_from";
 
 /**
  * Edge listing row — mirrors the `graph_resource_edges()` SQL function.
@@ -35,4 +35,4 @@ export type GraphTraversalRow = { resource_id: string, depth: number, path: Arra
  * Each field maps to an edge type. Values are raw strings — either UUIDs
  * or slugs — that get resolved to `kb_resources.id` at ingest time.
  */
-export type ResourceRelationships = { relates_to: Array<string>, extends: Array<string>, depends_on: Array<string>, references: Array<string>, tags: Array<string>, parent: string | null, preceded_by: Array<string>, derived_from: Array<string>, };
+export type ResourceRelationships = { relates_to: Array<string>, extends: Array<string>, depends_on: Array<string>, references: Array<string>, parent: string | null, preceded_by: Array<string>, derived_from: Array<string>, };
