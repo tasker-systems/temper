@@ -131,6 +131,22 @@ impl SlugMap {
     }
 }
 
+impl UuidMap {
+    pub(crate) fn insert(&mut self, owner: &str, id: Uuid, path: PathBuf) {
+        self.inner
+            .entry(owner.to_string())
+            .or_default()
+            .insert(id, path);
+    }
+
+    pub(crate) fn resolve(&self, scanning_owner: &str, id: Uuid) -> Option<&std::path::Path> {
+        self.inner
+            .get(scanning_owner)?
+            .get(&id)
+            .map(|p| p.as_path())
+    }
+}
+
 /// Top-level entry point. Walks the vault, scans bodies, merges
 /// references into open_meta, writes files back.
 pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport> {
@@ -227,5 +243,39 @@ mod tests {
     fn slug_map_returns_none_for_unknown_slug() {
         let map = SlugMap::default();
         assert_eq!(map.resolve("@me", "temper", "nonexistent"), None);
+    }
+
+    fn uuid(s: &str) -> Uuid {
+        Uuid::parse_str(s).unwrap()
+    }
+
+    #[test]
+    fn uuid_map_resolves_within_owner() {
+        let mut map = UuidMap::default();
+        let id = uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6");
+        map.insert("@me", id, path("/vault/@me/temper/task/foo.md"));
+
+        let resolved = map.resolve("@me", id);
+        assert_eq!(
+            resolved,
+            Some(path("/vault/@me/temper/task/foo.md").as_path())
+        );
+    }
+
+    #[test]
+    fn uuid_map_rejects_cross_owner() {
+        let mut map = UuidMap::default();
+        let id = uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6");
+        map.insert("+team-x", id, path("/vault/+team-x/shared/task/leaked.md"));
+
+        let resolved = map.resolve("@me", id);
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn uuid_map_returns_none_for_unknown_uuid() {
+        let map = UuidMap::default();
+        let id = uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6");
+        assert_eq!(map.resolve("@me", id), None);
     }
 }
