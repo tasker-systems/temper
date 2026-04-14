@@ -43,6 +43,24 @@ impl DocType {
             ))),
         }
     }
+
+    /// The embedded JSON Schema text for this doctype, as compiled into
+    /// the binary via `include_str!`. Single source of truth for the
+    /// `DocType → schema file` mapping.
+    ///
+    /// Matches on the enum variant, not a string — the compiler enforces
+    /// exhaustiveness. Any new variant added to `DocType` forces this
+    /// match to be updated.
+    pub fn schema_json(&self) -> &'static str {
+        match self {
+            DocType::Task => include_str!("../../schemas/task.schema.json"),
+            DocType::Goal => include_str!("../../schemas/goal.schema.json"),
+            DocType::Session => include_str!("../../schemas/session.schema.json"),
+            DocType::Research => include_str!("../../schemas/research.schema.json"),
+            DocType::Decision => include_str!("../../schemas/decision.schema.json"),
+            DocType::Concept => include_str!("../../schemas/concept.schema.json"),
+        }
+    }
 }
 
 /// Authoritative in-memory representation of a vault markdown file's

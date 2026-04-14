@@ -124,25 +124,11 @@ pub fn canonicalize(fm: &serde_yaml::Value, doc_type: DocType) -> serde_yaml::Va
 /// text through `serde_yaml::Value` instead — YAML is a superset of JSON
 /// and `serde_yaml::Mapping` is insertion-ordered via `IndexMap`, which is
 /// exactly what we need for "schema-declaration order".
+///
+/// The `DocType → schema text` mapping lives on [`DocType::schema_json`]
+/// as the single source of truth.
 fn schema_property_order(doc_type: DocType) -> Vec<String> {
-    const TASK_SCHEMA: &str = include_str!("../../schemas/task.schema.json");
-    const GOAL_SCHEMA: &str = include_str!("../../schemas/goal.schema.json");
-    const SESSION_SCHEMA: &str = include_str!("../../schemas/session.schema.json");
-    const RESEARCH_SCHEMA: &str = include_str!("../../schemas/research.schema.json");
-    const DECISION_SCHEMA: &str = include_str!("../../schemas/decision.schema.json");
-    const CONCEPT_SCHEMA: &str = include_str!("../../schemas/concept.schema.json");
-
-    let raw = match doc_type.as_str() {
-        "task" => TASK_SCHEMA,
-        "goal" => GOAL_SCHEMA,
-        "session" => SESSION_SCHEMA,
-        "research" => RESEARCH_SCHEMA,
-        "decision" => DECISION_SCHEMA,
-        "concept" => CONCEPT_SCHEMA,
-        _ => return Vec::new(),
-    };
-
-    let Ok(parsed) = serde_yaml::from_str::<serde_yaml::Value>(raw) else {
+    let Ok(parsed) = serde_yaml::from_str::<serde_yaml::Value>(doc_type.schema_json()) else {
         return Vec::new();
     };
     let Some(properties) = parsed.get("properties").and_then(|p| p.as_mapping()) else {
