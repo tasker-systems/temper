@@ -2,6 +2,7 @@ pub mod config;
 pub mod doctor;
 pub mod doctor_fix;
 pub mod goal;
+pub mod graph_build;
 pub mod ingest;
 pub mod progress;
 pub mod runtime;
