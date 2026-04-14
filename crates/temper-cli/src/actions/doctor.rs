@@ -502,6 +502,18 @@ fn dedup_frontmatter_keys(content: &str) -> Option<String> {
 ///
 /// Increments `report.canonicalized` for each file actually rewritten
 /// (or for each file that would be rewritten, in dry-run mode).
+///
+/// **Why this isn't redundant with `sync::normalize_all_entries`:**
+/// `normalize_all_entries` iterates `manifest.entries` (tracked files
+/// only) and is gated on `!dry_run`. This pass covers the two gaps:
+/// (1) **untracked files** — e.g. a brand-new note the user just dropped
+/// in before running `temper sync run` for the first time — get
+/// canonicalized here even though they aren't in the manifest yet; and
+/// (2) **dry-run visibility** — this pass runs in dry-run mode so the
+/// user can preview canonicalization that would occur on a real run.
+/// On a freshly synced vault in non-dry-run mode, every tracked file
+/// has already been canonicalized by `normalize_all_entries` and this
+/// pass is a fast no-op — a redundant-but-cheap safety net.
 fn canonicalize_pass(
     config: &Config,
     context_filter: Option<&str>,
@@ -522,11 +534,14 @@ fn canonicalize_pass(
             if !dir.is_dir() {
                 continue;
             }
-            for entry in fs::read_dir(&dir)? {
-                let path = entry?.path();
-                if path.extension().is_none_or(|e| e != "md") {
-                    continue;
-                }
+            // Match the per-entry error tolerance of collect_fixes_for_directory
+            // so one unreadable stray file doesn't abort the whole pass.
+            let entries: Vec<_> = fs::read_dir(&dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
+                .collect();
+            for path in entries {
                 canonicalize_one(&path, dry_run, report)?;
             }
         }
@@ -538,7 +553,7 @@ fn canonicalize_pass(
 /// write back only if the canonical form differs from the on-disk bytes.
 /// Files that fail to parse (malformed YAML, missing `temper-type`, etc.)
 /// are skipped silently — that's the doctor scanner's job, not this pass.
-fn canonicalize_one(path: &std::path::Path, dry_run: bool, report: &mut ApplyReport) -> Result<()> {
+fn canonicalize_one(path: &Path, dry_run: bool, report: &mut ApplyReport) -> Result<()> {
     let original = fs::read_to_string(path)?;
     let fm = match temper_core::frontmatter::Frontmatter::try_from(original.as_str()) {
         Ok(fm) => fm,
