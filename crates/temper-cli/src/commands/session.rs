@@ -63,9 +63,9 @@ pub fn save(
     if note_path.exists() {
         // File exists: replace body if stdin provided, otherwise no-op
         if let Some(body) = stdin_content {
-            let existing = std::fs::read_to_string(&note_path)?;
-            let updated = vault::replace_body(&existing, body);
-            std::fs::write(&note_path, updated)?;
+            let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
+            fm.set_body(body.to_string());
+            fm.write_to(&note_path)?;
             let relative = note_path
                 .strip_prefix(&config.vault_root)
                 .unwrap_or(&note_path);
@@ -81,21 +81,23 @@ pub fn save(
         title: note_title,
         date: &today,
     };
-    let content = tmpl
+    let rendered = tmpl
         .render()
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
-    // Set context field in frontmatter
-    let content = vault::set_frontmatter_field(&content, "temper-context", &context_name);
+    let mut fm = temper_core::frontmatter::Frontmatter::try_from(rendered.as_str())?;
+    fm.set_managed_field(
+        "temper-context",
+        serde_json::Value::String(context_name.clone()),
+    );
+    if let Some(body) = stdin_content {
+        fm.set_body(body.to_string());
+    }
 
-    // If stdin content was piped, replace the template body
-    let content = if let Some(body) = stdin_content {
-        vault::replace_body(&content, body)
-    } else {
-        content
-    };
-
-    vault::write_note(&note_path, &content)?;
+    if let Some(parent) = note_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    fm.write_to(&note_path)?;
 
     let relative = note_path
         .strip_prefix(&config.vault_root)
@@ -170,30 +172,20 @@ fn link_session_to_task(
     let task_vault = temper_core::vault::Vault::new(&config.vault_root);
     let task_owner = config.owner_for_context(&task_info.context);
     let task_path = task_vault.doc_file(&task_owner, &task_info.context, "task", &task_info.slug);
-    let mut task_content = std::fs::read_to_string(&task_path)?;
+    let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&task_path)?;
 
-    // Add/append to the sessions list in frontmatter
+    // Append session_id to the sessions list (or create it fresh).
     if !session_id.is_empty() {
-        if task_content.contains("\nsessions:") {
-            // sessions key already exists — append to the list
-            let sessions_marker = "\nsessions:";
-            if let Some(pos) = task_content.find(sessions_marker) {
-                let after_marker = pos + sessions_marker.len();
-                let insert_pos = after_marker;
-                let new_entry = format!("\n  - {session_id}");
-                task_content.insert_str(insert_pos, &new_entry);
-            }
-        } else {
-            // Insert sessions field before the closing --- of frontmatter
-            let trimmed_start = if task_content.starts_with("---") {
-                3
-            } else {
-                0
-            };
-            if let Some(close_pos) = task_content[trimmed_start..].find("\n---") {
-                let insert_at = trimmed_start + close_pos;
-                let new_field = format!("\nsessions:\n  - {session_id}");
-                task_content.insert_str(insert_at, &new_field);
+        let mapping = fm
+            .value_mut()
+            .as_mapping_mut()
+            .expect("Frontmatter invariant: value is a mapping");
+        let sessions_key = serde_yaml::Value::String("sessions".to_string());
+        let new_entry = serde_yaml::Value::String(session_id.clone());
+        match mapping.get_mut(&sessions_key) {
+            Some(serde_yaml::Value::Sequence(seq)) => seq.push(new_entry),
+            _ => {
+                mapping.insert(sessions_key, serde_yaml::Value::Sequence(vec![new_entry]));
             }
         }
     }
@@ -206,8 +198,7 @@ fn link_session_to_task(
         if output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !branch.is_empty() && branch != "HEAD" {
-                task_content =
-                    vault::set_frontmatter_field(&task_content, "temper-branch", &branch);
+                fm.set_managed_field("temper-branch", serde_json::Value::String(branch));
             }
         }
     }
@@ -215,10 +206,10 @@ fn link_session_to_task(
     // Optionally update the task stage
     if let Some(s) = state {
         vault::validate_stage(s)?;
-        task_content = vault::set_frontmatter_field(&task_content, "temper-stage", s);
+        fm.set_managed_field("temper-stage", serde_json::Value::String(s.to_string()));
     }
 
-    std::fs::write(&task_path, &task_content)?;
+    fm.write_to(&task_path)?;
     Ok(())
 }
 
