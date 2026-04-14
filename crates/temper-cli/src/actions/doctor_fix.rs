@@ -757,6 +757,7 @@ pub struct ApplyReport {
     pub files_relocated: u32,
     pub manifest_updated: u32,
     pub manifest_removed: u32,
+    pub canonicalized: u32,
 }
 
 /// Sort `plan` by phase, then apply every action.

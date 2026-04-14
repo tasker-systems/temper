@@ -338,7 +338,7 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
     }
 
     // Apply
-    let report = apply_plan(&mut plan, dry_run)?;
+    let mut report = apply_plan(&mut plan, dry_run)?;
 
     // Apply manifest changes, re-normalize every entry so defaults are
     // materialized and hashes reflect the content changes doctor fix just
@@ -360,6 +360,12 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
             manifest_io::save_manifest(&temper_dir, &manifest)?;
         }
     }
+
+    // Final pass: walk every vault file and re-serialize through Frontmatter
+    // to canonicalize alias-form keys and display ordering. Files already in
+    // canonical form produce byte-identical output and skip the write
+    // (parse + serialize is a fixed point on canonical input, Session 1 proved this).
+    canonicalize_pass(config, context_filter, dry_run, &mut report)?;
 
     Ok(report)
 }
@@ -487,6 +493,65 @@ fn dedup_frontmatter_keys(content: &str) -> Option<String> {
 
     let new_yaml = deduped_lines.join("\n");
     Some(format!("---\n{new_yaml}\n{after_fm}"))
+}
+
+/// Walk the vault and re-save each file via `Frontmatter::try_from` +
+/// `Frontmatter::write_to` so any alias-form keys or non-canonical key
+/// ordering get rewritten to canonical form. Files already in canonical
+/// form produce byte-identical output and are skipped — no write.
+///
+/// Increments `report.canonicalized` for each file actually rewritten
+/// (or for each file that would be rewritten, in dry-run mode).
+fn canonicalize_pass(
+    config: &Config,
+    context_filter: Option<&str>,
+    dry_run: bool,
+    report: &mut ApplyReport,
+) -> Result<()> {
+    let vault_layout = Vault::new(&config.vault_root);
+    let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
+        vec![ctx.to_string()]
+    } else {
+        config.contexts.clone()
+    };
+
+    for doc_type in ENTITY_DOC_TYPES {
+        for ctx in &contexts_to_scan {
+            let owner = config.owner_for_context(ctx);
+            let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
+            if !dir.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(&dir)? {
+                let path = entry?.path();
+                if path.extension().is_none_or(|e| e != "md") {
+                    continue;
+                }
+                canonicalize_one(&path, dry_run, report)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalize a single vault file: parse via Frontmatter, re-serialize,
+/// write back only if the canonical form differs from the on-disk bytes.
+/// Files that fail to parse (malformed YAML, missing `temper-type`, etc.)
+/// are skipped silently — that's the doctor scanner's job, not this pass.
+fn canonicalize_one(path: &std::path::Path, dry_run: bool, report: &mut ApplyReport) -> Result<()> {
+    let original = fs::read_to_string(path)?;
+    let fm = match temper_core::frontmatter::Frontmatter::try_from(original.as_str()) {
+        Ok(fm) => fm,
+        Err(_) => return Ok(()),
+    };
+    let canonical = fm.serialize()?;
+    if canonical != original {
+        if !dry_run {
+            fm.write_to(path)?;
+        }
+        report.canonicalized += 1;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

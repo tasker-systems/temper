@@ -36,11 +36,12 @@ pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<
         + report.files_renamed
         + report.files_relocated
         + report.manifest_updated
-        + report.manifest_removed;
+        + report.manifest_removed
+        + report.canonicalized;
 
     if dry_run {
         output::dim(format!(
-            "Dry run: would apply {total} fixes ({} field renames, {} fields set, {} file renames, {} relocations, {} manifest updates, {} manifest removals, {} owner backfills)",
+            "Dry run: would apply {total} fixes ({} field renames, {} fields set, {} file renames, {} relocations, {} manifest updates, {} manifest removals, {} owner backfills, {} canonicalized)",
             report.fields_renamed,
             report.fields_set,
             report.files_renamed,
@@ -48,11 +49,12 @@ pub fn run_fix(config: &Config, context: Option<&str>, dry_run: bool) -> Result<
             report.manifest_updated,
             report.manifest_removed,
             report.owner_backfilled,
+            report.canonicalized,
         ));
     } else {
         output::success(format!(
-            "Fixed: {} field renames, {} fields set, {} file renames, {} relocations, {} owner backfills",
-            report.fields_renamed, report.fields_set, report.files_renamed, report.files_relocated, report.owner_backfilled
+            "Fixed: {} field renames, {} fields set, {} file renames, {} relocations, {} owner backfills, {} canonicalized",
+            report.fields_renamed, report.fields_set, report.files_renamed, report.files_relocated, report.owner_backfilled, report.canonicalized
         ));
         if report.manifest_updated > 0 || report.manifest_removed > 0 {
             output::dim(format!(
