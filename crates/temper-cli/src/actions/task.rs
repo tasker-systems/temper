@@ -250,13 +250,13 @@ pub fn move_task(
     let vault_layout = Vault::new(&config.vault_root);
     let owner = config.owner_for_context(&task.context);
     let path = vault_layout.doc_file(&owner, &task.context, "task", &task.slug);
-    let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
+    let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
 
     let from_stage = task.stage.clone();
     let to_stage = stage.unwrap_or(&from_stage);
 
     if let Some(s) = stage {
-        content = vault::set_frontmatter_field(&content, "temper-stage", s);
+        fm.set_managed_field("temper-stage", serde_json::Value::String(s.to_string()));
     }
 
     if let Some(g) = new_goal {
@@ -269,23 +269,26 @@ pub fn move_task(
                 g, goal_info.context, task.context
             )));
         }
-        content = vault::set_frontmatter_field(&content, "temper-goal", g);
+        fm.set_managed_field("temper-goal", serde_json::Value::String(g.to_string()));
         // Assign new seq at end of target goal
         let new_seq = next_seq(config, &task.context, g)?;
-        content = vault::set_frontmatter_field(&content, "temper-seq", &new_seq.to_string());
+        fm.set_managed_field("temper-seq", serde_json::Value::from(new_seq));
     }
 
     if let Some(m) = mode {
-        content = vault::set_frontmatter_field(&content, "temper-mode", m);
+        fm.set_managed_field("temper-mode", serde_json::Value::String(m.to_string()));
     }
 
     if let Some(e) = effort {
-        content = vault::set_frontmatter_field(&content, "temper-effort", e);
+        fm.set_managed_field("temper-effort", serde_json::Value::String(e.to_string()));
     }
 
     let datetime = Local::now().to_rfc3339();
-    content = vault::set_frontmatter_field(&content, "temper-updated", &datetime);
-    fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
+    fm.set_managed_field(
+        "temper-updated",
+        serde_json::Value::String(datetime.clone()),
+    );
+    fm.write_to(&path)?;
 
     let event = discovery::Event::ResourceUpdate {
         ts: datetime,
@@ -317,18 +320,24 @@ pub fn done(
     let vault_layout = Vault::new(&config.vault_root);
     let owner = config.owner_for_context(&task.context);
     let path = vault_layout.doc_file(&owner, &task.context, "task", &task.slug);
-    let mut content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
+    let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
 
     let datetime = Local::now().to_rfc3339();
-    content = vault::set_frontmatter_field(&content, "temper-stage", "done");
-    content = vault::set_frontmatter_field(&content, "temper-updated", &datetime);
+    fm.set_managed_field(
+        "temper-stage",
+        serde_json::Value::String("done".to_string()),
+    );
+    fm.set_managed_field(
+        "temper-updated",
+        serde_json::Value::String(datetime.clone()),
+    );
     if let Some(b) = branch {
-        content = vault::set_frontmatter_field(&content, "temper-branch", b);
+        fm.set_managed_field("temper-branch", serde_json::Value::String(b.to_string()));
     }
     if let Some(p) = pr {
-        content = vault::set_frontmatter_field(&content, "temper-pr", p);
+        fm.set_managed_field("temper-pr", serde_json::Value::String(p.to_string()));
     }
-    fs::write(&path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
+    fm.write_to(&path)?;
 
     let event = discovery::Event::ResourceUpdate {
         ts: datetime,

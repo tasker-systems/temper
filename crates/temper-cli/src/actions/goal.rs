@@ -176,9 +176,12 @@ pub fn update(config: &Config, slug: &str, status: &str, context: Option<&str>) 
     if !path.exists() {
         return Err(TemperError::Vault(format!("goal not found: {slug}")));
     }
-    let content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let updated = vault::set_frontmatter_field(&content, "temper-status", status);
-    fs::write(&path, updated).map_err(|e| TemperError::Vault(e.to_string()))?;
+    let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
+    fm.set_managed_field(
+        "temper-status",
+        serde_json::Value::String(status.to_string()),
+    );
+    fm.write_to(&path)?;
     let event = discovery::Event::ResourceUpdate {
         ts: Local::now().to_rfc3339(),
         doc_type: "goal".to_string(),
