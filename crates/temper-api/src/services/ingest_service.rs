@@ -89,12 +89,13 @@ impl From<IngestError> for crate::error::ApiError {
 /// Agents may echo these back from a `get_resource` call; they should not cause
 /// validation errors.
 ///
-/// Uses `IDENTITY_FIELDS` from `temper_core::hash` plus a subset of
-/// `TIER1_SYSTEM_FIELDS`. Intentionally does NOT strip `temper-context` or
-/// `temper-type` — those remain so the update path can detect structural-move
-/// attempts (see `update()` lines that check for context/type changes).
+/// Uses `IDENTITY_FIELDS` and a subset of `TIER1_SYSTEM_FIELDS` from
+/// `temper_core::frontmatter::fields`. Intentionally does NOT strip
+/// `temper-context` or `temper-type` — those remain so the update path can
+/// detect structural-move attempts (see `update()` lines that check for
+/// context/type changes).
 fn strip_system_managed_fields(mut meta: serde_json::Value) -> serde_json::Value {
-    use temper_core::hash::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
+    use temper_core::frontmatter::fields::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
 
     // temper-context and temper-type are kept for structural-move detection.
     const KEEP_FOR_MOVE_DETECTION: &[&str] = &["temper-context", "temper-type"];

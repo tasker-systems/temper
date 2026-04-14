@@ -1,25 +1,34 @@
-//! Consolidated frontmatter field constants. Session 1 re-exports from
-//! their existing locations; Session 3 moves them here properly.
+//! Consolidated frontmatter field constants. Single source of truth for
+//! every place in the codebase that needs to know "is X an identity field?"
+//! / "is X a tier-1 system field?" / "is X a system-managed managed-tier
+//! field?".
 //!
-//! Downstream files in `crate::frontmatter` should import from this
-//! module exclusively, so Session 3's move is a purely local edit.
+//! Owned here in Session 3 (Session 1 re-exported these from hash.rs and
+//! schema.rs to keep the additive phase strictly non-breaking).
 
-pub use crate::hash::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
-pub use crate::schema::SYSTEM_MANAGED_FIELDS;
+/// Identity fields are never included in any hash tier — they identify the
+/// record but aren't content. Always rendered first in the canonical
+/// display order.
+pub const IDENTITY_FIELDS: &[&str] = &["temper-id", "temper-provisional-id"];
+
+/// Tier-1 system fields are stripped from managed metadata before hashing.
+/// The database owns authoritative values for these, so they must not
+/// influence the content hash.
+pub const TIER1_SYSTEM_FIELDS: &[&str] = &[
+    "temper-context",
+    "temper-type",
+    "temper-created",
+    "temper-updated",
+    "temper-owner",
+    "temper-source",
+    "temper-legacy-id",
+];
+
+pub use crate::schema::SYSTEM_MANAGED_FIELDS; // moved in Task 3
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn identity_fields_match_hash_module() {
-        assert_eq!(IDENTITY_FIELDS, crate::hash::IDENTITY_FIELDS);
-    }
-
-    #[test]
-    fn tier1_system_fields_match_hash_module() {
-        assert_eq!(TIER1_SYSTEM_FIELDS, crate::hash::TIER1_SYSTEM_FIELDS);
-    }
 
     #[test]
     fn system_managed_fields_match_schema_module() {

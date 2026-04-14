@@ -7,26 +7,7 @@
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/// Identity fields are never included in any hash tier — they identify the
-/// record but aren't content.
-pub const IDENTITY_FIELDS: &[&str] = &["temper-id", "temper-provisional-id"];
-
-/// Tier-1 system fields are stripped from managed metadata before hashing.
-/// The database owns authoritative values for these, so they must not
-/// influence the content hash.
-pub const TIER1_SYSTEM_FIELDS: &[&str] = &[
-    "temper-context",
-    "temper-type",
-    "temper-created",
-    "temper-updated",
-    "temper-owner",
-    "temper-source",
-    "temper-legacy-id",
-];
+use crate::frontmatter::fields::TIER1_SYSTEM_FIELDS;
 
 // ---------------------------------------------------------------------------
 // Body hash
