@@ -17,7 +17,6 @@ use crate::actions::doctor_fix::{
 use crate::config::Config;
 use crate::error::Result;
 use crate::manifest_io;
-use crate::vault;
 
 /// Aggregated report from a vault doctor scan.
 #[derive(Debug, Clone, Serialize)]
@@ -156,7 +155,7 @@ fn scan_file(
     let file_path_str = file_path.display().to_string();
     let content = fs::read_to_string(file_path)?;
 
-    let fm = vault::parse_frontmatter(&content);
+    let fm = temper_core::frontmatter::parse_yaml_block(&content);
 
     let mut issues: Vec<ValidationIssue> = Vec::new();
 
@@ -339,7 +338,7 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
     }
 
     // Apply
-    let report = apply_plan(&mut plan, dry_run)?;
+    let mut report = apply_plan(&mut plan, dry_run)?;
 
     // Apply manifest changes, re-normalize every entry so defaults are
     // materialized and hashes reflect the content changes doctor fix just
@@ -361,6 +360,12 @@ pub fn fix(config: &Config, context_filter: Option<&str>, dry_run: bool) -> Resu
             manifest_io::save_manifest(&temper_dir, &manifest)?;
         }
     }
+
+    // Final pass: walk every vault file and re-serialize through Frontmatter
+    // to canonicalize alias-form keys and display ordering. Files already in
+    // canonical form produce byte-identical output and skip the write
+    // (parse + serialize is a fixed point on canonical input, Session 1 proved this).
+    canonicalize_pass(config, context_filter, dry_run, &mut report)?;
 
     Ok(report)
 }
@@ -410,14 +415,14 @@ fn collect_fixes_for_file(
     let mut content = fs::read_to_string(file_path)?;
 
     // Pre-pass: if frontmatter fails to parse, attempt dedup and rewrite.
-    if vault::parse_frontmatter(&content).is_none() {
+    if temper_core::frontmatter::parse_yaml_block(&content).is_none() {
         if let Some(deduped) = dedup_frontmatter_keys(&content) {
             fs::write(file_path, &deduped)?;
             content = deduped;
         }
     }
 
-    let Some(fm) = vault::parse_frontmatter(&content) else {
+    let Some(fm) = temper_core::frontmatter::parse_yaml_block(&content) else {
         return Ok(());
     };
     plan.extend(fix_missing_fields(file_path, &fm, vault_root));
@@ -488,6 +493,80 @@ fn dedup_frontmatter_keys(content: &str) -> Option<String> {
 
     let new_yaml = deduped_lines.join("\n");
     Some(format!("---\n{new_yaml}\n{after_fm}"))
+}
+
+/// Walk the vault and re-save each file via `Frontmatter::try_from` +
+/// `Frontmatter::write_to` so any alias-form keys or non-canonical key
+/// ordering get rewritten to canonical form. Files already in canonical
+/// form produce byte-identical output and are skipped — no write.
+///
+/// Increments `report.canonicalized` for each file actually rewritten
+/// (or for each file that would be rewritten, in dry-run mode).
+///
+/// **Why this isn't redundant with `sync::normalize_all_entries`:**
+/// `normalize_all_entries` iterates `manifest.entries` (tracked files
+/// only) and is gated on `!dry_run`. This pass covers the two gaps:
+/// (1) **untracked files** — e.g. a brand-new note the user just dropped
+/// in before running `temper sync run` for the first time — get
+/// canonicalized here even though they aren't in the manifest yet; and
+/// (2) **dry-run visibility** — this pass runs in dry-run mode so the
+/// user can preview canonicalization that would occur on a real run.
+/// On a freshly synced vault in non-dry-run mode, every tracked file
+/// has already been canonicalized by `normalize_all_entries` and this
+/// pass is a fast no-op — a redundant-but-cheap safety net.
+fn canonicalize_pass(
+    config: &Config,
+    context_filter: Option<&str>,
+    dry_run: bool,
+    report: &mut ApplyReport,
+) -> Result<()> {
+    let vault_layout = Vault::new(&config.vault_root);
+    let contexts_to_scan: Vec<String> = if let Some(ctx) = context_filter {
+        vec![ctx.to_string()]
+    } else {
+        config.contexts.clone()
+    };
+
+    for doc_type in ENTITY_DOC_TYPES {
+        for ctx in &contexts_to_scan {
+            let owner = config.owner_for_context(ctx);
+            let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
+            if !dir.is_dir() {
+                continue;
+            }
+            // Match the per-entry error tolerance of collect_fixes_for_directory
+            // so one unreadable stray file doesn't abort the whole pass.
+            let entries: Vec<_> = fs::read_dir(&dir)?
+                .filter_map(|e| e.ok())
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|ext| ext == "md"))
+                .collect();
+            for path in entries {
+                canonicalize_one(&path, dry_run, report)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Canonicalize a single vault file: parse via Frontmatter, re-serialize,
+/// write back only if the canonical form differs from the on-disk bytes.
+/// Files that fail to parse (malformed YAML, missing `temper-type`, etc.)
+/// are skipped silently — that's the doctor scanner's job, not this pass.
+fn canonicalize_one(path: &Path, dry_run: bool, report: &mut ApplyReport) -> Result<()> {
+    let original = fs::read_to_string(path)?;
+    let fm = match temper_core::frontmatter::Frontmatter::try_from(original.as_str()) {
+        Ok(fm) => fm,
+        Err(_) => return Ok(()),
+    };
+    let canonical = fm.serialize()?;
+    if canonical != original {
+        if !dry_run {
+            fm.write_to(path)?;
+        }
+        report.canonicalized += 1;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

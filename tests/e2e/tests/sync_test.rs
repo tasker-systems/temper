@@ -1243,38 +1243,26 @@ async fn seed_synced_manifest_entry(
         .managed_meta
         .as_ref()
         .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
-    let frontmatter = temper_cli::actions::ingest::build_frontmatter_from_resource(
+    let fm = temper_cli::actions::ingest::build_frontmatter_from_resource(
         &resource,
         context,
         doc_type,
+        temper_cli::actions::ingest::normalize_body_for_vault(&content_response.markdown),
         managed_value.as_ref(),
         content_response.open_meta.as_ref(),
-    );
-    let vault_content = format!("{frontmatter}{}", content_response.markdown);
+    )
+    .expect("build_frontmatter_from_resource");
 
     let rel_path = format!("@{profile_slug}/{context}/{doc_type}/{slug}.md");
     let abs_path = app.vault_dir.path().join(&rel_path);
     std::fs::create_dir_all(abs_path.parent().unwrap()).expect("create parent dirs");
-    std::fs::write(&abs_path, &vault_content).expect("write vault file");
+    fm.write_to(&abs_path).expect("write vault file");
 
     // Compute hashes via the authoritative frontmatter module.
-    let body = temper_cli::actions::sync::strip_frontmatter(&vault_content);
-    let local_body_hash = temper_core::hash::compute_body_hash(body);
-    let (managed_meta_split, open_meta_split, managed_hash, open_hash) =
-        match temper_core::frontmatter::Frontmatter::try_from(vault_content.as_str()) {
-            Ok(fm) => {
-                let managed = fm.managed_json();
-                let open = fm.open_json();
-                let (mh, oh) = fm.hashes();
-                (managed, open, mh, oh)
-            }
-            Err(_) => (
-                serde_json::json!({}),
-                serde_json::json!({}),
-                temper_core::hash::compute_managed_hash(doc_type, &serde_json::json!({})),
-                temper_core::hash::compute_open_hash(&serde_json::json!({})),
-            ),
-        };
+    let local_body_hash = temper_core::hash::compute_body_hash(fm.body());
+    let managed_meta_split = fm.managed_json();
+    let open_meta_split = fm.open_json();
+    let (managed_hash, open_hash) = fm.hashes();
 
     // Overwrite the server's body_hash directly so it matches the
     // leading-`\n`-prefixed body the vault file produces via

@@ -44,11 +44,11 @@ pub fn load_goals(config: &Config, context: Option<&str>) -> Result<Vec<GoalInfo
             }
             let content = fs::read_to_string(&path)
                 .map_err(|e| TemperError::Vault(format!("reading {}: {e}", path.display())))?;
-            let fm = match vault::parse_frontmatter(&content) {
-                Some(fm) => fm,
-                None => continue,
+            let fm = match temper_core::frontmatter::Frontmatter::try_from(content.as_str()) {
+                Ok(fm) => fm,
+                Err(_) => continue,
             };
-            let info: GoalInfo = match serde_yaml::from_value(fm) {
+            let info: GoalInfo = match serde_yaml::from_value(fm.value().clone()) {
                 Ok(i) => i,
                 Err(e) => {
                     tracing::warn!(
@@ -176,9 +176,12 @@ pub fn update(config: &Config, slug: &str, status: &str, context: Option<&str>) 
     if !path.exists() {
         return Err(TemperError::Vault(format!("goal not found: {slug}")));
     }
-    let content = fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let updated = vault::set_frontmatter_field(&content, "temper-status", status);
-    fs::write(&path, updated).map_err(|e| TemperError::Vault(e.to_string()))?;
+    let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
+    fm.set_managed_field(
+        "temper-status",
+        serde_json::Value::String(status.to_string()),
+    );
+    fm.write_to(&path)?;
     let event = discovery::Event::ResourceUpdate {
         ts: Local::now().to_rfc3339(),
         doc_type: "goal".to_string(),
@@ -211,18 +214,18 @@ pub fn count_tasks_by_stage(
             continue;
         }
         let content = fs::read_to_string(&path).unwrap_or_default();
-        let fm = match vault::parse_frontmatter(&content) {
-            Some(fm) => fm,
-            None => continue,
+        let fm = match temper_core::frontmatter::Frontmatter::try_from(content.as_str()) {
+            Ok(fm) => fm,
+            Err(_) => continue,
         };
         let g = fm
+            .value()
             .get("temper-goal")
-            .or_else(|| fm.get("goal"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown");
         let stage = fm
+            .value()
             .get("temper-stage")
-            .or_else(|| fm.get("stage"))
             .and_then(|v| v.as_str())
             .unwrap_or("backlog");
         *counts

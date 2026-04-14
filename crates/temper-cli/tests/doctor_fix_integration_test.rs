@@ -112,3 +112,56 @@ fn doctor_fix_pipeline_end_to_end() {
         "expected at least one owner backfill"
     );
 }
+
+#[test]
+fn doctor_fix_canonicalizes_hyphen_aliases() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config(&dir);
+    let vault = dir.path();
+
+    // Write a task whose frontmatter uses hyphen-form alias keys.
+    // `relates-to` is the canonical alias example; `Frontmatter::try_from`
+    // normalises it to `relates_to` and `serialize` emits the underscore form.
+    let task_dir = vault.join("@me").join("temper").join("task");
+    fs::create_dir_all(&task_dir).unwrap();
+    let file_path = task_dir.join("hyphen-test.md");
+    fs::write(
+        &file_path,
+        "---\n\
+         temper-id: \"019d8110-8ff3-70c2-85ae-57e04ed62885\"\n\
+         temper-type: task\n\
+         temper-context: temper\n\
+         temper-created: \"2026-04-14T00:00:00Z\"\n\
+         temper-owner: \"@me\"\n\
+         title: T\n\
+         slug: hyphen-test\n\
+         temper-stage: in-progress\n\
+         relates-to:\n  - foo\n\
+         ---\n\
+         body\n",
+    )
+    .unwrap();
+
+    let report = temper_cli::actions::doctor::fix(&config, Some("temper"), false).unwrap();
+    assert!(
+        report.canonicalized >= 1,
+        "first run should canonicalize at least one file"
+    );
+
+    let after = fs::read_to_string(&file_path).unwrap();
+    assert!(
+        !after.contains("relates-to:"),
+        "hyphen form must be canonicalized away: {after}"
+    );
+    assert!(
+        after.contains("relates_to"),
+        "canonical underscore form must be present: {after}"
+    );
+
+    // Second run must be a no-op — parse + serialize is a fixed point on canonical input.
+    let second_report = temper_cli::actions::doctor::fix(&config, Some("temper"), false).unwrap();
+    assert_eq!(
+        second_report.canonicalized, 0,
+        "second run must be a no-op (canonical form is a fixed point)"
+    );
+}
