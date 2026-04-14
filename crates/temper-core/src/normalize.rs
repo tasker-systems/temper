@@ -12,7 +12,7 @@
 //! value before validating and writing back.
 
 use crate::error::{Result, TemperError};
-use crate::frontmatter::Frontmatter;
+use crate::frontmatter::{DocType, Frontmatter};
 use crate::hash::compute_body_hash;
 use crate::schema::ValidationIssue;
 use std::path::Path;
@@ -85,15 +85,26 @@ pub fn normalize_file_inspect(path: &Path, doc_type: &str) -> Result<NormalizeOu
 // Internal: shared implementation
 // ---------------------------------------------------------------------------
 
+/// Shared implementation for [`normalize_file`] and [`normalize_file_inspect`].
+/// When `write` is `false`, the on-disk file is never modified — the
+/// returned `changed` flag indicates only what *would* happen.
 fn normalize_impl(path: &Path, doc_type: &str, write: bool) -> Result<NormalizeOutcome> {
-    // Parse the file through the authoritative frontmatter module.
-    // Alias normalization and YAML parsing happen inside `parse_file`.
-    let mut fm = Frontmatter::parse_file(path)?;
+    // Single read — reused for both parsing and the change-comparison below.
+    let original = std::fs::read_to_string(path)
+        .map_err(|e| TemperError::Config(format!("failed to read {}: {e}", path.display())))?;
+    let mut fm = Frontmatter::try_from(original.as_str())?;
 
     // Sanity check: the filesystem-inferred doc_type should agree with
-    // what the frontmatter declares. Surface a mismatch rather than
-    // silently trusting one over the other.
-    if fm.doc_type().as_str() != doc_type {
+    // what the frontmatter declares. Parse the caller-supplied string into a
+    // typed DocType so an unknown caller string surfaces as a clean error
+    // rather than a misleading mismatch.
+    let expected = DocType::from_str(doc_type).map_err(|e| {
+        TemperError::Config(format!(
+            "normalize_file called with unknown doctype '{doc_type}' for {}: {e}",
+            path.display()
+        ))
+    })?;
+    if fm.doc_type() != expected {
         return Err(TemperError::Config(format!(
             "doc_type mismatch for {}: frontmatter says '{}', caller says '{}'",
             path.display(),
@@ -133,8 +144,6 @@ fn normalize_impl(path: &Path, doc_type: &str, write: bool) -> Result<NormalizeO
     // Compare canonical-serialized output against the on-disk text.
     // If they differ, write atomically via `Frontmatter::write_to`.
     let new_content = fm.serialize()?;
-    let original = std::fs::read_to_string(path)
-        .map_err(|e| TemperError::Config(format!("failed to read {}: {e}", path.display())))?;
     let changed = new_content != original;
 
     if changed && write {
@@ -469,7 +478,7 @@ slug: x
         );
         assert!(
             pos_slug < pos_stage,
-            "slug should appear before temper-stage (default appended last):\n{on_disk}"
+            "slug should appear before temper-stage (canonical display ordering places managed fields after open fields):\n{on_disk}"
         );
     }
 
