@@ -74,6 +74,117 @@ pub(crate) struct UuidMap {
     inner: HashMap<Owner, HashMap<Uuid, PathBuf>>,
 }
 
+/// A file captured by the vault walk. Keeps the parsed frontmatter
+/// so Pass 2 doesn't re-read it.
+pub(crate) struct DiscoveredFile {
+    pub(crate) path: PathBuf,
+    pub(crate) rel_path: String,
+    pub(crate) owner: String,
+    pub(crate) context: String,
+    pub(crate) frontmatter: temper_core::frontmatter::Frontmatter,
+}
+
+/// Walk the vault and build per-owner slug/UUID resolution maps.
+///
+/// `context_filter` restricts which files appear in the returned
+/// `DiscoveredFile` list (Pass 2 only scans filtered files), but the
+/// maps always include all same-owner files across all contexts so
+/// cross-context same-owner references can still resolve.
+pub(crate) fn discover_vault(
+    config: &Config,
+    context_filter: Option<&str>,
+) -> Result<(SlugMap, UuidMap, Vec<DiscoveredFile>)> {
+    use std::fs;
+    use temper_core::frontmatter::Frontmatter;
+    use temper_core::vault::Vault;
+
+    let mut slugs = SlugMap::default();
+    let mut uuids = UuidMap::default();
+    let mut filtered_files: Vec<DiscoveredFile> = Vec::new();
+
+    let vault_layout = Vault::new(&config.vault_root);
+
+    for ctx in &config.contexts {
+        let owner = config.owner_for_context(ctx);
+        let include_in_scan = context_filter.map_or(true, |f| f == ctx);
+
+        for doc_type in ENTITY_DOC_TYPES {
+            let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
+            if !dir.is_dir() {
+                continue;
+            }
+
+            let entries = match fs::read_dir(&dir) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(
+                        dir = %dir.display(),
+                        error = %e,
+                        "could not read doc_type dir, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                    continue;
+                }
+
+                let frontmatter = match Frontmatter::parse_file(&path) {
+                    Ok(fm) => fm,
+                    Err(e) => {
+                        tracing::debug!(
+                            path = %path.display(),
+                            error = %e,
+                            "unparseable frontmatter, skipping"
+                        );
+                        continue;
+                    }
+                };
+
+                let slug = match path.file_stem().and_then(|s| s.to_str()) {
+                    Some(s) => s.to_string(),
+                    None => continue,
+                };
+
+                slugs.insert(&owner, ctx, &slug, path.clone());
+
+                if let Some(id_str) = frontmatter
+                    .value()
+                    .get("temper-id")
+                    .and_then(|v| v.as_str())
+                {
+                    if let Ok(id) = Uuid::parse_str(id_str) {
+                        uuids.insert(&owner, id, path.clone());
+                    }
+                }
+
+                if include_in_scan {
+                    let rel_path = path
+                        .strip_prefix(&config.vault_root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .to_string();
+
+                    filtered_files.push(DiscoveredFile {
+                        path: path.clone(),
+                        rel_path,
+                        owner: owner.clone(),
+                        context: ctx.clone(),
+                        frontmatter,
+                    });
+                }
+            }
+        }
+    }
+
+    filtered_files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
+
+    Ok((slugs, uuids, filtered_files))
+}
+
 impl SlugMap {
     /// Register a file at `(owner, context, slug)`.
     pub(crate) fn insert(&mut self, owner: &str, context: &str, slug: &str, path: PathBuf) {
@@ -277,5 +388,110 @@ mod tests {
         let map = UuidMap::default();
         let id = uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6");
         assert_eq!(map.resolve("@me", id), None);
+    }
+
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Create a minimal vault structure under `tmp` and write a file
+    /// with valid frontmatter. Returns the absolute file path.
+    fn write_vault_file(
+        tmp: &TempDir,
+        owner: &str,
+        context: &str,
+        doc_type: &str,
+        slug: &str,
+        temper_id: Option<&str>,
+        body: &str,
+    ) -> PathBuf {
+        let dir = tmp.path().join(owner).join(context).join(doc_type);
+        fs::create_dir_all(&dir).unwrap();
+        let file_path = dir.join(format!("{slug}.md"));
+        let id_line = temper_id
+            .map(|id| format!("temper-id: {id}\n"))
+            .unwrap_or_default();
+        let content = format!(
+            "---\n\
+             temper-context: {context}\n\
+             temper-type: {doc_type}\n\
+             temper-owner: '{owner}'\n\
+             {id_line}\
+             title: {slug}\n\
+             slug: {slug}\n\
+             ---\n\
+             {body}\n"
+        );
+        fs::write(&file_path, content).unwrap();
+        file_path
+    }
+
+    fn fixture_config(tmp: &TempDir, contexts: &[&str]) -> Config {
+        Config {
+            vault_root: tmp.path().to_path_buf(),
+            state_dir: tmp.path().join(".temper"),
+            contexts: contexts.iter().map(|s| s.to_string()).collect(),
+            subscriptions: Vec::new(),
+            skill_output: tmp.path().join(".skill"),
+        }
+    }
+
+    #[test]
+    fn discover_vault_builds_slug_and_uuid_maps() {
+        let tmp = TempDir::new().unwrap();
+        write_vault_file(
+            &tmp,
+            "@me",
+            "temper",
+            "task",
+            "alpha",
+            Some("019d1d24-2000-7379-8f26-ae4ae87bc5c6"),
+            "body of alpha",
+        );
+        write_vault_file(&tmp, "@me", "tasker", "task", "beta", None, "body of beta");
+        let config = fixture_config(&tmp, &["temper", "tasker"]);
+
+        let (slugs, uuids, files) = discover_vault(&config, None).unwrap();
+
+        assert_eq!(files.len(), 2, "expected 2 files in walk");
+        assert!(slugs.resolve("@me", "temper", "alpha").is_some());
+        assert!(slugs.resolve("@me", "tasker", "beta").is_some());
+
+        let alpha_uuid = uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6");
+        assert!(uuids.resolve("@me", alpha_uuid).is_some());
+    }
+
+    #[test]
+    fn discover_vault_skips_unparseable_files_silently() {
+        let tmp = TempDir::new().unwrap();
+        write_vault_file(&tmp, "@me", "temper", "task", "good", None, "");
+        let bad_dir = tmp.path().join("@me").join("temper").join("task");
+        fs::write(
+            bad_dir.join("bad.md"),
+            "not a real frontmatter\nno yaml here\n",
+        )
+        .unwrap();
+
+        let config = fixture_config(&tmp, &["temper"]);
+        let result = discover_vault(&config, None);
+
+        assert!(result.is_ok(), "unparseable files should not fail the walk");
+        let (slugs, _uuids, files) = result.unwrap();
+
+        assert_eq!(files.len(), 1);
+        assert!(slugs.resolve("@me", "temper", "good").is_some());
+        assert!(slugs.resolve("@me", "temper", "bad").is_none());
+    }
+
+    #[test]
+    fn discover_vault_respects_context_filter() {
+        let tmp = TempDir::new().unwrap();
+        write_vault_file(&tmp, "@me", "temper", "task", "in-temper", None, "");
+        write_vault_file(&tmp, "@me", "tasker", "task", "in-tasker", None, "");
+        let config = fixture_config(&tmp, &["temper", "tasker"]);
+
+        let (_slugs, _uuids, files) = discover_vault(&config, Some("temper")).unwrap();
+
+        assert_eq!(files.len(), 1, "context filter should restrict walk");
+        assert!(files[0].path.ends_with("in-temper.md"));
     }
 }
