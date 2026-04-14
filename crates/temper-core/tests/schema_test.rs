@@ -1,5 +1,5 @@
 use serde_yaml::Value;
-use temper_core::hash;
+use temper_core::frontmatter::Frontmatter;
 use temper_core::schema::{
     check_legacy_fields, check_unknown_temper_fields, load_schema, validate_frontmatter,
 };
@@ -240,34 +240,33 @@ fn test_check_unknown_temper_fields_known_fields_ok() {
 
 #[test]
 fn test_hash_tiers_separate_managed_and_open() {
-    let fm1 = yaml(
-        r#"
+    let fm1 = Frontmatter::try_from(
+        r#"---
 temper-id: "01930000-0000-7000-8000-000000000040"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
 title: "My Task"
 open-field: "hello"
+---
 "#,
-    );
-    let fm2 = yaml(
-        r#"
+    )
+    .expect("parse task fixture");
+    let fm2 = Frontmatter::try_from(
+        r#"---
 temper-id: "01930000-0000-7000-8000-000000000041"
 temper-type: goal
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
 title: "My Task"
 open-field: "hello"
+---
 "#,
-    );
+    )
+    .expect("parse goal fixture");
 
-    let (managed1, open1_meta) = hash::split_frontmatter_tiers(&fm1, "task");
-    let meta1 = hash::compute_managed_hash("task", &managed1);
-    let open1 = hash::compute_open_hash(&open1_meta);
-
-    let (managed2, open2_meta) = hash::split_frontmatter_tiers(&fm2, "goal");
-    let meta2 = hash::compute_managed_hash("goal", &managed2);
-    let open2 = hash::compute_open_hash(&open2_meta);
+    let (meta1, open1) = fm1.hashes();
+    let (meta2, open2) = fm2.hashes();
 
     // managed hash should differ because doc-type defaults differ
     assert_ne!(
@@ -294,28 +293,33 @@ open-field: "hello"
 
 #[test]
 fn test_hash_tiers_open_hash_changes_with_open_fields() {
-    let fm1 = yaml(
-        r#"
+    let fm1 = Frontmatter::try_from(
+        r#"---
 temper-id: "01930000-0000-7000-8000-000000000050"
 temper-type: task
+temper-context: my-project
+temper-created: "2024-01-01T00:00:00Z"
 title: "My Task"
 custom: "hello"
+---
 "#,
-    );
-    let fm2 = yaml(
-        r#"
+    )
+    .expect("parse fm1");
+    let fm2 = Frontmatter::try_from(
+        r#"---
 temper-id: "01930000-0000-7000-8000-000000000050"
 temper-type: task
+temper-context: my-project
+temper-created: "2024-01-01T00:00:00Z"
 title: "My Task"
 custom: "world"
+---
 "#,
-    );
+    )
+    .expect("parse fm2");
 
-    let (_, open1_meta) = hash::split_frontmatter_tiers(&fm1, "task");
-    let open1 = hash::compute_open_hash(&open1_meta);
-
-    let (_, open2_meta) = hash::split_frontmatter_tiers(&fm2, "task");
-    let open2 = hash::compute_open_hash(&open2_meta);
+    let (_, open1) = fm1.hashes();
+    let (_, open2) = fm2.hashes();
 
     assert_ne!(
         open1, open2,
