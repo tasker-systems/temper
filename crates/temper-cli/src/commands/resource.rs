@@ -165,12 +165,11 @@ fn create_simple_resource(
         _ => unreachable!(),
     };
 
-    // Handle stdin body replacement
-    let content = if let Some(body) = stdin_content {
-        vault::replace_body(&content, body)
-    } else {
-        content
-    };
+    // Parse the rendered template once, optionally replace body, then write.
+    let mut fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str())?;
+    if let Some(body) = stdin_content {
+        fm.set_body(body.to_string());
+    }
 
     let vault_layout = Vault::new(&config.vault_root);
     let owner = config.owner_for_context(context);
@@ -184,7 +183,7 @@ fn create_simple_resource(
     }
 
     std::fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
-    vault::write_note(&path, &content)?;
+    fm.write_to(&path)?;
 
     let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
     let relative_str = relative.to_string_lossy();
@@ -808,29 +807,43 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         }
     }
 
-    // Read and modify content
-    let mut content =
-        std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
+    // Parse the file once, apply all mutations to the aggregate, then write
+    // exactly once to the (potentially moved) final path.
+    let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
 
     // Apply scalar field updates
     for (field_name, value) in &scalar_updates {
-        content = vault::set_frontmatter_field(&content, field_name, value);
+        fm.set_managed_field(field_name, serde_json::Value::String(value.clone()));
     }
 
-    // Apply array field appends
+    // Apply array field appends. Uses canonical (underscore) open-field
+    // names — Frontmatter::try_from has already normalized hyphen aliases
+    // at the parse boundary, so looking up by canonical form finds the
+    // existing sequence.
     let array_updates: Vec<(&str, &[String])> = vec![
         ("tags", params.tags),
         ("aliases", params.aliases),
-        ("relates-to", params.relates_to),
+        ("relates_to", params.relates_to),
         ("references", params.references),
-        ("depends-on", params.depends_on),
+        ("depends_on", params.depends_on),
         ("extends", params.extends),
-        ("preceded-by", params.preceded_by),
-        ("derived-from", params.derived_from),
+        ("preceded_by", params.preceded_by),
+        ("derived_from", params.derived_from),
     ];
     for (field_name, values) in &array_updates {
         for value in *values {
-            content = vault::append_frontmatter_array(&content, field_name, value);
+            let mapping = fm
+                .value_mut()
+                .as_mapping_mut()
+                .expect("Frontmatter invariant: value is a mapping");
+            let key = serde_yaml::Value::String((*field_name).to_string());
+            let new_entry = serde_yaml::Value::String(value.clone());
+            match mapping.get_mut(&key) {
+                Some(serde_yaml::Value::Sequence(seq)) => seq.push(new_entry),
+                _ => {
+                    mapping.insert(key, serde_yaml::Value::Sequence(vec![new_entry]));
+                }
+            }
         }
     }
 
@@ -847,7 +860,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
             .file_name()
             .ok_or_else(|| TemperError::Vault("cannot determine filename".into()))?;
         let new_path = new_dir.join(filename);
-        content = vault::set_frontmatter_field(&content, "temper-context", new_ctx);
+        fm.set_managed_field(
+            "temper-context",
+            serde_json::Value::String(new_ctx.to_string()),
+        );
         final_path = new_path;
         final_ctx = new_ctx.to_string();
     } else {
@@ -864,16 +880,22 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
             .file_name()
             .ok_or_else(|| TemperError::Vault("cannot determine filename".into()))?;
         let new_path = new_dir.join(filename);
-        content = vault::set_frontmatter_field(&content, "temper-type", new_type);
+        fm.set_managed_field(
+            "temper-type",
+            serde_json::Value::String(new_type.to_string()),
+        );
         final_path = new_path;
     }
 
     // Update temper-updated timestamp
     let datetime = Local::now().to_rfc3339();
-    content = vault::set_frontmatter_field(&content, "temper-updated", &datetime);
+    fm.set_managed_field(
+        "temper-updated",
+        serde_json::Value::String(datetime.clone()),
+    );
 
-    // Write updated content
-    std::fs::write(&final_path, &content).map_err(|e| TemperError::Vault(e.to_string()))?;
+    // Write the mutated frontmatter to the (possibly moved) final path.
+    fm.write_to(&final_path)?;
 
     // If file was moved, remove old file
     if final_path != path && path.exists() {
