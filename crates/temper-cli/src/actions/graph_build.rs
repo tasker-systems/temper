@@ -270,7 +270,6 @@ pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn path(s: &str) -> PathBuf {
         PathBuf::from(s)
