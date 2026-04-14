@@ -213,6 +213,32 @@ impl Frontmatter {
         }
     }
 
+    /// Construct a new `Frontmatter` with only `temper-type` set. Body is the
+    /// literal markdown body to emit after the frontmatter block. Callers
+    /// populate additional managed/open fields via [`Self::set_managed_field`]
+    /// and [`Self::set_open_field`] before writing.
+    ///
+    /// The resulting mapping is alias-normalized by construction (it has only
+    /// one key, the canonical `temper-type`). Subsequent inserts are the
+    /// caller's responsibility — pass canonical keys.
+    pub fn new(doc_type: DocType, body: String) -> Self {
+        let mut mapping = serde_yaml::Mapping::new();
+        mapping.insert(
+            serde_yaml::Value::String("temper-type".to_string()),
+            serde_yaml::Value::String(doc_type.as_str().to_string()),
+        );
+        Self {
+            doc_type,
+            value: serde_yaml::Value::Mapping(mapping),
+            body,
+        }
+    }
+
+    /// Replace the body. Frontmatter mapping is untouched.
+    pub fn set_body(&mut self, body: String) {
+        self.body = body;
+    }
+
     /// Shared implementation: insert or overwrite any top-level key.
     fn set_raw_field(&mut self, key: &str, value: serde_json::Value) {
         let yaml_value: serde_yaml::Value =
@@ -503,6 +529,68 @@ body
             .serialize()
             .unwrap();
         assert_eq!(once, twice, "canonical form must be a fixed point");
+    }
+
+    #[test]
+    fn new_constructor_creates_minimal_frontmatter() {
+        let fm = Frontmatter::new(DocType::Task, "body content\n".to_string());
+        assert_eq!(fm.doc_type(), DocType::Task);
+        assert_eq!(fm.body(), "body content\n");
+        // The mapping has at least temper-type set, so try_from on the serialized
+        // form would round-trip.
+        let serialized = fm.serialize().expect("serialize ok");
+        let parsed = Frontmatter::try_from(serialized.as_str()).expect("round-trip ok");
+        assert_eq!(parsed.doc_type(), DocType::Task);
+        assert_eq!(parsed.body(), "body content\n");
+    }
+
+    #[test]
+    fn new_constructor_allows_subsequent_field_population() {
+        let mut fm = Frontmatter::new(DocType::Goal, String::new());
+        fm.set_managed_field("title", serde_json::json!("Ship the thing"));
+        fm.set_managed_field("slug", serde_json::json!("ship-the-thing"));
+        fm.set_managed_field(
+            "temper-id",
+            serde_json::json!("019d8110-8ff3-70c2-85ae-57e04ed62885"),
+        );
+        fm.set_managed_field("temper-context", serde_json::json!("temper"));
+        fm.set_managed_field("temper-created", serde_json::json!("2026-04-14T00:00:00Z"));
+        let serialized = fm.serialize().expect("serialize ok");
+        let parsed = Frontmatter::try_from(serialized.as_str()).expect("round-trip ok");
+        assert_eq!(parsed.doc_type(), DocType::Goal);
+        assert_eq!(
+            parsed.value().get("title").and_then(|v| v.as_str()),
+            Some("Ship the thing"),
+        );
+        assert_eq!(
+            parsed.value().get("slug").and_then(|v| v.as_str()),
+            Some("ship-the-thing"),
+        );
+    }
+
+    #[test]
+    fn set_body_replaces_body_preserving_frontmatter() {
+        let mut fm = Frontmatter::try_from(TASK_FIXTURE).unwrap();
+        let original_value_keys: Vec<String> = fm
+            .value()
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .filter_map(|k| k.as_str().map(String::from))
+            .collect();
+        fm.set_body("brand new body\n".to_string());
+        assert_eq!(fm.body(), "brand new body\n");
+        let new_value_keys: Vec<String> = fm
+            .value()
+            .as_mapping()
+            .unwrap()
+            .keys()
+            .filter_map(|k| k.as_str().map(String::from))
+            .collect();
+        assert_eq!(
+            original_value_keys, new_value_keys,
+            "set_body must not touch frontmatter mapping"
+        );
     }
 
     #[test]
