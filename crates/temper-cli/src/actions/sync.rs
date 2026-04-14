@@ -1167,10 +1167,8 @@ fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry
     }
 
     let final_content = std::fs::read_to_string(file_path)?;
-    let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-        crate::vault::parse_frontmatter(&final_content).as_ref(),
-        doc_type,
-    );
+    let (managed_hash, open_hash) =
+        empty_hashes_fallback(Frontmatter::try_from(final_content.as_str()), doc_type);
 
     entry.managed_hash = managed_hash.clone();
     entry.open_hash = open_hash.clone();
@@ -1350,11 +1348,9 @@ async fn pull_resource_body(
         .to_string_lossy()
         .to_string();
 
-    // Compute frontmatter tier hashes from the written file
-    let (managed_hash, open_hash) = temper_core::hash::compute_frontmatter_hashes_from_yaml(
-        crate::vault::parse_frontmatter(&full_content).as_ref(),
-        &doc_type,
-    );
+    // Compute frontmatter tier hashes from the written file.
+    let (managed_hash, open_hash) =
+        empty_hashes_fallback(Frontmatter::try_from(full_content.as_str()), &doc_type);
 
     let mtime_secs = file_mtime_secs(&vault_path).ok();
 
