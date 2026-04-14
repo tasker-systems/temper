@@ -3175,25 +3175,20 @@ mod tests {
              ---\n\
              body\n",
         );
-        let fm_parsed = Frontmatter::try_from(fm_text.as_str()).expect("parse fm");
-        let payload = build_meta_update_payload(&fm_parsed, id.into());
+        let fm = Frontmatter::try_from(fm_text.as_str()).expect("parse fm");
+        let payload = build_meta_update_payload(&fm, id.into());
 
-        // Legacy bindings used by Task 7 assertions below — will be removed
-        // when Task 7 migrates these assertions to Frontmatter-native checks.
-        let fm = crate::vault::parse_frontmatter(&fm_text).expect("legacy parse fm");
-
-        // Direct comparison against the hashing helper — same input must
-        // produce identical hashes.
-        let (expected_managed, expected_open) =
-            temper_core::hash::compute_frontmatter_hashes_from_yaml(Some(&fm), "task");
+        // Direct comparison against the parsed Frontmatter's hashes —
+        // same input must produce identical (managed_hash, open_hash).
+        let (expected_managed, expected_open) = fm.hashes();
         assert_eq!(payload.managed_hash, expected_managed);
         assert_eq!(payload.open_hash, expected_open);
 
-        // Direct comparison against split_frontmatter_tiers. Round-trip
-        // the managed side through the typed ManagedMeta via the flatten
-        // extras bucket so the hash stays stable.
-        let (expected_managed_meta_json, expected_open_meta) =
-            temper_core::hash::split_frontmatter_tiers(&fm, "task");
+        // Direct comparison against the Frontmatter tier projections.
+        // Round-trip the managed side through the typed ManagedMeta via
+        // the flatten extras bucket so the hash stays stable.
+        let expected_managed_meta_json = fm.managed_json();
+        let expected_open_meta = fm.open_json();
         let expected_managed_meta: temper_core::types::managed_meta::ManagedMeta =
             serde_json::from_value(expected_managed_meta_json).expect("expected → typed");
         assert_eq!(payload.managed_meta, expected_managed_meta);
