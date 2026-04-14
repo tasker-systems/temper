@@ -4,6 +4,7 @@
 //! against them, detects legacy field names, and finds unknown temper-* fields.
 
 use crate::error::{Result, TemperError};
+use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, LEGACY_FIELDS, SYSTEM_MANAGED_FIELDS};
 use jsonschema::{Resource, Validator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -47,54 +48,6 @@ pub struct ValidationResult {
     /// All issues found in this file.
     pub issues: Vec<ValidationIssue>,
 }
-
-// ---------------------------------------------------------------------------
-// Known field sets
-// ---------------------------------------------------------------------------
-
-/// All temper-* field names that are explicitly defined across the schemas.
-/// Used to detect possible typos in temper-* fields.
-static KNOWN_TEMPER_FIELDS: &[&str] = &[
-    "temper-id",
-    "temper-provisional-id",
-    "temper-type",
-    "temper-context",
-    "temper-created",
-    "temper-updated",
-    "temper-owner",
-    "temper-source",
-    // task
-    "temper-stage",
-    "temper-mode",
-    "temper-effort",
-    "temper-goal",
-    "temper-seq",
-    "temper-branch",
-    "temper-pr",
-    // goal
-    "temper-status",
-    // session, research, decision, concept have no extra temper-* beyond base
-];
-
-/// Legacy field names that have been renamed to temper-* equivalents.
-/// Maps old name → suggested new name.
-static LEGACY_FIELDS: &[(&str, &str)] = &[
-    ("id", "temper-id"),
-    ("type", "temper-type"),
-    ("doc_type", "temper-type"),
-    ("context", "temper-context"),
-    ("project", "temper-context"),
-    ("created", "temper-created"),
-    ("updated", "temper-updated"),
-    ("source", "temper-source"),
-    ("stage", "temper-stage"),
-    ("status", "temper-status"),
-    ("mode", "temper-mode"),
-    ("effort", "temper-effort"),
-    ("goal", "temper-goal"),
-    ("branch", "temper-branch"),
-    ("pr", "temper-pr"),
-];
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -271,20 +224,6 @@ pub fn check_unknown_temper_fields(frontmatter: &serde_yaml::Value) -> Vec<Valid
 // ---------------------------------------------------------------------------
 // Updatable field helpers
 // ---------------------------------------------------------------------------
-
-/// Fields that are system-managed and cannot be updated via CLI.
-pub static SYSTEM_MANAGED_FIELDS: &[&str] = &[
-    "temper-id",
-    "temper-provisional-id",
-    "temper-type",
-    "temper-context",
-    "temper-owner",
-    "temper-created",
-    "temper-updated",
-    "temper-source",
-    "temper-legacy-id",
-    "slug",
-];
 
 /// Get the updatable field names for a doctype by reading the schema properties
 /// and excluding system-managed fields.
