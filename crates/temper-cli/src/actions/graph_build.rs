@@ -74,6 +74,63 @@ pub(crate) struct UuidMap {
     inner: HashMap<Owner, HashMap<Uuid, PathBuf>>,
 }
 
+impl SlugMap {
+    /// Register a file at `(owner, context, slug)`.
+    pub(crate) fn insert(&mut self, owner: &str, context: &str, slug: &str, path: PathBuf) {
+        self.inner
+            .entry(owner.to_string())
+            .or_default()
+            .entry(context.to_string())
+            .or_default()
+            .insert(slug.to_string(), path);
+    }
+
+    /// Resolve a slug for a scanning file.
+    ///
+    /// - Same-owner same-context: direct match wins.
+    /// - Same-owner cross-context: falls back ONLY if exactly one
+    ///   other context in the owner contains the slug. Ambiguous
+    ///   matches return `None` with a debug trace.
+    /// - Cross-owner: never resolves.
+    pub(crate) fn resolve(
+        &self,
+        scanning_owner: &str,
+        scanning_context: &str,
+        slug: &str,
+    ) -> Option<&std::path::Path> {
+        let owner_map = self.inner.get(scanning_owner)?;
+
+        // 1. Same-context first
+        if let Some(ctx_map) = owner_map.get(scanning_context) {
+            if let Some(path) = ctx_map.get(slug) {
+                return Some(path.as_path());
+            }
+        }
+
+        // 2. Cross-context fallback — only if exactly one match exists
+        let matches: Vec<&std::path::Path> = owner_map
+            .iter()
+            .filter(|(ctx, _)| ctx.as_str() != scanning_context)
+            .filter_map(|(_, ctx_map)| ctx_map.get(slug))
+            .map(|p| p.as_path())
+            .collect();
+
+        match matches.len() {
+            0 => None,
+            1 => Some(matches[0]),
+            n => {
+                tracing::debug!(
+                    owner = %scanning_owner,
+                    slug = %slug,
+                    n_matches = n,
+                    "ambiguous cross-context slug — skipping"
+                );
+                None
+            }
+        }
+    }
+}
+
 /// Top-level entry point. Walks the vault, scans bodies, merges
 /// references into open_meta, writes files back.
 pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport> {
@@ -81,4 +138,94 @@ pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport
     Err(crate::error::TemperError::Project(
         "graph_build::run: not yet implemented".into(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    fn path(s: &str) -> PathBuf {
+        PathBuf::from(s)
+    }
+
+    #[test]
+    fn slug_map_resolves_same_context_first() {
+        let mut map = SlugMap::default();
+        map.insert(
+            "@me",
+            "temper",
+            "foo",
+            path("/vault/@me/temper/task/foo.md"),
+        );
+        map.insert(
+            "@me",
+            "tasker",
+            "foo",
+            path("/vault/@me/tasker/task/foo.md"),
+        );
+
+        let resolved = map.resolve("@me", "temper", "foo");
+        assert_eq!(
+            resolved,
+            Some(path("/vault/@me/temper/task/foo.md").as_path())
+        );
+    }
+
+    #[test]
+    fn slug_map_falls_back_cross_context_when_unique() {
+        let mut map = SlugMap::default();
+        map.insert(
+            "@me",
+            "tasker",
+            "only-there",
+            path("/vault/@me/tasker/task/only-there.md"),
+        );
+
+        let resolved = map.resolve("@me", "temper", "only-there");
+        assert_eq!(
+            resolved,
+            Some(path("/vault/@me/tasker/task/only-there.md").as_path())
+        );
+    }
+
+    #[test]
+    fn slug_map_skips_ambiguous_cross_context() {
+        let mut map = SlugMap::default();
+        map.insert(
+            "@me",
+            "tasker",
+            "ambiguous",
+            path("/vault/@me/tasker/task/ambiguous.md"),
+        );
+        map.insert(
+            "@me",
+            "general",
+            "ambiguous",
+            path("/vault/@me/general/task/ambiguous.md"),
+        );
+
+        let resolved = map.resolve("@me", "temper", "ambiguous");
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn slug_map_rejects_cross_owner() {
+        let mut map = SlugMap::default();
+        map.insert(
+            "+team-x",
+            "shared",
+            "leaked",
+            path("/vault/+team-x/shared/task/leaked.md"),
+        );
+
+        let resolved = map.resolve("@me", "temper", "leaked");
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn slug_map_returns_none_for_unknown_slug() {
+        let map = SlugMap::default();
+        assert_eq!(map.resolve("@me", "temper", "nonexistent"), None);
+    }
 }
