@@ -766,6 +766,17 @@ pub struct ApplyReport {
 /// When the same source file has both a RelocateFile and a RenameFile action,
 /// they are merged: the file moves to the new directory with the new filename.
 /// Duplicate moves for the same source are skipped after the first succeeds.
+///
+/// **Field-mutation parse-failure semantics:** all three field-mutation arms
+/// (`RenameField`, `SetField`, `SetOwnerField`) route through
+/// `Frontmatter::parse_file`, which requires a present `temper-type` and a
+/// known doctype. On parse failure, `RenameField` silently skips the mutation
+/// while still incrementing its counter (matching the historical no-op
+/// behavior of the legacy text-level `rename_frontmatter_field` helper).
+/// `SetField` and `SetOwnerField` propagate the parse error — writing a
+/// managed field into frontmatter that cannot be parsed is never coherent,
+/// so hard-failing surfaces the broken file rather than silently ignoring
+/// the user's intent.
 pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<ApplyReport> {
     use std::collections::HashSet;
     use std::fs;
@@ -828,8 +839,8 @@ pub fn apply_plan(plan: &mut FixPlan, dry_run: bool) -> crate::error::Result<App
                             let new_yaml_key = serde_yaml::Value::String(new_key.clone());
                             let new_exists = mapping.contains_key(&new_yaml_key);
                             if new_exists {
-                                // The new key is already present — old key wins as a duplicate
-                                // and gets removed without copying its value over.
+                                // The new key is already present — keep its existing value
+                                // and drop the old key as a stale duplicate.
                                 mapping.remove(&old_yaml_key);
                             } else if let Some(old_value) = mapping.remove(&old_yaml_key) {
                                 mapping.insert(new_yaml_key, old_value);
