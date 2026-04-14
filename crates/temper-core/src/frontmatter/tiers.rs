@@ -242,10 +242,13 @@ date: "2026-04-13"
         assert_eq!(open, json!({}));
     }
 
-    // Regression anchor: for inputs that the old and new algorithms both
-    // handle, routing must be byte-identical.
+    // Regression anchor: the tier-split output produces stable hashes
+    // for a known task fixture. Golden hashes captured in session 2 task 10
+    // when the legacy hash::split_frontmatter_tiers API was deleted. If
+    // these change, either the schema or canonicalization moved; investigate
+    // before regenerating.
     #[test]
-    fn matches_legacy_split_for_task_fixture() {
+    fn task_fixture_produces_stable_hashes() {
         let v = yaml(
             r#"
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
@@ -265,14 +268,22 @@ tags: [auth]
 custom: ok
 "#,
         );
-        let (new_managed, new_open) = split_managed_open(&v, DocType::Task);
-        let (legacy_managed, legacy_open) = crate::hash::split_frontmatter_tiers(&v, "task");
-        assert_eq!(new_managed, legacy_managed, "managed tier drift for task");
-        assert_eq!(new_open, legacy_open, "open tier drift for task");
+        let (managed, open) = split_managed_open(&v, DocType::Task);
+        let managed_hash = crate::hash::compute_managed_hash("task", &managed);
+        let open_hash = crate::hash::compute_open_hash(&open);
+
+        assert_eq!(
+            managed_hash, "sha256:b15f4e2091c5f52a18fcb2220f91c3b542bf94b81527aabaad6bb69241ca8949",
+            "task fixture managed hash drift"
+        );
+        assert_eq!(
+            open_hash, "sha256:5ed7693d46e893012ed1fc01ebedb6119245c3909884df348f858d2897880c42",
+            "task fixture open hash drift"
+        );
     }
 
     #[test]
-    fn matches_legacy_split_for_session_fixture() {
+    fn session_fixture_produces_stable_hashes() {
         let v = yaml(
             r#"
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
@@ -286,12 +297,17 @@ relates_to: [a]
 tags: [x]
 "#,
         );
-        let (new_managed, new_open) = split_managed_open(&v, DocType::Session);
-        let (legacy_managed, legacy_open) = crate::hash::split_frontmatter_tiers(&v, "session");
+        let (managed, open) = split_managed_open(&v, DocType::Session);
+        let managed_hash = crate::hash::compute_managed_hash("session", &managed);
+        let open_hash = crate::hash::compute_open_hash(&open);
+
         assert_eq!(
-            new_managed, legacy_managed,
-            "managed tier drift for session"
+            managed_hash, "sha256:4d8186ecb2a225ef07ebbcf4aa2c0c4187e666895a648906c6489784795ed75a",
+            "session fixture managed hash drift"
         );
-        assert_eq!(new_open, legacy_open, "open tier drift for session");
+        assert_eq!(
+            open_hash, "sha256:369e3bc13f15eb2e74b3e2e295ede908968421d0c53d3e17e828fe9f0ccc0d91",
+            "session fixture open hash drift"
+        );
     }
 }

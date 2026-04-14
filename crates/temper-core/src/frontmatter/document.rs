@@ -386,20 +386,22 @@ depends-on: [b]
     }
 
     #[test]
-    fn hashes_match_legacy_path_byte_for_byte() {
+    fn task_fixture_hashes_are_golden() {
+        // Regression anchor: TASK_FIXTURE produces stable managed + open
+        // hashes. Goldens captured in session 2 task 10 when the legacy
+        // compute_frontmatter_hashes_from_yaml API was deleted. If these
+        // change, either the schema or canonicalization moved; investigate
+        // before regenerating.
         let fm = Frontmatter::try_from(TASK_FIXTURE).unwrap();
-        let (new_managed, new_open) = fm.hashes();
-
-        // Legacy path: parse the same YAML independently and run through
-        // `compute_frontmatter_hashes_from_yaml`.
-        let (yaml_text, _) = split_frontmatter_block(TASK_FIXTURE).unwrap();
-        let mut legacy_value = parse_yaml(&yaml_text).unwrap();
-        normalize_aliases(&mut legacy_value);
-        let (legacy_managed, legacy_open) =
-            crate::hash::compute_frontmatter_hashes_from_yaml(Some(&legacy_value), "task");
-
-        assert_eq!(new_managed, legacy_managed);
-        assert_eq!(new_open, legacy_open);
+        let (managed_hash, open_hash) = fm.hashes();
+        assert_eq!(
+            managed_hash, "sha256:40c2c784826e73014d5acfadc2914f73e4a3dce70185ce0a31d0bb1d28182b6c",
+            "task fixture managed hash drift"
+        );
+        assert_eq!(
+            open_hash, "sha256:b1c37240b0d306aab5aff2281173306122cf0bff36c6dec1dcc001b2df711061",
+            "task fixture open hash drift"
+        );
     }
 
     #[test]

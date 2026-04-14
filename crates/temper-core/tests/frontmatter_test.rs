@@ -94,24 +94,65 @@ fn golden_is_a_fixed_point_of_parse_serialize() {
     }
 }
 
-#[test]
-fn hashes_are_byte_identical_to_legacy_path_per_doctype() {
-    use temper_core::frontmatter::parse::{normalize_aliases, parse_yaml, split_frontmatter_block};
-    use temper_core::hash::compute_frontmatter_hashes_from_yaml;
+/// Golden per-fixture (managed_hash, open_hash) pairs captured in
+/// session 2 task 10. These anchor hash stability across future
+/// refactors. If the schema or canonicalization algorithm moves,
+/// update these deliberately — don't regenerate blindly.
+const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
+    // (stem, managed_hash, open_hash)
+    (
+        "task_minimal",
+        "sha256:8464342b589301fd11cda8a7c8d18cdc6db30ad3ed814b515b989c8142b2c107",
+        "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+    ),
+    (
+        "task_full",
+        "sha256:a8c66dd78ce09956d64c234b31b9c92e841ee3c76a67ae279263b74b31d7fb65",
+        "sha256:998a5ed4c7ce3d2b6b453caa05a77c15590e69d63dd4d8d72fa313902fe143dc",
+    ),
+    (
+        "task_with_aliases",
+        "sha256:fc8aff40618fd7d08853c7e6331bc11066d667b60de354f02b9f802e50a0de41",
+        "sha256:7c2eb7eddf439213c8a1f9689b313a0dd28acf34cb16e4d3593e07bc9ffcc70c",
+    ),
+    (
+        "goal_full",
+        "sha256:d8fcc5d25cb17d1e22ec8ba58226e50c96773d0a7693e19fea91f06ba5954a11",
+        "sha256:2cc0d1501ab8d23caaf440e3e96476b2eb88eedfde19517740f237b4ac4aea0c",
+    ),
+    (
+        "session_full",
+        "sha256:fee366cbb8d17dc0a048bdf667021b77266bc7b2323a4162aeba0c8828255946",
+        "sha256:504e5d7bf6bdc0acdfeed77a68b0aeaf58944e54d4056be90f63b65cb6ac663f",
+    ),
+    (
+        "research_full",
+        "sha256:f79b0842ed742e89b7650213762e4366ada37e2e6eace1f80841a582ffa8a4a2",
+        "sha256:111b91a43db2959cbbfa518e82606ec8cc8435bcb4d3c5f5d4cbc3c0e2f812cf",
+    ),
+    (
+        "decision_full",
+        "sha256:0afdce6816e71b7ccaab8ba67b9f344f64c6b21350ab7b6623c22898a0263f7c",
+        "sha256:2f8bc766b2649cb0b8efb9dd3eab08b6d4d37111b473666ddbb173059ecf78ce",
+    ),
+    (
+        "concept_full",
+        "sha256:0cc1542ddec0896021b2c73f091696d6c976224b93327cb4ccd50b3cdc32f619",
+        "sha256:e90feecd8af6e01e61b003b79f0dd7e74b7ccc186df842608985f450f522cd9a",
+    ),
+];
 
-    for (stem, dt) in ROUND_TRIP_CASES {
+#[test]
+fn fixture_hashes_match_goldens() {
+    for (stem, expected_managed, expected_open) in FIXTURE_HASH_GOLDENS {
         let content = load_fixture(&format!("{stem}.md"));
         let fm = Frontmatter::try_from(content.as_str()).unwrap();
-        let (new_managed, new_open) = fm.hashes();
-
-        let (yaml_text, _body) = split_frontmatter_block(&content).unwrap();
-        let mut legacy_value = parse_yaml(&yaml_text).unwrap();
-        normalize_aliases(&mut legacy_value);
-        let (legacy_managed, legacy_open) =
-            compute_frontmatter_hashes_from_yaml(Some(&legacy_value), dt.as_str());
-
-        assert_eq!(new_managed, legacy_managed, "managed hash drift for {stem}");
-        assert_eq!(new_open, legacy_open, "open hash drift for {stem}");
+        let (managed_hash, open_hash) = fm.hashes();
+        assert_eq!(
+            managed_hash, *expected_managed,
+            "managed hash drift for {stem}"
+        );
+        assert_eq!(open_hash, *expected_open, "open hash drift for {stem}");
     }
 }
 
