@@ -117,8 +117,13 @@ body
         assert_eq!(rels.relates_to, vec!["peer-a", "peer-b"]);
         assert_eq!(rels.depends_on, vec!["dep-c"]);
         assert_eq!(rels.parent.as_deref(), Some("the-parent"));
-        // tags still lives on the struct in session 1, so it should round-trip.
-        assert_eq!(rels.tags, vec!["auth", "observability"]);
+        // Tags are metadata, not a relationship — they do NOT land on the
+        // typed struct. Session 2 removed `tags` from ResourceRelationships
+        // to fix the phantom-edge bug; use `fm.tags()` to read them instead.
+        assert_eq!(
+            fm.tags(),
+            vec!["auth".to_string(), "observability".to_string()]
+        );
     }
 
     #[test]

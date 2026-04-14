@@ -23,7 +23,6 @@ pub enum EdgeType {
     DependsOn,
     References,
     ParentOf,
-    TaggedWith,
     PrecededBy,
     DerivedFrom,
 }
@@ -36,7 +35,6 @@ impl std::fmt::Display for EdgeType {
             Self::DependsOn => write!(f, "depends_on"),
             Self::References => write!(f, "references"),
             Self::ParentOf => write!(f, "parent_of"),
-            Self::TaggedWith => write!(f, "tagged_with"),
             Self::PrecededBy => write!(f, "preceded_by"),
             Self::DerivedFrom => write!(f, "derived_from"),
         }
@@ -93,8 +91,6 @@ pub struct ResourceRelationships {
     pub depends_on: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub references: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -110,7 +106,6 @@ impl ResourceRelationships {
             && self.extends.is_empty()
             && self.depends_on.is_empty()
             && self.references.is_empty()
-            && self.tags.is_empty()
             && self.parent.is_none()
             && self.preceded_by.is_empty()
             && self.derived_from.is_empty()
@@ -128,7 +123,6 @@ impl ResourceRelationships {
             (&self.extends, EdgeType::Extends),
             (&self.depends_on, EdgeType::DependsOn),
             (&self.references, EdgeType::References),
-            (&self.tags, EdgeType::TaggedWith),
             (&self.preceded_by, EdgeType::PrecededBy),
             (&self.derived_from, EdgeType::DerivedFrom),
         ];
@@ -340,7 +334,7 @@ mod tests {
     #[test]
     fn edge_type_display() {
         assert_eq!(EdgeType::ParentOf.to_string(), "parent_of");
-        assert_eq!(EdgeType::TaggedWith.to_string(), "tagged_with");
+        assert_eq!(EdgeType::RelatesTo.to_string(), "relates_to");
     }
 
     // ── ResourceRelationships serde round-trip ──────────────────────────

@@ -274,7 +274,9 @@ fn missing_required_parses_but_fails_validation() {
 #[test]
 fn tags_as_strings_do_not_become_parent_of_relationships() {
     // `tags` is metadata — it must not project into any of the
-    // `ResourceRelationships` edge-producing fields.
+    // `ResourceRelationships` edge-producing fields. Session 2 removed
+    // the `tags` field from `ResourceRelationships` entirely; the only
+    // typed read path is now `Frontmatter::tags()`.
     let content = load_fixture("tags_as_strings.md");
     let fm = Frontmatter::try_from(content.as_str()).unwrap();
     let rels = ResourceRelationships::from(&fm);
@@ -285,17 +287,8 @@ fn tags_as_strings_do_not_become_parent_of_relationships() {
     assert!(rels.preceded_by.is_empty());
     assert!(rels.derived_from.is_empty());
     assert!(rels.parent.is_none());
-    // tags itself lives on the struct for session 1 — verify it got there.
-    assert_eq!(
-        rels.tags,
-        vec![
-            "auth".to_string(),
-            "observability".to_string(),
-            "not-a-resource".to_string()
-        ]
-    );
 
-    // And the accessor returns the same thing.
+    // The typed accessor on Frontmatter is the canonical read path.
     assert_eq!(
         fm.tags(),
         vec![
