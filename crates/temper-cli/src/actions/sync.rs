@@ -316,10 +316,24 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
         let current_hash = temper_core::hash::compute_body_hash(body);
 
         // Compute frontmatter tier hashes via the authoritative module.
-        let doc_type =
-            temper_core::hash::doc_type_from_vault_path(&entry.path).unwrap_or("unknown");
-        let (managed_hash, open_hash) =
-            empty_hashes_fallback(Frontmatter::try_from(content.as_str()), doc_type);
+        // If the file can't be parsed as a Frontmatter — e.g. broken YAML,
+        // missing `temper-type`, legacy `type:` key — preserve the entry's
+        // existing hashes untouched and warn loudly so the user can review.
+        // Clobbering the hashes with empty-JSON values (the historical
+        // silent-swallow behavior) would misreport the file as
+        // "meta-unchanged against server" on the next sync.
+        let fm = match Frontmatter::try_from(content.as_str()) {
+            Ok(fm) => fm,
+            Err(e) => {
+                tracing::warn!(
+                    path = %file_path.display(),
+                    error = %e,
+                    "skipping rehash: frontmatter parse failed — existing manifest hashes preserved; run `temper doctor` to diagnose"
+                );
+                continue;
+            }
+        };
+        let (managed_hash, open_hash) = fm.hashes();
 
         entry.mtime_secs = Some(file_mtime);
 
@@ -347,23 +361,6 @@ fn file_mtime_secs(path: &Path) -> Result<i64> {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64)
-}
-
-/// Behavior-preserving wrapper: returns `Frontmatter::hashes()` on
-/// successful parse, or the hashes of empty `{}` JSON on parse failure.
-///
-/// Matches the legacy `compute_frontmatter_hashes_from_yaml(None, ..)`
-/// semantics of silently treating files-without-frontmatter as empty.
-/// Sync callers depend on this silent-swallow behavior; surfacing the
-/// error is a separate cleanup.
-fn empty_hashes_fallback(parsed: Result<Frontmatter>, doc_type: &str) -> (String, String) {
-    match parsed {
-        Ok(fm) => fm.hashes(),
-        Err(_) => (
-            temper_core::hash::compute_managed_hash(doc_type, &serde_json::json!({})),
-            temper_core::hash::compute_open_hash(&serde_json::json!({})),
-        ),
-    }
 }
 
 /// Build a SyncStatusRequest from the manifest, optionally filtered by contexts.
@@ -552,8 +549,24 @@ pub fn scan_vault_for_untracked(
         let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
-        let (managed_hash, open_hash) =
-            empty_hashes_fallback(Frontmatter::try_from(full_content.as_str()), &doc_type);
+        // Files that passed the lenient `parse_source_frontmatter` check
+        // above may still fail the stricter `Frontmatter::try_from` if they
+        // carry legacy-form frontmatter (e.g. `type:` instead of
+        // `temper-type:`). Skip such files during untracked discovery —
+        // they need `temper doctor fix` to migrate before they can be
+        // tracked. Don't insert them into the manifest with empty hashes.
+        let fm = match Frontmatter::try_from(full_content.as_str()) {
+            Ok(fm) => fm,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "skipping untracked file: legacy or malformed frontmatter — run `temper doctor fix` to migrate before syncing"
+                );
+                continue;
+            }
+        };
+        let (managed_hash, open_hash) = fm.hashes();
 
         manifest.entries.insert(
             resource_id,
@@ -1017,10 +1030,18 @@ async fn push_resource_body(
     }
 
     // Compute frontmatter hashes so we can record them as the remote values.
-    let (pushed_managed_hash, pushed_open_hash) = {
-        let current = std::fs::read_to_string(&file_path)?;
-        empty_hashes_fallback(Frontmatter::try_from(current.as_str()), &doc_type)
-    };
+    // The file was just successfully pushed (and possibly had its
+    // temper-provisional-id rewritten in place above), so it must parse
+    // cleanly here — any failure is a bug in our write path, not a user
+    // data issue, so propagate the error with path context.
+    let (pushed_managed_hash, pushed_open_hash) = Frontmatter::parse_file(&file_path)
+        .map_err(|e| {
+            TemperError::Vault(format!(
+                "push_resource_body post-write hash compute {}: {e}",
+                file_path.display()
+            ))
+        })?
+        .hashes();
 
     if let Some(e) = manifest.entries.get_mut(&server_id) {
         // After push, server hashes match what we sent
@@ -1178,9 +1199,18 @@ fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry
         )));
     }
 
-    let final_content = std::fs::read_to_string(file_path)?;
-    let (managed_hash, open_hash) =
-        empty_hashes_fallback(Frontmatter::try_from(final_content.as_str()), doc_type);
+    // normalize_file just rewrote the file through the Frontmatter
+    // pipeline, so it must parse cleanly here — any failure would be a
+    // bug in normalize_file, not a user data issue. Propagate with path
+    // context.
+    let (managed_hash, open_hash) = Frontmatter::parse_file(file_path)
+        .map_err(|e| {
+            TemperError::Vault(format!(
+                "apply_pull_meta_only post-normalize hash compute {}: {e}",
+                file_path.display()
+            ))
+        })?
+        .hashes();
 
     entry.managed_hash = managed_hash.clone();
     entry.open_hash = open_hash.clone();
@@ -1365,9 +1395,17 @@ async fn pull_resource_body(
         .to_string_lossy()
         .to_string();
 
-    // Compute frontmatter tier hashes from the written file.
-    let (managed_hash, open_hash) =
-        empty_hashes_fallback(Frontmatter::try_from(full_content.as_str()), &doc_type);
+    // write_pulled_file just wrote the file through Frontmatter::write_to,
+    // so re-parsing it must succeed here — any failure would be a bug in
+    // the write path, not a user data issue. Propagate with path context.
+    let (managed_hash, open_hash) = Frontmatter::try_from(full_content.as_str())
+        .map_err(|e| {
+            TemperError::Vault(format!(
+                "pull_resource post-write hash compute {}: {e}",
+                vault_path.display()
+            ))
+        })?
+        .hashes();
 
     let mtime_secs = file_mtime_secs(&vault_path).ok();
 
@@ -1513,9 +1551,19 @@ async fn merge_and_push_resource(
         .await
         .map_err(crate::commands::client_err)?;
 
-    // 8. Compute frontmatter hashes from the merged file
-    let (pushed_managed_hash, pushed_open_hash) =
-        empty_hashes_fallback(Frontmatter::try_from(new_file_content.as_str()), &doc_type);
+    // 8. Compute frontmatter hashes from the merged file. The merge
+    // pipeline just produced new_file_content and we wrote it to disk; if
+    // the re-parse fails, the merge generated invalid frontmatter — that's
+    // a bug in the merge pipeline, not a user data issue. Propagate with
+    // path context.
+    let (pushed_managed_hash, pushed_open_hash) = Frontmatter::try_from(new_file_content.as_str())
+        .map_err(|e| {
+            TemperError::Vault(format!(
+                "merge_and_push_resource post-merge hash compute {}: {e}",
+                file_path.display()
+            ))
+        })?
+        .hashes();
 
     // 9. Update manifest entry
     if let Some(e) = manifest.entries.get_mut(&item.resource_id) {
@@ -1806,11 +1854,24 @@ pub async fn sync_reset(
         let content_hash = temper_core::hash::compute_body_hash(body);
         let mtime = file_mtime_secs(path).ok();
 
-        // Compute local frontmatter tier hashes.
-        let reset_doc_type =
-            temper_core::hash::doc_type_from_vault_path(&rel_path).unwrap_or("unknown");
-        let (local_managed_hash, local_open_hash) =
-            empty_hashes_fallback(Frontmatter::try_from(content.as_str()), reset_doc_type);
+        // Compute local frontmatter tier hashes. Files with malformed or
+        // legacy frontmatter are skipped from the reset matching pass — we
+        // cannot produce meaningful hashes for them, and matching with
+        // empty-JSON hashes would guarantee a spurious mismatch against
+        // every server record. Warn so the user can fix the file before
+        // the next reset.
+        let strict_fm = match Frontmatter::try_from(content.as_str()) {
+            Ok(fm) => fm,
+            Err(e) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "skipping reset hash compute: frontmatter parse failed — run `temper doctor fix` to migrate"
+                );
+                continue;
+            }
+        };
+        let (local_managed_hash, local_open_hash) = strict_fm.hashes();
 
         let fm = ingest::parse_source_frontmatter(&content);
 
@@ -2056,7 +2117,7 @@ mod tests {
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
-            "new content",
+            "---\ntemper-type: task\ntemper-context: temper\ntitle: t\nslug: t\n---\n\nnew content\n",
         )
         .unwrap();
 
@@ -2328,8 +2389,8 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let original = "---\ntitle: Test\n---\n\n# Original body\n";
-        let modified = "---\ntitle: Test\n---\n\n# Modified body\n";
+        let original = "---\ntemper-type: task\ntemper-context: temper\ntitle: Test\nslug: test\n---\n\n# Original body\n";
+        let modified = "---\ntemper-type: task\ntemper-context: temper\ntitle: Test\nslug: test\n---\n\n# Modified body\n";
 
         let original_body_hash = temper_core::hash::compute_body_hash(strip_frontmatter(original));
 
@@ -2463,7 +2524,7 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let content = "no frontmatter body";
+        let content = "---\ntemper-type: task\ntemper-context: temper\ntitle: t\nslug: t\n---\n\nbody content\n";
         let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
@@ -2573,7 +2634,7 @@ mod tests {
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("overridden.md"),
-            "---\ncontext: custom\ndoc_type: session\n---\n\n# Overridden\n",
+            "---\ntemper-type: session\ntemper-context: custom\ntitle: overridden\nslug: overridden\n---\n\n# Overridden\n",
         )
         .unwrap();
 
