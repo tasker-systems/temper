@@ -313,6 +313,98 @@ fn scan_text_for_uuids(text: &str, re: &regex::Regex, out: &mut Vec<RawRef>) {
     }
 }
 
+/// Resolve a raw reference candidate against the owner-partitioned
+/// maps. Returns the canonical string form to store in
+/// `open_meta.references` — either a slug or a UUID string.
+///
+/// - `scanning_file` is the absolute path of the file whose body is
+///   being scanned; used to reject self-references and to resolve
+///   relative markdown links.
+/// - Wikilinks resolve via `SlugMap::resolve` with same-context-first.
+/// - Markdown links resolve the `dest_url` relative to the scanning
+///   file's parent directory (lexically, no filesystem access), then
+///   look up the resulting stem in `SlugMap`.
+/// - Bare UUIDs resolve via `UuidMap::resolve` with owner scoping.
+///
+/// Self-edges (resolution → scanning_file itself) are rejected: they
+/// would produce a source == target edge which `edge_service` already
+/// rejects server-side.
+pub(crate) fn resolve_ref(
+    raw: &RawRef,
+    scanning_owner: &str,
+    scanning_context: &str,
+    scanning_file: &std::path::Path,
+    slugs: &SlugMap,
+    uuids: &UuidMap,
+) -> Option<String> {
+    match raw {
+        RawRef::WikiSlug(slug) => {
+            let target = slugs.resolve(scanning_owner, scanning_context, slug)?;
+            if target == scanning_file {
+                return None;
+            }
+            Some(slug.clone())
+        }
+        RawRef::BareUuid(id) => {
+            let target = uuids.resolve(scanning_owner, *id)?;
+            if target == scanning_file {
+                return None;
+            }
+            Some(id.to_string())
+        }
+        RawRef::MarkdownLink(dest) => {
+            // Resolve the dest relative to the scanning file's dir.
+            let scanning_dir = scanning_file.parent()?;
+            let joined = scanning_dir.join(dest);
+            let canonical = lexical_clean(&joined);
+
+            // Extract the stem and look it up in the same-owner slug map.
+            let stem = canonical.file_stem()?.to_str()?.to_string();
+            let target = slugs.resolve(scanning_owner, scanning_context, &stem)?;
+
+            // Verify the resolved target actually matches the literal
+            // path we computed. This guards against stem collisions
+            // across contexts — SlugMap::resolve might pick a different
+            // file that happens to share the stem.
+            if target != canonical {
+                tracing::debug!(
+                    dest = %dest,
+                    stem = %stem,
+                    resolved = %target.display(),
+                    computed = %canonical.display(),
+                    "markdown link stem collision — rejecting"
+                );
+                return None;
+            }
+
+            if target == scanning_file {
+                return None;
+            }
+
+            Some(stem)
+        }
+    }
+}
+
+/// Purely lexical path cleanup — removes `./` and `../` components
+/// without touching the filesystem. Used for resolving markdown link
+/// paths in `resolve_ref` since test paths may not exist on disk and
+/// `std::fs::canonicalize` would fail.
+fn lexical_clean(path: &std::path::Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            c => out.push(c.as_os_str()),
+        }
+    }
+    out
+}
+
 impl SlugMap {
     /// Register a file at `(owner, context, slug)`.
     pub(crate) fn insert(&mut self, owner: &str, context: &str, slug: &str, path: PathBuf) {
@@ -747,5 +839,121 @@ Back to prose [[another-real]].
                 RawRef::WikiSlug("gamma".to_string()),
             ]
         );
+    }
+
+    // ── Pass 2: resolution ──────────────────────────────────────────
+
+    fn build_test_maps() -> (SlugMap, UuidMap) {
+        let mut slugs = SlugMap::default();
+        let mut uuids = UuidMap::default();
+        slugs.insert(
+            "@me",
+            "temper",
+            "alpha",
+            path("/v/@me/temper/task/alpha.md"),
+        );
+        slugs.insert("@me", "tasker", "beta", path("/v/@me/tasker/task/beta.md"));
+        uuids.insert(
+            "@me",
+            uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6"),
+            path("/v/@me/temper/task/alpha.md"),
+        );
+        slugs.insert(
+            "+team-x",
+            "shared",
+            "leaked",
+            path("/v/+team-x/shared/task/leaked.md"),
+        );
+        (slugs, uuids)
+    }
+
+    #[test]
+    fn resolve_ref_wikislug_same_owner_same_context() {
+        let (slugs, uuids) = build_test_maps();
+        let resolved = resolve_ref(
+            &RawRef::WikiSlug("alpha".to_string()),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/other.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(resolved, Some("alpha".to_string()));
+    }
+
+    #[test]
+    fn resolve_ref_wikislug_cross_owner_rejected() {
+        let (slugs, uuids) = build_test_maps();
+        let resolved = resolve_ref(
+            &RawRef::WikiSlug("leaked".to_string()),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/other.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(resolved, None, "cross-owner must not resolve");
+    }
+
+    #[test]
+    fn resolve_ref_bare_uuid_same_owner() {
+        let (slugs, uuids) = build_test_maps();
+        let resolved = resolve_ref(
+            &RawRef::BareUuid(uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6")),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/other.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(
+            resolved,
+            Some("019d1d24-2000-7379-8f26-ae4ae87bc5c6".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_ref_markdown_link_relative_md() {
+        let (slugs, uuids) = build_test_maps();
+        // Scanning from a file in /v/@me/temper/task/, linking to ./alpha.md
+        let resolved = resolve_ref(
+            &RawRef::MarkdownLink("alpha.md".to_string()),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/other.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(resolved, Some("alpha".to_string()));
+    }
+
+    #[test]
+    fn resolve_ref_markdown_link_unresolvable_returns_none() {
+        let (slugs, uuids) = build_test_maps();
+        let resolved = resolve_ref(
+            &RawRef::MarkdownLink("nonexistent.md".to_string()),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/other.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(resolved, None);
+    }
+
+    #[test]
+    fn resolve_ref_self_reference_returns_none() {
+        let (slugs, uuids) = build_test_maps();
+        // Scanning file IS alpha.md; a wikilink to [[alpha]] from inside
+        // alpha would create a self-edge, which is meaningless.
+        let resolved = resolve_ref(
+            &RawRef::WikiSlug("alpha".to_string()),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/alpha.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(resolved, None, "self-reference should be rejected");
     }
 }
