@@ -326,29 +326,49 @@ struct DeferredEdgeRow {
 
 // ─── Extraction & Reconciliation ────────────────────────────────────────────
 
-/// Extract edge declarations from the `open_meta` JSON value.
+/// Extract edge declarations from a resource's full meta.
 ///
-/// Pure function — no database access. Deserializes as `ResourceRelationships`
-/// (unknown fields are ignored by serde) and converts to `(EdgeType, TargetRef)` pairs.
-pub fn extract_declarations_from_open_meta(
+/// Reads relationship fields from `open_meta` (via `ResourceRelationships`)
+/// and, for tasks, the `temper-goal` field from `managed_meta` which
+/// yields a reversed `ParentOf` edge to the goal resource.
+///
+/// Pure function — no database access. Unknown fields in either
+/// tier are ignored.
+pub fn extract_declarations_from_resource(
+    doc_type: &str,
+    managed_meta: &serde_json::Value,
     open_meta: &serde_json::Value,
 ) -> Vec<(EdgeType, TargetRef)> {
-    if !open_meta.is_object() {
-        return Vec::new();
+    let mut edges = Vec::new();
+
+    // Open-meta relationships (existing path)
+    if open_meta.is_object() {
+        match serde_json::from_value::<ResourceRelationships>(open_meta.clone()) {
+            Ok(rels) => edges.extend(rels.to_edge_declarations()),
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    "open_meta did not contain valid relationship fields"
+                );
+            }
+        }
     }
 
-    let rels: ResourceRelationships = match serde_json::from_value(open_meta.clone()) {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::debug!(
-                error = %e,
-                "open_meta did not contain valid relationship fields"
-            );
-            return Vec::new();
+    // Managed-meta derivations
+    if doc_type == "task" {
+        if let Some(goal_slug) = managed_meta
+            .get("temper-goal")
+            .and_then(|v| v.as_str())
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            if let Some(target) = TargetRef::parse(goal_slug) {
+                edges.push((EdgeType::ParentOf, target));
+            }
         }
-    };
+    }
 
-    rels.to_edge_declarations()
+    edges
 }
 
 /// Top-level entry point for the CREATE path: extract edge declarations from
@@ -360,9 +380,11 @@ pub async fn extract_and_upsert_edges(
     profile_id: &ProfileId,
     context_id: &ContextId,
     resource_id: &ResourceId,
+    doc_type: &str,
+    managed_meta: &serde_json::Value,
     open_meta: &serde_json::Value,
 ) -> ApiResult<(usize, usize)> {
-    let declarations = extract_declarations_from_open_meta(open_meta);
+    let declarations = extract_declarations_from_resource(doc_type, managed_meta, open_meta);
     if declarations.is_empty() {
         return Ok((0, 0));
     }
@@ -395,9 +417,11 @@ pub async fn reconcile_edges(
     profile_id: &ProfileId,
     context_id: &ContextId,
     resource_id: &ResourceId,
+    doc_type: &str,
+    managed_meta: &serde_json::Value,
     open_meta: &serde_json::Value,
 ) -> ApiResult<EdgeReconciliation> {
-    let declarations = extract_declarations_from_open_meta(open_meta);
+    let declarations = extract_declarations_from_resource(doc_type, managed_meta, open_meta);
 
     // Fetch existing frontmatter-provenance edges where this resource is source
     let outgoing: Vec<ExistingEdgeRow> = sqlx::query_as::<_, ExistingEdgeRow>(
@@ -554,27 +578,28 @@ mod tests {
 
     #[test]
     fn extract_empty_object() {
-        let decls = extract_declarations_from_open_meta(&json!({}));
+        let decls = extract_declarations_from_resource("task", &json!({}), &json!({}));
         assert!(decls.is_empty());
     }
 
     #[test]
     fn extract_null_value() {
-        let decls = extract_declarations_from_open_meta(&serde_json::Value::Null);
+        let decls =
+            extract_declarations_from_resource("task", &json!({}), &serde_json::Value::Null);
         assert!(decls.is_empty());
     }
 
     #[test]
     fn extract_no_relationship_fields() {
         let meta = json!({"custom_field": "value", "another": 42});
-        let decls = extract_declarations_from_open_meta(&meta);
+        let decls = extract_declarations_from_resource("task", &json!({}), &meta);
         assert!(decls.is_empty());
     }
 
     #[test]
     fn extract_single_extends() {
         let meta = json!({"extends": ["some-slug"]});
-        let decls = extract_declarations_from_open_meta(&meta);
+        let decls = extract_declarations_from_resource("task", &json!({}), &meta);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].0, EdgeType::Extends);
         assert_eq!(decls[0].1, TargetRef::Slug("some-slug".to_string()));
@@ -588,7 +613,7 @@ mod tests {
             "references": ["019d1d24-2000-7379-8f26-ae4ae87bc5c6"],
             "irrelevant": "ignored"
         });
-        let decls = extract_declarations_from_open_meta(&meta);
+        let decls = extract_declarations_from_resource("task", &json!({}), &meta);
         // extends: 1, depends_on: 2, references: 1 (UUID) = 4
         assert_eq!(decls.len(), 4);
     }
@@ -598,7 +623,7 @@ mod tests {
         let meta = json!({
             "references": ["https://example.com", "valid-slug"]
         });
-        let decls = extract_declarations_from_open_meta(&meta);
+        let decls = extract_declarations_from_resource("task", &json!({}), &meta);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].1, TargetRef::Slug("valid-slug".to_string()));
     }
@@ -606,8 +631,52 @@ mod tests {
     #[test]
     fn extract_parent_produces_parent_of() {
         let meta = json!({"parent": "parent-slug"});
-        let decls = extract_declarations_from_open_meta(&meta);
+        let decls = extract_declarations_from_resource("task", &json!({}), &meta);
         assert_eq!(decls.len(), 1);
         assert_eq!(decls[0].0, EdgeType::ParentOf);
+    }
+
+    #[test]
+    fn extract_task_with_temper_goal_produces_parent_edge() {
+        let managed = json!({"temper-goal": "some-goal"});
+        let open = json!({});
+        let decls = extract_declarations_from_resource("task", &managed, &open);
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].0, EdgeType::ParentOf);
+        assert_eq!(decls[0].1, TargetRef::Slug("some-goal".to_string()));
+    }
+
+    #[test]
+    fn extract_non_task_with_temper_goal_ignores_it() {
+        let managed = json!({"temper-goal": "some-goal"});
+        let open = json!({});
+        let decls = extract_declarations_from_resource("research", &managed, &open);
+        assert!(decls.is_empty(), "only tasks emit temper-goal → parent_of");
+    }
+
+    #[test]
+    fn extract_task_without_temper_goal_produces_no_edge() {
+        let managed = json!({});
+        let open = json!({});
+        let decls = extract_declarations_from_resource("task", &managed, &open);
+        assert!(decls.is_empty());
+    }
+
+    #[test]
+    fn extract_task_with_temper_goal_and_open_meta_refs_combines_both() {
+        let managed = json!({"temper-goal": "some-goal"});
+        let open = json!({"relates_to": ["other-task"]});
+        let decls = extract_declarations_from_resource("task", &managed, &open);
+        assert_eq!(decls.len(), 2);
+        assert!(decls.iter().any(|(t, _)| *t == EdgeType::ParentOf));
+        assert!(decls.iter().any(|(t, _)| *t == EdgeType::RelatesTo));
+    }
+
+    #[test]
+    fn extract_task_with_empty_temper_goal_string_produces_no_edge() {
+        let managed = json!({"temper-goal": ""});
+        let open = json!({});
+        let decls = extract_declarations_from_resource("task", &managed, &open);
+        assert!(decls.is_empty(), "empty string is not a valid goal slug");
     }
 }

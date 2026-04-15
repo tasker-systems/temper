@@ -466,6 +466,8 @@ pub async fn ingest(
             &profile_id,
             &context_id,
             &resource.id,
+            payload.doc_type_name.as_str(),
+            &managed_meta,
             open,
         )
         .await
@@ -686,7 +688,7 @@ pub async fn update(
     tx.commit().await?;
 
     // Reconcile edges from updated frontmatter
-    if let Some(ref open) = payload.open_meta {
+    if payload.open_meta.is_some() {
         let ctx_id = sqlx::query_scalar!(
             "SELECT kb_context_id FROM kb_resources WHERE id = $1",
             *resource_id,
@@ -695,9 +697,16 @@ pub async fn update(
         .await?;
 
         let ctx_id = ContextId::from(ctx_id);
-        if let Err(e) =
-            super::edge_service::reconcile_edges(pool, &profile_id, &ctx_id, &resource_id, open)
-                .await
+        if let Err(e) = super::edge_service::reconcile_edges(
+            pool,
+            &profile_id,
+            &ctx_id,
+            &resource_id,
+            payload.doc_type_name.as_str(),
+            &managed_meta,
+            &open_meta,
+        )
+        .await
         {
             tracing::warn!(
                 resource_id = %resource_id,
