@@ -74,6 +74,19 @@ pub(crate) struct UuidMap {
     inner: HashMap<Owner, HashMap<Uuid, PathBuf>>,
 }
 
+/// A raw reference candidate extracted from markdown body text.
+/// Not yet resolved against any owner map.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RawRef {
+    /// A slug appearing in a wikilink `[[slug]]` (with any variants stripped).
+    WikiSlug(String),
+    /// A bare UUID appearing in body text.
+    BareUuid(Uuid),
+    /// A markdown link `[text](path)` pointing at a `.md` file.
+    /// The path is the raw `dest_url` from pulldown-cmark.
+    MarkdownLink(String),
+}
+
 /// A file captured by the vault walk. Keeps the parsed frontmatter
 /// so Pass 2 doesn't re-read it.
 pub(crate) struct DiscoveredFile {
@@ -183,6 +196,121 @@ pub(crate) fn discover_vault(
     filtered_files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
     Ok((slugs, uuids, filtered_files))
+}
+
+/// Scan a markdown body for raw reference candidates.
+///
+/// Walks the pulldown-cmark event stream and collects:
+/// - `Event::Start(Tag::Link { dest_url, .. })` → `RawRef::MarkdownLink`
+///   when `dest_url` ends in `.md` and is not an external URL
+/// - Wikilinks `[[...]]` and bare UUIDs inside `Event::Text` events
+///   (which are emitted only outside code contexts by pulldown-cmark)
+///
+/// Does NOT resolve candidates against any owner map — that's the
+/// caller's job in Pass 3.
+pub(crate) fn scan_body(body: &str) -> Vec<RawRef> {
+    use pulldown_cmark::{Event, Parser, Tag};
+
+    // Wikilink regex: [[slug]], [[slug|display]], [[slug#section]],
+    // [[slug#section|display]], [[slug.md]]. Rejects folder/ prefixes
+    // by disallowing `/` in the slug.
+    static WIKILINK_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(r"\[\[([^\]\|#/]+?)(?:\.md)?(?:#[^\]\|]*)?(?:\|[^\]]*)?\]\]").unwrap()
+    });
+
+    // UUID regex: 8-4-4-4-12 hex in standard form.
+    static UUID_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        )
+        .unwrap()
+    });
+
+    let mut out: Vec<RawRef> = Vec::new();
+    // pulldown-cmark 0.10 splits `[[alpha]]` into individual Text events for
+    // each bracket/token. Buffer consecutive Text events so the wikilink regex
+    // can match across the concatenated run. Flush whenever a non-Text event
+    // arrives (link start, code block start, paragraph end, etc.).
+    //
+    // Code blocks (fenced and indented) emit Event::Text for their content, so
+    // we track `in_code_block` and discard buffered text while inside one.
+    let mut text_buf = String::new();
+    let mut in_code_block = false;
+    let parser = Parser::new(body);
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::CodeBlock(_)) => {
+                flush_text_buf(&mut text_buf, &WIKILINK_RE, &UUID_RE, &mut out);
+                in_code_block = true;
+            }
+            Event::End(pulldown_cmark::TagEnd::CodeBlock) => {
+                // Discard anything accumulated inside the code block.
+                text_buf.clear();
+                in_code_block = false;
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                flush_text_buf(&mut text_buf, &WIKILINK_RE, &UUID_RE, &mut out);
+                let url = dest_url.as_ref();
+                if !is_external_or_anchor(url) && url.ends_with(".md") {
+                    out.push(RawRef::MarkdownLink(url.to_string()));
+                }
+            }
+            Event::Text(text) => {
+                if !in_code_block {
+                    text_buf.push_str(&text);
+                }
+            }
+            _ => {
+                if !in_code_block {
+                    flush_text_buf(&mut text_buf, &WIKILINK_RE, &UUID_RE, &mut out);
+                }
+            }
+        }
+    }
+    // Final flush in case the document ends while in a text run.
+    flush_text_buf(&mut text_buf, &WIKILINK_RE, &UUID_RE, &mut out);
+
+    out
+}
+
+fn flush_text_buf(
+    buf: &mut String,
+    wikilink_re: &regex::Regex,
+    uuid_re: &regex::Regex,
+    out: &mut Vec<RawRef>,
+) {
+    if !buf.is_empty() {
+        scan_text_for_wikilinks(buf, wikilink_re, out);
+        scan_text_for_uuids(buf, uuid_re, out);
+        buf.clear();
+    }
+}
+
+fn is_external_or_anchor(url: &str) -> bool {
+    url.starts_with("http://")
+        || url.starts_with("https://")
+        || url.starts_with("mailto:")
+        || url.starts_with('#')
+}
+
+fn scan_text_for_wikilinks(text: &str, re: &regex::Regex, out: &mut Vec<RawRef>) {
+    for caps in re.captures_iter(text) {
+        if let Some(m) = caps.get(1) {
+            let slug = m.as_str().trim();
+            if !slug.is_empty() {
+                out.push(RawRef::WikiSlug(slug.to_string()));
+            }
+        }
+    }
+}
+
+fn scan_text_for_uuids(text: &str, re: &regex::Regex, out: &mut Vec<RawRef>) {
+    for m in re.find_iter(text) {
+        if let Ok(id) = Uuid::parse_str(m.as_str()) {
+            out.push(RawRef::BareUuid(id));
+        }
+    }
 }
 
 impl SlugMap {
@@ -492,5 +620,132 @@ mod tests {
 
         assert_eq!(files.len(), 1, "context filter should restrict walk");
         assert!(files[0].path.ends_with("in-temper.md"));
+    }
+
+    // ── Pass 2: body scanning ───────────────────────────────────────
+
+    #[test]
+    fn scan_body_extracts_markdown_link() {
+        let refs = scan_body("See [alpha](alpha.md) for details.");
+        assert_eq!(refs, vec![RawRef::MarkdownLink("alpha.md".to_string())]);
+    }
+
+    #[test]
+    fn scan_body_extracts_wikilink_bare() {
+        let refs = scan_body("See [[alpha]] for details.");
+        assert_eq!(refs, vec![RawRef::WikiSlug("alpha".to_string())]);
+    }
+
+    #[test]
+    fn scan_body_extracts_wikilink_with_pipe_display() {
+        let refs = scan_body("See [[alpha|Alpha Doc]] for details.");
+        assert_eq!(refs, vec![RawRef::WikiSlug("alpha".to_string())]);
+    }
+
+    #[test]
+    fn scan_body_extracts_wikilink_with_anchor() {
+        let refs = scan_body("See [[alpha#section]] for details.");
+        assert_eq!(refs, vec![RawRef::WikiSlug("alpha".to_string())]);
+    }
+
+    #[test]
+    fn scan_body_extracts_wikilink_with_anchor_and_pipe() {
+        let refs = scan_body("See [[alpha#section|display]] for details.");
+        assert_eq!(refs, vec![RawRef::WikiSlug("alpha".to_string())]);
+    }
+
+    #[test]
+    fn scan_body_extracts_wikilink_with_md_suffix() {
+        let refs = scan_body("See [[alpha.md]] for details.");
+        assert_eq!(refs, vec![RawRef::WikiSlug("alpha".to_string())]);
+    }
+
+    #[test]
+    fn scan_body_extracts_bare_uuid() {
+        let refs = scan_body("See 019d1d24-2000-7379-8f26-ae4ae87bc5c6 for details.");
+        assert_eq!(
+            refs,
+            vec![RawRef::BareUuid(uuid(
+                "019d1d24-2000-7379-8f26-ae4ae87bc5c6"
+            ))]
+        );
+    }
+
+    #[test]
+    fn scan_body_rejects_external_urls() {
+        let refs = scan_body("See [example](https://example.com).");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_body_rejects_mailto() {
+        let refs = scan_body("See [contact](mailto:foo@bar.com).");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_body_rejects_intra_doc_anchors() {
+        let refs = scan_body("See [jump](#section).");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_body_rejects_non_md_extensions() {
+        let refs = scan_body("See [data](data.json).");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_body_rejects_extensionless_paths() {
+        let refs = scan_body("See [bare](foo).");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_body_skips_code_blocks() {
+        let body = "\
+Regular text [[real-ref]].
+
+```
+Inside code [[fake-ref]] and `[[also-fake]]`.
+```
+
+Back to prose [[another-real]].
+";
+        let refs = scan_body(body);
+        assert_eq!(
+            refs,
+            vec![
+                RawRef::WikiSlug("real-ref".to_string()),
+                RawRef::WikiSlug("another-real".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn scan_body_skips_inline_code() {
+        let refs = scan_body("The token `[[not-a-ref]]` is inline code.");
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_body_skips_indented_code_block() {
+        let body = "Prose line.\n\n    [[fake-ref-in-indented-block]]\n\nMore prose.";
+        let refs = scan_body(body);
+        assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn scan_body_multiple_references_in_reading_order() {
+        let body = "First [[alpha]], then [beta](beta.md), then [[gamma]].";
+        let refs = scan_body(body);
+        assert_eq!(
+            refs,
+            vec![
+                RawRef::WikiSlug("alpha".to_string()),
+                RawRef::MarkdownLink("beta.md".to_string()),
+                RawRef::WikiSlug("gamma".to_string()),
+            ]
+        );
     }
 }
