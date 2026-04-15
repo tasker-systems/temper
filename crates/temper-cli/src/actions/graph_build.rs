@@ -478,6 +478,49 @@ impl UuidMap {
     }
 }
 
+/// Merge discovered references with the existing `references` list,
+/// returning the combined list and the count of genuinely new entries.
+///
+/// Uses a HashSet for O(1) deduplication across both slices while
+/// preserving the original insertion order of `existing`.
+pub(crate) fn merge_references(existing: &[String], discovered: &[String]) -> (Vec<String>, usize) {
+    use std::collections::HashSet;
+    let mut seen: HashSet<&str> = existing.iter().map(|s| s.as_str()).collect();
+    let mut merged: Vec<String> = existing.to_vec();
+    let mut added = 0usize;
+
+    for d in discovered {
+        if seen.insert(d.as_str()) {
+            merged.push(d.clone());
+            added += 1;
+        }
+    }
+
+    (merged, added)
+}
+
+/// Write the merged reference list back into a file's frontmatter,
+/// mutating the `references` field and serializing the file to disk.
+pub(crate) fn write_back_references(file: &std::path::Path, merged: &[String]) -> Result<()> {
+    use serde_yaml::{Mapping, Value};
+    use temper_core::frontmatter::Frontmatter;
+
+    let mut fm = Frontmatter::parse_file(file)?;
+
+    let seq: Vec<Value> = merged.iter().map(|s| Value::String(s.clone())).collect();
+    let new_value = Value::Sequence(seq);
+
+    let mapping = fm.value_mut().as_mapping_mut().ok_or_else(|| {
+        crate::error::TemperError::Project(format!(
+            "frontmatter of {} is not a mapping",
+            file.display()
+        ))
+    })?;
+    mapping.insert(Value::String("references".to_string()), new_value);
+
+    fm.write_to(file)
+}
+
 /// Top-level entry point. Walks the vault, scans bodies, merges
 /// references into open_meta, writes files back.
 pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport> {
@@ -992,5 +1035,118 @@ Back to prose [[another-real]].
             resolved, None,
             "markdown-link self-reference should be rejected"
         );
+    }
+
+    // ── Pass 3: merge and write-back ─────────────────────────────────
+
+    #[test]
+    fn merge_references_union_preserves_existing_order() {
+        let existing = vec!["foo".to_string(), "bar".to_string()];
+        let discovered = vec!["baz".to_string()];
+        let (merged, added) = merge_references(&existing, &discovered);
+        assert_eq!(merged, vec!["foo", "bar", "baz"]);
+        assert_eq!(added, 1);
+    }
+
+    #[test]
+    fn merge_references_dedupes_across_existing_and_discovered() {
+        let existing = vec!["foo".to_string(), "bar".to_string()];
+        let discovered = vec!["foo".to_string(), "baz".to_string()];
+        let (merged, added) = merge_references(&existing, &discovered);
+        assert_eq!(merged, vec!["foo", "bar", "baz"]);
+        assert_eq!(added, 1);
+    }
+
+    #[test]
+    fn merge_references_no_new_entries_reports_zero_added() {
+        let existing = vec!["foo".to_string(), "bar".to_string()];
+        let discovered = vec!["foo".to_string()];
+        let (merged, added) = merge_references(&existing, &discovered);
+        assert_eq!(merged, vec!["foo", "bar"]);
+        assert_eq!(added, 0);
+    }
+
+    #[test]
+    fn merge_references_empty_existing() {
+        let existing: Vec<String> = vec![];
+        let discovered = vec!["foo".to_string(), "bar".to_string()];
+        let (merged, added) = merge_references(&existing, &discovered);
+        assert_eq!(merged, vec!["foo", "bar"]);
+        assert_eq!(added, 2);
+    }
+
+    #[test]
+    fn merge_references_discovered_duplicates_deduped() {
+        let existing: Vec<String> = vec![];
+        let discovered = vec!["foo".to_string(), "foo".to_string(), "bar".to_string()];
+        let (merged, added) = merge_references(&existing, &discovered);
+        assert_eq!(merged, vec!["foo", "bar"]);
+        assert_eq!(added, 2);
+    }
+
+    #[test]
+    fn write_back_adds_new_references_field_when_missing() {
+        let tmp = TempDir::new().unwrap();
+        let file = write_vault_file(&tmp, "@me", "temper", "task", "alpha", None, "body");
+
+        let merged = vec!["beta".to_string(), "gamma".to_string()];
+        write_back_references(&file, &merged).unwrap();
+
+        let fm = temper_core::frontmatter::Frontmatter::parse_file(&file).unwrap();
+        let refs = fm
+            .value()
+            .get("references")
+            .and_then(|v| v.as_sequence())
+            .unwrap();
+        let refs_strs: Vec<&str> = refs.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(refs_strs, vec!["beta", "gamma"]);
+    }
+
+    #[test]
+    fn write_back_updates_existing_references_field() {
+        let tmp = TempDir::new().unwrap();
+        let dir = tmp.path().join("@me").join("temper").join("task");
+        fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("alpha.md");
+        let content = "---\n\
+temper-context: temper\n\
+temper-type: task\n\
+temper-owner: '@me'\n\
+title: alpha\n\
+slug: alpha\n\
+references:\n  - existing1\n  - existing2\n\
+---\nbody\n";
+        fs::write(&file, content).unwrap();
+
+        let merged = vec![
+            "existing1".to_string(),
+            "existing2".to_string(),
+            "new".to_string(),
+        ];
+        write_back_references(&file, &merged).unwrap();
+
+        let fm = temper_core::frontmatter::Frontmatter::parse_file(&file).unwrap();
+        let refs: Vec<String> = fm
+            .value()
+            .get("references")
+            .and_then(|v| v.as_sequence())
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        assert_eq!(refs, vec!["existing1", "existing2", "new"]);
+    }
+
+    #[test]
+    fn write_back_preserves_body() {
+        let tmp = TempDir::new().unwrap();
+        let body_text = "# Heading\n\nSome content with [[alpha]] reference.\n";
+        let file = write_vault_file(&tmp, "@me", "temper", "task", "bravo", None, body_text);
+
+        write_back_references(&file, &["alpha".to_string()]).unwrap();
+
+        let fm = temper_core::frontmatter::Frontmatter::parse_file(&file).unwrap();
+        assert!(fm.body().contains("# Heading"));
+        assert!(fm.body().contains("[[alpha]]"));
     }
 }
