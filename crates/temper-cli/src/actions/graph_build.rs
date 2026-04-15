@@ -502,7 +502,7 @@ pub(crate) fn merge_references(existing: &[String], discovered: &[String]) -> (V
 /// Write the merged reference list back into a file's frontmatter,
 /// mutating the `references` field and serializing the file to disk.
 pub(crate) fn write_back_references(file: &std::path::Path, merged: &[String]) -> Result<()> {
-    use serde_yaml::{Mapping, Value};
+    use serde_yaml::Value;
     use temper_core::frontmatter::Frontmatter;
 
     let mut fm = Frontmatter::parse_file(file)?;
