@@ -956,4 +956,41 @@ Back to prose [[another-real]].
         );
         assert_eq!(resolved, None, "self-reference should be rejected");
     }
+
+    #[test]
+    fn resolve_ref_bare_uuid_self_reference_returns_none() {
+        let (slugs, uuids) = build_test_maps();
+        // The UUID for alpha is in the map pointing to alpha.md; scanning
+        // from alpha.md with that UUID as a bare ref is a self-edge.
+        let resolved = resolve_ref(
+            &RawRef::BareUuid(uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6")),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/alpha.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(
+            resolved, None,
+            "bare-uuid self-reference should be rejected"
+        );
+    }
+
+    #[test]
+    fn resolve_ref_markdown_link_self_reference_returns_none() {
+        let (slugs, uuids) = build_test_maps();
+        // Scanning alpha.md with a relative link to ./alpha.md is a self-edge.
+        let resolved = resolve_ref(
+            &RawRef::MarkdownLink("alpha.md".to_string()),
+            "@me",
+            "temper",
+            std::path::Path::new("/v/@me/temper/task/alpha.md"),
+            &slugs,
+            &uuids,
+        );
+        assert_eq!(
+            resolved, None,
+            "markdown-link self-reference should be rejected"
+        );
+    }
 }
