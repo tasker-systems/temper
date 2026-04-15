@@ -569,7 +569,15 @@ pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport
         let existing = existing_references(&file.frontmatter);
         let (merged, added) = merge_references(&existing, disc_refs);
 
-        let already = disc_refs.len().saturating_sub(added);
+        // Count already-present: unique items in discovered that already existed.
+        // disc_refs may contain duplicates (same slug mentioned twice in body).
+        // We count each unique ref once per existing item it matches.
+        use std::collections::HashSet;
+        let existing_set: HashSet<&str> = existing.iter().map(|s| s.as_str()).collect();
+        let already = disc_refs
+            .iter()
+            .filter(|d| existing_set.contains(d.as_str()))
+            .count();
         report.already_present += already;
 
         if added == 0 {
@@ -583,8 +591,12 @@ pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport
         report.files_modified += 1;
         report.references_added += added;
 
-        let added_refs = if params.verbose {
-            merged.iter().skip(existing.len()).cloned().collect()
+        let added_refs: Vec<String> = if params.verbose {
+            merged
+                .iter()
+                .filter(|r| !existing_set.contains(r.as_str()))
+                .cloned()
+                .collect()
         } else {
             Vec::new()
         };
