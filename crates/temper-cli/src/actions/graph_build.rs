@@ -524,10 +524,94 @@ pub(crate) fn write_back_references(file: &std::path::Path, merged: &[String]) -
 /// Top-level entry point. Walks the vault, scans bodies, merges
 /// references into open_meta, writes files back.
 pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport> {
-    let _ = (config, params);
-    Err(crate::error::TemperError::Project(
-        "graph_build::run: not yet implemented".into(),
-    ))
+    // Pass 1: walk + maps
+    let (slugs, uuids, files) = discover_vault(config, params.context_filter.as_deref())?;
+    let files_walked = files.len();
+
+    // Pass 2: scan + resolve, accumulating per-file discovered refs
+    let mut discovered: HashMap<PathBuf, Vec<String>> = HashMap::new();
+    let mut references_found = 0usize;
+
+    for file in &files {
+        let raw_refs = scan_body(file.frontmatter.body());
+        for raw in &raw_refs {
+            if let Some(resolved) =
+                resolve_ref(raw, &file.owner, &file.context, &file.path, &slugs, &uuids)
+            {
+                references_found += 1;
+                discovered
+                    .entry(file.path.clone())
+                    .or_default()
+                    .push(resolved);
+            }
+        }
+    }
+
+    // Pass 3: merge + write back (or simulate for dry-run)
+    let mut report = GraphBuildReport {
+        files_walked,
+        references_found,
+        ..Default::default()
+    };
+
+    let file_by_path: HashMap<&std::path::Path, &DiscoveredFile> =
+        files.iter().map(|f| (f.path.as_path(), f)).collect();
+
+    let mut paths: Vec<&PathBuf> = discovered.keys().collect();
+    paths.sort();
+
+    for path in paths {
+        let disc_refs = &discovered[path];
+        let file = file_by_path
+            .get(path.as_path())
+            .expect("discovered path not in walk");
+
+        let existing = existing_references(&file.frontmatter);
+        let (merged, added) = merge_references(&existing, disc_refs);
+
+        let already = disc_refs.len().saturating_sub(added);
+        report.already_present += already;
+
+        if added == 0 {
+            continue;
+        }
+
+        if !params.dry_run {
+            write_back_references(path, &merged)?;
+        }
+
+        report.files_modified += 1;
+        report.references_added += added;
+
+        let added_refs = if params.verbose {
+            merged.iter().skip(existing.len()).cloned().collect()
+        } else {
+            Vec::new()
+        };
+
+        report.modified_files.push(ModifiedFile {
+            rel_path: file.rel_path.clone(),
+            added,
+            added_refs,
+        });
+    }
+
+    Ok(report)
+}
+
+/// Read the existing `open_meta.references` field from a parsed
+/// Frontmatter as a `Vec<String>`. Missing, null, or wrong-typed
+/// fields yield an empty vec.
+fn existing_references(fm: &temper_core::frontmatter::Frontmatter) -> Vec<String> {
+    fm.value()
+        .get("references")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1148,5 +1232,114 @@ references:\n  - existing1\n  - existing2\n\
         let fm = temper_core::frontmatter::Frontmatter::parse_file(&file).unwrap();
         assert!(fm.body().contains("# Heading"));
         assert!(fm.body().contains("[[alpha]]"));
+    }
+
+    // ── End-to-end run() tests ───────────────────────────────────────
+
+    #[test]
+    fn run_end_to_end_seeds_references_from_wikilinks() {
+        let tmp = TempDir::new().unwrap();
+        write_vault_file(&tmp, "@me", "temper", "task", "alpha", None, "");
+        write_vault_file(&tmp, "@me", "temper", "task", "beta", None, "");
+        let source = write_vault_file(
+            &tmp,
+            "@me",
+            "temper",
+            "task",
+            "source",
+            None,
+            "This references [[alpha]] and [[beta]] explicitly.",
+        );
+        let config = fixture_config(&tmp, &["temper"]);
+        let params = GraphBuildParams {
+            context_filter: None,
+            dry_run: false,
+            verbose: false,
+        };
+        let report = run(&config, params).unwrap();
+
+        assert_eq!(report.files_modified, 1);
+        assert_eq!(report.references_added, 2);
+
+        let fm = temper_core::frontmatter::Frontmatter::parse_file(&source).unwrap();
+        let refs: Vec<String> = fm
+            .value()
+            .get("references")
+            .and_then(|v| v.as_sequence())
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+        assert_eq!(refs, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn run_end_to_end_idempotent() {
+        let tmp = TempDir::new().unwrap();
+        write_vault_file(&tmp, "@me", "temper", "task", "alpha", None, "");
+        write_vault_file(
+            &tmp,
+            "@me",
+            "temper",
+            "task",
+            "source",
+            None,
+            "See [[alpha]].",
+        );
+        let config = fixture_config(&tmp, &["temper"]);
+
+        let first = run(
+            &config,
+            GraphBuildParams {
+                context_filter: None,
+                dry_run: false,
+                verbose: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(first.files_modified, 1);
+
+        let second = run(
+            &config,
+            GraphBuildParams {
+                context_filter: None,
+                dry_run: false,
+                verbose: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(second.files_modified, 0, "second run must be a no-op");
+        assert_eq!(second.references_added, 0);
+    }
+
+    #[test]
+    fn run_dry_run_does_not_write() {
+        let tmp = TempDir::new().unwrap();
+        write_vault_file(&tmp, "@me", "temper", "task", "alpha", None, "");
+        let source = write_vault_file(
+            &tmp,
+            "@me",
+            "temper",
+            "task",
+            "source",
+            None,
+            "See [[alpha]].",
+        );
+        let content_before = std::fs::read_to_string(&source).unwrap();
+
+        let config = fixture_config(&tmp, &["temper"]);
+        let report = run(
+            &config,
+            GraphBuildParams {
+                context_filter: None,
+                dry_run: true,
+                verbose: false,
+            },
+        )
+        .unwrap();
+        assert_eq!(report.files_modified, 1, "report counts as if written");
+
+        let content_after = std::fs::read_to_string(&source).unwrap();
+        assert_eq!(content_before, content_after, "dry-run must not write");
     }
 }
