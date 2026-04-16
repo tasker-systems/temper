@@ -84,13 +84,10 @@ jobs:
         run: cargo sqlx migrate run
 
       - name: Run integration & E2E tests
-        # sync_run_push_body_round_trip is excluded here because it drives
-        # the server-side ingest pipeline (no pre-packed chunks), which
-        # invokes ort at runtime. This runner does not have ONNX Runtime
-        # installed; the test runs instead in the "Embed & MCP Round-Trip
-        # Tests" job, which installs libonnxruntime.so and sets
-        # ORT_DYLIB_PATH.
-        run: cargo nextest run --workspace --features test-db --locked --no-fail-fast -E '!test(=sync_run_push_body_round_trip)'
+        # Tests excluded here push un-pre-packed bodies, which triggers
+        # server-side embedding via ort. This runner has no ONNX Runtime;
+        # they run in the "Embed & MCP Round-Trip Tests" job instead.
+        run: cargo nextest run --workspace --features test-db --locked --no-fail-fast -E '!test(=sync_run_push_body_round_trip) & !test(=graph_build_then_sync_materializes_edges)'
 
   test-rust-embed:
     name: Embed & MCP Round-Trip Tests
@@ -163,4 +160,4 @@ jobs:
         # sync_run_push_body_round_trip specifically — the one sync_test
         # case that drives the server-side embed path by pushing an
         # un-pre-packed body.
-        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=sync_run_push_body_round_trip)'
+        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=sync_run_push_body_round_trip) + test(=graph_build_then_sync_materializes_edges)'
