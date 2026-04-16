@@ -37,7 +37,7 @@ jobs:
         uses: taiki-e/install-action@nextest
 
       - name: Run unit tests
-        run: cargo nextest run --workspace --locked
+        run: cargo nextest run --workspace --locked --no-fail-fast
 
   integration-tests:
     name: Integration & E2E Tests
@@ -90,7 +90,7 @@ jobs:
         # installed; the test runs instead in the "Embed & MCP Round-Trip
         # Tests" job, which installs libonnxruntime.so and sets
         # ORT_DYLIB_PATH.
-        run: cargo nextest run --workspace --features test-db --locked -E '!test(=sync_run_push_body_round_trip)'
+        run: cargo nextest run --workspace --features test-db --locked --no-fail-fast -E '!test(=sync_run_push_body_round_trip)'
 
   test-rust-embed:
     name: Embed & MCP Round-Trip Tests
@@ -155,8 +155,8 @@ jobs:
 
       - name: Run ingest pipeline tests
         run: |
-          cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1
-          cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1
+          cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1 --no-fail-fast
+          cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1 --no-fail-fast
 
       - name: Run MCP round-trip + ingest-pipeline e2e tests
         # Combined filter: the mcp_round_trip_test binary (all tests) plus

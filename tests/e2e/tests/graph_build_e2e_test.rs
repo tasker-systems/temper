@@ -165,7 +165,14 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
         .await
         .expect("context create failed");
 
-    // Step 3: Create a goal and two tasks via API so they're in the server DB
+    // Step 3: Create a goal and two tasks via API so they're in the server DB.
+    // Provide pre-computed empty `chunks_packed` to bypass the `ingest-pipeline`
+    // feature's `prepare_markdown` + `compute_body_hash` path. Without this,
+    // workspace builds (which enable `ingest-pipeline` via `temper-cloud`) would
+    // compute the same `sha256("")` for all four empty-content resources and
+    // `find_by_body_hash` dedup would collapse them into one server row.
+    let empty_chunks =
+        Some(temper_core::types::ingest::pack_chunks(&[]).expect("pack empty chunks"));
     let goal = app
         .client
         .ingest()
@@ -180,7 +187,7 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
             metadata: None,
             managed_meta: Some(serde_json::json!({})),
             open_meta: Some(serde_json::json!({})),
-            chunks_packed: None,
+            chunks_packed: empty_chunks.clone(),
         })
         .await
         .expect("ingest goal failed");
@@ -199,7 +206,7 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
             metadata: None,
             managed_meta: Some(serde_json::json!({"temper-goal": "my-goal"})),
             open_meta: Some(serde_json::json!({})),
-            chunks_packed: None,
+            chunks_packed: empty_chunks.clone(),
         })
         .await
         .expect("ingest task-a failed");
@@ -218,7 +225,7 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
             metadata: None,
             managed_meta: Some(serde_json::json!({"temper-goal": "my-goal"})),
             open_meta: Some(serde_json::json!({})),
-            chunks_packed: None,
+            chunks_packed: empty_chunks.clone(),
         })
         .await
         .expect("ingest task-b failed");
@@ -237,7 +244,7 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
             metadata: None,
             managed_meta: Some(serde_json::json!({})),
             open_meta: Some(serde_json::json!({})),
-            chunks_packed: None,
+            chunks_packed: empty_chunks.clone(),
         })
         .await
         .expect("ingest source failed");
@@ -305,9 +312,22 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
         "expected task-a to be added as reference"
     );
 
-    // Step 6: Insert source into the manifest. The server has no kb_resource_manifests
-    // entry for source (created via API without seeding), so server's body_hash = ''.
-    // We use remote_body_hash = String::new() to match the server's empty string.
+    // Step 6: Insert source into the manifest as LocalModified. The remote_*_hash
+    // fields must match what the server actually stored in kb_resource_manifests
+    // when source was ingested — NOT empty strings. With the `ingest-pipeline`
+    // feature enabled (which workspace builds activate via temper-cloud),
+    // `create_resource_with_manifest` runs `compute_body_hash(payload.content)`
+    // even on empty content, so server.body_hash is `sha256("")`, not `''`.
+    // Query the actual server-side row instead of guessing.
+    let source_uuid: uuid::Uuid = source.id.into();
+    let server_source_hashes: (String, String, String) = sqlx::query_as(
+        "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
+    )
+    .bind(source_uuid)
+    .fetch_one(&app.pool)
+    .await
+    .expect("fetch source server-side hashes");
+
     let source_rel_path = format!("{owner}/temper/task/source.md");
     let source_abs_path = app.vault_dir.path().join(&source_rel_path);
     let source_content = std::fs::read_to_string(&source_abs_path).expect("read source.md");
@@ -330,11 +350,11 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
         temper_core::types::ManifestEntry {
             path: source_rel_path,
             body_hash: source_body_hash,
-            remote_body_hash: String::new(), // server has '' (empty string) when no manifest entry
+            remote_body_hash: server_source_hashes.0.clone(),
             managed_hash: source_managed_hash,
             open_hash: source_open_hash,
-            remote_managed_hash: String::new(),
-            remote_open_hash: String::new(),
+            remote_managed_hash: server_source_hashes.1.clone(),
+            remote_open_hash: server_source_hashes.2.clone(),
             synced_at: chrono::Utc::now(),
             state: ManifestEntryState::LocalModified,
             mtime_secs: source_mtime,
