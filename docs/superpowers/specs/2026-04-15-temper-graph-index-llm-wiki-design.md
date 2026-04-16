@@ -100,7 +100,7 @@ Iteration 1 ships `temper index` and `temper graph index` without `--local-only`
 │    Produces: Vec<ConceptProposal>                             │
 │                                                               │
 │  Phase 4: Materialization                                     │
-│    Write Concept resources with body + open_meta              │
+│    Write Concept resources with body + managed meta           │
 │    Add relates-to edges on member documents (bidirectional)   │
 │    Dry-run mode: report only, no writes                       │
 │                                                               │
@@ -121,15 +121,17 @@ Iteration 1 ships `temper index` and `temper graph index` without `--local-only`
 
 ### Crate Layout
 
-**New crate (or module):** `temper-llm` — provider abstraction
-- Trait `LlmProvider` with `complete(prompt, params) -> CompletionResult`
-- Implementations: `ClaudeProvider`, `OpenAiCompatibleProvider` (handles ollama and any OpenAI-spec endpoint)
-- Structured output support via JSON schema prompting (iteration 1 keeps schemas simple; function calling can be added later)
+**New crate:** `temper-llm` — **minimal agent harness** with provider abstraction
+- Designed as a harness from day 1, not a thin completion wrapper. See the [Agent Harness](#agent-harness) section below for details.
+- Trait `LlmProvider` with a tool-aware completion API; implementations for Claude and any OpenAI-compatible endpoint (ollama, etc.).
+- Iteration 1's `graph index` uses the harness with `max_turns: 1` (single-turn structured output). Iteration 2's drift/split/merge and `build --llm` use the same harness with more turns and richer tool sets. No rewrites between iterations.
+- **Build in-house, not rig.** Our needs are narrow (tool registration, turn loop, provider dispatch, structured output), rig is a much larger surface area than we need, and we benefit from being able to read every line when debugging LLM behavior. Revisit only if we hit a concrete ceiling.
 
 **Extended crate:** `temper-ingest`
 - Already has `embed.rs` using `BAAI/bge-base-en-v1.5` via ort (gated behind `embed` feature)
-- Add HNSW index builder/loader (new module, gated behind existing `embed` feature or a new `hnsw` feature)
-- Decision point during planning: use `hnsw_rs` crate vs `instant-distance` vs a minimal in-house impl. See Open Questions.
+- Add HNSW index builder/loader (new module) using the `hnsw_rs` crate
+- Gated behind the existing `embed` feature or a new `hnsw` feature (decide during planning based on whether HNSW is always-on when embeddings are present)
+- Same embedding model (`BAAI/bge-base-en-v1.5`) is used for both the server-side pgvector pipeline and the local HNSW — do not fork the model
 
 **Extended crate:** `temper-cli`
 - `src/commands/index.rs` — new `temper index` command
@@ -176,27 +178,71 @@ Iteration 1 ships `temper index` and `temper graph index` without `--local-only`
    - Dry-run: emit a structured report, no file writes
    - Non-dry-run: write files, then trigger sync (or suggest the user run it)
 
-### LLM Provider Abstraction
+### Agent Harness
+
+`temper-llm` is built as a minimal agent harness from day 1. The shape:
 
 ```rust
+// Provider abstraction — the thing that actually talks to Claude or ollama.
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
-    async fn complete<T: DeserializeOwned>(
+    async fn complete(
         &self,
         system: &str,
-        user: &str,
-        schema: &serde_json::Value,  // JSON Schema for structured output
-    ) -> Result<T, LlmError>;
+        messages: &[Message],
+        tools: &[ToolSchema],          // may be empty (single-turn structured output)
+        response_format: Option<&JsonSchema>,
+    ) -> Result<LlmResponse, LlmError>;
 
     fn provider_name(&self) -> &str;
     fn model(&self) -> &str;
 }
+
+// LlmResponse carries either a final structured output or a set of tool calls
+// the model wants us to execute.
+pub enum LlmResponse {
+    Final { content: serde_json::Value },
+    ToolUse { calls: Vec<ToolCall> },
+}
+
+// Tools are registered with the harness; each has a name, JSON-schema input,
+// and an async handler.
+pub struct Tool<S> {
+    pub name: String,
+    pub description: String,
+    pub input_schema: JsonSchema,
+    pub handler: Box<dyn ToolHandler<S>>,
+}
+
+// The harness drives the turn loop: call provider, dispatch any tool calls,
+// feed results back, repeat until Final or max_turns reached.
+pub struct Agent<S> {
+    provider: Arc<dyn LlmProvider>,
+    tools: Vec<Tool<S>>,
+    max_turns: usize,
+    state: S,  // caller-supplied state passed to tool handlers
+}
+
+impl<S> Agent<S> {
+    pub async fn run(&mut self, system: &str, user: &str) -> Result<AgentOutcome, AgentError> {
+        // Loop: complete → dispatch tool calls → feed tool results → repeat.
+        // Exits on Final, max_turns exhaustion, or unrecoverable error.
+    }
+}
 ```
 
-Two implementations:
+**Provider implementations:**
 
-- `ClaudeProvider` — uses Anthropic's Messages API with JSON-schema-constrained output
-- `OpenAiCompatibleProvider` — handles ollama, OpenAI, any OpenAI-spec-compatible endpoint; uses JSON mode or structured output depending on server support
+- `ClaudeProvider` — Anthropic Messages API with native tool use and structured output via `response_format` or equivalent
+- `OpenAiCompatibleProvider` — handles ollama, any OpenAI-spec endpoint; uses function-calling or JSON mode depending on server capability (model-dependent for ollama — llama3.2 and qwen3 support tool use, older models may not)
+
+**Iteration 1 use:** `graph index` invokes `Agent::run` with `max_turns: 1`, no tools registered, and a `response_format` for `ConceptProposal`. The harness reduces to a single structured-output call — functionally equivalent to a direct `provider.complete()` but built on the harness so iteration 2 gets multi-turn for free.
+
+**Iteration 2+ use:** drift detection, concept split/merge, and `build --llm` register tools like `search_vault`, `read_resource`, `get_neighbors`, `propose_edge`, and let the agent run for N turns. The harness's turn loop, tool dispatch, and error handling are already in place.
+
+**Tool-call transparency:** every tool call and its result is logged with the run-id. This is the audit trail for later iterations — "why did the LLM do X?" is answered by reading the log.
+
+**Determinism note:** agent loops are not deterministic. Iteration 1's single-turn use preserves the determinism of a fixed pipeline (modulo LLM sampling). Later iterations accept some probabilistic termination behavior in exchange for the capabilities the harness enables. Tests use a mock `LlmProvider` that returns canned responses.
 
 Provider selection via config:
 
@@ -216,7 +262,7 @@ Precedence: `TEMPER_LLM_*` env vars → `--llm-provider`, `--llm-url`, `--llm-mo
 
 ### Concept Resource Shape
 
-The existing schema (`crates/temper-core/schemas/concept.schema.json`) requires only `slug`, `date`, and `temper-type: concept`. LLM-created concepts honor this with additional fields in `open_meta`:
+The existing schema (`crates/temper-core/schemas/concept.schema.json`) requires only `slug`, `date`, and `temper-type: concept`. LLM-created concepts honor this with additional managed-meta fields (`temper-provenance`, `temper-llm-model`, `temper-llm-run`) and open-meta edge declarations (`relates-to`):
 
 ```yaml
 ---
@@ -228,12 +274,12 @@ date: 2026-04-15
 temper-context: temper
 temper-owner: "@me"
 temper-created: 2026-04-15T...
+temper-provenance: llm-discovered   # managed meta — distinguishes llm-discovered from user-created
+temper-llm-model: llama3.2:latest   # managed meta — which model produced this resource
+temper-llm-run: <uuidv7-run-id>     # managed meta — groups resources created in one graph-index run
 relates-to:
   - 2026-04-10-decision-concept-doc-types
   - 2026-04-13-r11-knowledge-graph-visualization-design
-temper-provenance: llm-discovered  # open_meta field — distinguishes from user-created
-temper-llm-model: llama3.2:latest  # open_meta — which model produced this
-temper-llm-run: <run-id>           # open_meta — groups concepts created in one run
 ---
 
 # Narrative Topology
@@ -254,7 +300,7 @@ specifically.
 (LLM-written prose explaining the conceptual thread that binds members)
 ```
 
-**Provenance is open_meta, not managed.** Users remain free to edit, split, or supersede LLM-created concepts. The provenance field is informational — useful for future lifecycle operations (e.g., "only re-evaluate llm-discovered concepts during drift detection") but not enforcement.
+**Provenance is managed meta.** `temper-provenance`, `temper-llm-model`, and `temper-llm-run` are new managed-meta fields. They need to be registered in the managed-meta registry (`KNOWN_MANAGED_FIELDS` or equivalent) alongside existing fields like `temper-id`, `temper-type`, and `temper-context`. Users remain free to edit, split, or supersede LLM-created concepts — provenance tracks where a resource came from, not who is allowed to modify it. The field is informational: useful for future lifecycle operations (e.g., "only re-evaluate llm-discovered concepts during drift detection") but not enforcement.
 
 **Body content is first-class.** The LLM writes a substantive explanation, not a stub. This is the substrate that enables future evolution: drift detection compares current cluster membership against the body's described thread; concept splitting examines which members still fit the body and which have drifted to a new idea.
 
@@ -307,7 +353,7 @@ CLI flag overrides: `--llm-provider`, `--llm-url`, `--llm-model`, `--threshold`,
 
 **Dry-run is the safety net.** `--dry-run` produces a structured report showing: seeds extracted, clusters formed (size, members), LLM proposals accepted/rejected, files that would be written, edges that would be added. No vault mutations.
 
-**Run IDs for traceability.** Every `graph index` run generates a UUIDv7 run-id. All Concepts created in the run carry this in `temper-llm-run` open_meta. This lets a user audit "what did this run produce?" and, in iteration 2, enables undo/rollback operations.
+**Run IDs for traceability.** Every `graph index` run generates a UUIDv7 run-id. All Concepts created in the run carry this in the managed-meta `temper-llm-run` field. This lets a user audit "what did this run produce?" and, in iteration 2, enables undo/rollback operations.
 
 ---
 
@@ -334,7 +380,7 @@ Three layers:
 
 ## Open Questions
 
-**Q1: HNSW crate selection.** Candidates: `hnsw_rs`, `instant-distance`, minimal custom implementation. Factors: API ergonomics, serialization format stability, dependency weight, already-in-tree considerations. Decide during the `temper index` planning pass.
+**Q1 (resolved): HNSW crate is `hnsw_rs`.** This matches what the project used in its pre-temper-cloud history (confirmed in git archaeology). Revisit only if we hit a concrete blocker during implementation.
 
 **Q2: TF-IDF implementation — ship-built vs crate.** Lightweight enough to write in-tree (tokenize, stem via `rust-stemmers`, count, normalize), but `tantivy` already has TF-IDF primitives if we want them. Crate adds weight; in-tree adds maintenance. Lean in-tree unless tantivy is already a direct dep elsewhere.
 
@@ -342,7 +388,7 @@ Three layers:
 
 **Q4: Summary generation for LLM prompts.** When sending a cluster to the LLM, each member needs a summary to fit in the context. Options: (a) first N lines of body, (b) LLM pre-pass to summarize (adds LLM calls), (c) use the existing chunk most similar to the seed (free — it's already in HNSW). Initial lean: (c).
 
-**Q5: Concurrency model.** How many LLM calls run in parallel? Ollama's concurrency behavior depends on the model and hardware. Claude allows more. Default to serial for iteration 1, make configurable in iteration 2.
+**Q5: Concurrency model.** How many agent runs execute in parallel across clusters? Ollama's concurrency behavior depends on the model and hardware (local GPU is typically a bottleneck). Claude allows more parallelism at the API level but subject to rate limits. Default to serial for iteration 1 (one cluster at a time), make configurable in iteration 2. The harness itself is agnostic — concurrency is managed at the graph-index orchestration layer, not inside `Agent::run`.
 
 **Q6: Deferred — server-side indexing.** At what vault size does `graph index` stop being a sensible CLI-local operation? The server already has all resources, pgvector, and FTS. A `POST /api/graph/index` endpoint could run the pipeline centrally. Defer decision until iteration 1 teaches us what the realistic vault-size ceiling is.
 
@@ -370,7 +416,7 @@ The iteration-1 pipeline is the scaffold. The full vision extends it in these di
 - **Server-side indexing** — offload the pipeline from CLI to API for users with large vaults or who want scheduled indexing (nightly concept refresh, etc.).
 - **Cross-provider prompt routing** — use local models for narrow judgments ("does this cluster cohere?"), cloud models for generative work ("write a good concept body"). Configurable per-phase.
 
-These are not iteration-1 commitments. They are captured here so the iteration-1 design does not foreclose them.
+These are not iteration-1 commitments. They are captured here so the iteration-1 design does not foreclose them. All of them compose naturally on top of the `temper-llm` agent harness — they register additional tools (`search_vault`, `read_resource`, `propose_split`, etc.) and run with `max_turns > 1`. The single-turn iteration-1 use of the harness is a deliberate first rung on a ladder whose upper rungs are already structurally in scope.
 
 ---
 
