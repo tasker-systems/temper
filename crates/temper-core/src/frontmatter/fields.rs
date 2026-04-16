@@ -46,6 +46,10 @@ pub static KNOWN_TEMPER_FIELDS: &[&str] = &[
     // goal
     "temper-status",
     // session, research, decision, concept have no extra temper-* beyond base
+    // LLM-assist managed fields
+    "temper-provenance",
+    "temper-llm-model",
+    "temper-llm-run",
 ];
 
 /// Legacy field names that have been renamed to temper-* equivalents.
@@ -114,6 +118,13 @@ mod tests {
             "temper-effort",
             "temper-goal",
         ] {
+            assert!(KNOWN_TEMPER_FIELDS.contains(&key), "missing key {key}");
+        }
+    }
+
+    #[test]
+    fn known_temper_fields_includes_llm_managed_fields() {
+        for key in ["temper-provenance", "temper-llm-model", "temper-llm-run"] {
             assert!(KNOWN_TEMPER_FIELDS.contains(&key), "missing key {key}");
         }
     }

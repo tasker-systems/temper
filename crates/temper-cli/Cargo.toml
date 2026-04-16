@@ -47,6 +47,7 @@ validator = { version = "0.20", features = ["derive"] }
 [dev-dependencies]
 
 [features]
-default = ["embed", "extract"]
+default = ["embed", "extract", "hnsw"]
 embed = ["temper-ingest/embed-download"]
 extract = ["temper-ingest/extract"]
+hnsw = ["temper-ingest/hnsw"]

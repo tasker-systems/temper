@@ -75,6 +75,18 @@ pub struct ManagedMeta {
     #[serde(rename = "temper-status", skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
 
+    /// How this resource was created (LLM-discovered or user-created)
+    #[serde(rename = "temper-provenance", skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<String>,
+
+    /// Model that produced this resource
+    #[serde(rename = "temper-llm-model", skip_serializing_if = "Option::is_none")]
+    pub llm_model: Option<String>,
+
+    /// UUIDv7 of the graph-index run that created this resource
+    #[serde(rename = "temper-llm-run", skip_serializing_if = "Option::is_none")]
+    pub llm_run: Option<String>,
+
     /// Human-readable title (identity transport, no rename)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -291,6 +303,56 @@ mod tests {
             reparsed.extra.get("date"),
             Some(&serde_json::json!("2026-04-13")),
             "round-trip must preserve extras",
+        );
+    }
+
+    #[test]
+    fn managed_meta_llm_fields_roundtrip() {
+        let meta = ManagedMeta {
+            provenance: Some("llm-discovered".to_string()),
+            llm_model: Some("claude-sonnet-4-20250514".to_string()),
+            llm_run: Some("01947b5c-0000-0000-0000-000000000000".to_string()),
+            doc_type: Some("task".to_string()),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_string(&meta).unwrap();
+
+        // Verify temper-* LLM keys are present
+        assert!(
+            json.contains("\"temper-provenance\""),
+            "missing temper-provenance key"
+        );
+        assert!(
+            json.contains("\"temper-llm-model\""),
+            "missing temper-llm-model key"
+        );
+        assert!(
+            json.contains("\"temper-llm-run\""),
+            "missing temper-llm-run key"
+        );
+
+        // Verify values are preserved
+        assert!(
+            json.contains("llm-discovered"),
+            "llm-discovered value missing"
+        );
+        assert!(
+            json.contains("claude-sonnet-4-20250514"),
+            "model value missing"
+        );
+
+        // Verify roundtrip
+        let parsed: ManagedMeta = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, meta);
+        assert_eq!(parsed.provenance.as_deref(), Some("llm-discovered"));
+        assert_eq!(
+            parsed.llm_model.as_deref(),
+            Some("claude-sonnet-4-20250514")
+        );
+        assert_eq!(
+            parsed.llm_run.as_deref(),
+            Some("01947b5c-0000-0000-0000-000000000000")
         );
     }
 }

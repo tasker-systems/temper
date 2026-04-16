@@ -16,4 +16,4 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [package.metadata.cargo-machete]
-ignored = ["tokio"]
+ignored = ["tracing"]

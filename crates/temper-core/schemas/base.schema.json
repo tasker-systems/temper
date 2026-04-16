@@ -85,6 +85,23 @@
         { "type": "array", "items": { "type": "string" } }
       ],
       "description": "Source resources this was derived from"
+    },
+    "temper-provisional-id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "temper-provenance": {
+      "type": "string",
+      "enum": ["llm-discovered", "user-created"],
+      "description": "How this resource was created"
+    },
+    "temper-llm-model": {
+      "type": "string",
+      "description": "Model that produced this resource"
+    },
+    "temper-llm-run": {
+      "type": "string",
+      "description": "UUIDv7 of the graph-index run that created this resource"
     }
   },
   "required": ["temper-id", "temper-type", "temper-context", "temper-created", "title"],

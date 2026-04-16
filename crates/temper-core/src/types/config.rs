@@ -228,6 +228,61 @@ impl LlmConfig {
     }
 }
 
+/// Graph index configuration — controls TF-IDF seed extraction and cluster formation.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct GraphIndexConfig {
+    /// Minimum number of documents a phrase must appear in to be considered a seed.
+    #[serde(default = "default_seed_min_doc_frequency")]
+    pub seed_min_doc_frequency: usize,
+    /// Maximum number of seed phrases to extract per context.
+    #[serde(default = "default_seed_top_n")]
+    pub seed_top_n: usize,
+    /// Cosine similarity threshold for including a document in a cluster.
+    #[serde(default = "default_cluster_similarity_threshold")]
+    pub cluster_similarity_threshold: f32,
+    /// Maximum number of members per cluster.
+    #[serde(default = "default_cluster_max_members")]
+    pub cluster_max_members: usize,
+    /// Minimum number of members for a cluster to generate a concept.
+    #[serde(default = "default_concept_min_members")]
+    pub concept_min_members: usize,
+    /// Default edge type when adding relates-to edges to members.
+    #[serde(default = "default_concept_default_edge_type")]
+    pub concept_default_edge_type: String,
+}
+
+fn default_seed_min_doc_frequency() -> usize {
+    2
+}
+fn default_seed_top_n() -> usize {
+    50
+}
+fn default_cluster_similarity_threshold() -> f32 {
+    0.70
+}
+fn default_cluster_max_members() -> usize {
+    12
+}
+fn default_concept_min_members() -> usize {
+    3
+}
+fn default_concept_default_edge_type() -> String {
+    "relates-to".to_string()
+}
+
+impl Default for GraphIndexConfig {
+    fn default() -> Self {
+        Self {
+            seed_min_doc_frequency: default_seed_min_doc_frequency(),
+            seed_top_n: default_seed_top_n(),
+            cluster_similarity_threshold: default_cluster_similarity_threshold(),
+            cluster_max_members: default_cluster_max_members(),
+            concept_min_members: default_concept_min_members(),
+            concept_default_edge_type: default_concept_default_edge_type(),
+        }
+    }
+}
+
 /// Cloud API section of the configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
@@ -271,6 +326,9 @@ pub struct TemperConfig {
     #[serde(default)]
     #[validate(nested)]
     pub llm: LlmConfig,
+    #[serde(default)]
+    #[validate(nested)]
+    pub graph_index: GraphIndexConfig,
 }
 
 impl Default for TemperConfig {
@@ -284,6 +342,7 @@ impl Default for TemperConfig {
             auth: Default::default(),
             cloud: Default::default(),
             llm: Default::default(),
+            graph_index: Default::default(),
         }
     }
 }
