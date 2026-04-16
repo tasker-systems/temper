@@ -26,23 +26,9 @@ use std::borrow::Cow;
 /// Convert a ClientError to a TemperError, preserving SystemAccessRequired details.
 pub fn client_err(e: temper_client::error::ClientError) -> crate::error::TemperError {
     match e {
-        temper_client::error::ClientError::SystemAccessRequired {
-            email,
-            display_name,
-            access_mode,
-            join_request_status,
-            request_url,
-            cli_command,
-        } => crate::error::TemperError::SystemAccessRequired(Box::new(
-            temper_core::error::CliAccessDetails {
-                email,
-                display_name,
-                access_mode,
-                join_request_status,
-                request_url,
-                cli_command,
-            },
-        )),
+        temper_client::error::ClientError::SystemAccessRequired(details) => {
+            crate::error::TemperError::SystemAccessRequired(details)
+        }
         other => crate::error::TemperError::Api(other.to_string()),
     }
 }

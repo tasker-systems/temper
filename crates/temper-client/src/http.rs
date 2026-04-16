@@ -194,14 +194,14 @@ pub fn map_status_to_error(status: StatusCode, body: &str) -> ClientError {
         401 => ClientError::NotAuthenticated,
         403 => {
             if let Some(details) = parse_system_access_details(body) {
-                ClientError::SystemAccessRequired {
+                ClientError::SystemAccessRequired(Box::new(temper_core::error::CliAccessDetails {
                     email: details.email,
                     display_name: details.display_name,
                     access_mode: details.access_mode.unwrap_or_else(|| "unknown".to_string()),
                     join_request_status: details.join_request_status,
                     request_url: details.request_url,
                     cli_command: details.cli_command,
-                }
+                }))
             } else {
                 ClientError::Forbidden
             }
@@ -403,11 +403,9 @@ mod tests {
         let body = r#"{"error":{"code":"SYSTEM_ACCESS_REQUIRED","message":"This system requires approved access.","details":{"email":"pete@example.com","display_name":"Pete Taylor","access_mode":"invite_only","join_request_status":"pending","request_url":"https://temperkb.io/request-access","cli_command":"temper team join --message \"...\""}}}"#;
         let err = map_status_to_error(status(403), body);
         match err {
-            ClientError::SystemAccessRequired {
-                email, access_mode, ..
-            } => {
-                assert_eq!(email.as_deref(), Some("pete@example.com"));
-                assert_eq!(access_mode, "invite_only");
+            ClientError::SystemAccessRequired(details) => {
+                assert_eq!(details.email.as_deref(), Some("pete@example.com"));
+                assert_eq!(details.access_mode, "invite_only");
             }
             other => panic!("expected SystemAccessRequired, got {other:?}"),
         }
