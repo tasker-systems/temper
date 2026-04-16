@@ -243,11 +243,14 @@ pub async fn update_meta(
     // change in managed_meta was applied earlier in the same tx), so we can
     // reuse the local directly instead of re-querying.
     let ctx_id = ContextId::from(context_id);
+    let doc_type_str = payload.managed_meta.doc_type.as_deref().unwrap_or("");
     if let Err(e) = super::edge_service::reconcile_edges(
         pool,
         &profile_id,
         &ctx_id,
         &resource_id,
+        doc_type_str,
+        &managed_meta_json,
         &payload.open_meta,
     )
     .await

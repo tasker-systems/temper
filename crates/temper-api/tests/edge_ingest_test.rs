@@ -28,6 +28,8 @@ async fn test_extract_edges_from_open_meta(pool: PgPool) {
         &profile_id,
         &context_id,
         &resource_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta,
     )
     .await
@@ -68,6 +70,8 @@ async fn test_unresolved_targets_deferred(pool: PgPool) {
         &profile_id,
         &context_id,
         &resource_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta,
     )
     .await
@@ -108,6 +112,8 @@ async fn test_deferred_edge_resolution(pool: PgPool) {
         &profile_id,
         &context_id,
         &r1_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta,
     )
     .await
@@ -177,6 +183,8 @@ async fn test_uuid_target_ref_resolves(pool: PgPool) {
         &profile_id,
         &context_id,
         &resource_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta,
     )
     .await
@@ -205,6 +213,8 @@ async fn test_no_relationship_fields_no_edges(pool: PgPool) {
         &profile_id,
         &context_id,
         &resource_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta,
     )
     .await
@@ -238,6 +248,8 @@ async fn test_reconcile_adds_and_removes(pool: PgPool) {
         &profile_id,
         &context_id,
         &resource_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta_v1,
     )
     .await
@@ -250,6 +262,8 @@ async fn test_reconcile_adds_and_removes(pool: PgPool) {
         &profile_id,
         &context_id,
         &resource_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta_v2,
     )
     .await
@@ -317,6 +331,8 @@ async fn test_reconcile_preserves_manual_edges(pool: PgPool) {
         &profile_id,
         &context_id,
         &resource_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta,
     )
     .await
@@ -356,6 +372,8 @@ async fn test_parent_of_direction_reversal(pool: PgPool) {
         &profile_id,
         &context_id,
         &child_id,
+        "research",
+        &serde_json::json!({}),
         &open_meta,
     )
     .await

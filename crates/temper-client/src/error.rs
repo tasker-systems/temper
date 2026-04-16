@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use temper_core::error::CliAccessDetails;
+
 #[derive(Debug, thiserror::Error)]
 pub enum ClientError {
     #[error("not authenticated — run `temper auth login`")]
@@ -12,14 +14,7 @@ pub enum ClientError {
     Forbidden,
 
     #[error("system access required")]
-    SystemAccessRequired {
-        email: Option<String>,
-        display_name: Option<String>,
-        access_mode: String,
-        join_request_status: Option<String>,
-        request_url: Option<String>,
-        cli_command: Option<String>,
-    },
+    SystemAccessRequired(Box<CliAccessDetails>),
 
     #[error("{resource} not found")]
     NotFound { resource: String },
