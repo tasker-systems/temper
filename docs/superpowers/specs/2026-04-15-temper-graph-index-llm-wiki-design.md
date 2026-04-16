@@ -138,7 +138,7 @@ Iteration 1 ships `temper index` and `temper graph index` without `--local-only`
 - `src/commands/graph.rs` — add `Index` variant to `GraphAction` enum
 - `src/actions/index_build.rs` — new action for HNSW construction
 - `src/actions/graph_index.rs` — new action orchestrating the 4-phase pipeline
-- TF-IDF seed extraction lives in a new module — `src/actions/graph_index/seeds.rs` or similar
+- TF-IDF seed extraction lives in a new module — `src/actions/graph_index/seeds.rs` or similar — using `tantivy` for tokenization, stemming, and document-frequency scoring
 
 **Extended crate:** `temper-core`
 - `config.rs` grows a `LlmConfig` section
@@ -382,7 +382,7 @@ Three layers:
 
 **Q1 (resolved): HNSW crate is `hnsw_rs`.** This matches what the project used in its pre-temper-cloud history (confirmed in git archaeology). Revisit only if we hit a concrete blocker during implementation.
 
-**Q2: TF-IDF implementation — ship-built vs crate.** Lightweight enough to write in-tree (tokenize, stem via `rust-stemmers`, count, normalize), but `tantivy` already has TF-IDF primitives if we want them. Crate adds weight; in-tree adds maintenance. Lean in-tree unless tantivy is already a direct dep elsewhere.
+**Q2 (resolved): use `tantivy` for TF-IDF.** Neither `tantivy` nor `rust-stemmers` are currently direct deps in the workspace. Adopting `tantivy` adds build weight but removes the ongoing maintenance burden of an in-tree tokenize/stem/count/normalize implementation (including Unicode edge cases, stopword lists, and language handling that would otherwise grow over time). Revisit only if `tantivy`'s surface area or build time becomes a concrete problem.
 
 **Q3: Chunking for embeddings.** `temper-ingest` already embeds chunks for search. Does `temper index` use the same chunking strategy or embed full documents? For clustering purposes, document-level embeddings may be too coarse for long research docs. Initial guess: reuse existing chunking, treat the most representative chunk per document as the "document embedding" for cluster formation. Verify during implementation.
 
