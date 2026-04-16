@@ -1,10 +1,10 @@
 //! temper-llm unit tests
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::sync::Arc;
 
-use temper_llm::Schema as JsonSchema;
+use temper_llm::Schema;
 use temper_llm::{
     Agent, AgentError, AgentOutcome, MockLlmProvider, MockScenario, Tool, ToolHandler,
 };
@@ -93,7 +93,7 @@ async fn two_turn_tool_dispatch() {
     let tool = Tool::new(
         "echo".to_string(),
         "A test tool".to_string(),
-        JsonSchema::Object(Default::default()),
+        Schema::from(Map::new()),
         EchoHandler,
     );
 
@@ -123,7 +123,7 @@ async fn max_turns_exhaustion() {
     let tool = Tool::new(
         "noop".to_string(),
         "A no-op tool".to_string(),
-        JsonSchema::Object(Default::default()),
+        Schema::from(Map::new()),
         EchoHandler,
     );
 
@@ -168,7 +168,7 @@ async fn tool_handler_error_surfaces() {
     let tool = Tool::new(
         "error_tool".to_string(),
         "A tool that errors".to_string(),
-        JsonSchema::Object(Default::default()),
+        Schema::from(Map::new()),
         ErrorHandler,
     );
 
@@ -195,7 +195,7 @@ async fn state_threading() {
     let tool_a = Tool::new(
         "append_a".to_string(),
         "Appends 'a'".to_string(),
-        JsonSchema::Object(Default::default()),
+        Schema::from(Map::new()),
         StringAppender {
             value: "a".to_string(),
         },

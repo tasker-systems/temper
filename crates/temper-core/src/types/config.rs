@@ -159,6 +159,75 @@ impl Default for AuthConfig {
     }
 }
 
+/// LLM provider type — used to route to the correct backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProviderType {
+    #[default]
+    Ollama,
+    Claude,
+    OpenAiCompatible,
+}
+
+/// LLM configuration section.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct LlmConfig {
+    /// Which LLM backend to use.
+    #[serde(default)]
+    pub provider: LlmProviderType,
+    /// Base URL for the LLM API (e.g. `http://localhost:11434` for ollama).
+    /// Defaults to `http://localhost:11434` for ollama-compatible providers.
+    #[serde(default)]
+    pub url: String,
+    /// Model identifier (e.g. `llama3.2:latest`, `claude-sonnet-4-5`).
+    /// Defaults vary by provider.
+    #[serde(default)]
+    pub model: String,
+    /// API key — read from `TEMPER_LLM_API_KEY` env var at call site when None.
+    /// Only set this field if you want the key in the config file (not recommended).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            provider: LlmProviderType::default(),
+            url: "http://localhost:11434".to_string(),
+            model: "llama3.2:latest".to_string(),
+            api_key: None,
+        }
+    }
+}
+
+impl LlmConfig {
+    /// Load LLM config with env-var precedence over defaults.
+    ///
+    /// Precedence (highest to lowest):
+    /// 1. `TEMPER_LLM_*` env vars override everything
+    /// 2. Config file values
+    /// 3. Provider-specific defaults (ollama: localhost:11434 / llama3.2:latest)
+    ///
+    /// This should be called **after** loading the config file, so that
+    /// `file_config` contains the parsed file values and env vars can override them.
+    pub fn load(file_config: &LlmConfig) -> Self {
+        Self {
+            provider: std::env::var("TEMPER_LLM_PROVIDER")
+                .ok()
+                .and_then(|s| serde_json::from_str::<LlmProviderType>(&format!("\"{s}\"")).ok())
+                .unwrap_or(file_config.provider),
+            url: std::env::var("TEMPER_LLM_URL")
+                .ok()
+                .unwrap_or_else(|| file_config.url.clone()),
+            model: std::env::var("TEMPER_LLM_MODEL")
+                .ok()
+                .unwrap_or_else(|| file_config.model.clone()),
+            api_key: std::env::var("TEMPER_LLM_API_KEY").ok(),
+        }
+    }
+}
+
 /// Cloud API section of the configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
@@ -199,6 +268,9 @@ pub struct TemperConfig {
     #[serde(default)]
     #[validate(nested)]
     pub cloud: CloudSection,
+    #[serde(default)]
+    #[validate(nested)]
+    pub llm: LlmConfig,
 }
 
 impl Default for TemperConfig {
@@ -211,6 +283,7 @@ impl Default for TemperConfig {
             skill: Default::default(),
             auth: Default::default(),
             cloud: Default::default(),
+            llm: Default::default(),
         }
     }
 }

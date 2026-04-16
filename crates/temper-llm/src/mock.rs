@@ -58,7 +58,7 @@ impl LlmProvider for MockLlmProvider {
         _system: &str,
         _messages: &[Message],
         _tools: &[ToolSchema],
-        _response_format: Option<&schemars::schema::Schema>,
+        _response_format: Option<&schemars::Schema>,
     ) -> Result<LlmResponse, LlmError> {
         use MockScenario::*;
         let count = self.call_count.fetch_add(1, Ordering::SeqCst) + 1;

@@ -7,8 +7,11 @@
 mod agent;
 mod mock;
 mod provider;
+pub mod providers;
 
 pub use agent::{Agent, AgentError, AgentOutcome, Tool, ToolHandler};
 pub use mock::{MockLlmProvider, MockScenario};
 pub use provider::{JsonSchema, LlmError, LlmProvider, LlmResponse, Message, ToolCall, ToolSchema};
-pub use schemars::schema::Schema;
+pub use providers::claude::ClaudeProvider;
+pub use providers::openai_compatible::OpenAiCompatibleProvider;
+pub use schemars::Schema;

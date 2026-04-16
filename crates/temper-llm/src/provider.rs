@@ -5,12 +5,14 @@ use async_trait::async_trait;
 pub use schemars::JsonSchema;
 
 /// Message sent to the LLM.
+#[derive(Debug)]
 pub struct Message {
     pub role: String,
     pub content: String,
 }
 
 /// Tool call returned when the model requests a tool invocation.
+#[derive(Debug)]
 pub struct ToolCall {
     pub id: String,
     pub name: String,
@@ -18,10 +20,11 @@ pub struct ToolCall {
 }
 
 /// Schema for a tool the model may invoke.
+#[derive(Debug)]
 pub struct ToolSchema {
     pub name: String,
     pub description: String,
-    pub input_schema: schemars::schema::Schema,
+    pub input_schema: schemars::Schema,
 }
 
 /// LLM error variants.
@@ -44,6 +47,7 @@ impl From<reqwest::Error> for LlmError {
 }
 
 /// Successful LLM response.
+#[derive(Debug)]
 pub enum LlmResponse {
     /// Model produced a final structured response.
     Final { content: serde_json::Value },
@@ -59,7 +63,7 @@ pub trait LlmProvider: Send + Sync {
         system: &str,
         messages: &[Message],
         tools: &[ToolSchema],
-        response_format: Option<&schemars::schema::Schema>,
+        response_format: Option<&schemars::Schema>,
     ) -> Result<LlmResponse, LlmError>;
 
     /// Canonical name of this provider (e.g. "anthropic", "openai").

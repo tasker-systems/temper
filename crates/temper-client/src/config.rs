@@ -259,6 +259,7 @@ scopes        = ["openid"]
                 providers: Vec::new(),
             },
             cloud: CloudSection::default(),
+            llm: Default::default(),
         };
         let err = oauth_config(&config).unwrap_err();
         let msg = err.to_string();
@@ -282,6 +283,7 @@ scopes        = ["openid"]
                 providers: Vec::new(),
             },
             cloud: CloudSection::default(),
+            llm: Default::default(),
         };
         let err = oauth_config(&config).unwrap_err();
         let msg = err.to_string();

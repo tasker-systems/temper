@@ -39,7 +39,7 @@ pub trait ToolHandler<S>: Send + Sync {
 pub struct Tool<S> {
     pub name: String,
     pub description: String,
-    pub input_schema: schemars::schema::Schema,
+    pub input_schema: schemars::Schema,
     pub handler: Box<dyn ToolHandler<S>>,
 }
 
@@ -47,7 +47,7 @@ impl<S> Tool<S> {
     pub fn new(
         name: String,
         description: String,
-        input_schema: impl Into<schemars::schema::Schema>,
+        input_schema: impl Into<schemars::Schema>,
         handler: impl ToolHandler<S> + 'static,
     ) -> Self {
         Self {
