@@ -37,7 +37,9 @@ pub struct GraphBuildParams {
 #[derive(Debug, Default, Clone)]
 pub struct GraphBuildReport {
     pub files_walked: usize,
-    pub references_found: usize,
+    /// Files skipped during walk because their frontmatter failed to parse.
+    pub skipped_files: usize,
+    pub references_resolved: usize,
     pub files_modified: usize,
     pub references_added: usize,
     pub already_present: usize,
@@ -97,16 +99,26 @@ pub(crate) struct DiscoveredFile {
     pub(crate) frontmatter: temper_core::frontmatter::Frontmatter,
 }
 
+/// Result of walking the vault: the resolution maps, the filtered file
+/// list for Pass 2 to scan, and the count of files skipped because their
+/// frontmatter failed to parse.
+pub(crate) struct VaultDiscovery {
+    pub(crate) slugs: SlugMap,
+    pub(crate) uuids: UuidMap,
+    pub(crate) files: Vec<DiscoveredFile>,
+    pub(crate) skipped: usize,
+}
+
 /// Walk the vault and build per-owner slug/UUID resolution maps.
 ///
 /// `context_filter` restricts which files appear in the returned
-/// `DiscoveredFile` list (Pass 2 only scans filtered files), but the
+/// `files` list (Pass 2 only scans filtered files), but the
 /// maps always include all same-owner files across all contexts so
 /// cross-context same-owner references can still resolve.
 pub(crate) fn discover_vault(
     config: &Config,
     context_filter: Option<&str>,
-) -> Result<(SlugMap, UuidMap, Vec<DiscoveredFile>)> {
+) -> Result<VaultDiscovery> {
     use std::fs;
     use temper_core::frontmatter::Frontmatter;
     use temper_core::vault::Vault;
@@ -114,12 +126,13 @@ pub(crate) fn discover_vault(
     let mut slugs = SlugMap::default();
     let mut uuids = UuidMap::default();
     let mut filtered_files: Vec<DiscoveredFile> = Vec::new();
+    let mut skipped: usize = 0;
 
     let vault_layout = Vault::new(&config.vault_root);
 
     for ctx in &config.contexts {
         let owner = config.owner_for_context(ctx);
-        let include_in_scan = context_filter.map_or(true, |f| f == ctx);
+        let include_in_scan = context_filter.is_none_or(|f| f == ctx);
 
         for doc_type in ENTITY_DOC_TYPES {
             let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
@@ -153,6 +166,7 @@ pub(crate) fn discover_vault(
                             error = %e,
                             "unparseable frontmatter, skipping"
                         );
+                        skipped += 1;
                         continue;
                     }
                 };
@@ -195,7 +209,12 @@ pub(crate) fn discover_vault(
 
     filtered_files.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
 
-    Ok((slugs, uuids, filtered_files))
+    Ok(VaultDiscovery {
+        slugs,
+        uuids,
+        files: filtered_files,
+        skipped,
+    })
 }
 
 /// Scan a markdown body for raw reference candidates.
@@ -525,12 +544,17 @@ pub(crate) fn write_back_references(file: &std::path::Path, merged: &[String]) -
 /// references into open_meta, writes files back.
 pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport> {
     // Pass 1: walk + maps
-    let (slugs, uuids, files) = discover_vault(config, params.context_filter.as_deref())?;
+    let VaultDiscovery {
+        slugs,
+        uuids,
+        files,
+        skipped: skipped_files,
+    } = discover_vault(config, params.context_filter.as_deref())?;
     let files_walked = files.len();
 
     // Pass 2: scan + resolve, accumulating per-file discovered refs
     let mut discovered: HashMap<PathBuf, Vec<String>> = HashMap::new();
-    let mut references_found = 0usize;
+    let mut references_resolved = 0usize;
 
     for file in &files {
         let raw_refs = scan_body(file.frontmatter.body());
@@ -538,7 +562,7 @@ pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport
             if let Some(resolved) =
                 resolve_ref(raw, &file.owner, &file.context, &file.path, &slugs, &uuids)
             {
-                references_found += 1;
+                references_resolved += 1;
                 discovered
                     .entry(file.path.clone())
                     .or_default()
@@ -550,7 +574,8 @@ pub fn run(config: &Config, params: GraphBuildParams) -> Result<GraphBuildReport
     // Pass 3: merge + write back (or simulate for dry-run)
     let mut report = GraphBuildReport {
         files_walked,
-        references_found,
+        skipped_files,
+        references_resolved,
         ..Default::default()
     };
 
@@ -808,14 +833,15 @@ mod tests {
         write_vault_file(&tmp, "@me", "tasker", "task", "beta", None, "body of beta");
         let config = fixture_config(&tmp, &["temper", "tasker"]);
 
-        let (slugs, uuids, files) = discover_vault(&config, None).unwrap();
+        let discovery = discover_vault(&config, None).unwrap();
 
-        assert_eq!(files.len(), 2, "expected 2 files in walk");
-        assert!(slugs.resolve("@me", "temper", "alpha").is_some());
-        assert!(slugs.resolve("@me", "tasker", "beta").is_some());
+        assert_eq!(discovery.files.len(), 2, "expected 2 files in walk");
+        assert_eq!(discovery.skipped, 0);
+        assert!(discovery.slugs.resolve("@me", "temper", "alpha").is_some());
+        assert!(discovery.slugs.resolve("@me", "tasker", "beta").is_some());
 
         let alpha_uuid = uuid("019d1d24-2000-7379-8f26-ae4ae87bc5c6");
-        assert!(uuids.resolve("@me", alpha_uuid).is_some());
+        assert!(discovery.uuids.resolve("@me", alpha_uuid).is_some());
     }
 
     #[test]
@@ -833,11 +859,12 @@ mod tests {
         let result = discover_vault(&config, None);
 
         assert!(result.is_ok(), "unparseable files should not fail the walk");
-        let (slugs, _uuids, files) = result.unwrap();
+        let discovery = result.unwrap();
 
-        assert_eq!(files.len(), 1);
-        assert!(slugs.resolve("@me", "temper", "good").is_some());
-        assert!(slugs.resolve("@me", "temper", "bad").is_none());
+        assert_eq!(discovery.files.len(), 1);
+        assert_eq!(discovery.skipped, 1, "bad.md should be counted as skipped");
+        assert!(discovery.slugs.resolve("@me", "temper", "good").is_some());
+        assert!(discovery.slugs.resolve("@me", "temper", "bad").is_none());
     }
 
     #[test]
@@ -847,10 +874,14 @@ mod tests {
         write_vault_file(&tmp, "@me", "tasker", "task", "in-tasker", None, "");
         let config = fixture_config(&tmp, &["temper", "tasker"]);
 
-        let (_slugs, _uuids, files) = discover_vault(&config, Some("temper")).unwrap();
+        let discovery = discover_vault(&config, Some("temper")).unwrap();
 
-        assert_eq!(files.len(), 1, "context filter should restrict walk");
-        assert!(files[0].path.ends_with("in-temper.md"));
+        assert_eq!(
+            discovery.files.len(),
+            1,
+            "context filter should restrict walk"
+        );
+        assert!(discovery.files[0].path.ends_with("in-temper.md"));
     }
 
     // ── Pass 2: body scanning ───────────────────────────────────────

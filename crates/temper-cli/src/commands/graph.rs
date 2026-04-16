@@ -32,9 +32,15 @@ fn render_report(report: &graph_build::GraphBuildReport, dry_run: bool, verbose:
         "temper graph build — {} files walked",
         report.files_walked
     ));
+    if report.skipped_files > 0 {
+        output::plain(format!(
+            "  Skipped (unparseable frontmatter): {}",
+            report.skipped_files
+        ));
+    }
     output::plain(format!(
-        "  Pass 2 (scanning):    {} references found",
-        report.references_found
+        "  Pass 2 (scanning):    {} references resolved",
+        report.references_resolved
     ));
     output::plain("  Pass 3 (merge):");
     output::plain(format!("    Files modified:     {}", report.files_modified));
