@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-17
 **Context:** temper
-**Goal:** temper-maintenance
+**Goal:** llm-wiki
 **Related tasks:** `2026-04-12-knowledge-graph-ui-d3-js-visualization` (this is a narrowed MVP cut)
 **Related research:** `2026-04-13-r11-knowledge-graph-visualization-design`, `2026-04-01-r9-sveltekit-ui-design`
 **Status:** Design
@@ -30,6 +30,7 @@ This is **not** the full R11 design. R11's two-mode toggle, cluster-by-doctype h
 - New types: `GraphNode`, `GraphEdge`, `SubgraphResponse` in `temper-core` with `ts-rs` derives
 - Sidebar nav link added to `ContextNavGroup.svelte`
 - vitest added to `packages/temper-ui` as a baseline
+- Extensions to `scripts/seed-dev-data.sql` + new `scripts/seed-graph-fixtures.sql` for wide-and-deep integration-test coverage
 - Interactions: zoom, pan, drag, click-to-navigate, hover tooltip
 
 ### Out (follow-up branch)
@@ -380,13 +381,47 @@ No rate limiting, caching, or pagination in v1 — endpoint is cheap enough that
 ### Rust
 
 - **`graph_service.rs` integration test** under `#[cfg(feature = "test-db")]`:
-  - Seeds a fixture: 2 concepts × 3 members each, a few tier-3 nodes linked via `depends_on`/`relates_to`, and one cross-owner resource in the same context
+  - Loads the graph test fixture (see "Test fixtures" below) before each test via `BEGIN; ... ROLLBACK;` transaction wrapping for isolation
   - Calls `aggregator_subgraph` with `aggregator_types: &[DocType::Concept], depth: 2`
-  - Asserts: all 2 concepts present, all 6 direct members present, tier-3 nodes reachable within 2 hops present, tier-3 nodes *not* reachable within 2 hops absent, cross-owner resource absent, `edge_count` accurate for each node
+  - Separate test cases cover each assertion target (see fixture scenarios below): every-concept-returned, all-direct-members-present, tier-3-reachable-included, tier-3-unreachable-excluded, cross-owner-excluded, singleton-concept-returned-as-isolated-node, diamond-member-appears-once, `edge_count` correct, empty-context-returns-empty
 - **Handler test** in new `crates/temper-api/tests/graph_test.rs`:
   - 200 + valid `SubgraphResponse` shape for authenticated request
   - 401 for unauthenticated request
 - **Depth-clamp unit test** — calling with `depth: 100` clamps to 10
+
+### Test fixtures
+
+Sql-function service logic is easy to under-test without wide-and-deep fixture data. To fix that, this work extends `scripts/seed-dev-data.sql` and introduces a companion `scripts/seed-graph-fixtures.sql`:
+
+**Extensions to `seed-dev-data.sql`** (benefit both UI dev and test confidence):
+- Add edges between the existing 3 concepts and their related tasks/research/sessions — currently the seed creates resources with zero relationships, so the graph route would render three floating concepts. Adding 2–3 member edges per concept gives the dev UI a realistic render and proves the end-to-end path locally.
+- Add a handful of inter-member edges (`research depends_on research`, `task preceded_by task`) so tier-3 expansion has something to expand to.
+
+**New `scripts/seed-graph-fixtures.sql`** — comprehensive test fixtures, invoked by Rust integration tests via `sqlx::query_file!()` or similar. Parameterized by a profile-ID GUC (same pattern as `seed-dev-data.sql`'s `seed.email`) so tests can seed into a scratch profile without colliding with dev data. Scenarios covered:
+
+| Scenario | Setup | What it proves |
+|----------|-------|----------------|
+| **Happy path** | 3 concepts × 4 members each | Base depth-2 BFS, `edge_count` correctness |
+| **Tier-3 reachable** | Member → member edge (`depends_on`) | Depth-2 traversal actually expands beyond direct members |
+| **Tier-3 unreachable** | Node 4 hops away | Depth cutoff works |
+| **Singleton concept** | Concept with no member edges | Isolated node still returned |
+| **Diamond overlap** | Two concepts sharing a member | Member appears exactly once in nodes list |
+| **Cross-owner leak check** | Second profile owns a concept in the same context | Caller's query does not return the other owner's concept |
+| **Cross-owner edge attempt** | Edge between caller's concept and other owner's resource | Edge is filtered because target fails `resources_visible_to` join |
+| **Deleted resource** | Concept with `deleted_at` set | Excluded from results |
+| **Empty context** | Context with zero concepts | Returns `{ nodes: [], edges: [] }` |
+| **Multi-context isolation** | Concepts in two contexts | Query for context A returns only A's concepts |
+
+Test harness pattern (illustrative):
+
+```rust
+#[sqlx::test(fixtures(path = "../../scripts", scripts("seed-graph-fixtures.sql")))]
+async fn happy_path_returns_all_concepts_and_members(pool: PgPool) { ... }
+```
+
+If `sqlx::test`'s fixture loader doesn't fit (e.g., needs GUC setup), fall back to explicit `sqlx::query_file_unchecked!` with transaction wrapping. The plan will pick the mechanism that matches temper-api's existing test patterns.
+
+**Fixture hygiene:** the graph-fixtures SQL uses the same `ON CONFLICT` idempotency pattern as `seed-dev-data.sql`, uses well-known UUIDs for the scratch profile(s)/context/resources so assertions can reference them by constant, and drops its helper functions at the end.
 
 ### TypeScript (vitest — new to temper-ui)
 
