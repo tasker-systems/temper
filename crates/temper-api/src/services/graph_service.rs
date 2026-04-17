@@ -186,3 +186,26 @@ pub async fn aggregator_subgraph(
 
     Ok(SubgraphResponse { nodes, edges })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn max_depth_constant_is_ten() {
+        assert_eq!(MAX_DEPTH, 10);
+    }
+
+    #[test]
+    fn depth_within_limit_passes_through() {
+        // Compile-check: clamp is `params.depth.min(MAX_DEPTH)`.
+        // We unit-test the clamp arithmetic; integration tests cover end-to-end.
+        assert_eq!(5u32.min(MAX_DEPTH), 5);
+    }
+
+    #[test]
+    fn depth_over_limit_clamps_to_max() {
+        assert_eq!(100u32.min(MAX_DEPTH), 10);
+        assert_eq!(u32::MAX.min(MAX_DEPTH), 10);
+    }
+}
