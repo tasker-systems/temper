@@ -49,6 +49,13 @@ pub fn load_manifest(temper_dir: &Path) -> Option<IndexManifestView> {
 ///    `cluster_max_members`.
 /// 4. Emit a `Cluster` iff ≥ `concept_min_members` members remain.
 ///
+/// Before forming each cluster, drops seeds whose phrase embedding is within
+/// `seed_phrase_similarity_threshold` cosine of an already-accepted
+/// higher-scored seed's embedding. This catches topical-sibling seeds
+/// (e.g., "ui" and "sveltekit foundat") whose clusters diverge in
+/// membership — Jaccard dedup would miss them even though they're about
+/// the same topic.
+///
 /// After forming all clusters, drops duplicates whose `member_ids` overlap
 /// any earlier-accepted cluster by more than `cluster_overlap_threshold`
 /// (Jaccard). Because seeds arrive in descending TF-IDF score, the
@@ -59,11 +66,20 @@ pub fn form_clusters(
     config: &GraphIndexConfig,
 ) -> Vec<Cluster> {
     let mut clusters: Vec<Cluster> = Vec::new();
+    let mut accepted_seed_embeddings: Vec<Vec<f32>> = Vec::new();
 
     for seed in seeds {
         let Ok(seed_embedding) = temper_ingest::embed::embed_text(&seed.phrase) else {
             continue;
         };
+
+        if should_skip_seed_by_similarity(
+            &seed_embedding,
+            &accepted_seed_embeddings,
+            config.seed_phrase_similarity_threshold,
+        ) {
+            continue;
+        }
 
         let mut scored: Vec<(&ManifestFileView, f32)> = manifest
             .files
@@ -86,9 +102,23 @@ pub fn form_clusters(
             .collect();
 
         clusters.push(Cluster::new(seed.clone(), member_ids, member_embeddings));
+        accepted_seed_embeddings.push(seed_embedding);
     }
 
     dedupe_overlapping_clusters(clusters, config.cluster_overlap_threshold)
+}
+
+/// Returns `true` if `candidate`'s cosine similarity to any embedding in
+/// `accepted` exceeds `threshold`. Used by [`form_clusters`] to drop seed
+/// phrases that are semantic near-duplicates of an already-accepted seed.
+fn should_skip_seed_by_similarity(
+    candidate: &[f32],
+    accepted: &[Vec<f32>],
+    threshold: f32,
+) -> bool {
+    accepted
+        .iter()
+        .any(|prev| cosine_similarity(candidate, prev) > threshold)
 }
 
 /// Drop clusters whose `member_ids` overlap an earlier-accepted cluster by
@@ -187,5 +217,49 @@ mod tests {
         let deduped = dedupe_overlapping_clusters(clusters, 0.8);
         assert_eq!(deduped.len(), 1);
         assert_eq!(deduped[0].seed.phrase, "first");
+    }
+
+    #[test]
+    fn test_should_skip_seed_empty_accepted_never_skips() {
+        // No accepted embeddings yet → first seed always runs.
+        let candidate = vec![1.0, 0.0, 0.0];
+        assert!(!should_skip_seed_by_similarity(&candidate, &[], 0.85));
+    }
+
+    #[test]
+    fn test_should_skip_seed_orthogonal_not_skipped() {
+        // Orthogonal vectors have cosine 0.0, which is below any positive
+        // threshold → never skipped.
+        let accepted = vec![vec![1.0, 0.0, 0.0]];
+        let candidate = vec![0.0, 1.0, 0.0];
+        assert!(!should_skip_seed_by_similarity(&candidate, &accepted, 0.85));
+    }
+
+    #[test]
+    fn test_should_skip_seed_identical_is_skipped() {
+        // Identical vectors have cosine 1.0, which is strictly greater than
+        // 0.85 → skipped.
+        let accepted = vec![vec![1.0, 0.0, 0.0]];
+        let candidate = vec![1.0, 0.0, 0.0];
+        assert!(should_skip_seed_by_similarity(&candidate, &accepted, 0.85));
+    }
+
+    #[test]
+    fn test_should_skip_seed_threshold_boundary() {
+        // Two vectors whose cosine similarity is ~0.9:
+        //   a = (1, 0), b = (cos θ, sin θ) with cos θ ≈ 0.9 (θ ≈ 25.84°).
+        // sin θ ≈ sqrt(1 - 0.9^2) ≈ 0.43589.
+        let accepted = vec![vec![1.0_f32, 0.0]];
+        let candidate = vec![0.9_f32, 0.43589];
+        let sim = cosine_similarity(&candidate, &accepted[0]);
+        assert!(
+            (0.88..0.92).contains(&sim),
+            "expected cosine ≈ 0.9, got {sim}"
+        );
+
+        // At threshold 0.85: sim > 0.85 → skipped.
+        assert!(should_skip_seed_by_similarity(&candidate, &accepted, 0.85));
+        // At threshold 0.95: sim < 0.95 → not skipped.
+        assert!(!should_skip_seed_by_similarity(&candidate, &accepted, 0.95));
     }
 }

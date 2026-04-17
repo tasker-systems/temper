@@ -283,6 +283,14 @@ pub struct GraphIndexConfig {
     /// Default: 0.8 (80% overlap).
     #[serde(default = "default_cluster_overlap_threshold")]
     pub cluster_overlap_threshold: f32,
+    /// Drop a seed whose phrase embedding is within this cosine threshold of
+    /// an already-accepted higher-scored seed's embedding. Catches topical
+    /// siblings (e.g., "ui" and "sveltekit foundat") that Jaccard cluster
+    /// dedup misses because their clusters diverge in membership even when
+    /// they're about the same topic.
+    /// Default: 0.85.
+    #[serde(default = "default_seed_phrase_similarity_threshold")]
+    pub seed_phrase_similarity_threshold: f32,
 }
 
 fn default_seed_min_doc_frequency() -> usize {
@@ -321,6 +329,9 @@ fn default_seed_max_doc_frequency_ratio() -> f32 {
 fn default_cluster_overlap_threshold() -> f32 {
     0.8
 }
+fn default_seed_phrase_similarity_threshold() -> f32 {
+    0.85
+}
 
 impl Default for GraphIndexConfig {
     fn default() -> Self {
@@ -337,6 +348,7 @@ impl Default for GraphIndexConfig {
             seed_body_weight: default_seed_body_weight(),
             seed_max_doc_frequency_ratio: default_seed_max_doc_frequency_ratio(),
             cluster_overlap_threshold: default_cluster_overlap_threshold(),
+            seed_phrase_similarity_threshold: default_seed_phrase_similarity_threshold(),
         }
     }
 }
