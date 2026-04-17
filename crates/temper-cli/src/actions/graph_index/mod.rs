@@ -46,6 +46,21 @@ pub struct GraphIndexReport {
     pub errors: usize,
     /// Only populated when [`GraphIndexParams::verbose`] is true.
     pub failed: Vec<String>,
+    /// Seed phrases in descending score order. Only populated when
+    /// [`GraphIndexParams::verbose`] is true.
+    pub seeds_preview: Vec<String>,
+    /// Cluster summaries in formation order. Only populated when
+    /// [`GraphIndexParams::verbose`] is true.
+    pub clusters_preview: Vec<ClusterSummary>,
+}
+
+/// A compact, user-facing summary of a single cluster — just enough to inspect
+/// what a seed picked up without echoing the full embedding vectors.
+#[derive(Debug, Clone)]
+pub struct ClusterSummary {
+    pub seed: String,
+    pub member_count: usize,
+    pub top_members: Vec<String>,
 }
 
 /// Orchestrate the full pipeline: seeds → clusters → judgment → materialization.
@@ -107,6 +122,18 @@ pub fn run_with_provider(
         clusters_formed: clusters.len(),
         ..Default::default()
     };
+
+    if params.verbose {
+        report.seeds_preview = seeds.iter().map(|s| s.phrase.clone()).collect();
+        report.clusters_preview = clusters
+            .iter()
+            .map(|c| ClusterSummary {
+                seed: c.seed.phrase.clone(),
+                member_count: c.member_ids.len(),
+                top_members: c.member_ids.iter().take(5).cloned().collect(),
+            })
+            .collect();
+    }
 
     if params.dry_run {
         return Ok(report);

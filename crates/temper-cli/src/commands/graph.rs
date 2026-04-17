@@ -103,11 +103,30 @@ fn render_graph_index_report(report: &graph_index::GraphIndexReport, dry_run: bo
         output::plain(format!("  Errors:             {}", report.errors));
     }
 
-    if verbose && !report.failed.is_empty() {
-        output::blank();
-        output::plain("Failures:");
-        for f in &report.failed {
-            output::plain(format!("  - {f}"));
+    if verbose {
+        if !report.seeds_preview.is_empty() {
+            output::blank();
+            output::plain(format!("Seeds ({}):", report.seeds_preview.len()));
+            for s in &report.seeds_preview {
+                output::plain(format!("  - {s}"));
+            }
+        }
+        if !report.clusters_preview.is_empty() {
+            output::blank();
+            output::plain(format!("Clusters ({}):", report.clusters_preview.len()));
+            for c in &report.clusters_preview {
+                output::plain(format!("  \"{}\"  ({} members)", c.seed, c.member_count));
+                for m in &c.top_members {
+                    output::plain(format!("    - {m}"));
+                }
+            }
+        }
+        if !report.failed.is_empty() {
+            output::blank();
+            output::plain("Failures:");
+            for f in &report.failed {
+                output::plain(format!("  - {f}"));
+            }
         }
     }
 }
