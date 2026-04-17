@@ -1,15 +1,26 @@
-//! TF-IDF seed phrase extraction.
+//! Field-weighted TF-IDF seed phrase extraction.
 //!
-//! Walks the vault (via `discover_vault` from `index_build`), tokenizes markdown
-//! bodies, computes TF-IDF scores, and returns the top N candidate seed phrases.
+//! Walks the vault (via `discover_vault` from `index_build`), parses each
+//! markdown file into four structural fields (frontmatter `title`, H1 heading
+//! text, H2/H3 heading text, body prose), tokenizes each field independently,
+//! and computes TF-IDF over a weighted token-frequency map. Higher-structure
+//! fields (title, H1) amplify their terms' counts before TF/IDF math runs.
+//!
+//! ISO date tokens (`YYYY-MM-DD`, `YYYY/MM/DD`, bare `YYYY`) are stripped
+//! from every field before tokenization so that slug-style titles like
+//! `2026-04-16-wire-and-fix-...` do not boost year/month/day numerics.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use regex::Regex;
 use tantivy::tokenizer::{
     Language, LowerCaser, SimpleTokenizer, Stemmer, StopWordFilter, TextAnalyzer,
 };
+use temper_core::frontmatter::Frontmatter;
 use temper_core::types::config::GraphIndexConfig;
 use temper_llm::types::SeedPhrase;
 
@@ -26,7 +37,20 @@ struct PhraseAggregate {
     doc_scores: Vec<(String, f32)>,
 }
 
-/// Extract seed phrases from the vault using TF-IDF.
+/// Structural slices of a vault markdown file used for field-weighted TF-IDF.
+///
+/// Each field holds the raw text that should be tokenized independently and
+/// weighted before merging into the per-doc term-frequency map. Heading text
+/// is excluded from `body` so it is not double-counted.
+#[derive(Debug, Default, Clone)]
+struct DocFields {
+    title: String,
+    h1: String,
+    h2_h3: String,
+    body: String,
+}
+
+/// Extract seed phrases from the vault using field-weighted TF-IDF.
 ///
 /// Cross-document frequency filter: phrase must appear in ≥ `seed_min_doc_frequency`
 /// docs. The top `seed_top_n` phrases (by aggregate TF-IDF) are returned.
@@ -37,13 +61,13 @@ pub fn extract_seeds(
 ) -> Vec<SeedPhrase> {
     let discovered = discover_vault_files(vault_root, context_filter);
 
-    // Collect documents: rel_path -> body text
-    let mut documents: Vec<(String, String)> = Vec::new();
+    // Collect documents: rel_path -> parsed fields
+    let mut documents: Vec<(String, DocFields)> = Vec::new();
     for (path, rel_path) in discovered {
         if let Ok(raw) = fs::read_to_string(&path) {
-            let body = strip_frontmatter(&raw);
-            if !body.trim().is_empty() {
-                documents.push((rel_path, body));
+            let fields = parse_doc_fields(&raw);
+            if !fields_empty(&fields) {
+                documents.push((rel_path, fields));
             }
         }
     }
@@ -59,59 +83,74 @@ pub fn extract_seeds(
     // mutable reference rather than cloned per call.
     let mut analyzer = build_analyzer();
 
-    // Build term frequency per document and document frequency per term
-    let mut doc_term_freqs: Vec<HashMap<String, usize>> = Vec::new();
+    // Build weighted term frequency per document and document frequency per term.
+    // `doc_weighted_tf[i][term] = weighted count of term across all fields of doc i`
+    // `doc_weighted_len[i] = sum over fields of (field_weight * field_token_count)`
+    // `term_doc_freq[term] = number of docs in which term appears in ANY field`
+    let mut doc_weighted_tf: Vec<HashMap<String, f32>> = Vec::new();
+    let mut doc_weighted_len: Vec<f32> = Vec::new();
     let mut term_doc_freq: HashMap<String, usize> = HashMap::new();
 
-    for (_rel_path, body) in &documents {
-        let tokens = tokenize(&mut analyzer, body);
-        let mut freq: HashMap<String, usize> = HashMap::new();
-        for token in tokens {
-            *freq.entry(token).or_insert(0) += 1;
+    for (_rel_path, fields) in &documents {
+        let title_tokens = tokenize(&mut analyzer, &strip_dates(&fields.title));
+        let h1_tokens = tokenize(&mut analyzer, &strip_dates(&fields.h1));
+        let h23_tokens = tokenize(&mut analyzer, &strip_dates(&fields.h2_h3));
+        let body_tokens = tokenize(&mut analyzer, &strip_dates(&fields.body));
+
+        let field_inputs: [(&[String], f32); 4] = [
+            (&title_tokens, config.seed_title_weight),
+            (&h1_tokens, config.seed_h1_weight),
+            (&h23_tokens, config.seed_h2_h3_weight),
+            (&body_tokens, config.seed_body_weight),
+        ];
+
+        let mut weighted_tf: HashMap<String, f32> = HashMap::new();
+        let mut weighted_len: f32 = 0.0;
+
+        for (tokens, weight) in field_inputs {
+            if tokens.is_empty() || weight == 0.0 {
+                continue;
+            }
+            // Unigrams
+            for tok in tokens {
+                *weighted_tf.entry(tok.clone()).or_insert(0.0) += weight;
+                weighted_len += weight;
+            }
+            // Bigrams (stay within a single field — no cross-field bigrams)
+            for pair in tokens.windows(2) {
+                let bigram = format!("{} {}", pair[0], pair[1]);
+                *weighted_tf.entry(bigram).or_insert(0.0) += weight;
+                weighted_len += weight;
+            }
         }
-        for term in freq.keys() {
+
+        // Document frequency: count this doc once per distinct term across all fields.
+        for term in weighted_tf.keys() {
             *term_doc_freq.entry(term.clone()).or_insert(0) += 1;
         }
-        doc_term_freqs.push(freq);
+
+        doc_weighted_tf.push(weighted_tf);
+        doc_weighted_len.push(weighted_len);
     }
 
-    // Compute TF-IDF for n-grams (unigrams and bigrams).
-    // Per-phrase aggregate state while building the index.
+    // Compute TF-IDF per (doc, term) over the weighted frequency map.
     let mut phrase_scores: HashMap<String, PhraseAggregate> = HashMap::new();
 
-    for (i, (rel_path, body)) in documents.iter().enumerate() {
-        let tokens = tokenize(&mut analyzer, body);
-        let doc_len = tokens.len();
-        if doc_len == 0 {
+    for (i, (rel_path, _fields)) in documents.iter().enumerate() {
+        let weighted_len = doc_weighted_len[i];
+        if weighted_len <= 0.0 {
             continue;
         }
 
-        let phrases: Vec<String> = tokens
-            .iter()
-            .enumerate()
-            .flat_map(|(j, t)| {
-                let mut ph = vec![t.clone()];
-                if j + 1 < tokens.len() {
-                    ph.push(format!("{} {}", t, tokens[j + 1]));
-                }
-                ph
-            })
-            .collect();
-
         let mut seen: HashSet<String> = HashSet::new();
-        for phrase in phrases {
+        for (phrase, weighted_tf) in &doc_weighted_tf[i] {
             if !seen.insert(phrase.clone()) {
                 continue;
             }
 
-            let tf = doc_term_freqs[i].get(&phrase).copied().unwrap_or(0);
-            if tf == 0 {
-                continue;
-            }
-
-            let df = *term_doc_freq.get(&phrase).unwrap_or(&1);
+            let df = *term_doc_freq.get(phrase).unwrap_or(&1);
             let idf = ((total_docs as f32) / (df as f32)).ln() + 1.0;
-            let tfidf = (tf as f32 / doc_len as f32) * idf;
+            let tfidf = (weighted_tf / weighted_len) * idf;
 
             let entry = phrase_scores.entry(phrase.clone()).or_default();
             entry.doc_frequency += 1;
@@ -200,18 +239,107 @@ fn discover_vault_files(vault_root: &Path, context_filter: Option<&str>) -> Vec<
     out
 }
 
-/// Strip YAML frontmatter from markdown, returning just the body.
-fn strip_frontmatter(raw: &str) -> String {
-    let mut lines = raw.lines();
-    if lines.next() != Some("---") {
-        return raw.to_string();
-    }
-    for line in lines.by_ref() {
-        if line == "---" {
-            break;
+/// Parse a vault markdown file into its four structural fields.
+///
+/// Frontmatter is parsed via [`Frontmatter::try_from`] so that the `title`
+/// field comes from the canonical YAML parser rather than a hand-rolled split.
+/// Files whose frontmatter fails to parse (missing `temper-type`, malformed
+/// YAML) fall back to treating the whole file as body — this keeps seed
+/// extraction robust against mid-edit files.
+///
+/// Body parsing uses pulldown-cmark's event stream. Heading text is routed
+/// to `h1` or `h2_h3` by level (H4+ is treated as body, per SG-5). All
+/// non-heading `Event::Text` goes to `body`.
+fn parse_doc_fields(raw: &str) -> DocFields {
+    let (title, body_src) = match Frontmatter::try_from(raw) {
+        Ok(fm) => {
+            let title = fm
+                .value()
+                .as_mapping()
+                .and_then(|m| m.get(serde_yaml::Value::String("title".to_string())))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            (title, fm.body().to_string())
+        }
+        Err(_) => (String::new(), raw.to_string()),
+    };
+
+    let mut fields = DocFields {
+        title,
+        ..DocFields::default()
+    };
+
+    let parser = Parser::new(&body_src);
+    let mut in_heading: Option<HeadingLevel> = None;
+
+    for event in parser {
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                in_heading = Some(level);
+            }
+            Event::End(TagEnd::Heading(_)) => {
+                in_heading = None;
+            }
+            Event::Text(text) => match in_heading {
+                Some(HeadingLevel::H1) => push_with_sep(&mut fields.h1, &text),
+                Some(HeadingLevel::H2 | HeadingLevel::H3) => {
+                    push_with_sep(&mut fields.h2_h3, &text)
+                }
+                // H4+ and body prose both land in `body`.
+                _ => push_with_sep(&mut fields.body, &text),
+            },
+            Event::Code(text) => {
+                // Inline code inside a heading still counts as heading text.
+                match in_heading {
+                    Some(HeadingLevel::H1) => push_with_sep(&mut fields.h1, &text),
+                    Some(HeadingLevel::H2 | HeadingLevel::H3) => {
+                        push_with_sep(&mut fields.h2_h3, &text)
+                    }
+                    _ => push_with_sep(&mut fields.body, &text),
+                }
+            }
+            _ => {}
         }
     }
-    lines.collect::<Vec<_>>().join("\n").trim().to_string()
+
+    fields
+}
+
+fn push_with_sep(buf: &mut String, text: &str) {
+    if !buf.is_empty() {
+        buf.push('\n');
+    }
+    buf.push_str(text);
+}
+
+fn fields_empty(f: &DocFields) -> bool {
+    f.title.trim().is_empty()
+        && f.h1.trim().is_empty()
+        && f.h2_h3.trim().is_empty()
+        && f.body.trim().is_empty()
+}
+
+/// Regex matching ISO-style date tokens we want to strip before tokenization.
+///
+/// Matches:
+/// - `YYYY` (year only, 1900–2099)
+/// - `YYYY-MM`, `YYYY/MM`
+/// - `YYYY-MM-DD`, `YYYY/MM/DD`
+///
+/// Does NOT match four-digit numbers outside the 1900–2099 window
+/// (`11434` port, `3500` context, `1024`) or longer numeric runs.
+fn date_re() -> &'static Regex {
+    static DATE_RE: OnceLock<Regex> = OnceLock::new();
+    DATE_RE.get_or_init(|| {
+        Regex::new(r"\b(?:19|20)\d{2}(?:[-/]\d{1,2}){0,2}\b").expect("date regex is valid")
+    })
+}
+
+/// Replace ISO date tokens in `text` with a single space so the tokenizer
+/// never sees them. Used per-field before feeding the analyzer.
+fn strip_dates(text: &str) -> String {
+    date_re().replace_all(text, " ").to_string()
 }
 
 /// Build the shared tokenizer pipeline:
@@ -269,17 +397,190 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_frontmatter() {
-        let raw = "---\ntemper-id: abc123\n---\n# Hello\n\nBody text.";
-        let body = strip_frontmatter(raw);
-        assert!(body.starts_with("# Hello"));
-        assert!(body.contains("Body text"));
+    fn test_parse_doc_fields_splits_title_h1_h23_body() {
+        let raw = r#"---
+temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
+temper-type: task
+temper-context: temper
+temper-created: "2026-04-13T00:00:00Z"
+title: Graph Indexing Pipeline
+slug: graph-indexing
+---
+
+# Top Level Heading
+
+Some introductory prose here.
+
+## Second Level Heading
+
+More body prose.
+
+### Third Level Heading
+
+Body three.
+
+#### Fourth Level Ignored
+
+Extra body text.
+"#;
+        let fields = parse_doc_fields(raw);
+
+        assert_eq!(fields.title, "Graph Indexing Pipeline");
+        assert!(
+            fields.h1.contains("Top Level Heading"),
+            "h1 missing: {:?}",
+            fields.h1
+        );
+        assert!(
+            fields.h2_h3.contains("Second Level Heading"),
+            "h2_h3 missing H2: {:?}",
+            fields.h2_h3
+        );
+        assert!(
+            fields.h2_h3.contains("Third Level Heading"),
+            "h2_h3 missing H3: {:?}",
+            fields.h2_h3
+        );
+        // H4 heading text routes to body (we do not boost H4+).
+        assert!(
+            fields.body.contains("Fourth Level Ignored"),
+            "body missing H4 heading text: {:?}",
+            fields.body
+        );
+        assert!(
+            fields.body.contains("introductory prose"),
+            "body missing prose: {:?}",
+            fields.body
+        );
+        assert!(
+            fields.body.contains("More body prose"),
+            "body missing prose after H2: {:?}",
+            fields.body
+        );
+        // Heading text must not be double-counted in body.
+        assert!(
+            !fields.body.contains("Top Level Heading"),
+            "body should not contain H1 text: {:?}",
+            fields.body
+        );
+        assert!(
+            !fields.body.contains("Second Level Heading"),
+            "body should not contain H2 text: {:?}",
+            fields.body
+        );
     }
 
     #[test]
-    fn test_strip_frontmatter_no_frontmatter() {
-        let raw = "# Just a heading\n\nSome content";
-        let body = strip_frontmatter(raw);
-        assert!(body.starts_with("# Just a heading"));
+    fn test_parse_doc_fields_no_frontmatter_routes_to_body() {
+        let raw = "# Just a heading\n\nSome content with no frontmatter.\n";
+        let fields = parse_doc_fields(raw);
+
+        assert_eq!(fields.title, "");
+        // Without valid frontmatter the whole file is body_src, so headings
+        // still get routed via pulldown-cmark.
+        assert!(fields.h1.contains("Just a heading"));
+        assert!(fields.body.contains("Some content"));
+    }
+
+    #[test]
+    fn test_strip_dates_removes_iso_dates() {
+        let input = "2026-04-16 the ship 11434 port 2026 graph-index 2024/11/01 and 1899";
+        let stripped = strip_dates(input);
+        // ISO dates gone.
+        assert!(!stripped.contains("2026-04-16"), "got: {stripped}");
+        assert!(!stripped.contains("2024/11/01"), "got: {stripped}");
+        // Bare year within 1900-2099 also gone.
+        assert!(
+            !stripped.split_whitespace().any(|w| w == "2026"),
+            "got: {stripped}"
+        );
+        // Five-digit numbers untouched — port numbers survive.
+        assert!(stripped.contains("11434"), "got: {stripped}");
+        // Hyphenated words with non-date slugs survive.
+        assert!(stripped.contains("graph-index"), "got: {stripped}");
+        // Years outside the 1900–2099 window survive.
+        assert!(stripped.contains("1899"), "got: {stripped}");
+    }
+
+    #[test]
+    fn test_strip_dates_preserves_large_numbers() {
+        // Cases that would trip up a naive `\b\d{4}\b` regex.
+        assert_eq!(strip_dates("port 11434"), "port 11434");
+        assert_eq!(strip_dates("model 397B"), "model 397B");
+        assert_eq!(strip_dates("ctx 3500"), "ctx 3500");
+    }
+
+    #[test]
+    fn test_extract_seeds_title_boost_surfaces_title_terms() {
+        // Two docs: one with a highly distinctive term in the title only,
+        // another with filler prose. With field-weighted TF-IDF the title
+        // term becomes a seed even though it only appears once in the doc.
+        let tmp = tempfile::tempdir().unwrap();
+        let task_dir = tmp.path().join("@me").join("temper").join("task");
+        fs::create_dir_all(&task_dir).unwrap();
+
+        let doc_a = r#"---
+temper-id: "01900000-0000-7000-8000-000000000001"
+temper-type: task
+temper-context: temper
+temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
+title: "Graph Indexing Pipeline"
+temper-stage: backlog
+slug: graph-indexing-pipeline
+---
+
+We will build a pipeline for graph indexing. The pipeline has many stages.
+"#;
+        let doc_b = r#"---
+temper-id: "01900000-0000-7000-8000-000000000002"
+temper-type: task
+temper-context: temper
+temper-created: "2026-01-01T00:00:00Z"
+temper-owner: "@me"
+title: "Pipeline Notes"
+temper-stage: backlog
+slug: pipeline-notes
+---
+
+The pipeline runs nightly. The pipeline emits logs. The pipeline has stages.
+"#;
+        fs::write(task_dir.join("a.md"), doc_a).unwrap();
+        fs::write(task_dir.join("b.md"), doc_b).unwrap();
+
+        // Low min_df=1 so single-doc seeds still surface for the assertion.
+        let cfg = GraphIndexConfig {
+            seed_min_doc_frequency: 1,
+            seed_top_n: 100,
+            ..GraphIndexConfig::default()
+        };
+
+        let seeds = extract_seeds(tmp.path(), &cfg, Some("temper"));
+        assert!(!seeds.is_empty(), "expected seeds but got none");
+
+        let phrases: Vec<&str> = seeds.iter().map(|s| s.phrase.as_str()).collect();
+
+        // "pipeline" stems to "pipelin" with the Snowball English stemmer —
+        // both docs contain it, so the stem should be among the seeds.
+        assert!(
+            phrases.contains(&"pipelin"),
+            "expected 'pipelin' in seeds, got: {phrases:?}"
+        );
+
+        // "graph" only appears in doc A and only in the title + one body mention,
+        // but the title boost makes it a prominent seed. At minimum it must
+        // appear in the top-N — this asserts title-only weighting works.
+        assert!(
+            phrases.contains(&"graph"),
+            "expected 'graph' (title-weighted) in seeds, got: {phrases:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_seeds_handles_empty_vault() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = GraphIndexConfig::default();
+        let seeds = extract_seeds(tmp.path(), &cfg, None);
+        assert!(seeds.is_empty());
     }
 }

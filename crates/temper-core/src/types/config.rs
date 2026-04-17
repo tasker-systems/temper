@@ -259,6 +259,20 @@ pub struct GraphIndexConfig {
     /// Default edge type when adding relates-to edges to members.
     #[serde(default = "default_concept_default_edge_type")]
     pub concept_default_edge_type: String,
+    /// Weight applied to tokens occurring in the frontmatter `title` field
+    /// during TF-IDF seed extraction. Higher values boost title terms.
+    #[serde(default = "default_seed_title_weight")]
+    pub seed_title_weight: f32,
+    /// Weight applied to tokens occurring inside H1 heading text.
+    #[serde(default = "default_seed_h1_weight")]
+    pub seed_h1_weight: f32,
+    /// Weight applied to tokens occurring inside H2 or H3 heading text.
+    #[serde(default = "default_seed_h2_h3_weight")]
+    pub seed_h2_h3_weight: f32,
+    /// Weight applied to tokens occurring in ordinary body prose
+    /// (everything outside title and H1/H2/H3 headings).
+    #[serde(default = "default_seed_body_weight")]
+    pub seed_body_weight: f32,
 }
 
 fn default_seed_min_doc_frequency() -> usize {
@@ -279,6 +293,18 @@ fn default_concept_min_members() -> usize {
 fn default_concept_default_edge_type() -> String {
     "relates-to".to_string()
 }
+fn default_seed_title_weight() -> f32 {
+    10.0
+}
+fn default_seed_h1_weight() -> f32 {
+    5.0
+}
+fn default_seed_h2_h3_weight() -> f32 {
+    2.0
+}
+fn default_seed_body_weight() -> f32 {
+    1.0
+}
 
 impl Default for GraphIndexConfig {
     fn default() -> Self {
@@ -289,6 +315,10 @@ impl Default for GraphIndexConfig {
             cluster_max_members: default_cluster_max_members(),
             concept_min_members: default_concept_min_members(),
             concept_default_edge_type: default_concept_default_edge_type(),
+            seed_title_weight: default_seed_title_weight(),
+            seed_h1_weight: default_seed_h1_weight(),
+            seed_h2_h3_weight: default_seed_h2_h3_weight(),
+            seed_body_weight: default_seed_body_weight(),
         }
     }
 }

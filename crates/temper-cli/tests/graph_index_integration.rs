@@ -152,6 +152,7 @@ fn loose_graph_config() -> GraphIndexConfig {
         cluster_max_members: 12,
         concept_min_members: 2,
         concept_default_edge_type: "relates-to".to_string(),
+        ..GraphIndexConfig::default()
     }
 }
 
