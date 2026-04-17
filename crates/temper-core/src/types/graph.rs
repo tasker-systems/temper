@@ -1,6 +1,7 @@
 //! Knowledge graph types — edge types, traversal results, and relationship
 //! declarations for the R7 vertex-edge graph stored in `kb_resource_edges`.
 
+use crate::frontmatter::document::DocType;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -227,9 +228,8 @@ pub struct GraphNode {
     pub id: Uuid,
     pub slug: String,
     pub title: String,
-    /// Lowercase doc-type name (`"concept"`, `"research"`, etc.) — matches
-    /// `kb_doc_types.name` and the client's `DocType` union.
-    pub doc_type: String,
+    /// Typed doctype — serializes as `"concept"`, `"research"`, etc.
+    pub doc_type: DocType,
     /// Count of all edges touching this resource, regardless of subgraph scope.
     pub edge_count: i32,
 }

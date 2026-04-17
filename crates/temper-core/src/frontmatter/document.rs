@@ -5,7 +5,12 @@ use crate::frontmatter::parse::{normalize_aliases, parse_yaml, split_frontmatter
 
 /// Typed vault doctype. All valid values are enumerated exhaustively —
 /// unknown doctypes fail at parse, not at validation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "doc_type.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DocType {
     Task,
     Goal,
