@@ -95,15 +95,17 @@ pub struct ClaudeProvider {
 impl ClaudeProvider {
     /// Create a new Anthropic provider.
     ///
+    /// `timeout_secs` is the HTTP request timeout applied to the reqwest client.
+    ///
     /// # Errors
     /// Returns an error if the API key is empty.
-    pub fn new(model: &str, api_key: String) -> Result<Self, String> {
+    pub fn new(model: &str, api_key: String, timeout_secs: u64) -> Result<Self, String> {
         if api_key.is_empty() {
             return Err("API key must not be empty".to_string());
         }
 
         let client = Client::builder()
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .map_err(|e| e.to_string())?;
 

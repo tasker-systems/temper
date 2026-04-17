@@ -155,9 +155,15 @@ impl OpenAiCompatibleProvider {
     /// `base_url` is the root of the API (e.g. `http://localhost:11434` for ollama).
     /// `model` is the model identifier (e.g. `llama3.2:latest`).
     /// `api_key` is optional — pass `None` for ollama.
-    pub fn new(base_url: &str, model: &str, api_key: Option<&str>) -> Result<Self, String> {
+    /// `timeout_secs` is the HTTP request timeout applied to the reqwest client.
+    pub fn new(
+        base_url: &str,
+        model: &str,
+        api_key: Option<&str>,
+        timeout_secs: u64,
+    ) -> Result<Self, String> {
         let client = Client::builder()
-            .timeout(Duration::from_secs(120))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .map_err(|e| e.to_string())?;
         Ok(Self {
@@ -346,8 +352,9 @@ mod tests {
 
     #[test]
     fn provider_constructs() {
-        let p = OpenAiCompatibleProvider::new("http://localhost:11434", "llama3.2:latest", None)
-            .unwrap();
+        let p =
+            OpenAiCompatibleProvider::new("http://localhost:11434", "llama3.2:latest", None, 300)
+                .unwrap();
         assert_eq!(p.provider_name(), "openai-compatible");
         assert_eq!(p.model(), "llama3.2:latest");
     }
@@ -358,6 +365,7 @@ mod tests {
             "https://api.groq.com",
             "llama-3.2-90b-vision-preview",
             Some("sk-..."),
+            300,
         )
         .unwrap();
         assert_eq!(p.model(), "llama-3.2-90b-vision-preview");
@@ -369,6 +377,7 @@ mod tests {
             "http://localhost:11434",
             "llama3.2:latest",
             Some("secret-key"),
+            300,
         )
         .unwrap();
         let debug = format!("{p:?}");

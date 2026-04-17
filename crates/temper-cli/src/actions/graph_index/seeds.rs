@@ -7,6 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use tantivy::tokenizer::{
+    Language, LowerCaser, SimpleTokenizer, Stemmer, StopWordFilter, TextAnalyzer,
+};
 use temper_core::types::config::GraphIndexConfig;
 use temper_llm::types::SeedPhrase;
 
@@ -51,12 +54,17 @@ pub fn extract_seeds(
 
     let total_docs = documents.len();
 
+    // Build the tokenizer pipeline once and reuse it for every document.
+    // `token_stream` takes `&mut self`, so the analyzer is threaded through by
+    // mutable reference rather than cloned per call.
+    let mut analyzer = build_analyzer();
+
     // Build term frequency per document and document frequency per term
     let mut doc_term_freqs: Vec<HashMap<String, usize>> = Vec::new();
     let mut term_doc_freq: HashMap<String, usize> = HashMap::new();
 
     for (_rel_path, body) in &documents {
-        let tokens = tokenize(body);
+        let tokens = tokenize(&mut analyzer, body);
         let mut freq: HashMap<String, usize> = HashMap::new();
         for token in tokens {
             *freq.entry(token).or_insert(0) += 1;
@@ -72,7 +80,7 @@ pub fn extract_seeds(
     let mut phrase_scores: HashMap<String, PhraseAggregate> = HashMap::new();
 
     for (i, (rel_path, body)) in documents.iter().enumerate() {
-        let tokens = tokenize(body);
+        let tokens = tokenize(&mut analyzer, body);
         let doc_len = tokens.len();
         if doc_len == 0 {
             continue;
@@ -206,13 +214,30 @@ fn strip_frontmatter(raw: &str) -> String {
     lines.collect::<Vec<_>>().join("\n").trim().to_string()
 }
 
-/// Simple tokenizer: lowercase, strip punctuation, split on whitespace.
-fn tokenize(text: &str) -> Vec<String> {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '\'')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect()
+/// Build the shared tokenizer pipeline:
+/// `SimpleTokenizer` → `LowerCaser` → English stopwords → English Snowball stemmer.
+///
+/// Stopword filtering relies on tantivy's built-in English list (enabled via
+/// the `stopwords` feature). Stemming normalizes surface forms so "indexing",
+/// "indexes", and "indexed" all fold to the same token.
+fn build_analyzer() -> TextAnalyzer {
+    TextAnalyzer::builder(SimpleTokenizer::default())
+        .filter(LowerCaser)
+        .filter(StopWordFilter::new(Language::English).expect("English stopwords available"))
+        .filter(Stemmer::new(Language::English))
+        .build()
+}
+
+/// Tokenize `text` using the supplied analyzer. Returns stemmed tokens with
+/// stopwords removed. The analyzer is passed by `&mut` because
+/// `TextAnalyzer::token_stream` mutates internal buffer state.
+fn tokenize(analyzer: &mut TextAnalyzer, text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stream = analyzer.token_stream(text);
+    while let Some(tok) = stream.next() {
+        out.push(tok.text.clone());
+    }
+    out
 }
 
 #[cfg(test)]
@@ -220,11 +245,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tokenize_simple() {
-        let tokens = tokenize("Hello, world! This is a test.");
+    fn test_tokenize_filters_stopwords_and_stems() {
+        let mut analyzer = build_analyzer();
+        let tokens = tokenize(&mut analyzer, "Hello, world! This is a test.");
+        // Content words survive lowercasing + stemming (these stem to themselves).
         assert!(tokens.contains(&"hello".to_string()));
         assert!(tokens.contains(&"world".to_string()));
         assert!(tokens.contains(&"test".to_string()));
+        // Stopwords are removed by the English stopword filter.
+        assert!(!tokens.contains(&"this".to_string()));
+        assert!(!tokens.contains(&"is".to_string()));
+        assert!(!tokens.contains(&"a".to_string()));
+    }
+
+    #[test]
+    fn test_tokenize_stems_inflected_forms() {
+        let mut analyzer = build_analyzer();
+        let tokens = tokenize(&mut analyzer, "testing running indexes");
+        // Snowball stems: testing → test, running → run, indexes → index.
+        assert!(tokens.contains(&"test".to_string()));
+        assert!(tokens.contains(&"run".to_string()));
+        assert!(tokens.contains(&"index".to_string()));
     }
 
     #[test]

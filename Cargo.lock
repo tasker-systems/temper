@@ -4985,6 +4985,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "shell-words",
+ "tantivy",
  "temper-client",
  "temper-core",
  "temper-ingest",

@@ -7,7 +7,7 @@ use temper_llm::LlmProvider;
 
 #[test]
 fn new_rejects_empty_api_key() {
-    let result = ClaudeProvider::new("claude-sonnet-4-20250514", String::new());
+    let result = ClaudeProvider::new("claude-sonnet-4-20250514", String::new(), 300);
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
@@ -21,7 +21,7 @@ fn new_rejects_empty_api_key() {
 
 #[test]
 fn new_accepts_valid_api_key() {
-    let result = ClaudeProvider::new("claude-sonnet-4-20250514", "test-key".to_string());
+    let result = ClaudeProvider::new("claude-sonnet-4-20250514", "test-key".to_string(), 300);
     assert!(result.is_ok());
     let provider = result.unwrap();
     assert_eq!(provider.model(), "claude-sonnet-4-20250514");
@@ -32,7 +32,7 @@ fn new_accepts_valid_api_key() {
 
 #[test]
 fn model_returns_configured() {
-    let provider = ClaudeProvider::new("claude-opus-4-5", "sk-test".to_string()).unwrap();
+    let provider = ClaudeProvider::new("claude-opus-4-5", "sk-test".to_string(), 300).unwrap();
     assert_eq!(provider.model(), "claude-opus-4-5");
 }
 
@@ -40,7 +40,7 @@ fn model_returns_configured() {
 
 #[test]
 fn provider_name_is_anthropic() {
-    let provider = ClaudeProvider::new("claude-sonnet-4", "sk-test".to_string()).unwrap();
+    let provider = ClaudeProvider::new("claude-sonnet-4", "sk-test".to_string(), 300).unwrap();
     assert_eq!(provider.provider_name(), "anthropic");
 }
 
@@ -48,7 +48,7 @@ fn provider_name_is_anthropic() {
 
 #[test]
 fn debug_impl_does_not_panic() {
-    let provider = ClaudeProvider::new("claude-sonnet-4", "sk-test".to_string()).unwrap();
+    let provider = ClaudeProvider::new("claude-sonnet-4", "sk-test".to_string(), 300).unwrap();
     let debug = format!("{:?}", provider);
     assert!(debug.contains("ClaudeProvider"));
     assert!(debug.contains("claude-sonnet-4"));

@@ -15,15 +15,20 @@ pub async fn build_provider(config: &LlmConfig) -> Result<Arc<dyn LlmProvider>, 
         LlmProviderType::Claude => {
             let api_key = std::env::var("ANTHROPIC_API_KEY")
                 .map_err(|_| "ANTHROPIC_API_KEY environment variable is not set".to_string())?;
-            let provider = ClaudeProvider::new(&config.model, api_key)?;
+            let provider =
+                ClaudeProvider::new(&config.model, api_key, config.request_timeout_secs)?;
             Ok(Arc::new(provider))
         }
         LlmProviderType::Ollama | LlmProviderType::OpenAiCompatible => {
             let api_key = std::env::var("TEMPER_LLM_API_KEY")
                 .ok()
                 .or_else(|| config.api_key.clone());
-            let provider =
-                OpenAiCompatibleProvider::new(&config.url, &config.model, api_key.as_deref())?;
+            let provider = OpenAiCompatibleProvider::new(
+                &config.url,
+                &config.model,
+                api_key.as_deref(),
+                config.request_timeout_secs,
+            )?;
             Ok(Arc::new(provider))
         }
     }

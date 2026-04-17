@@ -188,6 +188,14 @@ pub struct LlmConfig {
     /// Only set this field if you want the key in the config file (not recommended).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// HTTP request timeout in seconds for LLM provider calls.
+    /// Reasoning / large cloud models may need longer than the default.
+    #[serde(default = "default_llm_timeout_secs")]
+    pub request_timeout_secs: u64,
+}
+
+fn default_llm_timeout_secs() -> u64 {
+    300
 }
 
 impl Default for LlmConfig {
@@ -197,6 +205,7 @@ impl Default for LlmConfig {
             url: "http://localhost:11434".to_string(),
             model: "llama3.2:latest".to_string(),
             api_key: None,
+            request_timeout_secs: default_llm_timeout_secs(),
         }
     }
 }
@@ -224,6 +233,7 @@ impl LlmConfig {
                 .ok()
                 .unwrap_or_else(|| file_config.model.clone()),
             api_key: std::env::var("TEMPER_LLM_API_KEY").ok(),
+            request_timeout_secs: file_config.request_timeout_secs,
         }
     }
 }

@@ -148,7 +148,7 @@ impl<S> Agent<S> {
             .handler
             .call(&input_val, &mut self.state)
             .await
-            .map_err(|e| AgentError::ToolHandler(e))?;
+            .map_err(AgentError::ToolHandler)?;
 
         Ok(result.to_string())
     }

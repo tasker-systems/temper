@@ -194,7 +194,7 @@ async fn build_provider(args: &Args) -> anyhow::Result<(Arc<dyn LlmProvider>, St
             let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
                 anyhow::anyhow!("--provider claude requires ANTHROPIC_API_KEY env var")
             })?;
-            let p = ClaudeProvider::new(&model, api_key)
+            let p = ClaudeProvider::new(&model, api_key, 300)
                 .map_err(|e| anyhow::anyhow!("ClaudeProvider::new: {e}"))?;
             Ok((Arc::new(p), "anthropic".to_string(), model))
         }
@@ -206,7 +206,7 @@ async fn build_provider(args: &Args) -> anyhow::Result<(Arc<dyn LlmProvider>, St
             let api_key = std::env::var("TEMPER_LLM_API_KEY")
                 .ok()
                 .filter(|k| !k.is_empty());
-            let p = OpenAiCompatibleProvider::new(&url, &model, api_key.as_deref())
+            let p = OpenAiCompatibleProvider::new(&url, &model, api_key.as_deref(), 300)
                 .map_err(|e| anyhow::anyhow!("OpenAiCompatibleProvider::new: {e}"))?;
             Ok((Arc::new(p), "openai-compatible".to_string(), model))
         }
