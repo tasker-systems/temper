@@ -202,20 +202,22 @@ fn truncate_excerpt(text: &str, max: usize) -> String {
     if text.chars().count() <= max {
         return text.to_string();
     }
-    let mut end = 0usize;
-    for (i, (byte_idx, _)) in text.char_indices().enumerate() {
-        if i == max {
-            end = byte_idx;
-            break;
-        }
-    }
-    if end == 0 {
-        end = text.len();
-    }
-    let slice = &text[..end];
-    let fallback = end.saturating_sub(max / 10);
-    if let Some(space_idx) = slice[fallback..].rfind(' ') {
-        format!("{}...", &slice[..fallback + space_idx])
+    // Byte index where char `max` begins — safe cut point.
+    let end_byte = text
+        .char_indices()
+        .nth(max)
+        .map(|(i, _)| i)
+        .unwrap_or(text.len());
+    let slice = &text[..end_byte];
+    // Byte index at ~90% of the char window — also a safe cut point.
+    let fallback_char = max.saturating_sub(max / 10);
+    let fallback_byte = slice
+        .char_indices()
+        .nth(fallback_char)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    if let Some(space_offset) = slice[fallback_byte..].rfind(' ') {
+        format!("{}...", &slice[..fallback_byte + space_offset])
     } else {
         format!("{slice}...")
     }
@@ -297,6 +299,24 @@ mod tests {
     use super::*;
     use std::fs;
     use temper_llm::types::SeedPhrase;
+
+    #[test]
+    fn test_truncate_excerpt_respects_utf8_char_boundaries() {
+        // A body with an em-dash (3 bytes in UTF-8) near the truncation window
+        // was panicking when truncate_excerpt sliced at a byte offset that
+        // landed inside the multi-byte char.
+        let text = "This is some prose — with an em-dash — that repeats. \
+                   More prose — with another em-dash — continues on and on \
+                   so we get past the truncation point.";
+        // Should not panic, should return a truncated string with ellipsis.
+        let out = truncate_excerpt(text, 40);
+        assert!(out.ends_with("..."), "expected ellipsis, got: {out:?}");
+        assert!(
+            out.chars().count() <= 40 + 3,
+            "expected ~40 chars + ..., got {} chars",
+            out.chars().count()
+        );
+    }
 
     fn write_vault_file(vault_root: &Path, rel_path: &str, title: &str, body: &str) {
         let full = vault_root.join(rel_path);
