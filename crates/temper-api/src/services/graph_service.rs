@@ -35,6 +35,17 @@ pub struct AggregatorSubgraphParams<'a> {
 ///
 /// The caller's visibility is enforced by `graph_traverse()`'s internal
 /// `resources_visible_to` join — cross-owner resources are never returned.
+///
+/// Implementation uses three steps to avoid CTE duplication and close the
+/// dangling-edge risk:
+///
+/// 1. Resolve the full active ID set once (seeds + traversed, both filtered
+///    by `is_active = true`).
+/// 2. Fetch node rows for those IDs.
+/// 3. Fetch edge rows where both endpoints are in the ID set.
+///
+/// Because inactive resources are excluded at step 1, the edge query in
+/// step 3 can never return a dangling edge.
 pub async fn aggregator_subgraph(
     pool: &PgPool,
     params: AggregatorSubgraphParams<'_>,
@@ -50,19 +61,18 @@ pub async fn aggregator_subgraph(
         .map(|dt| dt.as_str().to_string())
         .collect();
 
-    // Fetch the aggregator IDs (seeds) + traversed IDs, then join for node
-    // rows and edge rows. Two queries instead of one union-tagged query —
-    // clearer and both are millisecond-cheap against this data volume.
-
-    // 1. Node rows — every aggregator seed + every graph_traverse reachable
-    //    node, with title/slug/doc_type + total edge_count.
-    let node_rows = sqlx::query(
+    // Step 1: resolve the ID set once. The CTE returns seeds + traversed
+    // nodes, then joins back to kb_resources with `is_active = true` to
+    // guarantee only active rows end up in the set. Visibility is enforced
+    // by resources_visible_to() in the seed CTE and by graph_traverse()
+    // during expansion.
+    let id_rows = sqlx::query(
         r#"
         WITH seed_concepts AS (
             SELECT r.id
               FROM kb_resources r
               JOIN resources_visible_to($1, NULL, '{}') v ON v.resource_id = r.id
-              JOIN kb_contexts c  ON c.id = r.kb_context_id
+              JOIN kb_contexts c   ON c.id  = r.kb_context_id
               JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
              WHERE c.name = $2
                AND dt.name = ANY($3::text[])
@@ -77,11 +87,39 @@ pub async fn aggregator_subgraph(
                   '{}'
               )
         ),
-        all_ids AS (
+        candidate_ids AS (
             SELECT id          FROM seed_concepts
             UNION
             SELECT resource_id FROM traversed
         )
+        SELECT r.id AS id
+          FROM kb_resources r
+          JOIN candidate_ids c ON c.id = r.id
+         WHERE r.is_active = true
+        "#,
+    )
+    .bind(params.caller_profile_id)
+    .bind(params.context_name)
+    .bind(&aggregator_names)
+    .bind(depth as i32)
+    .fetch_all(pool)
+    .await?;
+
+    let node_ids: Vec<Uuid> = id_rows
+        .into_iter()
+        .map(|r| r.get::<Uuid, _>("id"))
+        .collect();
+
+    if node_ids.is_empty() {
+        return Ok(SubgraphResponse {
+            nodes: vec![],
+            edges: vec![],
+        });
+    }
+
+    // Step 2: node rows, bound directly to the resolved ID set.
+    let node_rows = sqlx::query(
+        r#"
         SELECT
             r.id                                                AS id,
             r.slug                                              AS slug,
@@ -93,14 +131,11 @@ pub async fn aggregator_subgraph(
                  OR e.target_resource_id = r.id)                AS edge_count
           FROM kb_resources r
           JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-          JOIN all_ids a       ON a.id = r.id
-         WHERE r.is_active = true
+         WHERE r.id = ANY($1::uuid[])
+           AND r.is_active = true
         "#,
     )
-    .bind(params.caller_profile_id)
-    .bind(params.context_name)
-    .bind(&aggregator_names)
-    .bind(depth as i32)
+    .bind(&node_ids)
     .fetch_all(pool)
     .await?;
 
@@ -122,46 +157,21 @@ pub async fn aggregator_subgraph(
         })
         .collect::<ApiResult<Vec<_>>>()?;
 
-    // 2. Edge rows — every edge whose BOTH endpoints are in the node set.
+    // Step 3: edge rows — both endpoints must be in the resolved set.
+    // Because node_ids only contains active resources (step 1), no dangling
+    // edges can appear here.
     let edge_rows = sqlx::query(
         r#"
-        WITH seed_concepts AS (
-            SELECT r.id
-              FROM kb_resources r
-              JOIN resources_visible_to($1, NULL, '{}') v ON v.resource_id = r.id
-              JOIN kb_contexts c  ON c.id = r.kb_context_id
-              JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-             WHERE c.name = $2
-               AND dt.name = ANY($3::text[])
-               AND r.is_active = true
-        ),
-        traversed AS (
-            SELECT resource_id
-              FROM graph_traverse(
-                  $1,
-                  ARRAY(SELECT id FROM seed_concepts),
-                  $4::int,
-                  '{}'
-              )
-        ),
-        all_ids AS (
-            SELECT id          FROM seed_concepts
-            UNION
-            SELECT resource_id FROM traversed
-        )
         SELECT
             e.source_resource_id AS source,
             e.target_resource_id AS target,
             e.edge_type          AS edge_type
           FROM kb_resource_edges e
-         WHERE e.source_resource_id IN (SELECT id FROM all_ids)
-           AND e.target_resource_id IN (SELECT id FROM all_ids)
+         WHERE e.source_resource_id = ANY($1::uuid[])
+           AND e.target_resource_id = ANY($1::uuid[])
         "#,
     )
-    .bind(params.caller_profile_id)
-    .bind(params.context_name)
-    .bind(&aggregator_names)
-    .bind(depth as i32)
+    .bind(&node_ids)
     .fetch_all(pool)
     .await?;
 
