@@ -236,7 +236,7 @@ fn discover_vault_files(vault_root: &Path, context_filter: Option<&str>) -> Vec<
                 let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
                     continue;
                 };
-                let rel_path = format!("{owner}/{context}/{file_name}");
+                let rel_path = format!("{owner}/{context}/{doc_type}/{file_name}");
                 out.push((path, rel_path));
             }
         }

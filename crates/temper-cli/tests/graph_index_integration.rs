@@ -290,10 +290,10 @@ fn test_graph_index_creates_concepts_and_is_idempotent() {
         "title": "Graph Indexing Pipeline",
         "body_markdown": "## Members\n\n- design-graph-indexing\n- implement-graph-indexing",
         "member_edges": [
-            { "target_slug": "design-graph-indexing", "edge_type": "relates-to" },
-            { "target_slug": "implement-graph-indexing", "edge_type": "relates-to" },
-            { "target_slug": "test-graph-indexing", "edge_type": "relates-to" },
-            { "target_slug": "ship-graph-indexing", "edge_type": "relates-to" },
+            { "target_path": "@me/temper/task/design-graph-indexing.md", "edge_type": "relates-to" },
+            { "target_path": "@me/temper/task/implement-graph-indexing.md", "edge_type": "relates-to" },
+            { "target_path": "@me/temper/task/test-graph-indexing.md", "edge_type": "relates-to" },
+            { "target_path": "@me/temper/goal/ship-graph-indexing.md", "edge_type": "relates-to" },
         ]
     });
     let mock = MockLlmProvider::new("mock", "mock-model")

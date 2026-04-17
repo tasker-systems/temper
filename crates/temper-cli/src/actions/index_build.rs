@@ -419,9 +419,10 @@ pub(crate) fn discover_vault(
                     let path = entry.path();
                     if path.extension().and_then(|s| s.to_str()) == Some("md") {
                         let rel_path = format!(
-                            "{}/{}/{}",
+                            "{}/{}/{}/{}",
                             owner,
                             context_owned,
+                            doc_type,
                             path.file_name().unwrap().to_str().unwrap()
                         );
 
@@ -500,7 +501,44 @@ fn sha256_hex(bytes: &[u8]) -> String {
 #[expect(dead_code)]
 pub(crate) struct DiscoveredFile {
     path: PathBuf,
-    rel_path: String,
+    pub(crate) rel_path: String,
     owner: String,
     context: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `discover_vault` must preserve the doctype segment in `rel_path` so that
+    /// downstream consumers (graph-index materialize, clustering) can locate the
+    /// file by rel_path alone. Previously the rel_path was
+    /// `@me/{context}/{file}` which dropped the doctype, breaking `vault_root.join(rel_path)`.
+    #[test]
+    fn test_discover_vault_rel_path_includes_doctype() {
+        let tmp = tempfile::tempdir().unwrap();
+        let task_dir = tmp.path().join("@me").join("temper").join("task");
+        fs::create_dir_all(&task_dir).unwrap();
+
+        let doc = "---\n\
+temper-id: \"01900000-0000-7000-8000-000000000001\"\n\
+temper-type: task\n\
+temper-context: temper\n\
+temper-created: \"2026-01-01T00:00:00Z\"\n\
+temper-owner: \"@me\"\n\
+title: \"Foo\"\n\
+temper-stage: backlog\n\
+slug: foo\n\
+---\n\
+\n\
+body\n";
+        fs::write(task_dir.join("foo.md"), doc).unwrap();
+
+        let discovered = discover_vault(&tmp.path().to_path_buf(), None);
+        assert_eq!(discovered.len(), 1, "one file discovered");
+        assert_eq!(
+            discovered[0].rel_path, "@me/temper/task/foo.md",
+            "rel_path preserves doctype segment"
+        );
+    }
 }

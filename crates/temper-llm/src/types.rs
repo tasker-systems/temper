@@ -72,6 +72,10 @@ pub struct ConceptProposal {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemberEdge {
-    pub target_slug: String,
+    /// The canonical rel_path of the member document (e.g.
+    /// `"@me/temper/task/foo.md"`). The LLM echoes back exactly the path
+    /// it was handed in the judgment prompt — materialization looks the
+    /// file up by joining this onto `vault_root`.
+    pub target_path: String,
     pub edge_type: String,
 }
