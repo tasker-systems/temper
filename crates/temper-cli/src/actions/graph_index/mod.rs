@@ -153,8 +153,17 @@ pub fn run_with_provider(
     };
     report.proposals_returned = proposals.len();
 
-    let mat =
-        materialize::materialize_concepts(&proposals, config, graph_index_config, params.dry_run);
+    // `context_filter` may be None (run over all contexts); use "temper" as
+    // the default landing context. The doctype-qualified-slug follow-up will
+    // let member_edges carry their own context if we ever relax this.
+    let materialize_context = params.context_filter.as_deref().unwrap_or("temper");
+    let mat = materialize::materialize_concepts(
+        &proposals,
+        config,
+        graph_index_config,
+        materialize_context,
+        params.dry_run,
+    );
     report.concepts_created = mat.concepts_created;
     report.concepts_skipped = mat.concepts_skipped;
     report.members_updated = mat.members_updated;

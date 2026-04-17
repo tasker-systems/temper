@@ -27,10 +27,16 @@ pub struct MaterializeReport {
 }
 
 /// Materialize concept proposals into vault files and member edge updates.
+///
+/// `context` is the context slug the run targeted — concept files land at
+/// `@me/{context}/concept/{slug}.md` and the frontmatter carries
+/// `temper-context: {context}`. Defaults to `"temper"` when the caller
+/// didn't constrain the run to a single context (historically hardcoded).
 pub fn materialize_concepts(
     proposals: &[ConceptProposal],
     config: &Config,
     graph_config: &GraphIndexConfig,
+    context: &str,
     dry_run: bool,
 ) -> MaterializeReport {
     let vault_root = &config.vault_root;
@@ -55,7 +61,7 @@ pub fn materialize_concepts(
 
         let concept_path = vault_root
             .join("@me")
-            .join("temper")
+            .join(context)
             .join("concept")
             .join(format!("{slug}.md"));
 
@@ -66,7 +72,7 @@ pub fn materialize_concepts(
         }
 
         let concept_content =
-            match build_concept_content(slug, title, body, &provisional_id, &llm_run) {
+            match build_concept_content(slug, title, body, context, &provisional_id, &llm_run) {
                 Ok(c) => c,
                 Err(e) => {
                     report.errors += 1;
@@ -129,19 +135,29 @@ fn build_concept_content(
     slug: &str,
     title: &str,
     body: &str,
+    context: &str,
     provisional_id: &str,
     llm_run: &str,
 ) -> Result<String, String> {
+    let now = chrono::Utc::now();
     let mut fm = Frontmatter::new(DocType::Concept, format!("\n# {title}\n\n{body}\n"));
     fm.set_managed_field(
         "temper-provisional-id",
         serde_json::Value::String(provisional_id.to_string()),
     );
+    fm.set_managed_field(
+        "temper-context",
+        serde_json::Value::String(context.to_string()),
+    );
+    fm.set_managed_field(
+        "temper-created",
+        serde_json::Value::String(now.to_rfc3339()),
+    );
     fm.set_open_field("slug", serde_json::Value::String(slug.to_string()));
     fm.set_open_field("title", serde_json::Value::String(title.to_string()));
     fm.set_open_field(
         "date",
-        serde_json::Value::String(chrono::Utc::now().format("%Y-%m-%d").to_string()),
+        serde_json::Value::String(now.format("%Y-%m-%d").to_string()),
     );
     fm.set_open_field(
         "temper-provenance",
@@ -262,7 +278,7 @@ body\n",
             }],
         };
 
-        let report = materialize_concepts(&[proposal], &config, &graph_config, false);
+        let report = materialize_concepts(&[proposal], &config, &graph_config, "temper", false);
 
         assert_eq!(
             report.errors, 0,
