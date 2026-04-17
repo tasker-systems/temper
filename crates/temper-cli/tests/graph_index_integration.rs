@@ -152,6 +152,12 @@ fn loose_graph_config() -> GraphIndexConfig {
         cluster_max_members: 12,
         concept_min_members: 2,
         concept_default_edge_type: "relates-to".to_string(),
+        // Fixture vault has only 4 docs and repeats "graph indexing pipeline"
+        // in every one; the production 0.5 max-df default would drop those
+        // stems as gravity wells. Disable both the max-df gravity-well filter
+        // and the cluster-overlap dedup for these mechanics tests.
+        seed_max_doc_frequency_ratio: 1.1,
+        cluster_overlap_threshold: 1.1,
         ..GraphIndexConfig::default()
     }
 }

@@ -273,6 +273,16 @@ pub struct GraphIndexConfig {
     /// (everything outside title and H1/H2/H3 headings).
     #[serde(default = "default_seed_body_weight")]
     pub seed_body_weight: f32,
+    /// Drop seed phrases that appear in more than this fraction of documents.
+    /// Catches "gravity well" terms whose IDF can't overcome title-weighting.
+    /// Default: 0.5 (drop anything in >50% of docs).
+    #[serde(default = "default_seed_max_doc_frequency_ratio")]
+    pub seed_max_doc_frequency_ratio: f32,
+    /// Threshold above which two clusters are considered duplicates (Jaccard
+    /// of member_id sets). When exceeded, the lower-scored cluster is dropped.
+    /// Default: 0.8 (80% overlap).
+    #[serde(default = "default_cluster_overlap_threshold")]
+    pub cluster_overlap_threshold: f32,
 }
 
 fn default_seed_min_doc_frequency() -> usize {
@@ -305,6 +315,12 @@ fn default_seed_h2_h3_weight() -> f32 {
 fn default_seed_body_weight() -> f32 {
     1.0
 }
+fn default_seed_max_doc_frequency_ratio() -> f32 {
+    0.5
+}
+fn default_cluster_overlap_threshold() -> f32 {
+    0.8
+}
 
 impl Default for GraphIndexConfig {
     fn default() -> Self {
@@ -319,6 +335,8 @@ impl Default for GraphIndexConfig {
             seed_h1_weight: default_seed_h1_weight(),
             seed_h2_h3_weight: default_seed_h2_h3_weight(),
             seed_body_weight: default_seed_body_weight(),
+            seed_max_doc_frequency_ratio: default_seed_max_doc_frequency_ratio(),
+            cluster_overlap_threshold: default_cluster_overlap_threshold(),
         }
     }
 }

@@ -80,8 +80,9 @@ pub fn extract_seeds(
 
     // Build the tokenizer pipeline once and reuse it for every document.
     // `token_stream` takes `&mut self`, so the analyzer is threaded through by
-    // mutable reference rather than cloned per call.
-    let mut analyzer = build_analyzer();
+    // mutable reference rather than cloned per call. The context name, when
+    // supplied, is installed as an extra stopword for this run.
+    let mut analyzer = build_analyzer(context_filter);
 
     // Build weighted term frequency per document and document frequency per term.
     // `doc_weighted_tf[i][term] = weighted count of term across all fields of doc i`
@@ -160,11 +161,16 @@ pub fn extract_seeds(
     }
 
     let min_df = config.seed_min_doc_frequency;
+    // Max-df filter: drop phrases appearing in more than this fraction of
+    // docs. Catches "gravity well" terms (e.g. repeated slug tokens) whose
+    // IDF can't overcome title-weighting.
+    let max_df_ratio = config.seed_max_doc_frequency_ratio.max(0.0);
+    let max_df = ((total_docs as f32) * max_df_ratio).floor() as usize;
 
-    // Filter by minimum doc frequency; build (agg_score, SeedPhrase) pairs for sorting.
+    // Filter by min and max doc frequency; build (agg_score, SeedPhrase) pairs for sorting.
     let mut scored: Vec<(f32, SeedPhrase)> = phrase_scores
         .into_iter()
-        .filter(|(_, agg)| agg.doc_frequency >= min_df)
+        .filter(|(_, agg)| agg.doc_frequency >= min_df && agg.doc_frequency <= max_df)
         .map(|(phrase, mut agg)| {
             agg.doc_scores
                 .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -342,17 +348,47 @@ fn strip_dates(text: &str) -> String {
     date_re().replace_all(text, " ").to_string()
 }
 
-/// Build the shared tokenizer pipeline:
-/// `SimpleTokenizer` → `LowerCaser` → English stopwords → English Snowball stemmer.
+/// Extended stopword list layered on top of tantivy's built-in English filter.
 ///
-/// Stopword filtering relies on tantivy's built-in English list (enabled via
-/// the `stopwords` feature). Stemming normalizes surface forms so "indexing",
-/// "indexes", and "indexed" all fold to the same token.
-fn build_analyzer() -> TextAnalyzer {
-    TextAnalyzer::builder(SimpleTokenizer::default())
+/// Tantivy's default English list is Lucene's 33-word minimalist set; it lets
+/// common auxiliary/discourse words through ("from", "has", "should", etc.)
+/// which survive TF-IDF weighting when they appear in titles. Listed here in
+/// their unstemmed surface form — the stopword filter runs before stemming.
+const EXTENDED_STOPWORDS: &[&str] = &[
+    "from", "has", "have", "had", "having", "can", "could", "may", "might", "must", "shall",
+    "should", "would", "do", "does", "did", "done", "been", "being", "am", "we", "us", "our",
+    "ours", "you", "your", "yours", "i", "me", "my", "mine", "he", "him", "his", "she", "her",
+    "hers", "them", "theirs", "after", "before", "when", "where", "while", "which", "who", "whom",
+    "whose", "why", "how", "what", "also", "just", "only", "so", "than", "too", "very", "some",
+    "any", "each", "every", "more", "most", "other", "others", "over", "under", "about", "above",
+    "below", "between", "during", "through", "up", "down", "out", "off", "again", "further",
+    "here", "there", "now", "all", "both", "few", "many", "same", "own",
+];
+
+/// Build the shared tokenizer pipeline:
+/// `SimpleTokenizer` → `LowerCaser` → default English stopwords → extended
+/// stopwords → (optional) context-name stopword → English Snowball stemmer.
+///
+/// Stopword filtering runs before stemming, so each stopword list must contain
+/// raw surface forms (e.g. `"has"`, not `"ha"`). The context name, when
+/// supplied, is lowercased and added as a one-off stopword so that every doc
+/// in an active context doesn't get that context's name as a top seed (the
+/// gravity-well case).
+fn build_analyzer(context_filter: Option<&str>) -> TextAnalyzer {
+    let mut builder = TextAnalyzer::builder(SimpleTokenizer::default())
         .filter(LowerCaser)
         .filter(StopWordFilter::new(Language::English).expect("English stopwords available"))
-        .filter(Stemmer::new(Language::English))
+        .filter(StopWordFilter::remove(
+            EXTENDED_STOPWORDS.iter().map(|&w| w.to_string()),
+        ))
+        .dynamic();
+    if let Some(ctx) = context_filter {
+        builder = builder
+            .filter_dynamic(StopWordFilter::remove(vec![ctx.to_lowercase()]))
+            .dynamic();
+    }
+    builder
+        .filter_dynamic(Stemmer::new(Language::English))
         .build()
 }
 
@@ -374,7 +410,7 @@ mod tests {
 
     #[test]
     fn test_tokenize_filters_stopwords_and_stems() {
-        let mut analyzer = build_analyzer();
+        let mut analyzer = build_analyzer(None);
         let tokens = tokenize(&mut analyzer, "Hello, world! This is a test.");
         // Content words survive lowercasing + stemming (these stem to themselves).
         assert!(tokens.contains(&"hello".to_string()));
@@ -384,11 +420,21 @@ mod tests {
         assert!(!tokens.contains(&"this".to_string()));
         assert!(!tokens.contains(&"is".to_string()));
         assert!(!tokens.contains(&"a".to_string()));
+
+        // Extended stopwords layered after tantivy's default English list.
+        let probe = "we should know from where it has gone when it can";
+        let probe_tokens = tokenize(&mut analyzer, probe);
+        for dropped in ["from", "has", "should", "can", "when", "where"] {
+            assert!(
+                !probe_tokens.contains(&dropped.to_string()),
+                "extended stopword '{dropped}' leaked through: {probe_tokens:?}"
+            );
+        }
     }
 
     #[test]
     fn test_tokenize_stems_inflected_forms() {
-        let mut analyzer = build_analyzer();
+        let mut analyzer = build_analyzer(None);
         let tokens = tokenize(&mut analyzer, "testing running indexes");
         // Snowball stems: testing → test, running → run, indexes → index.
         assert!(tokens.contains(&"test".to_string()));
@@ -549,9 +595,14 @@ The pipeline runs nightly. The pipeline emits logs. The pipeline has stages.
         fs::write(task_dir.join("b.md"), doc_b).unwrap();
 
         // Low min_df=1 so single-doc seeds still surface for the assertion.
+        // Disable max-df filter: this fixture has only 2 docs and
+        // "pipeline" (stem "pipelin") appears in both — the production 0.5
+        // default would drop it as a gravity well. This test exercises the
+        // title-boost mechanic, not the max-df filter.
         let cfg = GraphIndexConfig {
             seed_min_doc_frequency: 1,
             seed_top_n: 100,
+            seed_max_doc_frequency_ratio: 1.1,
             ..GraphIndexConfig::default()
         };
 
@@ -573,6 +624,105 @@ The pipeline runs nightly. The pipeline emits logs. The pipeline has stages.
         assert!(
             phrases.contains(&"graph"),
             "expected 'graph' (title-weighted) in seeds, got: {phrases:?}"
+        );
+    }
+
+    #[test]
+    fn test_extract_seeds_filters_gravity_wells() {
+        // 4 docs in an "alpha" context. "ubiquitous" appears in all 4
+        // (100% > 50%) and should get dropped as a gravity well.
+        // "alpha" appears in every doc's prose — the context-name auto-stopword
+        // should strip it. "rarephrase" appears in only doc A.
+        let tmp = tempfile::tempdir().unwrap();
+        let task_dir = tmp.path().join("@me").join("alpha").join("task");
+        fs::create_dir_all(&task_dir).unwrap();
+
+        let make_doc = |id: &str, slug: &str, title: &str, body: &str| -> String {
+            format!(
+                "---\n\
+temper-id: \"01900000-0000-7000-8000-{id}\"\n\
+temper-type: task\n\
+temper-context: alpha\n\
+temper-created: \"2026-01-01T00:00:00Z\"\n\
+temper-owner: \"@me\"\n\
+title: \"{title}\"\n\
+temper-stage: backlog\n\
+slug: {slug}\n\
+---\n\
+\n\
+{body}\n"
+            )
+        };
+
+        fs::write(
+            task_dir.join("a.md"),
+            make_doc(
+                "000000000001",
+                "doc-a",
+                "Doc A",
+                "Ubiquitous alpha content here. Rarephrase surfaces only once in the alpha corpus.",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            task_dir.join("b.md"),
+            make_doc(
+                "000000000002",
+                "doc-b",
+                "Doc B",
+                "Ubiquitous alpha content again. Nothing special here in alpha.",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            task_dir.join("c.md"),
+            make_doc(
+                "000000000003",
+                "doc-c",
+                "Doc C",
+                "Ubiquitous alpha words. The alpha world keeps spinning.",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            task_dir.join("d.md"),
+            make_doc(
+                "000000000004",
+                "doc-d",
+                "Doc D",
+                "Ubiquitous alpha mention. Alpha work continues daily.",
+            ),
+        )
+        .unwrap();
+
+        let cfg = GraphIndexConfig {
+            seed_min_doc_frequency: 1,
+            seed_top_n: 100,
+            // Default 0.5 max-df: any term in >2 of 4 docs gets dropped.
+            ..GraphIndexConfig::default()
+        };
+
+        let seeds = extract_seeds(tmp.path(), &cfg, Some("alpha"));
+        let phrases: Vec<&str> = seeds.iter().map(|s| s.phrase.as_str()).collect();
+
+        // "ubiquitous" appears in all 4 docs — gravity well, must be filtered.
+        assert!(
+            !phrases.contains(&"ubiquit"),
+            "gravity-well term 'ubiquit' (df=4/4) should be filtered, got: {phrases:?}"
+        );
+        // "alpha" is the context name — must not appear in any seed (neither
+        // as a unigram nor inside a bigram).
+        for phrase in &phrases {
+            assert!(
+                !phrase.split_whitespace().any(|tok| tok == "alpha"),
+                "context-name 'alpha' leaked into seed '{phrase}': {phrases:?}"
+            );
+        }
+        // "rarephrase" appears in 1/4 docs (25%) — survives the max-df filter.
+        // With seed_min_doc_frequency: 1 it also survives the min-df filter.
+        assert!(
+            phrases.contains(&"rarephras"),
+            "expected rare term 'rarephras' (df=1/4) in seeds, got: {phrases:?}"
         );
     }
 
