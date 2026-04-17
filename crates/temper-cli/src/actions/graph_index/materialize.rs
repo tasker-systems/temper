@@ -140,6 +140,10 @@ fn build_concept_content(
     fm.set_open_field("slug", serde_json::Value::String(slug.to_string()));
     fm.set_open_field("title", serde_json::Value::String(title.to_string()));
     fm.set_open_field(
+        "date",
+        serde_json::Value::String(chrono::Utc::now().format("%Y-%m-%d").to_string()),
+    );
+    fm.set_open_field(
         "temper-provenance",
         serde_json::Value::String("llm-discovered".to_string()),
     );
