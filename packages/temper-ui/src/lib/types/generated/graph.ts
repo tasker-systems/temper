@@ -10,6 +10,15 @@ import type { JsonValue } from "./serde_json/JsonValue";
 export type EdgeType = "relates_to" | "extends" | "depends_on" | "references" | "parent_of" | "preceded_by" | "derived_from";
 
 /**
+ * One directed edge in a returned subgraph.
+ *
+ * Both `source` and `target` are guaranteed to appear as `id` on a node
+ * in the same `SubgraphResponse` — edges to/from nodes outside the
+ * subgraph are filtered out server-side.
+ */
+export type GraphEdge = { source: string, target: string, edge_type: EdgeType, };
+
+/**
  * Edge listing row — mirrors the `graph_resource_edges()` SQL function.
  */
 export type GraphEdgeRow = { edge_id: string, peer_resource_id: string, peer_title: string, peer_slug: string, edge_type: EdgeType, direction: string, weight: number, metadata: JsonValue, created: string, };
@@ -18,6 +27,23 @@ export type GraphEdgeRow = { edge_id: string, peer_resource_id: string, peer_tit
  * Graph neighbor row — mirrors the `graph_neighbors()` SQL function.
  */
 export type GraphNeighborRow = { resource_id: string, edge_type: EdgeType, direction: string, weight: number, metadata: JsonValue, };
+
+/**
+ * One node in a returned subgraph.
+ *
+ * `edge_count` is the resource's **total** edge count in the graph (not just
+ * within the returned subgraph) — used client-side to size the visual radius.
+ */
+export type GraphNode = { id: string, slug: string, title: string, 
+/**
+ * Lowercase doc-type name (`"concept"`, `"research"`, etc.) — matches
+ * `kb_doc_types.name` and the client's `DocType` union.
+ */
+doc_type: string, 
+/**
+ * Count of all edges touching this resource, regardless of subgraph scope.
+ */
+edge_count: number, };
 
 /**
  * Graph traversal result row — mirrors the `graph_traverse()` SQL function.
@@ -36,3 +62,8 @@ export type GraphTraversalRow = { resource_id: string, depth: number, path: Arra
  * or slugs — that get resolved to `kb_resources.id` at ingest time.
  */
 export type ResourceRelationships = { relates_to: Array<string>, extends: Array<string>, depends_on: Array<string>, references: Array<string>, parent: string | null, preceded_by: Array<string>, derived_from: Array<string>, };
+
+/**
+ * Full response body for `GET /api/graph/subgraph`.
+ */
+export type SubgraphResponse = { nodes: Array<GraphNode>, edges: Array<GraphEdge>, };
