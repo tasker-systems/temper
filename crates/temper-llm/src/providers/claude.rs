@@ -8,6 +8,25 @@ use std::time::Duration;
 
 use crate::provider::{LlmError, LlmProvider, LlmResponse, Message, ToolCall, ToolSchema};
 
+// ── Retry constants ────────────────────────────────────────────────────────────
+
+/// Total number of attempts (initial try + retries).
+const MAX_ATTEMPTS: u32 = 3;
+
+/// Base delay in milliseconds between retries; doubled each attempt
+/// (1s before retry #2, 2s before retry #3).
+const BASE_DELAY_MS: u64 = 1000;
+
+/// Default Anthropic Messages API endpoint.
+const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+
+/// Crate-internal error wrapper used by `complete_once` so the retry loop can
+/// distinguish transient failures (retry) from permanent ones (propagate).
+enum AttemptError {
+    Transient(String),
+    Permanent(LlmError),
+}
+
 // ── Request types ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -90,6 +109,7 @@ pub struct ClaudeProvider {
     client: Client,
     api_key: String,
     model: String,
+    base_url: String,
 }
 
 impl ClaudeProvider {
@@ -109,10 +129,19 @@ impl ClaudeProvider {
             .build()
             .map_err(|e| e.to_string())?;
 
+        // Test hook: `TEMPER_LLM_CLAUDE_BASE_URL_OVERRIDE` redirects requests
+        // to a mock server for integration tests. The env var is never set in
+        // production and only consulted once at construction time, so the cost
+        // is negligible and the alternative (cfg-gated resolver) does not work
+        // for `tests/` targets which compile the lib without `cfg(test)`.
+        let base_url = std::env::var("TEMPER_LLM_CLAUDE_BASE_URL_OVERRIDE")
+            .unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+
         Ok(Self {
             client,
             api_key,
             model: model.to_string(),
+            base_url,
         })
     }
 }
@@ -125,15 +154,18 @@ impl Debug for ClaudeProvider {
     }
 }
 
-#[async_trait]
-impl LlmProvider for ClaudeProvider {
-    async fn complete(
+impl ClaudeProvider {
+    /// Single attempt against the Messages API. Returns `AttemptError::Transient`
+    /// for retryable failures (network errors, HTTP 5xx, HTTP 429) and
+    /// `AttemptError::Permanent` for non-retryable ones (other 4xx, JSON parse
+    /// failures, unexpected response types).
+    async fn complete_once(
         &self,
         system: &str,
         messages: &[Message],
         tools: &[ToolSchema],
         response_format: Option<&schemars::Schema>,
-    ) -> Result<LlmResponse, LlmError> {
+    ) -> Result<LlmResponse, AttemptError> {
         let api_messages: Vec<ApiMessage> = messages
             .iter()
             .map(|m| ApiMessage {
@@ -181,35 +213,50 @@ impl LlmProvider for ClaudeProvider {
             response_format: api_response_format,
         };
 
+        // Transport-level errors are always transient.
         let response = self
             .client
-            .post("https://api.anthropic.com/v1/messages")
+            .post(format!("{}/v1/messages", self.base_url))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
             .json(&request)
             .send()
-            .await?;
+            .await
+            .map_err(|e| AttemptError::Transient(e.to_string()))?;
 
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
+            let is_retryable = status.is_server_error() || status.as_u16() == 429;
+
             // Attempt to parse as API error for structured error type mapping
-            if let Ok(api_err) = serde_json::from_str::<ApiError>(&body) {
+            let permanent_err = if let Ok(api_err) = serde_json::from_str::<ApiError>(&body) {
                 match api_err.error_type.as_str() {
-                    "rate_limit" => return Err(LlmError::RateLimit),
-                    "timeout" => return Err(LlmError::Timeout),
-                    _ => return Err(LlmError::Provider(api_err.error.message)),
+                    "rate_limit" => LlmError::RateLimit,
+                    "timeout" => LlmError::Timeout,
+                    _ => LlmError::Provider(api_err.error.message),
                 }
-            }
-            return Err(LlmError::Provider(format!(
-                "HTTP {}: {}",
-                status.as_u16(),
-                body
-            )));
+            } else {
+                LlmError::Provider(format!("HTTP {}: {}", status.as_u16(), body))
+            };
+
+            return if is_retryable {
+                Err(AttemptError::Transient(format!(
+                    "HTTP {}: {}",
+                    status.as_u16(),
+                    body
+                )))
+            } else {
+                Err(AttemptError::Permanent(permanent_err))
+            };
         }
 
-        let api_response: MessagesResponse = response.json().await?;
+        // JSON parse failures on a 2xx body are semantic, not transport.
+        let api_response: MessagesResponse = response
+            .json()
+            .await
+            .map_err(|e| AttemptError::Permanent(LlmError::Provider(e.to_string())))?;
 
         match api_response.response_type.as_str() {
             "message" => {
@@ -240,11 +287,51 @@ impl LlmProvider for ClaudeProvider {
                     Ok(LlmResponse::Final { content })
                 }
             }
-            other => Err(LlmError::Model(format!(
+            other => Err(AttemptError::Permanent(LlmError::Model(format!(
                 "unexpected response type: {}",
                 other
-            ))),
+            )))),
         }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for ClaudeProvider {
+    async fn complete(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[ToolSchema],
+        response_format: Option<&schemars::Schema>,
+    ) -> Result<LlmResponse, LlmError> {
+        let mut last_transient: Option<String> = None;
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self
+                .complete_once(system, messages, tools, response_format)
+                .await
+            {
+                Ok(resp) => return Ok(resp),
+                Err(AttemptError::Permanent(err)) => return Err(err),
+                Err(AttemptError::Transient(msg)) => {
+                    if attempt < MAX_ATTEMPTS {
+                        tracing::warn!(
+                            attempt,
+                            max_attempts = MAX_ATTEMPTS,
+                            error = %msg,
+                            "transient provider error, retrying"
+                        );
+                        let delay_ms = BASE_DELAY_MS << (attempt - 1);
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                    last_transient = Some(msg);
+                }
+            }
+        }
+
+        Err(LlmError::Provider(
+            last_transient.unwrap_or_else(|| "retry attempts exhausted".to_string()),
+        ))
     }
 
     fn provider_name(&self) -> &str {

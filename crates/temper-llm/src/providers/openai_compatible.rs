@@ -9,6 +9,22 @@ use std::time::Duration;
 
 use crate::provider::{LlmError, LlmProvider, LlmResponse, Message, ToolCall, ToolSchema};
 
+// ── Retry constants ────────────────────────────────────────────────────────────
+
+/// Total number of attempts (initial try + retries).
+const MAX_ATTEMPTS: u32 = 3;
+
+/// Base delay in milliseconds between retries; doubled each attempt
+/// (1s before retry #2, 2s before retry #3).
+const BASE_DELAY_MS: u64 = 1000;
+
+/// Crate-internal error wrapper used by `complete_once` so the retry loop can
+/// distinguish transient failures (retry) from permanent ones (propagate).
+enum AttemptError {
+    Transient(String),
+    Permanent(LlmError),
+}
+
 // ── Request types ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize)]
@@ -193,15 +209,18 @@ impl std::fmt::Debug for OpenAiCompatibleProvider {
     }
 }
 
-#[async_trait]
-impl LlmProvider for OpenAiCompatibleProvider {
-    async fn complete(
+impl OpenAiCompatibleProvider {
+    /// Single attempt against the chat-completions endpoint. Returns
+    /// `AttemptError::Transient` for retryable failures (network errors, HTTP
+    /// 5xx, HTTP 429) and `AttemptError::Permanent` for non-retryable ones
+    /// (other 4xx, JSON parse failures, empty choices array).
+    async fn complete_once(
         &self,
         system: &str,
         messages: &[Message],
         tools: &[ToolSchema],
         response_format: Option<&schemars::Schema>,
-    ) -> Result<LlmResponse, LlmError> {
+    ) -> Result<LlmResponse, AttemptError> {
         // Build messages: prepend system message if non-empty.
         let mut api_messages = Vec::with_capacity(messages.len() + 1);
         if !system.is_empty() {
@@ -269,46 +288,61 @@ impl LlmProvider for OpenAiCompatibleProvider {
         }
         req_builder = req_builder.header("Content-Type", "application/json");
 
+        // Transport-level errors are always transient.
         let response = req_builder
             .json(&request)
             .send()
             .await
-            .map_err(|e| LlmError::Provider(e.to_string()))?;
+            .map_err(|e| AttemptError::Transient(e.to_string()))?;
 
         let status = response.status();
         let body = response
             .text()
             .await
-            .map_err(|e| LlmError::Provider(e.to_string()))?;
+            .map_err(|e| AttemptError::Transient(e.to_string()))?;
 
         if !status.is_success() {
+            // 5xx and 429: retry. Other 4xx: permanent.
+            let is_retryable = status.is_server_error() || status.as_u16() == 429;
+
             // Try to parse error body; fall back to a generic message.
-            if let Ok(err_resp) = serde_json::from_str::<ChatResponse>(&body) {
+            let permanent_err = if let Ok(err_resp) = serde_json::from_str::<ChatResponse>(&body) {
                 if let Some(err) = err_resp.error {
                     if err.error_type.as_deref() == Some("rate_limit") {
-                        return Err(LlmError::RateLimit);
+                        LlmError::RateLimit
+                    } else {
+                        LlmError::Provider(err.message)
                     }
-                    return Err(LlmError::Provider(err.message));
+                } else {
+                    LlmError::Provider(format!("HTTP {status}: {body}"))
                 }
-            }
-            return Err(LlmError::Provider(format!("HTTP {status}: {body}")));
+            } else {
+                LlmError::Provider(format!("HTTP {status}: {body}"))
+            };
+
+            return if is_retryable {
+                // Surface the underlying provider message for logging; final
+                // caller will see `permanent_err` only if all attempts fail.
+                Err(AttemptError::Transient(format!("HTTP {status}: {body}")))
+            } else {
+                Err(AttemptError::Permanent(permanent_err))
+            };
         }
 
-        let chat_resp: ChatResponse =
-            serde_json::from_str(&body).map_err(|e| LlmError::Provider(e.to_string()))?;
+        // JSON parse failures on a 2xx body are semantic, not transport.
+        let chat_resp: ChatResponse = serde_json::from_str(&body)
+            .map_err(|e| AttemptError::Permanent(LlmError::Provider(e.to_string())))?;
 
         if let Some(err) = chat_resp.error {
             if err.error_type.as_deref() == Some("rate_limit") {
-                return Err(LlmError::RateLimit);
+                return Err(AttemptError::Permanent(LlmError::RateLimit));
             }
-            return Err(LlmError::Provider(err.message));
+            return Err(AttemptError::Permanent(LlmError::Provider(err.message)));
         }
 
-        let choice = chat_resp
-            .choices
-            .into_iter()
-            .next()
-            .ok_or_else(|| LlmError::Provider("empty choices array".to_string()))?;
+        let choice = chat_resp.choices.into_iter().next().ok_or_else(|| {
+            AttemptError::Permanent(LlmError::Provider("empty choices array".to_string()))
+        })?;
 
         match choice.message {
             AssistantMessage::WithContent { content, .. } => {
@@ -335,6 +369,46 @@ impl LlmProvider for OpenAiCompatibleProvider {
                 Ok(LlmResponse::ToolUse { calls })
             }
         }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for OpenAiCompatibleProvider {
+    async fn complete(
+        &self,
+        system: &str,
+        messages: &[Message],
+        tools: &[ToolSchema],
+        response_format: Option<&schemars::Schema>,
+    ) -> Result<LlmResponse, LlmError> {
+        let mut last_transient: Option<String> = None;
+
+        for attempt in 1..=MAX_ATTEMPTS {
+            match self
+                .complete_once(system, messages, tools, response_format)
+                .await
+            {
+                Ok(resp) => return Ok(resp),
+                Err(AttemptError::Permanent(err)) => return Err(err),
+                Err(AttemptError::Transient(msg)) => {
+                    if attempt < MAX_ATTEMPTS {
+                        tracing::warn!(
+                            attempt,
+                            max_attempts = MAX_ATTEMPTS,
+                            error = %msg,
+                            "transient provider error, retrying"
+                        );
+                        let delay_ms = BASE_DELAY_MS << (attempt - 1);
+                        tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+                    }
+                    last_transient = Some(msg);
+                }
+            }
+        }
+
+        Err(LlmError::Provider(
+            last_transient.unwrap_or_else(|| "retry attempts exhausted".to_string()),
+        ))
     }
 
     fn provider_name(&self) -> &str {
