@@ -1,6 +1,7 @@
 //! `temper graph` command dispatch.
 
 use crate::actions::graph_build::{self, GraphBuildParams};
+use crate::actions::graph_index::{self, GraphIndexParams};
 use crate::cli::GraphAction;
 use crate::config::Config;
 use crate::error::Result;
@@ -20,6 +21,20 @@ pub fn run(config: &Config, action: GraphAction) -> Result<()> {
             };
             let report = graph_build::run(config, params)?;
             render_report(&report, dry_run, verbose);
+            Ok(())
+        }
+        GraphAction::Index {
+            context,
+            dry_run,
+            verbose,
+        } => {
+            let params = GraphIndexParams {
+                context_filter: context,
+                dry_run,
+                verbose,
+            };
+            let report = graph_index::run(config, params)?;
+            render_graph_index_report(&report, dry_run, verbose);
             Ok(())
         }
     }
@@ -63,6 +78,36 @@ fn render_report(report: &graph_build::GraphBuildReport, dry_run: bool, verbose:
                     output::plain(format!("    - {r}"));
                 }
             }
+        }
+    }
+}
+
+fn render_graph_index_report(report: &graph_index::GraphIndexReport, dry_run: bool, verbose: bool) {
+    let verb = if dry_run { "Would create" } else { "Created" };
+
+    output::header(format!(
+        "temper graph index — {} seeds, {} clusters",
+        report.seeds_extracted, report.clusters_formed
+    ));
+    output::plain(format!(
+        "  Proposals returned: {}",
+        report.proposals_returned
+    ));
+    output::plain(format!("  {verb} concepts:    {}", report.concepts_created));
+    output::plain(format!(
+        "  Skipped (non-concept): {}",
+        report.concepts_skipped
+    ));
+    output::plain(format!("  Members updated:    {}", report.members_updated));
+    if report.errors > 0 {
+        output::plain(format!("  Errors:             {}", report.errors));
+    }
+
+    if verbose && !report.failed.is_empty() {
+        output::blank();
+        output::plain("Failures:");
+        for f in &report.failed {
+            output::plain(format!("  - {f}"));
         }
     }
 }

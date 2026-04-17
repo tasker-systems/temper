@@ -1,13 +1,24 @@
-//! HNSW index building — walks vault, embeds files, writes `.temper/index.json` sidecar.
+//! HNSW index building — walks vault, embeds files, and writes
+//! `.temper/index.hnsw.data` + `.temper/index.hnsw.graph` (the on-disk HNSW graph)
+//! alongside a `.temper/index.json` sidecar manifest.
 //!
-//! Incremental: loads existing `.temper/index.json` and skips files whose (rel_path, content_hash)
-//! hasn't changed since the last run. Actual HNSW index write is TODO — depends on hnsw_rs API.
+//! Incremental: loads existing `.temper/index.json` and skips re-embedding files whose
+//! (rel_path, content_hash) hasn't changed since the last run. Cached chunk embeddings
+//! are reused — they're reinserted into the freshly-constructed HNSW so every query run
+//! sees the full corpus, not just newly-changed files.
+//!
+//! Streaming + checkpointed: the sidecar manifest is flushed every
+//! `CHECKPOINT_EVERY` files and at the end, so a kill mid-walk preserves progress.
+//! The HNSW binary is dumped once at the end (hnsw_rs has no streaming append).
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
+
+#[cfg(feature = "hnsw")]
+use hnsw_rs::prelude::{AnnT, DistCosine, Hnsw};
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
@@ -17,6 +28,15 @@ use super::index::IndexReport;
 
 /// Doc types that live at `{vault}/{owner}/{context}/{doc_type}/`.
 const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
+
+/// How many files between sidecar flushes during the walk. Keeps kill-resilience while
+/// avoiding a write-per-file amplification on large vaults.
+const CHECKPOINT_EVERY: usize = 25;
+
+/// Model and vector dimension used when building the sidecar. Kept as module-level
+/// constants so the checkpoint and final writes produce identical manifests.
+const MODEL_NAME: &str = "BAAI/bge-base-en-v1.5";
+const DIMENSION: usize = 768;
 
 /// Sidecar manifest — written to `.temper/index.json` alongside the binary index.
 /// Exposed as pub(crate) for use by graph_index module.
@@ -45,6 +65,9 @@ struct ChunkEntry {
     header_path: String,
     content_hash: String,
     vector_id: usize,
+    /// Per-chunk embedding. Persisted so incremental runs can reinsert cached chunks
+    /// into a freshly-constructed HNSW without re-embedding unchanged files.
+    embedding: Vec<f32>,
 }
 
 /// Run the index build pipeline.
@@ -52,23 +75,60 @@ pub fn run(config: &Config, params: IndexParams, temper_dir: &PathBuf) -> Result
     // Use config's vault_root
     let vault_root = config.vault_root.clone();
 
-    // Load existing manifest for incremental indexing
+    // Load existing manifest for incremental indexing. Cached entries carry chunk
+    // embeddings that will be reinserted into the new HNSW below.
     let existing: HashMap<(String, String), ManifestFile> = load_existing_manifest(temper_dir)?;
 
     // Discover vault files — hardcode "@me" owner, walk all contexts
     let discovered = discover_vault(&vault_root, params.context_filter.as_deref());
 
+    // Estimate max_elements for HNSW up-front: every cached chunk will be reinserted,
+    // and each new file contributes at most ~25 chunks (safe over-estimate using the
+    // whole discovered set as an upper bound on "to embed"). hnsw_rs treats
+    // max_elements as a sizing hint, not a hard cap.
+    let total_files = discovered.len();
+    let existing_chunk_count: usize = existing.values().map(|f| f.chunks.len()).sum();
+    let estimated_cached = existing.len().min(total_files);
+    let to_embed_upper_bound = total_files.saturating_sub(estimated_cached);
+
+    #[cfg(feature = "hnsw")]
+    let estimated_max_elements = existing_chunk_count + total_files * 25;
+    // `existing_chunk_count` is consumed via the estimate; silence unused-var when hnsw is off.
+    #[cfg(not(feature = "hnsw"))]
+    let _ = existing_chunk_count;
+
+    tracing::info!(
+        total_files,
+        cached = estimated_cached,
+        to_embed = to_embed_upper_bound,
+        "starting index build"
+    );
+
+    // Construct the HNSW graph up-front so cached chunks and freshly-embedded chunks
+    // feed into the same graph during the walk.
+    #[cfg(feature = "hnsw")]
+    let hnsw: Hnsw<f32, DistCosine> = Hnsw::new(
+        24,                            // max_nb_connection
+        estimated_max_elements.max(1), // max_elements (sizing hint)
+        16,                            // max_layer — hnsw_rs file_dump requires NB_LAYER_MAX
+        400,                           // ef_construction
+        DistCosine {},
+    );
+
     let mut report = IndexReport::default();
     let mut new_entries: Vec<FileEntry> = Vec::new();
     let mut vector_id_counter = 0usize;
 
-    // TODO: Initialize HNSW index once hnsw_rs is available
-    // let hnsw_dir = temper_dir.join("index.bin");
-    // let mut hnsw_index = hnsw_rs::Index::new(dim: 768, ...);
-
-    for discovered_file in discovered {
+    for (idx, discovered_file) in discovered.into_iter().enumerate() {
         let rel_path = discovered_file.rel_path.clone();
         let path = discovered_file.path.clone();
+
+        tracing::info!(
+            file = %rel_path,
+            idx = idx + 1,
+            total = total_files,
+            "indexing file"
+        );
 
         // Compute content hash from file body (not frontmatter-stripped)
         let (body_hash, mtime_ns) = match compute_body_hash(&path) {
@@ -80,20 +140,38 @@ pub fn run(config: &Config, params: IndexParams, temper_dir: &PathBuf) -> Result
             }
         };
 
-        // Skip unchanged files
+        // Unchanged file: reuse cached manifest entry AND reinsert its chunk embeddings
+        // into the HNSW so incremental runs produce a graph covering the whole corpus.
         if let Some(existing_entry) = existing.get(&(rel_path.clone(), body_hash.clone())) {
+            let mut reused_chunks: Vec<ChunkEntry> =
+                Vec::with_capacity(existing_entry.chunks.len());
+            for chunk in &existing_entry.chunks {
+                let vid = vector_id_counter;
+                vector_id_counter += 1;
+                #[cfg(feature = "hnsw")]
+                hnsw.insert((&chunk.embedding, vid));
+                reused_chunks.push(ChunkEntry {
+                    index: chunk.index,
+                    header_path: chunk.header_path.clone(),
+                    content_hash: chunk.content_hash.clone(),
+                    vector_id: vid,
+                    embedding: chunk.embedding.clone(),
+                });
+            }
             report.files_skipped += 1;
             new_entries.push(FileEntry {
                 rel_path,
                 content_hash: body_hash,
                 mtime_ns,
                 doc_embedding: existing_entry.doc_embedding.clone(),
-                chunks: existing_entry.chunks.clone(),
+                chunks: reused_chunks,
             });
+
+            maybe_checkpoint(idx, temper_dir, &new_entries)?;
             continue;
         }
 
-        // Read and strip frontmatter
+        // Changed/new file: read, strip frontmatter, chunk, embed.
         let raw = match fs::read_to_string(&path) {
             Ok(r) => r,
             Err(e) => {
@@ -155,27 +233,26 @@ pub fn run(config: &Config, params: IndexParams, temper_dir: &PathBuf) -> Result
             vec![]
         };
 
-        // Build chunk entries
-        let chunk_entries: Vec<ChunkEntry> = chunks
-            .iter()
-            .enumerate()
-            .map(|(i, chunk)| {
-                let chunk_hash = sha256_hex(chunk.content.as_bytes());
-                let vid = vector_id_counter;
-                vector_id_counter += 1;
-                ChunkEntry {
-                    index: i,
-                    header_path: chunk.header_path.clone(),
-                    content_hash: chunk_hash,
-                    vector_id: vid,
-                }
-            })
-            .collect();
-
-        // TODO: Add chunk embeddings to HNSW index
-        // for emb in embeddings {
-        //     hnsw_index.add_vector(emb, vector_id);
-        // }
+        // Build chunk entries — embedding is persisted inline so the next incremental
+        // run can reinsert this chunk without re-embedding.
+        let mut chunk_entries: Vec<ChunkEntry> = Vec::with_capacity(chunks.len());
+        for (i, chunk) in chunks.iter().enumerate() {
+            let chunk_hash = sha256_hex(chunk.content.as_bytes());
+            let vid = vector_id_counter;
+            vector_id_counter += 1;
+            let embedding = embeddings.get(i).cloned().unwrap_or_default();
+            #[cfg(feature = "hnsw")]
+            if !embedding.is_empty() {
+                hnsw.insert((&embedding, vid));
+            }
+            chunk_entries.push(ChunkEntry {
+                index: i,
+                header_path: chunk.header_path.clone(),
+                content_hash: chunk_hash,
+                vector_id: vid,
+                embedding,
+            });
+        }
 
         report.files_indexed += 1;
 
@@ -186,27 +263,80 @@ pub fn run(config: &Config, params: IndexParams, temper_dir: &PathBuf) -> Result
             doc_embedding,
             chunks: chunk_entries,
         });
+
+        maybe_checkpoint(idx, temper_dir, &new_entries)?;
     }
 
-    // Write HNSW index
-    // TODO: hnsw_index.write_index(temper_dir.join("index.bin"))?;
+    // Final sidecar write — always happens, even when nothing was indexed, so the
+    // manifest file reflects the current vault shape.
+    write_sidecar(temper_dir, &new_entries)?;
 
-    // Write sidecar manifest
+    // Dump the HNSW graph to `.temper/index.hnsw.{data,graph}`.
+    // Skip the dump when there's nothing to index (e.g. an empty vault).
+    #[cfg(feature = "hnsw")]
+    if !new_entries.is_empty() {
+        dump_hnsw(&hnsw, temper_dir)?;
+    }
+
+    tracing::info!(
+        files_indexed = report.files_indexed,
+        files_skipped = report.files_skipped,
+        "index build complete"
+    );
+
+    Ok(report)
+}
+
+/// Flush the sidecar manifest every `CHECKPOINT_EVERY` files. Called after each file
+/// is processed. `idx` is 0-based so `(idx + 1) % N == 0` fires on the Nth, 2Nth, …
+/// file rather than the first.
+fn maybe_checkpoint(idx: usize, temper_dir: &Path, entries: &[FileEntry]) -> Result<()> {
+    if (idx + 1).is_multiple_of(CHECKPOINT_EVERY) {
+        write_sidecar(temper_dir, entries)?;
+    }
+    Ok(())
+}
+
+/// Write `.temper/index.json` from the current set of entries. Called at checkpoints
+/// and at the end of the walk. Overwrites any existing manifest.
+fn write_sidecar(temper_dir: &Path, entries: &[FileEntry]) -> Result<()> {
     let manifest = IndexManifest {
         version: 1,
         run_at: chrono::Utc::now().to_rfc3339(),
-        model: "BAAI/bge-base-en-v1.5".to_string(),
-        dimension: 768,
-        file_count: new_entries.len(),
-        files: new_entries,
+        model: MODEL_NAME.to_string(),
+        dimension: DIMENSION,
+        file_count: entries.len(),
+        files: entries.to_vec(),
     };
 
     let manifest_json = serde_json::to_string_pretty(&manifest)
         .map_err(|e| TemperError::Project(format!("serialize index manifest: {e}")))?;
     fs::write(temper_dir.join("index.json"), manifest_json)
         .map_err(|e| TemperError::Project(format!("write index.json: {e}")))?;
+    Ok(())
+}
 
-    Ok(report)
+/// Dump the already-populated HNSW graph to disk as
+/// `{temper_dir}/index.hnsw.data` + `{temper_dir}/index.hnsw.graph`.
+///
+/// `hnsw_rs::file_dump` refuses to overwrite existing files — it instead generates a
+/// random-suffixed basename — so we explicitly remove any stale dump files first.
+#[cfg(feature = "hnsw")]
+fn dump_hnsw(hnsw: &Hnsw<f32, DistCosine>, temper_dir: &Path) -> Result<()> {
+    // Remove any stale dump so file_dump writes the expected basename rather than appending a
+    // random suffix to avoid collisions.
+    for ext in ["hnsw.data", "hnsw.graph"] {
+        let p = temper_dir.join(format!("index.{ext}"));
+        if p.exists() {
+            fs::remove_file(&p)
+                .map_err(|e| TemperError::Project(format!("remove {}: {e}", p.display())))?;
+        }
+    }
+
+    hnsw.file_dump(temper_dir, "index")
+        .map_err(|e| TemperError::Project(format!("hnsw dump: {e}")))?;
+
+    Ok(())
 }
 
 /// Load existing manifest, returning map of (rel_path, content_hash) -> entry.

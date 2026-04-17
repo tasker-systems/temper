@@ -3,6 +3,7 @@ pub mod doctor;
 pub mod doctor_fix;
 pub mod goal;
 pub mod graph_build;
+pub mod graph_index;
 pub mod index;
 pub mod index_build;
 pub mod ingest;

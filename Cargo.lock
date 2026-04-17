@@ -4974,6 +4974,7 @@ dependencies = [
  "clap",
  "dialoguer",
  "dirs 5.0.1",
+ "hnsw_rs",
  "ignore",
  "indicatif 0.17.11",
  "pulldown-cmark 0.10.3",

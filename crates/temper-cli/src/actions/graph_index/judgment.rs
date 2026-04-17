@@ -1,136 +1,158 @@
-//! LLM judgment — calls Agent::run with max_turns=1 to judge cluster quality.
+//! LLM judgment — asks the agent to judge cluster quality with `max_turns=1`.
 //!
-//! Builds a prompt per cluster (seed phrase + member summaries), calls the LLM via
-//! Agent, and returns ConceptProposal results. Logs failures to `.temper/graph-index-errors-{run_id}.log`.
+//! Builds a prompt per cluster (seed phrase + members), calls the LLM via
+//! `Agent::run`, and returns `ConceptProposal` results. Failures are appended
+//! to `.temper/graph-index-errors-{run_id}.log` (one JSON line per entry).
 
-use std::fs;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
-use uuid::Uuid;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-use temper_core::types::config::GraphIndexConfig;
+use serde::Serialize;
+use serde_json::Value;
+
 use temper_llm::types::{Cluster, ConceptProposal};
-use temper_llm::{Agent, LlmProvider};
+use temper_llm::{Agent, AgentOutcome, LlmProvider, Tool};
 
-use crate::config::Config;
+const SYSTEM_PROMPT: &str = "You are analyzing a cluster of documents to determine whether they \
+represent a coherent Concept — a named idea, pattern, or domain term that recurs across multiple \
+documents. Respond with valid JSON only, matching the schema shown in the user prompt.";
 
-static RUN_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Run LLM judgment on clusters, returning concept proposals.
-pub fn judge_clusters<P: LlmProvider>(
+/// Run LLM judgment on `clusters` (single turn per cluster), returning the parsed
+/// concept proposals. Failures (LLM errors, max-turns, parse failures) are logged
+/// to `.temper/graph-index-errors-{run_id}.log` under `vault_root`.
+pub async fn judge_clusters(
     clusters: &[Cluster],
-    provider: &P,
-    config: &Config,
-    graph_config: &GraphIndexConfig,
+    provider: Arc<dyn LlmProvider>,
+    run_id: &str,
+    vault_root: &Path,
 ) -> Vec<ConceptProposal> {
-    let run_id = Uuid::new_v4().to_string();
-    let mut proposals = Vec::new();
+    let mut proposals: Vec<ConceptProposal> = Vec::new();
     let mut error_log_path: Option<PathBuf> = None;
 
     for cluster in clusters {
-        let prompt = build_judgment_prompt(cluster);
+        let user = build_judgment_prompt(cluster);
+        let mut agent = Agent::new(Arc::clone(&provider), Vec::<Tool<()>>::new(), 1usize, ());
 
-        let messages = vec![temper_llm::Message {
-            role: temper_llm::provider::MessageRole::User,
-            content: prompt,
-        }];
-
-        let agent = Agent::new(provider.clone(), vec![], Some(1));
-        let result = agent.run(messages, None::<String>);
-
-        match result {
-            Ok(outcome) => {
-                if let temper_llm::AgentOutcome::Final(response) = outcome {
-                    // Parse ConceptProposal from response
-                    if let Some(proposal) = parse_concept_proposal(&response.content, &cluster.seed.phrase) {
-                        proposals.push(proposal);
-                    } else {
-                        // Log parse failure
-                        let log_path = get_error_log_path(&run_id);
-                        append_error(&log_path, &cluster.seed.phrase, "parse_failed", &response.content);
-                    }
-                }
-            }
-            Err(e) => {
-                // Log LLM error
-                let log_path = get_error_log_path(&run_id);
-                append_error(&log_path, &cluster.seed.phrase, "llm_error", &e.to_string());
-            }
+        match agent.run(SYSTEM_PROMPT, &user).await {
+            Ok(AgentOutcome::Final { content }) => match parse_concept_proposal(&content) {
+                Some(proposal) => proposals.push(proposal),
+                None => log_error(
+                    &mut error_log_path,
+                    vault_root,
+                    run_id,
+                    &cluster.seed.phrase,
+                    "parse_failed",
+                    &content.to_string(),
+                ),
+            },
+            Ok(AgentOutcome::MaxTurns) => log_error(
+                &mut error_log_path,
+                vault_root,
+                run_id,
+                &cluster.seed.phrase,
+                "max_turns",
+                "",
+            ),
+            Err(e) => log_error(
+                &mut error_log_path,
+                vault_root,
+                run_id,
+                &cluster.seed.phrase,
+                "llm_error",
+                &e.to_string(),
+            ),
         }
     }
 
     proposals
 }
 
-/// Build a judgment prompt for a cluster.
+/// Build the user prompt for a single cluster.
 fn build_judgment_prompt(cluster: &Cluster) -> String {
     let member_list = cluster
         .member_ids
         .iter()
         .enumerate()
-        .map(|(i, id)| format!("- {}: cluster member #{}", id, i + 1))
+        .map(|(i, id)| format!("- {id} (cluster member #{})", i + 1))
         .collect::<Vec<_>>()
         .join("\n");
 
     format!(
-        r#"You are analyzing a cluster of documents to determine if they represent a coherent Concept.
-A Concept is a named idea, pattern, or domain term that recurs across multiple documents.
-
-Seed phrase: "{}"
-
-Cluster members:
-{}
-
-Existing concepts in this context (do not duplicate these):
-- (none currently exist)
-
-Respond with JSON:
-{{
-  "is_concept": true/false,
-  "slug": "proposed-slug-if-true",
-  "title": "Human-readable title if true",
-  "body_markdown": "## Members\n\n- ...",
-  "member_edges": [
-    {{"target_slug": "...", "edge_type": "relates-to"}}
-  ]
-}}"#,
+        "Seed phrase: \"{}\"\n\n\
+         Cluster members:\n{member_list}\n\n\
+         Respond with JSON matching this shape:\n\
+         {{\n\
+           \"is_concept\": true | false,\n\
+           \"slug\": \"proposed-kebab-slug-if-true\",\n\
+           \"title\": \"Human-readable title if true\",\n\
+           \"body_markdown\": \"## Members\\n\\n- ...\",\n\
+           \"member_edges\": [\n\
+             {{ \"target_slug\": \"...\", \"edge_type\": \"relates-to\" }}\n\
+           ]\n\
+         }}",
         cluster.seed.phrase,
-        member_list
     )
 }
 
-/// Parse a ConceptProposal from LLM response content.
-fn parse_concept_proposal(content: &str, _seed: &str) -> Option<ConceptProposal> {
-    // Try to extract JSON from the content
-    let json_str = content
-        .lines()
-        .filter(|l| !l.trim().starts_with("```"))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    // Find JSON object boundaries
-    let start = json_str.find('{')?;
-    let end = json_str.rfind('}').map(|p| p + 1).unwrap_or(json_str.len());
-    let json = json_str[start..end].trim();
-
-    serde_json::from_str(json).ok()
+/// Parse a `ConceptProposal` from the agent's final content value.
+///
+/// Providers return either a structured `Value::Object` (preferred) or a
+/// `Value::String` wrapping JSON when the model emits raw text. Try both
+/// before giving up.
+fn parse_concept_proposal(content: &Value) -> Option<ConceptProposal> {
+    if let Ok(p) = serde_json::from_value::<ConceptProposal>(content.clone()) {
+        return Some(p);
+    }
+    if let Some(text) = content.as_str() {
+        if let Ok(p) = serde_json::from_str::<ConceptProposal>(text) {
+            return Some(p);
+        }
+    }
+    None
 }
 
-fn get_error_log_path(run_id: &str) -> PathBuf {
-    let vault = crate::config::load(None).ok()
-        .map(|c| c.vault_root)
-        .unwrap_or_else(|| std::path::PathBuf::from("~/.temper".to_string()));
-    vault.join(".temper").join(format!("graph-index-errors-{}.log", run_id))
+#[derive(Debug, Serialize)]
+struct ErrorEntry<'a> {
+    run_id: &'a str,
+    phase: &'a str,
+    seed: &'a str,
+    error: &'a str,
+    detail: &'a str,
 }
 
-fn append_error(log_path: &PathBuf, seed: &str, error_type: &str, detail: &str) {
-    let entry = serde_json::json!({
-        "run_id": log_path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown"),
-        "phase": "llm_judgment",
-        "seed": seed,
-        "error": error_type,
-        "detail": detail,
+fn log_error(
+    error_log_path: &mut Option<PathBuf>,
+    vault_root: &Path,
+    run_id: &str,
+    seed: &str,
+    error_type: &str,
+    detail: &str,
+) {
+    let path = error_log_path.get_or_insert_with(|| {
+        vault_root
+            .join(".temper")
+            .join(format!("graph-index-errors-{run_id}.log"))
     });
-    let line = serde_json::to_string(&entry).unwrap_or_default();
-    let _ = fs::write(log_path, format!("{}\n", line));
+
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    let entry = ErrorEntry {
+        run_id,
+        phase: "llm_judgment",
+        seed,
+        error: error_type,
+        detail,
+    };
+    let line = match serde_json::to_string(&entry) {
+        Ok(s) => s,
+        Err(_) => return,
+    };
+
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let _ = writeln!(file, "{line}");
+    }
 }

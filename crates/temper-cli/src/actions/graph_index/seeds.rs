@@ -1,59 +1,46 @@
-//! TF-IDF seed phrase extraction using tantivy.
+//! TF-IDF seed phrase extraction.
 //!
-//! Walks the vault (via discover_vault from index_build), tokenizes markdown bodies,
-//! computes TF-IDF scores, and returns the top N candidate seed phrases.
+//! Walks the vault (via `discover_vault` from `index_build`), tokenizes markdown
+//! bodies, computes TF-IDF scores, and returns the top N candidate seed phrases.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use temper_core::types::config::GraphIndexConfig;
+use temper_llm::types::SeedPhrase;
 
-use crate::actions::index_build::discover_vault;
+/// Doc types that live at `{vault}/@me/{context}/{doc_type}/`.
+/// Mirrors `graph_build::ENTITY_DOC_TYPES`.
+const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
 
-/// A seed phrase candidate with its TF-IDF score and supporting documents.
-#[derive(Debug, Clone)]
-pub struct SeedPhrase {
-    /// The raw phrase text (n-gram).
-    pub phrase: String,
-    /// Number of documents this phrase appears in.
-    pub doc_frequency: usize,
-    /// Top document IDs by TF-IDF score within this phrase's context.
-    pub top_doc_ids: Vec<String>,
-    /// Aggregate TF-IDF score across all documents.
-    pub aggregate_score: f32,
-}
-
-impl SeedPhrase {
-    pub fn new(phrase: String, doc_frequency: usize, top_doc_ids: Vec<String>, aggregate_score: f32) -> Self {
-        Self {
-            phrase,
-            doc_frequency,
-            top_doc_ids,
-            aggregate_score,
-        }
-    }
+/// Per-phrase accumulator used while computing TF-IDF across the vault.
+#[derive(Debug, Default)]
+struct PhraseAggregate {
+    doc_frequency: usize,
+    aggregate_score: f32,
+    /// `(rel_path, tfidf)` for every document in which the phrase appears.
+    doc_scores: Vec<(String, f32)>,
 }
 
 /// Extract seed phrases from the vault using TF-IDF.
 ///
-/// Uses tantivy for tokenization, Snowball stemmer, stopwords, and TF-IDF scoring.
-/// Cross-document frequency filter: phrase must appear in ≥`seed_min_doc_frequency` docs.
+/// Cross-document frequency filter: phrase must appear in ≥ `seed_min_doc_frequency`
+/// docs. The top `seed_top_n` phrases (by aggregate TF-IDF) are returned.
 pub fn extract_seeds(
-    vault_root: &PathBuf,
+    vault_root: &Path,
     config: &GraphIndexConfig,
     context_filter: Option<&str>,
 ) -> Vec<SeedPhrase> {
-    // Discover all vault files
-    let discovered = discover_vault(vault_root, context_filter);
+    let discovered = discover_vault_files(vault_root, context_filter);
 
     // Collect documents: rel_path -> body text
     let mut documents: Vec<(String, String)> = Vec::new();
-    for discovered_file in discovered {
-        if let Ok(raw) = fs::read_to_string(&discovered_file.path) {
+    for (path, rel_path) in discovered {
+        if let Ok(raw) = fs::read_to_string(&path) {
             let body = strip_frontmatter(&raw);
             if !body.trim().is_empty() {
-                documents.push((discovered_file.rel_path.clone(), body));
+                documents.push((rel_path, body));
             }
         }
     }
@@ -80,8 +67,9 @@ pub fn extract_seeds(
         doc_term_freqs.push(freq);
     }
 
-    // Compute TF-IDF for n-grams (unigrams and bigrams)
-    let mut phrase_scores: HashMap<String, (usize, f32, Vec<(String, f32)>)> = HashMap::new();
+    // Compute TF-IDF for n-grams (unigrams and bigrams).
+    // Per-phrase aggregate state while building the index.
+    let mut phrase_scores: HashMap<String, PhraseAggregate> = HashMap::new();
 
     for (i, (rel_path, body)) in documents.iter().enumerate() {
         let tokens = tokenize(body);
@@ -90,7 +78,6 @@ pub fn extract_seeds(
             continue;
         }
 
-        // Unigrams + bigrams
         let phrases: Vec<String> = tokens
             .iter()
             .enumerate()
@@ -105,10 +92,9 @@ pub fn extract_seeds(
 
         let mut seen: HashSet<String> = HashSet::new();
         for phrase in phrases {
-            if seen.contains(&phrase) {
+            if !seen.insert(phrase.clone()) {
                 continue;
             }
-            seen.insert(phrase.clone());
 
             let tf = doc_term_freqs[i].get(&phrase).copied().unwrap_or(0);
             if tf == 0 {
@@ -119,35 +105,91 @@ pub fn extract_seeds(
             let idf = ((total_docs as f32) / (df as f32)).ln() + 1.0;
             let tfidf = (tf as f32 / doc_len as f32) * idf;
 
-            let entry = phrase_scores.entry(phrase.clone()).or_insert((0, 0.0, Vec::new()));
-            entry.0 += 1; // doc frequency
-            entry.1 += tfidf; // aggregate score
-            entry.2.push((rel_path.clone(), tfidf));
+            let entry = phrase_scores.entry(phrase.clone()).or_default();
+            entry.doc_frequency += 1;
+            entry.aggregate_score += tfidf;
+            entry.doc_scores.push((rel_path.clone(), tfidf));
         }
     }
 
-    // Filter by minimum document frequency
     let min_df = config.seed_min_doc_frequency;
-    let candidates: Vec<(String, usize, f32, Vec<(String, f32)>)> = phrase_scores
+
+    // Filter by minimum doc frequency; build (agg_score, SeedPhrase) pairs for sorting.
+    let mut scored: Vec<(f32, SeedPhrase)> = phrase_scores
         .into_iter()
-        .filter(|(_, (df, _, _))| df >= min_df)
-        .map(|(phrase, (df, agg_score, doc_scores))| {
-            // Sort doc_scores by tfidf descending, take top 5
-            doc_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            let top_docs: Vec<String> = doc_scores.into_iter().take(5).map(|(p, _)| p).collect();
-            (phrase, df, agg_score, top_docs)
+        .filter(|(_, agg)| agg.doc_frequency >= min_df)
+        .map(|(phrase, mut agg)| {
+            agg.doc_scores
+                .sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+            let top_docs: Vec<String> =
+                agg.doc_scores.into_iter().take(5).map(|(p, _)| p).collect();
+            (
+                agg.aggregate_score,
+                SeedPhrase::new(phrase, agg.doc_frequency, top_docs),
+            )
         })
         .collect();
 
-    // Sort by aggregate score descending, take top N
-    let mut sorted: Vec<(String, usize, f32, Vec<String>)> = candidates;
-    sorted.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
-    sorted.truncate(config.seed_top_n);
+    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(config.seed_top_n);
 
-    sorted
-        .into_iter()
-        .map(|(phrase, df, score, top_docs)| SeedPhrase::new(phrase, df, top_docs, score))
-        .collect()
+    scored.into_iter().map(|(_, s)| s).collect()
+}
+
+/// Walk `{vault_root}/@me/{context}/{doc_type}/*.md` and return
+/// `(abs_path, rel_path)` pairs. `rel_path` uses forward slashes and is
+/// rooted at `@me` so it matches the shape used by the index manifest.
+fn discover_vault_files(vault_root: &Path, context_filter: Option<&str>) -> Vec<(PathBuf, String)> {
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
+    let owner = "@me";
+    let owner_root = vault_root.join(owner);
+
+    let contexts: Vec<(PathBuf, String)> = if let Some(ctx) = context_filter {
+        let path = owner_root.join(ctx);
+        if path.exists() {
+            vec![(path, ctx.to_string())]
+        } else {
+            Vec::new()
+        }
+    } else {
+        let Ok(entries) = fs::read_dir(&owner_root) else {
+            return out;
+        };
+        entries
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let p = e.path();
+                let name = p.file_name().and_then(|n| n.to_str())?.to_string();
+                if p.is_dir() && !name.starts_with('.') {
+                    Some((p, name))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+
+    for (ctx_root, context) in contexts {
+        for doc_type in ENTITY_DOC_TYPES {
+            let type_dir = ctx_root.join(doc_type);
+            let Ok(entries) = fs::read_dir(&type_dir) else {
+                continue;
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                    continue;
+                }
+                let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                let rel_path = format!("{owner}/{context}/{file_name}");
+                out.push((path, rel_path));
+            }
+        }
+    }
+
+    out
 }
 
 /// Strip YAML frontmatter from markdown, returning just the body.
@@ -172,8 +214,6 @@ fn tokenize(text: &str) -> Vec<String> {
         .map(|s| s.to_string())
         .collect()
 }
-
-use std::collections::HashSet;
 
 #[cfg(test)]
 mod tests {

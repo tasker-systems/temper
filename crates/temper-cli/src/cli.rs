@@ -484,4 +484,16 @@ pub enum GraphAction {
         #[arg(short, long)]
         verbose: bool,
     },
+    /// Discover concepts via LLM judgment over the HNSW index
+    Index {
+        /// Scope to a single context (default: all contexts)
+        #[arg(long)]
+        context: Option<String>,
+        /// Preview without writing concept files or member edges
+        #[arg(long)]
+        dry_run: bool,
+        /// Include per-concept detail in the report
+        #[arg(short, long)]
+        verbose: bool,
+    },
 }

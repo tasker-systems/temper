@@ -30,17 +30,15 @@ pub fn run(
     let vault_root = &config.vault_root;
     let temper_dir = vault_root.join(".temper");
 
-    // Handle --full rebuild
+    // Handle --full rebuild: delete the HNSW dump (data + graph) and the sidecar manifest.
     if params.full {
-        if temper_dir.join("index.bin").exists() {
-            std::fs::remove_file(temper_dir.join("index.bin")).map_err(|e| {
-                crate::error::TemperError::Project(format!("remove index.bin: {e}"))
-            })?;
-        }
-        if temper_dir.join("index.json").exists() {
-            std::fs::remove_file(temper_dir.join("index.json")).map_err(|e| {
-                crate::error::TemperError::Project(format!("remove index.json: {e}"))
-            })?;
+        for name in ["index.hnsw.data", "index.hnsw.graph", "index.json"] {
+            let p = temper_dir.join(name);
+            if p.exists() {
+                std::fs::remove_file(&p).map_err(|e| {
+                    crate::error::TemperError::Project(format!("remove {name}: {e}"))
+                })?;
+            }
         }
     }
 
