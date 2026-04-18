@@ -43,6 +43,10 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                 &write_root,
                 resource_id_typed,
                 manifest_opt.as_mut(),
+                // CLI `pull` has no sync-diff context and no server-declared
+                // content hash to pin; the primitive falls back to the local
+                // hash, which keeps body_hash and remote_body_hash agreeing.
+                None,
             )
             .await?;
 

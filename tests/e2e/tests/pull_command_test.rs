@@ -59,7 +59,7 @@ async fn pull_one_resource_without_manifest_writes_snapshot(pool: sqlx::PgPool) 
     };
     let seeded = app.client.ingest().create(&payload).await.expect("ingest");
 
-    let result = pull_one_resource(&app.client, app.vault_dir.path(), seeded.id, None)
+    let result = pull_one_resource(&app.client, app.vault_dir.path(), seeded.id, None, None)
         .await
         .expect("pull_one_resource");
 
@@ -152,6 +152,7 @@ async fn pull_one_resource_with_manifest_writes_to_vault_and_updates_entry(pool:
         app.vault_dir.path(),
         ResourceId::from(uuid::Uuid::from(seeded.id)),
         Some(&mut manifest),
+        None,
     )
     .await
     .expect("pull_one_resource");
@@ -222,7 +223,7 @@ async fn pull_one_resource_snapshot_lands_in_caller_provided_root(pool: sqlx::Pg
         "snapshot_dir must differ from vault_dir for this test to be meaningful"
     );
 
-    let result = pull_one_resource(&app.client, snapshot_dir.path(), seeded.id, None)
+    let result = pull_one_resource(&app.client, snapshot_dir.path(), seeded.id, None, None)
         .await
         .expect("pull_one_resource");
 
