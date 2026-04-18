@@ -237,12 +237,21 @@ And under `.github/scripts/release/`:
 
 ## Rollout plan
 
-1. **PR 1 — `embed.rs` fallback chain + tests.** Additive, no behavior change for existing users. Small, reviewable.
-2. **PR 2 — installer scripts + docs.** `scripts/install/install.sh` and `install.ps1`. Lands before any release workflow exists; installer is non-functional until first release but docs land with it.
-3. **PR 3 — cargo-make release-tasks + supporting scripts.** Local tooling — `cargo make release-check` works immediately against main.
-4. **PR 4 — GitHub Actions workflows.** `build-cli-binaries.yml`, `release-tag.yml`, `release.yml`, `.github/scripts/release/*`. Test by running the workflow against a throwaway tag.
-5. **PR 5 — README.md update.** Rewrite the install section, update the project elevator pitch. Standalone so it's easy to review and iterate on.
-6. **Tag `v0.1.0`** as the first real release. Celebrate.
+Single PR containing everything needed to cut the first release. The release-workflow and installer pieces can't be meaningfully tested in a PR anyway (workflows only execute on main, installer only works after a real release exists), so splitting would add review overhead without buying incremental safety.
+
+**PR 1 — everything:**
+- `embed.rs` fallback chain + tests (the only code piece that's testable in isolation — `cargo make test` must pass)
+- Installer scripts under `scripts/install/` (`install.sh`, `install.ps1`) + `docs/guides/install.md`
+- `tools/cargo-make/release-tasks.toml` wired into `main.toml`
+- `tools/scripts/release/` (lib/common.sh, read-version.sh, detect-changes.sh, calculate-version.sh, update-version.sh, release-prepare.sh) — all adapted from tasker-core
+- `.github/workflows/build-cli-binaries.yml`, `release-tag.yml`, `release.yml`
+- `.github/scripts/release/*` helpers
+- `VERSION` file at repo root (initial `0.0.1`)
+- README.md rewrite — new install section, updated elevator pitch
+
+**First dry run after merge:** cut tag `v0.0.1-rc1` (or similar preview tag) manually to exercise the workflow end-to-end. Verify archive contents per platform, run the installer on each target, run `temper graph build` to confirm the bundled ort loads. If something breaks, fix in a follow-up PR. Only then run `cargo make release-prepare` for real `v0.1.0`.
+
+Subsequent PRs are expected for whatever the first real execution exposes — classic "CI changes can only be tested on main" loop. Keep those PRs small and focused on the specific breakage found.
 
 ## Risks and open questions
 
