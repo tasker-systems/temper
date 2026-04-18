@@ -33,6 +33,51 @@ pub struct OwnershipMismatch {
     pub manifest_owner: String,
 }
 
+// ---------------------------------------------------------------------------
+// Single-resource push/pull primitives
+//
+// These are the factored-out, per-resource orchestration that sync_orchestration
+// batches over its diff sets. They also power `temper push <id|path>` and
+// `temper pull <id>` as first-class commands.
+//
+// The `manifest: Option<&mut Manifest>` parameter is the mode switch:
+// - Some(...) — local-vault mode, updates the manifest entry in place
+// - None     — cloud mode / raw push, no manifest side effects
+// ---------------------------------------------------------------------------
+
+/// What a single push targets. `Path` reads frontmatter to locate the id;
+/// `Id` requires a manifest to resolve the on-disk path.
+#[derive(Debug)]
+pub enum PushTarget<'a> {
+    Path(&'a std::path::Path),
+    Id(ResourceId),
+}
+
+/// Per-resource push outcome.
+#[derive(Debug, Clone)]
+pub struct PushResult {
+    pub resource_id: ResourceId,
+    pub path: std::path::PathBuf,
+    pub kind: PushKind,
+}
+
+/// Which pull branch ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullBranch {
+    /// Wrote to the manifest-resolved vault path and updated the entry.
+    ManifestTracked,
+    /// Wrote to CWD as `{id}.md` (no manifest, or id not in manifest).
+    Snapshot,
+}
+
+/// Per-resource pull outcome.
+#[derive(Debug, Clone)]
+pub struct PullResult {
+    pub resource_id: ResourceId,
+    pub path: std::path::PathBuf,
+    pub branch: PullBranch,
+}
+
 /// Validate every non-provisional manifest entry: the file's frontmatter
 /// `temper-owner` must match the owner segment of its manifest path.
 ///
