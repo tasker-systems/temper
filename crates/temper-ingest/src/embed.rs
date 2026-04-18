@@ -66,8 +66,11 @@ fn binary_adjacent_candidates(exe_path: &std::path::Path) -> Vec<std::path::Path
     ]
 }
 
-/// Covers `temper` symlinked onto PATH while the actual install lives in
-/// `~/.local/share/temper/`.
+/// Linux fallback for when `temper` is symlinked onto PATH while the actual
+/// install lives at `~/.local/share/temper/`. On macOS, `dirs::data_local_dir()`
+/// resolves to `~/Library/Application Support/` (platform-idiomatic) — but the
+/// binary-adjacent candidates fire first there, so this fallback is effectively
+/// Linux-only in practice.
 fn xdg_data_candidates() -> Vec<std::path::PathBuf> {
     let Some(data_dir) = dirs::data_local_dir() else {
         return Vec::new();
