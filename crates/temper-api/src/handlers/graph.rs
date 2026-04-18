@@ -3,7 +3,6 @@
 use axum::extract::{Query, State};
 use axum::Json;
 use serde::Deserialize;
-use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
@@ -42,18 +41,12 @@ pub async fn get_subgraph(
     // Cross-owner querying is deferred; handles are left as a later migration.
     // A client-supplied handle other than "@me" is an invalid query parameter,
     // so we return 400 Bad Request rather than 404.
-    let owner_profile_id: Uuid = if query.owner == "@me" {
-        auth.0.profile.id
-    } else {
+    if query.owner != "@me" {
         return Err(ApiError::BadRequest(format!(
             "owner handle '{}' not supported — only '@me' in v1",
             query.owner
         )));
-    };
-
-    // v1: caller can only query their own vault, so caller_profile_id ==
-    // owner_profile_id. When delegated access lands, this separates.
-    let _ = owner_profile_id; // kept for symmetry when cross-owner arrives
+    }
 
     let response = aggregator_subgraph(
         &state.pool,

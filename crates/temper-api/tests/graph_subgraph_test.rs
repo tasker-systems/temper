@@ -421,10 +421,10 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
 // ─── Handler smoke tests (service layer already integration-tested) ─────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn handler_rejects_non_me_owner(pool: PgPool) {
-    // Covers the `owner != "@me"` branch without needing the full HTTP stack.
-    // Full auth/HTTP integration is covered in the existing auth_test.rs
-    // pattern; here we assert the service contract one layer down is sound.
+async fn service_succeeds_for_caller_own_data(pool: PgPool) {
+    // Asserts the service contract one layer down from the handler: when the
+    // caller queries their own vault, `aggregator_subgraph` returns Ok. Full
+    // auth/HTTP integration is covered in the existing auth_test.rs pattern.
     common::fixtures::clean_and_seed(&pool).await;
     load_graph_fixtures(&pool).await;
 
