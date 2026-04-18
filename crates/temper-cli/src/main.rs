@@ -335,6 +335,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             )
         }
         Commands::Pull { resource_id } => commands::pull::run(&resource_id),
+        Commands::Push { target } => commands::push::run(&target),
         Commands::Remove { resource_id, force } => commands::remove::run(&resource_id, force),
         Commands::Sync { action } => match action {
             SyncAction::Run { context, format } => {
