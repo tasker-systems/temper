@@ -1,6 +1,9 @@
 <script>
   import Section from '$lib/components/landing/Section.svelte';
   import Footer from '$lib/components/landing/Footer.svelte';
+  import ContextRotDiagram from '$lib/components/landing/diagrams/ContextRotDiagram.svelte';
+  import LayersDiagram from '$lib/components/landing/diagrams/LayersDiagram.svelte';
+  import CycleDiagram from '$lib/components/landing/diagrams/CycleDiagram.svelte';
 </script>
 
 <svelte:head>
@@ -18,6 +21,19 @@
   </p>
 </section>
 
+<!-- The Problem -->
+<Section label="The problem">
+  <h2>Context <em>rots</em></h2>
+  <p>
+    Every new session, an agent starts from zero. The human remembers a
+    little — but fidelity decays fast, and chat transcripts become
+    unreadable after a week. The decisions, the alternatives considered,
+    the constraints that shaped the work — they scatter. Temper keeps
+    them on a throughline that survives the session it was made in.
+  </p>
+  <ContextRotDiagram />
+</Section>
+
 <!-- The Vault -->
 <Section label="The vault">
   <h2>Markdown with <em>frontmatter</em></h2>
@@ -27,66 +43,28 @@
     The content carries the thinking. Together they form a file that's simultaneously
     human-readable, git-trackable, and natively understood by language models.
   </p>
-  <div class="vault-visual">
-    <svg viewBox="0 0 560 200" xmlns="http://www.w3.org/2000/svg" class="vault-svg">
-      <g transform="translate(0, 10)">
-        <rect x="0" y="0" width="100" height="130" rx="4" fill="rgba(126,184,218,0.1)" stroke="rgba(126,184,218,0.35)" stroke-width="0.5"/>
-        <rect x="0" y="0" width="100" height="32" rx="4" fill="rgba(126,184,218,0.15)"/>
-        <text x="50" y="20" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">GOAL</text>
-        <line x1="8" y1="44" x2="60" y2="44" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
-        <line x1="8" y1="54" x2="80" y2="54" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="8" y1="64" x2="72" y2="64" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="8" y1="80" x2="88" y2="80" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="8" y1="90" x2="68" y2="90" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="8" y1="100" x2="82" y2="100" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="8" y1="110" x2="50" y2="110" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-
-        <rect x="116" y="20" width="100" height="130" rx="4" fill="rgba(126,184,218,0.1)" stroke="rgba(126,184,218,0.35)" stroke-width="0.5"/>
-        <rect x="116" y="20" width="100" height="32" rx="4" fill="rgba(126,184,218,0.15)"/>
-        <text x="166" y="40" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">TASK</text>
-        <line x1="124" y1="64" x2="176" y2="64" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
-        <line x1="124" y1="74" x2="196" y2="74" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="124" y1="84" x2="184" y2="84" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="124" y1="100" x2="204" y2="100" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="124" y1="110" x2="170" y2="110" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="124" y1="120" x2="192" y2="120" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-
-        <rect x="232" y="5" width="100" height="130" rx="4" fill="rgba(134,239,172,0.08)" stroke="rgba(134,239,172,0.28)" stroke-width="0.5"/>
-        <rect x="232" y="5" width="100" height="32" rx="4" fill="rgba(134,239,172,0.13)"/>
-        <text x="282" y="25" text-anchor="middle" fill="rgba(134,239,172,0.8)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">SESSION</text>
-        <line x1="240" y1="49" x2="292" y2="49" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
-        <line x1="240" y1="59" x2="312" y2="59" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="240" y1="69" x2="300" y2="69" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="240" y1="85" x2="320" y2="85" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="240" y1="95" x2="286" y2="95" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="240" y1="105" x2="308" y2="105" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-
-        <rect x="348" y="30" width="100" height="130" rx="4" fill="rgba(252,211,77,0.07)" stroke="rgba(252,211,77,0.25)" stroke-width="0.5"/>
-        <rect x="348" y="30" width="100" height="32" rx="4" fill="rgba(252,211,77,0.12)"/>
-        <text x="398" y="50" text-anchor="middle" fill="rgba(252,211,77,0.8)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">DECISION</text>
-        <line x1="356" y1="74" x2="408" y2="74" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
-        <line x1="356" y1="84" x2="428" y2="84" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="356" y1="94" x2="416" y2="94" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="356" y1="110" x2="436" y2="110" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="356" y1="120" x2="400" y2="120" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-
-        <rect x="464" y="10" width="96" height="130" rx="4" fill="rgba(148,163,184,0.07)" stroke="rgba(148,163,184,0.25)" stroke-width="0.5"/>
-        <rect x="464" y="10" width="96" height="32" rx="4" fill="rgba(148,163,184,0.12)"/>
-        <text x="512" y="30" text-anchor="middle" fill="rgba(148,163,184,0.75)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">RESEARCH</text>
-        <line x1="472" y1="54" x2="524" y2="54" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
-        <line x1="472" y1="64" x2="544" y2="64" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="472" y1="74" x2="532" y2="74" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
-        <line x1="472" y1="90" x2="548" y2="90" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-        <line x1="472" y1="100" x2="510" y2="100" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
-      </g>
-    </svg>
-  </div>
+  <LayersDiagram />
   <p>
     The vault is a directory on your machine. Browse it in any editor,
     in Obsidian, or on GitHub. No database, no proprietary format.
     Import existing docs with <span class="cmd-inline">temper add</span> —
     temper extracts markdown and adds the frontmatter structure.
   </p>
+</Section>
+
+<!-- The Cycle -->
+<Section label="The cycle">
+  <h2>Every session, a <em>loop</em></h2>
+  <p>
+    Sessions aren't arbitrary — they follow a recurring shape. You warm
+    up with recall from the vault, do the work, reach the decisions that
+    moved it forward, and record what happened before closing the tab.
+    The vault grows on every loop. The colors of each step match the doc
+    types they produce: blue for the warm-up's research recall, gold for
+    the decision, green for the session record. Only the work itself is
+    uncoloured — it's the doing between bookends.
+  </p>
+  <CycleDiagram />
 </Section>
 
 <!-- Connected Knowledge -->
@@ -334,6 +312,6 @@
   .hero h1 { margin-bottom: 1.5rem; }
   .tagline { max-width: 36em; }
   .cmd-inline { font-family: var(--font-mono); font-size: 0.85rem; color: var(--temper-blue); }
-  .vault-visual, .graph-visual, .cloud-visual, .sync-visual { margin: 2rem 0 1.5rem; }
-  .vault-svg, .graph-svg, .cloud-svg, .sync-svg { width: 100%; max-width: 560px; display: block; }
+  .graph-visual, .cloud-visual, .sync-visual { margin: 2rem 0 1.5rem; }
+  .graph-svg, .cloud-svg, .sync-svg { width: 100%; max-width: 560px; display: block; }
 </style>
