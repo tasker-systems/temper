@@ -1,0 +1,112 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Diagram — Throughline Layers</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 24px 28px; background: var(--obsidian-3); min-height: 340px; }
+  .frame { padding: 20px 24px; }
+  .title { font-family: var(--mono); font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--temper-blue); margin-bottom: 4px; }
+  .sub { font-family: var(--serif); font-style: italic; font-size: 13px; color: var(--chalk); margin-bottom: 26px; }
+  svg { display: block; width: 100%; height: auto; }
+  .cap { font-family: var(--serif); font-style: italic; font-size: 12px; color: var(--graphite); margin-top: 12px; line-height: 1.55; }
+</style>
+</head>
+<body>
+  <div class="frame">
+    <div class="title">THROUGHLINE · LAYERS</div>
+    <div class="sub">Six doc types. One vault. The vocabulary of structured work.</div>
+
+    <svg viewBox="0 0 640 260" xmlns="http://www.w3.org/2000/svg">
+      <!--
+        Per-color vertical gradients: saturated top, fading to parchment bottom.
+        Per-color floors are tuned so legibility holds on #0c0c11.
+        The thread "pours" color into each word; each word ends clean.
+      -->
+      <defs>
+        <!-- Blue (goal) -->
+        <linearGradient id="g-goal" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#8cc5e2"/>
+          <stop offset="100%" stop-color="#e8e4df"/>
+        </linearGradient>
+        <!-- Blue (research) same family, slightly cooler bottom -->
+        <linearGradient id="g-research" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#8cc5e2"/>
+          <stop offset="100%" stop-color="#e8e4df"/>
+        </linearGradient>
+        <!-- Amber (decision) -->
+        <linearGradient id="g-decision" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#f5d277"/>
+          <stop offset="100%" stop-color="#ebe2d0"/>
+        </linearGradient>
+        <!-- Orange (task) -->
+        <linearGradient id="g-task" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#f0a870"/>
+          <stop offset="100%" stop-color="#ece0d2"/>
+        </linearGradient>
+        <!-- Green (session) -->
+        <linearGradient id="g-session" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#9ed3af"/>
+          <stop offset="100%" stop-color="#e5e6de"/>
+        </linearGradient>
+        <!-- Pink (concept) -->
+        <linearGradient id="g-concept" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"  stop-color="#d89ccb"/>
+          <stop offset="100%" stop-color="#e8dde4"/>
+        </linearGradient>
+      </defs>
+
+      <!-- Vertical thread -->
+      <line x1="320" y1="28" x2="320" y2="236" stroke="rgba(126,184,218,0.22)" stroke-width="1"/>
+
+      <!-- Row: mono label · word (gradient) · italic annotation. Shared baseline. Tick below marks flow continuation. -->
+
+      <!-- 01 GOAL -->
+      <g>
+        <text x="40"  y="44" font-family="JetBrains Mono, monospace" font-size="9.5" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">01 · GOAL</text>
+        <text x="320" y="44" text-anchor="middle" font-family="Source Serif 4, Georgia, serif" font-size="15" font-weight="500" fill="url(#g-goal)">outcome</text>
+        <text x="600" y="44" text-anchor="end" font-family="Source Serif 4, Georgia, serif" font-style="italic" font-size="12" fill="rgba(255,255,255,0.52)">what we are building</text>
+        <line x1="320" y1="49" x2="320" y2="54" stroke="#8cc5e2" stroke-width="1" opacity="0.75"/>
+      </g>
+
+      <!-- 02 RESEARCH -->
+      <g>
+        <text x="40"  y="80" font-family="JetBrains Mono, monospace" font-size="9.5" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">02 · RESEARCH</text>
+        <text x="320" y="80" text-anchor="middle" font-family="Source Serif 4, Georgia, serif" font-size="15" font-weight="500" fill="url(#g-research)">survey</text>
+        <text x="600" y="80" text-anchor="end" font-family="Source Serif 4, Georgia, serif" font-style="italic" font-size="12" fill="rgba(255,255,255,0.52)">alternatives considered</text>
+        <line x1="320" y1="85" x2="320" y2="90" stroke="#8cc5e2" stroke-width="1" opacity="0.75"/>
+      </g>
+
+      <!-- 03 DECISION -->
+      <g>
+        <text x="40"  y="116" font-family="JetBrains Mono, monospace" font-size="9.5" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">03 · DECISION</text>
+        <text x="320" y="116" text-anchor="middle" font-family="Source Serif 4, Georgia, serif" font-size="15" font-weight="500" fill="url(#g-decision)">choice</text>
+        <text x="600" y="116" text-anchor="end" font-family="Source Serif 4, Georgia, serif" font-style="italic" font-size="12" fill="rgba(255,255,255,0.52)">what we decided</text>
+        <line x1="320" y1="121" x2="320" y2="126" stroke="#f5d277" stroke-width="1" opacity="0.8"/>
+      </g>
+
+      <!-- 04 TASK -->
+      <g>
+        <text x="40"  y="152" font-family="JetBrains Mono, monospace" font-size="9.5" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">04 · TASK</text>
+        <text x="320" y="152" text-anchor="middle" font-family="Source Serif 4, Georgia, serif" font-size="15" font-weight="500" fill="url(#g-task)">unit of work</text>
+        <text x="600" y="152" text-anchor="end" font-family="Source Serif 4, Georgia, serif" font-style="italic" font-size="12" fill="rgba(255,255,255,0.52)">what comes next</text>
+        <line x1="320" y1="157" x2="320" y2="162" stroke="#f0a870" stroke-width="1" opacity="0.8"/>
+      </g>
+
+      <!-- 05 SESSION -->
+      <g>
+        <text x="40"  y="188" font-family="JetBrains Mono, monospace" font-size="9.5" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">05 · SESSION</text>
+        <text x="320" y="188" text-anchor="middle" font-family="Source Serif 4, Georgia, serif" font-size="15" font-weight="500" fill="url(#g-session)">the work</text>
+        <text x="600" y="188" text-anchor="end" font-family="Source Serif 4, Georgia, serif" font-style="italic" font-size="12" fill="rgba(255,255,255,0.52)">what happened</text>
+        <line x1="320" y1="193" x2="320" y2="198" stroke="#9ed3af" stroke-width="1" opacity="0.8"/>
+      </g>
+
+      <!-- 06 CONCEPT (terminus — no tick; the flow pools) -->
+      <g>
+        <text x="40"  y="224" font-family="JetBrains Mono, monospace" font-size="9.5" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">06 · CONCEPT</text>
+        <text x="320" y="224" text-anchor="middle" font-family="Source Serif 4, Georgia, serif" font-size="15" font-weight="500" fill="url(#g-concept)">vocabulary</text>
+        <text x="600" y="224" text-anchor="end" font-family="Source Serif 4, Georgia, serif" font-style="italic" font-size="12" fill="rgba(255,255,255,0.52)">shared meaning</text>
+      </g>
+    </svg>
+
+    <div class="cap">The thread pours colour into each word; the word settles it. A tick below carries the current onward — until the last layer, where it pools.</div>
+  </div>
+</body></html>

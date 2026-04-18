@@ -1,0 +1,29 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Components — CLI Block</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 20px 24px; }
+  .term {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 4px;
+    padding: 14px 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    color: var(--chalk);
+  }
+  .p { color: var(--graphite-2); user-select: none; }
+  .c { color: var(--temper-blue); }
+  .f { color: var(--graphite-2); }
+  .o { color: var(--chalk); }
+  .out { color: var(--graphite); }
+</style>
+</head>
+<body>
+  <div class="term">
+<span class="p">$</span> <span class="c">temper</span> warmup <span class="f">--context</span> myapp<br>
+<span class="out">  → loaded 847 resources · 12 active sessions · ready</span><br>
+<span class="p">$</span> <span class="c">temper</span> session start <span class="f">--goal</span> <span class="o">"finish invoice flow"</span>
+  </div>
+</body></html>

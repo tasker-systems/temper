@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" font-family="Georgia, &#39;Times New Roman&#39;, serif">
+  <rect width="1280" height="640" fill="#0a0a0f"></rect>
+
+  
+  <path d="M 565 230 L 565 330" stroke="#7eb8da" stroke-width="8" stroke-linecap="round" fill="none"></path>
+  <path d="M 543 260 L 587 260 Q 601 260 607 270 Q 613 280 610 294" stroke="#7eb8da" stroke-width="6" stroke-linecap="round" fill="none"></path>
+
+  
+  <text x="640" y="390" text-anchor="middle" font-family="&#39;JetBrains Mono&#39;, &#39;Fira Code&#39;, monospace" font-size="28" fill="#7eb8da" letter-spacing="0.15em">temper</text>
+
+  
+  <text x="640" y="440" text-anchor="middle" font-size="18" fill="rgba(232, 228, 223, 0.45)" font-style="italic">A knowledge base for builders. Everything resolves to markdown.</text>
+
+  
+  <text x="640" y="490" text-anchor="middle" font-family="&#39;JetBrains Mono&#39;, &#39;Fira Code&#39;, monospace" font-size="13" fill="rgba(126, 184, 218, 0.4)" letter-spacing="0.1em">temperkb.io</text>
+</svg>

@@ -1,0 +1,55 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Components — Sidebar Item</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 0; background: var(--obsidian); min-height: 180px; }
+  .sb {
+    padding: 14px 14px;
+    border-right: 1px solid var(--rule);
+    background: var(--obsidian-2);
+    width: 260px;
+    font-family: var(--mono);
+  }
+  .group {
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--graphite-2);
+    padding: 6px 8px;
+    margin-top: 6px;
+  }
+  .group:first-child { margin-top: 0; }
+  .it {
+    display:flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: var(--chalk);
+    border-radius: 2px;
+    margin: 1px 0;
+  }
+  .it .ct {
+    font-size: 10px;
+    color: var(--graphite-2);
+  }
+  .it.on {
+    color: var(--parchment);
+    background: rgba(126,184,218,0.08);
+    border-left: 2px solid var(--temper-blue);
+    padding-left: 8px;
+  }
+  .it.on .ct { color: var(--temper-blue); }
+</style>
+</head>
+<body>
+  <div class="sb">
+    <div class="group">Contexts</div>
+    <div class="it on">@me/myapp <span class="ct">847</span></div>
+    <div class="it">@me/blog <span class="ct">112</span></div>
+    <div class="it">@acme/platform <span class="ct">2.3k</span></div>
+    <div class="group">Recent</div>
+    <div class="it">invoice‑flow‑session <span class="ct">3h</span></div>
+    <div class="it">auth‑redesign <span class="ct">1d</span></div>
+  </div>
+</body></html>

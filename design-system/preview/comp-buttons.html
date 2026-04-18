@@ -1,0 +1,43 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Components — Buttons</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 22px 24px; display: flex; flex-wrap: wrap; gap: 18px; align-items: center; }
+  .btn {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+    border: 1px solid var(--temper-blue-border);
+    background: transparent;
+    color: var(--temper-blue);
+    cursor: pointer;
+  }
+  .btn.hover { background: rgba(126,184,218,0.12); color: var(--parchment); }
+  .btn.ghost { border-color: var(--rule-2); color: var(--chalk); }
+  .btn.action {
+    border: none;
+    padding: 6px 0;
+    color: var(--temper-blue);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+  }
+  .txt {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--graphite-2);
+    margin-top: 4px;
+    display: block;
+  }
+  .stack { display:flex; flex-direction:column; gap: 3px; align-items: flex-start; }
+</style>
+</head>
+<body>
+  <div class="stack"><a class="btn">Sign in</a><span class="txt">Primary · rest</span></div>
+  <div class="stack"><a class="btn hover">Sign in</a><span class="txt">Hover</span></div>
+  <div class="stack"><a class="btn ghost">Read docs</a><span class="txt">Ghost</span></div>
+  <div class="stack"><a class="btn action">EXPLORE →</a><span class="txt">Text action</span></div>
+</body></html>

@@ -1,0 +1,62 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Colors — Ground & Text</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 22px 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+  }
+  .sw {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .chip {
+    height: 64px;
+    border: 1px solid var(--rule);
+  }
+  .nm {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--parchment);
+    letter-spacing: 0.04em;
+  }
+  .hx {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--graphite);
+    letter-spacing: 0.02em;
+  }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="sw">
+      <div class="chip" style="background:#0a0a0f"></div>
+      <div class="nm">obsidian</div>
+      <div class="hx">#0a0a0f · ground</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:#12121a"></div>
+      <div class="nm">obsidian-3</div>
+      <div class="hx">#12121a · lifted</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:#e8e4df"></div>
+      <div class="nm" style="color:var(--graphite)">parchment</div>
+      <div class="hx">#e8e4df · text</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:rgba(255,255,255,0.65)"></div>
+      <div class="nm">chalk</div>
+      <div class="hx">rgba/.65 · mid</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:rgba(255,255,255,0.45)"></div>
+      <div class="nm">graphite</div>
+      <div class="hx">rgba/.45 · labels</div>
+    </div>
+  </div>
+</body></html>

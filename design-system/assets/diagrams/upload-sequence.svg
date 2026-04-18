@@ -1,0 +1,120 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 720" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#475569"></path>
+    </marker>
+    <marker id="arrow-blue" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#3b82f6"></path>
+    </marker>
+    <marker id="arrow-green" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#16a34a"></path>
+    </marker>
+  </defs>
+
+  
+  <text x="450" y="30" text-anchor="middle" font-size="16" font-weight="600" fill="#0f172a">Upload Lifecycle — Sequence Diagram</text>
+
+  
+  <rect x="60" y="50" width="100" height="32" rx="4" fill="#f1f5f9" stroke="#94a3b8"></rect>
+  <text x="110" y="71" text-anchor="middle" font-size="12" font-weight="500" fill="#334155">Client</text>
+  <line x1="110" y1="82" x2="110" y2="700" stroke="#cbd5e1" stroke-dasharray="4,4"></line>
+
+  <rect x="230" y="50" width="120" height="32" rx="4" fill="#dbeafe" stroke="#3b82f6"></rect>
+  <text x="290" y="71" text-anchor="middle" font-size="12" font-weight="500" fill="#1e40af">Rust API</text>
+  <line x1="290" y1="82" x2="290" y2="700" stroke="#93c5fd" stroke-dasharray="4,4"></line>
+
+  <rect x="420" y="50" width="120" height="32" rx="4" fill="#dcfce7" stroke="#16a34a"></rect>
+  <text x="480" y="71" text-anchor="middle" font-size="12" font-weight="500" fill="#166534">Upload (TS)</text>
+  <line x1="480" y1="82" x2="480" y2="700" stroke="#86efac" stroke-dasharray="4,4"></line>
+
+  <rect x="610" y="50" width="120" height="32" rx="4" fill="#fef3c7" stroke="#d97706"></rect>
+  <text x="670" y="71" text-anchor="middle" font-size="12" font-weight="500" fill="#92400e">Workflow (TS)</text>
+  <line x1="670" y1="82" x2="670" y2="700" stroke="#fcd34d" stroke-dasharray="4,4"></line>
+
+  <rect x="790" y="50" width="80" height="32" rx="4" fill="#f3e8ff" stroke="#9333ea"></rect>
+  <text x="830" y="71" text-anchor="middle" font-size="12" font-weight="500" fill="#6b21a8">Postgres</text>
+  <line x1="830" y1="82" x2="830" y2="700" stroke="#c4b5fd" stroke-dasharray="4,4"></line>
+
+  
+  <rect x="30" y="100" width="860" height="90" rx="6" fill="#eff6ff" fill-opacity="0.5" stroke="#bfdbfe"></rect>
+  <text x="45" y="116" font-size="10" font-weight="600" fill="#1e40af">STEP 1: Create Resource</text>
+
+  <line x1="110" y1="130" x2="282" y2="130" stroke="#3b82f6" marker-end="url(#arrow-blue)"></line>
+  <text x="200" y="125" text-anchor="middle" font-size="10" fill="#475569">POST /api/resources</text>
+  <text x="200" y="137" text-anchor="middle" font-size="9" fill="#94a3b8">{context, doctype, title}</text>
+
+  <line x1="290" y1="150" x2="822" y2="150" stroke="#475569" stroke-dasharray="3,3" marker-end="url(#arrow)"></line>
+  <text x="560" y="147" text-anchor="middle" font-size="9" fill="#94a3b8">INSERT resources → resource_id</text>
+
+  <line x1="282" y1="170" x2="110" y2="170" stroke="#3b82f6" marker-end="url(#arrow-blue)"></line>
+  <text x="200" y="167" text-anchor="middle" font-size="10" fill="#475569">201 {id: resource_id}</text>
+
+  
+  <rect x="30" y="200" width="860" height="130" rx="6" fill="#f0fdf4" fill-opacity="0.5" stroke="#bbf7d0"></rect>
+  <text x="45" y="216" font-size="10" font-weight="600" fill="#166534">STEP 2: Upload File</text>
+
+  <line x1="110" y1="235" x2="472" y2="235" stroke="#16a34a" marker-end="url(#arrow-green)"></line>
+  <text x="295" y="230" text-anchor="middle" font-size="10" fill="#475569">POST /api/upload (multipart)</text>
+  <text x="295" y="242" text-anchor="middle" font-size="9" fill="#94a3b8">file + resource_id</text>
+
+  <line x1="480" y1="255" x2="822" y2="255" stroke="#475569" stroke-dasharray="3,3" marker-end="url(#arrow)"></line>
+  <text x="650" y="252" text-anchor="middle" font-size="9" fill="#94a3b8">verify access → resources_visible_to()</text>
+
+  <rect x="500" y="270" width="130" height="20" rx="3" fill="#fef9c3" stroke="#eab308"></rect>
+  <text x="565" y="284" text-anchor="middle" font-size="9" fill="#854d0e">→ Vercel Blob</text>
+
+  <line x1="480" y1="300" x2="822" y2="300" stroke="#475569" stroke-dasharray="3,3" marker-end="url(#arrow)"></line>
+  <text x="650" y="297" text-anchor="middle" font-size="9" fill="#94a3b8">INSERT blob_files (status=&#39;pending&#39;)</text>
+
+  <line x1="472" y1="315" x2="110" y2="315" stroke="#16a34a" marker-end="url(#arrow-green)"></line>
+  <text x="295" y="312" text-anchor="middle" font-size="10" fill="#475569">202 {blob_file_id, status: &#34;pending&#34;}</text>
+
+  
+  <rect x="30" y="340" width="860" height="350" rx="6" fill="#fffbeb" fill-opacity="0.5" stroke="#fde68a"></rect>
+  <text x="45" y="356" font-size="10" font-weight="600" fill="#92400e">STEP 3: Async Processing Workflow</text>
+
+  
+  <line x1="480" y1="375" x2="662" y2="375" stroke="#d97706" marker-end="url(#arrow)"></line>
+  <text x="571" y="372" text-anchor="middle" font-size="9" fill="#475569">processUpload()</text>
+
+  <line x1="670" y1="395" x2="822" y2="395" stroke="#475569" stroke-dasharray="3,3" marker-end="url(#arrow)"></line>
+  <text x="746" y="392" text-anchor="middle" font-size="9" fill="#94a3b8">status → &#39;processing&#39;</text>
+
+  <rect x="635" y="410" width="70" height="24" rx="3" fill="#fee2e2" stroke="#ef4444"></rect>
+  <text x="670" y="426" text-anchor="middle" font-size="9" font-weight="500" fill="#991b1b">Extract</text>
+  <text x="720" y="426" font-size="8" fill="#94a3b8">kreuzberg</text>
+
+  
+  <rect x="635" y="445" width="70" height="24" rx="3" fill="#fef3c7" stroke="#f59e0b"></rect>
+  <text x="670" y="461" text-anchor="middle" font-size="9" font-weight="500" fill="#78350f">Chunk</text>
+  <text x="720" y="461" font-size="8" fill="#94a3b8">markdown headers</text>
+
+  
+  <rect x="635" y="480" width="70" height="24" rx="3" fill="#dbeafe" stroke="#3b82f6"></rect>
+  <text x="670" y="496" text-anchor="middle" font-size="9" font-weight="500" fill="#1e3a8a">Embed</text>
+  <text x="720" y="496" font-size="8" fill="#94a3b8">bge-base 768d</text>
+
+  
+  <rect x="635" y="515" width="70" height="24" rx="3" fill="#dcfce7" stroke="#22c55e"></rect>
+  <text x="670" y="531" text-anchor="middle" font-size="9" font-weight="500" fill="#14532d">Store</text>
+
+  <line x1="670" y1="545" x2="822" y2="545" stroke="#475569" stroke-dasharray="3,3" marker-end="url(#arrow)"></line>
+  <text x="746" y="557" text-anchor="middle" font-size="9" fill="#94a3b8">version bump old chunks</text>
+
+  <line x1="670" y1="575" x2="822" y2="575" stroke="#475569" stroke-dasharray="3,3" marker-end="url(#arrow)"></line>
+  <text x="746" y="572" text-anchor="middle" font-size="9" fill="#94a3b8">INSERT kb_chunks + embeddings</text>
+
+  <line x1="670" y1="600" x2="822" y2="600" stroke="#475569" stroke-dasharray="3,3" marker-end="url(#arrow)"></line>
+  <text x="746" y="597" text-anchor="middle" font-size="9" fill="#94a3b8">status → &#39;processed&#39;</text>
+
+  
+  <line x1="670" y1="434" x2="670" y2="445" stroke="#94a3b8" marker-end="url(#arrow)"></line>
+  <line x1="670" y1="469" x2="670" y2="480" stroke="#94a3b8" marker-end="url(#arrow)"></line>
+  <line x1="670" y1="504" x2="670" y2="515" stroke="#94a3b8" marker-end="url(#arrow)"></line>
+
+  
+  <rect x="30" y="648" width="860" height="42" rx="6" fill="#f8fafc" fill-opacity="0.5" stroke="#e2e8f0"></rect>
+  <text x="45" y="664" font-size="10" font-weight="600" fill="#64748b">OPTIONAL: Poll for Status</text>
+  <line x1="110" y1="678" x2="282" y2="678" stroke="#94a3b8" stroke-dasharray="5,3" marker-end="url(#arrow)"></line>
+  <text x="200" y="675" text-anchor="middle" font-size="9" fill="#94a3b8">GET /api/resources/{id}</text>
+</svg>

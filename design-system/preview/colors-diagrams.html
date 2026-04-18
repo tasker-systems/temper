@@ -1,0 +1,60 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Colors — Diagram Palette</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 22px 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+  .sw { display: flex; flex-direction: column; gap: 5px; }
+  .chip { height: 52px; border: 1px solid var(--rule); position: relative; }
+  .chip.split::before,
+  .chip.split::after { content: ""; position: absolute; inset: 0; }
+  .nm { font-family: var(--mono); font-size: 10px; color: var(--parchment); letter-spacing: 0.04em; }
+  .hx { font-family: var(--mono); font-size: 8.5px; color: var(--graphite); letter-spacing: 0.02em; line-height: 1.45; }
+  .role {
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 10px;
+    color: var(--graphite);
+  }
+  .note {
+    margin-top: 12px;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 11px;
+    color: var(--graphite);
+  }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="sw">
+      <div class="chip" style="background:linear-gradient(90deg,#86efac 50%,#166534 50%)"></div>
+      <div class="nm">session-green</div>
+      <div class="hx">#86efac / #166534</div>
+      <div class="role">active · growing</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:linear-gradient(90deg,#fcd34d 50%,#92400e 50%)"></div>
+      <div class="nm">decision-amber</div>
+      <div class="hx">#fcd34d / #92400e</div>
+      <div class="role">choices · inflection</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:linear-gradient(90deg,#94a3b8 50%,#475569 50%)"></div>
+      <div class="nm">deferred-slate</div>
+      <div class="hx">#94a3b8 / #475569</div>
+      <div class="role">paused · future</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:linear-gradient(90deg,#fca5a5 50%,#991b1b 50%)"></div>
+      <div class="nm">rot-red</div>
+      <div class="hx">#fca5a5 / #991b1b</div>
+      <div class="role">decay · loss</div>
+    </div>
+  </div>
+  <div class="note">Diagrams and illustrations only — never in page chrome.</div>
+</body></html>

@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Components — Command Palette</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 16px 20px; background: var(--obsidian); }
+  .pal {
+    border: 1px solid var(--rule-2);
+    background: var(--obsidian-3);
+    box-shadow: 0 12px 40px rgba(0,0,0,0.6);
+    border-radius: 4px;
+    max-width: 520px;
+    margin: 0 auto;
+  }
+  .inp {
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--parchment);
+    border-bottom: 1px solid var(--rule);
+  }
+  .inp .cur {
+    display: inline-block;
+    width: 7px;
+    height: 14px;
+    background: var(--temper-blue);
+    vertical-align: -2px;
+    animation: b 1s infinite steps(2);
+  }
+  @keyframes b { 50% { opacity: 0; } }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    padding: 7px 14px;
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--chalk);
+  }
+  .row.on { background: rgba(126,184,218,0.08); color: var(--parchment); border-left: 2px solid var(--temper-blue); padding-left: 12px; }
+  .row .k { color: var(--graphite-2); font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+  <div class="pal">
+    <div class="inp">invoice<span class="cur"></span></div>
+    <div class="row on">Choosing an invoice provider <span class="k">RESEARCH</span></div>
+    <div class="row">Wire up Stripe checkout <span class="k">SESSION</span></div>
+    <div class="row">Invoice line‑items schema <span class="k">CONCEPT</span></div>
+  </div>
+</body></html>

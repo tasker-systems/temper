@@ -1,0 +1,40 @@
+/* Temper Design System — Tailwind v4 CSS-first theme.
+   Drop-in: @import this file after @import "tailwindcss". */
+
+@theme {
+  --color-obsidian:    #0a0a0f;
+  --color-obsidian-2:  #0c0c11;
+  --color-obsidian-3:  #12121a;
+  --color-parchment:   #e8e4df;
+
+  --color-temper-50:  #f0f7ff;
+  --color-temper-100: #e0effe;
+  --color-temper-200: #bae0fd;
+  --color-temper-300: #7ccbfc;
+  --color-temper-400: #36b2f8;
+  --color-temper-500: #0c99e9;
+  --color-temper-600: #0079c7;
+  --color-temper-700: #0060a1;
+  --color-temper-800: #045185;
+  --color-temper-900: #09446e;
+  --color-temper-950: #062b49;
+  --color-temper-blue: #7eb8da;
+
+  --color-session-light: #86efac;  --color-session-dark: #166534;
+  --color-decision-light: #fcd34d; --color-decision-dark: #92400e;
+  --color-deferred-light: #94a3b8; --color-deferred-dark: #475569;
+  --color-rot-light: #fca5a5;      --color-rot-dark: #991b1b;
+
+  --color-graph-research: #7eb8da;
+  --color-graph-task:     #f0a870;
+  --color-graph-session:  #82c99a;
+  --color-graph-concept:  #d48ac7;
+
+  --font-serif: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  --font-mono:  "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+
+  --tracking-label: 0.20em;
+  --tracking-strip: 0.22em;
+  --tracking-eyebrow: 0.28em;
+  --tracking-mark: 0.15em;
+}
