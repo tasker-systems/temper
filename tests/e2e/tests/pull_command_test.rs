@@ -5,6 +5,11 @@
 //!   - `manifest = None`  — snapshot written as `{id}.md` under `vault_root`.
 //!   - `manifest = Some(&mut ...)` with a tracked entry — write to the
 //!     manifest-resolved vault path and update the entry hashes/state.
+//!
+//! CLI-level behavior — `temper pull <id>` without a manifest writes
+//! `{id}.md` to CWD — is guarded by the wrapper in `commands/pull.rs`. The
+//! primitive itself writes snapshots to its `vault_root` arg; the wrapper
+//! passes CWD in the no-manifest case.
 
 mod common;
 
@@ -155,4 +160,82 @@ async fn pull_one_resource_with_manifest_writes_to_vault_and_updates_entry(pool:
     let entry = manifest.entries.get(&seeded.id).unwrap();
     assert!(!entry.body_hash.is_empty(), "body_hash populated post-pull");
     assert_eq!(entry.state, ManifestEntryState::Clean);
+}
+
+/// Locks down the primitive's contract: the caller chooses the write root
+/// for snapshots. Passing a root that is NOT the vault dir must land the
+/// file under that passed-in root (and NOT under vault_dir). This is what
+/// the CLI wrapper relies on when routing manifest-less pulls to CWD —
+/// see the module docstring and `crates/temper-cli/src/commands/pull.rs`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_one_resource_snapshot_lands_in_caller_provided_root(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("pull-snapshot-alt-root")
+        .await
+        .expect("context create");
+
+    let body = "# Snapshot Alt Root\n\nBody.".to_string();
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: body.clone(),
+        content_hash: format!("{:0>64}", "c"),
+        embedding: vec![0.0_f32; 768],
+    };
+    let payload = IngestPayload {
+        title: "Snapshot Alt Root Test".to_string(),
+        origin_uri: "test://pull-snapshot-alt-root".to_string(),
+        context_name: "pull-snapshot-alt-root".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&body)),
+        slug: "snapshot-alt-root-test".to_string(),
+        content: body.clone(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-04-18"})),
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+    };
+    let seeded = app.client.ingest().create(&payload).await.expect("ingest");
+
+    // Pass a root that is explicitly NOT the vault dir — simulates the CLI
+    // wrapper passing CWD when no manifest is loaded.
+    let snapshot_dir = tempfile::TempDir::new().expect("create snapshot dir");
+    assert_ne!(
+        snapshot_dir.path(),
+        app.vault_dir.path(),
+        "snapshot_dir must differ from vault_dir for this test to be meaningful"
+    );
+
+    let result = pull_one_resource(&app.client, snapshot_dir.path(), seeded.id, None)
+        .await
+        .expect("pull_one_resource");
+
+    assert_eq!(result.branch, PullBranch::Snapshot);
+    let expected_path = snapshot_dir.path().join(format!("{}.md", seeded.id));
+    assert_eq!(
+        result.path, expected_path,
+        "snapshot must be written under the caller-provided root, not vault_dir"
+    );
+    assert!(
+        expected_path.exists(),
+        "snapshot file must exist at caller-provided root: {}",
+        expected_path.display()
+    );
+
+    // Verify nothing landed in the vault dir.
+    let vault_candidate = app.vault_dir.path().join(format!("{}.md", seeded.id));
+    assert!(
+        !vault_candidate.exists(),
+        "snapshot must not appear in vault_dir when caller passed a different root"
+    );
 }

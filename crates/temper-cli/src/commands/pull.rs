@@ -27,9 +27,20 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                     Err(_) => (None, false),
                 };
 
+            // When a manifest loads, snapshots (for untracked ids) and tracked
+            // writes both go under vault_root. When there's no manifest at all,
+            // snapshots must land in CWD — matching pre-refactor behavior
+            // (`commands/pull.rs:88` pre-refactor: bare relative path) and the
+            // design spec (Unit A acceptance criterion 3).
+            let write_root: std::path::PathBuf = if manifest_opt.is_some() {
+                vault_root.clone()
+            } else {
+                std::env::current_dir()?
+            };
+
             let result = pull_one_resource(
                 client,
-                &vault_root,
+                &write_root,
                 resource_id_typed,
                 manifest_opt.as_mut(),
             )
