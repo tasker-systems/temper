@@ -1,0 +1,63 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Type — Mono Labels & UI</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 20px 26px; }
+  .label {
+    font-family: var(--mono);
+    font-size: 10.4px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--temper-blue);
+    margin-bottom: 4px;
+  }
+  .strip {
+    font-family: var(--mono);
+    font-size: 9.9px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--graphite);
+  }
+  .nav {
+    font-family: var(--mono);
+    font-size: 11.2px;
+    letter-spacing: 0.05em;
+    color: var(--chalk);
+  }
+  .nav a { color: var(--graphite); text-decoration: none; }
+  .code {
+    font-family: var(--mono);
+    font-size: 12.8px;
+    color: var(--temper-blue);
+  }
+  .wm {
+    font-family: var(--mono);
+    font-weight: 500;
+    font-size: 12px;
+    letter-spacing: 0.15em;
+    color: var(--temper-blue);
+  }
+  .meta {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--graphite-2);
+    margin-top: 10px;
+    margin-bottom: 3px;
+  }
+  .meta:first-child { margin-top: 0; }
+</style>
+</head>
+<body>
+  <div class="meta">Section label · .65rem · 0.20em track</div>
+  <div class="label">SESSION CONTINUITY</div>
+  <div class="meta">Masthead strip · .62rem · 0.22em track</div>
+  <div class="strip">DAILY · VOL&nbsp;I · TEMPER</div>
+  <div class="meta">Nav link · .7rem · 0.05em track</div>
+  <div class="nav"><a>How it works</a></div>
+  <div class="meta">CLI / code · .8rem</div>
+  <div class="code">$ temper warmup --context myapp</div>
+  <div class="meta">Wordmark · .75rem · 500 · 0.15em track</div>
+  <div class="wm">temper</div>
+</body></html>

@@ -1,0 +1,44 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Components — Footer</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 0; background: var(--obsidian); }
+  .f {
+    padding: 20px 26px;
+    border-top: 1px solid var(--rule);
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--graphite);
+    letter-spacing: 0.05em;
+  }
+  .brand { display:flex; align-items:center; gap:7px; color: var(--temper-blue); }
+  .brand svg { width: 12px; height: 12px; }
+  .brand .w { font-weight: 500; letter-spacing: 0.15em; }
+  .links { margin-left: auto; display:flex; gap: 18px; }
+  .links a { color: var(--graphite); text-decoration: none; }
+  .tag {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--graphite);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+  <div class="f">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M 12 7 L 12 25" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+        <path d="M 6 13 L 18 13 Q 23 13 25 16.5 Q 27 20 25 24" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+      </svg>
+      <span class="w">temper</span>
+    </div>
+    <span class="tag">— context that compounds</span>
+    <div class="links">
+      <a>Docs</a><a>Changelog</a><a>GitHub</a><a>Contact</a>
+    </div>
+  </div>
+</body></html>

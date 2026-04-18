@@ -1,0 +1,53 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Colors — Temper Blue</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 22px 24px; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 10px;
+  }
+  .sw { display: flex; flex-direction: column; gap: 6px; }
+  .chip { height: 64px; border: 1px solid var(--rule); }
+  .nm { font-family: var(--mono); font-size: 10px; color: var(--parchment); letter-spacing: 0.04em; }
+  .hx { font-family: var(--mono); font-size: 9px; color: var(--graphite); letter-spacing: 0.02em; }
+  .note {
+    margin-top: 14px;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 11px;
+    color: var(--graphite);
+  }
+</style>
+</head>
+<body>
+  <div class="grid">
+    <div class="sw">
+      <div class="chip" style="background:#7eb8da"></div>
+      <div class="nm" style="color:var(--temper-blue)">temper-blue</div>
+      <div class="hx">#7eb8da · accent</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:rgba(126,184,218,0.50);border-color:var(--rule-2)"></div>
+      <div class="nm">blue-border</div>
+      <div class="hx">rgba/.50 · buttons</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:rgba(126,184,218,0.40)"></div>
+      <div class="nm">blue-dim</div>
+      <div class="hx">rgba/.40 · subtle</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:rgba(126,184,218,0.25)"></div>
+      <div class="nm">blue-border-dim</div>
+      <div class="hx">rgba/.25 · rails</div>
+    </div>
+    <div class="sw">
+      <div class="chip" style="background:rgba(126,184,218,0.12)"></div>
+      <div class="nm">blue-glow</div>
+      <div class="hx">rgba/.12 · hover bg</div>
+    </div>
+  </div>
+  <div class="note">One accent carries every interactive signal — links, CLI commands, section labels, emphasis.</div>
+</body></html>

@@ -1,0 +1,49 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Colors — Graph Nodes</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 22px 24px; }
+  .row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+    align-items: start;
+  }
+  .cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot { border-radius: 50%; }
+  .nm {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--parchment);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .hx {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--graphite);
+  }
+  .note {
+    margin-top: 14px;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 11px;
+    color: var(--graphite);
+    text-align: center;
+  }
+</style>
+</head>
+<body>
+  <div class="row">
+    <div class="cell"><div class="dot" style="width:40px;height:40px;background:#7eb8da"></div><div class="nm">research</div><div class="hx">#7eb8da</div></div>
+    <div class="cell"><div class="dot" style="width:40px;height:40px;background:#f0a870"></div><div class="nm">task</div><div class="hx">#f0a870</div></div>
+    <div class="cell"><div class="dot" style="width:40px;height:40px;background:#82c99a"></div><div class="nm">session</div><div class="hx">#82c99a</div></div>
+    <div class="cell"><div class="dot" style="width:40px;height:40px;background:#d48ac7"></div><div class="nm">concept</div><div class="hx">#d48ac7</div></div>
+  </div>
+  <div class="note">Radius scales with edge count. Source: <span class="mono" style="font-style:normal">lib/graph/styling.ts</span></div>
+</body></html>

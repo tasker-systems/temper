@@ -1,0 +1,65 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Spacing — Radii & Borders</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 20px 26px; display:flex; flex-direction:column; gap: 12px; }
+  .row { display:flex; gap: 14px; align-items:center; }
+  .box {
+    width: 56px;
+    height: 36px;
+    border: 1px solid var(--rule);
+    background: var(--card-bg);
+  }
+  .pill {
+    padding: 4px 10px;
+    border: 1px solid var(--temper-blue-border-dim);
+    background: var(--temper-blue-card);
+    color: var(--temper-blue);
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+  }
+  .code {
+    padding: 4px 8px;
+    background: var(--card-bg);
+    border-radius: 3px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--chalk);
+  }
+  .dot {
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--temper-blue);
+  }
+  .anno {
+    font-family: var(--mono);
+    font-size: 9.5px;
+    color: var(--graphite);
+    letter-spacing: 0.04em;
+  }
+  .hl {
+    font-family: var(--serif);
+    font-style: italic;
+    color: var(--chalk);
+    font-size: 11.5px;
+  }
+</style>
+</head>
+<body>
+  <div class="hl">Radii scale: three stops only.</div>
+  <div class="row">
+    <div class="box" style="border-radius:0"></div>
+    <span class="anno">0 · marketing cards, panels, rules</span>
+  </div>
+  <div class="row">
+    <div class="box" style="border-radius:3px"></div>
+    <span class="pill" style="border-radius:4px">in‑progress</span>
+    <span class="code">temper init</span>
+    <span class="anno">3–4px · chips, code, pills</span>
+  </div>
+  <div class="row">
+    <div class="dot"></div>
+    <span class="anno">50% · graph nodes, step circles</span>
+  </div>
+</body></html>

@@ -1,0 +1,417 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Knowledge Graph — Static Scene</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  html, body { margin: 0; padding: 0; background: #0a0a0f; color: #e8e4df; font-family: "Source Serif 4", Georgia, serif; }
+  body { padding: 28px 32px 48px 32px; min-height: 1600px; }
+
+  .doc-title { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: #7eb8da; margin-bottom: 4px; }
+  .doc-sub { font-family: "Source Serif 4", Georgia, serif; font-style: italic; font-size: 13px; color: #a8a39d; margin-bottom: 32px; }
+  h3 { font-family: "JetBrains Mono", monospace; font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(255,255,255,0.45); margin: 0 0 14px 0; font-weight: 400; }
+
+  /* Reference row: three cells side by side */
+  .refs { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; margin-bottom: 44px; }
+  .ref-cell { padding: 16px; border: 1px solid rgba(255,255,255,0.06); background: #0c0c11; }
+  .ref-cell .label { font-family: "JetBrains Mono", monospace; font-size: 8.5px; letter-spacing: 0.2em; color: rgba(255,255,255,0.5); margin-bottom: 10px; }
+  .ref-cell .note { font-family: "Source Serif 4", Georgia, serif; font-style: italic; font-size: 11px; color: rgba(255,255,255,0.48); line-height: 1.55; margin-top: 10px; }
+
+  /* Main scene */
+  .scene-wrap { position: relative; border: 1px solid rgba(255,255,255,0.08); background: #0a0a0f; overflow: hidden; }
+  .scene-chrome-top { position: absolute; top: 0; left: 0; right: 0; display: flex; justify-content: space-between; align-items: flex-start; padding: 18px 22px; pointer-events: none; z-index: 3; }
+  .watermark {
+    position: absolute; left: 32px; bottom: 18px; font-family: "Source Serif 4", Georgia, serif; font-style: italic;
+    font-size: 80px; color: rgba(255,255,255,0.035); letter-spacing: -0.02em; line-height: 1; pointer-events: none; z-index: 0;
+  }
+  .watermark .ctx-prefix { font-family: "JetBrains Mono", monospace; font-size: 14px; font-style: normal; letter-spacing: 0.2em; vertical-align: middle; margin-right: 12px; opacity: 0.7; }
+
+  .view-toggle { z-index: 4; }
+  .view-toggle .view-label { font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 0.22em; color: rgba(255,255,255,0.38); margin-bottom: 6px; }
+  .view-toggle .view-row { display: flex; align-items: baseline; gap: 14px; }
+  .view-toggle .active { font-family: "Source Serif 4", Georgia, serif; font-size: 14px; color: #e8e4df; }
+  .view-toggle .inactive { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.18em; color: rgba(255,255,255,0.35); text-transform: uppercase; }
+
+  .legend { font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 0.18em; color: rgba(255,255,255,0.42); text-align: right; line-height: 1.9; }
+  .legend .sw { display: inline-block; width: 28px; height: 6px; margin-right: 8px; vertical-align: middle; }
+
+  .scene-caption {
+    font-family: "Source Serif 4", Georgia, serif; font-style: italic; font-size: 12.5px; color: rgba(255,255,255,0.55);
+    max-width: 680px; margin: 20px auto 0 auto; text-align: center; line-height: 1.6;
+  }
+
+  /* Marginalia block for hover-pane mock */
+  .hover-mock { position: absolute; top: 82px; right: 22px; width: 220px; padding: 14px 14px; border-left: 1px solid rgba(140,197,226,0.4); background: rgba(12,12,17,0.85); backdrop-filter: blur(6px); z-index: 5; }
+  .hover-mock .hm-type { font-family: "JetBrains Mono", monospace; font-size: 8.5px; letter-spacing: 0.22em; color: rgba(140,197,226,0.75); margin-bottom: 6px; }
+  .hover-mock .hm-title { font-family: "Source Serif 4", Georgia, serif; font-size: 14px; font-weight: 500; color: #e8e4df; margin-bottom: 10px; line-height: 1.3; }
+  .hover-mock .hm-row { font-family: "Source Serif 4", Georgia, serif; font-size: 11.5px; color: rgba(255,255,255,0.72); margin-bottom: 6px; line-height: 1.45; }
+  .hover-mock .hm-row em { font-family: "JetBrains Mono", monospace; font-style: normal; font-size: 8.5px; letter-spacing: 0.18em; color: rgba(255,255,255,0.38); margin-right: 8px; }
+  .hover-mock .hm-sess { font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 0.18em; color: rgba(158,211,175,0.7); margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.06); }
+</style>
+</head>
+<body>
+  <div class="doc-title">KNOWLEDGE GRAPH · STATIC SCENE</div>
+  <div class="doc-sub">A frozen frame of the temper vault at neighborhood zoom. Real docs from the research chain, one node hovered, meta-doc mode muted behind structural.</div>
+
+  <!-- ====================================================================== -->
+  <!-- REFERENCE ROW: current · obsidian-style · proposed                       -->
+  <!-- ====================================================================== -->
+  <h3>FOR REFERENCE · three approaches at a glance</h3>
+  <div class="refs">
+    <!-- CURRENT (D3 pink dots, gravity well) -->
+    <div class="ref-cell">
+      <div class="label">CURRENT · D3 · ALL-DOTS</div>
+      <svg viewBox="0 0 280 180" width="100%" height="180">
+        <!-- Central cluster -->
+        <circle cx="140" cy="90" r="4" fill="#d48ac7"/>
+        <circle cx="125" cy="78" r="3.5" fill="#d48ac7"/>
+        <circle cx="152" cy="76" r="4" fill="#d48ac7"/>
+        <circle cx="130" cy="102" r="3" fill="#9ed3af"/>
+        <circle cx="148" cy="100" r="3.5" fill="#d48ac7"/>
+        <circle cx="118" cy="90" r="3" fill="#d48ac7"/>
+        <circle cx="160" cy="92" r="3.5" fill="#d48ac7"/>
+        <circle cx="138" cy="68" r="2.5" fill="#9ed3af"/>
+        <line x1="140" y1="90" x2="125" y2="78" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>
+        <line x1="140" y1="90" x2="152" y2="76" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>
+        <line x1="140" y1="90" x2="130" y2="102" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>
+        <line x1="140" y1="90" x2="148" y2="100" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>
+        <line x1="140" y1="90" x2="118" y2="90" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>
+        <line x1="152" y1="76" x2="160" y2="92" stroke="rgba(255,255,255,0.15)" stroke-width="0.5"/>
+        <!-- periphery floaters -->
+        <circle cx="40" cy="30" r="3" fill="#d48ac7"/>
+        <circle cx="70" cy="50" r="3" fill="#d48ac7"/>
+        <circle cx="220" cy="40" r="3" fill="#d48ac7"/>
+        <circle cx="250" cy="60" r="3" fill="#d48ac7"/>
+        <circle cx="45" cy="140" r="3" fill="#d48ac7"/>
+        <circle cx="90" cy="155" r="3" fill="#d48ac7"/>
+        <circle cx="230" cy="125" r="3" fill="#d48ac7"/>
+        <circle cx="260" cy="150" r="3" fill="#d48ac7"/>
+        <circle cx="210" cy="170" r="3" fill="#d48ac7"/>
+        <circle cx="30" cy="95" r="3" fill="#d48ac7"/>
+      </svg>
+      <div class="note">Mostly-pink dots, one gravity well, no way to read structure. All doc types look the same; edges are ghost thin.</div>
+    </div>
+
+    <!-- OBSIDIAN-STYLE (reference point) -->
+    <div class="ref-cell">
+      <div class="label">OBSIDIAN · GLOW DOTS · RADIAL</div>
+      <svg viewBox="0 0 280 180" width="100%" height="180">
+        <defs>
+          <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+            <stop offset="0%" stop-color="#b899d4" stop-opacity="0.9"/>
+            <stop offset="60%" stop-color="#b899d4" stop-opacity="0.3"/>
+            <stop offset="100%" stop-color="#b899d4" stop-opacity="0"/>
+          </radialGradient>
+        </defs>
+        <!-- edges first -->
+        <g stroke="rgba(184,153,212,0.35)" stroke-width="0.6" fill="none">
+          <line x1="140" y1="90" x2="90" y2="55"/>
+          <line x1="140" y1="90" x2="200" y2="50"/>
+          <line x1="140" y1="90" x2="70" y2="130"/>
+          <line x1="140" y1="90" x2="210" y2="140"/>
+          <line x1="140" y1="90" x2="130" y2="30"/>
+          <line x1="140" y1="90" x2="160" y2="150"/>
+          <line x1="90" y1="55" x2="200" y2="50"/>
+          <line x1="90" y1="55" x2="70" y2="130"/>
+          <line x1="200" y1="50" x2="210" y2="140"/>
+          <line x1="70" y1="130" x2="160" y2="150"/>
+          <line x1="210" y1="140" x2="160" y2="150"/>
+        </g>
+        <!-- nodes with glow -->
+        <g>
+          <circle cx="140" cy="90" r="10" fill="url(#glow)"/><circle cx="140" cy="90" r="3" fill="#e8e4df"/>
+          <circle cx="90" cy="55" r="9" fill="url(#glow)"/><circle cx="90" cy="55" r="2.5" fill="#d4c7e0"/>
+          <circle cx="200" cy="50" r="9" fill="url(#glow)"/><circle cx="200" cy="50" r="2.5" fill="#d4c7e0"/>
+          <circle cx="70" cy="130" r="9" fill="url(#glow)"/><circle cx="70" cy="130" r="2.5" fill="#d4c7e0"/>
+          <circle cx="210" cy="140" r="9" fill="url(#glow)"/><circle cx="210" cy="140" r="2.5" fill="#d4c7e0"/>
+          <circle cx="130" cy="30" r="7" fill="url(#glow)"/><circle cx="130" cy="30" r="2" fill="#d4c7e0"/>
+          <circle cx="160" cy="150" r="7" fill="url(#glow)"/><circle cx="160" cy="150" r="2" fill="#d4c7e0"/>
+        </g>
+        <!-- tiny labels -->
+        <text x="144" y="108" font-family="Source Serif 4" font-size="5.5" fill="rgba(255,255,255,0.55)">central.md</text>
+        <text x="94" y="68" font-family="Source Serif 4" font-size="5" fill="rgba(255,255,255,0.4)">alpha.md</text>
+        <text x="204" y="62" font-family="Source Serif 4" font-size="5" fill="rgba(255,255,255,0.4)">beta.md</text>
+      </svg>
+      <div class="note">Pleasant to look at, tells you nothing. All nodes identical glow-dots; doc types absent; labels too small to read.</div>
+    </div>
+
+    <!-- PROPOSED (our aesthetic, tiny preview) -->
+    <div class="ref-cell">
+      <div class="label">PROPOSED · TYPESET · FRAMED</div>
+      <svg viewBox="0 0 280 180" width="100%" height="180">
+        <defs>
+          <linearGradient id="mini-goal" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f5d277"/><stop offset="100%" stop-color="#ebe2d0"/></linearGradient>
+          <linearGradient id="mini-task" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f0a870"/><stop offset="100%" stop-color="#ece0d2"/></linearGradient>
+          <linearGradient id="mini-research" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8cc5e2"/><stop offset="100%" stop-color="#e8e4df"/></linearGradient>
+          <linearGradient id="mini-concept" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#d89ccb"/><stop offset="100%" stop-color="#e8dde4"/></linearGradient>
+        </defs>
+        <!-- goal frame -->
+        <rect x="10" y="18" width="120" height="70" fill="none" stroke="rgba(245,210,119,0.32)" stroke-width="0.6"/>
+        <text x="14" y="14" font-family="JetBrains Mono" font-size="5" fill="rgba(245,210,119,0.7)" letter-spacing="1.2">GOAL</text>
+        <text x="16" y="30" font-family="Source Serif 4" font-size="8" font-weight="500" fill="url(#mini-goal)">llm-wiki</text>
+        <text x="18" y="46" font-family="Source Serif 4" font-size="6.5" fill="url(#mini-task)">doctype slugs</text>
+        <text x="18" y="58" font-family="Source Serif 4" font-size="6.5" fill="url(#mini-task)">graph-index</text>
+        <text x="18" y="70" font-family="Source Serif 4" font-size="6.5" fill="url(#mini-task)">temper-index</text>
+        <text x="18" y="82" font-family="Source Serif 4" font-size="6.5" fill="url(#mini-research)">r11 viz</text>
+
+        <!-- concept frame -->
+        <rect x="150" y="100" width="118" height="60" fill="none" stroke="rgba(216,156,203,0.32)" stroke-width="0.6"/>
+        <text x="154" y="96" font-family="JetBrains Mono" font-size="5" fill="rgba(216,156,203,0.7)" letter-spacing="1.2">CONCEPT</text>
+        <text x="156" y="114" font-family="Source Serif 4" font-size="8" font-weight="500" fill="url(#mini-concept)">throughline</text>
+        <text x="158" y="130" font-family="Source Serif 4" font-size="6.5" fill="url(#mini-research)">r7 vertex-edge</text>
+        <text x="158" y="142" font-family="Source Serif 4" font-size="6.5" fill="url(#mini-research)">session-continuity</text>
+        <text x="158" y="154" font-family="Source Serif 4" font-size="6.5" fill="url(#mini-task)">open-meta</text>
+
+        <!-- solo participants (outside frames) -->
+        <text x="152" y="30" font-family="Source Serif 4" font-size="7.5" fill="url(#mini-research)">r9 svelte ui</text>
+        <text x="152" y="46" font-family="Source Serif 4" font-size="7.5" fill="url(#mini-task)">kg foundations</text>
+        <text x="14" y="108" font-family="Source Serif 4" font-size="7" fill="url(#mini-research)">r2 data-model</text>
+
+        <!-- edges -->
+        <g stroke="rgba(255,255,255,0.2)" stroke-width="0.5">
+          <line x1="75" y1="46" x2="150" y2="30"/>
+          <line x1="75" y1="58" x2="150" y2="46"/>
+          <line x1="75" y1="82" x2="150" y2="130" stroke-dasharray="1.5,1.5"/>
+          <line x1="52" y1="108" x2="155" y2="130" stroke-dasharray="0.5,1.5"/>
+        </g>
+      </svg>
+      <div class="note">Two frames, eight words, four edges. You already know what each thing is and where it belongs.</div>
+    </div>
+  </div>
+
+  <!-- ====================================================================== -->
+  <!-- MAIN SCENE: composed vault                                               -->
+  <!-- ====================================================================== -->
+  <h3>PROPOSED · your temper vault · neighborhood zoom · one node hovered</h3>
+  <div class="scene-wrap" style="height: 720px;">
+
+    <!-- Watermark -->
+    <div class="watermark"><span class="ctx-prefix">CONTEXT</span><em>temper</em></div>
+
+    <!-- Top chrome: mode toggle and legend -->
+    <div class="scene-chrome-top">
+      <div class="view-toggle">
+        <div class="view-label">VIEW</div>
+        <div class="view-row">
+          <span class="active">structural</span>
+          <span class="inactive">meta-doc</span>
+        </div>
+      </div>
+      <div class="legend">
+        <div><span class="sw" style="background:#8cc5e2"></span>RESEARCH</div>
+        <div><span class="sw" style="background:#f0a870"></span>TASK</div>
+        <div><span class="sw" style="background:#9ed3af"></span>SESSION</div>
+        <div><span class="sw" style="border:1px solid rgba(245,210,119,0.5); background:transparent"></span>GOAL · frame</div>
+        <div><span class="sw" style="border:1px solid rgba(216,156,203,0.5); background:transparent"></span>CONCEPT · frame</div>
+      </div>
+    </div>
+
+    <!-- Hover inspector (fixed right side, mocked) -->
+    <div class="hover-mock">
+      <div class="hm-type">RESEARCH · HOVERED</div>
+      <div class="hm-title">r11 knowledge-graph visualization design</div>
+      <div class="hm-row"><em>DEPENDS</em>r7 vertex-edge graph</div>
+      <div class="hm-row"><em>DEPENDS</em>r9 svelte ui design</div>
+      <div class="hm-row"><em>RELATES</em>svar-grid</div>
+      <div class="hm-row"><em>RELATES</em>knowledge-graph</div>
+      <div class="hm-row"><em>EXT. BY</em>knowledge-graph-ui task</div>
+      <div class="hm-sess">⌊3⌋ SESSIONS REFERENCE THIS</div>
+    </div>
+
+    <!-- The scene itself: SVG overlay across the wrap -->
+    <svg viewBox="0 0 1000 720" width="100%" height="100%" style="position:absolute; inset:0; z-index:2;" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <!-- doc-type gradients -->
+        <linearGradient id="s-research" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#8cc5e2"/><stop offset="100%" stop-color="#e8e4df"/></linearGradient>
+        <linearGradient id="s-task"     x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f0a870"/><stop offset="100%" stop-color="#ece0d2"/></linearGradient>
+        <linearGradient id="s-session"  x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#9ed3af"/><stop offset="100%" stop-color="#e5e6de"/></linearGradient>
+        <linearGradient id="s-goal"     x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#f5d277"/><stop offset="100%" stop-color="#ebe2d0"/></linearGradient>
+        <linearGradient id="s-concept"  x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#d89ccb"/><stop offset="100%" stop-color="#e8dde4"/></linearGradient>
+
+        <!-- Hovered-edge color-pour gradients: source blue → parchment -->
+        <linearGradient id="pour-to-task"    x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#8cc5e2" stop-opacity="0.85"/><stop offset="100%" stop-color="#f0a870" stop-opacity="0.4"/></linearGradient>
+        <linearGradient id="pour-to-research"    x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#8cc5e2" stop-opacity="0.85"/><stop offset="100%" stop-color="#8cc5e2" stop-opacity="0.35"/></linearGradient>
+        <linearGradient id="pour-to-concept" x1="0" y1="0" x2="1" y2="0"><stop offset="0%" stop-color="#8cc5e2" stop-opacity="0.85"/><stop offset="100%" stop-color="#d89ccb" stop-opacity="0.45"/></linearGradient>
+
+        <!-- Cluster hull rendering -->
+      </defs>
+
+      <!--
+        LAYOUT STRATEGY — three spatial regions roughly corresponding to R11 D1 clusters:
+          • LEFT: research cluster
+          • CENTER: task cluster
+          • RIGHT: session cluster (plus annotations on referenced docs)
+        Aggregators (goal / concept) float in their own quadrants, spatially between the participants they aggregate.
+      -->
+
+      <!-- Cluster hulls (1px, very low alpha outline — you can almost miss them) -->
+      <!-- research hull -->
+      <path d="M 55 220 Q 30 170 80 130 Q 160 110 220 140 Q 270 200 240 260 Q 170 300 100 290 Q 55 270 55 220 Z"
+            fill="none" stroke="rgba(140,197,226,0.10)" stroke-width="1"/>
+      <!-- task hull -->
+      <path d="M 360 360 Q 340 300 400 270 Q 490 255 560 280 Q 600 330 570 390 Q 500 430 420 420 Q 360 410 360 360 Z"
+            fill="none" stroke="rgba(240,168,112,0.10)" stroke-width="1"/>
+      <!-- session hull -->
+      <path d="M 730 180 Q 720 140 770 130 Q 840 135 870 170 Q 880 220 840 240 Q 770 240 730 220 Q 725 200 730 180 Z"
+            fill="none" stroke="rgba(158,211,175,0.10)" stroke-width="1"/>
+
+      <!-- Faint cluster-type labels (echo of the hulls, mono-cap marginalia) -->
+      <text x="145" y="105" font-family="JetBrains Mono" font-size="9" fill="rgba(140,197,226,0.35)" letter-spacing="2.2" text-anchor="middle">RESEARCH</text>
+      <text x="470" y="250" font-family="JetBrains Mono" font-size="9" fill="rgba(240,168,112,0.35)" letter-spacing="2.2" text-anchor="middle">TASK</text>
+      <text x="800" y="115" font-family="JetBrains Mono" font-size="9" fill="rgba(158,211,175,0.35)" letter-spacing="2.2" text-anchor="middle">SESSION</text>
+
+      <!-- =====================================================================
+           EDGES — drawn BEFORE nodes so nodes sit on top.
+           Pour gradients on edges connected to hovered node (r11 viz).
+           All other edges at rgba(255,255,255,0.08) — present but quiet.
+           ===================================================================== -->
+
+      <g id="edges-quiet" stroke="rgba(255,255,255,0.09)" stroke-width="0.75" fill="none">
+        <!-- research → research -->
+        <line x1="180" y1="200" x2="110" y2="250"/> <!-- r7 → r2 -->
+        <line x1="180" y1="200" x2="230" y2="240" stroke-dasharray="3,2"/> <!-- r7 relates kg -->
+        <line x1="110" y1="250" x2="180" y2="280"/>
+        <!-- research → task (depends, solid) -->
+        <line x1="230" y1="240" x2="420" y2="340"/>
+        <line x1="230" y1="240" x2="480" y2="360"/>
+        <!-- task → task (preceded_by, long-dash) -->
+        <line x1="420" y1="340" x2="480" y2="360" stroke-dasharray="4,3"/>
+        <line x1="480" y1="360" x2="540" y2="380" stroke-dasharray="4,3"/>
+        <line x1="540" y1="380" x2="560" y2="400" stroke-dasharray="4,3"/>
+        <!-- task → goal (parent, implied — we render it visually by containment, not line) -->
+        <!-- session → research (references, dotted) -->
+        <line x1="800" y1="170" x2="230" y2="240" stroke-dasharray="1,3"/>
+        <line x1="800" y1="200" x2="180" y2="200" stroke-dasharray="1,3"/>
+        <line x1="840" y1="180" x2="540" y2="380" stroke-dasharray="1,3"/>
+        <!-- concept → research (relates, medium-dash) -->
+        <line x1="500" y1="560" x2="180" y2="200" stroke-dasharray="2,2"/>
+        <line x1="500" y1="560" x2="230" y2="240" stroke-dasharray="2,2"/>
+        <line x1="500" y1="560" x2="560" y2="400" stroke-dasharray="2,2"/>
+      </g>
+
+      <!-- POUR-EDGES: edges incident on the hovered node (r11 viz research) -->
+      <!-- r11 viz position: (260, 190). Hovered: brightest blue start.  -->
+      <g stroke-width="1.1" fill="none">
+        <!-- r11 → r7 (depends, solid) -->
+        <line x1="260" y1="190" x2="180" y2="200" stroke="url(#pour-to-research)"/>
+        <!-- r11 → r9 svelte ui (depends, solid) -->
+        <line x1="260" y1="190" x2="110" y2="250" stroke="url(#pour-to-research)"/>
+        <!-- r11 → svar-grid relates (medium-dash) -->
+        <line x1="260" y1="190" x2="420" y2="340" stroke="url(#pour-to-task)" stroke-dasharray="2,2"/>
+        <!-- r11 → knowledge-graph relates (medium-dash) -->
+        <line x1="260" y1="190" x2="500" y2="560" stroke="url(#pour-to-concept)" stroke-dasharray="2,2"/>
+        <!-- r11 extended_by kg-ui task (solid) -->
+        <line x1="260" y1="190" x2="480" y2="360" stroke="url(#pour-to-task)"/>
+      </g>
+
+      <!-- =====================================================================
+           AGGREGATOR FRAMES — drawn before the child participants inside them
+           ===================================================================== -->
+
+      <!-- GOAL: llm-wiki (top right, contains its tasks) -->
+      <g>
+        <rect x="620" y="330" width="300" height="160" fill="none" stroke="rgba(245,210,119,0.32)" stroke-width="0.75"/>
+        <text x="628" y="322" font-family="JetBrains Mono" font-size="8.5" fill="rgba(245,210,119,0.65)" letter-spacing="2.2">GOAL</text>
+        <text x="636" y="354" font-family="Source Serif 4" font-size="13" font-weight="500" fill="url(#s-goal)">llm-wiki</text>
+        <!-- children inside -->
+        <text x="640" y="384" font-family="Source Serif 4" font-size="11" fill="url(#s-task)">develop temper index</text>
+        <text x="640" y="404" font-family="Source Serif 4" font-size="11" fill="url(#s-task)">doctype-qualified slugs</text>
+        <text x="640" y="424" font-family="Source Serif 4" font-size="11" fill="url(#s-task)">graph-index materialize</text>
+        <text x="640" y="444" font-family="Source Serif 4" font-size="11" fill="url(#s-research)">r11 visualization design</text>
+        <text x="640" y="464" font-family="Source Serif 4" font-size="11" font-style="italic" fill="rgba(255,255,255,0.45)">+ 2 more on expand</text>
+      </g>
+
+      <!-- GOAL: temper-maintenance (bottom left) -->
+      <g>
+        <rect x="100" y="480" width="260" height="130" fill="none" stroke="rgba(245,210,119,0.28)" stroke-width="0.75"/>
+        <text x="108" y="472" font-family="JetBrains Mono" font-size="8.5" fill="rgba(245,210,119,0.6)" letter-spacing="2.2">GOAL</text>
+        <text x="116" y="504" font-family="Source Serif 4" font-size="13" font-weight="500" fill="url(#s-goal)">temper-maintenance</text>
+        <text x="120" y="534" font-family="Source Serif 4" font-size="11" fill="url(#s-task)">knowledge-graph-ui seeding</text>
+        <text x="120" y="554" font-family="Source Serif 4" font-size="11" fill="url(#s-task)">open-meta intentionality</text>
+        <text x="120" y="574" font-family="Source Serif 4" font-size="11" fill="url(#s-task)">kg foundations</text>
+      </g>
+
+      <!-- CONCEPT: throughline (bottom center) -->
+      <g>
+        <rect x="420" y="520" width="230" height="120" fill="none" stroke="rgba(216,156,203,0.38)" stroke-width="0.75"/>
+        <text x="428" y="512" font-family="JetBrains Mono" font-size="8.5" fill="rgba(216,156,203,0.7)" letter-spacing="2.2">CONCEPT</text>
+        <text x="436" y="544" font-family="Source Serif 4" font-size="13" font-weight="500" fill="url(#s-concept)">throughline</text>
+        <text x="440" y="572" font-family="Source Serif 4" font-size="11" fill="url(#s-research)">session-continuity</text>
+        <text x="440" y="592" font-family="Source Serif 4" font-size="11" fill="url(#s-research)">r7 vertex-edge</text>
+        <text x="440" y="612" font-family="Source Serif 4" font-size="11" font-style="italic" fill="rgba(255,255,255,0.45)">+ 4 derived</text>
+      </g>
+
+      <!-- =====================================================================
+           PARTICIPANTS — outside frames (research cluster at left, task mid, session right)
+           ===================================================================== -->
+
+      <!-- RESEARCH CLUSTER (left) -->
+      <!-- r7 vertex-edge -->
+      <g>
+        <text x="180" y="200" font-family="Source Serif 4" font-size="13" font-weight="500" fill="url(#s-research)" text-anchor="middle">r7 vertex-edge graph</text>
+        <text x="180" y="214" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">18 EDGES</text>
+        <!-- session halo -->
+        <text x="240" y="196" font-family="JetBrains Mono" font-size="8" fill="rgba(158,211,175,0.75)" letter-spacing="1.4">⌊5⌋</text>
+      </g>
+
+      <!-- r9 svelte ui -->
+      <g>
+        <text x="110" y="250" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-research)" text-anchor="middle">r9 svelte ui design</text>
+        <text x="110" y="264" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">9 EDGES</text>
+        <text x="162" y="246" font-family="JetBrains Mono" font-size="8" fill="rgba(158,211,175,0.65)" letter-spacing="1.4">⌊2⌋</text>
+      </g>
+
+      <!-- r2 data-model -->
+      <g>
+        <text x="180" y="280" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-research)" text-anchor="middle">r2 data-model</text>
+        <text x="180" y="294" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">11 EDGES</text>
+      </g>
+
+      <!-- r11 (HOVERED) -->
+      <g>
+        <!-- hovered ring: a hairline bracket marks the hovered node -->
+        <text x="260" y="190" font-family="Source Serif 4" font-size="14" font-weight="500" fill="url(#s-research)" text-anchor="middle">r11 visualization</text>
+        <!-- underline in the source color reinforces active state -->
+        <line x1="200" y1="198" x2="320" y2="198" stroke="#8cc5e2" stroke-width="1" opacity="0.9"/>
+        <text x="260" y="212" font-family="JetBrains Mono" font-size="7.5" fill="rgba(140,197,226,0.8)" letter-spacing="1.5" text-anchor="middle">HOVERED · 5 EDGES</text>
+        <text x="326" y="186" font-family="JetBrains Mono" font-size="8" fill="rgba(158,211,175,0.75)" letter-spacing="1.4">⌊3⌋</text>
+      </g>
+
+      <!-- TASK CLUSTER (center) -->
+      <g>
+        <text x="420" y="340" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-task)" text-anchor="middle">svar-grid</text>
+        <text x="420" y="354" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">3 EDGES</text>
+      </g>
+      <g>
+        <text x="480" y="360" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-task)" text-anchor="middle">knowledge-graph-ui</text>
+        <text x="480" y="374" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">IN-PROGRESS · 4 EDGES</text>
+      </g>
+      <g>
+        <text x="540" y="390" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-task)" text-anchor="middle">graph-index</text>
+        <text x="540" y="404" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">DONE · 3 EDGES</text>
+      </g>
+      <g>
+        <text x="560" y="430" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-task)" text-anchor="middle">three-tier-metadata</text>
+        <text x="560" y="444" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">BACKLOG</text>
+      </g>
+
+      <!-- SESSION CLUSTER (right) -->
+      <g>
+        <text x="800" y="170" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-session)" text-anchor="middle">2026-04-13 r11 build</text>
+        <text x="800" y="184" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">6 REFS</text>
+      </g>
+      <g>
+        <text x="840" y="210" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-session)" text-anchor="middle">2026-04-17 doctype slugs</text>
+        <text x="840" y="224" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">4 REFS</text>
+      </g>
+      <g>
+        <text x="790" y="240" font-family="Source Serif 4" font-size="12" font-weight="500" fill="url(#s-session)" text-anchor="middle">2026-04-15 llm-wiki</text>
+        <text x="790" y="254" font-family="JetBrains Mono" font-size="7.5" fill="rgba(255,255,255,0.32)" letter-spacing="1.5" text-anchor="middle">5 REFS</text>
+      </g>
+
+    </svg>
+  </div>
+
+  <p class="scene-caption">
+    One node hovered (<span style="color:#8cc5e2;">r11 visualization</span>). Its five edges lift and pour blue outward toward their targets; the rest of the graph fades. Two goals and one concept hold their children as typeset words inside thin frames. Session docs cluster to the right with their own hairline hull; elsewhere, sessions appear as small green halos — <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(158,211,175,0.75);">⌊3⌋</span>, <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(158,211,175,0.75);">⌊5⌋</span> — on the docs they reference. The right-side pane is what appears when you hover.
+  </p>
+
+</body></html>

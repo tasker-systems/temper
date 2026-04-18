@@ -1,0 +1,202 @@
+/* ============================================================================
+   Temper — Colors & Type
+   ============================================================================
+   
+   Source of truth extracted from packages/temper-ui/src/app.css.
+   Temper's aesthetic is "Quiet Instrument" — a dark editorial ground with
+   Georgia body, JetBrains Mono for technical text, and a single steel-blue
+   accent. Secondary semantic colors (green/amber/slate/red) appear ONLY in
+   diagrams and illustrations — never in site chrome.
+   ============================================================================ */
+
+/* Fonts are loaded from Google Fonts (see each HTML file's <link>).
+   Source Serif 4 replaces Georgia as the reading face; JetBrains Mono
+   stays. Both are SIL OFL / self-hostable. Georgia is retained only as
+   a local fallback for first paint. */
+
+:root {
+  /* ─── Ground & text ─────────────────────────────────────────────── */
+  --obsidian:   #0a0a0f;             /* Page background */
+  --obsidian-2: #0c0c11;             /* Table headers, lifted panels */
+  --obsidian-3: #12121a;             /* Slightly lifted for diagrams */
+
+  --parchment:  #e8e4df;             /* Primary body text */
+  --chalk:      rgba(255, 255, 255, 0.65); /* Secondary text */
+  --graphite:   rgba(255, 255, 255, 0.45); /* Tertiary, labels */
+  --graphite-2: rgba(255, 255, 255, 0.30); /* Faint, prompts */
+  --graphite-3: rgba(255, 255, 255, 0.15); /* Almost invisible chrome */
+
+  /* ─── Accent ────────────────────────────────────────────────────── */
+  --temper-blue:         #7eb8da;                        /* Primary accent */
+  --temper-blue-dim:     rgba(126, 184, 218, 0.40);      /* Subtle tint */
+  --temper-blue-border:  rgba(126, 184, 218, 0.50);      /* Buttons */
+  --temper-blue-border-dim: rgba(126, 184, 218, 0.25);   /* Soft borders */
+  --temper-blue-card:    rgba(126, 184, 218, 0.08);      /* Selected bg */
+  --temper-blue-glow:    rgba(126, 184, 218, 0.12);      /* Hover bg */
+
+  /* ─── Rules ─────────────────────────────────────────────────────── */
+  --rule:       rgba(255, 255, 255, 0.06); /* Hairline dividers */
+  --rule-2:     rgba(255, 255, 255, 0.10); /* Slightly stronger */
+  --card-bg:    rgba(255, 255, 255, 0.03); /* Card ground */
+  --card-bg-2:  rgba(255, 255, 255, 0.02); /* Even softer */
+
+  /* ─── The Tailwind temper-* scale (used in authed UI utilities) ── */
+  --temper-50:  #f0f7ff;
+  --temper-100: #e0effe;
+  --temper-200: #bae0fd;
+  --temper-300: #7ccbfc;
+  --temper-400: #36b2f8;
+  --temper-500: #0c99e9;
+  --temper-600: #0079c7;
+  --temper-700: #0060a1;
+  --temper-800: #045185;
+  --temper-900: #09446e;
+  --temper-950: #062b49;
+
+  --ink:    #1a1a2e;   /* Light-mode text (README/diagrams on white) */
+  --chalk-light: #f8f9fa;
+
+  /* ─── Diagram-only semantic palette ─────────────────────────────── */
+  /* Reserved for illustrations, knowledge graph, status chips in diagrams.
+     DO NOT use in page chrome — the site stays monochrome + blue. */
+  --session-green-lt: #86efac;  --session-green-dk: #166534;
+  --decision-amber-lt: #fcd34d; --decision-amber-dk: #92400e;
+  --deferred-slate-lt: #94a3b8; --deferred-slate-dk: #475569;
+  --rot-red-lt: #fca5a5;        --rot-red-dk: #991b1b;
+
+  /* Graph node colors (from lib/graph/styling.ts) */
+  --graph-research: #7eb8da;
+  --graph-task:     #f0a870;
+  --graph-session:  #82c99a;
+  --graph-concept:  #d48ac7;
+
+  /* ─── Type stacks ───────────────────────────────────────────────── */
+  --serif: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
+  --mono:  "JetBrains Mono", "Fira Code", ui-monospace, monospace;
+  --sans:  "Source Serif 4", Georgia, system-ui, sans-serif; /* no sans in marketing; this is just fallback */
+
+  /* ─── Spacing / rhythm ──────────────────────────────────────────── */
+  --space-column: 52rem;   /* Editorial max-width for long-form copy */
+  --space-wide:   50rem;   /* Landing max-width */
+  --space-section: 5rem;   /* Between major sections */
+
+  /* ─── Tracking (letter-spacing) ─────────────────────────────────── */
+  --track-label:  0.20em;  /* Section labels */
+  --track-strip:  0.22em;  /* Metadata strips */
+  --track-eyebrow:0.28em;  /* Hero eyebrows */
+  --track-ui:     0.05em;  /* Buttons, nav */
+  --track-mark:   0.15em;  /* Wordmark */
+}
+
+/* ============================================================================
+   Semantic type recipes
+   ============================================================================
+   These are the canonical text styles from Hero, Section, Nav, editorial
+   classes. Apply the class or copy the declaration into your component CSS. */
+
+/* ─── Hero (landing pages) ─────────────────────────────────────── */
+/* Source Serif 4 runs a hair heavier than Georgia at display size.
+   Drop weight to 300 and let optical sizing do the rest. */
+.t-hero-title {
+  font-family: var(--serif);
+  font-size: clamp(2.4rem, 5vw, 3.8rem);
+  font-weight: 300;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  color: var(--parchment);
+}
+.t-hero-title em { color: var(--temper-blue); font-style: italic; }
+
+/* ─── Editorial hero (authed app pages) ────────────────────────── */
+.t-ed-hero-name {
+  font-family: var(--serif);
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.95;
+  color: var(--parchment);
+}
+
+/* ─── Section heading ───────────────────────────────────────────── */
+.t-h2 {
+  font-family: var(--serif);
+  font-size: 1.6rem;
+  font-weight: 300;
+  line-height: 1.3;
+  color: var(--parchment);
+}
+.t-h2 em { color: var(--temper-blue); font-style: italic; }
+
+/* ─── Section label (mono eyebrow) ──────────────────────────────── */
+.t-label {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--temper-blue);
+}
+
+/* ─── Body copy ─────────────────────────────────────────────────── */
+.t-body {
+  font-family: var(--serif);
+  font-size: 1rem;
+  line-height: 1.8;
+  color: var(--chalk);
+}
+.t-body strong { color: var(--parchment); font-weight: 400; }
+
+/* ─── Italic deck / tagline ─────────────────────────────────────── */
+.t-tagline {
+  font-family: var(--serif);
+  font-size: 1.1rem;
+  font-style: italic;
+  color: var(--graphite);
+  line-height: 1.7;
+}
+
+/* ─── Small editorial deck (authed hero) ────────────────────────── */
+.t-ed-deck {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-style: italic;
+  color: var(--chalk);
+  line-height: 1.55;
+}
+
+/* ─── CLI / code block ──────────────────────────────────────────── */
+.t-code {
+  font-family: var(--mono);
+  font-size: 0.8rem;
+  color: var(--chalk);
+}
+.t-code .cmd  { color: var(--temper-blue); }
+.t-code .flag { color: var(--graphite-2); }
+
+/* ─── Wordmark ──────────────────────────────────────────────────── */
+.t-wordmark {
+  font-family: var(--mono);
+  font-weight: 500;
+  letter-spacing: var(--track-mark);
+  color: var(--temper-blue);
+}
+
+/* ─── Strip metadata ────────────────────────────────────────────── */
+.t-strip {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: var(--track-strip);
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+
+/* ─── Button (text, accent on hover) ────────────────────────────── */
+.t-action {
+  font-family: var(--mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--temper-blue);
+  background: none;
+  border: none;
+}
+.t-action:hover { color: var(--parchment); }

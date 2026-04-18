@@ -1,0 +1,37 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Components — Agent Transcript</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 20px 24px; font-family: var(--mono); font-size: 12px; line-height: 1.65; }
+  .line { display:flex; gap: 10px; margin-bottom: 6px; }
+  .who {
+    color: var(--temper-blue);
+    min-width: 54px;
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    padding-top: 3px;
+  }
+  .who.user { color: var(--graphite); }
+  .msg { color: var(--chalk); flex: 1; font-family: var(--serif); font-size: 13px; line-height: 1.7; }
+  .msg em { color: var(--parchment); font-style: italic; }
+  .msg code {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    color: var(--temper-blue);
+    background: var(--card-bg);
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+</style>
+</head>
+<body>
+  <div class="line">
+    <span class="who user">you</span>
+    <span class="msg">What did we decide about the invoice provider?</span>
+  </div>
+  <div class="line">
+    <span class="who">agent</span>
+    <span class="msg">Checking the throughline… <code>temper recall invoice</code> — you chose <em>Stripe</em> after comparing three options; the decision doc cites PCI scope as the deciding factor.</span>
+  </div>
+</body></html>

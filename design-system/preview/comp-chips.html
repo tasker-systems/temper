@@ -1,0 +1,54 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Components — Facet Chips</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 20px 24px; display:flex; flex-direction:column; gap: 12px; }
+  .row { display:flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .label {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--graphite-2);
+    margin-right: 6px;
+    min-width: 60px;
+  }
+  .chip {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    padding: 3px 9px;
+    border: 1px solid var(--rule-2);
+    color: var(--chalk);
+    border-radius: 3px;
+    background: transparent;
+    letter-spacing: 0.02em;
+  }
+  .chip.on {
+    color: var(--temper-blue);
+    border-color: var(--temper-blue-border);
+    background: var(--temper-blue-card);
+  }
+  .chip .ct { color: var(--graphite-2); margin-left: 6px; font-size: 9.5px; }
+</style>
+</head>
+<body>
+  <div class="row">
+    <span class="label">STAGE</span>
+    <span class="chip on">research <span class="ct">12</span></span>
+    <span class="chip">planning <span class="ct">4</span></span>
+    <span class="chip">building <span class="ct">18</span></span>
+    <span class="chip">shipped <span class="ct">7</span></span>
+  </div>
+  <div class="row">
+    <span class="label">MODE</span>
+    <span class="chip">thinking</span>
+    <span class="chip on">doing</span>
+    <span class="chip">reviewing</span>
+  </div>
+  <div class="row">
+    <span class="label">EFFORT</span>
+    <span class="chip">low</span>
+    <span class="chip">medium</span>
+    <span class="chip">high</span>
+  </div>
+</body></html>

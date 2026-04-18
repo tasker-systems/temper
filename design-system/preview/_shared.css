@@ -1,0 +1,55 @@
+/* Shared styles for preview cards */
+@import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@300;400;500&display=swap');
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #0a0a0f;
+  color: #e8e4df;
+  font-family: "Source Serif 4", Georgia, serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  min-height: 100vh;
+  padding: 18px 20px;
+  display: block;
+}
+
+:root {
+  --obsidian: #0a0a0f;
+  --obsidian-2: #0c0c11;
+  --obsidian-3: #12121a;
+  --parchment: #e8e4df;
+  --chalk: rgba(255,255,255,0.65);
+  --graphite: rgba(255,255,255,0.45);
+  --graphite-2: rgba(255,255,255,0.30);
+  --graphite-3: rgba(255,255,255,0.15);
+  --temper-blue: #7eb8da;
+  --temper-blue-dim: rgba(126,184,218,0.40);
+  --temper-blue-border: rgba(126,184,218,0.50);
+  --temper-blue-border-dim: rgba(126,184,218,0.25);
+  --temper-blue-card: rgba(126,184,218,0.08);
+  --temper-blue-glow: rgba(126,184,218,0.12);
+  --rule: rgba(255,255,255,0.06);
+  --rule-2: rgba(255,255,255,0.10);
+  --card-bg: rgba(255,255,255,0.03);
+  --card-bg-2: rgba(255,255,255,0.02);
+  --serif: "Source Serif 4", Georgia, serif;
+  --mono:  "JetBrains Mono", ui-monospace, monospace;
+}
+
+.mono { font-family: var(--mono); }
+.serif { font-family: var(--serif); }
+.italic { font-style: italic; }
+
+.label-strip {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--graphite-2);
+}

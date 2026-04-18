@@ -1,0 +1,280 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Knowledge Graph — Visual Language</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 28px 32px; background: #0a0a0f; color: #e8e4df; font-family: "Source Serif 4", Georgia, serif; min-height: 900px; }
+  .title { font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: #7eb8da; margin-bottom: 4px; }
+  .sub { font-family: "Source Serif 4", Georgia, serif; font-style: italic; font-size: 13px; color: #a8a39d; margin-bottom: 28px; }
+  h3 { font-family: "JetBrains Mono", monospace; font-size: 9.5px; letter-spacing: 0.22em; text-transform: uppercase; color: rgba(255,255,255,0.45); margin: 30px 0 14px 0; font-weight: 400; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; }
+  .section { padding: 20px; border: 1px solid rgba(255,255,255,0.06); }
+  .row { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; min-height: 32px; }
+  .mono-label { font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 0.18em; color: rgba(255,255,255,0.38); width: 88px; flex-shrink: 0; }
+  .italic-note { font-family: "Source Serif 4", Georgia, serif; font-style: italic; font-size: 11px; color: rgba(255,255,255,0.5); margin-left: 14px; }
+  svg { display: block; overflow: visible; }
+
+  /* Gradient defs reused across svgs via <use> impractical in inline per-svg; defined per-block */
+</style>
+</head>
+<body>
+  <div class="title">KNOWLEDGE GRAPH · VISUAL LANGUAGE</div>
+  <div class="sub">How the typographic pattern from the diagrams becomes an interactive graph. Participants are words, aggregators are frames, edges are hairlines, color pours from the source.</div>
+
+  <!-- PARTICIPANT NODES ======================================================= -->
+  <h3>PARTICIPANTS · the word is the node</h3>
+  <div class="section">
+    <svg viewBox="0 0 640 110" width="100%" height="110">
+      <defs>
+        <linearGradient id="kg-research" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8cc5e2"/><stop offset="100%" stop-color="#e8e4df"/>
+        </linearGradient>
+        <linearGradient id="kg-task" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#f0a870"/><stop offset="100%" stop-color="#ece0d2"/>
+        </linearGradient>
+        <linearGradient id="kg-session" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#9ed3af"/><stop offset="100%" stop-color="#e5e6de"/>
+        </linearGradient>
+      </defs>
+
+      <!-- Research -->
+      <text x="40" y="32" font-family="JetBrains Mono" font-size="9" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">RESEARCH</text>
+      <text x="40" y="58" font-family="Source Serif 4, Georgia, serif" font-size="14" font-weight="500" fill="url(#kg-research)">r7-vertex-edge-knowledge-graph</text>
+      <text x="40" y="78" font-family="JetBrains Mono" font-size="8.5" fill="rgba(255,255,255,0.3)" letter-spacing="1">12 EDGES · CONTEXT · TEMPER</text>
+
+      <!-- Task -->
+      <text x="240" y="32" font-family="JetBrains Mono" font-size="9" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">TASK</text>
+      <text x="240" y="58" font-family="Source Serif 4, Georgia, serif" font-size="14" font-weight="500" fill="url(#kg-task)">knowledge-graph-ui</text>
+      <text x="240" y="78" font-family="JetBrains Mono" font-size="8.5" fill="rgba(255,255,255,0.3)" letter-spacing="1">4 EDGES · IN-PROGRESS</text>
+
+      <!-- Session -->
+      <text x="400" y="32" font-family="JetBrains Mono" font-size="9" fill="rgba(255,255,255,0.38)" letter-spacing="2.2">SESSION</text>
+      <text x="400" y="58" font-family="Source Serif 4, Georgia, serif" font-size="14" font-weight="500" fill="url(#kg-session)">2026-04-13 r11 build</text>
+      <text x="400" y="78" font-family="JetBrains Mono" font-size="8.5" fill="rgba(255,255,255,0.3)" letter-spacing="1">REFERENCES · 6</text>
+    </svg>
+  </div>
+
+  <!-- AGGREGATOR NODES ======================================================= -->
+  <h3>AGGREGATORS · the frame is the container · children live inside</h3>
+  <div class="section">
+    <svg viewBox="0 0 640 180" width="100%" height="180">
+      <defs>
+        <linearGradient id="kg-goal" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#f5d277"/><stop offset="100%" stop-color="#ebe2d0"/>
+        </linearGradient>
+        <linearGradient id="kg-concept" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#d89ccb"/><stop offset="100%" stop-color="#e8dde4"/>
+        </linearGradient>
+        <linearGradient id="kg-task-sm" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#f0a870"/><stop offset="100%" stop-color="#ece0d2"/>
+        </linearGradient>
+        <linearGradient id="kg-research-sm" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8cc5e2"/><stop offset="100%" stop-color="#e8e4df"/>
+        </linearGradient>
+      </defs>
+
+      <!-- Goal compound -->
+      <g>
+        <rect x="20" y="18" width="280" height="130" fill="none" stroke="rgba(245,210,119,0.35)" stroke-width="0.75"/>
+        <text x="32" y="12" font-family="JetBrains Mono" font-size="8.5" fill="rgba(245,210,119,0.7)" letter-spacing="2.2">GOAL</text>
+        <text x="32" y="40" font-family="Source Serif 4, Georgia, serif" font-size="13" font-weight="500" fill="url(#kg-goal)">llm-wiki</text>
+        <!-- Children as typeset words -->
+        <text x="36" y="68" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="url(#kg-task-sm)">develop temper index</text>
+        <text x="36" y="88" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="url(#kg-task-sm)">doctype-qualified slugs</text>
+        <text x="36" y="108" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="url(#kg-task-sm)">graph-index materialize</text>
+        <text x="36" y="128" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="url(#kg-research-sm)">r11 visualization design</text>
+      </g>
+
+      <!-- Concept compound -->
+      <g>
+        <rect x="335" y="18" width="285" height="130" fill="none" stroke="rgba(216,156,203,0.35)" stroke-width="0.75"/>
+        <text x="347" y="12" font-family="JetBrains Mono" font-size="8.5" fill="rgba(216,156,203,0.7)" letter-spacing="2.2">CONCEPT</text>
+        <text x="347" y="40" font-family="Source Serif 4, Georgia, serif" font-size="13" font-weight="500" fill="url(#kg-concept)">throughline</text>
+        <text x="351" y="68" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="url(#kg-research-sm)">session-continuity foundations</text>
+        <text x="351" y="88" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="url(#kg-research-sm)">r7 vertex-edge graph</text>
+        <text x="351" y="108" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="url(#kg-task-sm)">open-meta intentionality</text>
+        <text x="351" y="128" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="rgba(255,255,255,0.55)" font-style="italic">+ 3 more on expand</text>
+      </g>
+    </svg>
+    <div style="margin-top: 6px; padding: 0 8px; display: flex; justify-content: space-between; font-family: 'Source Serif 4', Georgia, serif; font-style: italic; font-size: 11px; color: rgba(255,255,255,0.45);">
+      <span>Frame colour echoes the aggregator type at low alpha. Children are typeset inside — they participate in the outer graph too.</span>
+    </div>
+  </div>
+
+  <!-- EDGE VOCABULARY ======================================================= -->
+  <h3>EDGES · stroke encodes type · color pours from source on hover</h3>
+  <div class="section">
+    <div class="row">
+      <span class="mono-label">DEPENDS_ON</span>
+      <svg width="180" height="14"><line x1="0" y1="7" x2="180" y2="7" stroke="rgba(255,255,255,0.55)" stroke-width="0.75"/></svg>
+      <span class="italic-note">solid · structural certainty</span>
+    </div>
+    <div class="row">
+      <span class="mono-label">EXTENDS</span>
+      <svg width="180" height="14"><line x1="0" y1="7" x2="180" y2="7" stroke="rgba(255,255,255,0.55)" stroke-width="0.75"/></svg>
+      <span class="italic-note">solid · builds upon</span>
+    </div>
+    <div class="row">
+      <span class="mono-label">PRECEDED_BY</span>
+      <svg width="180" height="14"><line x1="0" y1="7" x2="180" y2="7" stroke="rgba(255,255,255,0.55)" stroke-width="0.75" stroke-dasharray="4,3"/></svg>
+      <span class="italic-note">long-dash · temporal sequence</span>
+    </div>
+    <div class="row">
+      <span class="mono-label">RELATES_TO</span>
+      <svg width="180" height="14"><line x1="0" y1="7" x2="180" y2="7" stroke="rgba(255,255,255,0.55)" stroke-width="0.75" stroke-dasharray="2,2"/></svg>
+      <span class="italic-note">medium-dash · soft association</span>
+    </div>
+    <div class="row">
+      <span class="mono-label">REFERENCES</span>
+      <svg width="180" height="14"><line x1="0" y1="7" x2="180" y2="7" stroke="rgba(255,255,255,0.55)" stroke-width="0.75" stroke-dasharray="1,3"/></svg>
+      <span class="italic-note">dotted · citation, weakest</span>
+    </div>
+    <div class="row">
+      <span class="mono-label">EMERGENT</span>
+      <svg width="180" height="14"><path d="M 0 10 Q 90 2 180 10" fill="none" stroke="rgba(255,255,255,0.35)" stroke-width="0.75"/></svg>
+      <span class="italic-note">hairline arc · Jaccard-derived · meta-doc mode only</span>
+    </div>
+  </div>
+
+  <!-- HOVER STATE: COLOR POURS ============================================== -->
+  <h3>HOVER · color pours from the source along its relationships</h3>
+  <div class="section">
+    <svg viewBox="0 0 640 130" width="100%" height="130">
+      <defs>
+        <linearGradient id="kg-pour-source" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8cc5e2"/><stop offset="100%" stop-color="#e8e4df"/>
+        </linearGradient>
+        <linearGradient id="kg-pour-edge-1" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#8cc5e2" stop-opacity="0.8"/>
+          <stop offset="100%" stop-color="#e8e4df" stop-opacity="0.35"/>
+        </linearGradient>
+        <linearGradient id="kg-pour-edge-2" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#8cc5e2" stop-opacity="0.8"/>
+          <stop offset="100%" stop-color="#e8e4df" stop-opacity="0.35"/>
+        </linearGradient>
+        <linearGradient id="kg-pour-target-task" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#f0a870" stop-opacity="0.7"/><stop offset="100%" stop-color="#ece0d2" stop-opacity="0.7"/>
+        </linearGradient>
+        <linearGradient id="kg-pour-target-session" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#9ed3af" stop-opacity="0.7"/><stop offset="100%" stop-color="#e5e6de" stop-opacity="0.7"/>
+        </linearGradient>
+      </defs>
+
+      <!-- Hovered research node (center left) -->
+      <text x="80" y="62" font-family="Source Serif 4, Georgia, serif" font-size="14" font-weight="500" fill="url(#kg-pour-source)">r11 visualization</text>
+      <line x1="40" y1="78" x2="210" y2="78" stroke="#8cc5e2" stroke-width="1" opacity="0.65"/>
+      <text x="40" y="95" font-family="JetBrains Mono" font-size="8.5" fill="rgba(140,197,226,0.7)" letter-spacing="2">HOVERED</text>
+
+      <!-- Edges pouring color outward -->
+      <line x1="220" y1="58" x2="380" y2="40" stroke="url(#kg-pour-edge-1)" stroke-width="0.75"/>
+      <line x1="220" y1="62" x2="380" y2="80" stroke="url(#kg-pour-edge-2)" stroke-width="0.75" stroke-dasharray="2,2"/>
+      <line x1="220" y1="66" x2="380" y2="115" stroke="url(#kg-pour-edge-2)" stroke-width="0.75" stroke-dasharray="1,3"/>
+
+      <!-- Target nodes at reduced opacity -->
+      <text x="385" y="45" font-family="Source Serif 4, Georgia, serif" font-size="12" font-weight="500" fill="url(#kg-pour-target-task)">knowledge-graph-ui</text>
+      <text x="385" y="85" font-family="Source Serif 4, Georgia, serif" font-size="12" font-weight="500" fill="url(#kg-pour-target-task)">doctype-qualified slugs</text>
+      <text x="385" y="120" font-family="Source Serif 4, Georgia, serif" font-size="12" font-weight="500" fill="url(#kg-pour-target-session)">2026-04-13 session</text>
+    </svg>
+    <div style="margin-top: 10px; padding: 0 4px; font-family: 'Source Serif 4', Georgia, serif; font-style: italic; font-size: 11px; color: rgba(255,255,255,0.5); line-height: 1.55;">
+      Hover over any node. Its connected edges brighten and take on the source's colour at the source end, fading to parchment at the target. Untouched edges drop to <span style="font-family:'JetBrains Mono',monospace;font-size:10px;">rgba(255,255,255,0.06)</span> — the rest of the graph quietens.
+    </div>
+  </div>
+
+  <!-- MODE TOGGLE ============================================================ -->
+  <h3>MODE TOGGLE · typography, not chrome</h3>
+  <div class="section">
+    <div style="display:flex; justify-content:space-between; align-items:center; padding: 16px 8px;">
+      <div>
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 9px; letter-spacing: 0.22em; color: rgba(255,255,255,0.45); margin-bottom: 8px;">VIEW</div>
+        <div style="display:flex; align-items:baseline; gap: 16px;">
+          <span style="font-family: 'Source Serif 4', Georgia, serif; font-size: 15px; color: #e8e4df;">structural</span>
+          <span style="font-family: 'JetBrains Mono', monospace; font-size: 10px; letter-spacing: 0.18em; color: rgba(255,255,255,0.38); text-transform: uppercase;">meta-doc</span>
+        </div>
+      </div>
+      <div style="font-family: 'Source Serif 4', Georgia, serif; font-style: italic; font-size: 12px; color: rgba(255,255,255,0.5); max-width: 340px; text-align: right; line-height: 1.55;">
+        Active mode is serif, in full parchment. Inactive is mono-caps, dimmed. Click the inactive word to swap — graph re-renders with a 220ms cross-fade.
+      </div>
+    </div>
+  </div>
+
+  <!-- ZOOM TIERS ============================================================ -->
+  <h3>ZOOM TIERS · typography emerges with proximity</h3>
+  <div class="section">
+    <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px;">
+      <!-- Overview -->
+      <div style="border:1px solid rgba(255,255,255,0.04); padding: 16px; background: #0c0c11;">
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 8.5px; letter-spacing: 0.18em; color: rgba(255,255,255,0.45); margin-bottom: 10px;">OVERVIEW · ≤ 25%</div>
+        <svg viewBox="0 0 180 110" width="100%" height="110">
+          <rect x="10" y="10" width="70" height="50" fill="none" stroke="rgba(245,210,119,0.28)" stroke-width="0.75"/>
+          <rect x="95" y="50" width="75" height="55" fill="none" stroke="rgba(216,156,203,0.28)" stroke-width="0.75"/>
+          <!-- dots -->
+          <circle cx="25" cy="28" r="1.6" fill="#f0a870"/>
+          <circle cx="42" cy="22" r="1.6" fill="#f0a870"/>
+          <circle cx="58" cy="35" r="1.6" fill="#8cc5e2"/>
+          <circle cx="38" cy="48" r="1.6" fill="#f0a870"/>
+          <circle cx="110" cy="65" r="1.6" fill="#8cc5e2"/>
+          <circle cx="130" cy="78" r="1.6" fill="#8cc5e2"/>
+          <circle cx="150" cy="70" r="1.6" fill="#f0a870"/>
+          <circle cx="125" cy="92" r="1.6" fill="#9ed3af"/>
+          <circle cx="155" cy="95" r="1.6" fill="#8cc5e2"/>
+          <line x1="25" y1="28" x2="42" y2="22" stroke="rgba(255,255,255,0.12)" stroke-width="0.5"/>
+          <line x1="42" y1="22" x2="58" y2="35" stroke="rgba(255,255,255,0.12)" stroke-width="0.5"/>
+          <line x1="110" y1="65" x2="130" y2="78" stroke="rgba(255,255,255,0.12)" stroke-width="0.5"/>
+          <line x1="130" y1="78" x2="150" y2="70" stroke="rgba(255,255,255,0.12)" stroke-width="0.5"/>
+        </svg>
+        <div style="font-family: 'Source Serif 4', Georgia, serif; font-style: italic; font-size: 10.5px; color: rgba(255,255,255,0.5); margin-top: 8px; line-height: 1.5;">Frames and dots. Structure only.</div>
+      </div>
+
+      <!-- Neighborhood -->
+      <div style="border:1px solid rgba(255,255,255,0.04); padding: 16px; background: #0c0c11;">
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 8.5px; letter-spacing: 0.18em; color: rgba(255,255,255,0.45); margin-bottom: 10px;">NEIGHBORHOOD · 25–75%</div>
+        <svg viewBox="0 0 180 110" width="100%" height="110">
+          <rect x="5" y="8" width="100" height="75" fill="none" stroke="rgba(245,210,119,0.3)" stroke-width="0.75"/>
+          <text x="10" y="20" font-family="Source Serif 4, Georgia, serif" font-size="9" fill="#f5d277">llm-wiki</text>
+          <text x="14" y="38" font-family="Source Serif 4, Georgia, serif" font-size="8" fill="#f0a870">doctype slugs</text>
+          <text x="14" y="52" font-family="Source Serif 4, Georgia, serif" font-size="8" fill="#f0a870">graph-index</text>
+          <text x="14" y="66" font-family="Source Serif 4, Georgia, serif" font-size="8" fill="#8cc5e2">r11 viz</text>
+          <circle cx="130" cy="45" r="1.6" fill="#8cc5e2"/>
+          <circle cx="150" cy="70" r="1.6" fill="#9ed3af"/>
+          <line x1="90" y1="44" x2="128" y2="45" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
+        </svg>
+        <div style="font-family: 'Source Serif 4', Georgia, serif; font-style: italic; font-size: 10.5px; color: rgba(255,255,255,0.5); margin-top: 8px; line-height: 1.5;">Words near viewport center. Periphery stays dots.</div>
+      </div>
+
+      <!-- Detail -->
+      <div style="border:1px solid rgba(255,255,255,0.04); padding: 16px; background: #0c0c11;">
+        <div style="font-family: 'JetBrains Mono', monospace; font-size: 8.5px; letter-spacing: 0.18em; color: rgba(255,255,255,0.45); margin-bottom: 10px;">DETAIL · > 75%</div>
+        <svg viewBox="0 0 180 110" width="100%" height="110">
+          <text x="8" y="25" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="#8cc5e2">r11 viz</text>
+          <text x="8" y="42" font-family="JetBrains Mono" font-size="6.5" fill="rgba(255,255,255,0.35)" letter-spacing="1">12 EDGES · CTX TEMPER</text>
+          <line x1="60" y1="23" x2="120" y2="23" stroke="rgba(255,255,255,0.5)" stroke-width="0.5"/>
+          <line x1="60" y1="27" x2="120" y2="38" stroke="rgba(255,255,255,0.5)" stroke-width="0.5" stroke-dasharray="2,2"/>
+          <text x="122" y="25" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="#f0a870">graph-index</text>
+          <text x="122" y="42" font-family="Source Serif 4, Georgia, serif" font-size="11" fill="#f0a870">doctype slugs</text>
+          <text x="122" y="58" font-family="Source Serif 4, Georgia, serif" font-size="9" font-style="italic" fill="rgba(255,255,255,0.55)">+ 4 more</text>
+          <text x="8" y="95" font-family="JetBrains Mono" font-size="7" fill="rgba(158,211,175,0.7)" letter-spacing="1.5">⌊3⌋ SESSIONS</text>
+        </svg>
+        <div style="font-family: 'Source Serif 4', Georgia, serif; font-style: italic; font-size: 10.5px; color: rgba(255,255,255,0.5); margin-top: 8px; line-height: 1.5;">Full typography. Stroke patterns. Session halos as marginalia.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SESSIONS AS MARGINALIA ================================================== -->
+  <h3>SESSIONS · annotation layer, not graph participants</h3>
+  <div class="section" style="display:flex; gap: 40px; align-items:center;">
+    <svg viewBox="0 0 280 80" width="280" height="80">
+      <defs>
+        <linearGradient id="kg-sess-research" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#8cc5e2"/><stop offset="100%" stop-color="#e8e4df"/>
+        </linearGradient>
+      </defs>
+      <text x="20" y="42" font-family="Source Serif 4, Georgia, serif" font-size="14" font-weight="500" fill="url(#kg-sess-research)">r11 visualization</text>
+      <!-- marginalia halo: mono-cap session count -->
+      <text x="230" y="28" font-family="JetBrains Mono" font-size="8.5" fill="rgba(158,211,175,0.8)" letter-spacing="1.5">⌊3⌋</text>
+      <text x="230" y="40" font-family="JetBrains Mono" font-size="7" fill="rgba(158,211,175,0.55)" letter-spacing="1.5">SESS.</text>
+    </svg>
+    <div style="font-family: 'Source Serif 4', Georgia, serif; font-style: italic; font-size: 12px; color: rgba(255,255,255,0.55); max-width: 320px; line-height: 1.6;">
+      Sessions don't clutter the graph. Each resource gets a small mono-cap count in session green to its upper-right — <span style="font-family:'JetBrains Mono',monospace;font-size:10px;color:rgba(158,211,175,0.8);">⌊3⌋</span> means "three sessions reference this." Click the halo to reveal the session list as a side panel.
+    </div>
+  </div>
+
+</body></html>
