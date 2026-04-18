@@ -64,11 +64,18 @@
   --deferred-slate-lt: #94a3b8; --deferred-slate-dk: #475569;
   --rot-red-lt: #fca5a5;        --rot-red-dk: #991b1b;
 
-  /* Graph node colors (from lib/graph/styling.ts) */
-  --graph-research: #7eb8da;
-  --graph-task:     #f0a870;
-  --graph-session:  #82c99a;
-  --graph-concept:  #d48ac7;
+  /* Graph node colors (from lib/graph/styling.ts).
+     `memory` is reserved for an upcoming doctype covering builder-and-agent
+     tooling conventions — subagent guidance, plugin preferences, consistency
+     rules. The Rust `DocType::Memory` variant lands in a later PR; the slot
+     is wired here so renderers are ready. */
+  --graph-research: #7eb8da;   /* steel blue      — analytical */
+  --graph-task:     #f0a870;   /* warm ochre      — operational */
+  --graph-session:  #82c99a;   /* moss green      — alive, current */
+  --graph-concept:  #d48ac7;   /* dusty pink      — abstract */
+  --graph-goal:     #f5d277;   /* warm gold       — aspirational */
+  --graph-decision: #c9923c;   /* burnt amber     — settled */
+  --graph-memory:   #8e9fc7;   /* dusk periwinkle — systemic */
 
   /* ─── Type stacks ───────────────────────────────────────────────── */
   --serif: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;

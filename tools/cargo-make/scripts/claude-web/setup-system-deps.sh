@@ -28,7 +28,7 @@ setup_system_deps() {
 
   local pkgs_needed=""
 
-  for pkg in libssl-dev libpq-dev pkg-config cmake jq curl; do
+  for pkg in libssl-dev libpq-dev pkg-config cmake jq curl git-lfs; do
     if ! dpkg -s "$pkg" >/dev/null 2>&1; then
       pkgs_needed="$pkgs_needed $pkg"
     fi

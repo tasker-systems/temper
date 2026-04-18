@@ -280,18 +280,23 @@ Slugs in the vault are often long and date-prefixed (`2026-04-17-doctype-qualifi
 
 Beta: ~500 nodes. Enterprise self-hosted: low-thousands. Renderer choice (**cytoscape.js** with Canvas/WebGL backend) is set against this target, not against the current ~50-node state. Viewport culling on; edges drawn only when both endpoints are in bounds.
 
-#### Node-doctype palette (unchanged)
+#### Node-doctype palette
 
-Colors come from `lib/graph/styling.ts`:
+Colors come from `lib/graph/styling.ts` (with matching `--graph-*` CSS vars in `app.css` and `--color-graph-*` Tailwind utilities).
 
-| Type | Color | Hex |
-|---|---|---|
-| research | steel blue | `#7eb8da` |
-| task | warm ochre | `#f0a870` |
-| session | moss green | `#82c99a` |
-| concept | dusty pink | `#d48ac7` |
-| goal | warm gold | `#f5d277` |
-| decision | *TBD — to be added when decision doctype lands* | — |
+| Type | Color | Hex | Role |
+|---|---|---|---|
+| research | steel blue | `#7eb8da` | analytical |
+| task | warm ochre | `#f0a870` | operational |
+| session | moss green | `#82c99a` | alive, current |
+| concept | dusty pink | `#d48ac7` | abstract |
+| goal | warm gold | `#f5d277` | aspirational |
+| decision | burnt amber | `#c9923c` | settled |
+| memory | dusk periwinkle | `#8e9fc7` | systemic |
+
+**`decision`** is deliberately distinct from goal's gold — amber reads as "sealed / preserved," which matches a decision's terminal character. The diagram-only `--decision-amber-lt/dk` pair in `colors_and_type.css` remains at `#fcd34d`/`#92400e` for status chips *inside* diagrams; the graph node hex sits between those two so it reads at 12–14px serif weight on obsidian without colliding with gold.
+
+**`memory`** is reserved for an upcoming doctype. It covers the substrate of how builders and agents work together in a system — plugin preferences, subagent guidance, tooling conventions, consistency rules — things currently scattered across per-installation `fundamentals.md` skill files and similar artifacts. Periwinkle sits between research's analytical steel and concept's abstract pink to signal "systemic" without claiming either of those roles.
 
 These are the *only* place in Temper where the extended palette touches UI instead of illustrations. Treat them as diagram vocabulary.
 

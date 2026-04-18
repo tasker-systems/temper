@@ -16,13 +16,13 @@
 
 <style>
   .footer { max-width: 800px; margin: 0 auto; padding: 4rem 2.5rem; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: center; }
-  .footer-logo { display: flex; align-items: center; gap: 0.45rem; text-decoration: none; color: var(--blue-dim); transition: color 0.2s; }
-  .footer-logo:hover { color: var(--blue); }
+  .footer-logo { display: flex; align-items: center; gap: 0.45rem; text-decoration: none; color: var(--temper-blue-dim); transition: color 0.2s; }
+  .footer-logo:hover { color: var(--temper-blue); }
   .footer-mark { width: 16px; height: 16px; }
-  .footer-wordmark { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; }
+  .footer-wordmark { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; }
   .footer-links { display: flex; gap: 1.5rem; }
-  .footer-links a { font-family: var(--mono); font-size: 0.65rem; color: rgba(255, 255, 255, 0.25); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
-  .footer-links a:hover { color: var(--text-dim); }
+  .footer-links a { font-family: var(--font-mono); font-size: 0.65rem; color: rgba(255, 255, 255, 0.25); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
+  .footer-links a:hover { color: var(--graphite); }
   @media (max-width: 640px) {
     .footer { flex-direction: column; gap: 1.5rem; text-align: center; }
     .footer-links { flex-wrap: wrap; justify-content: center; gap: 1rem; }

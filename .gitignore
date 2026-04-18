@@ -3,7 +3,11 @@ target/
 *.swo
 .DS_Store
 .superpowers/
-.claude/
+# Track only the shared team config (`.claude/settings.json`) — per-user
+# state (settings.local.json, project memory, caches) stays ignored.
+# Uses `.claude/*` rather than `.claude/` so the negation below can re-include.
+.claude/*
+!.claude/settings.json
 .env
 .vercel
 node_modules

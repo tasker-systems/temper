@@ -1,6 +1,30 @@
 @import "tailwindcss";
 
+/* ============================================================================
+   Design tokens.
+
+   This file is the runtime source of truth for temper's visual vocabulary.
+   Its shape mirrors `design-system/colors_and_type.css` so the two stay
+   reviewable against each other.
+
+   Two declaration blocks:
+
+   1. `@theme` — Tailwind v4 token registry. Anything declared here also
+      generates utility classes (e.g. `--color-quiet-accent` → `bg-quiet-accent`,
+      `text-quiet-accent`, `border-quiet-accent`). The `quiet` namespace is the
+      authed-app chrome; `graph-*` is the diagram / knowledge-graph doctype
+      vocabulary. Hex literals here intentionally duplicate the `:root` block
+      below — Tailwind v4 prefers literal values for opacity-modifier support.
+
+   2. `:root` — the design-system canonical names (`--obsidian`, `--parchment`,
+      `--temper-blue`, etc.). These are what scoped component styles reference
+      via `var(...)`. Use Tailwind utilities when possible; reach for the vars
+      only when class-based styling doesn't fit (dynamic values, SVG inline
+      attrs, etc.).
+   ============================================================================ */
+
 @theme {
+	/* ─── Tailwind `temper-*` scale (authed grid utilities) ──────── */
 	--color-temper-50: #f0f7ff;
 	--color-temper-100: #e0effe;
 	--color-temper-200: #bae0fd;
@@ -16,9 +40,10 @@
 	--color-ink: #1a1a2e;
 	--color-chalk: #f8f9fa;
 
-	/* Quiet Instrument dark-theme palette — exposed as Tailwind utilities
-	   so authed pages can use `bg-quiet`, `text-quiet-fg`, `border-quiet-rule`
-	   etc. instead of inline CSS vars. */
+	/* ─── Quiet Instrument palette — authed chrome utilities ─────── */
+	/* Exposed so authed pages can use `bg-quiet`, `text-quiet-fg`,
+	   `border-quiet-rule`, etc. Values mirror `--obsidian`, `--parchment`,
+	   `--chalk`, `--graphite`, `--temper-blue`, `--rule`, `--card-bg` in `:root`. */
 	--color-quiet: #0a0a0f;
 	--color-quiet-fg: #e8e4df;
 	--color-quiet-mid: rgba(255, 255, 255, 0.65);
@@ -28,23 +53,190 @@
 	--color-quiet-border: rgba(126, 184, 218, 0.25);
 	--color-quiet-card: rgba(255, 255, 255, 0.03);
 
-	--font-sans: "Inter", "system-ui", "sans-serif";
-	--font-mono: "JetBrains Mono", "Fira Code", "monospace";
+	/* ─── Knowledge-graph doctype palette ────────────────────────── */
+	/* Diagram / graph-node vocabulary only. Never for page chrome.
+	   Mirrors `--graph-*` in `:root` and `NODE_COLORS` in lib/graph/styling.ts. */
+	--color-graph-research: #7eb8da;
+	--color-graph-task:     #f0a870;
+	--color-graph-session:  #82c99a;
+	--color-graph-concept:  #d48ac7;
+	--color-graph-goal:     #f5d277;
+	--color-graph-decision: #c9923c;
+	--color-graph-memory:   #8e9fc7;
+
+	/* ─── Fonts ──────────────────────────────────────────────────── */
+	--font-sans:  "Inter", "system-ui", "sans-serif";
+	--font-serif: "Source Serif 4", "Source Serif Pro", Georgia, "Times New Roman", serif;
+	--font-mono:  "JetBrains Mono", "Fira Code", "monospace";
 }
 
 :root {
-  --bg: #0a0a0f;
-  --text: #e8e4df;
-  --text-mid: rgba(255, 255, 255, 0.65);
-  --text-dim: rgba(255, 255, 255, 0.45);
-  --blue: #7eb8da;
-  --blue-dim: rgba(126, 184, 218, 0.4);
-  --blue-border: rgba(126, 184, 218, 0.5);
-  --blue-border-dim: rgba(126, 184, 218, 0.25);
-  --rule: rgba(255, 255, 255, 0.06);
-  --mono: 'JetBrains Mono', 'Fira Code', monospace;
-  --serif: 'Georgia', 'Times New Roman', serif;
+  /* ─── Ground & text ──────────────────────────────────────────── */
+  --obsidian:    #0a0a0f;                  /* Page background */
+  --obsidian-2:  #0c0c11;                  /* Table headers, lifted panels */
+  --obsidian-3:  #12121a;                  /* Diagram grounds */
+
+  --parchment:   #e8e4df;                  /* Primary body text */
+  --chalk:       rgba(255, 255, 255, 0.65); /* Secondary text */
+  --graphite:    rgba(255, 255, 255, 0.45); /* Tertiary text, labels */
+  --graphite-2:  rgba(255, 255, 255, 0.30); /* Faint prompts */
+  --graphite-3:  rgba(255, 255, 255, 0.15); /* Near-invisible chrome */
+
+  /* ─── Accent ─────────────────────────────────────────────────── */
+  --temper-blue:            #7eb8da;
+  --temper-blue-dim:        rgba(126, 184, 218, 0.40);
+  --temper-blue-border:     rgba(126, 184, 218, 0.50);
+  --temper-blue-border-dim: rgba(126, 184, 218, 0.25);
+  --temper-blue-card:       rgba(126, 184, 218, 0.08);  /* Selected bg */
+  --temper-blue-glow:       rgba(126, 184, 218, 0.12);  /* Hover bg */
+
+  /* ─── Rules & cards ──────────────────────────────────────────── */
+  --rule:       rgba(255, 255, 255, 0.06);   /* Hairline dividers */
+  --rule-2:     rgba(255, 255, 255, 0.10);   /* Slightly stronger */
+  --card-bg:    rgba(255, 255, 255, 0.03);   /* Card ground */
+  --card-bg-2:  rgba(255, 255, 255, 0.02);   /* Softer card ground */
+
+  /* ─── Diagram-only semantic palette ──────────────────────────── */
+  /* Reserved for illustrations, knowledge-graph nodes, and status chips
+     INSIDE diagrams. Never for page chrome — site stays monochrome + blue. */
+  --session-green-lt:  #86efac;  --session-green-dk:  #166534;
+  --decision-amber-lt: #fcd34d;  --decision-amber-dk: #92400e;
+  --deferred-slate-lt: #94a3b8;  --deferred-slate-dk: #475569;
+  --rot-red-lt:        #fca5a5;  --rot-red-dk:        #991b1b;
+
+  /* ─── Knowledge-graph doctype palette ────────────────────────── */
+  /* Mirrors `--color-graph-*` in `@theme` and `NODE_COLORS` in
+     lib/graph/styling.ts. If you edit one, edit all three. */
+  --graph-research: #7eb8da;   /* steel blue  — analytical */
+  --graph-task:     #f0a870;   /* warm ochre  — operational */
+  --graph-session:  #82c99a;   /* moss green  — alive, current */
+  --graph-concept:  #d48ac7;   /* dusty pink  — abstract */
+  --graph-goal:     #f5d277;   /* warm gold   — aspirational */
+  --graph-decision: #c9923c;   /* burnt amber — settled */
+  --graph-memory:   #8e9fc7;   /* dusk periwinkle — systemic */
+
+  /* ─── Spacing & rhythm ───────────────────────────────────────── */
+  --space-column:  52rem;    /* Editorial max-width for long-form */
+  --space-wide:    50rem;    /* Landing max-width */
+  --space-section: 5rem;     /* Between major sections */
+
+  /* ─── Tracking (letter-spacing) ──────────────────────────────── */
+  --track-label:   0.20em;   /* Section labels */
+  --track-strip:   0.22em;   /* Metadata strips */
+  --track-eyebrow: 0.28em;   /* Hero eyebrows */
+  --track-ui:      0.05em;   /* Buttons, nav */
+  --track-mark:    0.15em;   /* Wordmark */
 }
+
+/* ============================================================================
+   Type recipes — pure typography (font, size, weight, tracking, color).
+   ============================================================================
+
+   Named `t-*` to sit alongside the layout-compositional `ed-*` editorial
+   classes below. Mirrors `design-system/colors_and_type.css` — keep the
+   two in sync when evolving the scale.
+
+   Use a `.t-*` class when you want the canonical type recipe without
+   baking in page-specific layout (margins, widths). When you need both
+   type and structural layout in one class, compose: drop `.t-*` on the
+   element and keep the layout in a page-scoped rule, or use `.ed-*`
+   which bundles both. */
+
+.t-hero-title {
+  font-family: var(--font-serif);
+  font-size: clamp(2.4rem, 5vw, 3.8rem);
+  font-weight: 300;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  color: var(--parchment);
+}
+.t-hero-title em { color: var(--temper-blue); font-style: italic; }
+
+.t-ed-hero-name {
+  font-family: var(--font-serif);
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.95;
+  color: var(--parchment);
+}
+
+.t-h2 {
+  font-family: var(--font-serif);
+  font-size: 1.6rem;
+  font-weight: 300;
+  line-height: 1.3;
+  color: var(--parchment);
+}
+.t-h2 em { color: var(--temper-blue); font-style: italic; }
+
+.t-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--temper-blue);
+}
+
+.t-body {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  line-height: 1.8;
+  color: var(--chalk);
+}
+.t-body strong { color: var(--parchment); font-weight: 400; }
+
+.t-tagline {
+  font-family: var(--font-serif);
+  font-size: 1.1rem;
+  font-style: italic;
+  color: var(--graphite);
+  line-height: 1.7;
+}
+
+.t-ed-deck {
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  font-style: italic;
+  color: var(--chalk);
+  line-height: 1.55;
+}
+
+.t-code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--chalk);
+}
+.t-code .cmd  { color: var(--temper-blue); }
+.t-code .flag { color: var(--graphite-2); }
+
+.t-wordmark {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: var(--track-mark);
+  color: var(--temper-blue);
+}
+
+.t-strip {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: var(--track-strip);
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+
+.t-action {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--temper-blue);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+.t-action:hover { color: var(--parchment); }
 
 /* ============================================================================
    Editorial system — shared classes used by the authed app pages.
@@ -54,6 +246,11 @@
    masthead, italic serif decks, left-rule sections evoking markdown blockquote
    markers. Classes are prefixed `ed-` to avoid collision with the marketing
    landing's `.hero` / `.nav` / `.footer` classes.
+
+   Compositional: they bundle a type recipe (usually one of the `.t-*`
+   recipes above) with layout concerns (margin, max-width, borders) tuned
+   for the authed-app masthead/rail/notice patterns. When you need just
+   the type, reach for `.t-*`.
 
    Page-specific list/grid styles (`.ledger`, `.library`, `.queue`) live in
    each page's scoped <style> block. */
@@ -83,7 +280,7 @@
   text-transform: none;
   font-style: italic;
   letter-spacing: 0;
-  font-family: var(--serif);
+  font-family: var(--font-serif);
   font-size: 0.78rem;
 }
 .ed-strip-sep { opacity: 0.35; }
@@ -104,23 +301,17 @@
   color: var(--color-quiet-accent);
   margin-bottom: 1.6rem;
 }
+/* .ed-hero-name and .ed-hero-deck intentionally stripped of their type
+   properties — those now come from `.t-ed-hero-name` and `.t-ed-deck`
+   (declared earlier in this file). Use-sites compose: <h1 class="ed-hero-name
+   t-ed-hero-name">, <p class="ed-hero-deck t-ed-deck">. These classes
+   contribute only the structural concerns. */
 .ed-hero-name {
-  font-family: var(--serif);
-  font-size: clamp(2.5rem, 6vw, 4.5rem);
-  font-weight: 400;
-  letter-spacing: -0.025em;
-  line-height: 0.95;
-  color: var(--color-quiet-fg);
   margin: 0;
 }
 .ed-hero-deck {
   margin-top: 1.8rem;
-  font-family: var(--serif);
-  font-size: 1.05rem;
-  font-style: italic;
-  color: var(--color-quiet-mid);
   max-width: 36rem;
-  line-height: 1.55;
 }
 .ed-hero-num {
   font-style: normal;
@@ -160,13 +351,13 @@
   margin-bottom: 0.3rem;
 }
 .ed-rail-sub {
-  font-family: var(--serif);
+  font-family: var(--font-serif);
   font-style: italic;
   font-size: 0.85rem;
   color: var(--color-quiet-dim);
 }
 .ed-rail-empty {
-  font-family: var(--serif);
+  font-family: var(--font-serif);
   font-style: italic;
   color: var(--color-quiet-dim);
   font-size: 0.95rem;
@@ -201,7 +392,7 @@
 .ed-notice ul, .ed-notice p {
   margin: 0;
   padding-left: 0;
-  font-family: var(--serif);
+  font-family: var(--font-serif);
   font-size: 0.9rem;
   font-style: italic;
   color: rgba(254, 215, 170, 0.85);
