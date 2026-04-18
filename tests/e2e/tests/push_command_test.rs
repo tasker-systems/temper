@@ -428,3 +428,170 @@ async fn push_one_resource_path_canonical_id_puts_existing_resource(pool: sqlx::
         server_content.markdown
     );
 }
+
+/// Task 5 relaxation: PushTarget::Id with a manifest hint is the authoritative
+/// source for (id, provisional). The primitive must accept a file whose
+/// frontmatter has NEITHER temper-id NOR temper-provisional-id, as long as
+/// the caller passes the id via PushTarget::Id + a manifest entry. This
+/// locks in the sync-path behavior (server-seeded resources whose vault
+/// file was written without id echo — see graph_build_e2e_test.rs for the
+/// motivating fixture).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn push_one_resource_id_target_accepts_file_without_frontmatter_id(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("push-test-5")
+        .await
+        .expect("context create");
+
+    // Step 1: Seed a resource server-side (canonical id lives only on the server).
+    // Use a real PackedChunk so content round-trips (Task 2 lesson).
+    let seed_body = "# Seed 5\n\nServer-seeded resource.".to_string();
+    let seed_chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: seed_body.clone(),
+        content_hash: format!("{:0>64}", "s5"),
+        embedding: vec![0.1_f32; 768],
+    };
+    let seed_payload = IngestPayload {
+        title: "Push No-FM-Id Seed".to_string(),
+        origin_uri: "test://e2e/push-no-fm-id/seed".to_string(),
+        context_name: "push-test-5".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&seed_body)),
+        slug: "push-no-fm-id-seed".to_string(),
+        content: seed_body.clone(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({})),
+        open_meta: Some(serde_json::json!({})),
+        chunks_packed: Some(pack_chunks(&[seed_chunk]).expect("pack chunks")),
+    };
+    let seeded = app
+        .client
+        .ingest()
+        .create(&seed_payload)
+        .await
+        .expect("ingest seed failed");
+    let resource_id = ResourceId::from(*seeded.id.as_uuid());
+
+    // Step 2: Write a local file at a vault-relative path whose frontmatter has
+    // NO temper-id AND NO temper-provisional-id. Include enough frontmatter
+    // for the parse to succeed (temper-context, temper-type, temper-created,
+    // temper-owner, title, slug, date).
+    let edited_body = "Edited body without frontmatter id.";
+    let file_path = app.vault_dir.path().join("push-no-fm-id.md");
+    std::fs::write(
+        &file_path,
+        format!(
+            "---\n\
+             temper-context: push-test-5\n\
+             temper-type: research\n\
+             temper-created: 2026-04-18T00:00:00Z\n\
+             temper-owner: '@me'\n\
+             title: Push No-FM-Id Seed\n\
+             slug: push-no-fm-id-seed\n\
+             date: 2026-04-18\n\
+             ---\n\
+             {edited_body}\n"
+        ),
+    )
+    .expect("write local file without frontmatter id");
+
+    // Step 3: Seed a manifest entry keyed by the server's canonical id, pointing
+    // at the local file, provisional=false.
+    let mut manifest = Manifest::new("e2e-test-device".to_string());
+    let file_name = file_path.file_name().unwrap().to_str().unwrap().to_string();
+    manifest.entries.insert(
+        resource_id,
+        ManifestEntry {
+            path: file_name,
+            body_hash: String::new(),
+            remote_body_hash: String::new(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: chrono::Utc::now(),
+            state: ManifestEntryState::LocalModified,
+            mtime_secs: None,
+            last_audit_id: None,
+            provisional: false,
+        },
+    );
+
+    // Step 4: Call push_one_resource(&app.client, vault_root, PushTarget::Id(id), Some(&mut manifest)).
+    let result = push_one_resource(
+        &app.client,
+        app.vault_dir.path(),
+        PushTarget::Id(resource_id),
+        Some(&mut manifest),
+    )
+    .await
+    .expect("push_one_resource (Id target, no frontmatter id)");
+
+    // Step 5: Assert all invariants:
+
+    // - result.kind == PushKind::Modified (manifest says non-provisional → PUT)
+    assert_eq!(result.kind, PushKind::Modified);
+
+    // - result.resource_id == the canonical id (unchanged)
+    assert_eq!(result.resource_id, resource_id, "server id unchanged");
+
+    // - file on disk has NOT grown a temper-id — the primitive must not
+    //   silently rewrite frontmatter when the id came from manifest
+    //   (verify by re-reading file and asserting absence of "temper-id:")
+    let file_content = std::fs::read_to_string(&file_path).expect("re-read file");
+    assert!(
+        !file_content.contains("temper-id:"),
+        "file must NOT be rewritten with temper-id when manifest is authoritative; got:\n{}",
+        file_content
+    );
+
+    // - manifest entry at the canonical id: state == Clean, all 9 fields
+    //   populated and self-consistent (body_hash == remote_body_hash, etc.)
+    let entry = manifest
+        .entries
+        .get(&resource_id)
+        .expect("entry still keyed by canonical id");
+    assert_eq!(entry.state, ManifestEntryState::Clean);
+    assert!(!entry.provisional);
+    assert!(!entry.body_hash.is_empty(), "body_hash populated");
+    assert_eq!(
+        entry.body_hash, entry.remote_body_hash,
+        "remote body hash mirrors local (push-authored)"
+    );
+    assert!(!entry.managed_hash.is_empty(), "managed_hash populated");
+    assert_eq!(
+        entry.managed_hash, entry.remote_managed_hash,
+        "remote managed hash mirrors local"
+    );
+    assert_eq!(
+        entry.open_hash, entry.remote_open_hash,
+        "remote open hash mirrors local"
+    );
+    assert!(entry.mtime_secs.is_some(), "mtime_secs populated");
+
+    // - server content reflects the push (fetch via app.client.resources().content()
+    //   and confirm the body we wrote is what the server stored)
+    let server_content = app
+        .client
+        .resources()
+        .content(*resource_id.as_uuid())
+        .await
+        .expect("fetch server content");
+    assert!(
+        server_content.markdown.contains(edited_body),
+        "server markdown must reflect edited body; got:\n{}",
+        server_content.markdown
+    );
+}
