@@ -2,6 +2,7 @@ pub mod access;
 pub mod contexts;
 pub mod edges;
 pub mod events;
+pub mod graph;
 pub mod health;
 pub mod ingest;
 pub mod meta;

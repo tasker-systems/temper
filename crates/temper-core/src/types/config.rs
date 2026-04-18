@@ -159,6 +159,200 @@ impl Default for AuthConfig {
     }
 }
 
+/// LLM provider type — used to route to the correct backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum LlmProviderType {
+    #[default]
+    Ollama,
+    Claude,
+    OpenAiCompatible,
+}
+
+/// LLM configuration section.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct LlmConfig {
+    /// Which LLM backend to use.
+    #[serde(default)]
+    pub provider: LlmProviderType,
+    /// Base URL for the LLM API (e.g. `http://localhost:11434` for ollama).
+    /// Defaults to `http://localhost:11434` for ollama-compatible providers.
+    #[serde(default)]
+    pub url: String,
+    /// Model identifier (e.g. `llama3.2:latest`, `claude-sonnet-4-5`).
+    /// Defaults vary by provider.
+    #[serde(default)]
+    pub model: String,
+    /// API key — read from `TEMPER_LLM_API_KEY` env var at call site when None.
+    /// Only set this field if you want the key in the config file (not recommended).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
+    /// HTTP request timeout in seconds for LLM provider calls.
+    /// Reasoning / large cloud models may need longer than the default.
+    #[serde(default = "default_llm_timeout_secs")]
+    pub request_timeout_secs: u64,
+}
+
+fn default_llm_timeout_secs() -> u64 {
+    300
+}
+
+impl Default for LlmConfig {
+    fn default() -> Self {
+        Self {
+            provider: LlmProviderType::default(),
+            url: "http://localhost:11434".to_string(),
+            model: "llama3.2:latest".to_string(),
+            api_key: None,
+            request_timeout_secs: default_llm_timeout_secs(),
+        }
+    }
+}
+
+impl LlmConfig {
+    /// Load LLM config with env-var precedence over defaults.
+    ///
+    /// Precedence (highest to lowest):
+    /// 1. `TEMPER_LLM_*` env vars override everything
+    /// 2. Config file values
+    /// 3. Provider-specific defaults (ollama: localhost:11434 / llama3.2:latest)
+    ///
+    /// This should be called **after** loading the config file, so that
+    /// `file_config` contains the parsed file values and env vars can override them.
+    pub fn load(file_config: &LlmConfig) -> Self {
+        Self {
+            provider: std::env::var("TEMPER_LLM_PROVIDER")
+                .ok()
+                .and_then(|s| serde_json::from_str::<LlmProviderType>(&format!("\"{s}\"")).ok())
+                .unwrap_or(file_config.provider),
+            url: std::env::var("TEMPER_LLM_URL")
+                .ok()
+                .unwrap_or_else(|| file_config.url.clone()),
+            model: std::env::var("TEMPER_LLM_MODEL")
+                .ok()
+                .unwrap_or_else(|| file_config.model.clone()),
+            api_key: std::env::var("TEMPER_LLM_API_KEY").ok(),
+            request_timeout_secs: file_config.request_timeout_secs,
+        }
+    }
+}
+
+/// Graph index configuration — controls TF-IDF seed extraction and cluster formation.
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+pub struct GraphIndexConfig {
+    /// Minimum number of documents a phrase must appear in to be considered a seed.
+    #[serde(default = "default_seed_min_doc_frequency")]
+    pub seed_min_doc_frequency: usize,
+    /// Maximum number of seed phrases to extract per context.
+    #[serde(default = "default_seed_top_n")]
+    pub seed_top_n: usize,
+    /// Cosine similarity threshold for including a document in a cluster.
+    #[serde(default = "default_cluster_similarity_threshold")]
+    pub cluster_similarity_threshold: f32,
+    /// Maximum number of members per cluster.
+    #[serde(default = "default_cluster_max_members")]
+    pub cluster_max_members: usize,
+    /// Minimum number of members for a cluster to generate a concept.
+    #[serde(default = "default_concept_min_members")]
+    pub concept_min_members: usize,
+    /// Default edge type when adding relates-to edges to members.
+    #[serde(default = "default_concept_default_edge_type")]
+    pub concept_default_edge_type: String,
+    /// Weight applied to tokens occurring in the frontmatter `title` field
+    /// during TF-IDF seed extraction. Higher values boost title terms.
+    #[serde(default = "default_seed_title_weight")]
+    pub seed_title_weight: f32,
+    /// Weight applied to tokens occurring inside H1 heading text.
+    #[serde(default = "default_seed_h1_weight")]
+    pub seed_h1_weight: f32,
+    /// Weight applied to tokens occurring inside H2 or H3 heading text.
+    #[serde(default = "default_seed_h2_h3_weight")]
+    pub seed_h2_h3_weight: f32,
+    /// Weight applied to tokens occurring in ordinary body prose
+    /// (everything outside title and H1/H2/H3 headings).
+    #[serde(default = "default_seed_body_weight")]
+    pub seed_body_weight: f32,
+    /// Drop seed phrases that appear in more than this fraction of documents.
+    /// Catches "gravity well" terms whose IDF can't overcome title-weighting.
+    /// Default: 0.5 (drop anything in >50% of docs).
+    #[serde(default = "default_seed_max_doc_frequency_ratio")]
+    pub seed_max_doc_frequency_ratio: f32,
+    /// Threshold above which two clusters are considered duplicates (Jaccard
+    /// of member_id sets). When exceeded, the lower-scored cluster is dropped.
+    /// Default: 0.8 (80% overlap).
+    #[serde(default = "default_cluster_overlap_threshold")]
+    pub cluster_overlap_threshold: f32,
+    /// Drop a seed whose phrase embedding is within this cosine threshold of
+    /// an already-accepted higher-scored seed's embedding. Catches topical
+    /// siblings (e.g., "ui" and "sveltekit foundat") that Jaccard cluster
+    /// dedup misses because their clusters diverge in membership even when
+    /// they're about the same topic.
+    /// Default: 0.85.
+    #[serde(default = "default_seed_phrase_similarity_threshold")]
+    pub seed_phrase_similarity_threshold: f32,
+}
+
+fn default_seed_min_doc_frequency() -> usize {
+    2
+}
+fn default_seed_top_n() -> usize {
+    50
+}
+fn default_cluster_similarity_threshold() -> f32 {
+    0.70
+}
+fn default_cluster_max_members() -> usize {
+    12
+}
+fn default_concept_min_members() -> usize {
+    3
+}
+fn default_concept_default_edge_type() -> String {
+    "relates-to".to_string()
+}
+fn default_seed_title_weight() -> f32 {
+    10.0
+}
+fn default_seed_h1_weight() -> f32 {
+    5.0
+}
+fn default_seed_h2_h3_weight() -> f32 {
+    2.0
+}
+fn default_seed_body_weight() -> f32 {
+    1.0
+}
+fn default_seed_max_doc_frequency_ratio() -> f32 {
+    0.5
+}
+fn default_cluster_overlap_threshold() -> f32 {
+    0.8
+}
+fn default_seed_phrase_similarity_threshold() -> f32 {
+    0.85
+}
+
+impl Default for GraphIndexConfig {
+    fn default() -> Self {
+        Self {
+            seed_min_doc_frequency: default_seed_min_doc_frequency(),
+            seed_top_n: default_seed_top_n(),
+            cluster_similarity_threshold: default_cluster_similarity_threshold(),
+            cluster_max_members: default_cluster_max_members(),
+            concept_min_members: default_concept_min_members(),
+            concept_default_edge_type: default_concept_default_edge_type(),
+            seed_title_weight: default_seed_title_weight(),
+            seed_h1_weight: default_seed_h1_weight(),
+            seed_h2_h3_weight: default_seed_h2_h3_weight(),
+            seed_body_weight: default_seed_body_weight(),
+            seed_max_doc_frequency_ratio: default_seed_max_doc_frequency_ratio(),
+            cluster_overlap_threshold: default_cluster_overlap_threshold(),
+            seed_phrase_similarity_threshold: default_seed_phrase_similarity_threshold(),
+        }
+    }
+}
+
 /// Cloud API section of the configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
@@ -199,6 +393,12 @@ pub struct TemperConfig {
     #[serde(default)]
     #[validate(nested)]
     pub cloud: CloudSection,
+    #[serde(default)]
+    #[validate(nested)]
+    pub llm: LlmConfig,
+    #[serde(default)]
+    #[validate(nested)]
+    pub graph_index: GraphIndexConfig,
 }
 
 impl Default for TemperConfig {
@@ -211,6 +411,8 @@ impl Default for TemperConfig {
             skill: Default::default(),
             auth: Default::default(),
             cloud: Default::default(),
+            llm: Default::default(),
+            graph_index: Default::default(),
         }
     }
 }

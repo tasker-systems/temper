@@ -69,6 +69,18 @@ pr: string | null,
  */
 status: string | null, 
 /**
+ * How this resource was created (LLM-discovered or user-created)
+ */
+provenance: string | null, 
+/**
+ * Model that produced this resource
+ */
+llm_model: string | null, 
+/**
+ * UUIDv7 of the graph-index run that created this resource
+ */
+llm_run: string | null, 
+/**
  * Human-readable title (identity transport, no rename)
  */
 title: string | null, 

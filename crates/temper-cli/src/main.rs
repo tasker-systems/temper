@@ -387,5 +387,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             temper_cli::commands::graph::run(&config, action)
         }
+        Commands::Index { context, full } => {
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
+            temper_cli::commands::index::run(&config, context.as_deref(), full)
+        }
     }
 }

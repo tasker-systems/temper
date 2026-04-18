@@ -7,6 +7,7 @@ pub mod doctor;
 pub mod events;
 pub mod goal;
 pub mod graph;
+pub mod index;
 pub mod init;
 pub mod pull;
 pub mod remove;

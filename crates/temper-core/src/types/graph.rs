@@ -1,6 +1,7 @@
 //! Knowledge graph types — edge types, traversal results, and relationship
 //! declarations for the R7 vertex-edge graph stored in `kb_resource_edges`.
 
+use crate::frontmatter::document::DocType;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -211,6 +212,51 @@ pub struct EdgeReconciliation {
     pub removed: usize,
     pub unchanged: usize,
     pub deferred: usize,
+}
+
+// ─── Subgraph Response Types ────────────────────────────────────────────────
+
+/// One node in a returned subgraph.
+///
+/// `edge_count` is the resource's **total** edge count in the graph (not just
+/// within the returned subgraph) — used client-side to size the visual radius.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphNode {
+    pub id: Uuid,
+    pub slug: String,
+    pub title: String,
+    /// Typed doctype — serializes as `"concept"`, `"research"`, etc.
+    pub doc_type: DocType,
+    /// Count of all edges touching this resource, regardless of subgraph scope.
+    pub edge_count: i32,
+}
+
+/// One directed edge in a returned subgraph.
+///
+/// Both `source` and `target` are guaranteed to appear as `id` on a node
+/// in the same `SubgraphResponse` — edges to/from nodes outside the
+/// subgraph are filtered out server-side.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GraphEdge {
+    pub source: Uuid,
+    pub target: Uuid,
+    pub edge_type: EdgeType,
+}
+
+/// Full response body for `GET /api/graph/subgraph`.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SubgraphResponse {
+    pub nodes: Vec<GraphNode>,
+    pub edges: Vec<GraphEdge>,
 }
 
 #[cfg(test)]

@@ -59,6 +59,7 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::resources::get_content),
         )
         .route("/api/resources/{id}/edges", get(handlers::edges::list))
+        .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))
         .route(
             "/api/resources/{id}/meta",
             get(handlers::meta::get_meta).put(handlers::meta::update_meta),
