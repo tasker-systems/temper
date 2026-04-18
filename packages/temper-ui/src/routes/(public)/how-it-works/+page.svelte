@@ -9,9 +9,9 @@
 </svelte:head>
 
 <section class="hero">
-  <div class="hero-label">How it works</div>
-  <h1>From markdown to connected <em>knowledge</em></h1>
-  <p class="tagline">
+  <div class="hero-label t-label">How it works</div>
+  <h1 class="t-hero-title">From markdown to connected <em>knowledge</em></h1>
+  <p class="tagline t-tagline">
     Your vault is files on your machine. Temper connects them,
     indexes them, and syncs them to the cloud. Everything resolves
     back to markdown you can read.
@@ -328,10 +328,11 @@
 
 <style>
   .hero { min-height: 60vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 6rem 2.5rem 2rem; }
-  .hero-label { font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--temper-blue); margin-bottom: 1.5rem; }
-  .hero h1 { font-family: var(--font-serif); font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 300; line-height: 1.2; margin-bottom: 1.5rem; letter-spacing: 0.02em; color: var(--parchment); }
-  .hero h1 em { color: var(--temper-blue); font-style: italic; }
-  .tagline { font-family: var(--font-serif); font-size: 1.1rem; color: var(--graphite); font-style: italic; max-width: 36em; line-height: 1.7; }
+  /* Type recipes come from .t-label, .t-hero-title, .t-tagline in app.css.
+     Keep only layout-specific overrides here. */
+  .hero-label { margin-bottom: 1.5rem; }
+  .hero h1 { margin-bottom: 1.5rem; }
+  .tagline { max-width: 36em; }
   .cmd-inline { font-family: var(--font-mono); font-size: 0.85rem; color: var(--temper-blue); }
   .vault-visual, .graph-visual, .cloud-visual, .sync-visual { margin: 2rem 0 1.5rem; }
   .vault-svg, .graph-svg, .cloud-svg, .sync-svg { width: 100%; max-width: 560px; display: block; }

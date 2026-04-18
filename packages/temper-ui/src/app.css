@@ -129,6 +129,116 @@
 }
 
 /* ============================================================================
+   Type recipes — pure typography (font, size, weight, tracking, color).
+   ============================================================================
+
+   Named `t-*` to sit alongside the layout-compositional `ed-*` editorial
+   classes below. Mirrors `design-system/colors_and_type.css` — keep the
+   two in sync when evolving the scale.
+
+   Use a `.t-*` class when you want the canonical type recipe without
+   baking in page-specific layout (margins, widths). When you need both
+   type and structural layout in one class, compose: drop `.t-*` on the
+   element and keep the layout in a page-scoped rule, or use `.ed-*`
+   which bundles both. */
+
+.t-hero-title {
+  font-family: var(--font-serif);
+  font-size: clamp(2.4rem, 5vw, 3.8rem);
+  font-weight: 300;
+  line-height: 1.15;
+  letter-spacing: 0.01em;
+  color: var(--parchment);
+}
+.t-hero-title em { color: var(--temper-blue); font-style: italic; }
+
+.t-ed-hero-name {
+  font-family: var(--font-serif);
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+  line-height: 0.95;
+  color: var(--parchment);
+}
+
+.t-h2 {
+  font-family: var(--font-serif);
+  font-size: 1.6rem;
+  font-weight: 300;
+  line-height: 1.3;
+  color: var(--parchment);
+}
+.t-h2 em { color: var(--temper-blue); font-style: italic; }
+
+.t-label {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--temper-blue);
+}
+
+.t-body {
+  font-family: var(--font-serif);
+  font-size: 1rem;
+  line-height: 1.8;
+  color: var(--chalk);
+}
+.t-body strong { color: var(--parchment); font-weight: 400; }
+
+.t-tagline {
+  font-family: var(--font-serif);
+  font-size: 1.1rem;
+  font-style: italic;
+  color: var(--graphite);
+  line-height: 1.7;
+}
+
+.t-ed-deck {
+  font-family: var(--font-serif);
+  font-size: 1.05rem;
+  font-style: italic;
+  color: var(--chalk);
+  line-height: 1.55;
+}
+
+.t-code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--chalk);
+}
+.t-code .cmd  { color: var(--temper-blue); }
+.t-code .flag { color: var(--graphite-2); }
+
+.t-wordmark {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  letter-spacing: var(--track-mark);
+  color: var(--temper-blue);
+}
+
+.t-strip {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: var(--track-strip);
+  text-transform: uppercase;
+  color: var(--graphite);
+}
+
+.t-action {
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--temper-blue);
+  background: none;
+  border: none;
+  cursor: pointer;
+  transition: color 0.18s ease;
+}
+.t-action:hover { color: var(--parchment); }
+
+/* ============================================================================
    Editorial system — shared classes used by the authed app pages.
    ============================================================================
 
@@ -136,6 +246,11 @@
    masthead, italic serif decks, left-rule sections evoking markdown blockquote
    markers. Classes are prefixed `ed-` to avoid collision with the marketing
    landing's `.hero` / `.nav` / `.footer` classes.
+
+   Compositional: they bundle a type recipe (usually one of the `.t-*`
+   recipes above) with layout concerns (margin, max-width, borders) tuned
+   for the authed-app masthead/rail/notice patterns. When you need just
+   the type, reach for `.t-*`.
 
    Page-specific list/grid styles (`.ledger`, `.library`, `.queue`) live in
    each page's scoped <style> block. */
@@ -186,23 +301,17 @@
   color: var(--color-quiet-accent);
   margin-bottom: 1.6rem;
 }
+/* .ed-hero-name and .ed-hero-deck intentionally stripped of their type
+   properties — those now come from `.t-ed-hero-name` and `.t-ed-deck`
+   (declared earlier in this file). Use-sites compose: <h1 class="ed-hero-name
+   t-ed-hero-name">, <p class="ed-hero-deck t-ed-deck">. These classes
+   contribute only the structural concerns. */
 .ed-hero-name {
-  font-family: var(--font-serif);
-  font-size: clamp(2.5rem, 6vw, 4.5rem);
-  font-weight: 400;
-  letter-spacing: -0.025em;
-  line-height: 0.95;
-  color: var(--color-quiet-fg);
   margin: 0;
 }
 .ed-hero-deck {
   margin-top: 1.8rem;
-  font-family: var(--font-serif);
-  font-size: 1.05rem;
-  font-style: italic;
-  color: var(--color-quiet-mid);
   max-width: 36rem;
-  line-height: 1.55;
 }
 .ed-hero-num {
   font-style: normal;

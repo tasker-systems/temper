@@ -63,8 +63,8 @@
 			<!-- ─── PENDING ─────────────────────────────────────────── -->
 			<header class="ed-hero">
 				<div class="ed-hero-eyebrow">Status</div>
-				<h1 class="ed-hero-name">Pending review</h1>
-				<p class="ed-hero-deck">
+				<h1 class="ed-hero-name t-ed-hero-name">Pending review</h1>
+				<p class="ed-hero-deck t-ed-deck">
 					Your letter was filed on <em>{fullDate(data.ownRequest!.created)}</em> and is awaiting
 					a steward's decision. This page will refresh automatically when it's been reviewed.
 				</p>
@@ -89,8 +89,8 @@
 			<!-- ─── APPROVED ────────────────────────────────────────── -->
 			<header class="ed-hero">
 				<div class="ed-hero-eyebrow">Status</div>
-				<h1 class="ed-hero-name">Approved</h1>
-				<p class="ed-hero-deck">
+				<h1 class="ed-hero-name t-ed-hero-name">Approved</h1>
+				<p class="ed-hero-deck t-ed-deck">
 					Welcome to temper. You're being routed to the dashboard now.
 				</p>
 			</header>
@@ -98,8 +98,8 @@
 			<!-- ─── FORM (no request, withdrawn, or rejected) ───────── -->
 			<header class="ed-hero">
 				<div class="ed-hero-eyebrow">A letter of introduction</div>
-				<h1 class="ed-hero-name">Request access</h1>
-				<p class="ed-hero-deck">
+				<h1 class="ed-hero-name t-ed-hero-name">Request access</h1>
+				<p class="ed-hero-deck t-ed-deck">
 					This instance is in invitation-only beta. Tell a steward what you're working on,
 					accept the terms, and you'll be added once your request is reviewed.
 				</p>

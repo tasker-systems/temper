@@ -11,9 +11,9 @@
 
 <!-- Hero -->
 <section class="hero">
-  <div class="hero-label">For builders</div>
-  <h1>Remember what you <em>decided</em></h1>
-  <p class="tagline">
+  <div class="hero-label t-label">For builders</div>
+  <h1 class="t-hero-title">Remember what you <em>decided</em></h1>
+  <p class="tagline t-tagline">
     Every session builds on the last. Your vault holds the throughline —
     what's been done, what's up next, what the agent needs to know.
   </p>
@@ -194,10 +194,11 @@
 
 <style>
   .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 6rem 2.5rem 4rem; }
-  .hero-label { font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--temper-blue); margin-bottom: 1.5rem; }
-  .hero h1 { font-family: var(--font-serif); font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 300; line-height: 1.2; margin-bottom: 1.5rem; letter-spacing: 0.02em; color: var(--parchment); }
-  .hero h1 em { color: var(--temper-blue); font-style: italic; }
-  .tagline { font-family: var(--font-serif); font-size: 1.1rem; color: var(--graphite); font-style: italic; max-width: 36em; margin-bottom: 3rem; line-height: 1.7; }
+  /* Type recipes come from .t-label, .t-hero-title, .t-tagline in app.css.
+     Keep only layout-specific overrides here. */
+  .hero-label { margin-bottom: 1.5rem; }
+  .hero h1 { margin-bottom: 1.5rem; }
+  .tagline { max-width: 36em; margin-bottom: 3rem; }
   .hero-ctas { display: flex; gap: 1rem; margin-bottom: 4rem; }
   .hero-ctas a { font-family: var(--font-mono); font-size: 0.8rem; padding: 0.6rem 1.5rem; text-decoration: none; letter-spacing: 0.05em; transition: all 0.2s; }
   .hero-ctas .primary { border: 1px solid var(--temper-blue-border); color: var(--temper-blue); }

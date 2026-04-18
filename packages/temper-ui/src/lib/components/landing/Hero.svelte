@@ -3,8 +3,8 @@
 </script>
 
 <section class="hero">
-  <h1>Clarify your <em>intention</em></h1>
-  <p class="tagline">
+  <h1 class="t-hero-title">Clarify your <em>intention</em></h1>
+  <p class="tagline t-tagline">
     Know what was decided, what's deferred, and what comes next.
     Every session builds on the last.
     <span class="tagline-brand">temper</span> your context.
@@ -38,29 +38,15 @@
     padding: 6rem 2.5rem 4rem;
   }
 
+  /* Type recipe is `.t-hero-title` (shared). Layout-only overrides here. */
   h1 {
-    font-family: var(--font-serif);
-    font-size: clamp(2.4rem, 5vw, 3.8rem);
-    font-weight: 300;
-    line-height: 1.2;
     margin-bottom: 1.5rem;
-    letter-spacing: 0.02em;
-    color: var(--parchment);
   }
 
-  h1 em {
-    color: var(--temper-blue);
-    font-style: italic;
-  }
-
+  /* Type recipe is `.t-tagline` (shared). Layout-only overrides here. */
   .tagline {
-    font-family: var(--font-serif);
-    font-size: 1.1rem;
-    color: var(--graphite);
-    font-style: italic;
     max-width: 36em;
     margin-bottom: 3rem;
-    line-height: 1.7;
   }
 
   .tagline-brand {
