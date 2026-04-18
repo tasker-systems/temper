@@ -36,7 +36,7 @@
   }
 
   .section-label {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.65rem;
     letter-spacing: 0.2em;
     text-transform: uppercase;
@@ -45,7 +45,7 @@
   }
 
   .section :global(h2) {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 1.6rem;
     font-weight: 300;
     margin-bottom: 1rem;
@@ -59,7 +59,7 @@
   }
 
   .section :global(p) {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 1rem;
     color: var(--text-mid);
     line-height: 1.8;

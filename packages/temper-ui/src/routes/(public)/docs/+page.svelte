@@ -42,7 +42,7 @@ cargo install --path crates/temper-cli</code></pre>
     </table>
 
     <h3>Resources</h3>
-    <p style="font-family: var(--serif); font-size: 0.9rem; color: var(--text-mid); margin-bottom: 0.75rem;">
+    <p style="font-family: var(--font-serif); font-size: 0.9rem; color: var(--text-mid); margin-bottom: 0.75rem;">
       All document types (task, goal, session, research, concept, decision) are managed through
       the unified <code>resource</code> command with <code>--type</code>.
     </p>
@@ -176,7 +176,7 @@ cargo install --path crates/temper-cli</code></pre>
   }
 
   h1 {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 2.2rem;
     font-weight: 300;
     color: var(--text);
@@ -184,7 +184,7 @@ cargo install --path crates/temper-cli</code></pre>
   }
 
   .lede {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 1.05rem;
     color: var(--text-mid);
     line-height: 1.8;
@@ -198,7 +198,7 @@ cargo install --path crates/temper-cli</code></pre>
   }
 
   h2 {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.8rem;
     font-weight: 600;
     color: var(--blue);
@@ -208,7 +208,7 @@ cargo install --path crates/temper-cli</code></pre>
   }
 
   h3 {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.7rem;
     font-weight: 500;
     color: var(--text-dim);
@@ -219,7 +219,7 @@ cargo install --path crates/temper-cli</code></pre>
   }
 
   p {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 0.95rem;
     color: var(--text-mid);
     line-height: 1.8;
@@ -243,7 +243,7 @@ cargo install --path crates/temper-cli</code></pre>
   }
 
   td {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.72rem;
     padding: 0.45rem 0;
     border-bottom: 1px solid var(--rule);
@@ -258,12 +258,12 @@ cargo install --path crates/temper-cli</code></pre>
 
   td:last-child {
     color: var(--text-dim);
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 0.82rem;
   }
 
   code {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.72rem;
   }
 
@@ -289,7 +289,7 @@ cargo install --path crates/temper-cli</code></pre>
   .back-link {
     display: inline-block;
     margin-top: 1rem;
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.75rem;
     color: var(--text-dim);
     letter-spacing: 0.05em;

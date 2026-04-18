@@ -125,7 +125,7 @@
 		margin-bottom: 1rem;
 	}
 	.queue-name {
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		font-size: 1.4rem;
 		color: var(--color-quiet-fg);
 		margin-bottom: 0.4rem;
@@ -146,7 +146,7 @@
 		opacity: 0.4;
 	}
 	.queue-message {
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		font-size: 1rem;
 		font-style: italic;
 		color: var(--color-quiet-mid);
@@ -171,7 +171,7 @@
 		gap: 0.8rem;
 	}
 	.queue-decline-input {
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 0.85rem;
 		background: transparent;

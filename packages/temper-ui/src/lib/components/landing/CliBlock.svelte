@@ -14,7 +14,7 @@
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.06);
     padding: 1.2rem 1.5rem;
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.8rem;
     text-align: left;
   }

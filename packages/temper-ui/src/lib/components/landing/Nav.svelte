@@ -31,9 +31,9 @@
   .nav-logo { display: flex; align-items: center; gap: 0.5rem; text-decoration: none; color: var(--blue); transition: opacity 0.2s; }
   .nav-logo:hover { opacity: 0.8; }
   .nav-mark { width: 20px; height: 20px; }
-  .nav-wordmark { font-family: var(--mono); font-size: 0.75rem; font-weight: 500; letter-spacing: 0.15em; }
+  .nav-wordmark { font-family: var(--font-mono); font-size: 0.75rem; font-weight: 500; letter-spacing: 0.15em; }
   .nav-links { display: flex; gap: 1.5rem; align-items: center; }
-  .nav-links a { font-family: var(--mono); font-size: 0.7rem; color: var(--text-dim); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
+  .nav-links a { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-dim); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
   .nav-links a:hover { color: var(--text); }
   .nav-links .cta { padding: 0.4rem 1rem; border: 1px solid var(--blue-border-dim); color: var(--blue); transition: border-color 0.2s, color 0.2s; }
   .nav-links .cta:hover { border-color: var(--blue); color: var(--text); }

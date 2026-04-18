@@ -17,7 +17,7 @@
 		min-height: 100vh;
 		background: var(--bg);
 		color: var(--text);
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		line-height: 1.7;
 		-webkit-font-smoothing: antialiased;
 	}

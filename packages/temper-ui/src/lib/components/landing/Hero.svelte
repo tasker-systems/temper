@@ -39,7 +39,7 @@
   }
 
   h1 {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: clamp(2.4rem, 5vw, 3.8rem);
     font-weight: 300;
     line-height: 1.2;
@@ -54,7 +54,7 @@
   }
 
   .tagline {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 1.1rem;
     color: var(--text-dim);
     font-style: italic;
@@ -66,7 +66,7 @@
   .tagline-brand {
     color: var(--blue);
     font-style: normal;
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 1rem;
     letter-spacing: 0.05em;
   }
@@ -78,7 +78,7 @@
   }
 
   .hero-ctas a {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.8rem;
     padding: 0.6rem 1.5rem;
     text-decoration: none;

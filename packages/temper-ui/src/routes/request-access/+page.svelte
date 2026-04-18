@@ -187,7 +187,7 @@
 	/* ─── Letter quote (pending state) ───────────────────────────── */
 
 	.letter-quote {
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		font-size: 1.05rem;
 		font-style: italic;
 		color: var(--color-quiet-mid);
@@ -223,13 +223,13 @@
 		text-transform: none;
 		letter-spacing: 0;
 		font-style: italic;
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		font-size: 0.78rem;
 	}
 	.letter-body {
 		display: block;
 		width: 100%;
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		font-size: 1.05rem;
 		line-height: 1.6;
 		color: var(--color-quiet-fg);
@@ -266,7 +266,7 @@
 		flex-shrink: 0;
 	}
 	.letter-terms-label {
-		font-family: var(--serif);
+		font-family: var(--font-serif);
 		font-style: italic;
 		font-size: 0.95rem;
 		color: var(--color-quiet-mid);

@@ -19,9 +19,9 @@
   .footer-logo { display: flex; align-items: center; gap: 0.45rem; text-decoration: none; color: var(--blue-dim); transition: color 0.2s; }
   .footer-logo:hover { color: var(--blue); }
   .footer-mark { width: 16px; height: 16px; }
-  .footer-wordmark { font-family: var(--mono); font-size: 0.7rem; letter-spacing: 0.1em; }
+  .footer-wordmark { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.1em; }
   .footer-links { display: flex; gap: 1.5rem; }
-  .footer-links a { font-family: var(--mono); font-size: 0.65rem; color: rgba(255, 255, 255, 0.25); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
+  .footer-links a { font-family: var(--font-mono); font-size: 0.65rem; color: rgba(255, 255, 255, 0.25); text-decoration: none; letter-spacing: 0.05em; transition: color 0.2s; }
   .footer-links a:hover { color: var(--text-dim); }
   @media (max-width: 640px) {
     .footer { flex-direction: column; gap: 1.5rem; text-align: center; }

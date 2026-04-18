@@ -122,16 +122,16 @@
 <style>
   .workflow { display: flex; flex-direction: column; gap: 1.2rem; margin-top: 1.5rem; }
   .workflow-step { display: flex; align-items: flex-start; gap: 1.2rem; }
-  .workflow-cmd { font-family: var(--mono); font-size: 0.75rem; padding: 0.4rem 0.8rem; border: 1px solid rgba(255, 255, 255, 0.1); color: var(--blue); white-space: nowrap; min-width: 140px; }
-  .workflow-desc { font-family: var(--serif); font-size: 0.9rem; color: var(--text-dim); padding-top: 0.3rem; line-height: 1.7; }
+  .workflow-cmd { font-family: var(--font-mono); font-size: 0.75rem; padding: 0.4rem 0.8rem; border: 1px solid rgba(255, 255, 255, 0.1); color: var(--blue); white-space: nowrap; min-width: 140px; }
+  .workflow-desc { font-family: var(--font-serif); font-size: 0.9rem; color: var(--text-dim); padding-top: 0.3rem; line-height: 1.7; }
   .concepts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
   .concept { border: 1px solid rgba(255, 255, 255, 0.06); padding: 1.2rem; transition: border-color 0.2s; }
   .concept:hover { border-color: var(--blue-border-dim); }
-  .concept-name { font-family: var(--mono); font-size: 0.7rem; color: var(--blue); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
+  .concept-name { font-family: var(--font-mono); font-size: 0.7rem; color: var(--blue); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
   .concept :global(p) { font-size: 0.85rem; color: var(--text-dim); line-height: 1.6; margin-bottom: 0; }
   .after-transcript { margin-top: 1.5rem; }
   .cloud-features { display: flex; flex-direction: column; gap: 0.8rem; margin-top: 1.5rem; }
   .cloud-feature { display: flex; gap: 1rem; align-items: baseline; }
   .dot { width: 4px; height: 4px; background: var(--blue); border-radius: 50%; flex-shrink: 0; margin-top: 0.5rem; }
-  .cloud-feature span { font-family: var(--serif); font-size: 0.95rem; color: var(--text-mid); }
+  .cloud-feature span { font-family: var(--font-serif); font-size: 0.95rem; color: var(--text-mid); }
 </style>

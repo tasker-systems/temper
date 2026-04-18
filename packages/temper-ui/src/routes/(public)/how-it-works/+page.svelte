@@ -32,7 +32,7 @@
       <g transform="translate(0, 10)">
         <rect x="0" y="0" width="100" height="130" rx="4" fill="rgba(126,184,218,0.1)" stroke="rgba(126,184,218,0.35)" stroke-width="0.5"/>
         <rect x="0" y="0" width="100" height="32" rx="4" fill="rgba(126,184,218,0.15)"/>
-        <text x="50" y="20" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="var(--mono)" font-size="8" letter-spacing="0.1em">GOAL</text>
+        <text x="50" y="20" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">GOAL</text>
         <line x1="8" y1="44" x2="60" y2="44" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
         <line x1="8" y1="54" x2="80" y2="54" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
         <line x1="8" y1="64" x2="72" y2="64" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
@@ -43,7 +43,7 @@
 
         <rect x="116" y="20" width="100" height="130" rx="4" fill="rgba(126,184,218,0.1)" stroke="rgba(126,184,218,0.35)" stroke-width="0.5"/>
         <rect x="116" y="20" width="100" height="32" rx="4" fill="rgba(126,184,218,0.15)"/>
-        <text x="166" y="40" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="var(--mono)" font-size="8" letter-spacing="0.1em">TASK</text>
+        <text x="166" y="40" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">TASK</text>
         <line x1="124" y1="64" x2="176" y2="64" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
         <line x1="124" y1="74" x2="196" y2="74" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
         <line x1="124" y1="84" x2="184" y2="84" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
@@ -53,7 +53,7 @@
 
         <rect x="232" y="5" width="100" height="130" rx="4" fill="rgba(134,239,172,0.08)" stroke="rgba(134,239,172,0.28)" stroke-width="0.5"/>
         <rect x="232" y="5" width="100" height="32" rx="4" fill="rgba(134,239,172,0.13)"/>
-        <text x="282" y="25" text-anchor="middle" fill="rgba(134,239,172,0.8)" font-family="var(--mono)" font-size="8" letter-spacing="0.1em">SESSION</text>
+        <text x="282" y="25" text-anchor="middle" fill="rgba(134,239,172,0.8)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">SESSION</text>
         <line x1="240" y1="49" x2="292" y2="49" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
         <line x1="240" y1="59" x2="312" y2="59" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
         <line x1="240" y1="69" x2="300" y2="69" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
@@ -63,7 +63,7 @@
 
         <rect x="348" y="30" width="100" height="130" rx="4" fill="rgba(252,211,77,0.07)" stroke="rgba(252,211,77,0.25)" stroke-width="0.5"/>
         <rect x="348" y="30" width="100" height="32" rx="4" fill="rgba(252,211,77,0.12)"/>
-        <text x="398" y="50" text-anchor="middle" fill="rgba(252,211,77,0.8)" font-family="var(--mono)" font-size="8" letter-spacing="0.1em">DECISION</text>
+        <text x="398" y="50" text-anchor="middle" fill="rgba(252,211,77,0.8)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">DECISION</text>
         <line x1="356" y1="74" x2="408" y2="74" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
         <line x1="356" y1="84" x2="428" y2="84" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
         <line x1="356" y1="94" x2="416" y2="94" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
@@ -72,7 +72,7 @@
 
         <rect x="464" y="10" width="96" height="130" rx="4" fill="rgba(148,163,184,0.07)" stroke="rgba(148,163,184,0.25)" stroke-width="0.5"/>
         <rect x="464" y="10" width="96" height="32" rx="4" fill="rgba(148,163,184,0.12)"/>
-        <text x="512" y="30" text-anchor="middle" fill="rgba(148,163,184,0.75)" font-family="var(--mono)" font-size="8" letter-spacing="0.1em">RESEARCH</text>
+        <text x="512" y="30" text-anchor="middle" fill="rgba(148,163,184,0.75)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.1em">RESEARCH</text>
         <line x1="472" y1="54" x2="524" y2="54" stroke="rgba(255,255,255,0.18)" stroke-width="0.5"/>
         <line x1="472" y1="64" x2="544" y2="64" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
         <line x1="472" y1="74" x2="532" y2="74" stroke="rgba(255,255,255,0.13)" stroke-width="0.5"/>
@@ -124,7 +124,7 @@
       <!-- Goal node -->
       <circle cx="280" cy="60" r="14" fill="rgba(126,184,218,0.16)" stroke="rgba(126,184,218,0.55)" stroke-width="0.5"/>
       <circle cx="280" cy="60" r="4" fill="rgba(126,184,218,0.8)"/>
-      <text x="280" y="38" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--mono)" font-size="8" letter-spacing="0.08em">goal</text>
+      <text x="280" y="38" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.08em">goal</text>
 
       <!-- Task nodes -->
       <circle cx="160" cy="130" r="10" fill="rgba(126,184,218,0.12)" stroke="rgba(126,184,218,0.45)" stroke-width="0.5"/>
@@ -133,8 +133,8 @@
       <circle cx="380" cy="120" r="3" fill="rgba(126,184,218,0.7)"/>
       <circle cx="240" cy="150" r="8" fill="rgba(126,184,218,0.1)" stroke="rgba(126,184,218,0.35)" stroke-width="0.5"/>
       <circle cx="240" cy="150" r="2.5" fill="rgba(126,184,218,0.6)"/>
-      <text x="135" y="118" text-anchor="middle" fill="rgba(126,184,218,0.6)" font-family="var(--mono)" font-size="7">task</text>
-      <text x="405" y="110" text-anchor="middle" fill="rgba(126,184,218,0.6)" font-family="var(--mono)" font-size="7">task</text>
+      <text x="135" y="118" text-anchor="middle" fill="rgba(126,184,218,0.6)" font-family="var(--font-mono)" font-size="7">task</text>
+      <text x="405" y="110" text-anchor="middle" fill="rgba(126,184,218,0.6)" font-family="var(--font-mono)" font-size="7">task</text>
 
       <!-- Session nodes -->
       <circle cx="90" cy="200" r="7" fill="rgba(134,239,172,0.1)" stroke="rgba(134,239,172,0.4)" stroke-width="0.5"/>
@@ -147,7 +147,7 @@
       <circle cx="340" cy="210" r="2" fill="rgba(134,239,172,0.6)"/>
       <circle cx="260" cy="230" r="5" fill="rgba(134,239,172,0.07)" stroke="rgba(134,239,172,0.28)" stroke-width="0.5"/>
       <circle cx="260" cy="230" r="1.5" fill="rgba(134,239,172,0.55)"/>
-      <text x="66" y="192" text-anchor="middle" fill="rgba(134,239,172,0.55)" font-family="var(--mono)" font-size="7">session</text>
+      <text x="66" y="192" text-anchor="middle" fill="rgba(134,239,172,0.55)" font-family="var(--font-mono)" font-size="7">session</text>
 
       <!-- Decision nodes -->
       <circle cx="130" cy="280" r="6" fill="rgba(252,211,77,0.1)" stroke="rgba(252,211,77,0.35)" stroke-width="0.5"/>
@@ -156,14 +156,14 @@
       <circle cx="470" cy="270" r="2" fill="rgba(252,211,77,0.7)"/>
       <circle cx="380" cy="290" r="5" fill="rgba(252,211,77,0.07)" stroke="rgba(252,211,77,0.28)" stroke-width="0.5"/>
       <circle cx="380" cy="290" r="1.5" fill="rgba(252,211,77,0.6)"/>
-      <text x="155" y="290" text-anchor="start" fill="rgba(252,211,77,0.55)" font-family="var(--mono)" font-size="7">decision</text>
+      <text x="155" y="290" text-anchor="start" fill="rgba(252,211,77,0.55)" font-family="var(--font-mono)" font-size="7">decision</text>
 
       <!-- Research nodes -->
       <circle cx="500" cy="100" r="6" fill="rgba(148,163,184,0.08)" stroke="rgba(148,163,184,0.35)" stroke-width="0.5"/>
       <circle cx="500" cy="100" r="2" fill="rgba(148,163,184,0.6)"/>
       <circle cx="60" cy="110" r="6" fill="rgba(148,163,184,0.08)" stroke="rgba(148,163,184,0.35)" stroke-width="0.5"/>
       <circle cx="60" cy="110" r="2" fill="rgba(148,163,184,0.6)"/>
-      <text x="520" y="96" text-anchor="start" fill="rgba(148,163,184,0.5)" font-family="var(--mono)" font-size="7">research</text>
+      <text x="520" y="96" text-anchor="start" fill="rgba(148,163,184,0.5)" font-family="var(--font-mono)" font-size="7">research</text>
 
       <!-- Ambient dots -->
       <circle cx="320" cy="170" r="1.5" fill="rgba(126,184,218,0.28)"/>
@@ -197,7 +197,7 @@
   <div class="cloud-visual">
     <svg viewBox="0 0 560 240" xmlns="http://www.w3.org/2000/svg" class="cloud-svg">
       <rect x="0" y="20" width="200" height="200" rx="8" fill="none" stroke="rgba(126,184,218,0.25)" stroke-width="0.5" stroke-dasharray="4,4"/>
-      <text x="100" y="12" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--mono)" font-size="9" letter-spacing="0.1em">YOUR VAULT</text>
+      <text x="100" y="12" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--font-mono)" font-size="9" letter-spacing="0.1em">YOUR VAULT</text>
 
       <rect x="16" y="44" width="56" height="68" rx="3" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.28)" stroke-width="0.5"/>
       <line x1="22" y1="56" x2="56" y2="56" stroke="rgba(255,255,255,0.14)" stroke-width="0.5"/>
@@ -216,7 +216,7 @@
       <line x1="150" y1="66" x2="170" y2="66" stroke="rgba(255,255,255,0.1)" stroke-width="0.5"/>
 
       <rect x="20" y="140" width="164" height="28" rx="4" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.14)" stroke-width="0.5"/>
-      <text x="102" y="158" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-family="var(--mono)" font-size="7">.temper/manifest.json</text>
+      <text x="102" y="158" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-family="var(--font-mono)" font-size="7">.temper/manifest.json</text>
 
       <!-- Sync arrows -->
       <line x1="220" y1="100" x2="340" y2="100" stroke="rgba(126,184,218,0.45)" stroke-width="0.5"/>
@@ -224,12 +224,12 @@
       <line x1="340" y1="140" x2="220" y2="140" stroke="rgba(134,239,172,0.45)" stroke-width="0.5"/>
       <polygon points="224,137 218,140 224,143" fill="rgba(134,239,172,0.45)"/>
 
-      <text x="280" y="90" text-anchor="middle" fill="rgba(126,184,218,0.55)" font-family="var(--mono)" font-size="7">push</text>
-      <text x="280" y="156" text-anchor="middle" fill="rgba(134,239,172,0.55)" font-family="var(--mono)" font-size="7">pull</text>
-      <text x="280" y="120" text-anchor="middle" fill="rgba(255,255,255,0.35)" font-family="var(--mono)" font-size="8">temper sync</text>
+      <text x="280" y="90" text-anchor="middle" fill="rgba(126,184,218,0.55)" font-family="var(--font-mono)" font-size="7">push</text>
+      <text x="280" y="156" text-anchor="middle" fill="rgba(134,239,172,0.55)" font-family="var(--font-mono)" font-size="7">pull</text>
+      <text x="280" y="120" text-anchor="middle" fill="rgba(255,255,255,0.35)" font-family="var(--font-mono)" font-size="8">temper sync</text>
 
       <rect x="360" y="20" width="200" height="200" rx="8" fill="rgba(126,184,218,0.05)" stroke="rgba(126,184,218,0.25)" stroke-width="0.5"/>
-      <text x="460" y="12" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--mono)" font-size="9" letter-spacing="0.1em">TEMPER CLOUD</text>
+      <text x="460" y="12" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--font-mono)" font-size="9" letter-spacing="0.1em">TEMPER CLOUD</text>
 
       <circle cx="410" cy="70" r="8" fill="rgba(126,184,218,0.12)" stroke="rgba(126,184,218,0.4)" stroke-width="0.5"/>
       <circle cx="410" cy="70" r="2.5" fill="rgba(126,184,218,0.7)"/>
@@ -249,10 +249,10 @@
       <line x1="390" y1="110" x2="410" y2="70" stroke="rgba(126,184,218,0.12)" stroke-width="0.5"/>
 
       <rect x="380" y="160" width="160" height="28" rx="4" fill="rgba(126,184,218,0.07)" stroke="rgba(126,184,218,0.22)" stroke-width="0.5"/>
-      <text x="460" y="178" text-anchor="middle" fill="rgba(126,184,218,0.6)" font-family="var(--mono)" font-size="7">pgvector · semantic search</text>
+      <text x="460" y="178" text-anchor="middle" fill="rgba(126,184,218,0.6)" font-family="var(--font-mono)" font-size="7">pgvector · semantic search</text>
 
       <rect x="380" y="196" width="160" height="20" rx="4" fill="rgba(134,239,172,0.05)" stroke="rgba(134,239,172,0.18)" stroke-width="0.5"/>
-      <text x="460" y="210" text-anchor="middle" fill="rgba(134,239,172,0.55)" font-family="var(--mono)" font-size="7">MCP server · agent access</text>
+      <text x="460" y="210" text-anchor="middle" fill="rgba(134,239,172,0.55)" font-family="var(--font-mono)" font-size="7">MCP server · agent access</text>
     </svg>
   </div>
 </Section>
@@ -271,9 +271,9 @@
   </p>
   <div class="sync-visual">
     <svg viewBox="0 0 560 160" xmlns="http://www.w3.org/2000/svg" class="sync-svg">
-      <text x="93" y="16" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--mono)" font-size="8" letter-spacing="0.08em">local file</text>
-      <text x="280" y="16" text-anchor="middle" fill="rgba(255,255,255,0.45)" font-family="var(--mono)" font-size="8" letter-spacing="0.08em">manifest</text>
-      <text x="467" y="16" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--mono)" font-size="8" letter-spacing="0.08em">server</text>
+      <text x="93" y="16" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.08em">local file</text>
+      <text x="280" y="16" text-anchor="middle" fill="rgba(255,255,255,0.45)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.08em">manifest</text>
+      <text x="467" y="16" text-anchor="middle" fill="rgba(126,184,218,0.7)" font-family="var(--font-mono)" font-size="8" letter-spacing="0.08em">server</text>
 
       <rect x="43" y="28" width="100" height="120" rx="4" fill="rgba(126,184,218,0.1)" stroke="rgba(126,184,218,0.35)" stroke-width="0.5"/>
       <rect x="51" y="42" width="84" height="8" rx="2" fill="rgba(126,184,218,0.15)"/>
@@ -281,13 +281,13 @@
       <rect x="51" y="68" width="72" height="6" rx="2" fill="rgba(134,239,172,0.2)" stroke="rgba(134,239,172,0.35)" stroke-width="0.5"/>
       <rect x="51" y="80" width="48" height="6" rx="2" fill="rgba(255,255,255,0.07)"/>
       <rect x="51" y="92" width="68" height="6" rx="2" fill="rgba(255,255,255,0.07)"/>
-      <text x="93" y="118" text-anchor="middle" fill="rgba(134,239,172,0.6)" font-family="var(--mono)" font-size="6">changed</text>
+      <text x="93" y="118" text-anchor="middle" fill="rgba(134,239,172,0.6)" font-family="var(--font-mono)" font-size="6">changed</text>
 
       <rect x="230" y="28" width="100" height="120" rx="4" fill="rgba(255,255,255,0.03)" stroke="rgba(255,255,255,0.14)" stroke-width="0.5"/>
-      <text x="280" y="60" text-anchor="middle" fill="rgba(255,255,255,0.35)" font-family="var(--mono)" font-size="7">sha256:a3f...</text>
-      <text x="280" y="80" text-anchor="middle" fill="rgba(255,255,255,0.25)" font-family="var(--mono)" font-size="7">synced_at</text>
-      <text x="280" y="95" text-anchor="middle" fill="rgba(255,255,255,0.25)" font-family="var(--mono)" font-size="7">2026-04-02</text>
-      <text x="280" y="118" text-anchor="middle" fill="rgba(255,255,255,0.35)" font-family="var(--mono)" font-size="6">baseline</text>
+      <text x="280" y="60" text-anchor="middle" fill="rgba(255,255,255,0.35)" font-family="var(--font-mono)" font-size="7">sha256:a3f...</text>
+      <text x="280" y="80" text-anchor="middle" fill="rgba(255,255,255,0.25)" font-family="var(--font-mono)" font-size="7">synced_at</text>
+      <text x="280" y="95" text-anchor="middle" fill="rgba(255,255,255,0.25)" font-family="var(--font-mono)" font-size="7">2026-04-02</text>
+      <text x="280" y="118" text-anchor="middle" fill="rgba(255,255,255,0.35)" font-family="var(--font-mono)" font-size="6">baseline</text>
 
       <rect x="417" y="28" width="100" height="120" rx="4" fill="rgba(126,184,218,0.07)" stroke="rgba(126,184,218,0.28)" stroke-width="0.5"/>
       <rect x="425" y="42" width="84" height="8" rx="2" fill="rgba(126,184,218,0.15)"/>
@@ -295,13 +295,13 @@
       <rect x="425" y="68" width="72" height="6" rx="2" fill="rgba(255,255,255,0.07)"/>
       <rect x="425" y="80" width="48" height="6" rx="2" fill="rgba(126,184,218,0.18)" stroke="rgba(126,184,218,0.35)" stroke-width="0.5"/>
       <rect x="425" y="92" width="68" height="6" rx="2" fill="rgba(255,255,255,0.07)"/>
-      <text x="467" y="118" text-anchor="middle" fill="rgba(126,184,218,0.55)" font-family="var(--mono)" font-size="6">changed</text>
+      <text x="467" y="118" text-anchor="middle" fill="rgba(126,184,218,0.55)" font-family="var(--font-mono)" font-size="6">changed</text>
 
       <line x1="148" y1="88" x2="226" y2="88" stroke="rgba(255,255,255,0.22)" stroke-width="0.5" stroke-dasharray="3,3"/>
       <line x1="334" y1="88" x2="413" y2="88" stroke="rgba(255,255,255,0.22)" stroke-width="0.5" stroke-dasharray="3,3"/>
 
-      <text x="187" y="80" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-family="var(--mono)" font-size="6">diff</text>
-      <text x="373" y="80" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-family="var(--mono)" font-size="6">diff</text>
+      <text x="187" y="80" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-family="var(--font-mono)" font-size="6">diff</text>
+      <text x="373" y="80" text-anchor="middle" fill="rgba(255,255,255,0.3)" font-family="var(--font-mono)" font-size="6">diff</text>
     </svg>
   </div>
   <p>
@@ -328,11 +328,11 @@
 
 <style>
   .hero { min-height: 60vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 6rem 2.5rem 2rem; }
-  .hero-label { font-family: var(--mono); font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--blue); margin-bottom: 1.5rem; }
-  .hero h1 { font-family: var(--serif); font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 300; line-height: 1.2; margin-bottom: 1.5rem; letter-spacing: 0.02em; color: var(--text); }
+  .hero-label { font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--blue); margin-bottom: 1.5rem; }
+  .hero h1 { font-family: var(--font-serif); font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 300; line-height: 1.2; margin-bottom: 1.5rem; letter-spacing: 0.02em; color: var(--text); }
   .hero h1 em { color: var(--blue); font-style: italic; }
-  .tagline { font-family: var(--serif); font-size: 1.1rem; color: var(--text-dim); font-style: italic; max-width: 36em; line-height: 1.7; }
-  .cmd-inline { font-family: var(--mono); font-size: 0.85rem; color: var(--blue); }
+  .tagline { font-family: var(--font-serif); font-size: 1.1rem; color: var(--text-dim); font-style: italic; max-width: 36em; line-height: 1.7; }
+  .cmd-inline { font-family: var(--font-mono); font-size: 0.85rem; color: var(--blue); }
   .vault-visual, .graph-visual, .cloud-visual, .sync-visual { margin: 2rem 0 1.5rem; }
   .vault-svg, .graph-svg, .cloud-svg, .sync-svg { width: 100%; max-width: 560px; display: block; }
 </style>
