@@ -64,6 +64,7 @@ async fn pull_one_resource_without_manifest_writes_snapshot(pool: sqlx::PgPool) 
         .expect("pull_one_resource");
 
     assert_eq!(result.branch, PullBranch::Snapshot);
+    assert_eq!(result.title, "Pull Snapshot Test");
     let expected_path = app.vault_dir.path().join(format!("{}.md", seeded.id));
     assert_eq!(result.path, expected_path);
     assert!(
@@ -156,9 +157,14 @@ async fn pull_one_resource_with_manifest_writes_to_vault_and_updates_entry(pool:
     .expect("pull_one_resource");
 
     assert_eq!(result.branch, PullBranch::ManifestTracked);
+    assert_eq!(result.title, "Pull Tracked Test");
     assert_eq!(result.path, abs);
     let entry = manifest.entries.get(&seeded.id).unwrap();
     assert!(!entry.body_hash.is_empty(), "body_hash populated post-pull");
+    assert_eq!(
+        entry.body_hash, entry.remote_body_hash,
+        "post-pull body_hash and remote_body_hash must agree (sync correctness invariant)"
+    );
     assert_eq!(entry.state, ManifestEntryState::Clean);
 }
 

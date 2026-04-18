@@ -46,21 +46,15 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
             )
             .await?;
 
-            // Fetch title for the user-facing message.
-            let resource = client
-                .resources()
-                .get(id)
-                .await
-                .map_err(crate::commands::client_err)?;
-
             if persist {
                 if let Some(m) = &manifest_opt {
                     crate::manifest_io::save_manifest(&temper_dir, m)?;
                 }
             }
+
             output::success(format!(
                 "Pulled: \"{}\" -> {}",
-                resource.title,
+                result.title,
                 result.path.display()
             ));
             Ok(())

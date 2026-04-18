@@ -66,7 +66,9 @@ pub struct PushResult {
 pub enum PullBranch {
     /// Wrote to the manifest-resolved vault path and updated the entry.
     ManifestTracked,
-    /// Wrote to CWD as `{id}.md` (no manifest, or id not in manifest).
+    /// Wrote as `{id}.md` under the caller-provided write root (used when no
+    /// manifest is available or the id is not tracked). The CLI wrapper passes
+    /// CWD in the no-manifest case; the sync engine passes `vault_root`.
     Snapshot,
 }
 
@@ -76,6 +78,7 @@ pub struct PullResult {
     pub resource_id: ResourceId,
     pub path: std::path::PathBuf,
     pub branch: PullBranch,
+    pub title: String,
 }
 
 /// Validate every non-provisional manifest entry: the file's frontmatter
@@ -1116,10 +1119,10 @@ async fn pull_resource(
 /// Pull a single resource from the server.
 ///
 /// With `Some(manifest)` and a tracked entry, writes to the manifest-resolved
-/// vault path and updates the entry (hashes, state=Clean, synced_at). With
-/// `None` or an untracked id, writes a snapshot as `{id}.md` under
-/// `vault_root` — the manifest-less branch preserves the ADDED behavior from
-/// `commands/pull.rs`.
+/// vault path (under `vault_root`) and updates the entry's hashes, state, and
+/// synced_at. With `None` or an untracked id, writes a snapshot as `{id}.md`
+/// under `vault_root` directly — the caller chooses where that is (the CLI
+/// wrapper uses CWD; the sync engine uses the vault root).
 pub async fn pull_one_resource(
     client: &temper_client::TemperClient,
     vault_root: &Path,
@@ -1176,6 +1179,7 @@ pub async fn pull_one_resource(
                 resource_id,
                 path: vault_path,
                 branch: PullBranch::ManifestTracked,
+                title: resource.title.clone(),
             });
         }
     }
@@ -1189,6 +1193,7 @@ pub async fn pull_one_resource(
         resource_id,
         path: snapshot_path,
         branch: PullBranch::Snapshot,
+        title: resource.title.clone(),
     })
 }
 
