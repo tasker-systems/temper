@@ -7,7 +7,6 @@
 //! edge-type filtering.
 
 use sqlx::PgPool;
-use sqlx::Row;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -36,16 +35,14 @@ pub struct AggregatorSubgraphParams<'a> {
 /// The caller's visibility is enforced by `graph_traverse()`'s internal
 /// `resources_visible_to` join — cross-owner resources are never returned.
 ///
-/// Implementation uses three steps to avoid CTE duplication and close the
-/// dangling-edge risk:
+/// Implementation uses two round-trips with compile-time checked queries:
 ///
-/// 1. Resolve the full active ID set once (seeds + traversed, both filtered
-///    by `is_active = true`).
-/// 2. Fetch node rows for those IDs.
-/// 3. Fetch edge rows where both endpoints are in the ID set.
+/// 1. CTE-resolved node rows (seeds + traversed, both filtered by
+///    `is_active = true`) — node metadata comes back in the same trip.
+/// 2. Edge rows where both endpoints are in the resolved ID set.
 ///
 /// Because inactive resources are excluded at step 1, the edge query in
-/// step 3 can never return a dangling edge.
+/// step 2 can never return a dangling edge.
 pub async fn aggregator_subgraph(
     pool: &PgPool,
     params: AggregatorSubgraphParams<'_>,
@@ -61,12 +58,12 @@ pub async fn aggregator_subgraph(
         .map(|dt| dt.as_str().to_string())
         .collect();
 
-    // Step 1: resolve the ID set once. The CTE returns seeds + traversed
-    // nodes, then joins back to kb_resources with `is_active = true` to
-    // guarantee only active rows end up in the set. Visibility is enforced
-    // by resources_visible_to() in the seed CTE and by graph_traverse()
-    // during expansion.
-    let id_rows = sqlx::query(
+    // Query 1: resolve the candidate ID set AND fetch node metadata in one
+    // round-trip. The CTE unions seeds + traversed, then joins back to
+    // kb_resources with `is_active = true` to guarantee only active rows
+    // surface. Visibility is enforced by resources_visible_to() in the seed
+    // CTE and by graph_traverse() during expansion.
+    let node_records = sqlx::query!(
         r#"
         WITH seed_concepts AS (
             SELECT r.id
@@ -79,7 +76,7 @@ pub async fn aggregator_subgraph(
                AND r.is_active = true
         ),
         traversed AS (
-            SELECT resource_id
+            SELECT resource_id AS id
               FROM graph_traverse(
                   $1,
                   ARRAY(SELECT id FROM seed_concepts),
@@ -88,99 +85,80 @@ pub async fn aggregator_subgraph(
               )
         ),
         candidate_ids AS (
-            SELECT id          FROM seed_concepts
+            SELECT id FROM seed_concepts
             UNION
-            SELECT resource_id FROM traversed
+            SELECT id FROM traversed
         )
-        SELECT r.id AS id
+        SELECT
+            r.id         AS "id!: Uuid",
+            r.slug       AS "slug!",
+            r.title      AS "title!",
+            dt.name      AS "doc_type!",
+            (SELECT COUNT(*)::int
+               FROM kb_resource_edges e
+              WHERE e.source_resource_id = r.id
+                 OR e.target_resource_id = r.id) AS "edge_count!: i32"
           FROM kb_resources r
+          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
           JOIN candidate_ids c ON c.id = r.id
          WHERE r.is_active = true
         "#,
+        params.caller_profile_id,
+        params.context_name,
+        &aggregator_names,
+        depth as i32,
     )
-    .bind(params.caller_profile_id)
-    .bind(params.context_name)
-    .bind(&aggregator_names)
-    .bind(depth as i32)
     .fetch_all(pool)
     .await?;
 
-    let node_ids: Vec<Uuid> = id_rows
-        .into_iter()
-        .map(|r| r.get::<Uuid, _>("id"))
-        .collect();
-
-    if node_ids.is_empty() {
+    if node_records.is_empty() {
         return Ok(SubgraphResponse {
             nodes: vec![],
             edges: vec![],
         });
     }
 
-    // Step 2: node rows, bound directly to the resolved ID set.
-    let node_rows = sqlx::query(
-        r#"
-        SELECT
-            r.id                                                AS id,
-            r.slug                                              AS slug,
-            r.title                                             AS title,
-            dt.name                                             AS doc_type,
-            (SELECT COUNT(*)::int
-               FROM kb_resource_edges e
-              WHERE e.source_resource_id = r.id
-                 OR e.target_resource_id = r.id)                AS edge_count
-          FROM kb_resources r
-          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-         WHERE r.id = ANY($1::uuid[])
-           AND r.is_active = true
-        "#,
-    )
-    .bind(&node_ids)
-    .fetch_all(pool)
-    .await?;
+    let mut node_ids: Vec<Uuid> = Vec::with_capacity(node_records.len());
+    let mut nodes: Vec<GraphNode> = Vec::with_capacity(node_records.len());
+    for rec in node_records {
+        // DocType::from_str returns TemperError on unknown name; map to
+        // ApiError::Internal since an unrecognised doctype is a data-integrity issue.
+        let doc_type = DocType::from_str(&rec.doc_type)
+            .map_err(|e| ApiError::Internal(format!("unexpected doc_type in db: {e}")))?;
+        node_ids.push(rec.id);
+        nodes.push(GraphNode {
+            id: rec.id,
+            slug: rec.slug,
+            title: rec.title,
+            doc_type,
+            edge_count: rec.edge_count,
+        });
+    }
 
-    let nodes: Vec<GraphNode> = node_rows
-        .into_iter()
-        .map(|row| -> ApiResult<GraphNode> {
-            let doc_type_str: String = row.get("doc_type");
-            // DocType::from_str returns TemperError on unknown name; map to
-            // ApiError::Internal since an unrecognised doctype is a data-integrity issue.
-            let doc_type = DocType::from_str(&doc_type_str)
-                .map_err(|e| ApiError::Internal(format!("unexpected doc_type in db: {e}")))?;
-            Ok(GraphNode {
-                id: row.get("id"),
-                slug: row.get("slug"),
-                title: row.get("title"),
-                doc_type,
-                edge_count: row.get("edge_count"),
-            })
-        })
-        .collect::<ApiResult<Vec<_>>>()?;
-
-    // Step 3: edge rows — both endpoints must be in the resolved set.
-    // Because node_ids only contains active resources (step 1), no dangling
+    // Query 2: edge rows — both endpoints must be in the resolved set.
+    // Because node_ids only contains active resources (query 1), no dangling
     // edges can appear here.
-    let edge_rows = sqlx::query(
+    let edge_records = sqlx::query!(
         r#"
         SELECT
-            e.source_resource_id AS source,
-            e.target_resource_id AS target,
-            e.edge_type          AS edge_type
-          FROM kb_resource_edges e
-         WHERE e.source_resource_id = ANY($1::uuid[])
-           AND e.target_resource_id = ANY($1::uuid[])
+            source_resource_id AS "source!: Uuid",
+            target_resource_id AS "target!: Uuid",
+            edge_type          AS "edge_type!: EdgeType"
+          FROM kb_resource_edges
+         WHERE source_resource_id = ANY($1::uuid[])
+           AND target_resource_id = ANY($1::uuid[])
         "#,
+        &node_ids,
     )
-    .bind(&node_ids)
     .fetch_all(pool)
     .await?;
 
-    let edges: Vec<GraphEdge> = edge_rows
+    let edges: Vec<GraphEdge> = edge_records
         .into_iter()
-        .map(|row| GraphEdge {
-            source: row.get("source"),
-            target: row.get("target"),
-            edge_type: row.get::<EdgeType, _>("edge_type"),
+        .map(|rec| GraphEdge {
+            source: rec.source,
+            target: rec.target,
+            edge_type: rec.edge_type,
         })
         .collect();
 
