@@ -10,6 +10,10 @@
 //! `{id}.md` to CWD — is guarded by the wrapper in `commands/pull.rs`. The
 //! primitive itself writes snapshots to its `vault_root` arg; the wrapper
 //! passes CWD in the no-manifest case.
+//
+// TODO: a second-round sync test would catch regressions where pull leaves
+// manifest hashes stale (reported as spurious drift on next sync-status).
+// See sync_test.rs for sync-round coverage.
 
 mod common;
 
@@ -164,8 +168,21 @@ async fn pull_one_resource_with_manifest_writes_to_vault_and_updates_entry(pool:
     assert!(!entry.body_hash.is_empty(), "body_hash populated post-pull");
     assert_eq!(
         entry.body_hash, entry.remote_body_hash,
-        "post-pull body_hash and remote_body_hash must agree (sync correctness invariant)"
+        "hashes agree post-pull (no sync-diff context)"
     );
+    assert!(
+        !entry.managed_hash.is_empty(),
+        "managed_hash populated post-pull"
+    );
+    assert_eq!(
+        entry.managed_hash, entry.remote_managed_hash,
+        "managed hashes agree post-pull"
+    );
+    assert_eq!(
+        entry.open_hash, entry.remote_open_hash,
+        "open hashes agree post-pull"
+    );
+    assert!(entry.mtime_secs.is_some(), "mtime_secs populated post-pull");
     assert_eq!(entry.state, ManifestEntryState::Clean);
 }
 

@@ -1205,10 +1205,17 @@ pub async fn pull_one_resource(
             })?;
 
             let content_hash = temper_core::hash::compute_body_hash(fm.body());
+            let (managed_hash, open_hash) = fm.hashes();
+
             entry.body_hash = content_hash.clone();
             entry.remote_body_hash = expected_remote_hash.unwrap_or(content_hash);
+            entry.managed_hash = managed_hash.clone();
+            entry.open_hash = open_hash.clone();
+            entry.remote_managed_hash = managed_hash;
+            entry.remote_open_hash = open_hash;
             entry.synced_at = chrono::Utc::now();
             entry.state = ManifestEntryState::Clean;
+            entry.mtime_secs = file_mtime_secs(&vault_path).ok();
 
             return Ok(PullResult {
                 resource_id,
