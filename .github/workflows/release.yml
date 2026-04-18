@@ -1,0 +1,133 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0)'
+        required: true
+        type: string
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  determine-version:
+    name: Determine Version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 2
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.ref_name }}"
+          fi
+          VERSION="${TAG#v}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Releasing temper v${VERSION}"
+
+  pre-flight-check:
+    name: Pre-flight Validation
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    needs: determine-version
+    env:
+      SQLX_OFFLINE: 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-preflight
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run clippy
+        run: cargo clippy --package temper-cli --all-features -- -D warnings
+
+      - name: Release build smoke test
+        run: cargo build --release --package temper-cli --features embed,extract,hnsw
+
+  build-cli-binaries:
+    name: Build CLI Binaries
+    needs: [determine-version, pre-flight-check]
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-cli-binaries.yml
+    with:
+      version: ${{ needs.determine-version.outputs.version }}
+
+  release-summary:
+    name: Release Summary
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    needs: [determine-version, build-cli-binaries]
+    if: always()
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Download CLI binary artifacts
+        if: needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'failure'
+        uses: actions/download-artifact@v8
+        with:
+          pattern: cli-v${{ needs.determine-version.outputs.version }}-*
+          path: cli-artifacts/
+          merge-multiple: true
+
+      - name: List artifacts
+        run: |
+          if [[ -d cli-artifacts ]]; then
+            find cli-artifacts -type f | sort
+          else
+            echo "No artifacts downloaded."
+          fi
+
+      - name: Check for build failures
+        id: check-failures
+        env:
+          DARWIN_ARM64_RESULT: ${{ needs.build-cli-binaries.result }}
+          LINUX_X64_RESULT: ${{ needs.build-cli-binaries.result }}
+          WINDOWS_X64_RESULT: ${{ needs.build-cli-binaries.result }}
+        run: ./.github/scripts/release/check-failures.sh
+
+      - name: Generate summary
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+          DARWIN_ARM64_RESULT: ${{ needs.build-cli-binaries.result }}
+          LINUX_X64_RESULT: ${{ needs.build-cli-binaries.result }}
+          WINDOWS_X64_RESULT: ${{ needs.build-cli-binaries.result }}
+        run: ./.github/scripts/release/generate-summary.sh
+
+      - name: Create GitHub Release
+        if: steps.check-failures.outputs.has_failures != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.determine-version.outputs.version }}
+          ARTIFACT_DIR: cli-artifacts
+        run: ./.github/scripts/release/create-github-release.sh
+
+      - name: Fail the job if any build failed
+        if: steps.check-failures.outputs.has_failures == 'true'
+        run: |
+          echo "::error::One or more platform builds failed; release was not published."
+          exit 1
