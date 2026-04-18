@@ -39,9 +39,12 @@ describe('nodeColor', () => {
 			nodeColor('research'),
 			nodeColor('task'),
 			nodeColor('session'),
-			nodeColor('concept')
+			nodeColor('concept'),
+			nodeColor('goal'),
+			nodeColor('decision'),
+			nodeColor('memory')
 		]);
-		expect(colors.size).toBe(4);
+		expect(colors.size).toBe(7);
 	});
 
 	it('returns a fallback gray for unknown doc types', () => {

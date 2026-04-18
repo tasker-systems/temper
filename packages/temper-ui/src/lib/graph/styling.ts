@@ -6,11 +6,27 @@ export function nodeRadius(node: GraphNode): number {
 	return base + Math.sqrt(node.edge_count) * 2;
 }
 
+/**
+ * Knowledge-graph doctype palette.
+ *
+ * Mirrors `--graph-*` in `app.css` and `--color-graph-*` in the Tailwind
+ * `@theme` block. If you change a color here, change both CSS references
+ * — the hex is duplicated across the three because SVG inline styles,
+ * CSS vars, and Tailwind utilities each need the raw value.
+ *
+ * `memory` is reserved for an upcoming doctype covering builder-and-agent
+ * tooling conventions (plugin preferences, subagent guidance, consistency
+ * rules). The color slot is wired up now so the renderer is ready when
+ * the Rust `DocType::Memory` variant lands.
+ */
 const NODE_COLORS: Record<string, string> = {
 	research: '#7eb8da',
 	task: '#f0a870',
 	session: '#82c99a',
-	concept: '#d48ac7'
+	concept: '#d48ac7',
+	goal: '#f5d277',
+	decision: '#c9923c',
+	memory: '#8e9fc7'
 };
 
 const FALLBACK_COLOR = '#9ca3af';
