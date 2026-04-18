@@ -102,6 +102,12 @@ jobs:
             echo "No artifacts downloaded."
           fi
 
+      # Note: needs.build-cli-binaries.result is a single aggregate value for
+      # the whole reusable workflow — GitHub Actions does not expose per-matrix
+      # results through workflow_call outputs. All three *_RESULT vars get the
+      # same aggregate, so a single-platform failure fails the whole release.
+      # We accept this v1 tradeoff; per-platform granularity would require the
+      # reusable workflow to emit named outputs per job.
       - name: Check for build failures
         id: check-failures
         env:

@@ -116,7 +116,7 @@ jobs:
             chmod +x "$STAGING/temper"
           fi
 
-          ORT_LIB=$(find ort-staging -name '${{ matrix.target.lib_name }}' -type f | head -n1)
+          ORT_LIB=$(find ort-staging -name '${{ matrix.target.lib_name }}' | head -n1)
           if [[ -z "$ORT_LIB" ]]; then
             echo "::error::Could not locate ${{ matrix.target.lib_name }} in extracted archive"
             find ort-staging -type f | head -50
@@ -130,17 +130,17 @@ jobs:
           fi
 
           cp LICENSE "$STAGING/"
-          cat > "$STAGING/README-INSTALL.txt" <<EOF
-          temper v${VERSION} — ${TARGET}
-
-          Install this archive via:
-            https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh
-          or
-            https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1
-
-          See full install docs at:
-            https://github.com/tasker-systems/temper/blob/main/docs/guides/install.md
-          EOF
+          {
+            printf 'temper v%s — %s\n' "$VERSION" "$TARGET"
+            printf '\n'
+            printf 'Install this archive via:\n'
+            printf '  https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh\n'
+            printf 'or\n'
+            printf '  https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1\n'
+            printf '\n'
+            printf 'See full install docs at:\n'
+            printf '  https://github.com/tasker-systems/temper/blob/main/docs/guides/install.md\n'
+          } > "$STAGING/README-INSTALL.txt"
 
           echo "Staging contents:"
           find "$STAGING" -type f
