@@ -54,6 +54,12 @@ pub enum PushTarget<'a> {
 }
 
 /// Per-resource push outcome.
+///
+/// `kind` reflects the REQUEST shape — `PushKind::New` when the client POSTed
+/// (frontmatter had a provisional or missing id), `PushKind::Modified` when
+/// the client PUT (canonical id). A PUT that the server responds to with 404
+/// currently surfaces as an error; fallback-on-404 is deferred to the
+/// cloud-mode work (Unit B.2).
 #[derive(Debug, Clone)]
 pub struct PushResult {
     pub resource_id: ResourceId,
@@ -1033,52 +1039,73 @@ pub async fn push_one_resource(
     target: PushTarget<'_>,
     manifest: Option<&mut Manifest>,
 ) -> Result<PushResult> {
-    // ---- Step A — resolve (file_path, entry_id, is_provisional) -----------
-    let (file_path, entry_id, is_provisional) = match target {
-        PushTarget::Path(p) => {
-            let abs: std::path::PathBuf = if p.is_absolute() {
-                p.to_path_buf()
-            } else {
-                vault_root.join(p)
-            };
-            if !abs.exists() {
-                return Err(TemperError::NotFound(format!(
-                    "file not found: {}",
-                    abs.display()
-                )));
+    // ---- Step A — resolve file_path (+ optional manifest hint) ------------
+    //
+    // The manifest hint (entry_id, provisional flag) is used for the
+    // `PushTarget::Id` branch as a cross-check against frontmatter: we read
+    // and parse the file exactly once in Step B, and frontmatter remains
+    // the authoritative source of the id. If a caller asks us to push by
+    // id and the on-disk file's frontmatter disagrees, that's surfaced as
+    // an error rather than silently pushing the wrong resource.
+    let (file_path, manifest_hint): (std::path::PathBuf, Option<(ResourceId, bool)>) =
+        match target {
+            PushTarget::Path(p) => {
+                let abs: std::path::PathBuf = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    vault_root.join(p)
+                };
+                if !abs.exists() {
+                    return Err(TemperError::NotFound(format!(
+                        "file not found: {}",
+                        abs.display()
+                    )));
+                }
+                (abs, None)
             }
-            let fm = Frontmatter::parse_file(&abs).map_err(|e| {
-                TemperError::Config(format!(
-                    "push requires parseable frontmatter at {}: {e}",
-                    abs.display()
-                ))
-            })?;
-            let (id, is_prov) = extract_id_from_frontmatter(&fm)?;
-            (abs, id, is_prov)
-        }
-        PushTarget::Id(id) => {
-            let m = manifest.as_ref().ok_or_else(|| {
-                TemperError::Config(
-                    "push by id requires a manifest; pass a path for manifest-less push".into(),
-                )
-            })?;
-            let entry = m
-                .entries
-                .get(&id)
-                .ok_or_else(|| TemperError::NotFound(format!("manifest entry not found: {id}")))?;
-            let abs = vault_root.join(&entry.path);
-            if !abs.exists() {
-                return Err(TemperError::NotFound(format!(
-                    "vault file not found: {}",
-                    abs.display()
-                )));
+            PushTarget::Id(id) => {
+                let m = manifest.as_ref().ok_or_else(|| {
+                    TemperError::Config(
+                        "push by id requires a manifest; pass a path for manifest-less push".into(),
+                    )
+                })?;
+                let entry = m.entries.get(&id).ok_or_else(|| {
+                    TemperError::NotFound(format!("manifest entry not found: {id}"))
+                })?;
+                let abs = vault_root.join(&entry.path);
+                if !abs.exists() {
+                    return Err(TemperError::NotFound(format!(
+                        "vault file not found: {}",
+                        abs.display()
+                    )));
+                }
+                (abs, Some((id, entry.provisional)))
             }
-            (abs, id, entry.provisional)
-        }
-    };
+        };
 
-    // ---- Step B — read body, derive (context, doc_type), build payload ----
+    // ---- Step B — single file read + single frontmatter parse -------------
     let content = std::fs::read_to_string(&file_path)?;
+    let fm = Frontmatter::try_from(content.as_str()).map_err(|e| {
+        TemperError::Config(format!(
+            "push requires parseable frontmatter at {}: {e}",
+            file_path.display()
+        ))
+    })?;
+    let (entry_id, is_provisional) = extract_id_from_frontmatter(&fm)?;
+
+    // For PushTarget::Id callers, cross-check manifest vs frontmatter. Any
+    // divergence is a real inconsistency — surface it rather than silently
+    // pushing under the wrong id.
+    if let Some((hinted_id, _)) = manifest_hint {
+        if hinted_id != entry_id {
+            return Err(TemperError::Config(format!(
+                "push-by-id mismatch: manifest entry points to {} but file frontmatter says {}",
+                Uuid::from(hinted_id),
+                Uuid::from(entry_id)
+            )));
+        }
+    }
+
     let body = crate::actions::ingest::strip_frontmatter(&content);
 
     // Prefer vault-relative path parsing; fall back to frontmatter fields
@@ -1095,11 +1122,6 @@ pub async fn push_one_resource(
     let (context, doc_type) = match rel_parsed {
         Some(cd) => cd,
         None => {
-            let fm = Frontmatter::try_from(content.as_str()).map_err(|e| {
-                TemperError::Config(format!(
-                    "push: could not parse frontmatter for context/doc_type: {e}"
-                ))
-            })?;
             let mapping = fm
                 .value()
                 .as_mapping()
@@ -1114,10 +1136,8 @@ pub async fn push_one_resource(
         }
     };
 
-    let (managed_meta, open_meta) = match Frontmatter::try_from(content.as_str()) {
-        Ok(fm) => (Some(fm.managed_json()), Some(fm.open_json())),
-        Err(_) => (None, None),
-    };
+    let managed_meta = Some(fm.managed_json());
+    let open_meta = Some(fm.open_json());
     let title = crate::actions::ingest::title_from_path(&file_path);
     let mut payload =
         crate::actions::ingest::build_ingest_payload(body, &title, &context, &doc_type, None)?;
@@ -1194,7 +1214,10 @@ pub async fn push_one_resource(
         ))
     })?;
     let (managed_hash, open_hash) = fm_written.hashes();
-    let body_hash = payload.content_hash.clone().unwrap_or_default();
+    // Compute body hash from the on-disk body directly. We have `body`
+    // (stripped frontmatter) in scope from Step B, and this avoids
+    // depending on build_ingest_payload's Option<String> contract.
+    let body_hash = temper_core::hash::compute_body_hash(body);
 
     if let Some(m) = manifest.as_mut() {
         if let Some(e) = m.entries.get_mut(&server_id) {

@@ -1,15 +1,22 @@
 #![cfg(feature = "test-db")]
 
 //! End-to-end tests for the `push_one_resource` primitive in
-//! `temper_cli::actions::sync`. Two scenarios:
-//!   - `manifest = None` + `PushTarget::Path` — the primitive resolves the id
-//!     from frontmatter, POSTs (provisional) to create a new server-side
-//!     resource, and rewrites `temper-provisional-id` → `temper-id` on disk.
-//!   - `manifest = Some(&mut ...)` + `PushTarget::Path` — same POST flow, but
-//!     the primitive also remaps the manifest entry from the provisional key
-//!     to the canonical server id, and populates all nine entry fields
-//!     (body/managed/open hashes for local + remote, state, synced_at,
-//!     mtime_secs).
+//! `temper_cli::actions::sync`. Scenarios covered:
+//!   - `manifest = None` + `PushTarget::Path` + provisional id — the
+//!     primitive resolves the id from frontmatter, POSTs to create a new
+//!     server-side resource, and rewrites `temper-provisional-id` →
+//!     `temper-id` on disk.
+//!   - `manifest = Some(&mut ...)` + `PushTarget::Path` + provisional id —
+//!     same POST flow, but the primitive also remaps the manifest entry
+//!     from the provisional key to the canonical server id, and populates
+//!     all nine entry fields (body/managed/open hashes for local + remote,
+//!     state, synced_at, mtime_secs).
+//!   - `manifest = Some(&mut ...)` + `PushTarget::Id` + canonical id — the
+//!     primitive resolves path via the manifest entry, PUTs the edited
+//!     body, and updates the entry's nine fields in place.
+//!   - `manifest = None` + `PushTarget::Path` + canonical id — the
+//!     primitive PUTs the edited body directly with no manifest side
+//!     effects.
 //!
 //! The CLI-level `temper push <id|path>` wrapper is Task 6 and is not tested
 //! here.
@@ -17,6 +24,7 @@
 mod common;
 
 use temper_cli::actions::sync::{push_one_resource, PushTarget};
+use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 use temper_core::types::{Manifest, ManifestEntry, ManifestEntryState, PushKind, ResourceId};
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -185,4 +193,238 @@ async fn push_one_resource_path_with_manifest_remaps_entry(pool: sqlx::PgPool) {
         "remote open hash mirrors local"
     );
     assert!(entry.mtime_secs.is_some(), "mtime_secs populated");
+}
+
+/// `PushTarget::Id` happy path: server-side resource already exists, local
+/// file has the canonical `temper-id` and an edited body, manifest entry is
+/// keyed by the canonical id. The primitive should PUT (not POST), report
+/// `PushKind::Modified`, land the edit server-side, and refresh all nine
+/// manifest fields.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn push_one_resource_id_target_pushes_existing_resource(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("push-test-3")
+        .await
+        .expect("context create");
+
+    // Seed a resource server-side with a real PackedChunk so the ingest path
+    // doesn't hit the empty-body gotcha from Task 2.
+    let seed_body = "# Seed\n\nOriginal body.".to_string();
+    let seed_chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: seed_body.clone(),
+        content_hash: format!("{:0>64}", "s3"),
+        embedding: vec![0.1_f32; 768],
+    };
+    let seed_payload = IngestPayload {
+        title: "Push Id Seed".to_string(),
+        origin_uri: "test://e2e/push-id/seed".to_string(),
+        context_name: "push-test-3".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&seed_body)),
+        slug: "push-id-seed".to_string(),
+        content: seed_body.clone(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({})),
+        open_meta: Some(serde_json::json!({})),
+        chunks_packed: Some(pack_chunks(&[seed_chunk]).expect("pack chunks")),
+    };
+    let seeded = app
+        .client
+        .ingest()
+        .create(&seed_payload)
+        .await
+        .expect("ingest seed failed");
+    let resource_id = ResourceId::from(*seeded.id.as_uuid());
+
+    // Write a local file with the canonical temper-id + an edited body.
+    let edited_body = "Edited body via PushTarget::Id.";
+    let file_path = app.vault_dir.path().join("push-id-target.md");
+    std::fs::write(
+        &file_path,
+        format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-context: push-test-3\n\
+             temper-type: research\n\
+             temper-created: 2026-04-18T00:00:00Z\n\
+             temper-owner: '@me'\n\
+             title: Push Id Seed\n\
+             slug: push-id-seed\n\
+             date: 2026-04-18\n\
+             ---\n\
+             {edited_body}\n",
+            id = resource_id.as_uuid(),
+        ),
+    )
+    .expect("write local file");
+
+    // Seed manifest with entry keyed by canonical id.
+    let mut manifest = Manifest::new("e2e-test-device".to_string());
+    let file_name = file_path.file_name().unwrap().to_str().unwrap().to_string();
+    manifest.entries.insert(
+        resource_id,
+        ManifestEntry {
+            path: file_name,
+            body_hash: String::new(),
+            remote_body_hash: String::new(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: chrono::Utc::now(),
+            state: ManifestEntryState::LocalModified,
+            mtime_secs: None,
+            last_audit_id: None,
+            provisional: false,
+        },
+    );
+
+    let result = push_one_resource(
+        &app.client,
+        app.vault_dir.path(),
+        PushTarget::Id(resource_id),
+        Some(&mut manifest),
+    )
+    .await
+    .expect("push_one_resource (Id target)");
+
+    assert_eq!(result.kind, PushKind::Modified);
+    assert_eq!(result.resource_id, resource_id, "server id unchanged");
+
+    let entry = manifest
+        .entries
+        .get(&resource_id)
+        .expect("entry still keyed by canonical id");
+    assert_eq!(entry.state, ManifestEntryState::Clean);
+    assert!(!entry.provisional);
+    assert!(!entry.body_hash.is_empty(), "body_hash populated");
+    assert_eq!(entry.body_hash, entry.remote_body_hash);
+    assert!(!entry.managed_hash.is_empty(), "managed_hash populated");
+    assert_eq!(entry.managed_hash, entry.remote_managed_hash);
+    assert_eq!(entry.open_hash, entry.remote_open_hash);
+    assert!(entry.mtime_secs.is_some());
+
+    // Server content reflects the edit.
+    let server_content = app
+        .client
+        .resources()
+        .content(*resource_id.as_uuid())
+        .await
+        .expect("fetch server content");
+    assert!(
+        server_content.markdown.contains(edited_body),
+        "server markdown must reflect edited body; got:\n{}",
+        server_content.markdown
+    );
+}
+
+/// `PushTarget::Path` with canonical id and no manifest: PUT the edited
+/// body directly, return `PushKind::Modified`, and the caller gets no
+/// manifest side effects (since none was passed).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn push_one_resource_path_canonical_id_puts_existing_resource(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("push-test-4")
+        .await
+        .expect("context create");
+
+    let seed_body = "# Seed 4\n\nOriginal body.".to_string();
+    let seed_chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: seed_body.clone(),
+        content_hash: format!("{:0>64}", "s4"),
+        embedding: vec![0.1_f32; 768],
+    };
+    let seed_payload = IngestPayload {
+        title: "Push Path Canonical Seed".to_string(),
+        origin_uri: "test://e2e/push-path-canonical/seed".to_string(),
+        context_name: "push-test-4".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&seed_body)),
+        slug: "push-path-canonical-seed".to_string(),
+        content: seed_body.clone(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({})),
+        open_meta: Some(serde_json::json!({})),
+        chunks_packed: Some(pack_chunks(&[seed_chunk]).expect("pack chunks")),
+    };
+    let seeded = app
+        .client
+        .ingest()
+        .create(&seed_payload)
+        .await
+        .expect("ingest seed failed");
+    let resource_id = ResourceId::from(*seeded.id.as_uuid());
+
+    let edited_body = "Edited body via PushTarget::Path canonical.";
+    let file_path = app.vault_dir.path().join("push-path-canonical.md");
+    std::fs::write(
+        &file_path,
+        format!(
+            "---\n\
+             temper-id: \"{id}\"\n\
+             temper-context: push-test-4\n\
+             temper-type: research\n\
+             temper-created: 2026-04-18T00:00:00Z\n\
+             temper-owner: '@me'\n\
+             title: Push Path Canonical Seed\n\
+             slug: push-path-canonical-seed\n\
+             date: 2026-04-18\n\
+             ---\n\
+             {edited_body}\n",
+            id = resource_id.as_uuid(),
+        ),
+    )
+    .expect("write local file");
+
+    let result = push_one_resource(
+        &app.client,
+        app.vault_dir.path(),
+        PushTarget::Path(&file_path),
+        None,
+    )
+    .await
+    .expect("push_one_resource (Path canonical)");
+
+    assert_eq!(result.kind, PushKind::Modified);
+    assert_eq!(
+        result.resource_id, resource_id,
+        "canonical id from frontmatter unchanged"
+    );
+
+    // Server content reflects the edit.
+    let server_content = app
+        .client
+        .resources()
+        .content(*resource_id.as_uuid())
+        .await
+        .expect("fetch server content");
+    assert!(
+        server_content.markdown.contains(edited_body),
+        "server markdown must reflect edited body; got:\n{}",
+        server_content.markdown
+    );
 }
