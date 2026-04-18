@@ -31,6 +31,7 @@ use temper_core::types::resource::{
         crate::handlers::meta::get_meta,
         crate::handlers::meta::update_meta,
         crate::handlers::edges::list,
+        crate::handlers::graph::get_subgraph,
     ),
     components(schemas(
         HealthResponse,
@@ -53,6 +54,9 @@ use temper_core::types::resource::{
         ErrorBody,
         ErrorDetail,
         temper_core::types::graph::GraphEdgeRow,
+        temper_core::types::graph::GraphNode,
+        temper_core::types::graph::GraphEdge,
+        temper_core::types::graph::SubgraphResponse,
         temper_core::types::Profile,
         temper_core::types::ProfileAuthLink,
     )),
@@ -64,6 +68,7 @@ use temper_core::types::resource::{
         (name = "Events", description = "Activity event log"),
         (name = "Search", description = "Semantic and keyword search"),
         (name = "Meta", description = "Resource frontmatter metadata management"),
+        (name = "Graph", description = "Knowledge graph traversal"),
     ),
     info(
         title = "Temper Cloud API",
@@ -116,6 +121,7 @@ mod tests {
         assert!(json.contains("/api/search"));
         assert!(json.contains("/api/resources/{id}/meta"));
         assert!(json.contains("/api/resources/{id}/edges"));
+        assert!(json.contains("/api/graph/subgraph"));
 
         // Verify security scheme
         assert!(json.contains("bearer_auth"));

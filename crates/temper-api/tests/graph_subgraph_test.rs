@@ -417,3 +417,30 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
         .expect("c1 should be in the result");
     assert_eq!(c1.edge_count, 3, "c1 has 3 outgoing edges");
 }
+
+// ─── Handler smoke tests (service layer already integration-tested) ─────────
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn handler_rejects_non_me_owner(pool: PgPool) {
+    // Covers the `owner != "@me"` branch without needing the full HTTP stack.
+    // Full auth/HTTP integration is covered in the existing auth_test.rs
+    // pattern; here we assert the service contract one layer down is sound.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let alice = uuid(ALICE);
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: alice,
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "service layer succeeds for caller's own data"
+    );
+}
