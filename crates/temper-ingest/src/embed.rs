@@ -46,8 +46,12 @@ static ORT_LIB_BYTES: &[u8] = include_bytes!("../lib/x86_64-unknown-linux-gnu/li
 
 // ---- ORT runtime initialization ----
 
-/// Extracted so distribution-layout tests can exercise the selection logic
-/// without a real ONNX Runtime installed.
+// The three helpers below are consumed only by the "load-dynamic" init branch
+// further down and by unit tests. On the Vercel/Linux path (embed without
+// embed-download) only the bundled-.so branch compiles, leaving them dead —
+// hence the explicit allow. The tests always exercise them via cfg(test).
+
+#[allow(dead_code)]
 fn resolve_dylib_from_candidates(candidates: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
     candidates.iter().find(|p| p.exists()).cloned()
 }
@@ -55,6 +59,7 @@ fn resolve_dylib_from_candidates(candidates: &[std::path::PathBuf]) -> Option<st
 /// Covers the two archive layouts the release installer produces:
 ///   - mac/linux:  <exe_dir>/lib/libonnxruntime.{dylib,so}
 ///   - windows:    <exe_dir>/onnxruntime.dll (flat)
+#[allow(dead_code)]
 fn binary_adjacent_candidates(exe_path: &std::path::Path) -> Vec<std::path::PathBuf> {
     let Some(exe_dir) = exe_path.parent() else {
         return Vec::new();
@@ -71,6 +76,7 @@ fn binary_adjacent_candidates(exe_path: &std::path::Path) -> Vec<std::path::Path
 /// resolves to `~/Library/Application Support/` (platform-idiomatic) — but the
 /// binary-adjacent candidates fire first there, so this fallback is effectively
 /// Linux-only in practice.
+#[allow(dead_code)]
 fn xdg_data_candidates() -> Vec<std::path::PathBuf> {
     let Some(data_dir) = dirs::data_local_dir() else {
         return Vec::new();
