@@ -18,6 +18,9 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
+    outputs:
+      tag: ${{ steps.derive.outputs.tag }}
+      created: ${{ steps.create.outputs.created }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -28,22 +31,34 @@ jobs:
         id: read
         run: ./tools/scripts/release/read-version.sh >> "$GITHUB_OUTPUT"
 
-      - name: Check tag does not already exist
-        id: check
-        run: |
-          TAG="v${{ steps.read.outputs.VERSION }}"
-          if git rev-parse "$TAG" >/dev/null 2>&1; then
-            echo "Tag $TAG already exists, skipping." >&2
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "exists=false" >> "$GITHUB_OUTPUT"
-          fi
+      - name: Derive tag name
+        id: derive
+        run: echo "tag=v${{ steps.read.outputs.VERSION }}" >> "$GITHUB_OUTPUT"
 
       - name: Create and push tag
-        if: steps.check.outputs.exists != 'true'
+        id: create
         run: |
-          TAG="v${{ steps.read.outputs.VERSION }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin "$TAG"
+          TAG="${{ steps.derive.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping." >&2
+            echo "created=false" >> "$GITHUB_OUTPUT"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+            echo "created=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Call release.yml directly. Pushing a tag from a workflow using the default
+  # GITHUB_TOKEN does not trigger other workflows (loop prevention), so we can't
+  # rely on release.yml's `push: tags: v*` trigger firing — we invoke it
+  # explicitly via workflow_call instead.
+  release:
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.tag.outputs.tag }}
