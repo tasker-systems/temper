@@ -1,0 +1,49 @@
+name: Release Tag
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'VERSION'
+
+concurrency:
+  group: release-tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Create release tag
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Read VERSION
+        id: read
+        run: ./tools/scripts/release/read-version.sh >> "$GITHUB_OUTPUT"
+
+      - name: Check tag does not already exist
+        id: check
+        run: |
+          TAG="v${{ steps.read.outputs.VERSION }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping." >&2
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create and push tag
+        if: steps.check.outputs.exists != 'true'
+        run: |
+          TAG="v${{ steps.read.outputs.VERSION }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"

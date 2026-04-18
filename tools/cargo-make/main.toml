@@ -4,7 +4,10 @@
 # Composite tasks that operate across the entire workspace.
 # Extended by the root Makefile.toml.
 
-extend = "./base-tasks.toml"
+extend = [
+    { path = "./base-tasks.toml" },
+    { path = "./release-tasks.toml" },
+]
 
 # =============================================================================
 # Composite Tasks

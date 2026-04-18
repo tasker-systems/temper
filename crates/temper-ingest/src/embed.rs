@@ -46,6 +46,48 @@ static ORT_LIB_BYTES: &[u8] = include_bytes!("../lib/x86_64-unknown-linux-gnu/li
 
 // ---- ORT runtime initialization ----
 
+// The three helpers below are consumed only by the "load-dynamic" init branch
+// further down and by unit tests. On the Vercel/Linux path (embed without
+// embed-download) only the bundled-.so branch compiles, leaving them dead —
+// hence the explicit allow. The tests always exercise them via cfg(test).
+
+#[allow(dead_code)]
+fn resolve_dylib_from_candidates(candidates: &[std::path::PathBuf]) -> Option<std::path::PathBuf> {
+    candidates.iter().find(|p| p.exists()).cloned()
+}
+
+/// Covers the two archive layouts the release installer produces:
+///   - mac/linux:  <exe_dir>/lib/libonnxruntime.{dylib,so}
+///   - windows:    <exe_dir>/onnxruntime.dll (flat)
+#[allow(dead_code)]
+fn binary_adjacent_candidates(exe_path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Some(exe_dir) = exe_path.parent() else {
+        return Vec::new();
+    };
+    vec![
+        exe_dir.join("lib").join("libonnxruntime.dylib"),
+        exe_dir.join("lib").join("libonnxruntime.so"),
+        exe_dir.join("onnxruntime.dll"),
+    ]
+}
+
+/// Linux fallback for when `temper` is symlinked onto PATH while the actual
+/// install lives at `~/.local/share/temper/`. On macOS, `dirs::data_local_dir()`
+/// resolves to `~/Library/Application Support/` (platform-idiomatic) — but the
+/// binary-adjacent candidates fire first there, so this fallback is effectively
+/// Linux-only in practice.
+#[allow(dead_code)]
+fn xdg_data_candidates() -> Vec<std::path::PathBuf> {
+    let Some(data_dir) = dirs::data_local_dir() else {
+        return Vec::new();
+    };
+    let lib_dir = data_dir.join("temper").join("lib");
+    vec![
+        lib_dir.join("libonnxruntime.dylib"),
+        lib_dir.join("libonnxruntime.so"),
+    ]
+}
+
 static ORT_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 
 /// Initialize the ORT runtime.
@@ -81,19 +123,29 @@ fn init_ort_runtime() -> std::result::Result<(), String> {
         {
             // Search order:
             //   1. ORT_DYLIB_PATH env var (explicit override)
-            //   2. Homebrew ARM64: /opt/homebrew/lib/libonnxruntime.dylib
-            //   3. Homebrew Intel: /usr/local/lib/libonnxruntime.dylib
-            //   4. Linux system: /usr/lib/libonnxruntime.so
-            let dylib_path = std::env::var("ORT_DYLIB_PATH").ok().or_else(|| {
-                [
-                    "/opt/homebrew/lib/libonnxruntime.dylib",
-                    "/usr/local/lib/libonnxruntime.dylib",
-                    "/usr/lib/libonnxruntime.so",
-                ]
-                .iter()
-                .find(|p| std::path::Path::new(p).exists())
-                .map(|p| p.to_string())
-            });
+            //   2. Binary-adjacent: <exe_dir>/lib/libonnxruntime.{dylib,so} OR
+            //      <exe_dir>/onnxruntime.dll (installer-bundled layout)
+            //   3. XDG data: ~/.local/share/temper/lib/libonnxruntime.{dylib,so}
+            //   4. Homebrew ARM64: /opt/homebrew/lib/libonnxruntime.dylib
+            //   5. Homebrew Intel: /usr/local/lib/libonnxruntime.dylib
+            //   6. Linux system: /usr/lib/libonnxruntime.so
+            let dylib_path = std::env::var("ORT_DYLIB_PATH")
+                .ok()
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    std::env::current_exe().ok().and_then(|exe| {
+                        resolve_dylib_from_candidates(&binary_adjacent_candidates(&exe))
+                    })
+                })
+                .or_else(|| resolve_dylib_from_candidates(&xdg_data_candidates()))
+                .or_else(|| {
+                    resolve_dylib_from_candidates(&[
+                        std::path::PathBuf::from("/opt/homebrew/lib/libonnxruntime.dylib"),
+                        std::path::PathBuf::from("/usr/local/lib/libonnxruntime.dylib"),
+                        std::path::PathBuf::from("/usr/lib/libonnxruntime.so"),
+                    ])
+                })
+                .map(|p| p.to_string_lossy().into_owned());
 
             if let Some(path) = dylib_path {
                 ort::init_from(path)
@@ -446,5 +498,93 @@ mod tests {
         let sim_related: f32 = v1.iter().zip(&v2).map(|(a, b)| a * b).sum();
         let sim_unrelated: f32 = v1.iter().zip(&v3).map(|(a, b)| a * b).sum();
         assert!(sim_related > sim_unrelated);
+    }
+
+    // -- Dylib discovery fallback chain --
+    //
+    // These tests exercise the pure helpers extracted from the ORT init logic.
+    // They don't actually load ONNX — just verify path selection against a
+    // constructed set of candidate paths.
+
+    use std::fs;
+
+    fn make_dummy_lib(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, b"not a real library").expect("write dummy lib");
+        path
+    }
+
+    #[test]
+    fn resolve_picks_first_existing_candidate() {
+        let tmp = tempfile::tempdir().unwrap();
+        let first = make_dummy_lib(tmp.path(), "first.dylib");
+        let second = make_dummy_lib(tmp.path(), "second.dylib");
+
+        let picked = super::resolve_dylib_from_candidates(&[first.clone(), second.clone()]);
+
+        assert_eq!(picked, Some(first));
+    }
+
+    #[test]
+    fn resolve_skips_missing_candidates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist.dylib");
+        let exists = make_dummy_lib(tmp.path(), "real.dylib");
+
+        let picked = super::resolve_dylib_from_candidates(&[missing, exists.clone()]);
+
+        assert_eq!(picked, Some(exists));
+    }
+
+    #[test]
+    fn resolve_returns_none_when_all_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let candidates = vec![tmp.path().join("a.dylib"), tmp.path().join("b.dylib")];
+
+        let picked = super::resolve_dylib_from_candidates(&candidates);
+
+        assert_eq!(picked, None);
+    }
+
+    #[test]
+    fn binary_adjacent_candidates_include_lib_subdir_and_flat() {
+        // Given an exe at /opt/tool/bin/temper, candidates should include both
+        // /opt/tool/bin/lib/libonnxruntime.{dylib,so} (installed-tree layout)
+        // and /opt/tool/bin/onnxruntime.dll (Windows flat layout).
+        let fake_exe = std::path::PathBuf::from("/opt/tool/bin/temper");
+        let candidates = super::binary_adjacent_candidates(&fake_exe);
+
+        let as_str: Vec<String> = candidates
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(
+            as_str
+                .iter()
+                .any(|s| s.ends_with("lib/libonnxruntime.dylib")),
+            "missing lib/libonnxruntime.dylib: {as_str:?}"
+        );
+        assert!(
+            as_str.iter().any(|s| s.ends_with("lib/libonnxruntime.so")),
+            "missing lib/libonnxruntime.so: {as_str:?}"
+        );
+        assert!(
+            as_str.iter().any(|s| s.ends_with("onnxruntime.dll")),
+            "missing onnxruntime.dll: {as_str:?}"
+        );
+    }
+
+    #[test]
+    fn xdg_data_candidates_point_at_temper_lib() {
+        let candidates = super::xdg_data_candidates();
+        let as_str: Vec<String> = candidates
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            as_str.iter().any(|s| s.contains("/temper/lib/")),
+            "candidates should include ~/.local/share/temper/lib/: {as_str:?}"
+        );
     }
 }

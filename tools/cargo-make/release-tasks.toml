@@ -1,0 +1,38 @@
+# tools/cargo-make/release-tasks.toml
+#
+# Release preparation tasks. Wires the scripts under
+# tools/scripts/release/ into cargo-make for easy invocation.
+#
+# Primary entrypoints:
+#   cargo make release-check    — dry-run: what would release-prepare do?
+#   cargo make release-prepare  — real run: bump version, open release PR
+#
+# See: docs/superpowers/specs/2026-04-17-temper-cli-binary-release-design.md
+
+[tasks.release-check]
+description = "Dry-run release preparation — detect changes, show next version"
+category = "Release"
+script = [
+    "./tools/scripts/release/release-prepare.sh --dry-run"
+]
+
+[tasks.release-prepare]
+description = "Bump version, create release branch, and open release PR"
+category = "Release"
+script = [
+    "./tools/scripts/release/release-prepare.sh"
+]
+
+[tasks.release-prepare-minor]
+description = "Release-prepare with a minor bump (0.1.x -> 0.2.0)"
+category = "Release"
+script = [
+    "./tools/scripts/release/release-prepare.sh --bump minor"
+]
+
+[tasks.release-prepare-major]
+description = "Release-prepare with a major bump (0.x.y -> 1.0.0)"
+category = "Release"
+script = [
+    "./tools/scripts/release/release-prepare.sh --bump major"
+]
