@@ -1,0 +1,181 @@
+name: Build CLI Binaries
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version string for artifact naming (without leading v)'
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string for artifact naming'
+        required: false
+        default: 'dev'
+
+env:
+  ONNX_RUNTIME_VERSION: '1.24.2'
+
+jobs:
+  build:
+    name: ${{ matrix.target.name }}
+    runs-on: ${{ matrix.target.runner }}
+    timeout-minutes: 30
+    env:
+      SQLX_OFFLINE: 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: darwin-arm64
+            runner: macos-14
+            triple: aarch64-apple-darwin
+            ort_archive: onnxruntime-osx-arm64
+            ort_archive_ext: tgz
+            lib_name: libonnxruntime.dylib
+            lib_dest_dir: lib
+            archive_ext: tar.gz
+          - name: linux-x64
+            runner: ubuntu-22.04
+            triple: x86_64-unknown-linux-gnu
+            ort_archive: onnxruntime-linux-x64
+            ort_archive_ext: tgz
+            lib_name: libonnxruntime.so
+            lib_dest_dir: lib
+            archive_ext: tar.gz
+          - name: windows-x64
+            runner: windows-2022
+            triple: x86_64-pc-windows-msvc
+            ort_archive: onnxruntime-win-x64
+            ort_archive_ext: zip
+            lib_name: onnxruntime.dll
+            lib_dest_dir: .
+            archive_ext: zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target.triple }}
+
+      - name: Setup Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target.triple }}
+
+      - name: Build temper CLI (${{ matrix.target.triple }})
+        shell: bash
+        run: |
+          cargo build \
+            --release \
+            --package temper-cli \
+            --target ${{ matrix.target.triple }} \
+            --features embed,extract,hnsw
+
+      - name: Download ONNX Runtime (${{ matrix.target.name }})
+        shell: bash
+        run: |
+          ORT_VER="${{ env.ONNX_RUNTIME_VERSION }}"
+          ORT_NAME="${{ matrix.target.ort_archive }}-${ORT_VER}"
+          ORT_EXT="${{ matrix.target.ort_archive_ext }}"
+          ORT_URL="https://github.com/microsoft/onnxruntime/releases/download/v${ORT_VER}/${ORT_NAME}.${ORT_EXT}"
+
+          mkdir -p ort-staging
+          echo "Downloading ${ORT_URL}..."
+          curl -fsSL -o "ort-staging/ort.${ORT_EXT}" "$ORT_URL"
+
+          echo "Extracting..."
+          if [[ "$ORT_EXT" == "tgz" ]]; then
+            tar -xzf "ort-staging/ort.${ORT_EXT}" -C ort-staging
+          else
+            7z x "ort-staging/ort.${ORT_EXT}" -oort-staging -y >/dev/null
+          fi
+
+          echo "Contents:"
+          find ort-staging -name 'libonnxruntime*' -o -name 'onnxruntime.dll' | head -20
+
+      - name: Assemble archive contents
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          TARGET="${{ matrix.target.triple }}"
+          STAGING="staging"
+          rm -rf "$STAGING"
+          mkdir -p "$STAGING/${{ matrix.target.lib_dest_dir }}"
+
+          BIN_SRC="target/${TARGET}/release/temper"
+          if [[ "${{ matrix.target.name }}" == "windows-x64" ]]; then
+            BIN_SRC="${BIN_SRC}.exe"
+            cp "$BIN_SRC" "$STAGING/temper.exe"
+          else
+            cp "$BIN_SRC" "$STAGING/temper"
+            chmod +x "$STAGING/temper"
+          fi
+
+          ORT_LIB=$(find ort-staging -name '${{ matrix.target.lib_name }}' -type f | head -n1)
+          if [[ -z "$ORT_LIB" ]]; then
+            echo "::error::Could not locate ${{ matrix.target.lib_name }} in extracted archive"
+            find ort-staging -type f | head -50
+            exit 1
+          fi
+
+          if [[ "${{ matrix.target.lib_dest_dir }}" == "." ]]; then
+            cp "$ORT_LIB" "$STAGING/${{ matrix.target.lib_name }}"
+          else
+            cp "$ORT_LIB" "$STAGING/${{ matrix.target.lib_dest_dir }}/${{ matrix.target.lib_name }}"
+          fi
+
+          cp LICENSE "$STAGING/"
+          cat > "$STAGING/README-INSTALL.txt" <<EOF
+          temper v${VERSION} — ${TARGET}
+
+          Install this archive via:
+            https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh
+          or
+            https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1
+
+          See full install docs at:
+            https://github.com/tasker-systems/temper/blob/main/docs/guides/install.md
+          EOF
+
+          echo "Staging contents:"
+          find "$STAGING" -type f
+
+      - name: Create archive (tar.gz)
+        if: matrix.target.archive_ext == 'tar.gz'
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          TARGET="${{ matrix.target.triple }}"
+          ARCHIVE="temper-v${VERSION}-${TARGET}.tar.gz"
+          tar -czf "$ARCHIVE" -C staging .
+          ls -lh "$ARCHIVE"
+          shasum -a 256 "$ARCHIVE" > "${ARCHIVE}.sha256"
+          cat "${ARCHIVE}.sha256"
+
+      - name: Create archive (zip)
+        if: matrix.target.archive_ext == 'zip'
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          TARGET="${{ matrix.target.triple }}"
+          ARCHIVE="temper-v${VERSION}-${TARGET}.zip"
+          (cd staging && 7z a -tzip "../${ARCHIVE}" . >/dev/null)
+          ls -lh "$ARCHIVE"
+          sha256sum "$ARCHIVE" > "${ARCHIVE}.sha256"
+          cat "${ARCHIVE}.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cli-v${{ inputs.version }}-${{ matrix.target.name }}
+          path: |
+            temper-v${{ inputs.version }}-*.tar.gz
+            temper-v${{ inputs.version }}-*.zip
+            temper-v${{ inputs.version }}-*.sha256
+          retention-days: 7
+          if-no-files-found: error
