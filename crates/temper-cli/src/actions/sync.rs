@@ -1113,6 +1113,85 @@ async fn pull_resource(
     }
 }
 
+/// Pull a single resource from the server.
+///
+/// With `Some(manifest)` and a tracked entry, writes to the manifest-resolved
+/// vault path and updates the entry (hashes, state=Clean, synced_at). With
+/// `None` or an untracked id, writes a snapshot as `{id}.md` under
+/// `vault_root` — the manifest-less branch preserves the ADDED behavior from
+/// `commands/pull.rs`.
+pub async fn pull_one_resource(
+    client: &temper_client::TemperClient,
+    vault_root: &Path,
+    resource_id: ResourceId,
+    manifest: Option<&mut Manifest>,
+) -> Result<PullResult> {
+    let id = Uuid::from(resource_id);
+
+    let resource = client
+        .resources()
+        .get(id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    let content_response = client
+        .resources()
+        .content(id)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    // Manifest-tracked branch: only when we have a manifest AND the id is in it.
+    if let Some(manifest) = manifest {
+        if let Some(entry) = manifest.entries.get_mut(&resource_id) {
+            let vault_path = vault_root.join(&entry.path);
+            if let Some(parent) = vault_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let (ctx, dtype) = match Vault::parse_rel(&entry.path) {
+                Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+                None => ("default".to_string(), "resource".to_string()),
+            };
+            let managed_value = content_response
+                .managed_meta
+                .as_ref()
+                .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
+            let fm = ingest::build_frontmatter_from_resource(
+                &resource,
+                &ctx,
+                &dtype,
+                ingest::normalize_body_for_vault(&content_response.markdown),
+                managed_value.as_ref(),
+                content_response.open_meta.as_ref(),
+            )?;
+            fm.write_to(&vault_path).map_err(|e| {
+                TemperError::Vault(format!("pull write {}: {e}", vault_path.display()))
+            })?;
+
+            let content_hash = temper_core::hash::compute_body_hash(fm.body());
+            entry.body_hash = content_hash.clone();
+            entry.remote_body_hash = content_hash;
+            entry.synced_at = chrono::Utc::now();
+            entry.state = ManifestEntryState::Clean;
+
+            return Ok(PullResult {
+                resource_id,
+                path: vault_path,
+                branch: PullBranch::ManifestTracked,
+            });
+        }
+    }
+
+    // Snapshot branch: no manifest, or id not tracked. Write to vault_root
+    // as `{id}.md`. Matches the ADDED branch in `commands/pull.rs` today.
+    let filename = format!("{id}.md");
+    let snapshot_path = vault_root.join(&filename);
+    std::fs::write(&snapshot_path, &content_response.markdown)?;
+    Ok(PullResult {
+        resource_id,
+        path: snapshot_path,
+        branch: PullBranch::Snapshot,
+    })
+}
+
 /// Relocation guard for meta-only pulls.
 ///
 /// A meta-only pull must not change the file's vault location — doing so
