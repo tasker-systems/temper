@@ -119,6 +119,32 @@ ENVEOF
 generate_env
 
 # ---------------------------------------------------------------------------
+# Phase 3a: git-lfs (required by pre-push hook + onnxruntime binary assets)
+# ---------------------------------------------------------------------------
+# The repo's `githooks/pre-push` invokes `git lfs pre-push`, so git-lfs must
+# be installed for any session that intends to push. Separately,
+# onnxruntime-node ships model binaries through LFS — another hard requirement.
+# Cheap to install (~2s apt), safe to skip silently if already present.
+ensure_git_lfs() {
+  if command_exists git-lfs; then
+    log_ok "git-lfs already installed ($(git-lfs version 2>/dev/null | head -1))"
+    return
+  fi
+  if command_exists apt-get; then
+    if sudo apt-get install -y -qq git-lfs >/dev/null 2>&1; then
+      git lfs install --skip-repo >/dev/null 2>&1 || true
+      log_ok "git-lfs installed via apt"
+    else
+      log_warn "git-lfs install failed — pushes will fail until resolved"
+    fi
+  else
+    log_warn "git-lfs not installed and no apt-get — install manually to enable pushes"
+  fi
+}
+
+ensure_git_lfs
+
+# ---------------------------------------------------------------------------
 # Phase 3b: SvelteKit UI env stubs + node_modules
 # ---------------------------------------------------------------------------
 # The SvelteKit app imports env vars from `$env/static/private` at module
@@ -158,6 +184,69 @@ if command_exists bun; then
 else
   log_warn "bun not installed — skipping node_modules (install via setup-claude-web-full.sh)"
 fi
+
+# ---------------------------------------------------------------------------
+# Phase 3c: temper CLI (so the agent can dogfood the product it's editing)
+# ---------------------------------------------------------------------------
+# Uses the one-liner release installer from README.md, which drops a
+# binary symlink at ~/.local/bin/temper. Skipped if `temper` is already on
+# PATH or present at a standard install location — e.g. a pre-populated
+# image, a local build (~/.cargo/bin/temper from `cargo install --path`),
+# or a previous run of this script.
+#
+# Cloud sessions don't yet have credentials to hit temper-cloud — the
+# JWT-for-agents work is tracked separately — so the CLI works for
+# `--help`, `--version`, `init`, and local-vault commands, but NOT
+# `sync`, `push`, etc. Still valuable for reading the help surface,
+# running doctor, and testing changes to the CLI itself.
+# Known-good fallback version, used when the installer's "latest" GitHub
+# API call gets rate-limited (common in cloud sandboxes — returns 403).
+# Bump this when you cut a new release; $TEMPER_CLI_VERSION env var wins.
+TEMPER_CLI_FALLBACK_VERSION="v0.1.2"
+
+install_temper_cli() {
+  if command_exists temper; then
+    log_ok "temper CLI already on PATH ($(command -v temper))"
+    return
+  fi
+  for candidate in "$HOME/.local/bin/temper" "$HOME/.cargo/bin/temper"; do
+    if [ -x "$candidate" ]; then
+      log_ok "temper CLI found at $candidate (not on PATH — add its dir to PATH)"
+      return
+    fi
+  done
+  if ! command_exists curl; then
+    log_warn "temper CLI not installed and curl unavailable — skipping"
+    return
+  fi
+
+  local installer="https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh"
+  local pin="${TEMPER_CLI_VERSION:-}"
+  local log="/tmp/temper-install.log"
+
+  # If a pin is set, go straight there. Otherwise try "latest" (one GitHub API
+  # call inside the installer); if that 403s from rate-limiting, retry with
+  # the hardcoded fallback version which goes straight to the release download.
+  if [ -n "$pin" ]; then
+    if curl -fsSL "$installer" | sh -s -- --version "$pin" >"$log" 2>&1; then
+      log_ok "temper CLI $pin installed to \$HOME/.local/bin/temper"
+      return
+    fi
+  else
+    if curl -fsSL "$installer" | sh >"$log" 2>&1; then
+      log_ok "temper CLI (latest) installed to \$HOME/.local/bin/temper"
+      return
+    fi
+    if curl -fsSL "$installer" | sh -s -- --version "$TEMPER_CLI_FALLBACK_VERSION" >"$log" 2>&1; then
+      log_ok "temper CLI $TEMPER_CLI_FALLBACK_VERSION installed (GitHub API unavailable, used pinned fallback)"
+      return
+    fi
+  fi
+
+  log_warn "temper CLI install failed (non-fatal) — see $log for details"
+}
+
+install_temper_cli
 
 # ---------------------------------------------------------------------------
 # Phase 4: Detect available tools and services
