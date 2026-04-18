@@ -42,7 +42,7 @@ cargo install --path crates/temper-cli</code></pre>
     </table>
 
     <h3>Resources</h3>
-    <p style="font-family: var(--font-serif); font-size: 0.9rem; color: var(--text-mid); margin-bottom: 0.75rem;">
+    <p style="font-family: var(--font-serif); font-size: 0.9rem; color: var(--chalk); margin-bottom: 0.75rem;">
       All document types (task, goal, session, research, concept, decision) are managed through
       the unified <code>resource</code> command with <code>--type</code>.
     </p>
@@ -179,14 +179,14 @@ cargo install --path crates/temper-cli</code></pre>
     font-family: var(--font-serif);
     font-size: 2.2rem;
     font-weight: 300;
-    color: var(--text);
+    color: var(--parchment);
     margin-bottom: 0.75rem;
   }
 
   .lede {
     font-family: var(--font-serif);
     font-size: 1.05rem;
-    color: var(--text-mid);
+    color: var(--chalk);
     line-height: 1.8;
     margin-bottom: 3rem;
   }
@@ -201,7 +201,7 @@ cargo install --path crates/temper-cli</code></pre>
     font-family: var(--font-mono);
     font-size: 0.8rem;
     font-weight: 600;
-    color: var(--blue);
+    color: var(--temper-blue);
     letter-spacing: 0.12em;
     text-transform: uppercase;
     margin-bottom: 1.25rem;
@@ -211,7 +211,7 @@ cargo install --path crates/temper-cli</code></pre>
     font-family: var(--font-mono);
     font-size: 0.7rem;
     font-weight: 500;
-    color: var(--text-dim);
+    color: var(--graphite);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     margin-top: 1.5rem;
@@ -221,19 +221,19 @@ cargo install --path crates/temper-cli</code></pre>
   p {
     font-family: var(--font-serif);
     font-size: 0.95rem;
-    color: var(--text-mid);
+    color: var(--chalk);
     line-height: 1.8;
     margin-bottom: 1rem;
   }
 
   a {
-    color: var(--blue);
+    color: var(--temper-blue);
     text-decoration: none;
     transition: color 0.2s;
   }
 
   a:hover {
-    color: var(--text);
+    color: var(--parchment);
   }
 
   table {
@@ -253,11 +253,11 @@ cargo install --path crates/temper-cli</code></pre>
   td:first-child {
     white-space: nowrap;
     padding-right: 1.5rem;
-    color: var(--text);
+    color: var(--parchment);
   }
 
   td:last-child {
-    color: var(--text-dim);
+    color: var(--graphite);
     font-family: var(--font-serif);
     font-size: 0.82rem;
   }
@@ -281,7 +281,7 @@ cargo install --path crates/temper-cli</code></pre>
   }
 
   .cli-block code {
-    color: var(--text);
+    color: var(--parchment);
     font-size: 0.72rem;
     line-height: 1.7;
   }
@@ -291,11 +291,11 @@ cargo install --path crates/temper-cli</code></pre>
     margin-top: 1rem;
     font-family: var(--font-mono);
     font-size: 0.75rem;
-    color: var(--text-dim);
+    color: var(--graphite);
     letter-spacing: 0.05em;
   }
 
   .back-link:hover {
-    color: var(--blue);
+    color: var(--temper-blue);
   }
 </style>

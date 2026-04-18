@@ -328,11 +328,11 @@
 
 <style>
   .hero { min-height: 60vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 6rem 2.5rem 2rem; }
-  .hero-label { font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--blue); margin-bottom: 1.5rem; }
-  .hero h1 { font-family: var(--font-serif); font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 300; line-height: 1.2; margin-bottom: 1.5rem; letter-spacing: 0.02em; color: var(--text); }
-  .hero h1 em { color: var(--blue); font-style: italic; }
-  .tagline { font-family: var(--font-serif); font-size: 1.1rem; color: var(--text-dim); font-style: italic; max-width: 36em; line-height: 1.7; }
-  .cmd-inline { font-family: var(--font-mono); font-size: 0.85rem; color: var(--blue); }
+  .hero-label { font-family: var(--font-mono); font-size: 0.65rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--temper-blue); margin-bottom: 1.5rem; }
+  .hero h1 { font-family: var(--font-serif); font-size: clamp(2.4rem, 5vw, 3.8rem); font-weight: 300; line-height: 1.2; margin-bottom: 1.5rem; letter-spacing: 0.02em; color: var(--parchment); }
+  .hero h1 em { color: var(--temper-blue); font-style: italic; }
+  .tagline { font-family: var(--font-serif); font-size: 1.1rem; color: var(--graphite); font-style: italic; max-width: 36em; line-height: 1.7; }
+  .cmd-inline { font-family: var(--font-mono); font-size: 0.85rem; color: var(--temper-blue); }
   .vault-visual, .graph-visual, .cloud-visual, .sync-visual { margin: 2rem 0 1.5rem; }
   .vault-svg, .graph-svg, .cloud-svg, .sync-svg { width: 100%; max-width: 560px; display: block; }
 </style>

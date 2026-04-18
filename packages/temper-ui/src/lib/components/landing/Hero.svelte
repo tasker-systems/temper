@@ -45,18 +45,18 @@
     line-height: 1.2;
     margin-bottom: 1.5rem;
     letter-spacing: 0.02em;
-    color: var(--text);
+    color: var(--parchment);
   }
 
   h1 em {
-    color: var(--blue);
+    color: var(--temper-blue);
     font-style: italic;
   }
 
   .tagline {
     font-family: var(--font-serif);
     font-size: 1.1rem;
-    color: var(--text-dim);
+    color: var(--graphite);
     font-style: italic;
     max-width: 36em;
     margin-bottom: 3rem;
@@ -64,7 +64,7 @@
   }
 
   .tagline-brand {
-    color: var(--blue);
+    color: var(--temper-blue);
     font-style: normal;
     font-family: var(--font-mono);
     font-size: 1rem;
@@ -87,8 +87,8 @@
   }
 
   .hero-ctas .primary {
-    border: 1px solid var(--blue-border);
-    color: var(--blue);
+    border: 1px solid var(--temper-blue-border);
+    color: var(--temper-blue);
   }
 
   .hero-ctas .primary:hover {
@@ -97,12 +97,12 @@
 
   .hero-ctas .secondary {
     border: 1px solid rgba(255, 255, 255, 0.12);
-    color: var(--text-dim);
+    color: var(--graphite);
   }
 
   .hero-ctas .secondary:hover {
     border-color: rgba(255, 255, 255, 0.25);
-    color: var(--text-mid);
+    color: var(--chalk);
   }
 
   .cli-wrapper {

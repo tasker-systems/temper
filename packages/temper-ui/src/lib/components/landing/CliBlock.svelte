@@ -20,12 +20,12 @@
   }
 
   .cli-block :global(.cli-prompt) {
-    color: var(--text-mid);
+    color: var(--chalk);
     margin-bottom: 0.8rem;
   }
 
   .cli-block :global(.cmd) {
-    color: var(--blue);
+    color: var(--temper-blue);
   }
 
   .cli-block :global(.flag) {
@@ -34,7 +34,7 @@
 
   .cli-block :global(.cli-results) {
     font-size: 0.7rem;
-    color: var(--text-dim);
+    color: var(--graphite);
   }
 
   .cli-block :global(.cli-result) {
@@ -49,6 +49,6 @@
   }
 
   .cli-block :global(.cli-score) {
-    color: var(--blue-dim);
+    color: var(--temper-blue-dim);
   }
 </style>

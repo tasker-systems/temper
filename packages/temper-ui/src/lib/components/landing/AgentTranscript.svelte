@@ -55,7 +55,7 @@
   }
 
   .role {
-    color: var(--blue-dim);
+    color: var(--temper-blue-dim);
     font-size: 0.6rem;
     margin-bottom: 0.4rem;
   }
@@ -91,6 +91,6 @@
   }
 
   .highlight {
-    color: var(--blue);
+    color: var(--temper-blue);
   }
 </style>
