@@ -62,19 +62,26 @@ Temper gives agents the same throughline that humans carry in their heads: what 
 
 If it can read files, it can use temper.
 
-## Installation
+## Install
+
+The fastest way to try temper is the one-liner installer — no Rust toolchain needed.
+
+**macOS (Apple Silicon) and Linux (x86_64):**
 
 ```bash
-cargo install temper-cli
+curl -fsSL https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh | sh
 ```
 
-Or build from source:
+**Windows (x86_64, PowerShell):**
 
-```bash
-git clone https://github.com/tasker-systems/temper.git
-cd temper
-cargo install --path crates/temper-cli
+```powershell
+irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.ps1 | iex
 ```
+
+> Windows support is experimental in v0.1.x — please file issues at
+> https://github.com/tasker-systems/temper/issues if you hit problems.
+
+For version pinning, uninstall instructions, and building from source (including Linux arm64 and Intel Mac), see [docs/guides/install.md](docs/guides/install.md).
 
 ## Quick Start
 
