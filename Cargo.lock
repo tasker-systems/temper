@@ -4997,7 +4997,6 @@ dependencies = [
  "anstream 0.6.21",
  "anstyle",
  "askama",
- "base64 0.22.1",
  "chrono",
  "clap",
  "dialoguer",

@@ -40,36 +40,8 @@ pub fn logout() -> Result<()> {
 /// Useful for API-only clients, CI environments, or bootstrapping
 /// when the browser OAuth flow isn't available yet.
 pub fn token(jwt: &str, provider: &str) -> Result<()> {
-    // Decode the JWT payload to extract expiry (without verifying signature)
-    let parts: Vec<&str> = jwt.split('.').collect();
-    if parts.len() != 3 {
-        return Err(crate::error::TemperError::Config(
-            "invalid JWT format — expected header.payload.signature".into(),
-        ));
-    }
-
-    // Decode the payload (base64url → JSON)
-    use base64::Engine;
-    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    let payload_bytes = engine
-        .decode(parts[1])
-        .map_err(|e| crate::error::TemperError::Config(format!("JWT decode error: {e}")))?;
-    let payload: serde_json::Value = serde_json::from_slice(&payload_bytes)
-        .map_err(|e| crate::error::TemperError::Config(format!("JWT payload parse error: {e}")))?;
-
-    let exp = payload
-        .get("exp")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| crate::error::TemperError::Config("JWT missing 'exp' claim".into()))?;
-
-    let expires_at = chrono::DateTime::from_timestamp(exp, 0).ok_or_else(|| {
-        crate::error::TemperError::Config("invalid 'exp' timestamp in JWT".into())
-    })?;
-
-    let profile_id = payload
-        .get("sub")
-        .and_then(|v| v.as_str())
-        .and_then(|s| uuid::Uuid::parse_str(s).ok());
+    let claims = temper_client::auth::parse_jwt_claims(jwt)
+        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
 
     let device_id = temper_client::auth::load_or_create_device_id();
 
@@ -77,8 +49,8 @@ pub fn token(jwt: &str, provider: &str) -> Result<()> {
         provider: provider.to_string(),
         access_token: jwt.to_string(),
         refresh_token: None,
-        expires_at,
-        profile_id,
+        expires_at: claims.expires_at,
+        profile_id: claims.profile_id,
         device_id: Some(device_id),
     };
 
