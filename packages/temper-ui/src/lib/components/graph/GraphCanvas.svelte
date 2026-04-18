@@ -57,6 +57,8 @@
 	onMount(() => {
 		if (!svgEl) return;
 
+		let didDrag = false;
+
 		const positions = seedPositions(nodes, edges, { width, height });
 		const simNodes = toSimulationNodes(nodes, positions);
 		const simLinks = toSimulationLinks(edges);
@@ -95,6 +97,8 @@
 			.append('g')
 			.attr('cursor', 'pointer')
 			.on('click', (_ev, d) => {
+				// suppress click fired at end of a drag
+				if (didDrag) return;
 				goto(resourceHref(owner, context, d));
 			})
 			.on('mouseenter', function (ev, d) {
@@ -132,11 +136,13 @@
 		// Drag
 		const dragBehavior = d3drag<SVGGElement, SimulationNode>()
 			.on('start', (ev: D3DragEvent<SVGGElement, SimulationNode, unknown>, d) => {
+				didDrag = false;
 				if (!ev.active && sim) sim.alphaTarget(0.3).restart();
 				d.fx = d.x;
 				d.fy = d.y;
 			})
 			.on('drag', (ev, d) => {
+				didDrag = true;
 				d.fx = ev.x;
 				d.fy = ev.y;
 			})
