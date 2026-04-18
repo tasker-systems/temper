@@ -394,6 +394,47 @@ Evaluated three OAuth/identity providers for the acme-app authentication layer.
 
 DROP FUNCTION _seed_content;
 
+-- ─── Relationships (edges) for graph visualization ─────────────────────────
+-- Each edge source is a concept; target is a related task/research/session.
+-- Also a couple of inter-member edges so depth-2 BFS expansion has reach.
+
+DO $$
+DECLARE v_pid UUID := current_setting('seed.profile_id')::uuid;
+BEGIN
+    -- Idempotency concept → related task/research
+    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
+        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000001',
+         'a0000000-0002-0000-0000-000000000005', 'relates_to', 1.0, '{}', v_pid),
+        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000001',
+         'a0000000-0004-0000-0000-000000000002', 'relates_to', 1.0, '{}', v_pid)
+    ON CONFLICT DO NOTHING;
+
+    -- Zero-copy concept (learning) → rust research / session
+    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
+        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000002',
+         'a0000000-0004-0000-0000-000000000004', 'relates_to', 1.0, '{}', v_pid),
+        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000002',
+         'a0000000-0003-0000-0000-000000000007', 'relates_to', 1.0, '{}', v_pid)
+    ON CONFLICT DO NOTHING;
+
+    -- Circuit breaker concept → related research/task/session
+    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
+        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000003',
+         'a0000000-0002-0000-0000-000000000001', 'relates_to', 1.0, '{}', v_pid),
+        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000003',
+         'a0000000-0004-0000-0000-000000000001', 'relates_to', 1.0, '{}', v_pid),
+        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000003',
+         'a0000000-0003-0000-0000-000000000001', 'relates_to', 1.0, '{}', v_pid)
+    ON CONFLICT DO NOTHING;
+
+    -- Inter-member: research depends_on research (tier-3 expansion signal)
+    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
+        (gen_random_uuid(), 'a0000000-0004-0000-0000-000000000002',
+         'a0000000-0004-0000-0000-000000000001', 'depends_on', 1.0, '{}', v_pid)
+    ON CONFLICT DO NOTHING;
+END;
+$$;
+
 -- ─── Cleanup ───────────────────────────────────────────────────────────────
 
 DROP FUNCTION _seed_resource;
@@ -406,6 +447,7 @@ COMMIT;
 \echo ''
 \echo '  Contexts: acme-app, infrastructure, learning'
 \echo '  Resources: 3 goals, 8 tasks, 7 sessions, 4 research, 3 decisions, 3 concepts'
+\echo '  Edges: ~8 concept member edges for graph visualization'
 \echo ''
 \echo '  Profile email set to:' :seed_email
 \echo '  Log in via Auth0 with that email and the vault browser will show seed data.'
