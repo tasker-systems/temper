@@ -10,6 +10,12 @@ on:
         description: 'Tag to release (e.g. v0.1.0)'
         required: true
         type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g. v0.1.0)'
+        required: true
+        type: string
 
 concurrency:
   group: release
@@ -26,7 +32,7 @@ jobs:
       - name: Extract version from tag
         id: version
         run: |
-          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+          if [[ -n "${{ inputs.tag }}" ]]; then
             TAG="${{ inputs.tag }}"
           else
             TAG="${{ github.ref_name }}"
@@ -35,39 +41,9 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "Releasing temper v${VERSION}"
 
-  pre-flight-check:
-    name: Pre-flight Validation
-    runs-on: ubuntu-22.04
-    timeout-minutes: 15
-    needs: determine-version
-    env:
-      SQLX_OFFLINE: 'true'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - name: Setup Rust build cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: release-preflight
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --package temper-cli --all-features -- -D warnings
-
-      - name: Release build smoke test
-        run: cargo build --release --package temper-cli --features embed,extract,hnsw
-
   build-cli-binaries:
     name: Build CLI Binaries
-    needs: [determine-version, pre-flight-check]
+    needs: determine-version
     permissions:
       contents: read
     uses: ./.github/workflows/build-cli-binaries.yml
@@ -87,53 +63,43 @@ jobs:
         uses: actions/checkout@v6
 
       - name: Download CLI binary artifacts
-        if: needs.build-cli-binaries.result == 'success' || needs.build-cli-binaries.result == 'failure'
+        if: needs.build-cli-binaries.result == 'success'
         uses: actions/download-artifact@v8
         with:
           pattern: cli-v${{ needs.determine-version.outputs.version }}-*
           path: cli-artifacts/
           merge-multiple: true
 
-      - name: List artifacts
-        run: |
-          if [[ -d cli-artifacts ]]; then
-            find cli-artifacts -type f | sort
-          else
-            echo "No artifacts downloaded."
-          fi
-
-      # Note: needs.build-cli-binaries.result is a single aggregate value for
-      # the whole reusable workflow — GitHub Actions does not expose per-matrix
-      # results through workflow_call outputs. All three *_RESULT vars get the
-      # same aggregate, so a single-platform failure fails the whole release.
-      # We accept this v1 tradeoff; per-platform granularity would require the
-      # reusable workflow to emit named outputs per job.
-      - name: Check for build failures
-        id: check-failures
-        env:
-          DARWIN_ARM64_RESULT: ${{ needs.build-cli-binaries.result }}
-          LINUX_X64_RESULT: ${{ needs.build-cli-binaries.result }}
-          WINDOWS_X64_RESULT: ${{ needs.build-cli-binaries.result }}
-        run: ./.github/scripts/release/check-failures.sh
-
-      - name: Generate summary
+      - name: Write job summary
         env:
           VERSION: ${{ needs.determine-version.outputs.version }}
-          DARWIN_ARM64_RESULT: ${{ needs.build-cli-binaries.result }}
-          LINUX_X64_RESULT: ${{ needs.build-cli-binaries.result }}
-          WINDOWS_X64_RESULT: ${{ needs.build-cli-binaries.result }}
-        run: ./.github/scripts/release/generate-summary.sh
+          BUILD_RESULT: ${{ needs.build-cli-binaries.result }}
+        run: |
+          case "$BUILD_RESULT" in
+            success)   ICON="✅" ;;
+            failure)   ICON="❌" ;;
+            cancelled) ICON="⏹️" ;;
+            skipped)   ICON="⏭️" ;;
+            *)         ICON="❓" ;;
+          esac
+          {
+            echo "## Release v${VERSION}"
+            echo ""
+            echo "| Build matrix | Result |"
+            echo "|---|---|"
+            echo "| all platforms (darwin-arm64 / linux-x64 / windows-x64) | ${ICON} ${BUILD_RESULT} |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create GitHub Release
-        if: steps.check-failures.outputs.has_failures != 'true'
+        if: needs.build-cli-binaries.result == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.determine-version.outputs.version }}
           ARTIFACT_DIR: cli-artifacts
         run: ./.github/scripts/release/create-github-release.sh
 
-      - name: Fail the job if any build failed
-        if: steps.check-failures.outputs.has_failures == 'true'
+      - name: Fail the job if build did not succeed
+        if: needs.build-cli-binaries.result != 'success'
         run: |
-          echo "::error::One or more platform builds failed; release was not published."
+          echo "::error::build-cli-binaries result: ${{ needs.build-cli-binaries.result }} — release not published."
           exit 1

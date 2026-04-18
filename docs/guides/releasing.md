@@ -21,7 +21,7 @@ This guide is for maintainers cutting a new `temper` CLI release. End users look
 Three GitHub Actions workflows coordinate the release:
 
 1. **`release-tag.yml`** — fires when `main` receives a commit that changes `VERSION`. Reads the new version, creates and pushes an annotated `v<X.Y.Z>` tag. That's it.
-2. **`release.yml`** — fires on `v*` tag push. Runs pre-flight validation (fmt, clippy, release smoke build), then calls the reusable `build-cli-binaries.yml` to produce 3 platform archives, then creates a GitHub Release with attached artifacts.
+2. **`release.yml`** — fires on `v*` tag push (or via `workflow_call` from `release-tag.yml`, or manual `workflow_dispatch`). Calls the reusable `build-cli-binaries.yml` to produce 3 platform archives, then creates a GitHub Release with attached artifacts. There's no separate pre-flight validation step — the release PR's normal CI (fmt, clippy, tests) is the gate.
 3. **`build-cli-binaries.yml`** — a reusable workflow called by `release.yml`. Builds `temper` for macOS arm64, Linux x86_64, and Windows x86_64, bundles the matching ONNX Runtime library, and uploads per-platform archives plus SHA256 checksums.
 
 ## Cutting a Release
