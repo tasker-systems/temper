@@ -84,6 +84,9 @@ impl TokenStore for DiskTokenStore {
 /// stay in memory only; [`clear`](TokenStore::clear) wipes the slot.
 /// Deliberately does NOT derive `Serialize` — prevents future "log the whole
 /// client state as JSON" accidents.
+///
+/// Cloning this store produces a second handle to the **same** underlying
+/// slot — saves through one handle are visible to all clones.
 #[derive(Clone)]
 pub struct MemoryTokenStore {
     inner: std::sync::Arc<std::sync::RwLock<Option<StoredAuth>>>,
@@ -118,40 +121,52 @@ impl MemoryTokenStore {
             None => Ok(None),
         }
     }
+
+    /// Like [`from_env`](Self::from_env), but errors when `TEMPER_TOKEN` is
+    /// unset — the expected shape for cloud-mode dispatch where no disk
+    /// fallback is valid. Centralizes the canonical error message so it
+    /// can't drift across call sites.
+    pub fn from_env_required() -> Result<Self> {
+        Self::from_env()?.ok_or_else(|| {
+            ClientError::Other("TEMPER_VAULT_STATE=cloud but TEMPER_TOKEN is not set".into())
+        })
+    }
 }
 
 impl std::fmt::Debug for MemoryTokenStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let populated = self.inner.read().map(|g| g.is_some()).unwrap_or(false);
+        let state: &dyn std::fmt::Debug = match self.inner.read() {
+            Ok(g) => &g.is_some(),
+            Err(_) => &"<poisoned>",
+        };
         f.debug_struct("MemoryTokenStore")
-            .field("populated", &populated)
+            .field("populated", state)
             .finish()
     }
 }
 
 impl TokenStore for MemoryTokenStore {
+    // Poison recovery: a panic in an unrelated thread (OOM, agent-runner
+    // SIGSEGV, etc.) will poison the RwLock, but the token itself is still
+    // valid. The invariant here is "single `Option<StoredAuth>` cell" — a
+    // poisoned lock just means a previous guard was dropped during a panic.
+    // `PoisonError::into_inner()` returns the guard regardless, so we recover
+    // rather than killing every subsequent call. No dedicated unit test for
+    // this path: simulating a panic-poisoned RwLock in a test is fiddly and
+    // low-value relative to the existing happy-path coverage.
     fn load(&self) -> Result<Option<StoredAuth>> {
-        Ok(self
-            .inner
-            .read()
-            .map_err(|_| ClientError::Other("MemoryTokenStore lock poisoned".into()))?
-            .clone())
+        let guard = self.inner.read().unwrap_or_else(|e| e.into_inner());
+        Ok(guard.clone())
     }
 
     fn save(&self, auth: &StoredAuth) -> Result<()> {
-        let mut guard = self
-            .inner
-            .write()
-            .map_err(|_| ClientError::Other("MemoryTokenStore lock poisoned".into()))?;
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         *guard = Some(auth.clone());
         Ok(())
     }
 
     fn clear(&self) -> Result<()> {
-        let mut guard = self
-            .inner
-            .write()
-            .map_err(|_| ClientError::Other("MemoryTokenStore lock poisoned".into()))?;
+        let mut guard = self.inner.write().unwrap_or_else(|e| e.into_inner());
         *guard = None;
         Ok(())
     }
@@ -946,6 +961,22 @@ mod tests {
         assert_eq!(loaded.access_token.expose_secret(), jwt);
 
         clear_env();
+    }
+
+    #[test]
+    fn memory_token_store_from_env_required_errors_without_token() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+        let err = MemoryTokenStore::from_env_required().unwrap_err();
+        assert!(
+            matches!(err, ClientError::Other(_)),
+            "expected ClientError::Other, got {err:?}"
+        );
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("TEMPER_TOKEN"),
+            "error mentions TEMPER_TOKEN: {msg}"
+        );
     }
 
     #[test]
