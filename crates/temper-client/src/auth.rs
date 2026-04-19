@@ -361,7 +361,14 @@ pub fn auth_status() -> Result<AuthStatus> {
 #[derive(Debug, Clone)]
 pub struct JwtClaims {
     pub expires_at: DateTime<Utc>,
+    /// Only populated when `sub` parses as a UUID (our issuer's profile id).
+    /// Unit D tokens issued via Auth0 Management API may have non-UUID
+    /// subjects (e.g., `auth0|abc123`); use `sub` for the raw value.
     pub profile_id: Option<uuid::Uuid>,
+    /// The raw `sub` claim as a string, regardless of format. Preserved
+    /// for downstream callers (tracing, Unit D session-id extraction) that
+    /// need to distinguish "sub missing" from "sub present but not a UUID".
+    pub sub: Option<String>,
 }
 
 /// Decode a JWT payload (base64url → JSON) and extract `exp` and `sub` claims.
@@ -393,14 +400,17 @@ pub fn parse_jwt_claims(jwt: &str) -> Result<JwtClaims> {
     let expires_at = DateTime::from_timestamp(exp, 0)
         .ok_or_else(|| ClientError::Other("invalid 'exp' timestamp in JWT".into()))?;
 
-    let profile_id = payload
+    let sub = payload
         .get("sub")
         .and_then(|v| v.as_str())
-        .and_then(|s| uuid::Uuid::parse_str(s).ok());
+        .map(|s| s.to_string());
+
+    let profile_id = sub.as_deref().and_then(|s| uuid::Uuid::parse_str(s).ok());
 
     Ok(JwtClaims {
         expires_at,
         profile_id,
+        sub,
     })
 }
 
@@ -751,6 +761,48 @@ mod tests {
 
         let claims = parse_jwt_claims(&jwt).unwrap();
         assert!(claims.profile_id.is_none());
+    }
+
+    /// Plan-named alias over `fake_jwt`: kept distinct so future changes to
+    /// the "payload shaped test JWT" signature don't ripple into fake_jwt's
+    /// call sites. Both helpers delegate to the same base64url encoding.
+    fn make_test_jwt_with_payload(payload: &serde_json::Value) -> String {
+        fake_jwt(payload)
+    }
+
+    #[test]
+    fn parse_jwt_claims_preserves_non_uuid_sub() {
+        // Issuer pattern "auth0|abc123" — not a UUID.
+        let payload = serde_json::json!({
+            "exp": (Utc::now() + Duration::hours(1)).timestamp(),
+            "sub": "auth0|6123abcdef"
+        });
+        let jwt = make_test_jwt_with_payload(&payload);
+
+        let claims = parse_jwt_claims(&jwt).expect("parse");
+        assert!(
+            claims.profile_id.is_none(),
+            "non-UUID sub: profile_id stays None"
+        );
+        assert_eq!(
+            claims.sub.as_deref(),
+            Some("auth0|6123abcdef"),
+            "raw sub must be preserved for downstream (Unit D) callers"
+        );
+    }
+
+    #[test]
+    fn parse_jwt_claims_uuid_sub_populates_both_fields() {
+        let uuid = uuid::Uuid::now_v7();
+        let payload = serde_json::json!({
+            "exp": (Utc::now() + Duration::hours(1)).timestamp(),
+            "sub": uuid.to_string()
+        });
+        let jwt = make_test_jwt_with_payload(&payload);
+
+        let claims = parse_jwt_claims(&jwt).expect("parse");
+        assert_eq!(claims.profile_id, Some(uuid));
+        assert_eq!(claims.sub.as_deref(), Some(uuid.to_string().as_str()));
     }
 
     #[test]
