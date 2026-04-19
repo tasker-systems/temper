@@ -79,6 +79,84 @@ impl TokenStore for DiskTokenStore {
     }
 }
 
+/// Ephemeral, in-memory token store. Constructed once at session start —
+/// typically from `TEMPER_TOKEN` via [`MemoryTokenStore::from_env()`]. Saves
+/// stay in memory only; [`clear`](TokenStore::clear) wipes the slot.
+/// Deliberately does NOT derive `Serialize` — prevents future "log the whole
+/// client state as JSON" accidents.
+#[derive(Clone)]
+pub struct MemoryTokenStore {
+    inner: std::sync::Arc<std::sync::RwLock<Option<StoredAuth>>>,
+}
+
+impl MemoryTokenStore {
+    /// Empty store — for tests, or when the caller will `save()` immediately.
+    pub fn empty() -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::RwLock::new(None)),
+        }
+    }
+
+    /// Pre-populated from [`StoredAuth`].
+    pub fn with_auth(auth: StoredAuth) -> Self {
+        Self {
+            inner: std::sync::Arc::new(std::sync::RwLock::new(Some(auth))),
+        }
+    }
+
+    /// Initialize from env vars (`TEMPER_TOKEN` + `TEMPER_PROVIDER` +
+    /// `TEMPER_DEVICE_ID`). Returns `Ok(None)` when `TEMPER_TOKEN` is unset
+    /// — caller should fall back to disk or error per `VaultState`. Returns
+    /// `Err(_)` when the env is set but malformed.
+    ///
+    /// Unlike [`stored_auth_from_env`], this reads the env **once**; later
+    /// [`load`](TokenStore::load) calls return the in-memory state, not a
+    /// fresh env read.
+    pub fn from_env() -> Result<Option<Self>> {
+        match stored_auth_from_env()? {
+            Some(auth) => Ok(Some(Self::with_auth(auth))),
+            None => Ok(None),
+        }
+    }
+}
+
+impl std::fmt::Debug for MemoryTokenStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let populated = self.inner.read().map(|g| g.is_some()).unwrap_or(false);
+        f.debug_struct("MemoryTokenStore")
+            .field("populated", &populated)
+            .finish()
+    }
+}
+
+impl TokenStore for MemoryTokenStore {
+    fn load(&self) -> Result<Option<StoredAuth>> {
+        Ok(self
+            .inner
+            .read()
+            .map_err(|_| ClientError::Other("MemoryTokenStore lock poisoned".into()))?
+            .clone())
+    }
+
+    fn save(&self, auth: &StoredAuth) -> Result<()> {
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| ClientError::Other("MemoryTokenStore lock poisoned".into()))?;
+        *guard = Some(auth.clone());
+        Ok(())
+    }
+
+    fn clear(&self) -> Result<()> {
+        let mut guard = self
+            .inner
+            .write()
+            .map_err(|_| ClientError::Other("MemoryTokenStore lock poisoned".into()))?;
+        *guard = None;
+        Ok(())
+    }
+}
+
 /// Persisted auth state written to `~/.config/temper/auth.json`.
 ///
 /// `device_id` is a UUIDv7 generated on first login, identifying this machine.
@@ -815,6 +893,59 @@ mod tests {
             rendered.contains("provider"),
             "structural fields still present: {rendered}"
         );
+    }
+
+    #[test]
+    fn memory_token_store_returns_what_was_saved_not_env() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+
+        let store = MemoryTokenStore::empty();
+        assert!(store.load().expect("load").is_none());
+
+        let auth = StoredAuth {
+            provider: "auth0".to_string(),
+            access_token: secrecy::SecretString::from("at_v1"),
+            refresh_token: None,
+            expires_at: Utc::now() + Duration::hours(1),
+            profile_id: None,
+            device_id: None,
+        };
+        store.save(&auth).expect("save");
+
+        let loaded = store.load().expect("load").expect("some");
+        assert_eq!(loaded.access_token.expose_secret(), "at_v1");
+
+        store.clear().expect("clear");
+        assert!(store.load().expect("load after clear").is_none());
+    }
+
+    #[test]
+    fn memory_token_store_from_env_reads_token_once() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        clear_env();
+
+        let exp = (Utc::now() + Duration::hours(1)).timestamp();
+        let sub = uuid::Uuid::now_v7();
+        let jwt = fake_jwt(&serde_json::json!({
+            "exp": exp,
+            "sub": sub.to_string(),
+        }));
+        std::env::set_var(TEMPER_TOKEN_ENV, &jwt);
+
+        let store = MemoryTokenStore::from_env()
+            .expect("from_env")
+            .expect("some");
+
+        // Mutate env after construction — store must NOT re-read.
+        std::env::set_var(TEMPER_TOKEN_ENV, "junk_not_a_jwt");
+
+        let loaded = store.load().expect("load").expect("some");
+        // Token came from the initial parse, not from the junk env.
+        assert_eq!(loaded.provider, "auth0");
+        assert_eq!(loaded.access_token.expose_secret(), jwt);
+
+        clear_env();
     }
 
     #[test]
