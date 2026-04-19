@@ -292,7 +292,7 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
 
     let stored_auth = StoredAuth {
         provider: "test".to_string(),
-        access_token: token.clone(),
+        access_token: token.clone().into(),
         refresh_token: None,
         expires_at: Utc::now() + Duration::hours(1),
         profile_id: None,

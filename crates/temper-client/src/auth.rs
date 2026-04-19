@@ -84,16 +84,66 @@ impl TokenStore for DiskTokenStore {
 /// `device_id` is a UUIDv7 generated on first login, identifying this machine.
 /// It is sent as `X-Temper-Device-Id` on every API request and used for
 /// per-device sync state and vault config overrides.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct StoredAuth {
     pub provider: String,
-    pub access_token: String,
-    pub refresh_token: Option<String>,
+    #[serde(with = "secrecy_serde")]
+    pub access_token: secrecy::SecretString,
+    #[serde(default, with = "secrecy_serde_opt")]
+    pub refresh_token: Option<secrecy::SecretString>,
     pub expires_at: DateTime<Utc>,
     pub profile_id: Option<uuid::Uuid>,
     /// Per-device identity — generated once on first login, stable across re-auth.
     #[serde(default)]
     pub device_id: Option<String>,
+}
+
+impl std::fmt::Debug for StoredAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StoredAuth")
+            .field("provider", &self.provider)
+            .field("access_token", &"<REDACTED>")
+            .field(
+                "refresh_token",
+                &self.refresh_token.as_ref().map(|_| "<REDACTED>"),
+            )
+            .field("expires_at", &self.expires_at)
+            .field("profile_id", &self.profile_id)
+            .field("device_id", &self.device_id)
+            .finish()
+    }
+}
+
+/// Serde helper: serialize/deserialize `SecretString` as its underlying
+/// string. The JSON layer is trusted because `auth.json` is chmod 0o600
+/// and the env-var path never reaches serde at all.
+mod secrecy_serde {
+    use secrecy::{ExposeSecret, SecretString};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(s: &SecretString, ser: S) -> Result<S::Ok, S::Error> {
+        ser.serialize_str(s.expose_secret())
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<SecretString, D::Error> {
+        String::deserialize(d).map(SecretString::from)
+    }
+}
+
+mod secrecy_serde_opt {
+    use secrecy::{ExposeSecret, SecretString};
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(s: &Option<SecretString>, ser: S) -> Result<S::Ok, S::Error> {
+        match s {
+            Some(v) => ser.serialize_some(v.expose_secret()),
+            None => ser.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<SecretString>, D::Error> {
+        Option::<String>::deserialize(d).map(|o| o.map(SecretString::from))
+    }
 }
 
 /// Summary returned by `auth_status` — safe to display without exposing tokens.
@@ -298,7 +348,7 @@ pub fn stored_auth_from_env() -> Result<Option<StoredAuth>> {
 
     Ok(Some(StoredAuth {
         provider,
-        access_token: jwt,
+        access_token: jwt.into(),
         refresh_token: None,
         expires_at: claims.expires_at,
         profile_id: claims.profile_id,
@@ -344,11 +394,12 @@ pub fn load_device_id() -> Option<String> {
 /// This is the primary helper used by sub-clients to get a bearer token
 /// for outgoing requests without needing access to the OAuth config.
 pub fn current_token() -> Result<String> {
+    use secrecy::ExposeSecret;
     let auth = load_auth()?.ok_or(ClientError::NotAuthenticated)?;
     if auth.expires_at <= Utc::now() {
         return Err(ClientError::TokenExpired);
     }
-    Ok(auth.access_token)
+    Ok(auth.access_token.expose_secret().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -374,9 +425,11 @@ pub async fn refresh_token(
     token_url: &str,
     client_id: &str,
 ) -> Result<StoredAuth> {
+    use secrecy::ExposeSecret;
+
     let refresh = auth
         .refresh_token
-        .as_deref()
+        .as_ref()
         .ok_or(ClientError::TokenExpired)?;
 
     let client = reqwest::Client::new();
@@ -384,7 +437,7 @@ pub async fn refresh_token(
         .post(token_url)
         .form(&[
             ("grant_type", "refresh_token"),
-            ("refresh_token", refresh),
+            ("refresh_token", refresh.expose_secret()),
             ("client_id", client_id),
         ])
         .send()
@@ -400,8 +453,11 @@ pub async fn refresh_token(
 
     let updated = StoredAuth {
         provider: auth.provider.clone(),
-        access_token: tr.access_token,
-        refresh_token: tr.refresh_token.or_else(|| auth.refresh_token.clone()),
+        access_token: tr.access_token.into(),
+        refresh_token: tr
+            .refresh_token
+            .map(Into::into)
+            .or_else(|| auth.refresh_token.clone()),
         expires_at,
         profile_id: auth.profile_id,
         device_id: auth.device_id.clone(),
@@ -413,14 +469,16 @@ pub async fn refresh_token(
 
 /// Load auth, refresh if needed, and return a valid access token.
 pub async fn get_valid_token(token_url: &str, client_id: &str) -> Result<String> {
+    use secrecy::ExposeSecret;
+
     let auth = load_auth()?.ok_or(ClientError::NotAuthenticated)?;
 
     if needs_refresh(&auth) {
         let refreshed = refresh_token(&auth, token_url, client_id).await?;
-        return Ok(refreshed.access_token);
+        return Ok(refreshed.access_token.expose_secret().to_string());
     }
 
-    Ok(auth.access_token)
+    Ok(auth.access_token.expose_secret().to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -430,13 +488,14 @@ pub async fn get_valid_token(token_url: &str, client_id: &str) -> Result<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use secrecy::ExposeSecret;
     use tempfile::TempDir;
 
     fn make_auth(expires_at: DateTime<Utc>) -> StoredAuth {
         StoredAuth {
             provider: "github".to_owned(),
-            access_token: "tok_test".to_owned(),
-            refresh_token: Some("rtok_test".to_owned()),
+            access_token: "tok_test".to_owned().into(),
+            refresh_token: Some("rtok_test".to_owned().into()),
             expires_at,
             profile_id: None,
             device_id: Some("test-device-id".to_owned()),
@@ -475,8 +534,14 @@ mod tests {
 
         let loaded = load_auth_from(&path).unwrap().expect("should be Some");
         assert_eq!(loaded.provider, original.provider);
-        assert_eq!(loaded.access_token, original.access_token);
-        assert_eq!(loaded.refresh_token, original.refresh_token);
+        assert_eq!(
+            loaded.access_token.expose_secret(),
+            original.access_token.expose_secret()
+        );
+        assert_eq!(
+            loaded.refresh_token.as_ref().map(|s| s.expose_secret()),
+            original.refresh_token.as_ref().map(|s| s.expose_secret())
+        );
     }
 
     #[test]
@@ -649,7 +714,7 @@ mod tests {
             .expect("env should produce auth");
         clear_env();
 
-        assert_eq!(stored.access_token, jwt);
+        assert_eq!(stored.access_token.expose_secret(), jwt);
         assert_eq!(stored.provider, "auth0-test");
         assert_eq!(stored.device_id.as_deref(), Some("fixed-device"));
         assert_eq!(stored.profile_id, Some(sub));
@@ -700,8 +765,8 @@ mod tests {
 
         let auth = StoredAuth {
             provider: "auth0".to_string(),
-            access_token: "at_test".to_string(),
-            refresh_token: Some("rt_test".to_string()),
+            access_token: "at_test".to_string().into(),
+            refresh_token: Some("rt_test".to_string().into()),
             expires_at: Utc::now() + Duration::hours(1),
             profile_id: Some(uuid::Uuid::now_v7()),
             device_id: Some(uuid::Uuid::now_v7().to_string()),
@@ -709,8 +774,14 @@ mod tests {
 
         store.save(&auth).expect("save");
         let loaded = store.load().expect("load").expect("some");
-        assert_eq!(loaded.access_token, auth.access_token);
-        assert_eq!(loaded.refresh_token, auth.refresh_token);
+        assert_eq!(
+            loaded.access_token.expose_secret(),
+            auth.access_token.expose_secret()
+        );
+        assert_eq!(
+            loaded.refresh_token.as_ref().map(|s| s.expose_secret()),
+            auth.refresh_token.as_ref().map(|s| s.expose_secret())
+        );
         assert_eq!(loaded.provider, auth.provider);
 
         store.clear().expect("clear");
@@ -719,6 +790,31 @@ mod tests {
         if std::env::var("TEMPER_TOKEN").is_err() {
             assert!(after_clear.is_none());
         }
+    }
+
+    #[test]
+    fn stored_auth_debug_redacts_tokens() {
+        let auth = StoredAuth {
+            provider: "auth0".to_string(),
+            access_token: secrecy::SecretString::from("at_sensitive"),
+            refresh_token: Some(secrecy::SecretString::from("rt_sensitive")),
+            expires_at: Utc::now(),
+            profile_id: None,
+            device_id: None,
+        };
+        let rendered = format!("{auth:?}");
+        assert!(
+            !rendered.contains("at_sensitive"),
+            "access_token must not appear in Debug output: {rendered}"
+        );
+        assert!(
+            !rendered.contains("rt_sensitive"),
+            "refresh_token must not appear in Debug output: {rendered}"
+        );
+        assert!(
+            rendered.contains("provider"),
+            "structural fields still present: {rendered}"
+        );
     }
 
     #[test]
@@ -739,7 +835,7 @@ mod tests {
         clear_env();
 
         // Env-var path is distinguishable by refresh_token=None and matching JWT.
-        assert_eq!(loaded.access_token, jwt);
+        assert_eq!(loaded.access_token.expose_secret(), jwt);
         assert_eq!(loaded.profile_id, Some(env_profile));
         assert!(loaded.refresh_token.is_none());
     }

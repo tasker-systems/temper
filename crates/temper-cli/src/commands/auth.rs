@@ -47,7 +47,7 @@ pub fn token(jwt: &str, provider: &str) -> Result<()> {
 
     let stored = temper_client::auth::StoredAuth {
         provider: provider.to_string(),
-        access_token: jwt.to_string(),
+        access_token: jwt.to_string().into(),
         refresh_token: None,
         expires_at: claims.expires_at,
         profile_id: claims.profile_id,

@@ -161,8 +161,8 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
 
     let stored = StoredAuth {
         provider: "auth0".to_owned(),
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
+        access_token: tokens.access_token.into(),
+        refresh_token: tokens.refresh_token.map(Into::into),
         expires_at,
         profile_id: claims.subject,
         device_id: Some(device_id),

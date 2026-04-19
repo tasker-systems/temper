@@ -77,7 +77,11 @@ pub fn build_client_from(
     let device_id = auth.and_then(|a| a.device_id.clone());
 
     let client = if let Some(auth) = auth {
-        crate::TemperClient::with_token(&url, device_id, auth.access_token.clone())
+        crate::TemperClient::with_token(
+            &url,
+            device_id,
+            secrecy::ExposeSecret::expose_secret(&auth.access_token).to_string(),
+        )
     } else {
         crate::TemperClient::new(&url, device_id)
     };
@@ -373,7 +377,7 @@ scopes        = ["openid", "profile"]
         };
         let auth = crate::auth::StoredAuth {
             provider: "test".to_string(),
-            access_token: "test-token".to_string(),
+            access_token: "test-token".to_string().into(),
             refresh_token: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
             profile_id: None,
