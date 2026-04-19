@@ -15,6 +15,70 @@ pub const TEMPER_TOKEN_ENV: &str = "TEMPER_TOKEN";
 pub const TEMPER_PROVIDER_ENV: &str = "TEMPER_PROVIDER";
 pub const TEMPER_DEVICE_ID_ENV: &str = "TEMPER_DEVICE_ID";
 
+// ---------------------------------------------------------------------------
+// TokenStore — abstracts over "where does the auth state live"
+// ---------------------------------------------------------------------------
+//
+// DiskTokenStore  — ~/.config/temper/auth.json (local CLI default).
+// MemoryTokenStore — ephemeral, populated from env vars at session start
+//                    (cloud mode / agent runners with no writable $HOME).
+//
+// Every function that previously called the free `load_auth` / `save_auth`
+// functions must move to accepting `&dyn TokenStore` so the caller chooses
+// the backing storage explicitly. `VaultState::Cloud` MUST use
+// MemoryTokenStore; `DiskTokenStore` reaching a cloud session would write
+// refreshed tokens to the agent's $HOME.
+
+pub trait TokenStore: Send + Sync {
+    fn load(&self) -> Result<Option<StoredAuth>>;
+    fn save(&self, auth: &StoredAuth) -> Result<()>;
+    fn clear(&self) -> Result<()>;
+}
+
+/// Disk-backed token store — the local CLI default. Wraps the existing
+/// `load_auth_from` / `save_auth_to` / `clear_auth_at` helpers with a
+/// configurable path (default: `auth_json_path()`).
+#[derive(Debug, Clone)]
+pub struct DiskTokenStore {
+    path: std::path::PathBuf,
+}
+
+impl DiskTokenStore {
+    /// Use `~/.config/temper/auth.json`.
+    pub fn default_path() -> Self {
+        Self {
+            path: auth_json_path(),
+        }
+    }
+
+    /// Use an explicit path (tests, non-default installs).
+    pub fn at(path: std::path::PathBuf) -> Self {
+        Self { path }
+    }
+}
+
+impl TokenStore for DiskTokenStore {
+    fn load(&self) -> Result<Option<StoredAuth>> {
+        // Env-var path takes precedence even for DiskTokenStore — matches
+        // current `load_auth()` semantics. Callers in cloud mode should use
+        // MemoryTokenStore; this fallback exists for backward compatibility
+        // with any tool that instantiates DiskTokenStore without checking
+        // VaultState.
+        if let Some(stored) = stored_auth_from_env()? {
+            return Ok(Some(stored));
+        }
+        load_auth_from(&self.path)
+    }
+
+    fn save(&self, auth: &StoredAuth) -> Result<()> {
+        save_auth_to(auth, &self.path)
+    }
+
+    fn clear(&self) -> Result<()> {
+        clear_auth_at(&self.path)
+    }
+}
+
 /// Persisted auth state written to `~/.config/temper/auth.json`.
 ///
 /// `device_id` is a UUIDv7 generated on first login, identifying this machine.
@@ -627,6 +691,34 @@ mod tests {
             result.is_err(),
             "malformed TEMPER_TOKEN must error, not fall through"
         );
+    }
+
+    #[test]
+    fn disk_token_store_round_trips_stored_auth() {
+        let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
+        let store = DiskTokenStore::at(tmp.path().to_path_buf());
+
+        let auth = StoredAuth {
+            provider: "auth0".to_string(),
+            access_token: "at_test".to_string(),
+            refresh_token: Some("rt_test".to_string()),
+            expires_at: Utc::now() + Duration::hours(1),
+            profile_id: Some(uuid::Uuid::now_v7()),
+            device_id: Some(uuid::Uuid::now_v7().to_string()),
+        };
+
+        store.save(&auth).expect("save");
+        let loaded = store.load().expect("load").expect("some");
+        assert_eq!(loaded.access_token, auth.access_token);
+        assert_eq!(loaded.refresh_token, auth.refresh_token);
+        assert_eq!(loaded.provider, auth.provider);
+
+        store.clear().expect("clear");
+        let after_clear = store.load().expect("load after clear");
+        // Env var may still populate on CI — guard against false failure.
+        if std::env::var("TEMPER_TOKEN").is_err() {
+            assert!(after_clear.is_none());
+        }
     }
 
     #[test]
