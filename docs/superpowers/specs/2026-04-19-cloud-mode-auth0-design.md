@@ -44,17 +44,28 @@ The context constraints on cloud-mode are: no interactive browser, no persistent
 
 **Flow:**
 1. User runs `temper auth export-token` on their local machine.
-2. Command loads local auth (`load_auth()` in `crates/temper-client/src/auth.rs`), calls `get_valid_token(token_url, client_id)` so the AT is refreshed locally if near expiry (uses the user's local RT; the RT stays on disk).
-3. Command prints the AT to **stdout** as plain text by default, or JSON with `--json` to match other `temper auth` subcommands' output style.
-4. Command prints a security warning to **stderr** (stdout stays cleanly pipeable into `pbcopy` / scripts):
+2. Command loads local auth via `DiskTokenStore::default()` (post-Q2 refactor), calls `get_valid_token(&store, token_url, client_id)` so the AT is refreshed locally if near expiry. The refresh uses the user's local RT and writes the rotated RT back to disk (standard local behavior). The RT itself never leaves the local machine.
+3. Command prints the AT to **stdout** as plain text. No `--json` flag — the token is already a single string, and JSON wrapping only expands the capture surface for agent-framework structured-output loggers. Plain stdout is correct.
+4. Command prints a security warning to **stderr** (stdout stays cleanly pipeable into `pbcopy` / stdin):
    ```
    ⚠  This access token grants full access to your temper account at
       your current permission levels until it expires (~24 hours).
-      Do not share it, commit it to a repo, or paste it anywhere you
-      wouldn't paste your password. Once issued, the token cannot be
-      revoked early — treat leaked tokens as live for their full
-      lifetime. Per-session revocation is coming in Unit D of the
-      cloud-mode goal.
+      Once issued, the token cannot be revoked early — treat leaked
+      tokens as live for their full lifetime. Per-session revocation
+      is coming in Unit D of the cloud-mode goal.
+
+      Recommended handling:
+        temper auth export-token | pbcopy          # macOS clipboard
+        temper auth export-token | wl-copy         # Linux wayland
+        temper auth export-token | <agent-secret-input>
+      AVOID:
+        temper auth export-token > token.txt       # file lands in
+                                                     backups (Time
+                                                     Machine / iCloud
+                                                     / Dropbox)
+        TEMPER_TOKEN=$(temper auth export-token)   # shell history +
+                                                     exposed via
+                                                     /proc/<pid>/environ
    ```
 5. User pastes the AT into Claude Web / Cursor cloud agent / Devin session secrets as `TEMPER_TOKEN`. B.1's env-var floor (shipped) picks it up.
 
@@ -63,11 +74,12 @@ The context constraints on cloud-mode are: no interactive browser, no persistent
 - 24h (Auth0 default AT lifetime) ceiling. Re-export to renew; no in-cloud refresh because no RT is exported.
 - **Zero grant entanglement with Claude Desktop MCP.** Claude Desktop runs its own device flow against `temper-mcp`'s OAuth discovery endpoints (`crates/temper-mcp/src/discovery.rs`) and holds its own grant.
 - Local CLI is untouched by anything that happens in the cloud session. The cloud session never holds an RT from the user's local grant.
+- **Post-Unit-D framing:** once `temper auth create-cloud-session` ships (Unit D), `export-token` remains available as a dev-expedient for quick tests and throwaway sessions but is **permanently non-revocable-early** because it exports from the user's local grant. `create-cloud-session` becomes the recommended path for durable / production use because it mints a separately-revocable grant. `export-token` is not deprecated, but the recommendation shifts.
 
 **Command implementation notes:**
 - Lives alongside `login`, `logout`, `status`, `token` in `crates/temper-cli/src/commands/auth.rs`.
-- The existing `temper auth token <jwt>` command imports a JWT to disk; `export-token` is its dual. Keep both; they're inverses.
-- No new `temper-client` API needed beyond Q2's `TokenStore` refactor — the command just calls `get_valid_token` and prints the result.
+- The existing `temper auth token <jwt>` command imports a JWT via **positional arg**, which leaks the token to shell history, `ps auxww`, and `/proc/<pid>/cmdline`. **Migrate `temper auth token` to stdin-only input** (`temper auth export-token | temper auth token` would be the new round-trip). This is a breaking change to the CLI shape; per the "no premature backward compat" rule (repo is ~1 month old), acceptable.
+- No new `temper-client` API needed beyond Q2's `TokenStore` refactor — the command just calls `get_valid_token(&DiskTokenStore::default(), …)` and prints the result.
 
 ### W2 (Unit D) — server-minted separate grant
 
@@ -99,10 +111,30 @@ pub trait TokenStore: Send + Sync {
 }
 ```
 
+### Structural secrets hardening (must land with the refactor)
+
+Today `StoredAuth` at `auth.rs:23-33` derives `Debug, Clone, Serialize, Deserialize` and carries `access_token: String` / `refresh_token: Option<String>` directly. Any of these leak paths is one line from active:
+
+- `tracing::error!("auth state: {auth:?}")`
+- `dbg!(auth)` during debugging, committed by accident
+- `panic!` over a `Result` carrying `StoredAuth` → token in stderr backtrace
+- `#[instrument]` on a function taking `&StoredAuth` → token in span fields
+- Any future `serde_json::to_string(&store)` → token in JSON
+
+"Verify via grep during B.2" is not a durable defense. Fix structurally, in the same PR as the `TokenStore` refactor:
+
+- **Introduce `SecretString` newtype** in `temper-client` (or pull in the `secrecy` crate, which provides `SecretString` with `zeroize` on drop and a `Debug` impl that prints `[REDACTED]`).
+- **Replace `access_token: String` → `access_token: SecretString`** on `StoredAuth`. Same for `refresh_token: Option<SecretString>`.
+- **Replace the derived `Debug` on `StoredAuth`** with a manual impl that prints field names but redacts token values (or rely on `SecretString`'s Debug if the crate is used).
+- **`MemoryTokenStore` should not implement `Serialize` at all.** Mark with `#[serde(skip)]` where applicable or simply don't derive. Prevents future "log the whole client state as JSON" accidents.
+- **`StoredAuth::clone()` stays available** (the refresh flow needs it), but reviewers should flag any `auth.clone()` followed by logging.
+
+Acceptance: grep for `.access_token` / `.refresh_token` string extraction in the refactored code; each site extracts via `expose_secret()` (or equivalent) immediately before network use, never stored in a `String` variable that outlives the request.
+
 ### Two impls
 
-- **`DiskTokenStore`** — the local CLI default. Wraps the existing `load_auth_from` / `save_auth_to` with a configurable path (default `auth_json_path()`). Existing `save_auth` / `load_auth` free functions are thin wrappers over `DiskTokenStore::default()`.
-- **`MemoryTokenStore`** — ephemeral. Holds `Arc<RwLock<Option<StoredAuth>>>`. Constructed by cloud-mode code with the initial `StoredAuth` built from `TEMPER_TOKEN` + optional `TEMPER_REFRESH_TOKEN` (the latter only relevant when Unit D ships).
+- **`DiskTokenStore`** — the local CLI default. Wraps the existing `load_auth_from` / `save_auth_to` with a configurable path (default `auth_json_path()`). `auth.json` format unchanged on disk (base64-ish token strings are already what Auth0 returns).
+- **`MemoryTokenStore`** — ephemeral. Holds `Arc<RwLock<Option<StoredAuth>>>`. Constructed **once at session start** from `TEMPER_TOKEN` (+ optional `TEMPER_REFRESH_TOKEN` when Unit D ships). Does not re-parse env on every `load()` call (the current `stored_auth_from_env` path at `auth.rs:217` re-parses on every `load_auth()` — acceptable for B.1's no-refresh case, but not for cloud mode once refresh lands in Unit D, because the env var never changes and the post-refresh authoritative state lives in the store).
 
 ### Refactored API
 
@@ -110,9 +142,26 @@ pub trait TokenStore: Send + Sync {
 - `get_valid_token(store: &dyn TokenStore, token_url, client_id) -> Result<String>` — reads via `store.load()`, checks `needs_refresh`, refreshes through the trait if needed.
 - Free-function `get_valid_token(token_url, client_id)` / `refresh_token(auth, …)` shims are **eliminated**. Per the "no premature backward compat" rule, call sites migrate to pass an explicit `TokenStore`. Expected change: ~5-10 call sites across `temper-cli` and `temper-client`, each replacing a bare call with a `DiskTokenStore::default()` argument.
 
-### Lands in B.2
+### Lands in B.2 — ordering is load-bearing
 
-The refactor is a prerequisite for B.2 cloud-mode dispatch (which needs a non-disk token store) and for Unit D (which needs in-memory refresh to work with RT rotation). B.2 picks it up as its first step.
+The refactor is a **hard prerequisite** for `temper auth export-token` and for cloud-mode dispatch. Ordering within B.2:
+
+1. `TokenStore` trait + `DiskTokenStore` + `SecretString` newtype + manual `Debug` on `StoredAuth`. Free-function shims eliminated.
+2. `MemoryTokenStore` impl + env-var-to-store bootstrap at client construction time.
+3. `temper auth export-token` command (depends on `DiskTokenStore` already being the default path).
+4. `temper auth token` migrated to stdin-only.
+5. Remaining cloud-mode dispatch (the bulk of B.2 per the parent spec).
+
+**Why the ordering matters:** today's `refresh_token()` at `auth.rs:346` calls `save_auth(&updated)` unconditionally. If `export-token` ships before the refactor, a cloud runner that happens to have a writable `$HOME` (e.g., a GitHub Actions runner, a Vercel function with a tmpfs home, a hostile but writable container mount) will persist refreshed tokens to `~/.config/temper/auth.json`. The `TokenStore` abstraction is what makes "cloud mode never writes tokens to disk" a structural property, not a per-call discipline. Ship it first.
+
+### Known latent bug to fix during the Q2 work
+
+`parse_jwt_claims` at `auth.rs:166` extracts `sub` and runs `uuid::Uuid::parse_str(s).ok()`. When `sub` parses as a UUID it becomes `profile_id`; when it doesn't, `profile_id` silently becomes `None`. Today this is fine — our own issuer emits profile UUIDs. It will break silently the moment Unit D introduces Management-API-minted tokens whose `sub` is an Auth0 user-id string (`auth0|6123abc...`) rather than the profile UUID. Two paths:
+
+- **Fix at parse time.** Extend `JwtClaims` so `profile_id` carries either a `Uuid` or a `String`, and callers decide how to map. Keeps the failure loud.
+- **Accept the None for now, document it.** Revisit as part of Unit D's "how do we embed claims in minted tokens" research.
+
+Recommendation: **fix at parse time** in the same Q2 refactor. Small change, preempts a hard-to-debug Unit D integration failure.
 
 ---
 
@@ -240,10 +289,13 @@ The five recommendations are not independent. They form one coherent first cut:
 
 ### B.2 ordering implied by this
 
-1. Q2 refactor: introduce `TokenStore`, `DiskTokenStore`, `MemoryTokenStore`; refactor `refresh_token` / `get_valid_token` to take the trait; keep thin free-function shims or eliminate per audit.
+1. Q2 refactor (first): `TokenStore` trait + `DiskTokenStore` + `MemoryTokenStore`; `SecretString` newtype on `StoredAuth` tokens + manual redacted `Debug`; `parse_jwt_claims` fix so non-UUID `sub` doesn't silently drop `profile_id`; free-function shims eliminated.
 2. Q5 refactor: `Provider` enum, reset `auth.json` format.
-3. W1 command: `temper auth export-token` with security warning on stderr.
-4. Cloud-mode dispatch (the bulk of B.2 per the parent spec): `resource::create` / `resource::update` / `push` / `pull` / `list` / `show` / `search` / `sync` branches against `VaultState::Cloud`, all consuming `MemoryTokenStore`-backed `Client`.
+3. Migrate `temper auth token` from positional-arg to stdin-only (breaking).
+4. `temper auth export-token` command with stderr security warning and structured Do/Avoid guidance (no `--json` flag).
+5. Cloud-mode dispatch (the bulk of B.2 per the parent spec): `resource::create` / `resource::update` / `push` / `pull` / `list` / `show` / `search` / `sync` branches against `VaultState::Cloud`, all consuming `MemoryTokenStore`-backed `Client`.
+
+Steps 1–4 are the security-critical ones — getting them in order keeps the blast radius of an accidentally-shipped intermediate state bounded to "the command doesn't exist yet" rather than "the command leaks tokens to disk."
 
 ---
 
@@ -258,15 +310,22 @@ Per-session revocation + in-cloud refresh via grants that are fully isolated fro
 ### `temper-api` side
 
 - **New Auth0 Management API M2M application.** `temper-api` holds this credential; the CLI never does. Config lives in the secrets manager (Vercel env, etc.), loaded at process start.
+  - **Scope the M2M credential minimally.** Only `create:users_access_tokens` (or whatever exact scope the chosen mint flow requires) and `delete:sessions`. **No `read:*` scopes.** This credential is the ultimate blast-radius key: compromise of the Vercel env → ability to mint tokens for any user. Keep its capability surface as narrow as possible.
+  - **Rotate regularly.** At least quarterly, with an automated rotation pipeline. Rotation cadence belongs in Unit D's acceptance criteria.
+  - **Audit-log every mint and revoke.** Append-only `cloud_session_audit` table (or equivalent) with `(event, profile_id, session_id, actor, at)`. Graduate audit-logging from "out-of-scope" (per current §Out of scope) to **in-scope for Unit D** — given the M2M credential's blast radius, an audit trail is a baseline, not a future polish.
 - **Service:** `cloud_session_service` in `crates/temper-api/src/services/`. Functions: `mint(profile_id, label, ttl_hours)`, `list(profile_id)`, `revoke(profile_id, session_id)`.
 - **Endpoints:**
   - `POST /auth/cloud-sessions` (mint) — body carries `label`, optional `ttl_hours`; response carries `access_token`, optional `refresh_token`, `session_id`, `expires_at`.
   - `GET /auth/cloud-sessions` (list) — profile-scoped; response carries `[{ session_id, label, created_at, last_used_at }]`.
   - `DELETE /auth/cloud-sessions/{session_id}` (revoke) — profile-scoped; server calls Management API.
-- **Schema:** `cloud_sessions` table — `id` (uuidv7), `profile_id`, `label`, `auth0_grant_id`, `created_at`, `last_used_at`, `revoked_at` (nullable).
-- **Token validation extension.** For revocation to actually stop outstanding ATs (not just future issuance), `temper-api`'s JWT validator must check `cloud_sessions.revoked_at IS NULL` on each authenticated request carrying a cloud-session AT. That requires:
-  - A `session_id` claim embedded in the minted AT (Auth0 Management API supports custom claims via hooks or the token's `gty` + metadata).
-  - An indexed lookup in the JWT middleware. The `cloud_sessions` table is small and lookup is primary-key by `session_id`; performance should be negligible with a connection pool.
+- **Schema:** `cloud_sessions` table — `id` (uuidv7), `profile_id`, `label`, `auth0_grant_id`, `created_at`, `last_used_at`, `revoked_at` (nullable). Plus `cloud_session_audit` as above.
+- **Token validation extension.** For revocation to actually stop outstanding ATs (not just future issuance), `temper-api`'s JWT validator must check `cloud_sessions.revoked_at IS NULL` on each authenticated request carrying a cloud-session AT. Traps to avoid:
+  - **URL-namespace the custom claim.** Auth0 strips non-namespaced custom claims from the AT. Use `https://temperkb.io/session_id` (not bare `session_id`). A bare claim that Auth0 silently strips means the validator never sees a `session_id` → the revocation check becomes a fails-open no-op, which is **worse than no revocation at all** because we'd believe sessions are revocable when they're not. Lock this in Unit D's implementation plan.
+  - **Extend the claims struct in BOTH `temper-api` and `temper-mcp`.** Today `temper-mcp` uses its own `McpClaims` struct in `middleware.rs`; `temper-api` uses a parallel one. Both need the new namespaced `session_id` field and both need the revocation check. Forgetting `temper-mcp` means MCP-from-cloud calls bypass revocation entirely.
+  - **Run the revocation check AFTER signature validation.** Invalid tokens must fail at the JWKS step, not at the DB lookup. Otherwise a volumetric DOS against an unauthenticated endpoint carrying random bearer tokens exhausts the DB connection pool.
+  - **Fail closed on unknown `session_id`.** If a token carries a `session_id` that doesn't exist in `cloud_sessions`, reject it (401). Not "assume it's an older non-session token and let it through" — a compromised signing config could mint tokens with arbitrary claims including nonexistent session ids, and the only safe default is to reject anything claiming session-origin that doesn't check out.
+  - **Indexed lookup.** `cloud_sessions` primary key on `session_id`; constant-time check with a connection-pool budget. Expected negligible given the table is small.
+- **TOCTOU on in-flight long-running requests.** Revocation stops **new** requests within a round-trip; an in-flight request that already passed the validator completes normally. For short REST calls this is trivially bounded. For long-lived MCP streams (SSE-style) or future long-running HTTP responses, either (a) document "in-flight completes, new requests blocked" as an accepted property, or (b) have the streaming handler re-check `revoked_at` periodically. **Default to (a); flag (b) as a future enhancement.**
 - **Authorization:** profile-scoped throughout. Users can only mint/list/revoke their own sessions.
 
 ### `temper-client` + CLI side
@@ -298,7 +357,6 @@ Per-session revocation + in-cloud refresh via grants that are fully isolated fro
 - **Working directory layout** — Unit B.3's problem.
 - **Claude Desktop MCP auth flow changes** — Claude Desktop runs its own device flow via `temper-mcp`'s discovery endpoints; no changes needed here.
 - **Second token provider** — the `Provider` enum shape is the change; building a `SelfHosted` variant is a separate future spec.
-- **Audit-log capture of cloud session lifecycle events** — likely belongs with Unit D's server side but is its own design question.
 
 ---
 
@@ -311,10 +369,37 @@ Per-session revocation + in-cloud refresh via grants that are fully isolated fro
 
 ---
 
+## Security review summary
+
+The design was security-reviewed on 2026-04-19 (commit `79bb273` state). The review verified:
+
+- M2M client credentials correctly rejected for user-representing cloud sessions.
+- Claude Desktop MCP grant isolation correctly characterized (verified via `crates/temper-mcp/src/discovery.rs`).
+- `/oauth/revoke` correctly described as non-invalidating for outstanding ATs (verified via the JWKS-decode pattern in `crates/temper-mcp/src/middleware.rs`).
+- `TokenStore` trait as the right abstraction.
+- `Provider` enum scope discipline (one variant, no speculative expansion).
+
+It raised concrete risks that have been addressed inline in this spec:
+
+- **Secrets-in-memory hygiene** (§Q2: `SecretString` newtype, manual redacted `Debug` on `StoredAuth`, no `Serialize` on `MemoryTokenStore`) — **addressed in Q2 structural hardening**.
+- **`refresh_token()` unconditional disk write** — **addressed by enforcing the Q2-refactor-before-export-token ordering in Integration Picture**.
+- **`parse_jwt_claims` silently dropping non-UUID `sub`** — **addressed as a known latent bug to fix in Q2**.
+- **`temper auth token <jwt>` positional arg leaks to shell history / `ps` / `/proc`** — **addressed by migrating to stdin-only input**.
+- **`--json` on `export-token` expands capture surface** — **dropped; stdout is plain token only**.
+- **Shell-redirection to file risk** — **addressed in stderr warning's Do/Avoid guidance**.
+- **Env-var bootstrap re-parsing on every call** — **addressed in `MemoryTokenStore` read-once-at-construction note**.
+- **Unit D trap: bare (non-namespaced) `session_id` claim silently stripped by Auth0** — **addressed in Unit D's token-validation extension**.
+- **Unit D trap: claim struct must be extended in both `temper-api` and `temper-mcp`** — **addressed**.
+- **Unit D trap: revocation check ordering (after signature validation)** — **addressed**.
+- **Unit D trap: fail-closed on unknown `session_id`** — **addressed**.
+- **Unit D: M2M credential scope minimization, rotation cadence, audit-log** — **addressed; audit-log graduated from out-of-scope to in-scope for Unit D**.
+- **Unit D: TOCTOU on in-flight long-running requests** — **addressed; "in-flight completes, new requests blocked" is the accepted property**.
+
 ## Acceptance (for this research note)
 
 - One actionable recommendation per Q1–Q5. ✓
-- In-memory refresh contract specified at `temper-client` API level (trait shape + two impls + refactored function signatures). ✓
-- Revocation/rotation story explicit enough to implement without re-research: W1 uses AT-expiry; W2 uses Management API `/api/v2/users/{id}/revoke-access`. ✓
+- In-memory refresh contract specified at `temper-client` API level (trait shape + two impls + refactored function signatures + secrets hardening). ✓
+- Revocation/rotation story explicit enough to implement without re-research: W1 uses AT-expiry; W2 uses Management API `/api/v2/users/{id}/revoke-access` + namespaced `session_id` claim + per-request revocation check. ✓
 - Provider abstraction decision made and scoped: enum with one variant, reset `auth.json`. ✓
-- Follow-on work (Unit D) shaped concretely enough to create a task. ✓
+- Follow-on work (Unit D) shaped concretely enough to create a task, with the critical security traps pinned in the sketch. ✓
+- Independent security review completed and findings integrated. ✓
