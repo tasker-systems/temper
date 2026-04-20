@@ -590,24 +590,72 @@ struct ExistingEdgeRow {
 // ─── Listing ────────────────────────────────────────────────────────────────
 
 /// List all edges connected to a resource, checking visibility.
+///
+/// Combines the visibility gate and the `graph_resource_edges` fetch into a
+/// single round-trip via `LEFT JOIN LATERAL`. The outer subquery always
+/// returns at least one row carrying the visibility flag, so we can still
+/// distinguish NotFound (resource invisible to caller) from a visible
+/// resource that happens to have no edges.
 pub async fn list_resource_edges(
     pool: &PgPool,
     profile_id: Uuid,
     resource_id: Uuid,
 ) -> ApiResult<Vec<temper_core::types::graph::GraphEdgeRow>> {
-    // Verify the resource is visible to this profile
-    let _resource =
-        crate::services::resource_service::get_visible(pool, profile_id, resource_id).await?;
+    use crate::error::ApiError;
+    use temper_core::types::graph::{EdgeType, GraphEdgeRow};
 
-    let rows = sqlx::query_as::<_, temper_core::types::graph::GraphEdgeRow>(
-        "SELECT * FROM graph_resource_edges($1, $2)",
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            v.is_visible                 AS "is_visible!: bool",
+            ge.edge_id                   AS "edge_id?: Uuid",
+            ge.peer_resource_id          AS "peer_resource_id?: Uuid",
+            ge.peer_title                AS "peer_title?: String",
+            ge.peer_slug                 AS "peer_slug?: String",
+            ge.edge_type                 AS "edge_type?: EdgeType",
+            ge.direction                 AS "direction?: String",
+            ge.weight                    AS "weight?: f64",
+            ge.metadata                  AS "metadata?: serde_json::Value",
+            ge.created                   AS "created?: chrono::DateTime<chrono::Utc>"
+          FROM (
+              SELECT EXISTS (
+                  SELECT 1 FROM resources_visible_to($1, NULL, ARRAY[$2]::uuid[]) rv
+                   WHERE rv.resource_id = $2
+              ) AS is_visible
+          ) v
+          LEFT JOIN LATERAL graph_resource_edges($1, $2) ge ON v.is_visible
+        "#,
+        profile_id,
+        resource_id,
     )
-    .bind(profile_id)
-    .bind(resource_id)
     .fetch_all(pool)
     .await?;
 
-    Ok(rows)
+    if rows.first().is_none_or(|r| !r.is_visible) {
+        return Err(ApiError::NotFound);
+    }
+
+    // Each visible-but-edgeless resource still produces one sentinel row
+    // from the LEFT JOIN where every edge column is NULL; the filter_map
+    // drops those and keeps only real edges.
+    let edges = rows
+        .into_iter()
+        .filter_map(|r| {
+            Some(GraphEdgeRow {
+                edge_id: r.edge_id?,
+                peer_resource_id: r.peer_resource_id?,
+                peer_title: r.peer_title?,
+                peer_slug: r.peer_slug?,
+                edge_type: r.edge_type?,
+                direction: r.direction?,
+                weight: r.weight?,
+                metadata: r.metadata?,
+                created: r.created?,
+            })
+        })
+        .collect();
+
+    Ok(edges)
 }
 
 #[cfg(test)]
