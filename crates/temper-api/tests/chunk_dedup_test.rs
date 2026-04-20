@@ -208,11 +208,16 @@ async fn replace_chunks_preserves_unchanged_positions(pool: PgPool) {
         .await
         .unwrap();
 
-    let a2 = seed_audit(&pool, rid, "body1").await;
+    // A different body_hash on the second call forces the dedup CTE to run
+    // (bypassing the replay guard), so we validate that chunks with matching
+    // (chunk_index, content_hash) are preserved even when the body differs.
+    // Realistic scenario: a whitespace-only body edit that doesn't alter any
+    // chunk's extracted content.
+    let a2 = seed_audit(&pool, rid, "body1-rev2").await;
     let r2: Uuid = sqlx::query_scalar("SELECT replace_resource_chunks($1, $2, $3, $4)")
         .bind(rid)
         .bind(a2)
-        .bind("body1")
+        .bind("body1-rev2")
         .bind(&chunks)
         .fetch_one(&pool)
         .await
@@ -236,6 +241,52 @@ async fn replace_chunks_preserves_unchanged_positions(pool: PgPool) {
         first_revs.iter().all(|r| *r == r1),
         "preserved chunks keep original first_revision_id"
     );
+}
+
+/// Replay guard: calling `replace_resource_chunks` with the same body_hash
+/// as the resource's most recent revision is a no-op that returns the
+/// existing revision's id. Prevents workflow retries from writing chunkless
+/// noise revisions.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn replace_chunks_replay_returns_existing_revision(pool: PgPool) {
+    let rid = seed_resource(&pool).await;
+    let a1 = seed_audit(&pool, rid, "body1").await;
+    let chunks = json!([chunk(0, "alpha", "ha"), chunk(1, "beta", "hb")]);
+    let r1: Uuid = sqlx::query_scalar("SELECT persist_resource_chunks($1, $2, $3, $4)")
+        .bind(rid)
+        .bind(a1)
+        .bind("body1")
+        .bind(&chunks)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    let a2 = seed_audit(&pool, rid, "body1").await;
+    let r2: Uuid = sqlx::query_scalar("SELECT replace_resource_chunks($1, $2, $3, $4)")
+        .bind(rid)
+        .bind(a2)
+        .bind("body1")
+        .bind(&chunks)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(r1, r2, "replay of same body_hash returns existing revision");
+    assert_eq!(count_current(&pool, rid).await, 2);
+    assert_eq!(
+        count_total(&pool, rid).await,
+        2,
+        "no chunks written on replay"
+    );
+
+    let revision_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*)::bigint FROM kb_resource_revisions WHERE resource_id = $1",
+    )
+    .bind(rid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(revision_count, 1, "no new revision row written on replay");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

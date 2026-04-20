@@ -65,6 +65,12 @@ $$;
 --   * Supersede rows whose content_hash differs at same chunk_index, or whose
 --     chunk_index is no longer present in input.
 --   * Insert new rows for (chunk_index, content_hash) pairs not in current set.
+--
+-- Replay guard: if the most recent revision for this resource already has
+-- body_hash = p_body_hash, the caller is replaying the same write (e.g.
+-- workflow retry). Return that revision's id and skip — the current chunk
+-- set already reflects p_body_hash, so there is no work to do. Avoids
+-- writing noise revisions that dedup turns into chunkless orphans.
 CREATE FUNCTION replace_resource_chunks(
     p_resource_id UUID,
     p_audit_id    UUID,
@@ -73,8 +79,22 @@ CREATE FUNCTION replace_resource_chunks(
 ) RETURNS UUID
 LANGUAGE plpgsql AS $$
 DECLARE
-    v_revision_id UUID;
+    v_revision_id     UUID;
+    v_latest_rev_id   UUID;
+    v_latest_body_hash TEXT;
 BEGIN
+    -- Use idx_resource_revisions_resource_created (resource_id, created DESC).
+    SELECT id, body_hash
+      INTO v_latest_rev_id, v_latest_body_hash
+      FROM kb_resource_revisions
+     WHERE resource_id = p_resource_id
+     ORDER BY created DESC
+     LIMIT 1;
+
+    IF FOUND AND v_latest_body_hash = p_body_hash THEN
+        RETURN v_latest_rev_id;
+    END IF;
+
     PERFORM set_config('temper.skip_search_rebuild', 'true', true);
 
     v_revision_id := uuidv7();
