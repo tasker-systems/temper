@@ -12,7 +12,9 @@ use temper_core::defaults::apply_doc_type_defaults;
 use temper_core::hash::compute_body_hash;
 use temper_core::hash::{compute_managed_hash, compute_open_hash};
 use temper_core::schema::ValidationIssue;
-use temper_core::types::ids::{ContextId, EventId, ProfileId, ResourceAuditId, ResourceId};
+use temper_core::types::ids::{
+    ContextId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId,
+};
 use temper_core::types::ingest::chunks_to_jsonb;
 
 use temper_core::types::ingest::{unpack_chunks, IngestPayload, PackedChunk};
@@ -212,44 +214,54 @@ pub async fn find_by_body_hash(
 
 /// Batch-insert chunks for a new resource via SQL function.
 /// Gates search triggers, does bulk INSERT, rebuilds search index once.
+/// Returns the newly-created `RevisionId`.
 async fn persist_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_id: ResourceId,
+    audit_id: Uuid,
+    body_hash: &str,
     chunks: &[PackedChunk],
-) -> ApiResult<i32> {
+) -> ApiResult<RevisionId> {
     let chunks_json = chunks_to_jsonb(chunks);
 
-    let count = sqlx::query_scalar!(
-        "SELECT persist_resource_chunks($1, $2)",
+    let rev: Uuid = sqlx::query_scalar!(
+        "SELECT persist_resource_chunks($1::uuid, $2::uuid, $3::text, $4::jsonb)",
         *resource_id,
+        audit_id,
+        body_hash,
         chunks_json
     )
     .fetch_one(&mut **tx)
     .await?
     .expect("persist_resource_chunks returned NULL");
 
-    Ok(count)
+    Ok(RevisionId::from(rev))
 }
 
 /// Version-bump old chunks and batch-insert new ones via SQL function.
 /// Gates search triggers, does bulk version-bump + INSERT, rebuilds once.
+/// Returns the newly-created `RevisionId`.
 async fn replace_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_id: ResourceId,
+    audit_id: Uuid,
+    body_hash: &str,
     chunks: &[PackedChunk],
-) -> ApiResult<i32> {
+) -> ApiResult<RevisionId> {
     let chunks_json = chunks_to_jsonb(chunks);
 
-    let count = sqlx::query_scalar!(
-        "SELECT replace_resource_chunks($1, $2)",
+    let rev: Uuid = sqlx::query_scalar!(
+        "SELECT replace_resource_chunks($1::uuid, $2::uuid, $3::text, $4::jsonb)",
         *resource_id,
+        audit_id,
+        body_hash,
         chunks_json
     )
     .fetch_one(&mut **tx)
     .await?
     .expect("replace_resource_chunks returned NULL");
 
-    Ok(count)
+    Ok(RevisionId::from(rev))
 }
 
 /// Everything needed to create a resource with its manifest (and optional chunks)
@@ -338,7 +350,7 @@ pub async fn create_resource_with_manifest(
     .await?;
 
     // Insert event + audit atomically
-    insert_event_and_audit(
+    let (_event_id, audit_id) = insert_event_and_audit(
         &mut tx,
         params.profile_id,
         params.device_id,
@@ -358,7 +370,14 @@ pub async fn create_resource_with_manifest(
         let chunks = unpack_chunks(packed)
             .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
         if !chunks.is_empty() {
-            persist_chunks(&mut tx, resource_id, &chunks).await?;
+            persist_chunks(
+                &mut tx,
+                resource_id,
+                *audit_id,
+                params.content_hash,
+                &chunks,
+            )
+            .await?;
         }
     }
 
@@ -525,7 +544,7 @@ pub struct UpdateManifestParams<'a> {
 pub async fn update_resource_manifest(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     params: &UpdateManifestParams<'_>,
-) -> ApiResult<()> {
+) -> ApiResult<ResourceAuditId> {
     let managed_hash = compute_managed_hash(params.doc_type_name, params.managed_meta);
     let open_hash = compute_open_hash(params.open_meta);
 
@@ -560,7 +579,7 @@ pub async fn update_resource_manifest(
     .execute(&mut **tx)
     .await?;
 
-    insert_event_and_audit(
+    let (_event_id, audit_id) = insert_event_and_audit(
         tx,
         params.profile_id,
         params.device_id,
@@ -574,7 +593,7 @@ pub async fn update_resource_manifest(
     )
     .await?;
 
-    Ok(())
+    Ok(audit_id)
 }
 
 /// Update an existing resource's content — re-chunk and re-embed.
@@ -668,7 +687,7 @@ pub async fn update(
     let mut tx = pool.begin().await?;
 
     // Update manifest + fire event (context_id derived from resource row)
-    update_resource_manifest(
+    let audit_id = update_resource_manifest(
         &mut tx,
         &UpdateManifestParams {
             profile_id,
@@ -683,7 +702,14 @@ pub async fn update(
     .await?;
 
     // Replace chunks — version-bump + batch insert + search rebuild in one call
-    replace_chunks(&mut tx, resource_id, &chunks).await?;
+    replace_chunks(
+        &mut tx,
+        resource_id,
+        *audit_id,
+        payload.content_hash.as_deref().unwrap_or(""),
+        &chunks,
+    )
+    .await?;
 
     tx.commit().await?;
 
