@@ -181,7 +181,14 @@ pub async fn aggregator_subgraph(
                FROM kb_current_chunks cc
               WHERE cc.resource_id = r.id
               ORDER BY cc.chunk_index ASC
-              LIMIT 1) AS "first_chunk: String"
+              LIMIT 1) AS "first_chunk: String",
+            -- Task workflow stage sourced from managed_meta.temper-stage —
+            -- only meaningful when doc_type = 'task'. Left as NULL for
+            -- everything else; the Rust side guards with a doctype check
+            -- before surfacing the value on the node.
+            (SELECT m.managed_meta->>'temper-stage'
+               FROM kb_resource_manifests m
+              WHERE m.resource_id = r.id) AS "stage_raw: String"
           FROM kb_resources r
           JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
           JOIN candidate_ids c ON c.id = r.id
@@ -212,6 +219,13 @@ pub async fn aggregator_subgraph(
             .map_err(|e| ApiError::Internal(format!("unexpected doc_type in db: {e}")))?;
         node_ids.push(rec.id);
         let excerpt = rec.first_chunk.as_deref().and_then(compute_excerpt);
+        // Stage is task-only. Ignore the managed_meta value on any other
+        // doctype even if it happens to carry a `temper-stage` key.
+        let stage = if matches!(doc_type, DocType::Task) {
+            rec.stage_raw.filter(|s| !s.trim().is_empty())
+        } else {
+            None
+        };
         nodes.push(GraphNode {
             id: rec.id,
             slug: rec.slug,
@@ -221,6 +235,7 @@ pub async fn aggregator_subgraph(
             edge_count: rec.edge_count,
             session_count: rec.session_count,
             excerpt,
+            stage,
         });
     }
 

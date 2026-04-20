@@ -21,6 +21,7 @@ function node(partial: Partial<GraphNode>): GraphNode {
 		edge_count: 0,
 		session_count: 0,
 		excerpt: null,
+		stage: null,
 		...partial
 	};
 }
@@ -177,6 +178,15 @@ describe('zoom-tier selectors', () => {
 		);
 		expect(rule, 'detail dateStrip rule exists').toBeDefined();
 		expect(rule?.style.label).toBe('data(labelWithDate)');
+		expect(rule?.style['text-wrap']).toBe('wrap');
+	});
+
+	it('stacks the stage tag under tasks at the detail tier', () => {
+		const rule = buildStylesheet().find(
+			(r) => r.selector === 'node.tier-detail.type-task[stage]'
+		);
+		expect(rule, 'detail task-stage rule exists').toBeDefined();
+		expect(rule?.style.label).toBe('data(labelWithDateAndStage)');
 		expect(rule?.style['text-wrap']).toBe('wrap');
 	});
 

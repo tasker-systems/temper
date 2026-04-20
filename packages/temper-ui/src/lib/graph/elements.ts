@@ -15,6 +15,13 @@ import { nodeColor, nodeFontSize, nodeHeightPx, nodeWidthPx } from './styling';
  * `labelWithDate` is the label concatenated with `\n` + `dateStrip` when
  * a date exists — the `node.tier-detail[dateStrip]` rule swaps the visible
  * label to this multiline form at the detail zoom tier.
+ *
+ * `labelWithDateAndStage` stacks a task's stage below its label/date at the
+ * detail zoom tier. Populated only when `stage` is set (tasks only, see
+ * `GraphNode.stage` in temper-core) and keyed by the `node.tier-detail[stage]`
+ * selector in styling.ts. When both stage and a date strip are present the
+ * rendered label reads `{label}\n{dateStrip}\n{STAGE}`; stage-only tasks
+ * collapse to `{label}\n{STAGE}`.
  */
 export interface CytoscapeNodeElement {
 	group: 'nodes';
@@ -24,6 +31,8 @@ export interface CytoscapeNodeElement {
 		aggregator: boolean;
 		label: string;
 		labelWithDate: string | null;
+		labelWithDateAndStage: string | null;
+		stage: string | null;
 		fullTitle: string;
 		dateStrip: string | null;
 		edges: number;
@@ -64,6 +73,16 @@ export function toCytoscapeElements(
 	const nodeElements: CytoscapeNodeElement[] = nodes.map((n) => {
 		const { label, fullTitle, dateStrip } = deriveDisplay(n);
 		const labelWithDate = dateStrip ? `${label}\n${dateStrip}` : null;
+		// Stage is task-only server-side; keep it as a plain string for the
+		// stylesheet selector to see and as an uppercased segment in the
+		// composed label for readability at the detail zoom tier.
+		const stage = n.stage ?? null;
+		const stageSegment = stage ? stage.toUpperCase() : null;
+		const labelWithDateAndStage = stageSegment
+			? dateStrip
+				? `${label}\n${dateStrip}\n${stageSegment}`
+				: `${label}\n${stageSegment}`
+			: null;
 		return {
 			group: 'nodes',
 			data: {
@@ -72,6 +91,8 @@ export function toCytoscapeElements(
 				aggregator: n.aggregator,
 				label,
 				labelWithDate,
+				labelWithDateAndStage,
+				stage,
 				fullTitle,
 				dateStrip,
 				edges: n.edge_count,

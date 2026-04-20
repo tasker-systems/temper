@@ -259,6 +259,12 @@ pub struct GraphNode {
     /// Renders as the `EXCERPT` block in the resource peek panel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<String>,
+    /// Task workflow stage (e.g. `"in-progress"`, `"backlog"`). Only populated
+    /// for `DocType::Task` rows, sourced from `managed_meta.temper-stage`.
+    /// Renders as a small mono-caps tag under the task label at the detail
+    /// zoom tier (`node.tier-detail.type-task`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
 }
 
 /// One directed edge in a returned subgraph.

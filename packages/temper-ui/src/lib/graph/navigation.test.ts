@@ -12,6 +12,7 @@ function makeNode(partial: Partial<GraphNode>): GraphNode {
 		edge_count: 0,
 		session_count: 0,
 		excerpt: null,
+		stage: null,
 		...partial
 	};
 }

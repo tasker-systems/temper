@@ -284,4 +284,15 @@ INSERT INTO kb_chunk_content (chunk_id, content) VALUES
      repeat('OAuth comparison notes repeating for word-boundary truncation coverage. ', 8))
 ON CONFLICT (chunk_id) DO UPDATE SET content = EXCLUDED.content;
 
+-- ─── Manifest rows (task stage lives here) ─────────────────────────────────
+-- m2 is a task carrying temper-stage=in-progress so the detail-tier stage
+-- tag path is covered. m1 (research) also gets a manifest but with no stage,
+-- proving that non-task doctypes never surface stage even if it were set.
+INSERT INTO kb_resource_manifests (resource_id, managed_meta) VALUES
+    ('00000000-0000-0000-00c2-000000000002',
+     '{"temper-type":"task","temper-stage":"in-progress"}'::jsonb),
+    ('00000000-0000-0000-00c2-000000000001',
+     '{"temper-type":"research"}'::jsonb)
+ON CONFLICT (resource_id) DO UPDATE SET managed_meta = EXCLUDED.managed_meta;
+
 COMMIT;

@@ -12,6 +12,7 @@ function node(id: string, extra: Partial<GraphNode> = {}): GraphNode {
 		edge_count: 0,
 		session_count: 0,
 		excerpt: null,
+		stage: null,
 		...extra
 	};
 }

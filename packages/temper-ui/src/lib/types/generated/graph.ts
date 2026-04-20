@@ -62,7 +62,14 @@ session_count: number,
  * with an ellipsis suffix). `None` when the resource has no body text.
  * Renders as the `EXCERPT` block in the resource peek panel.
  */
-excerpt: string | null, };
+excerpt: string | null, 
+/**
+ * Task workflow stage (e.g. `"in-progress"`, `"backlog"`). Only populated
+ * for `DocType::Task` rows, sourced from `managed_meta.temper-stage`.
+ * Renders as a small mono-caps tag under the task label at the detail
+ * zoom tier (`node.tier-detail.type-task`).
+ */
+stage: string | null, };
 
 /**
  * Graph traversal result row — mirrors the `graph_traverse()` SQL function.

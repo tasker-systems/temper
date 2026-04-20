@@ -12,6 +12,7 @@ function gnode(partial: Partial<GraphNode>): GraphNode {
 		edge_count: 0,
 		session_count: 0,
 		excerpt: null,
+		stage: null,
 		...partial
 	};
 }
@@ -102,5 +103,42 @@ describe('toCytoscapeElements', () => {
 		const data = (els[0] as CytoscapeNodeElement).data;
 		expect(data.dateStrip).toBeNull();
 		expect(data.labelWithDate).toBeNull();
+	});
+
+	it('stacks stage under the label for tasks with a stage value', () => {
+		const els = toCytoscapeElements(
+			[gnode({ id: 'a', doc_type: 'task', title: 'Auth middleware', stage: 'in-progress' })],
+			[]
+		);
+		const data = (els[0] as CytoscapeNodeElement).data;
+		expect(data.stage).toBe('in-progress');
+		expect(data.labelWithDateAndStage).toBe('Auth middleware\nIN-PROGRESS');
+	});
+
+	it('stacks stage below label+date when both are present', () => {
+		const els = toCytoscapeElements(
+			[
+				gnode({
+					id: 'a',
+					doc_type: 'task',
+					title: 'Plan q2',
+					slug: '2026-04-17-plan-q2',
+					stage: 'done'
+				})
+			],
+			[]
+		);
+		const data = (els[0] as CytoscapeNodeElement).data;
+		expect(data.labelWithDateAndStage).toBe('Plan q2\n2026-04-17\nDONE');
+	});
+
+	it('leaves labelWithDateAndStage null when stage is absent', () => {
+		const els = toCytoscapeElements(
+			[gnode({ id: 'a', doc_type: 'task', title: 'No stage', stage: null })],
+			[]
+		);
+		const data = (els[0] as CytoscapeNodeElement).data;
+		expect(data.stage).toBeNull();
+		expect(data.labelWithDateAndStage).toBeNull();
 	});
 });

@@ -621,6 +621,55 @@ async fn excerpt_is_none_when_no_body_chunk(pool: PgPool) {
     );
 }
 
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn stage_populated_only_for_task_doctype(pool: PgPool) {
+    // m2 is a task with managed_meta.temper-stage = "in-progress"; the
+    // server must surface that as GraphNode.stage. m1 is research with a
+    // manifest but no stage — the field must stay None for non-tasks even
+    // if the JSON blob happened to carry the key.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let m2 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(M2_MIDDLEWARE))
+        .expect("m2 (task) should be in the result");
+    assert_eq!(m2.doc_type, DocType::Task, "fixture sanity");
+    assert_eq!(
+        m2.stage.as_deref(),
+        Some("in-progress"),
+        "task stage must come from managed_meta.temper-stage",
+    );
+
+    // Every non-task node — including m1 which has a manifest — must have
+    // stage = None. The field is doctype-gated server-side.
+    for node in &result.nodes {
+        if node.doc_type == DocType::Task {
+            continue;
+        }
+        assert!(
+            node.stage.is_none(),
+            "{:?} ({}) must not carry a stage (got {:?})",
+            node.doc_type,
+            node.title,
+            node.stage,
+        );
+    }
+}
+
 // ─── Handler smoke tests (service layer already integration-tested) ─────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
