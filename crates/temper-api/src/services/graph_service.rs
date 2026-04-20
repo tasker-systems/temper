@@ -226,9 +226,11 @@ mod tests {
     #[test]
     fn depth_over_limit_clamps_to_max() {
         assert_eq!(100u32.min(MAX_DEPTH), 10);
-        // u32::MAX is trivially >= MAX_DEPTH by type; assert via the ordering
-        // the clamp relies on, without triggering `clippy::unnecessary_min_or_max`.
-        assert!(u32::MAX > MAX_DEPTH);
+        // Exercise the clamp with a runtime value at the numeric ceiling —
+        // a literal u32::MAX trips clippy::unnecessary_min_or_max because the
+        // result is statically knowable, but a black_box value preserves the
+        // branch coverage we actually want.
+        assert_eq!(std::hint::black_box(u32::MAX).min(MAX_DEPTH), MAX_DEPTH);
     }
 
     // ── compute_excerpt ─────────────────────────────────────────────────
@@ -277,9 +279,7 @@ mod tests {
     #[test]
     fn compute_excerpt_truncates_past_max_chars_on_word_boundary() {
         // Build a paragraph well over EXCERPT_MAX_CHARS of ASCII words.
-        let long: String = std::iter::repeat("lorem ipsum dolor sit amet ")
-            .take(20)
-            .collect();
+        let long: String = "lorem ipsum dolor sit amet ".repeat(20);
         let excerpt = compute_excerpt(&long).expect("excerpt");
         assert!(excerpt.ends_with('…'), "trailing ellipsis: {excerpt}");
         assert!(
@@ -306,7 +306,7 @@ mod tests {
     fn compute_excerpt_handles_utf8_char_boundaries() {
         // Multi-byte chars must not panic the slice math. Build a paragraph
         // wider than the budget using 3-byte UTF-8 characters.
-        let long: String = std::iter::repeat("漢字 ").take(400).collect();
+        let long: String = "漢字 ".repeat(400);
         let excerpt = compute_excerpt(&long).expect("excerpt");
         assert!(excerpt.ends_with('…'));
         assert!(excerpt.chars().count() <= EXCERPT_MAX_CHARS + 1);

@@ -32,7 +32,7 @@ async fn test_graph_search_expands_from_seeds(pool: PgPool) {
         "#,
     )
     .bind(profile)
-    .bind(&vec![a])
+    .bind(vec![a])
     .fetch_all(&pool)
     .await
     .expect("graph_search query");
