@@ -1,7 +1,10 @@
 //! Edge service — extracts relationship declarations from frontmatter,
 //! resolves targets, and manages edges in `kb_resource_edges`.
 //!
-//! All SQL lives here per the "service layer owns SQL" rule.
+//! All SQL lives here per the "service layer owns SQL" rule. Resolution and
+//! mutation are batched — each `extract_and_upsert_edges` / `reconcile_edges`
+//! call fires at most O(1) DB round-trips per operation, not O(N) over the
+//! declaration list.
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -14,83 +17,6 @@ use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 // ─── Target Resolution ──────────────────────────────────────────────────────
 
-/// Resolve a single `TargetRef` to a resource UUID visible to the given profile.
-///
-/// - `TargetRef::Id(uuid)` — direct lookup against `kb_resources.id`
-/// - `TargetRef::Slug(slug)` — same-context match first, then cross-context.
-///   Must resolve to exactly one visible resource; ambiguous matches return None.
-///
-/// Returns `None` for unresolvable forward references.
-pub async fn resolve_target(
-    pool: &PgPool,
-    profile_id: &ProfileId,
-    context_id: &ContextId,
-    target: &TargetRef,
-) -> ApiResult<Option<Uuid>> {
-    match target {
-        TargetRef::Id(uuid) => {
-            // Direct UUID lookup scoped to visibility
-            let row = sqlx::query_scalar::<_, Uuid>(
-                "SELECT r.id
-                   FROM kb_resources r
-                   JOIN resources_visible_to($1, NULL, '{}') rv ON rv.resource_id = r.id
-                  WHERE r.id = $2",
-            )
-            .bind(**profile_id)
-            .bind(uuid)
-            .fetch_optional(pool)
-            .await?;
-            Ok(row)
-        }
-        TargetRef::Slug(slug) => {
-            // Try same-context first
-            let same_ctx = sqlx::query_scalar::<_, Uuid>(
-                "SELECT r.id
-                   FROM kb_resources r
-                   JOIN resources_visible_to($1, NULL, '{}') rv ON rv.resource_id = r.id
-                  WHERE r.slug = $2
-                    AND r.kb_context_id = $3",
-            )
-            .bind(**profile_id)
-            .bind(slug)
-            .bind(**context_id)
-            .fetch_optional(pool)
-            .await?;
-
-            if let Some(id) = same_ctx {
-                return Ok(Some(id));
-            }
-
-            // Fall back to cross-context, but require exactly one match
-            let cross_ctx: Vec<Uuid> = sqlx::query_scalar::<_, Uuid>(
-                "SELECT r.id
-                   FROM kb_resources r
-                   JOIN resources_visible_to($1, NULL, '{}') rv ON rv.resource_id = r.id
-                  WHERE r.slug = $2
-                    AND r.kb_context_id != $3",
-            )
-            .bind(**profile_id)
-            .bind(slug)
-            .bind(**context_id)
-            .fetch_all(pool)
-            .await?;
-
-            match cross_ctx.len() {
-                0 => Ok(None),
-                1 => Ok(Some(cross_ctx[0])),
-                n => {
-                    tracing::warn!(
-                        slug = %slug,
-                        matches = n,
-                        "ambiguous slug reference — resolved to multiple visible resources, skipping"
-                    );
-                    Ok(None)
-                }
-            }
-        }
-    }
-}
-
 /// Resolve a batch of `(EdgeType, TargetRef)` declarations into `ResolvedEdge`s.
 ///
 /// For `ParentOf` edges the direction is reversed: the resolved target becomes
@@ -98,6 +24,17 @@ pub async fn resolve_target(
 ///
 /// Returns `(resolved, unresolved)` — unresolved refs are forward references
 /// that should be deferred.
+///
+/// Performance: one DB round-trip regardless of declaration count. The query
+/// unnests the declaration list into a `refs` table, joins it against the
+/// visible resource set, and returns every (ord, candidate_id, same_ctx) row.
+/// Resolution semantics match the prior per-ref implementation:
+///
+///   * UUID ref → unique match or none (PK lookup).
+///   * Slug + at least one same-context candidate → first same-context wins.
+///   * Slug + no same-context + exactly one cross-context candidate → use it.
+///   * Slug + no same-context + multiple cross-context candidates → unresolved
+///     + tracing warning.
 pub async fn resolve_declarations(
     pool: &PgPool,
     profile_id: &ProfileId,
@@ -105,22 +42,79 @@ pub async fn resolve_declarations(
     resource_id: &ResourceId,
     declarations: &[(EdgeType, TargetRef)],
 ) -> ApiResult<(Vec<ResolvedEdge>, Vec<(EdgeType, TargetRef)>)> {
+    if declarations.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let (ords, kinds, refs): (Vec<i32>, Vec<String>, Vec<String>) = declarations
+        .iter()
+        .enumerate()
+        .map(|(i, (_, t))| match t {
+            TargetRef::Id(uuid) => (i as i32, "uuid".to_string(), uuid.to_string()),
+            TargetRef::Slug(slug) => (i as i32, "slug".to_string(), slug.clone()),
+        })
+        .fold(
+            (Vec::new(), Vec::new(), Vec::new()),
+            |(mut o, mut k, mut r), (ord, kind, text)| {
+                o.push(ord);
+                k.push(kind);
+                r.push(text);
+                (o, k, r)
+            },
+        );
+
+    // One round-trip: for each declaration ord, emit every visible candidate
+    // with a same_ctx flag. UUID matches cast the ref_text; slug matches use
+    // string equality. Bounded by the count of visible resources matching
+    // each ref (typically 0–1 for UUIDs, small for slugs).
+    let rows = sqlx::query!(
+        r#"
+        WITH refs(ord, ref_kind, ref_text) AS (
+            SELECT * FROM UNNEST($2::int[], $3::text[], $4::text[])
+        )
+        SELECT refs.ord                     AS "ord!: i32",
+               r.id                         AS "resource_id!: Uuid",
+               (r.kb_context_id = $5)       AS "same_ctx!: bool"
+          FROM refs
+          JOIN kb_resources r ON (
+               (refs.ref_kind = 'uuid' AND r.id = refs.ref_text::uuid)
+            OR (refs.ref_kind = 'slug' AND r.slug = refs.ref_text)
+          )
+          JOIN resources_visible_to($1, NULL, '{}') rv ON rv.resource_id = r.id
+         ORDER BY refs.ord, (r.kb_context_id = $5) DESC, r.id
+        "#,
+        **profile_id,
+        &ords,
+        &kinds,
+        &refs,
+        **context_id,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    // Group candidates by ord. `rows` is already ordered (ord ASC, same_ctx
+    // DESC, id ASC) so same_ctx candidates come first for each ord.
+    let mut by_ord: std::collections::HashMap<i32, Vec<(Uuid, bool)>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        by_ord
+            .entry(row.ord)
+            .or_default()
+            .push((row.resource_id, row.same_ctx));
+    }
+
     let mut resolved = Vec::new();
     let mut unresolved = Vec::new();
-
-    for (edge_type, target) in declarations {
-        match resolve_target(pool, profile_id, context_id, target).await? {
-            Some(target_uuid) => {
-                // Determine source/target based on edge type
+    for (i, (edge_type, target)) in declarations.iter().enumerate() {
+        let candidates = by_ord.remove(&(i as i32)).unwrap_or_default();
+        let chosen = select_candidate(&candidates);
+        match chosen {
+            Resolution::One(target_uuid) => {
                 let (source, dest) = if *edge_type == EdgeType::ParentOf {
-                    // ParentOf is reversed: resolved target is the parent (source),
-                    // declaring resource is the child (target)
                     (target_uuid, **resource_id)
                 } else {
                     (**resource_id, target_uuid)
                 };
-
-                // Skip self-edges
                 if source == dest {
                     tracing::warn!(
                         resource_id = %resource_id,
@@ -129,7 +123,6 @@ pub async fn resolve_declarations(
                     );
                     continue;
                 }
-
                 resolved.push(ResolvedEdge {
                     source_resource_id: source,
                     target_resource_id: dest,
@@ -138,7 +131,17 @@ pub async fn resolve_declarations(
                     metadata: serde_json::json!({"provenance": "frontmatter"}),
                 });
             }
-            None => {
+            Resolution::Ambiguous => {
+                if let TargetRef::Slug(slug) = target {
+                    tracing::warn!(
+                        slug = %slug,
+                        matches = candidates.len(),
+                        "ambiguous slug reference — resolved to multiple visible resources, skipping"
+                    );
+                }
+                unresolved.push((*edge_type, target.clone()));
+            }
+            Resolution::None => {
                 unresolved.push((*edge_type, target.clone()));
             }
         }
@@ -147,49 +150,79 @@ pub async fn resolve_declarations(
     Ok((resolved, unresolved))
 }
 
-// ─── Upsert & Defer ─────────────────────────────────────────────────────────
-
-/// Insert or update a single edge. Uses ON CONFLICT to merge metadata.
-pub async fn upsert_edge(
-    pool: &PgPool,
-    edge: &ResolvedEdge,
-    profile_id: &ProfileId,
-) -> ApiResult<()> {
-    // Runtime query because of edge_type::edge_type cast
-    sqlx::query(
-        "INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
-         VALUES ($1, $2, $3, $4::edge_type, $5, $6, $7)
-         ON CONFLICT ON CONSTRAINT uq_resource_edge
-         DO UPDATE SET weight = EXCLUDED.weight,
-                       metadata = kb_resource_edges.metadata || EXCLUDED.metadata,
-                       updated = now()",
-    )
-    .bind(Uuid::now_v7())
-    .bind(edge.source_resource_id)
-    .bind(edge.target_resource_id)
-    .bind(edge.edge_type.to_string())
-    .bind(edge.weight)
-    .bind(&edge.metadata)
-    .bind(**profile_id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
+enum Resolution {
+    One(Uuid),
+    Ambiguous,
+    None,
 }
 
-/// Upsert a batch of resolved edges. Returns count of edges upserted.
+/// Pick a winner from the ordered candidate list for one declaration.
+///
+/// Rows arrive ordered by (same_ctx DESC, id ASC). Rules match the legacy
+/// per-ref implementation:
+///   * Any same-ctx candidate → first one wins (same-context always beats
+///     cross-context, even if multiple same-ctx matches exist — matches the
+///     prior `fetch_optional` semantics).
+///   * No same-ctx + one cross-ctx → use it.
+///   * No same-ctx + multiple cross-ctx → Ambiguous.
+fn select_candidate(candidates: &[(Uuid, bool)]) -> Resolution {
+    if let Some(&(id, _)) = candidates.iter().find(|(_, same)| *same) {
+        return Resolution::One(id);
+    }
+    match candidates.len() {
+        0 => Resolution::None,
+        1 => Resolution::One(candidates[0].0),
+        _ => Resolution::Ambiguous,
+    }
+}
+
+// ─── Upsert & Defer ─────────────────────────────────────────────────────────
+
+/// Upsert a batch of resolved edges in a single round-trip. Uses ON CONFLICT
+/// to merge metadata, so re-running over the same declarations is idempotent.
+///
+/// Returns the count of edges processed (equal to the input length).
 pub async fn upsert_edges(
     pool: &PgPool,
     edges: &[ResolvedEdge],
     profile_id: &ProfileId,
 ) -> ApiResult<usize> {
-    for edge in edges {
-        upsert_edge(pool, edge, profile_id).await?;
+    if edges.is_empty() {
+        return Ok(0);
     }
+
+    let ids: Vec<Uuid> = edges.iter().map(|_| Uuid::now_v7()).collect();
+    let sources: Vec<Uuid> = edges.iter().map(|e| e.source_resource_id).collect();
+    let targets: Vec<Uuid> = edges.iter().map(|e| e.target_resource_id).collect();
+    let edge_types: Vec<String> = edges.iter().map(|e| e.edge_type.to_string()).collect();
+    let weights: Vec<f64> = edges.iter().map(|e| e.weight).collect();
+    let metadata: Vec<serde_json::Value> = edges.iter().map(|e| e.metadata.clone()).collect();
+
+    sqlx::query(
+        "INSERT INTO kb_resource_edges
+            (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
+         SELECT u.id, u.source_id, u.target_id, u.edge_type::edge_type, u.weight, u.metadata, $7
+           FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::float8[], $6::jsonb[])
+             AS u(id, source_id, target_id, edge_type, weight, metadata)
+         ON CONFLICT ON CONSTRAINT uq_resource_edge
+         DO UPDATE SET weight = EXCLUDED.weight,
+                       metadata = kb_resource_edges.metadata || EXCLUDED.metadata,
+                       updated = now()",
+    )
+    .bind(&ids)
+    .bind(&sources)
+    .bind(&targets)
+    .bind(&edge_types)
+    .bind(&weights)
+    .bind(&metadata)
+    .bind(**profile_id)
+    .execute(pool)
+    .await?;
+
     Ok(edges.len())
 }
 
-/// Store unresolved target references in `kb_deferred_edges` for later resolution.
+/// Store unresolved target references in `kb_deferred_edges` in a single round-trip.
 pub async fn defer_edges(
     pool: &PgPool,
     resource_id: &ResourceId,
@@ -197,27 +230,35 @@ pub async fn defer_edges(
     profile_id: &ProfileId,
     unresolved: &[(EdgeType, TargetRef)],
 ) -> ApiResult<usize> {
-    for (edge_type, target) in unresolved {
-        let target_ref_str = match target {
+    if unresolved.is_empty() {
+        return Ok(0);
+    }
+
+    let ids: Vec<Uuid> = unresolved.iter().map(|_| Uuid::now_v7()).collect();
+    let edge_types: Vec<String> = unresolved.iter().map(|(t, _)| t.to_string()).collect();
+    let target_refs: Vec<String> = unresolved
+        .iter()
+        .map(|(_, t)| match t {
             TargetRef::Id(uuid) => uuid.to_string(),
             TargetRef::Slug(slug) => slug.clone(),
-        };
+        })
+        .collect();
 
-        sqlx::query(
-            "INSERT INTO kb_deferred_edges (id, source_resource_id, target_ref, target_context_id, edge_type, weight, metadata, created_by_profile_id)
-             VALUES ($1, $2, $3, $4, $5::edge_type, $6, $7, $8)",
-        )
-        .bind(Uuid::now_v7())
-        .bind(**resource_id)
-        .bind(&target_ref_str)
-        .bind(**context_id)
-        .bind(edge_type.to_string())
-        .bind(1.0_f64)
-        .bind(serde_json::json!({"provenance": "frontmatter"}))
-        .bind(**profile_id)
-        .execute(pool)
-        .await?;
-    }
+    sqlx::query(
+        "INSERT INTO kb_deferred_edges
+            (id, source_resource_id, target_ref, target_context_id, edge_type, weight, metadata, created_by_profile_id)
+         SELECT u.id, $2, u.target_ref, $3, u.edge_type::edge_type, 1.0, '{\"provenance\": \"frontmatter\"}'::jsonb, $4
+           FROM UNNEST($1::uuid[], $5::text[], $6::text[])
+             AS u(id, edge_type, target_ref)",
+    )
+    .bind(&ids)
+    .bind(**resource_id)
+    .bind(**context_id)
+    .bind(**profile_id)
+    .bind(&edge_types)
+    .bind(&target_refs)
+    .execute(pool)
+    .await?;
 
     Ok(unresolved.len())
 }
@@ -246,10 +287,10 @@ pub async fn resolve_deferred_edges(
     .fetch_all(pool)
     .await?;
 
-    let mut resolved_count = 0usize;
+    let mut edges_to_upsert: Vec<ResolvedEdge> = Vec::new();
+    let mut deferred_ids_to_delete: Vec<Uuid> = Vec::new();
 
     for row in &rows {
-        // Parse edge_type from stored TEXT
         let edge_type: EdgeType =
             match serde_json::from_value(serde_json::Value::String(row.edge_type.clone())) {
                 Ok(et) => et,
@@ -264,15 +305,15 @@ pub async fn resolve_deferred_edges(
                 }
             };
 
-        // Determine direction: ParentOf means the deferred source declared a parent,
-        // so the new resource is the parent (source) and the declaring resource is the child (target)
+        // ParentOf means the deferred source declared a parent, so the new
+        // resource is the parent (source) and the declaring resource is the
+        // child (target).
         let (source, target) = if edge_type == EdgeType::ParentOf {
             (**new_resource_id, row.source_resource_id)
         } else {
             (row.source_resource_id, **new_resource_id)
         };
 
-        // Skip self-edges
         if source == target {
             tracing::warn!(
                 deferred_id = %row.id,
@@ -282,26 +323,25 @@ pub async fn resolve_deferred_edges(
             continue;
         }
 
-        let edge = ResolvedEdge {
+        edges_to_upsert.push(ResolvedEdge {
             source_resource_id: source,
             target_resource_id: target,
             edge_type,
             weight: row.weight,
             metadata: row.metadata.clone(),
-        };
+        });
+        deferred_ids_to_delete.push(row.id);
+    }
 
-        upsert_edge(pool, &edge, profile_id).await?;
-
-        // Delete the resolved deferred edge
-        sqlx::query("DELETE FROM kb_deferred_edges WHERE id = $1")
-            .bind(row.id)
+    let resolved_count = edges_to_upsert.len();
+    if resolved_count > 0 {
+        upsert_edges(pool, &edges_to_upsert, profile_id).await?;
+        // Delete the resolved deferred edges in a single round-trip.
+        sqlx::query("DELETE FROM kb_deferred_edges WHERE id = ANY($1::uuid[])")
+            .bind(&deferred_ids_to_delete)
             .execute(pool)
             .await?;
 
-        resolved_count += 1;
-    }
-
-    if resolved_count > 0 {
         tracing::info!(
             resource_id = %new_resource_id,
             resolved = resolved_count,
@@ -498,17 +538,17 @@ pub async fn reconcile_edges(
 
     let unchanged = existing_set.intersection(&new_set).count();
 
-    // Execute additions
+    // Batch additions and removals into one round-trip each.
     let added = to_add.len();
-    for edge in &to_add {
-        upsert_edge(pool, edge, profile_id).await?;
+    if added > 0 {
+        let additions: Vec<ResolvedEdge> = to_add.iter().map(|&e| e.clone()).collect();
+        upsert_edges(pool, &additions, profile_id).await?;
     }
 
-    // Execute removals
     let removed = to_remove.len();
-    for edge_id in &to_remove {
-        sqlx::query("DELETE FROM kb_resource_edges WHERE id = $1")
-            .bind(edge_id)
+    if removed > 0 {
+        sqlx::query("DELETE FROM kb_resource_edges WHERE id = ANY($1::uuid[])")
+            .bind(&to_remove)
             .execute(pool)
             .await?;
     }
