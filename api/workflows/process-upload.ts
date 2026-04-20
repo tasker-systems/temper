@@ -7,18 +7,22 @@ import {
   type ChunkRow,
 } from "../../packages/temper-cloud/src/workflow/store.js";
 import { getDb } from "../../packages/temper-cloud/src/db.js";
+import { insertEventAndAudit, DEVICE_ID_CLOUD } from "../../packages/temper-cloud/src/events.js";
+import { createHash } from "node:crypto";
 
 export async function processUpload(
   blobFileId: string,
   blobUrl: string,
-  resourceId: string
+  resourceId: string,
+  profileId: string,
+  contextId: string,
 ) {
   "use workflow";
 
   const text = await extractStep(blobFileId, blobUrl);
   const chunks = await chunkStep(text);
   const embeddings = await embedStep(chunks.map((c) => c.content));
-  await storeStep(blobFileId, resourceId, chunks, embeddings);
+  await storeStep(blobFileId, resourceId, profileId, contextId, text, chunks, embeddings);
 }
 
 async function extractStep(blobFileId: string, blobUrl: string): Promise<string> {
@@ -49,8 +53,10 @@ async function extractStep(blobFileId: string, blobUrl: string): Promise<string>
 }
 
 async function chunkStep(
-  text: string
-): Promise<Array<{ header_path: string; content: string; content_hash: string; chunk_index: number }>> {
+  text: string,
+): Promise<
+  Array<{ header_path: string; content: string; content_hash: string; chunk_index: number }>
+> {
   "use step";
   return chunkText(text);
 }
@@ -63,28 +69,54 @@ async function embedStep(texts: string[]): Promise<number[][]> {
 async function storeStep(
   blobFileId: string,
   resourceId: string,
-  chunks: Array<{ header_path: string; content: string; content_hash: string; chunk_index: number }>,
-  embeddings: number[][]
+  profileId: string,
+  contextId: string,
+  bodyText: string,
+  chunks: Array<{
+    header_path: string;
+    content: string;
+    content_hash: string;
+    chunk_index: number;
+  }>,
+  embeddings: number[][],
 ): Promise<void> {
   "use step";
 
   const db = getDb();
 
-  // Build chunk rows with embeddings
-  const chunkRows: ChunkRow[] = chunks.map((chunk, i) => ({
-    id: "",
-    resource_id: resourceId,
-    chunk_index: chunk.chunk_index,
-    version: 0,
-    header_path: chunk.header_path,
-    content: chunk.content,
-    content_hash: chunk.content_hash,
-    embedding: embeddings[i],
-  }));
+  const bodyHash = `sha256:${createHash("sha256").update(bodyText).digest("hex")}`;
 
-  // Store chunks atomically via SQL function (handles version bump + insert)
-  const chunksJson = JSON.stringify(chunksToJsonb(chunkRows));
-  await db`SELECT persist_resource_chunks(${resourceId}::uuid, ${chunksJson}::jsonb)`;
+  const { auditId } = await insertEventAndAudit(db, {
+    profileId,
+    deviceId: DEVICE_ID_CLOUD,
+    contextId,
+    resourceId,
+    eventType: "body_updated",
+    action: "update_body",
+    bodyHash,
+    managedHash: "",
+    openHash: "",
+  });
+
+  if (chunks.length > 0) {
+    const chunkRows: ChunkRow[] = chunks.map((chunk, i) => ({
+      id: "",
+      resource_id: resourceId,
+      chunk_index: chunk.chunk_index,
+      version: 0,
+      header_path: chunk.header_path,
+      content: chunk.content,
+      content_hash: chunk.content_hash,
+      embedding: embeddings[i],
+    }));
+
+    const chunksJson = JSON.stringify(chunksToJsonb(chunkRows));
+    await db`
+      SELECT persist_resource_chunks(
+        ${resourceId}::uuid, ${auditId}::uuid, ${bodyHash}, ${chunksJson}::jsonb
+      )
+    `;
+  }
 
   // Update blob_files status to processed
   const statusQuery = buildStatusUpdateQuery(blobFileId, "processed", null);
