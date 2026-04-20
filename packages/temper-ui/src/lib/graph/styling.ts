@@ -203,6 +203,40 @@ export function buildStylesheet(): CytoscapeStyle {
 			style: {
 				opacity: 0.03
 			}
+		},
+		// ── Zoom tiers ──────────────────────────────────────────────────────
+		//
+		// kg-handoff.md § PR 5:
+		//   < 0.5  → overview: only aggregators labeled; participants render
+		//            as short colored tick marks.
+		//     0.5 – 1.2 → mid: steady state.
+		//   > 1.2  → detail: labels + date strips (stage tags deferred).
+		//
+		// Tier transitions are supposed to fade at 220ms. Cytoscape's
+		// `transition-duration` is per-element, so we inherit the base
+		// node's 180ms (see `EMPHASIS_TRANSITION_MS`) — a 40ms deviation
+		// from the design budget in service of keeping one duration.
+		// Mid tier has no style rule because it IS the steady state.
+		{
+			selector: 'node.tier-overview.participant',
+			style: {
+				'text-opacity': 0,
+				'background-opacity': 1,
+				'background-color': 'data(fill)',
+				shape: 'rectangle',
+				width: 12,
+				height: 3
+			}
+		},
+		// Detail tier: swap label to the multiline date variant for nodes
+		// that have a date strip. Participants and aggregators both opt in.
+		{
+			selector: 'node.tier-detail[dateStrip]',
+			style: {
+				label: 'data(labelWithDate)',
+				'text-wrap': 'wrap',
+				'line-height': 1.2
+			}
 		}
 	];
 }

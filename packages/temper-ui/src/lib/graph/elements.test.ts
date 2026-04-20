@@ -82,4 +82,24 @@ describe('toCytoscapeElements', () => {
 		const edgeIds = els.filter((e) => e.group === 'edges').map((e) => e.data.id);
 		expect(new Set(edgeIds).size).toBe(edgeIds.length);
 	});
+
+	it('builds labelWithDate when the slug has a date prefix', () => {
+		const els = toCytoscapeElements(
+			[gnode({ id: 'a', title: 'R11 design', slug: '2026-04-17-r11-design' })],
+			[]
+		);
+		const data = (els[0] as CytoscapeNodeElement).data;
+		expect(data.dateStrip).toBe('2026-04-17');
+		expect(data.labelWithDate).toBe('R11 design\n2026-04-17');
+	});
+
+	it('leaves labelWithDate null when there is no date prefix', () => {
+		const els = toCytoscapeElements(
+			[gnode({ id: 'a', title: 'Circuit breakers', slug: 'circuit-breakers' })],
+			[]
+		);
+		const data = (els[0] as CytoscapeNodeElement).data;
+		expect(data.dateStrip).toBeNull();
+		expect(data.labelWithDate).toBeNull();
+	});
 });

@@ -11,6 +11,10 @@ import { nodeColor, nodeFontSize, nodeHeightPx, nodeWidthPx } from './styling';
  * `label` / `fullTitle` / `dateStrip` / `sessions` data fields, and the
  * `type-<doctype>` + `aggregator|participant` classes that the stylesheet
  * selectors hook into.
+ *
+ * `labelWithDate` is the label concatenated with `\n` + `dateStrip` when
+ * a date exists — the `node.tier-detail[dateStrip]` rule swaps the visible
+ * label to this multiline form at the detail zoom tier.
  */
 export interface CytoscapeNodeElement {
 	group: 'nodes';
@@ -19,6 +23,7 @@ export interface CytoscapeNodeElement {
 		type: string;
 		aggregator: boolean;
 		label: string;
+		labelWithDate: string | null;
 		fullTitle: string;
 		dateStrip: string | null;
 		edges: number;
@@ -58,6 +63,7 @@ export function toCytoscapeElements(
 
 	const nodeElements: CytoscapeNodeElement[] = nodes.map((n) => {
 		const { label, fullTitle, dateStrip } = deriveDisplay(n);
+		const labelWithDate = dateStrip ? `${label}\n${dateStrip}` : null;
 		return {
 			group: 'nodes',
 			data: {
@@ -65,6 +71,7 @@ export function toCytoscapeElements(
 				type: n.doc_type,
 				aggregator: n.aggregator,
 				label,
+				labelWithDate,
 				fullTitle,
 				dateStrip,
 				edges: n.edge_count,

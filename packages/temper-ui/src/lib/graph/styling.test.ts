@@ -153,6 +153,38 @@ describe('emphasis classes', () => {
 	});
 });
 
+describe('zoom-tier selectors', () => {
+	it('hides participant labels and renders tick marks at the overview tier', () => {
+		const rule = buildStylesheet().find(
+			(r) => r.selector === 'node.tier-overview.participant'
+		);
+		expect(rule, 'participant overview rule exists').toBeDefined();
+		expect(rule?.style['text-opacity']).toBe(0);
+		expect(rule?.style['background-opacity']).toBe(1);
+		expect(rule?.style.shape).toBe('rectangle');
+	});
+
+	it('does NOT add an overview-tier rule for aggregators (they stay labeled)', () => {
+		const sheet = buildStylesheet();
+		const hit = sheet.find((r) => r.selector === 'node.tier-overview.aggregator');
+		expect(hit, 'aggregators should have no overview override').toBeUndefined();
+	});
+
+	it('swaps the detail-tier label to the multiline labelWithDate when dateStrip exists', () => {
+		const rule = buildStylesheet().find(
+			(r) => r.selector === 'node.tier-detail[dateStrip]'
+		);
+		expect(rule, 'detail dateStrip rule exists').toBeDefined();
+		expect(rule?.style.label).toBe('data(labelWithDate)');
+		expect(rule?.style['text-wrap']).toBe('wrap');
+	});
+
+	it('has NO tier-mid rule (mid IS the steady state)', () => {
+		const hits = buildStylesheet().filter((r) => r.selector.includes('tier-mid'));
+		expect(hits).toEqual([]);
+	});
+});
+
 describe('edgeStrokeDasharray', () => {
 	it('returns a nonempty dash for dashed edge types', () => {
 		expect(edgeStrokeDasharray('preceded_by')).not.toBe('');

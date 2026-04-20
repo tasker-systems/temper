@@ -8,6 +8,7 @@
 	import { toCytoscapeElements } from '$lib/graph/elements';
 	import { defaultFcoseConfig } from '$lib/graph/layout';
 	import { buildStylesheet } from '$lib/graph/styling';
+	import { ALL_TIER_CLASSES, tierClass, zoomTier, type ZoomTier } from '$lib/graph/tiers';
 	import ResourcePeek from './ResourcePeek.svelte';
 
 	// Register fcose once per page — cytoscape tolerates re-registration but
@@ -132,6 +133,25 @@
 				cy!.nodes().removeClass('hovered dim');
 				cy!.edges().removeClass('incident quiet');
 			});
+		});
+
+		// Zoom-tier label culling. Every zoom tick reclassifies; we cache the
+		// last tier and skip the DOM work when nothing changed — that's the
+		// anti-jitter strategy at threshold boundaries (no hysteresis needed
+		// because zoomTier is pure and the no-op path dominates).
+		let currentTier: ZoomTier | null = null;
+		const applyTier = (next: ZoomTier) => {
+			if (!cy || next === currentTier) return;
+			currentTier = next;
+			cy.batch(() => {
+				cy!.nodes().removeClass(ALL_TIER_CLASSES).addClass(tierClass(next));
+			});
+		};
+		// Seed the initial tier from the layout's starting zoom, then react.
+		applyTier(zoomTier(cy.zoom()));
+		cy.on('zoom', () => {
+			if (!cy) return;
+			applyTier(zoomTier(cy.zoom()));
 		});
 
 		// fcose occasionally quiesces in an alpha-0 state until a user
