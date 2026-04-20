@@ -430,3 +430,19 @@ async fn replace_chunks_empty_input_supersedes_all(pool: PgPool) {
             .unwrap();
     assert_eq!(chunk_count, 0);
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn backfill_assigns_first_revision_to_every_chunk(pool: PgPool) {
+    // Any chunk existing after all migrations run must have first_revision_id set.
+    // The sqlx::test harness applies migrations in order, including the backfill,
+    // so seed-data chunks (inserted by earlier migrations) must be populated.
+    let null_count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM kb_chunks WHERE first_revision_id IS NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        null_count, 0,
+        "backfill must leave zero chunks with null first_revision_id"
+    );
+}
