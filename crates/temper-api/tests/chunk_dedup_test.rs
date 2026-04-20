@@ -446,3 +446,15 @@ async fn backfill_assigns_first_revision_to_every_chunk(pool: PgPool) {
         "backfill must leave zero chunks with null first_revision_id"
     );
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn kb_chunks_first_revision_id_is_not_null(pool: PgPool) {
+    let is_nullable: String = sqlx::query_scalar(
+        "SELECT is_nullable FROM information_schema.columns \
+         WHERE table_name = 'kb_chunks' AND column_name = 'first_revision_id'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(is_nullable, "NO");
+}
