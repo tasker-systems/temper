@@ -218,7 +218,7 @@ pub async fn find_by_body_hash(
 async fn persist_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_id: ResourceId,
-    audit_id: Uuid,
+    audit_id: ResourceAuditId,
     body_hash: &str,
     chunks: &[PackedChunk],
 ) -> ApiResult<RevisionId> {
@@ -227,7 +227,7 @@ async fn persist_chunks(
     let rev: Uuid = sqlx::query_scalar!(
         "SELECT persist_resource_chunks($1::uuid, $2::uuid, $3::text, $4::jsonb)",
         *resource_id,
-        audit_id,
+        *audit_id,
         body_hash,
         chunks_json
     )
@@ -244,7 +244,7 @@ async fn persist_chunks(
 async fn replace_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_id: ResourceId,
-    audit_id: Uuid,
+    audit_id: ResourceAuditId,
     body_hash: &str,
     chunks: &[PackedChunk],
 ) -> ApiResult<RevisionId> {
@@ -253,7 +253,7 @@ async fn replace_chunks(
     let rev: Uuid = sqlx::query_scalar!(
         "SELECT replace_resource_chunks($1::uuid, $2::uuid, $3::text, $4::jsonb)",
         *resource_id,
-        audit_id,
+        *audit_id,
         body_hash,
         chunks_json
     )
@@ -370,14 +370,7 @@ pub async fn create_resource_with_manifest(
         let chunks = unpack_chunks(packed)
             .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
         if !chunks.is_empty() {
-            persist_chunks(
-                &mut tx,
-                resource_id,
-                *audit_id,
-                params.content_hash,
-                &chunks,
-            )
-            .await?;
+            persist_chunks(&mut tx, resource_id, audit_id, params.content_hash, &chunks).await?;
         }
     }
 
@@ -705,7 +698,7 @@ pub async fn update(
     replace_chunks(
         &mut tx,
         resource_id,
-        *audit_id,
+        audit_id,
         payload.content_hash.as_deref().unwrap_or(""),
         &chunks,
     )
