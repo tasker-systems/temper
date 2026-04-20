@@ -301,17 +301,26 @@ CREATE OR REPLACE FUNCTION _seed_content(
     p_content     TEXT
 ) RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
-    v_chunk_id UUID := gen_random_uuid();
+    v_chunk_id    UUID := gen_random_uuid();
+    v_revision_id UUID := uuidv7();
+    v_body_hash   TEXT := md5(p_content);
     v_zero_vec vector(768) := ('[' || repeat('0,', 767) || '0]')::vector;
 BEGIN
     -- Remove existing chunks for this resource
     DELETE FROM kb_chunks WHERE resource_id = p_resource_id;
 
+    -- Synthesize a revision row to satisfy kb_chunks.first_revision_id NOT NULL.
+    -- audit_id is NULL because this is dev seed data, not an actual write.
+    INSERT INTO kb_resource_revisions (id, resource_id, audit_id, body_hash, chunk_count)
+    VALUES (v_revision_id, p_resource_id, NULL, v_body_hash, 1);
+
     -- Insert single chunk (no splitting needed for seed data)
     INSERT INTO kb_chunks
-        (id, resource_id, chunk_index, version, header_path, content_hash, embedding, is_current)
+        (id, resource_id, chunk_index, version, header_path, content_hash,
+         embedding, is_current, first_revision_id)
     VALUES
-        (v_chunk_id, p_resource_id, 0, 1, '', md5(p_content), v_zero_vec, true);
+        (v_chunk_id, p_resource_id, 0, 1, '', v_body_hash,
+         v_zero_vec, true, v_revision_id);
 
     INSERT INTO kb_chunk_content (chunk_id, content)
     VALUES (v_chunk_id, p_content)
