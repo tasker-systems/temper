@@ -254,6 +254,11 @@ pub struct GraphNode {
     /// Count of `session`-typed resources that share any edge with this node.
     /// Renders as a `⌊N⌋` annotation glyph in the UI.
     pub session_count: i32,
+    /// First-paragraph body preview (≤ 280 chars, truncated on a word boundary
+    /// with an ellipsis suffix). `None` when the resource has no body text.
+    /// Renders as the `EXCERPT` block in the resource peek panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
 }
 
 /// One directed edge in a returned subgraph.

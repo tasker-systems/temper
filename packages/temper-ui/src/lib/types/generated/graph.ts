@@ -56,7 +56,13 @@ edge_count: number,
  * Count of `session`-typed resources that share any edge with this node.
  * Renders as a `⌊N⌋` annotation glyph in the UI.
  */
-session_count: number, };
+session_count: number, 
+/**
+ * First-paragraph body preview (≤ 280 chars, truncated on a word boundary
+ * with an ellipsis suffix). `None` when the resource has no body text.
+ * Renders as the `EXCERPT` block in the resource peek panel.
+ */
+excerpt: string | null, };
 
 /**
  * Graph traversal result row — mirrors the `graph_traverse()` SQL function.

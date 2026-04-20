@@ -231,6 +231,21 @@
 				<div class="text-[#e8e4df]">{display.dateStrip}</div>
 			{/if}
 		</div>
+
+		<!-- First-paragraph body preview. Hidden for resources with no chunk
+		     content yet (e.g., frontmatter-only records). -->
+		{#if node.excerpt}
+			<div class="mb-2.5 font-mono text-[8.5px] tracking-[0.22em] text-white/35">
+				EXCERPT
+			</div>
+			<p
+				class="mb-[18px] font-serif text-[14px] leading-[1.6]"
+				style="color: rgba(232,228,223,0.88); text-wrap: pretty;"
+				data-testid="peek-excerpt"
+			>
+				{node.excerpt}
+			</p>
+		{/if}
 	</div>
 
 	<!-- Footer: ESC hint + open-resource link -->

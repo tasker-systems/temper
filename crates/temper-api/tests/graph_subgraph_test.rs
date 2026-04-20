@@ -542,6 +542,85 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
     assert_eq!(c1.edge_count, 3, "c1 has 3 outgoing edges");
 }
 
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn excerpt_reflects_first_chunk_first_paragraph(pool: PgPool) {
+    // c1 is seeded with a two-paragraph body; excerpt must contain only the
+    // first paragraph, and m1 is seeded with a long single paragraph so the
+    // excerpt truncates with a trailing ellipsis.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let c1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
+        .expect("c1 should be in the result");
+    assert_eq!(
+        c1.excerpt.as_deref(),
+        Some("Idempotency keys let retries be safe."),
+        "c1 excerpt should be the first paragraph only"
+    );
+
+    let m1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(M1_OAUTH))
+        .expect("m1 should be in the result");
+    let m1_excerpt = m1.excerpt.as_deref().expect("m1 excerpt present");
+    assert!(
+        m1_excerpt.ends_with('…'),
+        "long paragraph must truncate with ellipsis, got {m1_excerpt:?}"
+    );
+    assert!(
+        m1_excerpt.chars().count() <= 281,
+        "excerpt bounded to 280 chars + ellipsis"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn excerpt_is_none_when_no_body_chunk(pool: PgPool) {
+    // Most fixture resources have no chunk content seeded; those nodes should
+    // come back with excerpt = None rather than empty-string or a panic.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    // c3 (singleton, no chunk seeded) → None
+    let c3 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C3_SINGLETON))
+        .expect("c3 should be in the result");
+    assert!(
+        c3.excerpt.is_none(),
+        "resource with no body chunk yields excerpt = None, got {:?}",
+        c3.excerpt,
+    );
+}
+
 // ─── Handler smoke tests (service layer already integration-tested) ─────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
