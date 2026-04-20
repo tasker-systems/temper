@@ -26,7 +26,12 @@
 		</div>
 	{:else}
 		<div class="min-h-0 flex-1">
-			<KnowledgeGraph nodes={data.subgraph.nodes} edges={data.subgraph.edges} />
+			<KnowledgeGraph
+				nodes={data.subgraph.nodes}
+				edges={data.subgraph.edges}
+				owner={data.owner}
+				context={data.context}
+			/>
 		</div>
 	{/if}
 </div>
