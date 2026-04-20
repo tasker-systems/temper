@@ -6,6 +6,13 @@
 --      are pinned regardless of age.
 --   3. Age ceiling: revisions younger than p_age_ceiling_days are pinned.
 --
+-- Practical note: because Phase C does not garbage-collect kb_chunks, dial
+-- (1) is dominant in practice. Any revision that ever minted or superseded
+-- a chunk stays pinned forever. The sweep therefore collects only chunkless
+-- revisions — orphans from the backfill fallback (migration 0008 step 4)
+-- and potential future sources of chunkless revisions. Operators should
+-- not expect large deletion counts until chunk GC lands.
+--
 -- Returns the count of revisions deleted.
 CREATE OR REPLACE FUNCTION sweep_orphaned_revisions(
     p_keep_last_n      INT DEFAULT 10,
