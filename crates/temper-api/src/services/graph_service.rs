@@ -95,15 +95,13 @@ pub struct AggregatorSubgraphParams<'a> {
 /// `session_count` equal to the number of sessions that share an edge with
 /// it. Edges whose endpoint is a session are likewise dropped.
 ///
-/// Implementation uses two round-trips with compile-time checked queries:
+/// Implementation uses two round-trips:
 ///
-/// 1. CTE-resolved node rows (seeds + traversed, both filtered by
-///    `is_active = true` AND `doc_type != 'session'`) — node metadata plus
-///    the per-node session count come back in the same trip.
+/// 1. `graph_subgraph_nodes(...)` SQL function — seeds + traversed ID set
+///    with edge_count, session_count, first_chunk, and stage_raw aggregated
+///    via CTEs in a single planned query. Sessions and inactive resources
+///    are excluded in the function.
 /// 2. Edge rows where both endpoints are in the resolved (non-session) ID set.
-///
-/// Because inactive and session resources are excluded at step 1, the edge
-/// query in step 2 can never return a dangling or session-incident edge.
 pub async fn aggregator_subgraph(
     pool: &PgPool,
     params: AggregatorSubgraphParams<'_>,
@@ -119,81 +117,21 @@ pub async fn aggregator_subgraph(
         .map(|dt| dt.as_str().to_string())
         .collect();
 
-    // Query 1: resolve the candidate ID set AND fetch node metadata in one
-    // round-trip. The CTE unions seeds + traversed, then joins back to
-    // kb_resources with `is_active = true` AND `doc_type != 'session'` to
-    // exclude sessions from the node list. Visibility is enforced by
-    // resources_visible_to() in the seed CTE and by graph_traverse() during
-    // expansion.
-    //
-    // session_count is computed as a correlated subquery: for each returned
-    // node, how many session-typed resources share any edge with it?
+    // Query 1: nodes via the packaged SQL function. The function does the
+    // seed + BFS + edge/session aggregation in a single planned query,
+    // avoiding the N*4 correlated subqueries of the prior inline form.
     let node_records = sqlx::query!(
         r#"
-        WITH seed_concepts AS (
-            SELECT r.id
-              FROM kb_resources r
-              JOIN resources_visible_to($1, NULL, '{}') v ON v.resource_id = r.id
-              JOIN kb_contexts c   ON c.id  = r.kb_context_id
-              JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-             WHERE c.name = $2
-               AND dt.name = ANY($3::text[])
-               AND r.is_active = true
-        ),
-        traversed AS (
-            SELECT resource_id AS id
-              FROM graph_traverse(
-                  $1,
-                  ARRAY(SELECT id FROM seed_concepts),
-                  $4::int,
-                  '{}'
-              )
-        ),
-        candidate_ids AS (
-            SELECT id FROM seed_concepts
-            UNION
-            SELECT id FROM traversed
-        )
         SELECT
-            r.id         AS "id!: Uuid",
-            r.slug       AS "slug!",
-            r.title      AS "title!",
-            dt.name      AS "doc_type!",
-            (SELECT COUNT(*)::int
-               FROM kb_resource_edges e
-              WHERE e.source_resource_id = r.id
-                 OR e.target_resource_id = r.id) AS "edge_count!: i32",
-            (SELECT COUNT(DISTINCT peer.id)::int
-               FROM kb_resource_edges e
-               JOIN kb_resources peer
-                 ON peer.id = CASE WHEN e.source_resource_id = r.id
-                                   THEN e.target_resource_id
-                                   ELSE e.source_resource_id
-                              END
-               JOIN kb_doc_types peer_dt ON peer_dt.id = peer.kb_doc_type_id
-              WHERE (e.source_resource_id = r.id OR e.target_resource_id = r.id)
-                AND peer_dt.name = 'session'
-                AND peer.is_active = true) AS "session_count!: i32",
-            -- Body text of the first chunk — used to derive the peek panel
-            -- excerpt. NULL when a resource has no chunks yet (e.g., ingest
-            -- in flight or a purely frontmatter record).
-            (SELECT cc.content
-               FROM kb_current_chunks cc
-              WHERE cc.resource_id = r.id
-              ORDER BY cc.chunk_index ASC
-              LIMIT 1) AS "first_chunk: String",
-            -- Task workflow stage sourced from managed_meta.temper-stage —
-            -- only meaningful when doc_type = 'task'. Left as NULL for
-            -- everything else; the Rust side guards with a doctype check
-            -- before surfacing the value on the node.
-            (SELECT m.managed_meta->>'temper-stage'
-               FROM kb_resource_manifests m
-              WHERE m.resource_id = r.id) AS "stage_raw: String"
-          FROM kb_resources r
-          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
-          JOIN candidate_ids c ON c.id = r.id
-         WHERE r.is_active = true
-           AND dt.name <> 'session'
+            resource_id   AS "id!: Uuid",
+            slug          AS "slug!",
+            title         AS "title!",
+            doc_type      AS "doc_type!",
+            edge_count    AS "edge_count!: i32",
+            session_count AS "session_count!: i32",
+            first_chunk   AS "first_chunk: String",
+            stage_raw     AS "stage_raw: String"
+          FROM graph_subgraph_nodes($1, $2, $3::text[], $4::int)
         "#,
         params.caller_profile_id,
         params.context_name,
@@ -288,9 +226,11 @@ mod tests {
     #[test]
     fn depth_over_limit_clamps_to_max() {
         assert_eq!(100u32.min(MAX_DEPTH), 10);
-        // u32::MAX is trivially >= MAX_DEPTH by type; assert via the ordering
-        // the clamp relies on, without triggering `clippy::unnecessary_min_or_max`.
-        assert!(u32::MAX > MAX_DEPTH);
+        // Exercise the clamp with a runtime value at the numeric ceiling —
+        // a literal u32::MAX trips clippy::unnecessary_min_or_max because the
+        // result is statically knowable, but a black_box value preserves the
+        // branch coverage we actually want.
+        assert_eq!(std::hint::black_box(u32::MAX).min(MAX_DEPTH), MAX_DEPTH);
     }
 
     // ── compute_excerpt ─────────────────────────────────────────────────
@@ -339,9 +279,7 @@ mod tests {
     #[test]
     fn compute_excerpt_truncates_past_max_chars_on_word_boundary() {
         // Build a paragraph well over EXCERPT_MAX_CHARS of ASCII words.
-        let long: String = std::iter::repeat("lorem ipsum dolor sit amet ")
-            .take(20)
-            .collect();
+        let long: String = "lorem ipsum dolor sit amet ".repeat(20);
         let excerpt = compute_excerpt(&long).expect("excerpt");
         assert!(excerpt.ends_with('…'), "trailing ellipsis: {excerpt}");
         assert!(
@@ -368,7 +306,7 @@ mod tests {
     fn compute_excerpt_handles_utf8_char_boundaries() {
         // Multi-byte chars must not panic the slice math. Build a paragraph
         // wider than the budget using 3-byte UTF-8 characters.
-        let long: String = std::iter::repeat("漢字 ").take(400).collect();
+        let long: String = "漢字 ".repeat(400);
         let excerpt = compute_excerpt(&long).expect("excerpt");
         assert!(excerpt.ends_with('…'));
         assert!(excerpt.chars().count() <= EXCERPT_MAX_CHARS + 1);

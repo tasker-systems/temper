@@ -1,17 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { chunkText } from "../../src/workflow/chunk.js";
 import { EMBEDDING_DIM, embedTexts } from "../../src/workflow/embed.js";
 import { extractText } from "../../src/workflow/extract.js";
-import {
-  buildStatusUpdateQuery,
-  buildStoreChunksQueries,
-  buildStoreChunksQuery,
-  buildVersionBumpQuery,
-  type ChunkRow,
-} from "../../src/workflow/store.js";
+import { buildStatusUpdateQuery } from "../../src/workflow/store.js";
 import {
   cleanupTestResource,
   createTestBlobFile,
@@ -161,7 +154,6 @@ describe("fixture embedding", () => {
 // ---------------------------------------------------------------------------
 
 describe("database storage", () => {
-  let resource: TestResource;
   const resourceIds: string[] = [];
 
   afterAll(async () => {
@@ -170,132 +162,11 @@ describe("database storage", () => {
     }
   });
 
-  it("stores chunks with correct schema", async () => {
-    resource = await createTestResource(sql, "integration-test-md");
-    resourceIds.push(resource.id);
-
-    // Extract → chunk → embed
-    const { content } = await extractText(join(FIXTURES, "simple.md"));
-    const chunks = chunkText(content);
-    const embeddings = await embedTexts(chunks.map((c) => c.content));
-
-    // Build chunk rows
-    const rows: ChunkRow[] = chunks.map((chunk, i) => ({
-      id: randomUUID(),
-      resource_id: resource.id,
-      chunk_index: chunk.chunk_index,
-      version: 1,
-      header_path: chunk.header_path,
-      content: chunk.content,
-      content_hash: chunk.content_hash,
-      embedding: embeddings[i],
-    }));
-
-    // Store to database — buildStoreChunksQueries returns two queries:
-    // 1) kb_chunks (metadata + embedding), 2) kb_chunk_content (content text)
-    const storeQueries = buildStoreChunksQueries(rows);
-    for (const { sql: insertSql, params } of storeQueries) {
-      await sql.unsafe(insertSql, params);
-    }
-
-    // Verify rows — content lives in kb_chunk_content, so join it in
-    const stored = await sql`
-      SELECT c.*, cc.content
-      FROM kb_chunks c
-      LEFT JOIN kb_chunk_content cc ON cc.chunk_id = c.id
-      WHERE c.resource_id = ${resource.id}
-      ORDER BY c.chunk_index
-    `;
-
-    expect(stored.length).toBe(chunks.length);
-    for (let i = 0; i < stored.length; i++) {
-      expect(stored[i].chunk_index).toBe(i);
-      expect(stored[i].version).toBe(1);
-      expect(stored[i].is_current).toBe(true);
-      expect(stored[i].header_path).toBe(chunks[i].header_path);
-      expect(stored[i].content_hash).toBe(chunks[i].content_hash);
-      expect(stored[i].content).toBe(chunks[i].content);
-    }
-
-    // Verify embedding dimensions by checking the stored vector
-    const embCheck = await sql`
-      SELECT vector_dims(embedding) as dims
-      FROM kb_chunks
-      WHERE resource_id = ${resource.id}
-      LIMIT 1
-    `;
-    expect(embCheck[0].dims).toBe(EMBEDDING_DIM);
-  });
-
-  it("version bumps old chunks on re-upload", async () => {
-    const res = await createTestResource(sql, "integration-test-version-bump");
-    resourceIds.push(res.id);
-
-    // Version 1: store initial chunks
-    const { content } = await extractText(join(FIXTURES, "simple.txt"));
-    const chunks = chunkText(content);
-    const embeddings = await embedTexts(chunks.map((c) => c.content));
-
-    const v1Rows: ChunkRow[] = chunks.map((chunk, i) => ({
-      id: randomUUID(),
-      resource_id: res.id,
-      chunk_index: chunk.chunk_index,
-      version: 1,
-      header_path: chunk.header_path,
-      content: chunk.content,
-      content_hash: chunk.content_hash,
-      embedding: embeddings[i],
-    }));
-
-    const v1Query = buildStoreChunksQuery(v1Rows);
-    await sql.unsafe(v1Query.sql, v1Query.params);
-
-    // Version bump: mark v1 as not current
-    const bumpQuery = buildVersionBumpQuery(res.id, 2);
-    await sql.unsafe(bumpQuery.sql, bumpQuery.params);
-
-    // Version 2: store new chunks
-    const v2Rows: ChunkRow[] = chunks.map((chunk, i) => ({
-      id: randomUUID(),
-      resource_id: res.id,
-      chunk_index: chunk.chunk_index,
-      version: 2,
-      header_path: chunk.header_path,
-      content: chunk.content,
-      content_hash: chunk.content_hash,
-      embedding: embeddings[i],
-    }));
-
-    const v2Query = buildStoreChunksQuery(v2Rows);
-    await sql.unsafe(v2Query.sql, v2Query.params);
-
-    // Verify: v1 chunks are not current
-    const v1Chunks = await sql`
-      SELECT is_current, version FROM kb_chunks
-      WHERE resource_id = ${res.id} AND version = 1
-    `;
-    for (const row of v1Chunks) {
-      expect(row.is_current).toBe(false);
-      expect(row.version).toBe(1);
-    }
-
-    // Verify: v2 chunks are current
-    const v2Chunks = await sql`
-      SELECT is_current, version FROM kb_chunks
-      WHERE resource_id = ${res.id} AND version = 2
-    `;
-    for (const row of v2Chunks) {
-      expect(row.is_current).toBe(true);
-      expect(row.version).toBe(2);
-    }
-
-    // Total chunks: v1 + v2
-    const allChunks = await sql`
-      SELECT count(*)::int as count FROM kb_chunks
-      WHERE resource_id = ${res.id}
-    `;
-    expect(allChunks[0].count).toBe(chunks.length * 2);
-  });
+  // Chunk write / version-bump / dedup semantics are exercised end-to-end
+  // by the Rust `chunk_dedup_test.rs` against the canonical SQL path
+  // (`persist_resource_chunks` / `replace_resource_chunks`). The TS
+  // integration test used to re-implement the INSERT via a legacy builder
+  // that pre-dated the revision model; that builder has been removed.
 
   it("content hash is deterministic across pipeline runs", async () => {
     const res = await createTestResource(sql, "integration-test-deterministic");

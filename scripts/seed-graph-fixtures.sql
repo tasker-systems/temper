@@ -258,22 +258,35 @@ ON CONFLICT DO NOTHING;
 -- Only a handful of resources get seeded content — enough to exercise the
 -- peek-panel excerpt path without blowing up unrelated edge-count assertions.
 -- Embedding is a zero vector(768); semantic search is out of scope here.
+--
+-- kb_chunks.first_revision_id is NOT NULL; seed one revision per resource
+-- (audit_id = NULL since this is synthetic fixture data, not an actual write).
+INSERT INTO kb_resource_revisions (id, resource_id, audit_id, body_hash, chunk_count)
+VALUES
+    ('00000000-0000-0000-00cd-000000000001', '00000000-0000-0000-00c1-000000000001',
+     NULL, md5('c1-body'), 1),
+    ('00000000-0000-0000-00cd-000000000002', '00000000-0000-0000-00c2-000000000001',
+     NULL, md5('m1-body'), 1)
+ON CONFLICT (id) DO NOTHING;
+
 INSERT INTO kb_chunks
     (id, resource_id, chunk_index, version, header_path, heading_depth,
-     content_hash, embedding, is_current)
+     content_hash, embedding, is_current, first_revision_id)
 VALUES
     -- c1 body: a multi-paragraph preamble. Excerpt = first paragraph only.
     ('00000000-0000-0000-00cc-000000000001', '00000000-0000-0000-00c1-000000000001',
      0, 1, '', 0,
      md5('c1-body'),
      ('[' || repeat('0,', 767) || '0]')::vector,
-     true),
+     true,
+     '00000000-0000-0000-00cd-000000000001'),
     -- m1 body: a single paragraph longer than 280 chars — exercises truncation.
     ('00000000-0000-0000-00cc-000000000002', '00000000-0000-0000-00c2-000000000001',
      0, 1, '', 0,
      md5('m1-body'),
      ('[' || repeat('0,', 767) || '0]')::vector,
-     true)
+     true,
+     '00000000-0000-0000-00cd-000000000002')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO kb_chunk_content (chunk_id, content) VALUES

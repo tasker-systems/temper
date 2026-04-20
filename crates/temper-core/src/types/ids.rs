@@ -114,3 +114,8 @@ define_id!(
     /// A `kb_resource_audits.id` value.
     ResourceAuditId
 );
+
+define_id!(
+    /// A `kb_resource_revisions.id` value. Always UUIDv7 (time-sortable).
+    RevisionId
+);
