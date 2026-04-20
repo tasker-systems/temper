@@ -237,6 +237,21 @@ export function buildStylesheet(): CytoscapeStyle {
 				'text-wrap': 'wrap',
 				'line-height': 1.2
 			}
+		},
+		// Detail tier + task + stage: stack the stage tag under the label
+		// (and date, when present). The combined `labelWithDateAndStage`
+		// variant is precomputed in `toCytoscapeElements`, so this rule just
+		// picks it up instead of relying on Cytoscape expression templates.
+		// Only tasks carry a `stage` attribute — the server guards with a
+		// doctype check — so the attribute-existence selector is enough to
+		// gate the tag to tasks.
+		{
+			selector: 'node.tier-detail.type-task[stage]',
+			style: {
+				label: 'data(labelWithDateAndStage)',
+				'text-wrap': 'wrap',
+				'line-height': 1.2
+			}
 		}
 	];
 }

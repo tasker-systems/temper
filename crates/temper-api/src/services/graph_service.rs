@@ -17,6 +17,60 @@ use temper_core::types::graph::{is_aggregator, EdgeType, GraphEdge, GraphNode, S
 /// with depth; 10 hops covers any imaginable UI traversal. Clamped silently.
 const MAX_DEPTH: u32 = 10;
 
+/// Max characters of body text to keep in a peek-panel excerpt. The UI
+/// re-flows at ~60 chars per line and we render three lines of parchment
+/// serif, so 280 is a generous fit without crowding the metadata block.
+const EXCERPT_MAX_CHARS: usize = 280;
+
+/// Derive a peek-panel excerpt from the first body chunk of a resource.
+///
+/// Takes the first paragraph (text up to the first blank line), then trims
+/// to `EXCERPT_MAX_CHARS`. Truncation prefers the last whitespace within the
+/// final 10% of the budget and suffixes `…`; shorter paragraphs are returned
+/// whole. Returns `None` when the input is empty or whitespace-only.
+///
+/// Pure, so the unit tests below cover the paragraph / truncation edges that
+/// the integration test can't reach cleanly.
+fn compute_excerpt(body: &str) -> Option<String> {
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let first_paragraph = trimmed
+        .split("\n\n")
+        .map(str::trim)
+        .find(|p| !p.is_empty())?;
+    // Collapse intra-paragraph newlines so a soft-wrapped markdown paragraph
+    // renders as one flowing sentence in the peek.
+    let collapsed: String = first_paragraph
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if collapsed.chars().count() <= EXCERPT_MAX_CHARS {
+        return Some(collapsed);
+    }
+    // Byte index at the EXCERPT_MAX_CHARS-th character boundary (safe cut).
+    let end_byte = collapsed
+        .char_indices()
+        .nth(EXCERPT_MAX_CHARS)
+        .map(|(i, _)| i)
+        .unwrap_or(collapsed.len());
+    let slice = &collapsed[..end_byte];
+    // Prefer to backtrack to the last whitespace in the final 10% of the
+    // window so we don't sever mid-word.
+    let fallback_char = EXCERPT_MAX_CHARS.saturating_sub(EXCERPT_MAX_CHARS / 10);
+    let fallback_byte = slice
+        .char_indices()
+        .nth(fallback_char)
+        .map(|(i, _)| i)
+        .unwrap_or(0);
+    let cut = slice[fallback_byte..]
+        .rfind(' ')
+        .map(|off| fallback_byte + off)
+        .unwrap_or(slice.len());
+    Some(format!("{}…", slice[..cut].trim_end()))
+}
+
 /// Parameters for `aggregator_subgraph`.
 ///
 /// Factored into a struct so future filter additions (doc-type excludes,
@@ -119,7 +173,22 @@ pub async fn aggregator_subgraph(
                JOIN kb_doc_types peer_dt ON peer_dt.id = peer.kb_doc_type_id
               WHERE (e.source_resource_id = r.id OR e.target_resource_id = r.id)
                 AND peer_dt.name = 'session'
-                AND peer.is_active = true) AS "session_count!: i32"
+                AND peer.is_active = true) AS "session_count!: i32",
+            -- Body text of the first chunk — used to derive the peek panel
+            -- excerpt. NULL when a resource has no chunks yet (e.g., ingest
+            -- in flight or a purely frontmatter record).
+            (SELECT cc.content
+               FROM kb_current_chunks cc
+              WHERE cc.resource_id = r.id
+              ORDER BY cc.chunk_index ASC
+              LIMIT 1) AS "first_chunk: String",
+            -- Task workflow stage sourced from managed_meta.temper-stage —
+            -- only meaningful when doc_type = 'task'. Left as NULL for
+            -- everything else; the Rust side guards with a doctype check
+            -- before surfacing the value on the node.
+            (SELECT m.managed_meta->>'temper-stage'
+               FROM kb_resource_manifests m
+              WHERE m.resource_id = r.id) AS "stage_raw: String"
           FROM kb_resources r
           JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
           JOIN candidate_ids c ON c.id = r.id
@@ -149,6 +218,14 @@ pub async fn aggregator_subgraph(
         let doc_type = DocType::from_str(&rec.doc_type)
             .map_err(|e| ApiError::Internal(format!("unexpected doc_type in db: {e}")))?;
         node_ids.push(rec.id);
+        let excerpt = rec.first_chunk.as_deref().and_then(compute_excerpt);
+        // Stage is task-only. Ignore the managed_meta value on any other
+        // doctype even if it happens to carry a `temper-stage` key.
+        let stage = if matches!(doc_type, DocType::Task) {
+            rec.stage_raw.filter(|s| !s.trim().is_empty())
+        } else {
+            None
+        };
         nodes.push(GraphNode {
             id: rec.id,
             slug: rec.slug,
@@ -157,6 +234,8 @@ pub async fn aggregator_subgraph(
             doc_type,
             edge_count: rec.edge_count,
             session_count: rec.session_count,
+            excerpt,
+            stage,
         });
     }
 
@@ -212,5 +291,86 @@ mod tests {
         // u32::MAX is trivially >= MAX_DEPTH by type; assert via the ordering
         // the clamp relies on, without triggering `clippy::unnecessary_min_or_max`.
         assert!(u32::MAX > MAX_DEPTH);
+    }
+
+    // ── compute_excerpt ─────────────────────────────────────────────────
+
+    #[test]
+    fn compute_excerpt_returns_none_for_empty_or_whitespace() {
+        assert_eq!(compute_excerpt(""), None);
+        assert_eq!(compute_excerpt("   \n\n  \t\n"), None);
+    }
+
+    #[test]
+    fn compute_excerpt_returns_short_paragraph_whole() {
+        let body = "Idempotency keys let retries be safe.";
+        assert_eq!(
+            compute_excerpt(body),
+            Some("Idempotency keys let retries be safe.".to_string()),
+        );
+    }
+
+    #[test]
+    fn compute_excerpt_stops_at_first_blank_line() {
+        let body = "First paragraph lives here.\n\nSecond paragraph is ignored.";
+        assert_eq!(
+            compute_excerpt(body),
+            Some("First paragraph lives here.".to_string()),
+        );
+    }
+
+    #[test]
+    fn compute_excerpt_collapses_soft_wraps() {
+        // Single paragraph with internal newlines collapses to one line — the
+        // peek UI handles its own re-flow, so we normalise whitespace.
+        let body = "A paragraph soft-wrapped\nacross multiple\nlines.";
+        assert_eq!(
+            compute_excerpt(body),
+            Some("A paragraph soft-wrapped across multiple lines.".to_string()),
+        );
+    }
+
+    #[test]
+    fn compute_excerpt_skips_leading_blank_paragraphs() {
+        let body = "\n\n\nActual opener.\n\nTrailing content.";
+        assert_eq!(compute_excerpt(body), Some("Actual opener.".to_string()),);
+    }
+
+    #[test]
+    fn compute_excerpt_truncates_past_max_chars_on_word_boundary() {
+        // Build a paragraph well over EXCERPT_MAX_CHARS of ASCII words.
+        let long: String = std::iter::repeat("lorem ipsum dolor sit amet ")
+            .take(20)
+            .collect();
+        let excerpt = compute_excerpt(&long).expect("excerpt");
+        assert!(excerpt.ends_with('…'), "trailing ellipsis: {excerpt}");
+        assert!(
+            excerpt.chars().count() <= EXCERPT_MAX_CHARS + 1,
+            "length bounded: {} chars",
+            excerpt.chars().count()
+        );
+        // Cut must land on a word boundary: the original paragraph is space-
+        // delimited words, and trimming the ellipsis should leave a complete
+        // word run that appears verbatim in the source.
+        let kept = excerpt.trim_end_matches('…').trim_end();
+        assert!(
+            long.starts_with(kept),
+            "kept prefix must be a prefix of the source, got {kept:?}",
+        );
+        assert!(
+            long[kept.len()..].starts_with(' '),
+            "cut must land on a whitespace boundary in the source, byte after kept = {:?}",
+            long[kept.len()..].chars().next(),
+        );
+    }
+
+    #[test]
+    fn compute_excerpt_handles_utf8_char_boundaries() {
+        // Multi-byte chars must not panic the slice math. Build a paragraph
+        // wider than the budget using 3-byte UTF-8 characters.
+        let long: String = std::iter::repeat("漢字 ").take(400).collect();
+        let excerpt = compute_excerpt(&long).expect("excerpt");
+        assert!(excerpt.ends_with('…'));
+        assert!(excerpt.chars().count() <= EXCERPT_MAX_CHARS + 1);
     }
 }

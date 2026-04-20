@@ -542,6 +542,134 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
     assert_eq!(c1.edge_count, 3, "c1 has 3 outgoing edges");
 }
 
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn excerpt_reflects_first_chunk_first_paragraph(pool: PgPool) {
+    // c1 is seeded with a two-paragraph body; excerpt must contain only the
+    // first paragraph, and m1 is seeded with a long single paragraph so the
+    // excerpt truncates with a trailing ellipsis.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let c1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
+        .expect("c1 should be in the result");
+    assert_eq!(
+        c1.excerpt.as_deref(),
+        Some("Idempotency keys let retries be safe."),
+        "c1 excerpt should be the first paragraph only"
+    );
+
+    let m1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(M1_OAUTH))
+        .expect("m1 should be in the result");
+    let m1_excerpt = m1.excerpt.as_deref().expect("m1 excerpt present");
+    assert!(
+        m1_excerpt.ends_with('…'),
+        "long paragraph must truncate with ellipsis, got {m1_excerpt:?}"
+    );
+    assert!(
+        m1_excerpt.chars().count() <= 281,
+        "excerpt bounded to 280 chars + ellipsis"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn excerpt_is_none_when_no_body_chunk(pool: PgPool) {
+    // Most fixture resources have no chunk content seeded; those nodes should
+    // come back with excerpt = None rather than empty-string or a panic.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    // c3 (singleton, no chunk seeded) → None
+    let c3 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C3_SINGLETON))
+        .expect("c3 should be in the result");
+    assert!(
+        c3.excerpt.is_none(),
+        "resource with no body chunk yields excerpt = None, got {:?}",
+        c3.excerpt,
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn stage_populated_only_for_task_doctype(pool: PgPool) {
+    // m2 is a task with managed_meta.temper-stage = "in-progress"; the
+    // server must surface that as GraphNode.stage. m1 is research with a
+    // manifest but no stage — the field must stay None for non-tasks even
+    // if the JSON blob happened to carry the key.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let m2 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(M2_MIDDLEWARE))
+        .expect("m2 (task) should be in the result");
+    assert_eq!(m2.doc_type, DocType::Task, "fixture sanity");
+    assert_eq!(
+        m2.stage.as_deref(),
+        Some("in-progress"),
+        "task stage must come from managed_meta.temper-stage",
+    );
+
+    // Every non-task node — including m1 which has a manifest — must have
+    // stage = None. The field is doctype-gated server-side.
+    for node in &result.nodes {
+        if node.doc_type == DocType::Task {
+            continue;
+        }
+        assert!(
+            node.stage.is_none(),
+            "{:?} ({}) must not carry a stage (got {:?})",
+            node.doc_type,
+            node.title,
+            node.stage,
+        );
+    }
+}
+
 // ─── Handler smoke tests (service layer already integration-tested) ─────────
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

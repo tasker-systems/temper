@@ -254,6 +254,17 @@ pub struct GraphNode {
     /// Count of `session`-typed resources that share any edge with this node.
     /// Renders as a `⌊N⌋` annotation glyph in the UI.
     pub session_count: i32,
+    /// First-paragraph body preview (≤ 280 chars, truncated on a word boundary
+    /// with an ellipsis suffix). `None` when the resource has no body text.
+    /// Renders as the `EXCERPT` block in the resource peek panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    /// Task workflow stage (e.g. `"in-progress"`, `"backlog"`). Only populated
+    /// for `DocType::Task` rows, sourced from `managed_meta.temper-stage`.
+    /// Renders as a small mono-caps tag under the task label at the detail
+    /// zoom tier (`node.tier-detail.type-task`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
 }
 
 /// One directed edge in a returned subgraph.

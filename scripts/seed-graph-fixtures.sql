@@ -254,4 +254,45 @@ INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_
      '00000000-0000-0000-0088-000000000001')
 ON CONFLICT DO NOTHING;
 
+-- ─── Body chunks for excerpt derivation ────────────────────────────────────
+-- Only a handful of resources get seeded content — enough to exercise the
+-- peek-panel excerpt path without blowing up unrelated edge-count assertions.
+-- Embedding is a zero vector(768); semantic search is out of scope here.
+INSERT INTO kb_chunks
+    (id, resource_id, chunk_index, version, header_path, heading_depth,
+     content_hash, embedding, is_current)
+VALUES
+    -- c1 body: a multi-paragraph preamble. Excerpt = first paragraph only.
+    ('00000000-0000-0000-00cc-000000000001', '00000000-0000-0000-00c1-000000000001',
+     0, 1, '', 0,
+     md5('c1-body'),
+     ('[' || repeat('0,', 767) || '0]')::vector,
+     true),
+    -- m1 body: a single paragraph longer than 280 chars — exercises truncation.
+    ('00000000-0000-0000-00cc-000000000002', '00000000-0000-0000-00c2-000000000001',
+     0, 1, '', 0,
+     md5('m1-body'),
+     ('[' || repeat('0,', 767) || '0]')::vector,
+     true)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO kb_chunk_content (chunk_id, content) VALUES
+    ('00000000-0000-0000-00cc-000000000001',
+     'Idempotency keys let retries be safe.' || E'\n\n' ||
+     'Further discussion of retry semantics lives in the follow-up chunk and is intentionally not part of the excerpt.'),
+    ('00000000-0000-0000-00cc-000000000002',
+     repeat('OAuth comparison notes repeating for word-boundary truncation coverage. ', 8))
+ON CONFLICT (chunk_id) DO UPDATE SET content = EXCLUDED.content;
+
+-- ─── Manifest rows (task stage lives here) ─────────────────────────────────
+-- m2 is a task carrying temper-stage=in-progress so the detail-tier stage
+-- tag path is covered. m1 (research) also gets a manifest but with no stage,
+-- proving that non-task doctypes never surface stage even if it were set.
+INSERT INTO kb_resource_manifests (resource_id, managed_meta) VALUES
+    ('00000000-0000-0000-00c2-000000000002',
+     '{"temper-type":"task","temper-stage":"in-progress"}'::jsonb),
+    ('00000000-0000-0000-00c2-000000000001',
+     '{"temper-type":"research"}'::jsonb)
+ON CONFLICT (resource_id) DO UPDATE SET managed_meta = EXCLUDED.managed_meta;
+
 COMMIT;

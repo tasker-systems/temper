@@ -10,6 +10,8 @@ function node(partial: Partial<GraphNode> & Pick<GraphNode, 'id'>): GraphNode {
 		aggregator: false,
 		edge_count: 0,
 		session_count: 0,
+		excerpt: null,
+		stage: null,
 		...partial
 	};
 }
