@@ -1461,6 +1461,13 @@ async fn sync_run_push_meta_only_round_trip(pool: sqlx::PgPool) {
     .expect("fetch chunks before push");
     assert_eq!(chunks_before.len(), 1, "expected one chunk pre-push");
 
+    let revisions_before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM kb_resource_revisions WHERE resource_id = $1")
+            .bind(r1.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch revisions before push");
+
     // Edit the local file: insert a relates_to line into the frontmatter
     // block. The insertion point is just before the closing `---\n` of the
     // frontmatter so we do not disturb the body.
@@ -1525,6 +1532,17 @@ async fn sync_run_push_meta_only_round_trip(pool: sqlx::PgPool) {
     assert_eq!(
         chunks_after, chunks_before,
         "meta-only push must not touch kb_chunks rows"
+    );
+
+    let revisions_after: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM kb_resource_revisions WHERE resource_id = $1")
+            .bind(r1.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch revisions after push");
+    assert_eq!(
+        revisions_after, revisions_before,
+        "meta-only push must not create a new kb_resource_revisions row"
     );
 
     // The relates_to edge must exist in kb_resource_edges.

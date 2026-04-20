@@ -49,11 +49,9 @@ Create `crates/temper-api/tests/chunk_dedup_test.rs`:
 ```rust
 #![cfg(feature = "test-db")]
 
-mod common;
-
 use sqlx::PgPool;
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn schema_has_kb_resource_revisions_table(pool: PgPool) {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
@@ -65,7 +63,7 @@ async fn schema_has_kb_resource_revisions_table(pool: PgPool) {
     assert!(exists, "kb_resource_revisions table must exist");
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn kb_chunks_has_revision_columns(pool: PgPool) {
     let cols: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns \
@@ -124,7 +122,7 @@ CREATE INDEX idx_resource_revisions_body_hash
     ON kb_resource_revisions(body_hash);
 
 -- kb_chunks revision linkage.
--- first_revision_id nullable for now; Task 9 tightens to NOT NULL after backfill.
+-- first_revision_id nullable for now; Task 8 tightens to NOT NULL after backfill.
 -- Both columns ON DELETE RESTRICT — a revision referenced by any chunk
 -- cannot be deleted (retention sweep must skip pinned revisions).
 
@@ -263,7 +261,7 @@ async fn count_total(pool: &PgPool, resource_id: Uuid) -> i64 {
         .bind(resource_id).fetch_one(pool).await.unwrap()
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn persist_chunks_creates_revision(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let audit = seed_audit(&pool, rid, "body1").await;
@@ -286,7 +284,7 @@ async fn persist_chunks_creates_revision(pool: PgPool) {
     assert_eq!(count_current(&pool, rid).await, 2);
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn replace_chunks_preserves_unchanged_positions(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let a1 = seed_audit(&pool, rid, "body1").await;
@@ -311,7 +309,7 @@ async fn replace_chunks_preserves_unchanged_positions(pool: PgPool) {
     assert!(first_revs.iter().all(|r| *r == r1), "preserved chunks keep original first_revision_id");
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn replace_chunks_supersedes_changed_content(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let a1 = seed_audit(&pool, rid, "b1").await;
@@ -346,7 +344,7 @@ async fn replace_chunks_supersedes_changed_content(pool: PgPool) {
     assert_eq!(current_new.1, None);
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn replace_chunks_supersedes_removed_positions(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let a1 = seed_audit(&pool, rid, "b1").await;
@@ -374,7 +372,7 @@ async fn replace_chunks_supersedes_removed_positions(pool: PgPool) {
     assert_eq!(removed_supersede, Some(r2));
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn replace_chunks_adds_new_positions(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let a1 = seed_audit(&pool, rid, "b1").await;
@@ -403,7 +401,7 @@ async fn replace_chunks_adds_new_positions(pool: PgPool) {
     assert!(new_positions.iter().all(|r| *r == r2));
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn replace_chunks_empty_input_supersedes_all(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let a1 = seed_audit(&pool, rid, "b1").await;
@@ -455,20 +453,17 @@ git commit -m "test(db): add dedup scenarios for replace_resource_chunks"
 Create `migrations/20260420000006_chunk_dedup_functions.sql`:
 
 ```sql
--- Replace persist_resource_chunks and replace_resource_chunks with
--- revision-aware + dedup-aware versions.
+-- Add dedup-aware + revision-linked overloads of persist_resource_chunks
+-- and replace_resource_chunks. The new 4-arg signatures coexist with the
+-- pre-existing 2-arg forms (PostgreSQL allows function overloading by
+-- argument list). This lets Rust `sqlx::query!` macros compile against
+-- cached 2-arg metadata while Task 4/5 migrate callers to the new form;
+-- Task 5 drops the legacy 2-arg variants as its final step.
 --
--- Signatures change from (resource_id, chunks) -> (resource_id, audit_id,
--- body_hash, chunks). Return changes from INT (chunk count) to UUID
--- (the new revision id). The spec's rationale:
+-- New signatures: (resource_id, audit_id, body_hash, chunks). Return
+-- changes from INT (chunk count) to UUID (the new revision id).
 --
--- docs/superpowers/specs/2026-04-20-chunk-dedup-and-revisions-design.md
---
--- Drop the two-arg variants; callers (Rust temper-api, TS temper-cloud
--- workflows) are updated in the same branch so there are no stragglers.
-
-DROP FUNCTION IF EXISTS persist_resource_chunks(UUID, JSONB);
-DROP FUNCTION IF EXISTS replace_resource_chunks(UUID, JSONB);
+-- Spec: docs/superpowers/specs/2026-04-20-chunk-dedup-and-revisions-design.md
 
 -- First-create path. No existing chunks; just insert all at version 1.
 CREATE FUNCTION persist_resource_chunks(
@@ -725,7 +720,7 @@ fn make_packed_chunks() -> String {
     pack_chunks(&chunks).expect("pack_chunks")
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn create_resource_links_revision_to_create_audit(pool: PgPool) {
     fixtures::clean_and_seed(&pool).await;
     let profile_uuid = fixtures::create_test_profile(&pool, "alice@test.local").await;
@@ -987,6 +982,35 @@ git add crates/temper-api/src/services/ingest_service.rs \
         .sqlx/
 git commit -m "feat(api): thread audit_id through ingest_service for revision linkage"
 ```
+
+- [ ] **Step 10: Drop the legacy 2-arg SQL function variants**
+
+Now that no caller references `persist_resource_chunks(uuid, jsonb)` or `replace_resource_chunks(uuid, jsonb)`, drop them. Create `migrations/20260420000006a_drop_legacy_chunk_functions.sql`:
+
+```sql
+-- Drop the pre-dedup 2-arg variants of persist_resource_chunks and
+-- replace_resource_chunks. The 4-arg revision-aware forms introduced in
+-- 20260420000006 are now the only callers (Rust temper-api updated in
+-- this commit's parent; TS cloud workflows updated in Task 6).
+DROP FUNCTION IF EXISTS persist_resource_chunks(UUID, JSONB);
+DROP FUNCTION IF EXISTS replace_resource_chunks(UUID, JSONB);
+```
+
+Regenerate sqlx cache and commit:
+
+```bash
+cargo sqlx prepare --workspace -- --all-features
+git add migrations/20260420000006a_drop_legacy_chunk_functions.sql .sqlx/
+git commit -m "chore(db): drop legacy 2-arg persist/replace_resource_chunks"
+```
+
+Run the full test-db suite to confirm nothing still depends on the old forms:
+
+```bash
+cargo nextest run -p temper-api --features "test-db ingest-pipeline"
+```
+
+Expected: all non-HF-TLS tests still PASS.
 
 ---
 
@@ -1329,7 +1353,7 @@ git commit -m "feat(cloud): workflow mints audit and passes revision params"
 Append to `crates/temper-api/tests/chunk_dedup_test.rs`:
 
 ```rust
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn backfill_assigns_first_revision_to_every_chunk(pool: PgPool) {
     // Any chunk existing after all migrations run must have first_revision_id set.
     // The sqlx::test harness applies migrations in order, including the backfill,
@@ -1473,7 +1497,7 @@ git commit -m "migrate(db): backfill kb_resource_revisions and chunk revision co
 Append to `crates/temper-api/tests/chunk_dedup_test.rs`:
 
 ```rust
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn kb_chunks_first_revision_id_is_not_null(pool: PgPool) {
     let is_nullable: String = sqlx::query_scalar(
         "SELECT is_nullable FROM information_schema.columns \
@@ -1583,7 +1607,7 @@ fn chunk(index: i32, content: &str, hash: &str) -> serde_json::Value {
             "content": content, "content_hash": hash, "embedding": emb })
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn resource_chunks_at_revision_returns_original_state(pool: PgPool) {
     let rid = seed_resource(&pool).await;
 
@@ -1608,7 +1632,7 @@ async fn resource_chunks_at_revision_returns_original_state(pool: PgPool) {
     assert_eq!(rows[1], (1, "ORIG-1".to_string()));
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn resource_chunks_at_revision_unknown_returns_empty(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let rows: i64 = sqlx::query_scalar(
@@ -1693,7 +1717,7 @@ git commit -m "feat(db): resource_chunks_at_revision point-in-time function"
 Append to `crates/temper-api/tests/revision_retention_test.rs`:
 
 ```rust
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn sweep_skips_revisions_with_live_chunks(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     let a1 = seed_audit(&pool, rid, "b1").await;
@@ -1716,7 +1740,7 @@ async fn sweep_skips_revisions_with_live_chunks(pool: PgPool) {
     assert!(still_there);
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn sweep_respects_keep_last_n(pool: PgPool) {
     let rid = seed_resource(&pool).await;
 
@@ -1744,7 +1768,7 @@ async fn sweep_respects_keep_last_n(pool: PgPool) {
     assert_eq!(remaining, 10);
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn sweep_respects_age_ceiling(pool: PgPool) {
     let rid = seed_resource(&pool).await;
     for i in 0..5 {
