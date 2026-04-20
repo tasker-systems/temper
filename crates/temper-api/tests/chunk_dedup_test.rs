@@ -1,10 +1,8 @@
 #![cfg(feature = "test-db")]
 
-mod common;
-
 use sqlx::PgPool;
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn schema_has_kb_resource_revisions_table(pool: PgPool) {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables \
@@ -16,7 +14,7 @@ async fn schema_has_kb_resource_revisions_table(pool: PgPool) {
     assert!(exists, "kb_resource_revisions table must exist");
 }
 
-#[sqlx::test(migrations = "../../migrations")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn kb_chunks_has_revision_columns(pool: PgPool) {
     let cols: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns \
