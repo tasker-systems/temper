@@ -149,3 +149,99 @@ async fn resource_chunks_at_revision_unknown_returns_empty(pool: PgPool) {
     .unwrap();
     assert_eq!(rows, 0);
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_skips_revisions_with_live_chunks(pool: PgPool) {
+    let rid = seed_resource(&pool).await;
+    let a1 = seed_audit(&pool, rid, "b1").await;
+    let r1: Uuid = sqlx::query_scalar("SELECT persist_resource_chunks($1, $2, $3, $4)")
+        .bind(rid)
+        .bind(a1)
+        .bind("b1")
+        .bind(json!([chunk(0, "x", "hx")]))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // Set created far in the past so it would be age-eligible.
+    sqlx::query(
+        "UPDATE kb_resource_revisions SET created = now() - interval '120 days' WHERE id = $1",
+    )
+    .bind(r1)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let deleted: i32 = sqlx::query_scalar("SELECT sweep_orphaned_revisions(0, 90)")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        deleted, 0,
+        "revision referenced by live chunk (first_revision_id) must not be deleted"
+    );
+    let still_there: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM kb_resource_revisions WHERE id = $1)")
+            .bind(r1)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(still_there);
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_respects_keep_last_n(pool: PgPool) {
+    let rid = seed_resource(&pool).await;
+
+    // 15 orphan revisions (no chunks, so referential pin does not apply).
+    for i in 0..15i32 {
+        sqlx::query(
+            "INSERT INTO kb_resource_revisions (id, resource_id, audit_id, body_hash, chunk_count, created) \
+             VALUES (uuidv7(), $1, NULL, $2, 0, now() - ($3::int || ' days')::interval)",
+        )
+        .bind(rid)
+        .bind(format!("b{i}"))
+        .bind(200 - i) // older first
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    let deleted: i32 = sqlx::query_scalar("SELECT sweep_orphaned_revisions(10, 0)")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    assert_eq!(deleted, 5, "should delete 5 of 15 when keep_last_n = 10");
+
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM kb_resource_revisions WHERE resource_id = $1")
+            .bind(rid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining, 10);
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sweep_respects_age_ceiling(pool: PgPool) {
+    let rid = seed_resource(&pool).await;
+    for i in 0..5i32 {
+        sqlx::query(
+            "INSERT INTO kb_resource_revisions (id, resource_id, audit_id, body_hash, chunk_count, created) \
+             VALUES (uuidv7(), $1, NULL, $2, 0, now() - ($3::int || ' days')::interval)",
+        )
+        .bind(rid)
+        .bind(format!("b{i}"))
+        .bind(i * 5) // all younger than 90 days
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    let deleted: i32 = sqlx::query_scalar("SELECT sweep_orphaned_revisions(0, 90)")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(deleted, 0);
+}
