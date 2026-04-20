@@ -9,6 +9,9 @@
 	import { defaultFcoseConfig } from '$lib/graph/layout';
 	import { buildStylesheet } from '$lib/graph/styling';
 	import { ALL_TIER_CLASSES, tierClass, zoomTier, type ZoomTier } from '$lib/graph/tiers';
+	import ContextWatermark from './ContextWatermark.svelte';
+	import GraphLegend from './GraphLegend.svelte';
+	import ModeToggle, { type GraphMode } from './ModeToggle.svelte';
 	import ResourcePeek from './ResourcePeek.svelte';
 
 	// Register fcose once per page — cytoscape tolerates re-registration but
@@ -31,6 +34,12 @@
 
 	let containerEl: HTMLDivElement | undefined = $state();
 	let cy: Core | undefined;
+
+	// View mode — `structural` ships today, `meta-doc` is PR 6 / the
+	// Jaccard emergent-edge work per kg-handoff-next.md. The toggle is
+	// wired but nothing downstream reads `mode` yet; the ModeToggle
+	// surfaces a "not implemented" stub when the user picks meta-doc.
+	let mode: GraphMode = $state('structural');
 
 	// Right-docked peek state — a stack of node ids representing the drill
 	// path. Empty array = peek closed. The *current* focused node is always
@@ -173,8 +182,13 @@
 	});
 </script>
 
-<div class="relative h-full w-full bg-neutral-950">
-	<div bind:this={containerEl} class="absolute inset-0" data-testid="knowledge-graph"></div>
+<div class="relative h-full w-full overflow-hidden bg-neutral-950">
+	<ContextWatermark {context} />
+
+	<div bind:this={containerEl} class="absolute inset-0 z-[1]" data-testid="knowledge-graph"></div>
+
+	<ModeToggle {mode} onModeChange={(next) => (mode = next)} />
+	<GraphLegend />
 
 	{#if peekNode}
 		<ResourcePeek
@@ -187,6 +201,7 @@
 			onClose={closePeek}
 			onFocus={drillInto}
 			onCrumbClick={sliceTrail}
+			topOffset={168}
 		/>
 	{/if}
 </div>
