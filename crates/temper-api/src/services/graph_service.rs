@@ -11,7 +11,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::frontmatter::document::DocType;
-use temper_core::types::graph::{EdgeType, GraphEdge, GraphNode, SubgraphResponse};
+use temper_core::types::graph::{is_aggregator, EdgeType, GraphEdge, GraphNode, SubgraphResponse};
 
 /// Hard upper bound on traversal depth. Recursive-CTE cost grows superlinearly
 /// with depth; 10 hops covers any imaginable UI traversal. Clamped silently.
@@ -35,14 +35,21 @@ pub struct AggregatorSubgraphParams<'a> {
 /// The caller's visibility is enforced by `graph_traverse()`'s internal
 /// `resources_visible_to` join — cross-owner resources are never returned.
 ///
+/// **Sessions are not nodes.** Per the R11 visual language (sessions are
+/// annotations, not graph participants), session-typed resources are filtered
+/// out of the returned node set. Each remaining node carries a
+/// `session_count` equal to the number of sessions that share an edge with
+/// it. Edges whose endpoint is a session are likewise dropped.
+///
 /// Implementation uses two round-trips with compile-time checked queries:
 ///
 /// 1. CTE-resolved node rows (seeds + traversed, both filtered by
-///    `is_active = true`) — node metadata comes back in the same trip.
-/// 2. Edge rows where both endpoints are in the resolved ID set.
+///    `is_active = true` AND `doc_type != 'session'`) — node metadata plus
+///    the per-node session count come back in the same trip.
+/// 2. Edge rows where both endpoints are in the resolved (non-session) ID set.
 ///
-/// Because inactive resources are excluded at step 1, the edge query in
-/// step 2 can never return a dangling edge.
+/// Because inactive and session resources are excluded at step 1, the edge
+/// query in step 2 can never return a dangling or session-incident edge.
 pub async fn aggregator_subgraph(
     pool: &PgPool,
     params: AggregatorSubgraphParams<'_>,
@@ -60,9 +67,13 @@ pub async fn aggregator_subgraph(
 
     // Query 1: resolve the candidate ID set AND fetch node metadata in one
     // round-trip. The CTE unions seeds + traversed, then joins back to
-    // kb_resources with `is_active = true` to guarantee only active rows
-    // surface. Visibility is enforced by resources_visible_to() in the seed
-    // CTE and by graph_traverse() during expansion.
+    // kb_resources with `is_active = true` AND `doc_type != 'session'` to
+    // exclude sessions from the node list. Visibility is enforced by
+    // resources_visible_to() in the seed CTE and by graph_traverse() during
+    // expansion.
+    //
+    // session_count is computed as a correlated subquery: for each returned
+    // node, how many session-typed resources share any edge with it?
     let node_records = sqlx::query!(
         r#"
         WITH seed_concepts AS (
@@ -97,11 +108,23 @@ pub async fn aggregator_subgraph(
             (SELECT COUNT(*)::int
                FROM kb_resource_edges e
               WHERE e.source_resource_id = r.id
-                 OR e.target_resource_id = r.id) AS "edge_count!: i32"
+                 OR e.target_resource_id = r.id) AS "edge_count!: i32",
+            (SELECT COUNT(DISTINCT peer.id)::int
+               FROM kb_resource_edges e
+               JOIN kb_resources peer
+                 ON peer.id = CASE WHEN e.source_resource_id = r.id
+                                   THEN e.target_resource_id
+                                   ELSE e.source_resource_id
+                              END
+               JOIN kb_doc_types peer_dt ON peer_dt.id = peer.kb_doc_type_id
+              WHERE (e.source_resource_id = r.id OR e.target_resource_id = r.id)
+                AND peer_dt.name = 'session'
+                AND peer.is_active = true) AS "session_count!: i32"
           FROM kb_resources r
           JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
           JOIN candidate_ids c ON c.id = r.id
          WHERE r.is_active = true
+           AND dt.name <> 'session'
         "#,
         params.caller_profile_id,
         params.context_name,
@@ -130,8 +153,10 @@ pub async fn aggregator_subgraph(
             id: rec.id,
             slug: rec.slug,
             title: rec.title,
+            aggregator: is_aggregator(doc_type),
             doc_type,
             edge_count: rec.edge_count,
+            session_count: rec.session_count,
         });
     }
 
@@ -184,6 +209,8 @@ mod tests {
     #[test]
     fn depth_over_limit_clamps_to_max() {
         assert_eq!(100u32.min(MAX_DEPTH), 10);
-        assert_eq!(u32::MAX.min(MAX_DEPTH), 10);
+        // u32::MAX is trivially >= MAX_DEPTH by type; assert via the ordering
+        // the clamp relies on, without triggering `clippy::unnecessary_min_or_max`.
+        assert!(u32::MAX > MAX_DEPTH);
     }
 }
