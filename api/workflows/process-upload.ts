@@ -86,6 +86,18 @@ async function storeStep(
 
   const bodyHash = `sha256:${createHash("sha256").update(bodyText).digest("hex")}`;
 
+  // Snapshot current meta hashes from the manifest so the update_body audit
+  // records the resource state after this action (body advances, meta unchanged).
+  // Empty-string fallback only applies if the manifest row is missing, which
+  // should not happen for an upload flow targeting an existing resource.
+  const manifestRows = (await db`
+    SELECT managed_hash, open_hash
+      FROM kb_resource_manifests
+     WHERE resource_id = ${resourceId}::uuid
+  `) as Array<{ managed_hash: string; open_hash: string }>;
+  const managedHash = manifestRows[0]?.managed_hash ?? "";
+  const openHash = manifestRows[0]?.open_hash ?? "";
+
   const { auditId } = await insertEventAndAudit(db, {
     profileId,
     deviceId: DEVICE_ID_CLOUD,
@@ -94,8 +106,8 @@ async function storeStep(
     eventType: "body_updated",
     action: "update_body",
     bodyHash,
-    managedHash: "",
-    openHash: "",
+    managedHash,
+    openHash,
   });
 
   if (chunks.length > 0) {
