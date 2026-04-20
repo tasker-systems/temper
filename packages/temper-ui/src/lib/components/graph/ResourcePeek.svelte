@@ -5,6 +5,7 @@
 	import { resourceHref } from '$lib/graph/navigation';
 	import { buildNeighborEntries } from '$lib/graph/peek';
 	import { nodeColor, SESSION_GLYPH_COLOR } from '$lib/graph/styling';
+	import { buildCrumbEntries } from '$lib/graph/trail';
 
 	interface Props {
 		node: GraphNode;
@@ -12,8 +13,19 @@
 		edges: GraphEdge[];
 		owner: string;
 		context: string;
+		/**
+		 * The drill path up to and including the current focused node. Single-
+		 * item trails render no breadcrumb; length ≥ 2 shows the crumb bar.
+		 */
+		trail: string[];
 		onClose: () => void;
 		onFocus: (id: string) => void;
+		/**
+		 * Crumb click handler. Receives the *original* trail depth to slice to
+		 * (`trail.slice(0, depth + 1)`) — callers shouldn't worry about whether
+		 * the breadcrumb was collapsed for rendering.
+		 */
+		onCrumbClick: (depth: number) => void;
 		width?: number;
 		topOffset?: number;
 	}
@@ -24,19 +36,23 @@
 		edges,
 		owner,
 		context,
+		trail,
 		onClose,
 		onFocus,
+		onCrumbClick,
 		width = 420,
 		topOffset = 0
 	}: Props = $props();
 
 	// Derived view-model for the focused node. Recomputes when `node` changes
-	// (which happens on row-click rebind).
+	// (which happens on row-click rebind or crumb-click slice).
 	const display = $derived(deriveDisplay(node));
 	const color = $derived(nodeColor(node.doc_type));
 	const neighbors = $derived(buildNeighborEntries(node.id, nodes, edges));
 	const href = $derived(resourceHref(owner, context, node));
 	const sessionCount = $derived(node.session_count);
+	const crumbs = $derived(buildCrumbEntries(trail, nodes));
+	const showCrumbs = $derived(trail.length >= 2);
 
 	onMount(() => {
 		const handler = (e: KeyboardEvent) => {
@@ -91,6 +107,60 @@
 			onclick={onClose}>CLOSE ✕</button
 		>
 	</div>
+
+	<!-- Breadcrumb — only when drilled (trail depth ≥ 2). Current crumb (last)
+	     is an inert span; earlier crumbs are buttons that slice the trail and
+	     recenter the camera via `onCrumbClick(depth)`. -->
+	{#if showCrumbs}
+		<div
+			class="flex flex-wrap items-baseline gap-1.5 px-7 pt-2.5 font-mono text-[8.5px] tracking-[0.16em] text-white/40"
+			data-testid="peek-breadcrumb"
+		>
+			{#each crumbs as entry, idx (idx)}
+				{#if entry.kind === 'ellipsis'}
+					<span class="opacity-50">…</span>
+					<span class="opacity-30">›</span>
+				{:else}
+					{@const cColor = nodeColor(entry.node.doc_type)}
+					{@const cLabel = deriveDisplay(entry.node).label}
+					{#if idx > 0}
+						<span class="opacity-30">›</span>
+					{/if}
+					{#if entry.isCurrent}
+						<span
+							class:italic={entry.node.aggregator}
+							style="
+								color: {cColor}cc;
+								font-family: {entry.node.aggregator
+								? '"Source Serif 4", Georgia, serif'
+								: '"JetBrains Mono", monospace'};
+								font-size: {entry.node.aggregator ? '11px' : '8.5px'};
+								letter-spacing: {entry.node.aggregator ? '0' : '0.16em'};
+							">{cLabel}</span
+						>
+					{:else}
+						<button
+							onclick={() => onCrumbClick(entry.depth)}
+							title={`Back to ${entry.node.title}`}
+							class="cursor-pointer border-0 bg-transparent p-0 transition-colors"
+							class:italic={entry.node.aggregator}
+							style="
+								color: {cColor}88;
+								font-family: {entry.node.aggregator
+								? '"Source Serif 4", Georgia, serif'
+								: '"JetBrains Mono", monospace'};
+								font-size: {entry.node.aggregator ? '11px' : '8.5px'};
+								letter-spacing: {entry.node.aggregator ? '0' : '0.16em'};
+							"
+							onmouseenter={(e) => (e.currentTarget.style.color = cColor)}
+							onmouseleave={(e) => (e.currentTarget.style.color = `${cColor}88`)}
+							>{cLabel}</button
+						>
+					{/if}
+				{/if}
+			{/each}
+		</div>
+	{/if}
 
 	<!-- Title -->
 	<div class="px-7 pt-4 pb-3">

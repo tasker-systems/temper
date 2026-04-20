@@ -31,12 +31,16 @@
 	let containerEl: HTMLDivElement | undefined = $state();
 	let cy: Core | undefined;
 
-	// Right-docked peek state. `null` = peek closed. Derived node lookup in
-	// the template keeps the state minimal (just the id).
-	let peekNodeId: string | null = $state(null);
-	const peekNode = $derived(
-		peekNodeId === null ? null : (nodes.find((n) => n.id === peekNodeId) ?? null)
-	);
+	// Right-docked peek state — a stack of node ids representing the drill
+	// path. Empty array = peek closed. The *current* focused node is always
+	// the last entry. A fresh tap on the graph replaces the trail; drilling
+	// via a peek row appends; a breadcrumb click slices back to that depth.
+	let peekTrail: string[] = $state([]);
+	const peekNode = $derived.by(() => {
+		if (peekTrail.length === 0) return null;
+		const currentId = peekTrail[peekTrail.length - 1];
+		return nodes.find((n) => n.id === currentId) ?? null;
+	});
 
 	// Animate the camera to center on a given node. 380ms ease-in-out matches
 	// kg-handoff.md's peek behavior spec.
@@ -52,13 +56,30 @@
 		});
 	}
 
+	/** Fresh tap on a graph node — reset the trail with this node as its root. */
 	function openPeek(id: string) {
-		peekNodeId = id;
+		peekTrail = [id];
 		recenterTo(id);
 	}
 
+	/** Row-click from the peek — drill deeper by pushing onto the trail. */
+	function drillInto(id: string) {
+		// Guard against no-op clicks on the already-current node.
+		if (peekTrail[peekTrail.length - 1] === id) return;
+		peekTrail = [...peekTrail, id];
+		recenterTo(id);
+	}
+
+	/** Breadcrumb click — slice back to the given depth. */
+	function sliceTrail(depth: number) {
+		const sliced = peekTrail.slice(0, depth + 1);
+		if (sliced.length === 0) return;
+		peekTrail = sliced;
+		recenterTo(sliced[sliced.length - 1]);
+	}
+
 	function closePeek() {
-		peekNodeId = null;
+		peekTrail = [];
 	}
 
 	onMount(() => {
@@ -116,8 +137,10 @@
 			{edges}
 			{owner}
 			{context}
+			trail={peekTrail}
 			onClose={closePeek}
-			onFocus={openPeek}
+			onFocus={drillInto}
+			onCrumbClick={sliceTrail}
 		/>
 	{/if}
 </div>
