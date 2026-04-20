@@ -108,6 +108,32 @@
 			if (evt.target === cy) closePeek();
 		});
 
+		// Hover emphasis — lift the hovered node's neighborhood, fade the
+		// rest. Class toggles are wired to stylesheet rules so the transition
+		// duration lives in one place (styling.ts → EMPHASIS_TRANSITION_MS).
+		cy.on('mouseover', 'node', (evt) => {
+			if (!cy) return;
+			const target = evt.target;
+			const neighborhood = target.closedNeighborhood();
+			const incidentEdges = target.connectedEdges();
+
+			cy.batch(() => {
+				cy!.nodes().removeClass('hovered');
+				target.addClass('hovered');
+				cy!.nodes().not(neighborhood).addClass('dim');
+				incidentEdges.addClass('incident').removeClass('quiet');
+				cy!.edges().not(incidentEdges).addClass('quiet').removeClass('incident');
+			});
+		});
+
+		cy.on('mouseout', 'node', () => {
+			if (!cy) return;
+			cy.batch(() => {
+				cy!.nodes().removeClass('hovered dim');
+				cy!.edges().removeClass('incident quiet');
+			});
+		});
+
 		// fcose occasionally quiesces in an alpha-0 state until a user
 		// interaction forces a render. Kick a paint after layoutstop and a
 		// short fallback in case layoutstop fired synchronously.

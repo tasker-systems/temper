@@ -82,8 +82,25 @@ export function nodeHeightPx(node: GraphNode): number {
  *   - `fontSize` : 13 | 14 | 19
  *   - `widthPx`  : computed from label length
  *   - `heightPx` : 22 | 70
+ *
+ * Hover-emphasis classes (toggled by KnowledgeGraph's mouseover handler):
+ *   - `node.hovered` — the pointer is directly over this node
+ *   - `node.dim`     — some other node is hovered and this one isn't its neighbor
+ *   - `edge.incident` — edge touches the hovered node; lifted in its source hue
+ *   - `edge.quiet`    — no relation to the hovered node; faded to 3% alpha
+ *
+ * All hover transitions animate over `EMPHASIS_TRANSITION_MS` so mouseleave
+ * returns to steady state within the kg-handoff.md 180ms budget.
+ *
+ * Cytoscape doesn't support per-edge linear gradients natively. The
+ * `edge.incident` rule approximates the source→target gradient with a solid
+ * `data(sourceFill)` stroke at full saturation — a proper gradient would
+ * require a custom renderer layer and is deferred.
  */
 export type CytoscapeStyle = Array<{ selector: string; style: Record<string, unknown> }>;
+
+/** Emphasis transition duration in ms — matches the kg-handoff.md spec. */
+export const EMPHASIS_TRANSITION_MS = 180;
 
 export function buildStylesheet(): CytoscapeStyle {
 	return [
@@ -104,7 +121,12 @@ export function buildStylesheet(): CytoscapeStyle {
 				width: 'data(widthPx)',
 				height: 'data(heightPx)',
 				'text-events': 'yes',
-				'overlay-opacity': 0
+				'overlay-opacity': 0,
+				opacity: 1,
+				'text-opacity': 1,
+				'transition-property':
+					'opacity, text-opacity, background-opacity, text-background-opacity',
+				'transition-duration': EMPHASIS_TRANSITION_MS
 			}
 		},
 		// Aggregators: larger italic serif + soft radial-ish wash. Cytoscape
@@ -123,6 +145,22 @@ export function buildStylesheet(): CytoscapeStyle {
 				'font-weight': 600
 			}
 		},
+		// Hovered: subtle text-background wash in the node's own hue.
+		{
+			selector: 'node.hovered',
+			style: {
+				'text-background-color': 'data(fill)',
+				'text-background-opacity': 0.12,
+				'text-background-padding': 4
+			}
+		},
+		// Dimmed: another node is hovered and this one isn't incident.
+		{
+			selector: 'node.dim',
+			style: {
+				opacity: 0.35
+			}
+		},
 		// ── Edges ────────────────────────────────────────────────────────────
 		{
 			selector: 'edge',
@@ -131,7 +169,9 @@ export function buildStylesheet(): CytoscapeStyle {
 				'line-color': 'rgba(255,255,255,0.10)',
 				'curve-style': 'straight',
 				'target-arrow-shape': 'none',
-				opacity: 1
+				opacity: 1,
+				'transition-property': 'opacity, width, line-color',
+				'transition-duration': EMPHASIS_TRANSITION_MS
 			}
 		},
 		{ selector: 'edge.etype-depends_on', style: { 'line-style': 'solid' } },
@@ -146,7 +186,24 @@ export function buildStylesheet(): CytoscapeStyle {
 			selector: 'edge.etype-relates_to',
 			style: { 'line-style': 'dashed', 'line-dash-pattern': [3, 3] }
 		},
-		{ selector: 'edge.etype-references', style: { 'line-style': 'dotted' } }
+		{ selector: 'edge.etype-references', style: { 'line-style': 'dotted' } },
+		// Incident edges (touch the hovered node): lifted to 1.1px in source
+		// hue at full saturation — the gradient approximation.
+		{
+			selector: 'edge.incident',
+			style: {
+				width: 1.1,
+				'line-color': 'data(sourceFill)',
+				opacity: 1
+			}
+		},
+		// Quiet edges (not incident on any hovered node): faded to 3% alpha.
+		{
+			selector: 'edge.quiet',
+			style: {
+				opacity: 0.03
+			}
+		}
 	];
 }
 

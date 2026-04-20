@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	buildStylesheet,
 	edgeStrokeDasharray,
+	EMPHASIS_TRANSITION_MS,
 	nodeColor,
 	nodeFontSize,
 	nodeHeightPx,
@@ -104,6 +105,51 @@ describe('buildStylesheet', () => {
 		const aggRule = buildStylesheet().find((r) => r.selector === 'node.aggregator');
 		expect(aggRule?.style['shape']).toBe('ellipse');
 		expect(aggRule?.style['background-opacity'] as number).toBeLessThan(1);
+	});
+});
+
+describe('emphasis classes', () => {
+	it('exposes a 180ms transition budget that matches kg-handoff', () => {
+		expect(EMPHASIS_TRANSITION_MS).toBe(180);
+	});
+
+	it('base node rule animates opacity/text-opacity at the transition budget', () => {
+		const base = buildStylesheet().find((r) => r.selector === 'node');
+		expect(base?.style['transition-duration']).toBe(EMPHASIS_TRANSITION_MS);
+		expect(String(base?.style['transition-property'])).toContain('opacity');
+		expect(String(base?.style['transition-property'])).toContain('text-opacity');
+	});
+
+	it('base edge rule animates opacity/width/line-color at the transition budget', () => {
+		const base = buildStylesheet().find((r) => r.selector === 'edge');
+		expect(base?.style['transition-duration']).toBe(EMPHASIS_TRANSITION_MS);
+		const props = String(base?.style['transition-property']);
+		expect(props).toContain('opacity');
+		expect(props).toContain('width');
+		expect(props).toContain('line-color');
+	});
+
+	it('node.hovered wraps the label in a low-alpha wash of its own hue', () => {
+		const rule = buildStylesheet().find((r) => r.selector === 'node.hovered');
+		expect(rule?.style['text-background-color']).toBe('data(fill)');
+		expect(rule?.style['text-background-opacity'] as number).toBeLessThan(1);
+	});
+
+	it('node.dim fades non-neighbor nodes toward 0.35 opacity', () => {
+		const rule = buildStylesheet().find((r) => r.selector === 'node.dim');
+		expect(rule?.style.opacity).toBe(0.35);
+	});
+
+	it('edge.incident lifts to 1.1px in the source hue at full opacity', () => {
+		const rule = buildStylesheet().find((r) => r.selector === 'edge.incident');
+		expect(rule?.style.width).toBe(1.1);
+		expect(rule?.style['line-color']).toBe('data(sourceFill)');
+		expect(rule?.style.opacity).toBe(1);
+	});
+
+	it('edge.quiet fades unrelated edges to 0.03 alpha', () => {
+		const rule = buildStylesheet().find((r) => r.selector === 'edge.quiet');
+		expect(rule?.style.opacity).toBe(0.03);
 	});
 });
 
