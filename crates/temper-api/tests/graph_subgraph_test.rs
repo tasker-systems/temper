@@ -87,16 +87,140 @@ async fn happy_path_returns_all_concepts_and_direct_members(pool: PgPool) {
     );
     assert!(node_ids.contains(&uuid(C4_AUTH)), "c4 present");
 
-    // All direct members present
+    // All non-session direct members present
     assert!(
         node_ids.contains(&uuid(M1_OAUTH)),
         "m1 present (shared member)"
     );
     assert!(node_ids.contains(&uuid(M2_MIDDLEWARE)), "m2 present");
-    assert!(node_ids.contains(&uuid(M3_SESSION)), "m3 present");
     assert!(node_ids.contains(&uuid(M4_CIRCUIT_DESIGN)), "m4 present");
     assert!(node_ids.contains(&uuid(M5_CIRCUIT_IMPL)), "m5 present");
     assert!(node_ids.contains(&uuid(M6_JWT)), "m6 present");
+
+    // Sessions are annotations, not nodes — m3 must be excluded.
+    assert!(
+        !node_ids.contains(&uuid(M3_SESSION)),
+        "session-typed m3 must be excluded from nodes"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sessions_excluded_from_nodes_and_edges(pool: PgPool) {
+    // Per R11: sessions annotate other resources via session_count, they are
+    // never graph participants. Verifies both the node exclusion and that no
+    // edge in the response points at (or from) a session.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    // No node in the result is a session.
+    for node in &result.nodes {
+        assert_ne!(
+            node.doc_type,
+            DocType::Session,
+            "no node should have DocType::Session (got {:?} for {})",
+            node.doc_type,
+            node.title,
+        );
+    }
+
+    // No edge touches m3 (the only session in the fixture).
+    let m3_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.source == uuid(M3_SESSION) || e.target == uuid(M3_SESSION))
+        .collect();
+    assert_eq!(
+        m3_edges.len(),
+        0,
+        "edges incident to the session (m3) must be dropped"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn aggregator_flag_set_correctly(pool: PgPool) {
+    // Concepts (and goals/decisions) are aggregators; research/task are
+    // participants. The flag is server-derived so the client doesn't
+    // repeat the classification.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    for node in &result.nodes {
+        let expected = matches!(
+            node.doc_type,
+            DocType::Concept | DocType::Goal | DocType::Decision
+        );
+        assert_eq!(
+            node.aggregator, expected,
+            "{:?} ({}) aggregator={} but expected {}",
+            node.doc_type, node.title, node.aggregator, expected,
+        );
+    }
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn session_count_reflects_incident_sessions(pool: PgPool) {
+    // c1 has an edge to m3 (a session); session_count for c1 should be 1.
+    // No other fixture resource has a session edge, so all others = 0.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let c1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
+        .expect("c1 should be in the result");
+    assert_eq!(
+        c1.session_count, 1,
+        "c1 has one session neighbor (m3); session_count reflects that"
+    );
+
+    // Every other node in the subgraph has zero session neighbors.
+    for node in &result.nodes {
+        if node.id == uuid(C1_IDEMPOTENCY) {
+            continue;
+        }
+        assert_eq!(
+            node.session_count, 0,
+            "{} ({:?}) has no session neighbors in the fixture",
+            node.title, node.doc_type,
+        );
+    }
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

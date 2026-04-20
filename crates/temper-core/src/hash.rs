@@ -304,8 +304,7 @@ slug: my-task
         let cases: Vec<(&str, String, serde_json::Value)> = vec![
             (
                 "task",
-                format!(
-                    r#"---
+                r#"---
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: ctx
@@ -315,7 +314,7 @@ slug: my-task
 temper-stage: in-progress
 ---
 "#
-                ),
+                .to_string(),
                 json!({
                     "temper-stage": "in-progress",
                     "title": "My Task",
@@ -324,8 +323,7 @@ temper-stage: in-progress
             ),
             (
                 "goal",
-                format!(
-                    r#"---
+                r#"---
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: goal
 temper-context: ctx
@@ -335,7 +333,7 @@ slug: ship-v1
 temper-status: achieved
 ---
 "#
-                ),
+                .to_string(),
                 json!({
                     "temper-status": "achieved",
                     "title": "Ship v1",

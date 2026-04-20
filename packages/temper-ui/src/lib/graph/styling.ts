@@ -1,29 +1,33 @@
 import type { EdgeType, GraphNode } from '../types/generated/graph';
 
-/** Visual radius for a node based on its edge count and doc type. */
-export function nodeRadius(node: GraphNode): number {
-	const base = node.doc_type === 'concept' ? 8 : 6;
-	return base + Math.sqrt(node.edge_count) * 2;
-}
-
 /**
  * Knowledge-graph doctype palette.
  *
  * Mirrors `--graph-*` in `app.css` and `--color-graph-*` in the Tailwind
- * `@theme` block. If you change a color here, change both CSS references
- * — the hex is duplicated across the three because SVG inline styles,
+ * `@theme` block. If you change a color here, change both CSS references —
+ * the hex is duplicated across the three because Cytoscape inline styles,
  * CSS vars, and Tailwind utilities each need the raw value.
  *
+ * Palette lifted from the kg-handoff legend table:
+ *   research — `#8cc5e2` (cool blue)
+ *   task     — `#f0a870` (warm orange)
+ *   goal     — `#f5d277` (amber, aggregator)
+ *   concept  — `#d89ccb` (warm pink, aggregator)
+ *   decision — `#c9923c` (aggregator, aligned with goal)
+ *
+ * `session` has no visible color because sessions are annotations, not
+ * nodes — they render as a small green `⌊N⌋` glyph beside other nodes.
+ * The `sessionGlyph` color slot is the only place the session hue lives.
+ *
  * `memory` is reserved for an upcoming doctype covering builder-and-agent
- * tooling conventions (plugin preferences, subagent guidance, consistency
- * rules). The color slot is wired up now so the renderer is ready when
- * the Rust `DocType::Memory` variant lands.
+ * tooling conventions. The slot is wired up now so the renderer is ready
+ * when the Rust `DocType::Memory` variant lands.
  */
 const NODE_COLORS: Record<string, string> = {
-	research: '#7eb8da',
+	research: '#8cc5e2',
 	task: '#f0a870',
-	session: '#82c99a',
-	concept: '#d48ac7',
+	session: '#9ed3af',
+	concept: '#d89ccb',
 	goal: '#f5d277',
 	decision: '#c9923c',
 	memory: '#8e9fc7'
@@ -31,22 +35,134 @@ const NODE_COLORS: Record<string, string> = {
 
 const FALLBACK_COLOR = '#9ca3af';
 
-/** Color for a node based on its doc type. */
+/** Color for a node based on its doc type. Used by both the graph and peek. */
 export function nodeColor(docType: string): string {
 	return NODE_COLORS[docType] ?? FALLBACK_COLOR;
 }
+
+/** The session-annotation glyph color (`⌊N⌋`). */
+export const SESSION_GLYPH_COLOR = NODE_COLORS.session;
+
+// ─── Typographic sizing ─────────────────────────────────────────────────────
+
+/** Font size in px for a node label. */
+export function nodeFontSize(node: GraphNode): number {
+	if (node.aggregator) return 19;
+	return node.edge_count >= 10 ? 14 : 13;
+}
+
+/**
+ * Rendered node width — sized from the label so the word fills its cell.
+ *
+ * Aggregators are ellipses with a 180px floor (so the italic label has
+ * breathing room inside its gravity-well wash); participants tight-fit.
+ */
+export function nodeWidthPx(node: GraphNode, labelLength: number): number {
+	if (node.aggregator) {
+		return Math.max(180, labelLength * 12) + 40;
+	}
+	return Math.max(60, labelLength * 8);
+}
+
+/** Rendered node height — fixed per participant/aggregator class. */
+export function nodeHeightPx(node: GraphNode): number {
+	return node.aggregator ? 70 : 22;
+}
+
+// ─── Cytoscape stylesheet ───────────────────────────────────────────────────
+
+/**
+ * Base Cytoscape stylesheet — one rule per selector. Keys match the
+ * prototype's `cy.style([...])` block 1:1 so R11's visual verdict carries
+ * over verbatim.
+ *
+ * Per-node data used by these rules (set by `toCytoscapeElements`):
+ *   - `label`    : display label (truncated)
+ *   - `fill`     : doctype hue
+ *   - `fontSize` : 13 | 14 | 19
+ *   - `widthPx`  : computed from label length
+ *   - `heightPx` : 22 | 70
+ */
+export type CytoscapeStyle = Array<{ selector: string; style: Record<string, unknown> }>;
+
+export function buildStylesheet(): CytoscapeStyle {
+	return [
+		// ── Base node: the word IS the node ──────────────────────────────────
+		{
+			selector: 'node',
+			style: {
+				label: 'data(label)',
+				color: 'data(fill)',
+				'font-family': '"Source Serif 4", Georgia, serif',
+				'font-size': 'data(fontSize)',
+				'font-weight': 500,
+				'text-halign': 'center',
+				'text-valign': 'center',
+				'text-wrap': 'none',
+				'background-opacity': 0,
+				'border-width': 0,
+				width: 'data(widthPx)',
+				height: 'data(heightPx)',
+				'text-events': 'yes',
+				'overlay-opacity': 0
+			}
+		},
+		// Aggregators: larger italic serif + soft radial-ish wash. Cytoscape
+		// does not do gradients, so we approximate with a low-opacity fill on
+		// an oversized ellipse that sits under the label.
+		{
+			selector: 'node.aggregator',
+			style: {
+				shape: 'ellipse',
+				'background-color': 'data(fill)',
+				'background-opacity': 0.05,
+				width: 260,
+				height: 140,
+				'font-size': 19,
+				'font-style': 'italic',
+				'font-weight': 600
+			}
+		},
+		// ── Edges ────────────────────────────────────────────────────────────
+		{
+			selector: 'edge',
+			style: {
+				width: 0.75,
+				'line-color': 'rgba(255,255,255,0.10)',
+				'curve-style': 'straight',
+				'target-arrow-shape': 'none',
+				opacity: 1
+			}
+		},
+		{ selector: 'edge.etype-depends_on', style: { 'line-style': 'solid' } },
+		{ selector: 'edge.etype-extends', style: { 'line-style': 'solid' } },
+		{ selector: 'edge.etype-parent_of', style: { 'line-style': 'solid' } },
+		{ selector: 'edge.etype-derived_from', style: { 'line-style': 'solid' } },
+		{
+			selector: 'edge.etype-preceded_by',
+			style: { 'line-style': 'dashed', 'line-dash-pattern': [6, 4] }
+		},
+		{
+			selector: 'edge.etype-relates_to',
+			style: { 'line-style': 'dashed', 'line-dash-pattern': [3, 3] }
+		},
+		{ selector: 'edge.etype-references', style: { 'line-style': 'dotted' } }
+	];
+}
+
+// ─── Edge-type dash patterns (exposed for the legend/peek to reuse) ────────
 
 const EDGE_DASH: Record<EdgeType, string> = {
 	depends_on: '',
 	extends: '',
 	parent_of: '',
-	preceded_by: '8,4',
-	relates_to: '4,4',
-	derived_from: '4,4',
+	preceded_by: '6,4',
+	relates_to: '3,3',
+	derived_from: '',
 	references: '2,3'
 };
 
-/** SVG `stroke-dasharray` value for an edge type. Empty string = solid. */
+/** SVG-compatible `stroke-dasharray` for an edge type. Empty = solid. */
 export function edgeStrokeDasharray(edgeType: EdgeType): string {
 	return EDGE_DASH[edgeType] ?? '';
 }
