@@ -301,8 +301,8 @@ CREATE OR REPLACE FUNCTION _seed_content(
     p_content     TEXT
 ) RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
-    v_chunk_id    UUID := gen_random_uuid();
-    v_revision_id UUID := uuidv7();
+    v_chunk_id    UUID := uuid_generate_v7();
+    v_revision_id UUID := uuid_generate_v7();
     v_body_hash   TEXT := md5(p_content);
     v_zero_vec vector(768) := ('[' || repeat('0,', 767) || '0]')::vector;
 BEGIN

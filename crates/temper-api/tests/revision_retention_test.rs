@@ -198,7 +198,7 @@ async fn sweep_respects_keep_last_n(pool: PgPool) {
     for i in 0..15i32 {
         sqlx::query(
             "INSERT INTO kb_resource_revisions (id, resource_id, audit_id, body_hash, chunk_count, created) \
-             VALUES (uuidv7(), $1, NULL, $2, 0, now() - ($3::int || ' days')::interval)",
+             VALUES (uuid_generate_v7(), $1, NULL, $2, 0, now() - ($3::int || ' days')::interval)",
         )
         .bind(rid)
         .bind(format!("b{i}"))
@@ -230,7 +230,7 @@ async fn sweep_respects_age_ceiling(pool: PgPool) {
     for i in 0..5i32 {
         sqlx::query(
             "INSERT INTO kb_resource_revisions (id, resource_id, audit_id, body_hash, chunk_count, created) \
-             VALUES (uuidv7(), $1, NULL, $2, 0, now() - ($3::int || ' days')::interval)",
+             VALUES (uuid_generate_v7(), $1, NULL, $2, 0, now() - ($3::int || ' days')::interval)",
         )
         .bind(rid)
         .bind(format!("b{i}"))
