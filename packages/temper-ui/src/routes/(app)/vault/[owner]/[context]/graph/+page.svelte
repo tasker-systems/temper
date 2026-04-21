@@ -10,7 +10,7 @@
 	<title>Knowledge graph — {data.context}</title>
 </svelte:head>
 
-<div class="flex h-[calc(100vh-4rem)] flex-col">
+<div class="flex h-full flex-col">
 	<header class="border-b border-neutral-800 bg-neutral-950 px-6 py-3">
 		<h1 class="text-sm font-medium tracking-wide text-neutral-200">Knowledge graph</h1>
 		<p class="text-xs text-neutral-500">
