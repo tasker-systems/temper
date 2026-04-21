@@ -20,6 +20,16 @@ export const ZOOM_THRESHOLDS = {
 } as const;
 
 /**
+ * Cytoscape viewport bounds. `MIN_GRAPH_ZOOM` is pinned to the overview
+ * threshold so `cy.fit()` can never clamp into the overview tier — otherwise
+ * participants render as 12×3 tick marks with `text-opacity: 0` (see the
+ * `node.tier-overview.participant` rule in styling.ts), and the canvas looks
+ * empty. Better to have outer nodes pan off-screen than invisible ticks.
+ */
+export const MIN_GRAPH_ZOOM = ZOOM_THRESHOLDS.overview;
+export const MAX_GRAPH_ZOOM = 3;
+
+/**
  * Pure threshold classifier — same zoom level always yields the same tier,
  * so the zoom handler can cache the last value and only toggle classes on
  * an actual tier change (which is the anti-jitter strategy).

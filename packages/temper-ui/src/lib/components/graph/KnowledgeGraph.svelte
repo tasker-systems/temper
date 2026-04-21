@@ -8,7 +8,14 @@
 	import { toCytoscapeElements } from '$lib/graph/elements';
 	import { defaultFcoseConfig } from '$lib/graph/layout';
 	import { buildStylesheet } from '$lib/graph/styling';
-	import { ALL_TIER_CLASSES, tierClass, zoomTier, type ZoomTier } from '$lib/graph/tiers';
+	import {
+		ALL_TIER_CLASSES,
+		MAX_GRAPH_ZOOM,
+		MIN_GRAPH_ZOOM,
+		tierClass,
+		zoomTier,
+		type ZoomTier
+	} from '$lib/graph/tiers';
 	import ContextWatermark from './ContextWatermark.svelte';
 	import GraphLegend from './GraphLegend.svelte';
 	import ModeToggle, { type GraphMode } from './ModeToggle.svelte';
@@ -34,6 +41,7 @@
 
 	let containerEl: HTMLDivElement | undefined = $state();
 	let cy: Core | undefined;
+	let resizeObserver: ResizeObserver | undefined;
 
 	// View mode — `structural` ships today, `meta-doc` is PR 6 / the
 	// Jaccard emergent-edge work per kg-handoff-next.md. The toggle is
@@ -96,13 +104,24 @@
 		if (!containerEl) return;
 		registerFcose();
 
+		// Defer cytoscape init to the next frame so the browser has committed
+		// initial layout before cytoscape reads container dimensions. Without
+		// this, hydration occasionally lands us in onMount while the flex
+		// chain hasn't measured, and cytoscape captures a 0 height it never
+		// recovers from.
+		const frameId = requestAnimationFrame(initCytoscape);
+		return () => cancelAnimationFrame(frameId);
+	});
+
+	function initCytoscape() {
+		if (!containerEl) return;
 		const elements = toCytoscapeElements(nodes, edges);
 
 		cy = cytoscape({
 			container: containerEl,
 			elements,
-			minZoom: 0.25,
-			maxZoom: 3,
+			minZoom: MIN_GRAPH_ZOOM,
+			maxZoom: MAX_GRAPH_ZOOM,
 			wheelSensitivity: 0.2,
 			style: buildStylesheet(),
 			layout: defaultFcoseConfig()
@@ -156,27 +175,34 @@
 				cy!.nodes().removeClass(ALL_TIER_CLASSES).addClass(tierClass(next));
 			});
 		};
-		// Seed the initial tier from the layout's starting zoom, then react.
 		applyTier(zoomTier(cy.zoom()));
 		cy.on('zoom', () => {
 			if (!cy) return;
 			applyTier(zoomTier(cy.zoom()));
 		});
 
-		// fcose occasionally quiesces in an alpha-0 state until a user
-		// interaction forces a render. Kick a paint after layoutstop and a
-		// short fallback in case layoutstop fired synchronously.
+		// Two failure modes both need a refit kick:
+		//   1. fcose occasionally quiesces in an alpha-0 state. A refit on
+		//      `layoutstop` forces a paint.
+		//   2. The container resizes (window resize, sidebar toggle, etc.) —
+		//      ResizeObserver catches that and refits to fill the new box.
+		// `requestAnimationFrame` guards against layoutstop firing synchronously
+		// during cytoscape init (before cy is assigned).
 		const forcePaint = () => {
 			requestAnimationFrame(() => {
-				cy?.fit(undefined, 100);
+				if (!cy) return;
+				cy.resize();
+				cy.fit(undefined, 100);
 			});
 		};
 		cy.one('layoutstop', forcePaint);
-		setTimeout(forcePaint, 50);
-		setTimeout(forcePaint, 300);
-	});
+		resizeObserver = new ResizeObserver(forcePaint);
+		resizeObserver.observe(containerEl);
+	}
 
 	onDestroy(() => {
+		resizeObserver?.disconnect();
+		resizeObserver = undefined;
 		cy?.destroy();
 		cy = undefined;
 	});
@@ -185,7 +211,22 @@
 <div class="relative h-full w-full overflow-hidden bg-neutral-950">
 	<ContextWatermark {context} />
 
-	<div bind:this={containerEl} class="absolute inset-0 z-[1]" data-testid="knowledge-graph"></div>
+	<!--
+		`h-full w-full` + `relative` rather than `absolute inset-0` because
+		cytoscape injects a `.__________cytoscape_container` class on this
+		element whose stylesheet forces `position: relative`. That overrides
+		an outer `position: absolute`, which in turn voids `inset-0` — the
+		container then collapses to 0×0 since its canvas children are all
+		absolutely positioned. Explicit sizing via `h-full w-full` survives
+		cytoscape's position override. The `z-[1]` keeps it above the
+		background-layer `ContextWatermark` (z-0); `ModeToggle` and
+		`GraphLegend` sit at z-[10]/z-[16] so the overlay stack is preserved.
+	-->
+	<div
+		bind:this={containerEl}
+		class="relative z-[1] h-full w-full"
+		data-testid="knowledge-graph"
+	></div>
 
 	<ModeToggle {mode} onModeChange={(next) => (mode = next)} />
 	<GraphLegend />

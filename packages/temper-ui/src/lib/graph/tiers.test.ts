@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { ALL_TIER_CLASSES, tierClass, zoomTier, ZOOM_THRESHOLDS } from './tiers';
+import {
+	ALL_TIER_CLASSES,
+	MAX_GRAPH_ZOOM,
+	MIN_GRAPH_ZOOM,
+	tierClass,
+	zoomTier,
+	ZOOM_THRESHOLDS
+} from './tiers';
 
 describe('zoomTier thresholds', () => {
 	it('matches the kg-handoff.md prototype values', () => {
@@ -46,5 +53,20 @@ describe('ALL_TIER_CLASSES', () => {
 	it('lists every tier class for bulk .removeClass()', () => {
 		const parts = ALL_TIER_CLASSES.split(' ');
 		expect(new Set(parts)).toEqual(new Set(['tier-overview', 'tier-mid', 'tier-detail']));
+	});
+});
+
+describe('graph zoom bounds', () => {
+	// Regression guard for the "empty canvas" bug: if `minZoom` drops below the
+	// overview threshold, `cy.fit()` on a wide bbox lands in the overview tier
+	// where participants render as 12×3 ticks with `text-opacity: 0`, making
+	// the graph look empty on the near-black canvas.
+	it('pins MIN_GRAPH_ZOOM to the overview threshold so fit() never clamps into overview', () => {
+		expect(MIN_GRAPH_ZOOM).toBe(ZOOM_THRESHOLDS.overview);
+		expect(zoomTier(MIN_GRAPH_ZOOM)).toBe('mid');
+	});
+
+	it('keeps MAX_GRAPH_ZOOM above the detail threshold so detail tier is reachable', () => {
+		expect(MAX_GRAPH_ZOOM).toBeGreaterThan(ZOOM_THRESHOLDS.detail);
 	});
 });
