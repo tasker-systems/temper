@@ -14,6 +14,8 @@ pub mod judgment;
 pub mod materialize;
 pub mod seeds;
 
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use temper_core::types::config::GraphIndexConfig;
@@ -22,6 +24,10 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
+
+/// Doc types whose presence marks a context as "active" for the graph-index
+/// pipeline. Mirrors `seeds::ENTITY_DOC_TYPES` and `graph_build::ENTITY_DOC_TYPES`.
+const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
 
 /// Parameters for a graph-index run.
 #[derive(Debug, Clone)]
@@ -94,6 +100,15 @@ pub fn run(config: &Config, params: GraphIndexParams) -> Result<GraphIndexReport
 /// integration tests to substitute a [`temper_llm::MockLlmProvider`] and avoid
 /// reading global config from disk.
 ///
+/// When `params.context_filter` is `Some(ctx)`, a single pass runs against
+/// that context. When `None`, the vault is scanned for every context under
+/// `@me/` that contains at least one entity-doctype file, and each such
+/// context is processed in its own isolated pass — seeds, clusters,
+/// judgment, and materialization all stay within a single context. This is
+/// the boundary that makes Concepts context-scoped: a member in
+/// `@me/tasker/…` can never end up with a `relates_to` edge to a concept in
+/// `@me/temper/concept/`.
+///
 /// `provider` is required for non-dry-run calls and ignored for dry-run.
 pub fn run_with_provider(
     config: &Config,
@@ -110,12 +125,43 @@ pub fn run_with_provider(
         )
     })?;
 
-    let seeds = seeds::extract_seeds(
-        vault_root,
-        graph_index_config,
-        params.context_filter.as_deref(),
-    );
-    let clusters = cluster::form_clusters(&seeds, &manifest, graph_index_config);
+    let contexts = match params.context_filter.as_deref() {
+        Some(ctx) => vec![ctx.to_string()],
+        None => discover_active_contexts(vault_root),
+    };
+
+    let mut aggregate = GraphIndexReport::default();
+
+    for context in &contexts {
+        let per_context = run_single_context(
+            config,
+            &params,
+            provider.as_ref().cloned(),
+            graph_index_config,
+            &manifest,
+            context,
+        )?;
+        merge_reports(&mut aggregate, per_context);
+    }
+
+    Ok(aggregate)
+}
+
+/// Run the full pipeline (seeds → clusters → judgment → materialize) for a
+/// single context. Called once per context by [`run_with_provider`].
+fn run_single_context(
+    config: &Config,
+    params: &GraphIndexParams,
+    provider: Option<Arc<dyn LlmProvider>>,
+    graph_index_config: &GraphIndexConfig,
+    manifest: &cluster::IndexManifestView,
+    context: &str,
+) -> Result<GraphIndexReport> {
+    let vault_root = &config.vault_root;
+
+    let seeds = seeds::extract_seeds(vault_root, graph_index_config, Some(context));
+    let context_manifest = cluster::filter_manifest_to_context(manifest, context);
+    let clusters = cluster::form_clusters(&seeds, &context_manifest, graph_index_config);
 
     let mut report = GraphIndexReport {
         seeds_extracted: seeds.len(),
@@ -153,15 +199,11 @@ pub fn run_with_provider(
     };
     report.proposals_returned = proposals.len();
 
-    // `context_filter` may be None (run over all contexts); use "temper" as
-    // the default landing context. The doctype-qualified-slug follow-up will
-    // let member_edges carry their own context if we ever relax this.
-    let materialize_context = params.context_filter.as_deref().unwrap_or("temper");
     let mat = materialize::materialize_concepts(
         &proposals,
         config,
         graph_index_config,
-        materialize_context,
+        context,
         params.dry_run,
     );
     report.concepts_created = mat.concepts_created;
@@ -173,4 +215,64 @@ pub fn run_with_provider(
     }
 
     Ok(report)
+}
+
+/// List the contexts under `{vault_root}/@me/` that have at least one file
+/// in one of the entity doctype directories. Contexts with no content are
+/// skipped — no point creating an empty concept directory for a stub context.
+fn discover_active_contexts(vault_root: &Path) -> Vec<String> {
+    let owner_root = vault_root.join("@me");
+    let Ok(entries) = fs::read_dir(&owner_root) else {
+        return Vec::new();
+    };
+
+    let mut contexts: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str())?.to_string();
+            if !path.is_dir() || name.starts_with('.') {
+                return None;
+            }
+            if context_has_entity_files(&path) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    contexts.sort();
+    contexts
+}
+
+/// True iff `{context_root}/{doc_type}/` exists for any entity doctype and
+/// contains at least one `*.md` file.
+fn context_has_entity_files(context_root: &Path) -> bool {
+    for doc_type in ENTITY_DOC_TYPES {
+        let type_dir = context_root.join(doc_type);
+        let Ok(entries) = fs::read_dir(&type_dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Combine a per-context report into the aggregate that crosses all contexts.
+fn merge_reports(acc: &mut GraphIndexReport, next: GraphIndexReport) {
+    acc.seeds_extracted += next.seeds_extracted;
+    acc.clusters_formed += next.clusters_formed;
+    acc.proposals_returned += next.proposals_returned;
+    acc.concepts_created += next.concepts_created;
+    acc.concepts_skipped += next.concepts_skipped;
+    acc.members_updated += next.members_updated;
+    acc.errors += next.errors;
+    acc.failed.extend(next.failed);
+    acc.seeds_preview.extend(next.seeds_preview);
+    acc.clusters_preview.extend(next.clusters_preview);
 }

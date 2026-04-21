@@ -30,6 +30,39 @@ pub struct ManifestFileView {
     pub doc_embedding: Vec<f32>,
 }
 
+/// Extract the context segment (segment index 1) from a manifest `rel_path`
+/// shaped like `@me/{context}/{doctype}/{filename}`. Returns `None` for any
+/// rel_path that doesn't start with an `@`-prefixed owner segment or that
+/// doesn't carry at least owner/context/doctype/filename (4 segments).
+pub fn context_from_rel_path(rel_path: &str) -> Option<&str> {
+    let mut parts = rel_path.split('/');
+    let owner = parts.next()?;
+    if !owner.starts_with('@') {
+        return None;
+    }
+    let context = parts.next()?;
+    // Require the doctype + filename tail so bare `@me/temper` isn't treated
+    // as a valid entity rel_path.
+    let _doctype = parts.next()?;
+    let _filename = parts.next()?;
+    Some(context)
+}
+
+/// Restrict a manifest view to entries whose rel_path lives under
+/// `@me/{context}/`. Entries with malformed rel_paths are dropped.
+pub fn filter_manifest_to_context(
+    manifest: &IndexManifestView,
+    context: &str,
+) -> IndexManifestView {
+    let files = manifest
+        .files
+        .iter()
+        .filter(|f| context_from_rel_path(&f.rel_path) == Some(context))
+        .cloned()
+        .collect();
+    IndexManifestView { files }
+}
+
 /// Load the index manifest from `.temper/index.json`, or `None` if absent.
 pub fn load_manifest(temper_dir: &Path) -> Option<IndexManifestView> {
     let path = temper_dir.join("index.json");
@@ -164,6 +197,69 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mk_manifest_view(rel_paths: &[&str]) -> IndexManifestView {
+        IndexManifestView {
+            files: rel_paths
+                .iter()
+                .map(|p| ManifestFileView {
+                    rel_path: (*p).to_string(),
+                    doc_embedding: Vec::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn test_context_from_rel_path_extracts_segment_one() {
+        assert_eq!(
+            context_from_rel_path("@me/temper/task/foo.md"),
+            Some("temper")
+        );
+        assert_eq!(
+            context_from_rel_path("@me/tasker/goal/plan-x.md"),
+            Some("tasker")
+        );
+    }
+
+    #[test]
+    fn test_context_from_rel_path_rejects_malformed() {
+        // Missing doctype/filename segment — not a valid entity rel_path.
+        assert_eq!(context_from_rel_path("@me/temper"), None);
+        // Missing owner prefix.
+        assert_eq!(context_from_rel_path("temper/task/foo.md"), None);
+        // Empty string.
+        assert_eq!(context_from_rel_path(""), None);
+    }
+
+    #[test]
+    fn test_filter_manifest_to_context_keeps_only_matching_entries() {
+        let manifest = mk_manifest_view(&[
+            "@me/temper/task/a.md",
+            "@me/tasker/task/b.md",
+            "@me/temper/goal/c.md",
+            "@me/storyteller/task/d.md",
+        ]);
+
+        let filtered = filter_manifest_to_context(&manifest, "temper");
+
+        let paths: Vec<&str> = filtered.files.iter().map(|f| f.rel_path.as_str()).collect();
+        assert_eq!(paths, vec!["@me/temper/task/a.md", "@me/temper/goal/c.md"]);
+    }
+
+    #[test]
+    fn test_filter_manifest_to_context_drops_malformed_rel_paths() {
+        let manifest = mk_manifest_view(&[
+            "@me/temper/task/a.md",
+            "broken-path",
+            "@me/tasker/task/b.md",
+        ]);
+
+        let filtered = filter_manifest_to_context(&manifest, "temper");
+
+        let paths: Vec<&str> = filtered.files.iter().map(|f| f.rel_path.as_str()).collect();
+        assert_eq!(paths, vec!["@me/temper/task/a.md"]);
+    }
 
     fn mk_cluster(phrase: &str, member_ids: &[&str]) -> Cluster {
         let seed = SeedPhrase::new(
