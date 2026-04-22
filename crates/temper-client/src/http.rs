@@ -1,28 +1,48 @@
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use reqwest::{
     header::{HeaderValue, AUTHORIZATION},
     Client, RequestBuilder, Response, StatusCode,
 };
+use secrecy::ExposeSecret;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
 
 use tracing::Instrument;
 
+use crate::auth::TokenStore;
 use crate::error::{ClientError, Result};
 
 /// Wraps a `reqwest::Client` with base URL and optional device identity.
 ///
 /// All request methods prepend `base_url` to the given path and inject the
 /// `X-Temper-Device-Id` header when a device ID has been set.
-#[derive(Debug, Clone)]
+///
+/// Bearer tokens are resolved through [`TokenStore`] — cloud sessions use
+/// `MemoryTokenStore`, local sessions use `DiskTokenStore`. There is no
+/// disk fallback inside `resolve_token`; callers that have an explicit
+/// token (tests, one-off scripts) use [`HttpClient::with_token_override`].
+#[derive(Clone)]
 pub struct HttpClient {
     inner: Client,
     base_url: String,
     device_id: Option<String>,
     token_override: Option<String>,
+    token_store: Option<Arc<dyn TokenStore>>,
+}
+
+impl fmt::Debug for HttpClient {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("HttpClient")
+            .field("base_url", &self.base_url)
+            .field("device_id", &self.device_id)
+            .field("has_token_override", &self.token_override.is_some())
+            .field("has_token_store", &self.token_store.is_some())
+            .finish()
+    }
 }
 
 /// Describes an outgoing HTTP request for structured logging.
@@ -42,7 +62,15 @@ impl fmt::Display for ApiRequest<'_> {
 }
 
 impl HttpClient {
-    pub fn new(base_url: &str, device_id: Option<String>) -> Self {
+    /// Construct an `HttpClient` with a [`TokenStore`] for bearer-token
+    /// resolution. Cloud sessions pass an `Arc<MemoryTokenStore>`; local
+    /// sessions pass an `Arc<DiskTokenStore>`. Tests that don't care about
+    /// auth can pass `None` and use [`HttpClient::with_token_override`] instead.
+    pub fn new(
+        base_url: &str,
+        device_id: Option<String>,
+        token_store: Option<Arc<dyn TokenStore>>,
+    ) -> Self {
         let inner = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -53,30 +81,42 @@ impl HttpClient {
             base_url: base_url.trim_end_matches('/').to_owned(),
             device_id,
             token_override: None,
+            token_store,
         }
     }
 
-    /// Construct an `HttpClient` with a fixed token that bypasses `auth.json`.
+    /// Construct an `HttpClient` with a fixed token that bypasses the store.
     ///
-    /// Intended for testing and scripting contexts where reading from the
-    /// filesystem is undesirable.
+    /// Intended for testing and scripting contexts, or for client
+    /// construction where the token was already resolved upstream (e.g.
+    /// `build_client_from` after a successful `store.load()`).
     pub fn with_token_override(base_url: &str, device_id: Option<String>, token: String) -> Self {
         Self {
             token_override: Some(token),
-            ..Self::new(base_url, device_id)
+            ..Self::new(base_url, device_id, None)
         }
     }
 
     /// Return the token to use for authenticated requests.
     ///
     /// Returns the token override if one was set at construction time;
-    /// otherwise falls back to [`crate::auth::current_token`], which reads
-    /// `~/.config/temper/auth.json`.
+    /// otherwise calls [`TokenStore::load`] on the configured store and
+    /// returns the stored access token (or `TokenExpired` / `NotAuthenticated`
+    /// as appropriate). Returns `NotAuthenticated` when neither an override
+    /// nor a store is configured.
     pub fn resolve_token(&self) -> Result<String> {
         if let Some(tok) = &self.token_override {
             return Ok(tok.clone());
         }
-        crate::auth::current_token()
+        let store = self
+            .token_store
+            .as_ref()
+            .ok_or(ClientError::NotAuthenticated)?;
+        let auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
+        if auth.expires_at <= chrono::Utc::now() {
+            return Err(ClientError::TokenExpired);
+        }
+        Ok(auth.access_token.expose_secret().to_string())
     }
 
     fn url(&self, path: &str) -> String {
@@ -383,7 +423,7 @@ mod tests {
 
     #[test]
     fn url_building_strips_trailing_and_leading_slashes() {
-        let client = HttpClient::new("https://api.example.com/", None);
+        let client = HttpClient::new("https://api.example.com/", None, None);
         let url = client.url("/v1/tasks");
         assert_eq!(url, "https://api.example.com/v1/tasks");
     }
@@ -419,21 +459,29 @@ mod tests {
     }
 
     #[test]
-    fn resolve_token_without_override_falls_back_to_auth() {
-        // When no override is set, resolve_token delegates to current_token().
-        // Both must return the same result regardless of whether auth.json exists.
-        let client = HttpClient::new("https://api.example.com", None);
-        let from_client = client.resolve_token();
-        let from_auth = crate::auth::current_token();
-        match (from_client, from_auth) {
-            (Ok(a), Ok(b)) => assert_eq!(
-                a, b,
-                "resolve_token must return the same token as current_token"
-            ),
-            (Err(_), Err(_)) => {} // both failed — fallback path exercised correctly
-            (Ok(_), Err(_)) | (Err(_), Ok(_)) => {
-                panic!("resolve_token and current_token must agree when no override is set")
-            }
-        }
+    fn resolve_token_errors_when_no_override_and_no_store() {
+        let client = HttpClient::new("https://api.example.com", None, None);
+        let err = client
+            .resolve_token()
+            .expect_err("no override, no store → NotAuthenticated");
+        assert!(matches!(err, ClientError::NotAuthenticated));
+    }
+
+    #[test]
+    fn resolve_token_uses_store_when_no_override() {
+        use crate::auth::{MemoryTokenStore, Provider, StoredAuth, TokenStore};
+        let store = MemoryTokenStore::empty();
+        store
+            .save(&StoredAuth {
+                provider: Provider::auth0("test.auth0.com"),
+                access_token: "at_from_store".to_string().into(),
+                refresh_token: None,
+                expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+                profile_id: None,
+                device_id: None,
+            })
+            .unwrap();
+        let client = HttpClient::new("https://api.example.com", None, Some(Arc::new(store)));
+        assert_eq!(client.resolve_token().unwrap(), "at_from_store");
     }
 }

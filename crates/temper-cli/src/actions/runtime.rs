@@ -2,12 +2,34 @@
 //!
 //! Eliminates duplicated `tokio::runtime::Runtime::new()` + `build_client()`
 //! boilerplate across command modules.
+//!
+//! Picks a [`temper_client::auth::TokenStore`] based on
+//! [`temper_core::types::VaultState::from_env`]:
+//! `VaultState::Cloud` → `MemoryTokenStore` (ephemeral, env-var-backed);
+//! `VaultState::Local` → `DiskTokenStore::default_path()`
+//! (`~/.config/temper/auth.json`). Cloud sessions cannot accidentally write
+//! to disk because the store itself has no disk knowledge.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use temper_client::auth::{DiskTokenStore, MemoryTokenStore, TokenStore};
+use temper_core::types::VaultState;
+
 use crate::error::{Result, TemperError};
+
+/// Resolve the active [`TokenStore`] for this process.
+fn resolve_token_store() -> Result<Arc<dyn TokenStore>> {
+    match VaultState::from_env() {
+        VaultState::Cloud => {
+            let mem = MemoryTokenStore::from_env_required()
+                .map_err(|e| TemperError::Config(e.to_string()))?;
+            Ok(Arc::new(mem))
+        }
+        VaultState::Local => Ok(Arc::new(DiskTokenStore::default_path())),
+    }
+}
 
 /// Create a tokio runtime and temper client, then execute an async closure.
 ///
@@ -19,8 +41,9 @@ where
 {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    let store = resolve_token_store()?;
     let client =
-        temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
+        temper_client::config::build_client(store).map_err(|e| TemperError::Api(e.to_string()))?;
     rt.block_on(f(&client))
 }
 
@@ -33,8 +56,9 @@ where
 {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    let store = resolve_token_store()?;
     let client = Arc::new(
-        temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?,
+        temper_client::config::build_client(store).map_err(|e| TemperError::Api(e.to_string()))?,
     );
     rt.block_on(f(client))
 }
@@ -48,8 +72,9 @@ pub fn build_runtime_and_client() -> Result<(tokio::runtime::Runtime, temper_cli
 {
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+    let store = resolve_token_store()?;
     let client =
-        temper_client::config::build_client().map_err(|e| TemperError::Api(e.to_string()))?;
+        temper_client::config::build_client(store).map_err(|e| TemperError::Api(e.to_string()))?;
     Ok((rt, client))
 }
 

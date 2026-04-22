@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn sync_client_is_debug() {
-        let client = HttpClient::new("https://example.com", None);
+        let client = HttpClient::new("https://example.com", None, None);
         let sync = SyncClient::new(&client);
         let debug_str = format!("{sync:?}");
         assert!(debug_str.contains("SyncClient"));

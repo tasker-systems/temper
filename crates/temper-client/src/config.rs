@@ -65,25 +65,29 @@ pub fn oauth_config(config: &TemperConfig) -> crate::error::Result<crate::login:
     })
 }
 
-/// Build client from explicit config and optional stored auth (no disk reads).
+/// Build client from explicit config and an explicit [`crate::auth::TokenStore`].
 ///
-/// When `auth` is provided, the access token is set as a token override on the
-/// underlying `HttpClient`, bypassing `auth.json` reads in all sub-clients.
+/// When the store resolves a current [`crate::auth::StoredAuth`], its access
+/// token is set as a request-path override on the underlying `HttpClient`.
+/// The store is still held for refresh / logout / status, so cloud sessions
+/// never reach for a disk fallback.
 pub fn build_client_from(
     config: &TemperConfig,
-    auth: Option<&crate::auth::StoredAuth>,
+    store: std::sync::Arc<dyn crate::auth::TokenStore>,
 ) -> crate::error::Result<crate::TemperClient> {
     let url = api_url(config);
-    let device_id = auth.and_then(|a| a.device_id.clone());
+    let auth = store.load()?;
+    let device_id = auth.as_ref().and_then(|a| a.device_id.clone());
 
     let client = if let Some(auth) = auth {
         crate::TemperClient::with_token(
             &url,
             device_id,
             secrecy::ExposeSecret::expose_secret(&auth.access_token).to_string(),
+            store,
         )
     } else {
-        crate::TemperClient::new(&url, device_id)
+        crate::TemperClient::new(&url, device_id, store)
     };
 
     let client = match oauth_config(config) {
@@ -97,15 +101,18 @@ pub fn build_client_from(
     Ok(client)
 }
 
-/// Convenience: load config and build a fully-configured [`TemperClient`](crate::TemperClient).
+/// Convenience: load config and build a fully-configured [`TemperClient`](crate::TemperClient)
+/// with an explicit [`crate::auth::TokenStore`].
 ///
-/// Reads `~/.config/temper/config.toml`, resolves the API URL (with env-var
-/// override), loads the device UUID from `auth.json`, and attaches OAuth
-/// config when a provider is configured.
-pub fn build_client() -> crate::error::Result<crate::TemperClient> {
+/// Callers choose the store (typically `DiskTokenStore::default_path()` for
+/// local CLI sessions, `MemoryTokenStore::from_env_required()` for cloud).
+/// There is no "default store" here — `VaultState` selection belongs at the
+/// CLI entry point, not the client builder.
+pub fn build_client(
+    store: std::sync::Arc<dyn crate::auth::TokenStore>,
+) -> crate::error::Result<crate::TemperClient> {
     let config = load_cloud_config()?;
-    let auth = crate::auth::load_auth().ok().flatten();
-    build_client_from(&config, auth.as_ref())
+    build_client_from(&config, store)
 }
 
 // ---------------------------------------------------------------------------
@@ -360,7 +367,9 @@ scopes        = ["openid", "profile"]
         let nonexistent = dir.path().join("no-such-config.toml");
         std::env::set_var("TEMPER_GLOBAL_CONFIG", &nonexistent);
         std::env::remove_var("TEMPER_API_URL");
-        let result = build_client();
+        let store: std::sync::Arc<dyn crate::auth::TokenStore> =
+            std::sync::Arc::new(crate::auth::MemoryTokenStore::empty());
+        let result = build_client(store);
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
         assert!(result.is_ok(), "build_client failed: {:?}", result.err());
     }
@@ -383,7 +392,9 @@ scopes        = ["openid", "profile"]
             profile_id: None,
             device_id: Some("test-device".to_string()),
         };
-        let client = build_client_from(&config, Some(&auth)).unwrap();
+        let store: std::sync::Arc<dyn crate::auth::TokenStore> =
+            std::sync::Arc::new(crate::auth::MemoryTokenStore::with_auth(auth));
+        let client = build_client_from(&config, store).unwrap();
         // Client was constructed without reading disk — verify it exists
         assert!(format!("{:?}", client).contains("test.example.com"));
     }

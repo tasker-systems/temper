@@ -123,7 +123,7 @@ async fn exchange_code(
 // Login flow
 // ---------------------------------------------------------------------------
 
-pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
+pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result<StoredAuth> {
     let (code_verifier, code_challenge) = generate_pkce_pair();
 
     // Bind to a random port on localhost.
@@ -168,7 +168,7 @@ pub async fn login(config: &OAuthConfig) -> Result<StoredAuth> {
         device_id: Some(device_id),
     };
 
-    auth::save_auth(&stored)?;
+    store.save(&stored)?;
     info!("Authentication successful — token saved");
 
     Ok(stored)

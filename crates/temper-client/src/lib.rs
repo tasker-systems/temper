@@ -19,35 +19,69 @@ pub mod search;
 pub mod sync;
 pub mod upload;
 
+use std::sync::Arc;
+
 use error::{ClientError, Result};
 
 /// Top-level client for the temper cloud API.
 ///
 /// Provides typed sub-clients via accessor methods (`resources()`, `search()`,
 /// etc.) and handles authentication lifecycle (login, logout, status).
-#[derive(Debug)]
+///
+/// Holds an `Arc<dyn TokenStore>` so every auth operation (token refresh,
+/// status, logout) routes through the store chosen at construction time.
+/// Cloud sessions bind `MemoryTokenStore`; local sessions bind
+/// `DiskTokenStore`. There is no "default disk path" fallback at this
+/// layer — a missing store is a programming error.
 pub struct TemperClient {
     http: http::HttpClient,
     oauth_config: Option<login::OAuthConfig>,
+    store: Arc<dyn auth::TokenStore>,
+}
+
+impl std::fmt::Debug for TemperClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TemperClient")
+            .field("http", &self.http)
+            .field("has_oauth_config", &self.oauth_config.is_some())
+            .finish()
+    }
 }
 
 impl TemperClient {
     /// Create a new client targeting `base_url`.
     ///
     /// `device_id` is sent as `X-Temper-Device-Id` on every request for
-    /// per-device manifest tracking.
-    pub fn new(base_url: &str, device_id: Option<String>) -> Self {
+    /// per-device manifest tracking. `store` is the source of truth for
+    /// token resolution.
+    pub fn new(
+        base_url: &str,
+        device_id: Option<String>,
+        store: Arc<dyn auth::TokenStore>,
+    ) -> Self {
         Self {
-            http: http::HttpClient::new(base_url, device_id),
+            http: http::HttpClient::new(base_url, device_id, Some(store.clone())),
             oauth_config: None,
+            store,
         }
     }
 
-    /// Create a new client with a pre-set token (bypasses `auth.json`).
-    pub fn with_token(base_url: &str, device_id: Option<String>, token: String) -> Self {
+    /// Create a new client with a pre-resolved token override.
+    ///
+    /// Used by `build_client_from` after resolving the current token from
+    /// the store — the override path keeps the request path off any further
+    /// store reads for the lifetime of this client. The store is still held
+    /// for refresh / logout / status operations.
+    pub fn with_token(
+        base_url: &str,
+        device_id: Option<String>,
+        token: String,
+        store: Arc<dyn auth::TokenStore>,
+    ) -> Self {
         Self {
             http: http::HttpClient::with_token_override(base_url, device_id, token),
             oauth_config: None,
+            store,
         }
     }
 
@@ -65,7 +99,7 @@ impl TemperClient {
             .oauth_config
             .as_ref()
             .ok_or(ClientError::NotAuthenticated)?;
-        auth::get_valid_token(&config.token_url, &config.client_id).await
+        auth::get_valid_token(&*self.store, &config.token_url, &config.client_id).await
     }
 
     // ----- Sub-client accessors -----
@@ -122,16 +156,16 @@ impl TemperClient {
         let config = self.oauth_config.as_ref().ok_or_else(|| {
             ClientError::Other("no OAuth config — call with_oauth() first".into())
         })?;
-        login::login(config).await
+        login::login(config, &*self.store).await
     }
 
-    /// Remove stored authentication credentials.
+    /// Remove stored authentication credentials via the bound store.
     pub fn auth_logout(&self) -> Result<()> {
-        auth::clear_auth()
+        self.store.clear()
     }
 
-    /// Return a summary of the current authentication state.
+    /// Return a summary of the current authentication state from the bound store.
     pub fn auth_status(&self) -> Result<auth::AuthStatus> {
-        auth::auth_status()
+        auth::auth_status(&*self.store)
     }
 }

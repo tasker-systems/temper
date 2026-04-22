@@ -1,6 +1,12 @@
 //! `temper auth` subcommands: login, logout, status.
 //!
 //! All output is JSON so the commands can be consumed programmatically.
+//!
+//! `login`, `logout`, and `token` are inherently disk-mode operations —
+//! they persist credentials to `~/.config/temper/auth.json`. Cloud sessions
+//! receive tokens via `TEMPER_TOKEN` and don't invoke these commands.
+
+use temper_client::auth::{DiskTokenStore, TokenStore};
 
 use crate::actions::runtime;
 use crate::error::Result;
@@ -29,16 +35,19 @@ pub fn login() -> Result<()> {
 
 /// Clear stored credentials and print confirmation.
 pub fn logout() -> Result<()> {
-    temper_client::auth::clear_auth()
+    DiskTokenStore::default_path()
+        .clear()
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
     println!("{{\"status\": \"logged_out\"}}");
     Ok(())
 }
 
-/// Store a JWT directly, bypassing the OAuth flow.
+/// Store a JWT directly to `~/.config/temper/auth.json`, bypassing the
+/// OAuth flow.
 ///
-/// Useful for API-only clients, CI environments, or bootstrapping
-/// when the browser OAuth flow isn't available yet.
+/// Useful for API-only clients, CI environments, or bootstrapping when the
+/// browser OAuth flow isn't available yet. Writes to disk unconditionally
+/// — cloud sessions use `TEMPER_TOKEN` rather than this command.
 pub fn token(jwt: &str, provider: &str) -> Result<()> {
     let claims = temper_client::auth::parse_jwt_claims(jwt)
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
@@ -61,7 +70,8 @@ pub fn token(jwt: &str, provider: &str) -> Result<()> {
         device_id: Some(device_id),
     };
 
-    temper_client::auth::save_auth(&stored)
+    DiskTokenStore::default_path()
+        .save(&stored)
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
 
     let status = temper_client::auth::AuthStatus {
@@ -77,9 +87,15 @@ pub fn token(jwt: &str, provider: &str) -> Result<()> {
 
 /// Print the current auth status as JSON.
 pub fn status() -> Result<()> {
-    let status = temper_client::auth::auth_status()
-        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-    let json = serde_json::to_string_pretty(&status).map_err(crate::error::TemperError::Json)?;
-    println!("{json}");
-    Ok(())
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            let status = client
+                .auth_status()
+                .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
+            let json =
+                serde_json::to_string_pretty(&status).map_err(crate::error::TemperError::Json)?;
+            println!("{json}");
+            Ok(())
+        })
+    })
 }

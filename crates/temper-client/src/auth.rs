@@ -389,6 +389,10 @@ pub fn clear_auth_at(path: &Path) -> Result<()> {
 /// Load stored auth, preferring `TEMPER_TOKEN` when set, falling back to
 /// `~/.config/temper/auth.json`.
 ///
+/// Read-only; safe in cloud mode. Writers must go through [`TokenStore`] so
+/// `MemoryTokenStore` sessions cannot accidentally persist to disk — see
+/// module-level comment.
+///
 /// When `TEMPER_TOKEN` is set, the token is parsed into an in-memory
 /// [`StoredAuth`] without touching disk — the primary bootstrap path for
 /// ephemeral cloud agent sessions. A malformed `TEMPER_TOKEN` surfaces as an
@@ -401,19 +405,14 @@ pub fn load_auth() -> Result<Option<StoredAuth>> {
     load_auth_from(&auth_json_path())
 }
 
-/// Save auth to the default location.
-pub fn save_auth(auth: &StoredAuth) -> Result<()> {
-    save_auth_to(auth, &auth_json_path())
-}
-
-/// Remove auth from the default location.
-pub fn clear_auth() -> Result<()> {
-    clear_auth_at(&auth_json_path())
-}
-
 /// Return a lightweight status struct (no token values exposed).
-pub fn auth_status() -> Result<AuthStatus> {
-    match load_auth()? {
+///
+/// Accepts a [`TokenStore`] so cloud sessions (backed by
+/// [`MemoryTokenStore`]) report the in-memory auth and disk sessions report
+/// `~/.config/temper/auth.json`. There is deliberately no `auth_status()`
+/// free function that hardcodes the disk path.
+pub fn auth_status(store: &dyn TokenStore) -> Result<AuthStatus> {
+    match store.load()? {
         None => Ok(AuthStatus {
             authenticated: false,
             provider: None,
@@ -566,20 +565,6 @@ pub fn load_device_id() -> Option<String> {
 // Current token helper
 // ---------------------------------------------------------------------------
 
-/// Load the stored access token, returning an error if not authenticated
-/// or if the token has expired.
-///
-/// This is the primary helper used by sub-clients to get a bearer token
-/// for outgoing requests without needing access to the OAuth config.
-pub fn current_token() -> Result<String> {
-    use secrecy::ExposeSecret;
-    let auth = load_auth()?.ok_or(ClientError::NotAuthenticated)?;
-    if auth.expires_at <= Utc::now() {
-        return Err(ClientError::TokenExpired);
-    }
-    Ok(auth.access_token.expose_secret().to_string())
-}
-
 // ---------------------------------------------------------------------------
 // Token refresh
 // ---------------------------------------------------------------------------
@@ -597,8 +582,16 @@ struct TokenResponse {
     expires_in: Option<u64>,
 }
 
-/// POST a refresh-token grant and persist the updated [`StoredAuth`].
+/// POST a refresh-token grant and persist the updated [`StoredAuth`] via
+/// the provided [`TokenStore`].
+///
+/// Takes a store rather than writing to the disk path directly — a cloud
+/// session using [`MemoryTokenStore`] refreshes into memory, a local
+/// session refreshes to `~/.config/temper/auth.json`. There is no
+/// `refresh_token` free function that hardcodes disk — structural, not
+/// discipline-based.
 pub async fn refresh_token(
+    store: &dyn TokenStore,
     auth: &StoredAuth,
     token_url: &str,
     client_id: &str,
@@ -641,19 +634,32 @@ pub async fn refresh_token(
         device_id: auth.device_id.clone(),
     };
 
-    save_auth(&updated)?;
+    store.save(&updated)?;
     Ok(updated)
 }
 
-/// Load auth, refresh if needed, and return a valid access token.
-pub async fn get_valid_token(token_url: &str, client_id: &str) -> Result<String> {
+/// Load auth from the store, refresh if needed, and return a valid access
+/// token string.
+///
+/// The store is the single source of truth for where tokens live — cloud
+/// sessions use [`MemoryTokenStore`], local sessions use [`DiskTokenStore`].
+/// Callers never reach for the disk path directly.
+pub async fn get_valid_token(
+    store: &dyn TokenStore,
+    token_url: &str,
+    client_id: &str,
+) -> Result<String> {
     use secrecy::ExposeSecret;
 
-    let auth = load_auth()?.ok_or(ClientError::NotAuthenticated)?;
+    let auth = store.load()?.ok_or(ClientError::NotAuthenticated)?;
 
     if needs_refresh(&auth) {
-        let refreshed = refresh_token(&auth, token_url, client_id).await?;
+        let refreshed = refresh_token(store, &auth, token_url, client_id).await?;
         return Ok(refreshed.access_token.expose_secret().to_string());
+    }
+
+    if auth.expires_at <= Utc::now() {
+        return Err(ClientError::TokenExpired);
     }
 
     Ok(auth.access_token.expose_secret().to_string())
