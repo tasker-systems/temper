@@ -172,6 +172,83 @@ impl TokenStore for MemoryTokenStore {
     }
 }
 
+/// Default Auth0 tenant domain used when no explicit domain is supplied via
+/// `TEMPER_PROVIDER`. Matches `CloudSection::default()` in `temper-core`.
+/// Kept as a compile-time constant to avoid an I/O dependency in the env-var
+/// bootstrap path — see also `default_provider_is_auth0_with_config` in
+/// `config::tests` which pins the same value.
+const DEFAULT_AUTH0_DOMAIN: &str = "temperkb.us.auth0.com";
+
+/// Expose the default Auth0 domain for consumers that need to construct a
+/// `Provider::Auth0` without re-reading config.
+pub fn default_auth0_domain() -> String {
+    DEFAULT_AUTH0_DOMAIN.to_string()
+}
+
+/// Which identity provider issued the stored credentials.
+///
+/// One variant today; the enum shape is the change — a second variant
+/// (hypothetical `SelfHosted`, etc.) is a separate design question and is
+/// NOT speculatively built. Extending the enum later is a minor refactor;
+/// extending a stringly-typed field is a breaking API change.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Provider {
+    Auth0 { domain: String },
+}
+
+impl Provider {
+    /// Convenience constructor for the common case.
+    pub fn auth0(domain: impl Into<String>) -> Self {
+        Self::Auth0 {
+            domain: domain.into(),
+        }
+    }
+
+    /// Expose the provider's domain (e.g. `temper.us.auth0.com`) for OAuth
+    /// endpoint construction. The domain is informational on the token side
+    /// — actual OAuth endpoints come from `config.toml`'s `[[auth.providers]]`.
+    pub fn domain(&self) -> &str {
+        match self {
+            Provider::Auth0 { domain } => domain,
+        }
+    }
+
+    /// Short identifier used in status displays (`temper auth status`).
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Provider::Auth0 { .. } => "auth0",
+        }
+    }
+
+    /// Parse the `TEMPER_PROVIDER` env-var value, treating unknown/invalid
+    /// values as a fallback to the default Auth0 tenant. Prefer
+    /// [`try_from_env_value`](Self::try_from_env_value) when unknown values
+    /// should surface as an error instead.
+    ///
+    /// Accepted shapes:
+    /// - `None` / empty / `"auth0"` → `Auth0 { default_auth0_domain() }`
+    /// - `"auth0:DOMAIN"` → `Auth0 { DOMAIN }`
+    /// - anything else → falls back to the default Auth0 tenant
+    pub fn from_env_value(raw: Option<&str>) -> Self {
+        Self::try_from_env_value(raw).unwrap_or_else(|_| Self::auth0(default_auth0_domain()))
+    }
+
+    /// Strict parse of `TEMPER_PROVIDER`: unknown shapes return an error so
+    /// the CLI can surface a clear message rather than silently defaulting.
+    pub fn try_from_env_value(raw: Option<&str>) -> Result<Self> {
+        match raw.map(str::trim).filter(|s| !s.is_empty()) {
+            None | Some("auth0") => Ok(Self::auth0(default_auth0_domain())),
+            Some(s) if s.starts_with("auth0:") => {
+                Ok(Self::auth0(s.trim_start_matches("auth0:").to_string()))
+            }
+            Some(other) => Err(ClientError::Other(format!(
+                "unsupported TEMPER_PROVIDER value: {other}"
+            ))),
+        }
+    }
+}
+
 /// Persisted auth state written to `~/.config/temper/auth.json`.
 ///
 /// `device_id` is a UUIDv7 generated on first login, identifying this machine.
@@ -179,7 +256,7 @@ impl TokenStore for MemoryTokenStore {
 /// per-device sync state and vault config overrides.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct StoredAuth {
-    pub provider: String,
+    pub provider: Provider,
     #[serde(with = "secrecy_serde")]
     pub access_token: secrecy::SecretString,
     #[serde(default, with = "secrecy_serde_opt")]
@@ -243,7 +320,7 @@ mod secrecy_serde_opt {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthStatus {
     pub authenticated: bool,
-    pub provider: Option<String>,
+    pub provider: Option<Provider>,
     pub expires_at: Option<DateTime<Utc>>,
     pub profile_id: Option<uuid::Uuid>,
 }
@@ -439,10 +516,8 @@ pub fn stored_auth_from_env() -> Result<Option<StoredAuth>> {
 
     let claims = parse_jwt_claims(&jwt)?;
 
-    let provider = std::env::var(TEMPER_PROVIDER_ENV)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "auth0".to_string());
+    let provider_env = std::env::var(TEMPER_PROVIDER_ENV).ok();
+    let provider = Provider::try_from_env_value(provider_env.as_deref())?;
 
     let device_id = std::env::var(TEMPER_DEVICE_ID_ENV)
         .ok()
@@ -596,7 +671,7 @@ mod tests {
 
     fn make_auth(expires_at: DateTime<Utc>) -> StoredAuth {
         StoredAuth {
-            provider: "github".to_owned(),
+            provider: Provider::auth0("test.auth0.com"),
             access_token: "tok_test".to_owned().into(),
             refresh_token: Some("rtok_test".to_owned().into()),
             expires_at,
@@ -851,7 +926,7 @@ mod tests {
             "sub": sub.to_string(),
         }));
         std::env::set_var(TEMPER_TOKEN_ENV, &jwt);
-        std::env::set_var(TEMPER_PROVIDER_ENV, "auth0-test");
+        std::env::set_var(TEMPER_PROVIDER_ENV, "auth0:test.auth0.com");
         std::env::set_var(TEMPER_DEVICE_ID_ENV, "fixed-device");
 
         let stored = stored_auth_from_env()
@@ -860,7 +935,7 @@ mod tests {
         clear_env();
 
         assert_eq!(stored.access_token.expose_secret(), jwt);
-        assert_eq!(stored.provider, "auth0-test");
+        assert_eq!(stored.provider, Provider::auth0("test.auth0.com"));
         assert_eq!(stored.device_id.as_deref(), Some("fixed-device"));
         assert_eq!(stored.profile_id, Some(sub));
         assert!(
@@ -885,7 +960,7 @@ mod tests {
             .expect("env should produce auth");
         clear_env();
 
-        assert_eq!(stored.provider, "auth0");
+        assert_eq!(stored.provider, Provider::auth0(default_auth0_domain()));
         let device_id = stored.device_id.expect("device_id should be generated");
         uuid::Uuid::parse_str(&device_id).expect("generated device_id should parse as UUID");
     }
@@ -909,7 +984,7 @@ mod tests {
         let store = DiskTokenStore::at(tmp.path().to_path_buf());
 
         let auth = StoredAuth {
-            provider: "auth0".to_string(),
+            provider: Provider::auth0(default_auth0_domain()),
             access_token: "at_test".to_string().into(),
             refresh_token: Some("rt_test".to_string().into()),
             expires_at: Utc::now() + Duration::hours(1),
@@ -940,7 +1015,7 @@ mod tests {
     #[test]
     fn stored_auth_debug_redacts_tokens() {
         let auth = StoredAuth {
-            provider: "auth0".to_string(),
+            provider: Provider::auth0(default_auth0_domain()),
             access_token: secrecy::SecretString::from("at_sensitive"),
             refresh_token: Some(secrecy::SecretString::from("rt_sensitive")),
             expires_at: Utc::now(),
@@ -971,7 +1046,7 @@ mod tests {
         assert!(store.load().expect("load").is_none());
 
         let auth = StoredAuth {
-            provider: "auth0".to_string(),
+            provider: Provider::auth0(default_auth0_domain()),
             access_token: secrecy::SecretString::from("at_v1"),
             refresh_token: None,
             expires_at: Utc::now() + Duration::hours(1),
@@ -1009,7 +1084,7 @@ mod tests {
 
         let loaded = store.load().expect("load").expect("some");
         // Token came from the initial parse, not from the junk env.
-        assert_eq!(loaded.provider, "auth0");
+        assert_eq!(loaded.provider, Provider::auth0(default_auth0_domain()));
         assert_eq!(loaded.access_token.expose_secret(), jwt);
 
         clear_env();
@@ -1028,6 +1103,46 @@ mod tests {
         assert!(
             msg.contains("TEMPER_TOKEN"),
             "error mentions TEMPER_TOKEN: {msg}"
+        );
+    }
+
+    #[test]
+    fn provider_auth0_serializes_as_tagged_enum() {
+        let p = Provider::Auth0 {
+            domain: "temperkb.us.auth0.com".to_string(),
+        };
+        let json = serde_json::to_string(&p).expect("to_string");
+        assert!(json.contains("\"kind\":\"auth0\""), "tag present: {json}");
+        assert!(
+            json.contains("\"domain\":\"temperkb.us.auth0.com\""),
+            "domain present: {json}"
+        );
+
+        let round: Provider = serde_json::from_str(&json).expect("from_str");
+        assert_eq!(round, p);
+    }
+
+    #[test]
+    fn provider_parses_from_env_shapes() {
+        assert_eq!(
+            Provider::from_env_value(None),
+            Provider::auth0(default_auth0_domain())
+        );
+        assert_eq!(
+            Provider::from_env_value(Some("")),
+            Provider::auth0(default_auth0_domain())
+        );
+        assert_eq!(
+            Provider::from_env_value(Some("auth0")),
+            Provider::auth0(default_auth0_domain())
+        );
+        assert_eq!(
+            Provider::from_env_value(Some("auth0:my.domain.com")),
+            Provider::auth0("my.domain.com")
+        );
+        assert!(
+            Provider::from_env_value(Some("github")) == Provider::auth0(default_auth0_domain())
+                || Provider::try_from_env_value(Some("github")).is_err()
         );
     }
 

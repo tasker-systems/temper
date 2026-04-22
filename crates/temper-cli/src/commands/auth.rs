@@ -43,10 +43,17 @@ pub fn token(jwt: &str, provider: &str) -> Result<()> {
     let claims = temper_client::auth::parse_jwt_claims(jwt)
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
 
+    let provider_enum =
+        temper_client::auth::Provider::try_from_env_value(Some(provider)).map_err(|e| {
+            crate::error::TemperError::Config(format!(
+                "invalid --provider: {e}. Accepted: \"auth0\" or \"auth0:DOMAIN\""
+            ))
+        })?;
+
     let device_id = temper_client::auth::load_or_create_device_id();
 
     let stored = temper_client::auth::StoredAuth {
-        provider: provider.to_string(),
+        provider: provider_enum,
         access_token: jwt.to_string().into(),
         refresh_token: None,
         expires_at: claims.expires_at,

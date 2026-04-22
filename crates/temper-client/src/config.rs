@@ -376,7 +376,7 @@ scopes        = ["openid", "profile"]
             ..TemperConfig::default()
         };
         let auth = crate::auth::StoredAuth {
-            provider: "test".to_string(),
+            provider: crate::auth::Provider::auth0("test.auth0.com"),
             access_token: "test-token".to_string().into(),
             refresh_token: None,
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
