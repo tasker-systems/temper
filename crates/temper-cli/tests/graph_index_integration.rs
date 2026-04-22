@@ -40,11 +40,23 @@ fn fixture_config(tmp: &TempDir) -> Config {
 /// `temper-id`, `temper-type`, `temper-context`, `temper-created`, `temper-owner`,
 /// `title`, `slug`; plus doctype-specific fields.
 fn task_file(id_suffix: &str, slug: &str, title: &str, body: &str) -> String {
+    task_file_in_context(id_suffix, slug, title, body, "temper")
+}
+
+/// Like [`task_file`] but with an explicit `temper-context` — used by the
+/// multi-context fixtures that exercise per-context iteration.
+fn task_file_in_context(
+    id_suffix: &str,
+    slug: &str,
+    title: &str,
+    body: &str,
+    context: &str,
+) -> String {
     format!(
         "---\n\
 temper-id: \"01900000-0000-7000-8000-{id_suffix}\"\n\
 temper-type: task\n\
-temper-context: temper\n\
+temper-context: {context}\n\
 temper-created: \"2026-01-01T00:00:00Z\"\n\
 temper-owner: \"@me\"\n\
 title: \"{title}\"\n\
@@ -408,4 +420,244 @@ fn test_graph_index_creates_concepts_and_is_idempotent() {
         count, 1,
         "member relates_to contains concept slug exactly once (idempotent), got {relates2:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Scenario 4 — multi-context, no `--context` filter: pipeline must iterate
+// per context. Each context produces its own concepts scoped to its own
+// directory, with zero cross-context member edges.
+// ---------------------------------------------------------------------------
+
+fn build_multi_context_fixture_vault(tmp: &TempDir) {
+    // Context "temper": three tasks hammering the phrase "graph indexing pipeline".
+    let temper_tasks = tmp.path().join("@me").join("temper").join("task");
+    write_file(
+        &temper_tasks,
+        "design-graph-indexing.md",
+        &task_file_in_context(
+            "000000000201",
+            "design-graph-indexing",
+            "Design graph indexing",
+            "# Design graph indexing pipeline\n\nWe need to design the graph indexing pipeline. \
+             The graph indexing pipeline takes markdown files, extracts TF-IDF seed phrases, \
+             and forms clusters. Graph indexing pipeline quality depends on embedding fidelity.",
+            "temper",
+        ),
+    );
+    write_file(
+        &temper_tasks,
+        "implement-graph-indexing.md",
+        &task_file_in_context(
+            "000000000202",
+            "implement-graph-indexing",
+            "Implement graph indexing",
+            "# Implement graph indexing pipeline\n\nImplement the graph indexing pipeline in \
+             Rust. The graph indexing pipeline wires seeds, clusters, judgment, and \
+             materialization. Graph indexing pipeline integration tests live in the temper-cli \
+             crate.",
+            "temper",
+        ),
+    );
+    write_file(
+        &temper_tasks,
+        "test-graph-indexing.md",
+        &task_file_in_context(
+            "000000000203",
+            "test-graph-indexing",
+            "Test graph indexing",
+            "# Test graph indexing pipeline\n\nWrite integration tests for the graph indexing \
+             pipeline. The graph indexing pipeline must produce deterministic clusters given a \
+             fixed corpus. Graph indexing pipeline failures surface in the error log.",
+            "temper",
+        ),
+    );
+
+    // Context "tasker": three tasks on a distinct topic — "narrative scene model".
+    // Different vocabulary so seed phrases diverge from the temper context.
+    let tasker_tasks = tmp.path().join("@me").join("tasker").join("task");
+    write_file(
+        &tasker_tasks,
+        "author-narrative-scene.md",
+        &task_file_in_context(
+            "000000000301",
+            "author-narrative-scene",
+            "Author narrative scene",
+            "# Narrative scene model\n\nAuthor the narrative scene model. The narrative scene \
+             model captures beats, characters, and setting. Narrative scene model scaffolding \
+             keeps the authoring surface ergonomic.",
+            "tasker",
+        ),
+    );
+    write_file(
+        &tasker_tasks,
+        "render-narrative-scene.md",
+        &task_file_in_context(
+            "000000000302",
+            "render-narrative-scene",
+            "Render narrative scene",
+            "# Narrative scene model\n\nRender the narrative scene model to prose. The \
+             narrative scene model drives per-beat output. Narrative scene model rendering \
+             respects the pacing graph.",
+            "tasker",
+        ),
+    );
+    write_file(
+        &tasker_tasks,
+        "diff-narrative-scene.md",
+        &task_file_in_context(
+            "000000000303",
+            "diff-narrative-scene",
+            "Diff narrative scene",
+            "# Narrative scene model\n\nDiff two revisions of the narrative scene model. The \
+             narrative scene model version history is authoritative. Narrative scene model \
+             diffs highlight beat edits.",
+            "tasker",
+        ),
+    );
+}
+
+/// Multi-context config so the pipeline treats both contexts as first-class.
+fn multi_context_config(tmp: &TempDir) -> Config {
+    Config {
+        vault_root: tmp.path().to_path_buf(),
+        state_dir: tmp.path().join(".temper"),
+        contexts: vec!["temper".to_string(), "tasker".to_string()],
+        subscriptions: Vec::new(),
+        skill_output: tmp.path().join(".skill"),
+    }
+}
+
+#[test]
+fn test_graph_index_no_filter_iterates_per_context() {
+    let tmp = TempDir::new().unwrap();
+    build_multi_context_fixture_vault(&tmp);
+    let config = multi_context_config(&tmp);
+    let graph_config = loose_graph_config();
+
+    index_action::run(
+        &config,
+        IndexParams {
+            context_filter: None,
+            full: true,
+        },
+    )
+    .unwrap();
+
+    // Mock returns a proposal whose member_edges reference BOTH contexts —
+    // this is what the buggy pipeline used to produce (clusters mixing across
+    // contexts). The fix: per-context iteration forms clusters only within a
+    // single context, and materialize drops any cross-context edge the LLM
+    // returns anyway (defense-in-depth).
+    let cross_context_proposal = json!({
+        "is_concept": true,
+        "slug": "graph-indexing-pipeline",
+        "title": "Graph Indexing Pipeline",
+        "body_markdown": "## Members\n\n- design-graph-indexing\n- author-narrative-scene",
+        "member_edges": [
+            { "target_path": "@me/temper/task/design-graph-indexing.md", "edge_type": "relates-to" },
+            { "target_path": "@me/temper/task/implement-graph-indexing.md", "edge_type": "relates-to" },
+            { "target_path": "@me/tasker/task/author-narrative-scene.md", "edge_type": "relates-to" },
+            { "target_path": "@me/tasker/task/render-narrative-scene.md", "edge_type": "relates-to" },
+        ]
+    });
+    let mock = MockLlmProvider::new("mock", "mock-model")
+        .scenario(MockScenario::SingleTurn(cross_context_proposal));
+    let provider: Arc<dyn LlmProvider> = Arc::new(mock);
+
+    let report = graph_index::run_with_provider(
+        &config,
+        GraphIndexParams {
+            context_filter: None,
+            dry_run: false,
+            verbose: true,
+        },
+        Some(provider),
+        &graph_config,
+    )
+    .unwrap();
+
+    // The pipeline must have run against BOTH contexts — at least one cluster
+    // per context means at least two total.
+    assert!(
+        report.clusters_formed >= 2,
+        "expected clusters from both contexts (got {})",
+        report.clusters_formed
+    );
+    assert!(
+        report.concepts_created >= 2,
+        "expected at least one concept per context (got {})",
+        report.concepts_created
+    );
+
+    // Concept files live in their OWN context directory.
+    let temper_concept_dir = tmp.path().join("@me").join("temper").join("concept");
+    let tasker_concept_dir = tmp.path().join("@me").join("tasker").join("concept");
+    assert!(
+        temper_concept_dir.exists() && fs::read_dir(&temper_concept_dir).unwrap().next().is_some(),
+        "temper context must have its own concept file(s)"
+    );
+    assert!(
+        tasker_concept_dir.exists() && fs::read_dir(&tasker_concept_dir).unwrap().next().is_some(),
+        "tasker context must have its own concept file(s)"
+    );
+
+    // Every concept file's frontmatter `temper-context` matches the context
+    // directory it lives in — no pollution.
+    for (ctx, dir) in [
+        ("temper", &temper_concept_dir),
+        ("tasker", &tasker_concept_dir),
+    ] {
+        for entry in fs::read_dir(dir).unwrap().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            let fm = temper_core::frontmatter::Frontmatter::parse_file(&path).unwrap();
+            let actual_ctx = fm
+                .value()
+                .get("temper-context")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            assert_eq!(
+                actual_ctx, ctx,
+                "concept at {path:?} must carry temper-context={ctx}, got {actual_ctx:?}"
+            );
+        }
+    }
+
+    // Across BOTH contexts, no member file points at a concept slug that
+    // lives in a different context. We verify by reading each member's
+    // `relates_to` — every listed concept slug must resolve to a file in the
+    // member's own `{context}/concept/` directory.
+    for (ctx, tasks_dir) in [
+        ("temper", tmp.path().join("@me").join("temper").join("task")),
+        ("tasker", tmp.path().join("@me").join("tasker").join("task")),
+    ] {
+        let concept_dir = tmp.path().join("@me").join(ctx).join("concept");
+        for entry in fs::read_dir(&tasks_dir).unwrap().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("md") {
+                continue;
+            }
+            let fm = temper_core::frontmatter::Frontmatter::parse_file(&path).unwrap();
+            let relates: Vec<String> = fm
+                .value()
+                .get("relates_to")
+                .and_then(|v| v.as_sequence())
+                .map(|seq| {
+                    seq.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for slug in &relates {
+                let concept_path = concept_dir.join(format!("{slug}.md"));
+                assert!(
+                    concept_path.exists(),
+                    "member {path:?} references concept slug {slug:?} that should exist \
+                     in-context at {concept_path:?} — cross-context edge leaked"
+                );
+            }
+        }
+    }
 }

@@ -14,6 +14,8 @@ pub mod judgment;
 pub mod materialize;
 pub mod seeds;
 
+use std::fs;
+use std::path::Path;
 use std::sync::Arc;
 
 use temper_core::types::config::GraphIndexConfig;
@@ -22,6 +24,10 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
+
+/// Doc types whose presence marks a context as "active" for the graph-index
+/// pipeline. Mirrors `seeds::ENTITY_DOC_TYPES` and `graph_build::ENTITY_DOC_TYPES`.
+const ENTITY_DOC_TYPES: &[&str] = &["task", "goal", "session", "decision", "concept", "research"];
 
 /// Parameters for a graph-index run.
 #[derive(Debug, Clone)]
@@ -94,6 +100,15 @@ pub fn run(config: &Config, params: GraphIndexParams) -> Result<GraphIndexReport
 /// integration tests to substitute a [`temper_llm::MockLlmProvider`] and avoid
 /// reading global config from disk.
 ///
+/// When `params.context_filter` is `Some(ctx)`, a single pass runs against
+/// that context. When `None`, the vault is scanned for every context under
+/// `@me/` that contains at least one entity-doctype file, and each such
+/// context is processed in its own isolated pass — seeds, clusters,
+/// judgment, and materialization all stay within a single context. This is
+/// the boundary that makes Concepts context-scoped: a member in
+/// `@me/tasker/…` can never end up with a `relates_to` edge to a concept in
+/// `@me/temper/concept/`.
+///
 /// `provider` is required for non-dry-run calls and ignored for dry-run.
 pub fn run_with_provider(
     config: &Config,
@@ -110,12 +125,46 @@ pub fn run_with_provider(
         )
     })?;
 
-    let seeds = seeds::extract_seeds(
-        vault_root,
-        graph_index_config,
-        params.context_filter.as_deref(),
-    );
-    let clusters = cluster::form_clusters(&seeds, &manifest, graph_index_config);
+    let contexts = match params.context_filter.as_deref() {
+        Some(ctx) => {
+            validate_context_is_active(vault_root, ctx)?;
+            vec![ctx.to_string()]
+        }
+        None => discover_active_contexts(vault_root),
+    };
+
+    let mut aggregate = GraphIndexReport::default();
+
+    for context in &contexts {
+        let per_context = run_single_context(
+            config,
+            &params,
+            provider.as_ref().cloned(),
+            graph_index_config,
+            &manifest,
+            context,
+        )?;
+        merge_reports(&mut aggregate, per_context);
+    }
+
+    Ok(aggregate)
+}
+
+/// Run the full pipeline (seeds → clusters → judgment → materialize) for a
+/// single context. Called once per context by [`run_with_provider`].
+fn run_single_context(
+    config: &Config,
+    params: &GraphIndexParams,
+    provider: Option<Arc<dyn LlmProvider>>,
+    graph_index_config: &GraphIndexConfig,
+    manifest: &cluster::IndexManifestView,
+    context: &str,
+) -> Result<GraphIndexReport> {
+    let vault_root = &config.vault_root;
+
+    let seeds = seeds::extract_seeds(vault_root, graph_index_config, Some(context));
+    let context_manifest = cluster::filter_manifest_to_context(manifest, context);
+    let clusters = cluster::form_clusters(&seeds, &context_manifest, graph_index_config);
 
     let mut report = GraphIndexReport {
         seeds_extracted: seeds.len(),
@@ -153,15 +202,11 @@ pub fn run_with_provider(
     };
     report.proposals_returned = proposals.len();
 
-    // `context_filter` may be None (run over all contexts); use "temper" as
-    // the default landing context. The doctype-qualified-slug follow-up will
-    // let member_edges carry their own context if we ever relax this.
-    let materialize_context = params.context_filter.as_deref().unwrap_or("temper");
     let mat = materialize::materialize_concepts(
         &proposals,
         config,
         graph_index_config,
-        materialize_context,
+        context,
         params.dry_run,
     );
     report.concepts_created = mat.concepts_created;
@@ -173,4 +218,191 @@ pub fn run_with_provider(
     }
 
     Ok(report)
+}
+
+/// List the contexts under `{vault_root}/@me/` that have at least one file
+/// in one of the entity doctype directories. Contexts with no content are
+/// skipped — no point creating an empty concept directory for a stub context.
+fn discover_active_contexts(vault_root: &Path) -> Vec<String> {
+    let owner_root = vault_root.join("@me");
+    let Ok(entries) = fs::read_dir(&owner_root) else {
+        return Vec::new();
+    };
+
+    let mut contexts: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name().and_then(|n| n.to_str())?.to_string();
+            if !path.is_dir() || name.starts_with('.') {
+                return None;
+            }
+            if context_has_entity_files(&path) {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    contexts.sort();
+    contexts
+}
+
+/// True iff `{context_root}/{doc_type}/` exists for any entity doctype and
+/// contains at least one `*.md` file.
+fn context_has_entity_files(context_root: &Path) -> bool {
+    for doc_type in ENTITY_DOC_TYPES {
+        let type_dir = context_root.join(doc_type);
+        let Ok(entries) = fs::read_dir(&type_dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) == Some("md") {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Combine a per-context report into the aggregate that crosses all contexts.
+fn merge_reports(acc: &mut GraphIndexReport, next: GraphIndexReport) {
+    acc.seeds_extracted += next.seeds_extracted;
+    acc.clusters_formed += next.clusters_formed;
+    acc.proposals_returned += next.proposals_returned;
+    acc.concepts_created += next.concepts_created;
+    acc.concepts_skipped += next.concepts_skipped;
+    acc.members_updated += next.members_updated;
+    acc.errors += next.errors;
+    acc.failed.extend(next.failed);
+    acc.seeds_preview.extend(next.seeds_preview);
+    acc.clusters_preview.extend(next.clusters_preview);
+}
+
+/// Reject a `--context X` invocation when `X` is not an active context — i.e.,
+/// has no files under `@me/X/{entity doctype}/`. Prevents the pipeline from
+/// silently producing zero output, and surfaces the list of active contexts in
+/// the error so the user can self-correct.
+fn validate_context_is_active(vault_root: &Path, ctx: &str) -> Result<()> {
+    let active = discover_active_contexts(vault_root);
+    if active.iter().any(|c| c == ctx) {
+        return Ok(());
+    }
+    let msg = if active.is_empty() {
+        format!(
+            "context '{ctx}' has no entity files under {}/@me/{ctx}/ — no active contexts found in the vault",
+            vault_root.display()
+        )
+    } else {
+        format!(
+            "context '{ctx}' has no entity files under @me/{ctx}/ — active contexts: {}",
+            active.join(", ")
+        )
+    };
+    Err(TemperError::Config(msg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_entity_file(vault_root: &Path, context: &str, doc_type: &str, name: &str) {
+        let dir = vault_root.join("@me").join(context).join(doc_type);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(name), "---\n---\n").unwrap();
+    }
+
+    #[test]
+    fn test_validate_context_is_active_accepts_active_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_entity_file(tmp.path(), "temper", "task", "t1.md");
+
+        validate_context_is_active(tmp.path(), "temper").expect("active context should validate");
+    }
+
+    #[test]
+    fn test_validate_context_is_active_rejects_unknown_with_active_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_entity_file(tmp.path(), "temper", "task", "t1.md");
+        write_entity_file(tmp.path(), "tasker", "goal", "g1.md");
+
+        let err = validate_context_is_active(tmp.path(), "storyteller")
+            .expect_err("unknown context must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("storyteller"),
+            "error names the bad context: {msg}"
+        );
+        assert!(msg.contains("tasker"), "error lists active contexts: {msg}");
+        assert!(msg.contains("temper"), "error lists active contexts: {msg}");
+    }
+
+    #[test]
+    fn test_validate_context_is_active_rejects_context_without_entity_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Context directory exists but is empty — no entity files.
+        fs::create_dir_all(tmp.path().join("@me").join("stub")).unwrap();
+        write_entity_file(tmp.path(), "temper", "task", "t1.md");
+
+        let err = validate_context_is_active(tmp.path(), "stub")
+            .expect_err("context without entity files must error");
+        assert!(err.to_string().contains("stub"));
+    }
+
+    #[test]
+    fn test_validate_context_is_active_error_when_no_contexts() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No @me directory at all.
+        let err =
+            validate_context_is_active(tmp.path(), "temper").expect_err("missing @me should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no active contexts"),
+            "empty-vault message: {msg}"
+        );
+    }
+
+    /// Wiring check: `run_with_provider` must fail fast when `--context` names
+    /// an inactive context, before it spends any work on seeds/clusters.
+    #[test]
+    fn test_run_with_provider_rejects_unknown_context_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_root = tmp.path();
+        write_entity_file(vault_root, "temper", "task", "t1.md");
+
+        // Minimal manifest so we pass the manifest-load gate and reach the
+        // context validation.
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+        fs::write(temper_dir.join("index.json"), r#"{"files":[]}"#).unwrap();
+
+        let config = Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: temper_dir,
+            contexts: vec!["temper".to_string()],
+            subscriptions: Vec::new(),
+            skill_output: vault_root.join(".skill"),
+        };
+        let graph_config = GraphIndexConfig::default();
+
+        let err = run_with_provider(
+            &config,
+            GraphIndexParams {
+                context_filter: Some("typo-ctx".to_string()),
+                dry_run: true,
+                verbose: false,
+            },
+            None,
+            &graph_config,
+        )
+        .expect_err("invalid context must propagate as an error");
+        let msg = err.to_string();
+        assert!(msg.contains("typo-ctx"), "error names bad context: {msg}");
+        assert!(
+            msg.contains("temper"),
+            "error lists the real context: {msg}"
+        );
+    }
 }

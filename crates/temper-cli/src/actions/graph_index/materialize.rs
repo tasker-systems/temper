@@ -14,6 +14,7 @@ use temper_core::frontmatter::{DocType, Frontmatter};
 use temper_core::types::config::GraphIndexConfig;
 use temper_llm::types::ConceptProposal;
 
+use crate::actions::graph_index::cluster::context_from_rel_path;
 use crate::config::Config;
 
 /// Report from materialization.
@@ -96,6 +97,18 @@ pub fn materialize_concepts(
 
         let mut rolled_back = false;
         for edge in &proposal.member_edges {
+            // Concepts are context-scoped: the edge's target_path must live
+            // under `@me/{context}/` or we'd be polluting a sibling context
+            // with an edge to a concept it can't see. Defense-in-depth against
+            // an LLM proposal that mixes in cross-context paths.
+            if context_from_rel_path(&edge.target_path) != Some(context) {
+                report.errors += 1;
+                report.failed.push(format!(
+                    "cross-context member edge dropped: {} (concept context: {context})",
+                    edge.target_path
+                ));
+                continue;
+            }
             // `target_path` is the canonical `@me/{context}/{doctype}/{file}.md`
             // rel_path that the LLM was handed in the judgment prompt — resolve
             // directly against `vault_root`. No probing across doctype dirs.
@@ -306,6 +319,106 @@ body\n",
         assert!(
             relates.iter().any(|s| s == "stdin-body-input"),
             "member has relates_to edge to concept slug; got {relates:?}"
+        );
+    }
+
+    /// `materialize_concepts` must treat `context` as an authoritative boundary:
+    /// any proposal whose `member_edges[*].target_path` points outside
+    /// `@me/{context}/` must have that edge dropped (and reported). Defensive
+    /// guard against LLM proposals that mix in cross-context paths when the
+    /// pipeline is run per-context.
+    #[test]
+    fn test_materialize_rejects_cross_context_member_edges() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_root = tmp.path();
+
+        // One same-context member (valid) and one cross-context member (must
+        // be dropped even though the file exists on disk).
+        let in_ctx_rel = "@me/temper/task/in-ctx.md";
+        let out_ctx_rel = "@me/tasker/task/out-ctx.md";
+
+        for (rel, ctx) in [(in_ctx_rel, "temper"), (out_ctx_rel, "tasker")] {
+            let full = vault_root.join(rel);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(
+                &full,
+                format!(
+                    "---\n\
+temper-id: \"01900000-0000-7000-8000-00000000000{n}\"\n\
+temper-type: task\n\
+temper-context: {ctx}\n\
+temper-created: \"2026-01-01T00:00:00Z\"\n\
+temper-owner: \"@me\"\n\
+title: \"Fixture\"\n\
+temper-stage: backlog\n\
+slug: fixture\n\
+---\n\
+\n\
+body\n",
+                    n = if ctx == "temper" { "1" } else { "2" }
+                ),
+            )
+            .unwrap();
+        }
+
+        let config = Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: vault_root.join(".temper"),
+            contexts: vec!["temper".to_string(), "tasker".to_string()],
+            subscriptions: Vec::new(),
+            skill_output: vault_root.join(".skill"),
+        };
+        let graph_config = GraphIndexConfig {
+            concept_default_edge_type: "relates-to".to_string(),
+            ..GraphIndexConfig::default()
+        };
+
+        let proposal = ConceptProposal {
+            is_concept: true,
+            slug: Some("scoped-concept".to_string()),
+            title: Some("Scoped Concept".to_string()),
+            body_markdown: Some("body".to_string()),
+            member_edges: vec![
+                MemberEdge {
+                    target_path: in_ctx_rel.to_string(),
+                    edge_type: "relates-to".to_string(),
+                },
+                MemberEdge {
+                    target_path: out_ctx_rel.to_string(),
+                    edge_type: "relates-to".to_string(),
+                },
+            ],
+        };
+
+        let report = materialize_concepts(&[proposal], &config, &graph_config, "temper", false);
+
+        // One valid edge was applied; the cross-context one was dropped.
+        assert_eq!(
+            report.members_updated, 1,
+            "only the in-context edge was applied; failed: {:?}",
+            report.failed
+        );
+        assert_eq!(
+            report.errors, 1,
+            "cross-context edge must surface as an error; failed: {:?}",
+            report.failed
+        );
+        assert!(
+            report
+                .failed
+                .iter()
+                .any(|msg| msg.contains("cross-context") && msg.contains(out_ctx_rel)),
+            "error message should name the rejected cross-context path; got {:?}",
+            report.failed
+        );
+        // Concept itself is still created — one valid edge is enough to land.
+        assert_eq!(report.concepts_created, 1, "concept created");
+
+        // Cross-context file was NOT modified.
+        let out_ctx_fm = Frontmatter::parse_file(&vault_root.join(out_ctx_rel)).unwrap();
+        assert!(
+            out_ctx_fm.value().get("relates_to").is_none(),
+            "cross-context file must not have a relates_to edge after materialize"
         );
     }
 }
