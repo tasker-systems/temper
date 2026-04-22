@@ -126,7 +126,10 @@ pub fn run_with_provider(
     })?;
 
     let contexts = match params.context_filter.as_deref() {
-        Some(ctx) => vec![ctx.to_string()],
+        Some(ctx) => {
+            validate_context_is_active(vault_root, ctx)?;
+            vec![ctx.to_string()]
+        }
         None => discover_active_contexts(vault_root),
     };
 
@@ -275,4 +278,131 @@ fn merge_reports(acc: &mut GraphIndexReport, next: GraphIndexReport) {
     acc.failed.extend(next.failed);
     acc.seeds_preview.extend(next.seeds_preview);
     acc.clusters_preview.extend(next.clusters_preview);
+}
+
+/// Reject a `--context X` invocation when `X` is not an active context — i.e.,
+/// has no files under `@me/X/{entity doctype}/`. Prevents the pipeline from
+/// silently producing zero output, and surfaces the list of active contexts in
+/// the error so the user can self-correct.
+fn validate_context_is_active(vault_root: &Path, ctx: &str) -> Result<()> {
+    let active = discover_active_contexts(vault_root);
+    if active.iter().any(|c| c == ctx) {
+        return Ok(());
+    }
+    let msg = if active.is_empty() {
+        format!(
+            "context '{ctx}' has no entity files under {}/@me/{ctx}/ — no active contexts found in the vault",
+            vault_root.display()
+        )
+    } else {
+        format!(
+            "context '{ctx}' has no entity files under @me/{ctx}/ — active contexts: {}",
+            active.join(", ")
+        )
+    };
+    Err(TemperError::Config(msg))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+
+    fn write_entity_file(vault_root: &Path, context: &str, doc_type: &str, name: &str) {
+        let dir = vault_root.join("@me").join(context).join(doc_type);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(name), "---\n---\n").unwrap();
+    }
+
+    #[test]
+    fn test_validate_context_is_active_accepts_active_context() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_entity_file(tmp.path(), "temper", "task", "t1.md");
+
+        validate_context_is_active(tmp.path(), "temper").expect("active context should validate");
+    }
+
+    #[test]
+    fn test_validate_context_is_active_rejects_unknown_with_active_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_entity_file(tmp.path(), "temper", "task", "t1.md");
+        write_entity_file(tmp.path(), "tasker", "goal", "g1.md");
+
+        let err = validate_context_is_active(tmp.path(), "storyteller")
+            .expect_err("unknown context must error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("storyteller"),
+            "error names the bad context: {msg}"
+        );
+        assert!(msg.contains("tasker"), "error lists active contexts: {msg}");
+        assert!(msg.contains("temper"), "error lists active contexts: {msg}");
+    }
+
+    #[test]
+    fn test_validate_context_is_active_rejects_context_without_entity_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Context directory exists but is empty — no entity files.
+        fs::create_dir_all(tmp.path().join("@me").join("stub")).unwrap();
+        write_entity_file(tmp.path(), "temper", "task", "t1.md");
+
+        let err = validate_context_is_active(tmp.path(), "stub")
+            .expect_err("context without entity files must error");
+        assert!(err.to_string().contains("stub"));
+    }
+
+    #[test]
+    fn test_validate_context_is_active_error_when_no_contexts() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No @me directory at all.
+        let err =
+            validate_context_is_active(tmp.path(), "temper").expect_err("missing @me should error");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no active contexts"),
+            "empty-vault message: {msg}"
+        );
+    }
+
+    /// Wiring check: `run_with_provider` must fail fast when `--context` names
+    /// an inactive context, before it spends any work on seeds/clusters.
+    #[test]
+    fn test_run_with_provider_rejects_unknown_context_filter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_root = tmp.path();
+        write_entity_file(vault_root, "temper", "task", "t1.md");
+
+        // Minimal manifest so we pass the manifest-load gate and reach the
+        // context validation.
+        let temper_dir = vault_root.join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+        fs::write(temper_dir.join("index.json"), r#"{"files":[]}"#).unwrap();
+
+        let config = Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: temper_dir,
+            contexts: vec!["temper".to_string()],
+            subscriptions: Vec::new(),
+            skill_output: vault_root.join(".skill"),
+        };
+        let graph_config = GraphIndexConfig::default();
+
+        let err = run_with_provider(
+            &config,
+            GraphIndexParams {
+                context_filter: Some("typo-ctx".to_string()),
+                dry_run: true,
+                verbose: false,
+            },
+            None,
+            &graph_config,
+        )
+        .expect_err("invalid context must propagate as an error");
+        let msg = err.to_string();
+        assert!(msg.contains("typo-ctx"), "error names bad context: {msg}");
+        assert!(
+            msg.contains("temper"),
+            "error lists the real context: {msg}"
+        );
+    }
 }
