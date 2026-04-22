@@ -34,6 +34,8 @@ export type GraphNeighborRow = { resource_id: string, edge_type: EdgeType, direc
  *
  * `edge_count` is the resource's **total** edge count in the graph (not just
  * within the returned subgraph) — used client-side to size the visual radius.
+ * `session_count` is the number of `session`-typed resources that share any
+ * edge with this node; sessions themselves are **not** returned as nodes.
  */
 export type GraphNode = { id: string, slug: string, title: string, 
 /**
@@ -41,9 +43,33 @@ export type GraphNode = { id: string, slug: string, title: string,
  */
 doc_type: DocType, 
 /**
+ * Whether this node is an aggregator (goal/concept/decision) vs a
+ * participant (research/task). Derived server-side from `doc_type` so
+ * the client doesn't have to repeat the classification.
+ */
+aggregator: boolean, 
+/**
  * Count of all edges touching this resource, regardless of subgraph scope.
  */
-edge_count: number, };
+edge_count: number, 
+/**
+ * Count of `session`-typed resources that share any edge with this node.
+ * Renders as a `⌊N⌋` annotation glyph in the UI.
+ */
+session_count: number, 
+/**
+ * First-paragraph body preview (≤ 280 chars, truncated on a word boundary
+ * with an ellipsis suffix). `None` when the resource has no body text.
+ * Renders as the `EXCERPT` block in the resource peek panel.
+ */
+excerpt: string | null, 
+/**
+ * Task workflow stage (e.g. `"in-progress"`, `"backlog"`). Only populated
+ * for `DocType::Task` rows, sourced from `managed_meta.temper-stage`.
+ * Renders as a small mono-caps tag under the task label at the detail
+ * zoom tier (`node.tier-detail.type-task`).
+ */
+stage: string | null, };
 
 /**
  * Graph traversal result row — mirrors the `graph_traverse()` SQL function.

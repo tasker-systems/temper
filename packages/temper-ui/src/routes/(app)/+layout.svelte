@@ -26,9 +26,16 @@
 			: null}
 		isAdmin={data.entitlements?.is_admin ?? false}
 	/>
-	<main class="flex-1 overflow-y-auto">
+	<!--
+		main is a flex-col so page content can size itself against a resolved
+		parent height (via `h-full` or `flex-1 min-h-0`) instead of subtracting
+		a magic header height with `calc(100vh - 4rem)`. The scroll boundary
+		lives on the inner wrapper — pages that want to fill the viewport
+		(graph) get a bounded height; pages with long content scroll inside it.
+	-->
+	<main class="flex flex-1 min-w-0 flex-col">
 		<header
-			class="sticky top-0 z-10 flex items-center gap-3 px-6 py-3 bg-zinc-950 border-b border-zinc-800"
+			class="flex items-center gap-3 px-6 py-3 bg-zinc-950 border-b border-zinc-800"
 		>
 			<button
 				onclick={() => palette.toggle()}
@@ -41,7 +48,9 @@
 				>
 			</button>
 		</header>
-		{@render children()}
+		<div class="flex-1 min-h-0 overflow-y-auto">
+			{@render children()}
+		</div>
 	</main>
 </div>
 

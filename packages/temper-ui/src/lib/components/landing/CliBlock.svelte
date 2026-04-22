@@ -14,18 +14,18 @@
     background: rgba(255, 255, 255, 0.02);
     border: 1px solid rgba(255, 255, 255, 0.06);
     padding: 1.2rem 1.5rem;
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.8rem;
     text-align: left;
   }
 
   .cli-block :global(.cli-prompt) {
-    color: var(--text-mid);
+    color: var(--chalk);
     margin-bottom: 0.8rem;
   }
 
   .cli-block :global(.cmd) {
-    color: var(--blue);
+    color: var(--temper-blue);
   }
 
   .cli-block :global(.flag) {
@@ -34,7 +34,7 @@
 
   .cli-block :global(.cli-results) {
     font-size: 0.7rem;
-    color: var(--text-dim);
+    color: var(--graphite);
   }
 
   .cli-block :global(.cli-result) {
@@ -49,6 +49,6 @@
   }
 
   .cli-block :global(.cli-score) {
-    color: var(--blue-dim);
+    color: var(--temper-blue-dim);
   }
 </style>

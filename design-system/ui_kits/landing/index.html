@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>temper — context that compounds</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,300;0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+<link rel="icon" type="image/svg+xml" href="../../assets/favicon.svg" />
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #0a0a0f; color: #e8e4df; font-family: "Source Serif 4", Georgia, 'Times New Roman', serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+  a { color: inherit; }
+  ::selection { background: rgba(126,184,218,0.3); color: #e8e4df; }
+  .cloud-feature { display: flex; gap: 1rem; align-items: baseline; margin-bottom: 0.8rem; }
+  .cloud-feature .dot { width: 4px; height: 4px; background: #7eb8da; border-radius: 50%; flex-shrink: 0; margin-top: 0.55rem; }
+  .cloud-feature span { font-family: Georgia, serif; font-size: 14.5px; color: rgba(255,255,255,0.65); line-height: 1.7; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<script type="text/babel" src="Brand.jsx"></script>
+<script type="text/babel" src="Nav.jsx"></script>
+<script type="text/babel" src="Section.jsx"></script>
+<script type="text/babel" src="CliBlock.jsx"></script>
+<script type="text/babel" src="AgentTranscript.jsx"></script>
+<script type="text/babel" src="Workflow.jsx"></script>
+<script type="text/babel" src="Hero.jsx"></script>
+<script type="text/babel" src="Footer.jsx"></script>
+
+<script type="text/babel">
+const App = () => (
+  <>
+    <Nav current="home" />
+    <Hero />
+
+    <Section label="The premise">
+      <H2>Knowledge work deserves <Em>structure</Em></H2>
+      <P>
+        Code is an expression of intent. So are specifications, plans, and decisions.
+        But the context behind them — the <Strong>why</Strong>, the alternatives considered,
+        the constraints that shaped the choice — scatters across conversations, documents,
+        and memory.
+      </P>
+      <P>
+        Temper gives that context a home. Every goal, task, session, research thread,
+        and decision lives as <Strong>markdown with frontmatter</Strong> in your vault.
+        The frontmatter carries the throughline. The content carries the thinking.
+      </P>
+    </Section>
+
+    <Section label="How it works">
+      <H2>Write markdown. Let temper do the <Em>rest</Em>.</H2>
+      <Workflow />
+    </Section>
+
+    <Section label="What temper tracks">
+      <H2>The vocabulary of <Em>structured</Em> knowledge work</H2>
+      <P>
+        Every file in your vault has a doc type that temper understands.
+        These aren't arbitrary tags — they're the building blocks of how
+        work actually progresses.
+      </P>
+      <Concepts />
+    </Section>
+
+    <Section label="For humans and agents">
+      <H2>Context that's always <Em>ready to hand</Em></H2>
+      <P>
+        Agentic tools like Claude Code and Cursor are powerful — but only when
+        they have context. Temper gives agents the same throughline that humans
+        carry in their heads: what we're building, why, what we've decided, and
+        what's deferred.
+      </P>
+      <AgentTranscript />
+      <P>
+        Subscribe to contexts across projects. Everything arrives as markdown
+        in your vault — no special tooling, no vendor lock-in. If it can read
+        files, it can use temper.
+      </P>
+    </Section>
+
+    <Section label="Temper Cloud">
+      <H2>Your vault, <Em>everywhere</Em></H2>
+      <P>
+        Work on your laptop. Pick up on your desktop. Let a cloud agent
+        contribute while you sleep. Temper Cloud syncs your vault across
+        machines and team members with semantic search built in.
+      </P>
+      <div style={{ marginTop: '1.4rem' }}>
+        {[
+          'Cross-machine sync with conflict resolution',
+          'Semantic search powered by pgvector embeddings',
+          'Team contexts with granular access control',
+          'Knowledge graph connecting your resources',
+          'Self-host or use temperkb.io — same protocol, your choice',
+        ].map(t => (
+          <div key={t} className="cloud-feature">
+            <div className="dot"></div>
+            <span>{t}</span>
+          </div>
+        ))}
+      </div>
+    </Section>
+
+    <Footer />
+  </>
+);
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

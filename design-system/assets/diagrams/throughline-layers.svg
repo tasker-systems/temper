@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 440" font-family="system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="tl-arrow" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#555"></polygon>
+    </marker>
+    <marker id="tl-arrow-blue" markerWidth="10" markerHeight="7" refX="10" refY="3.5" orient="auto">
+      <polygon points="0 0, 10 3.5, 0 7" fill="#2563eb"></polygon>
+    </marker>
+  </defs>
+
+  <rect width="700" height="440" rx="8" fill="#fafafa" stroke="#e0e0e0" stroke-width="1"></rect>
+
+  <text x="350" y="32" text-anchor="middle" font-size="16" font-weight="600" fill="#1a1a1a">Throughline: From Goals to Sessions</text>
+  <text x="350" y="50" text-anchor="middle" font-size="11" fill="#888">Each layer provides context for the layer below</text>
+
+  
+  <rect x="100" y="70" width="500" height="55" rx="8" fill="#f3e8ff" stroke="#c4b5fd" stroke-width="2"></rect>
+  <text x="350" y="93" text-anchor="middle" font-size="14" font-weight="600" fill="#6b21a8">Goals</text>
+  <text x="350" y="112" text-anchor="middle" font-size="10" fill="#7c3aed">The outcome you&#39;re building toward. Vision and purpose that guide all work.</text>
+
+  <line x1="350" y1="125" x2="350" y2="145" stroke="#555" stroke-width="1.5" marker-end="url(#tl-arrow)"></line>
+  <text x="365" y="140" font-size="9" fill="#888">decompose into</text>
+
+  
+  <rect x="120" y="150" width="460" height="55" rx="8" fill="#dbeafe" stroke="#93c5fd" stroke-width="1.5"></rect>
+  <text x="350" y="173" text-anchor="middle" font-size="14" font-weight="600" fill="#1e40af">Tasks</text>
+  <text x="350" y="192" text-anchor="middle" font-size="10" fill="#2563eb">Units of work with mode (build | plan) and effort (small | medium | large).</text>
+
+  <line x1="350" y1="205" x2="350" y2="225" stroke="#555" stroke-width="1.5" marker-end="url(#tl-arrow)"></line>
+  <text x="365" y="220" font-size="9" fill="#888">executed in</text>
+
+  
+  <rect x="140" y="230" width="420" height="55" rx="8" fill="#dcfce7" stroke="#86efac" stroke-width="1.5"></rect>
+  <text x="350" y="253" text-anchor="middle" font-size="14" font-weight="600" fill="#166534">Sessions</text>
+  <text x="350" y="272" text-anchor="middle" font-size="10" fill="#15803d">What happened, what changed, what decisions were made, what comes next.</text>
+
+  
+  <rect x="160" y="310" width="380" height="55" rx="8" fill="#fef3c7" stroke="#fcd34d" stroke-width="1.5"></rect>
+  <text x="350" y="333" text-anchor="middle" font-size="14" font-weight="600" fill="#92400e">Decisions &amp; Research</text>
+  <text x="350" y="352" text-anchor="middle" font-size="10" fill="#a16207">The choices, alternatives, constraints, and investigations that shape the work.</text>
+
+  <line x1="350" y1="285" x2="350" y2="305" stroke="#555" stroke-width="1.5" marker-end="url(#tl-arrow)"></line>
+  <text x="365" y="300" font-size="9" fill="#888">produce</text>
+
+  
+  <path d="M 560 250 Q 640 250 640 165 Q 640 95 600 95" fill="none" stroke="#7c3aed" stroke-width="1.5" stroke-dasharray="6,3" marker-end="url(#tl-arrow)"></path>
+  <text x="655" y="175" font-size="9" fill="#7c3aed" font-weight="500" transform="rotate(90, 655, 175)">refines goals</text>
+
+  
+  <rect x="80" y="385" width="540" height="40" rx="6" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1"></rect>
+  <text x="350" y="405" text-anchor="middle" font-size="11" fill="#64748b">
+    <tspan font-weight="600">Semantic Index</tspan> — all layers searchable via temper search
+  </text>
+  <line x1="350" y1="365" x2="350" y2="385" stroke="#cbd5e1" stroke-width="1" stroke-dasharray="3,3"></line>
+
+  
+  <text x="55" y="220" font-size="11" font-weight="600" fill="#1a1a1a" transform="rotate(-90, 55, 220)">THROUGHLINE</text>
+  <line x1="75" y1="80" x2="75" y2="355" stroke="#2563eb" stroke-width="3" stroke-linecap="round"></line>
+</svg>

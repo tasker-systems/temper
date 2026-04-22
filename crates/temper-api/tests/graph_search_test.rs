@@ -32,7 +32,7 @@ async fn test_graph_search_expands_from_seeds(pool: PgPool) {
         "#,
     )
     .bind(profile)
-    .bind(&vec![a])
+    .bind(vec![a])
     .fetch_all(&pool)
     .await
     .expect("graph_search query");
@@ -64,7 +64,33 @@ async fn test_graph_search_no_edges_degrades(pool: PgPool) {
     let a = common::fixtures::create_test_resource(&pool, profile, "Isolated Doc", "isolated-doc")
         .await;
 
-    // Insert a chunk so vector search can find it
+    // Insert a chunk so vector search can find it.
+    // The 4-arg persist_resource_chunks requires an audit row; seed one first.
+    let event_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_events \
+         (id, profile_id, device_id, kb_context_id, resource_id, event_type, payload, created) \
+         VALUES (gen_random_uuid(), $1, 'test-device', \
+             (SELECT kb_context_id FROM kb_resources WHERE id = $2), \
+             $2, 'resource_created', '{}', now()) RETURNING id",
+    )
+    .bind(profile)
+    .bind(a)
+    .fetch_one(&pool)
+    .await
+    .expect("seed event");
+
+    let audit_id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resource_audits \
+         (resource_id, event_id, profile_id, device_id, body_hash, managed_hash, open_hash, action) \
+         VALUES ($1, $2, $3, 'test-device', 'iso-body', 'mh', 'oh', 'create') RETURNING id",
+    )
+    .bind(a)
+    .bind(event_id)
+    .bind(profile)
+    .fetch_one(&pool)
+    .await
+    .expect("seed audit");
+
     let chunk_json = serde_json::json!([{
         "chunk_index": 0,
         "header_path": "Isolated",
@@ -73,8 +99,10 @@ async fn test_graph_search_no_edges_degrades(pool: PgPool) {
         "content_hash": "iso-hash",
         "embedding": format!("[{}]", vec!["0.1"; 768].join(","))
     }]);
-    sqlx::query("SELECT persist_resource_chunks($1, $2)")
+    sqlx::query("SELECT persist_resource_chunks($1::uuid, $2::uuid, $3::text, $4::jsonb)")
         .bind(a)
+        .bind(audit_id)
+        .bind("iso-body")
         .bind(&chunk_json)
         .execute(&pool)
         .await

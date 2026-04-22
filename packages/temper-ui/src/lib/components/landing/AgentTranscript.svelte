@@ -36,7 +36,7 @@
     border: 1px solid rgba(255, 255, 255, 0.06);
     padding: 1.2rem;
     margin-top: 1.5rem;
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.7rem;
     line-height: 1.8;
   }
@@ -55,7 +55,7 @@
   }
 
   .role {
-    color: var(--blue-dim);
+    color: var(--temper-blue-dim);
     font-size: 0.6rem;
     margin-bottom: 0.4rem;
   }
@@ -65,7 +65,7 @@
   }
 
   .content.agent {
-    font-family: var(--serif);
+    font-family: var(--font-serif);
     font-size: 0.8rem;
     line-height: 1.7;
   }
@@ -80,7 +80,7 @@
   }
 
   .context-summary {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 0.65rem;
     color: rgba(255, 255, 255, 0.35);
     margin-bottom: 0.8rem;
@@ -91,6 +91,6 @@
   }
 
   .highlight {
-    color: var(--blue);
+    color: var(--temper-blue);
   }
 </style>

@@ -15,14 +15,14 @@
 	   the authed (app) pages render lighter cards on top of it. */
 	.app-shell {
 		min-height: 100vh;
-		background: var(--bg);
-		color: var(--text);
-		font-family: var(--serif);
+		background: var(--obsidian);
+		color: var(--parchment);
+		font-family: var(--font-serif);
 		line-height: 1.7;
 		-webkit-font-smoothing: antialiased;
 	}
 
 	:global(body) {
-		background: var(--bg);
+		background: var(--obsidian);
 	}
 </style>

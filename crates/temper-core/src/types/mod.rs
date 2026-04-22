@@ -59,7 +59,7 @@ pub use graph::{
     EdgeReconciliation, EdgeType, GraphEdgeRow, GraphNeighborRow, GraphTraversalRow, ResolvedEdge,
     ResourceRelationships, TargetRef,
 };
-pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId};
+pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, ResourceId, RevisionId};
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
 pub use managed_meta::{ManagedMeta, MetaUpdatePayload, ResourceManifestRow};

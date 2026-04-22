@@ -216,10 +216,25 @@ pub struct EdgeReconciliation {
 
 // ─── Subgraph Response Types ────────────────────────────────────────────────
 
+/// Whether a doctype is an *aggregator* (gravity-well node that clusters
+/// participants) or a *participant* (leaf node).
+///
+/// Drives the R11 visual distinction: aggregators render larger, italic, with
+/// a soft radial wash; participants render as plain typeset words. Sessions
+/// are neither — they're annotations, not graph nodes.
+pub fn is_aggregator(doc_type: DocType) -> bool {
+    matches!(
+        doc_type,
+        DocType::Goal | DocType::Concept | DocType::Decision
+    )
+}
+
 /// One node in a returned subgraph.
 ///
 /// `edge_count` is the resource's **total** edge count in the graph (not just
 /// within the returned subgraph) — used client-side to size the visual radius.
+/// `session_count` is the number of `session`-typed resources that share any
+/// edge with this node; sessions themselves are **not** returned as nodes.
 #[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -230,8 +245,26 @@ pub struct GraphNode {
     pub title: String,
     /// Typed doctype — serializes as `"concept"`, `"research"`, etc.
     pub doc_type: DocType,
+    /// Whether this node is an aggregator (goal/concept/decision) vs a
+    /// participant (research/task). Derived server-side from `doc_type` so
+    /// the client doesn't have to repeat the classification.
+    pub aggregator: bool,
     /// Count of all edges touching this resource, regardless of subgraph scope.
     pub edge_count: i32,
+    /// Count of `session`-typed resources that share any edge with this node.
+    /// Renders as a `⌊N⌋` annotation glyph in the UI.
+    pub session_count: i32,
+    /// First-paragraph body preview (≤ 280 chars, truncated on a word boundary
+    /// with an ellipsis suffix). `None` when the resource has no body text.
+    /// Renders as the `EXCERPT` block in the resource peek panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub excerpt: Option<String>,
+    /// Task workflow stage (e.g. `"in-progress"`, `"backlog"`). Only populated
+    /// for `DocType::Task` rows, sourced from `managed_meta.temper-stage`.
+    /// Renders as a small mono-caps tag under the task label at the detail
+    /// zoom tier (`node.tier-detail.type-task`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<String>,
 }
 
 /// One directed edge in a returned subgraph.

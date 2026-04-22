@@ -64,7 +64,7 @@
 		opacity: 0.8;
 	}
 	.wordmark {
-		font-family: 'JetBrains Mono', 'Fira Code', monospace;
+		font-family: var(--font-mono);
 		font-weight: 500;
 		letter-spacing: 0.15em;
 	}

@@ -67,16 +67,19 @@ export default async function handler(req: Request): Promise<Response> {
     );
   }
 
-  const visibleResources = await db`
-    SELECT resource_id FROM resources_visible_to(${profileId}::uuid)
-    WHERE resource_id = ${resourceId}::uuid
-  `;
+  const visibleResources = (await db`
+    SELECT rv.resource_id, r.kb_context_id
+      FROM resources_visible_to(${profileId}::uuid) rv
+      JOIN kb_resources r ON r.id = rv.resource_id
+     WHERE rv.resource_id = ${resourceId}::uuid
+  `) as Array<{ resource_id: string; kb_context_id: string }>;
   if (visibleResources.length === 0) {
     return new Response(
       JSON.stringify({ error: "Resource not found or not accessible" }),
       { status: 404, headers: { "Content-Type": "application/json" } }
     );
   }
+  const contextId = visibleResources[0].kb_context_id;
 
   // Store in Vercel Blob
   const pathname = buildBlobPathname(profileId, resourceId, file.name);
@@ -98,7 +101,7 @@ export default async function handler(req: Request): Promise<Response> {
   // a durable invocation — Vercel executes the steps asynchronously.
   // If the workflow fails to start, we still return 202 since the file is stored.
   try {
-    await processUpload(blobFileId, blob.url, resourceId);
+    await processUpload(blobFileId, blob.url, resourceId, profileId, contextId);
   } catch (err) {
     logger.error({ err }, "Failed to trigger processing workflow");
   }

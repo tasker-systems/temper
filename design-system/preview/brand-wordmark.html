@@ -1,0 +1,71 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Brand — Wordmark</title>
+<link rel="stylesheet" href="_shared.css">
+<style>
+  body { padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; justify-content: center; min-height: 140px; }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .row .g {
+    color: var(--temper-blue);
+    display: inline-flex;
+    align-items: center;
+  }
+  .row .g svg { height: 22px; width: 22px; }
+  .row.sm .g svg { height: 14px; width: 14px; }
+  .row .w {
+    font-family: var(--mono);
+    font-weight: 500;
+    letter-spacing: 0.15em;
+    color: var(--temper-blue);
+    font-size: 20px;
+  }
+  .row.sm .w { font-size: 13px; }
+  .row.tiny .w { font-size: 10px; }
+  .row.tiny .g svg { height: 12px; width: 12px; }
+  .meta {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--graphite-2);
+  }
+</style>
+</head>
+<body>
+  <div class="row">
+    <span class="g">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M 12 7 L 12 25" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+        <path d="M 6 13 L 18 13 Q 23 13 25 16.5 Q 27 20 25 24" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span class="w">temper</span>
+    <span style="flex:1"></span>
+    <span class="meta">Hero / nav</span>
+  </div>
+  <div class="row sm">
+    <span class="g">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M 12 7 L 12 25" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+        <path d="M 6 13 L 18 13 Q 23 13 25 16.5 Q 27 20 25 24" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span class="w">temper</span>
+    <span style="flex:1"></span>
+    <span class="meta">Footer</span>
+  </div>
+  <div class="row tiny">
+    <span class="g">
+      <svg viewBox="0 0 32 32" fill="none">
+        <path d="M 12 7 L 12 25" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+        <path d="M 6 13 L 18 13 Q 23 13 25 16.5 Q 27 20 25 24" stroke="currentColor" stroke-width="2.8" stroke-linecap="round"/>
+      </svg>
+    </span>
+    <span class="w">temper</span>
+    <span style="flex:1"></span>
+    <span class="meta">Docs / sidebar</span>
+  </div>
+</body></html>

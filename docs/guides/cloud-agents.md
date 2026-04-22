@@ -40,8 +40,14 @@ The project provides setup scripts for cloud agent environments:
 
 ### `tools/bin/setup-claude-web.sh` (lightweight, runs on SessionStart)
 - Configures PATH, environment variables, git hooks
-- Generates `.env` file with dev/test values
-- Runs automatically via the SessionStart hook in `.claude/settings.local.json`
+- Generates root `.env` with Rust/API dev values
+- Generates `packages/temper-ui/.env` with SvelteKit stub values (so
+  `bun run check` / `build` resolve `$env/static/private` imports — real
+  credentials come from your local `.env` or Vercel project env in prod)
+- Runs `bun install` at the workspace root to populate `node_modules`
+- Wired via the SessionStart hook in the committed `.claude/settings.json`
+  — applies to every cloud session automatically. Per-user overrides go
+  in the gitignored `.claude/settings.local.json`.
 - Must complete in seconds
 
 ### `tools/bin/setup-claude-web-full.sh` (heavy, run manually)

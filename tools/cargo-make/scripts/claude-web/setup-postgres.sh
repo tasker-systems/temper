@@ -77,6 +77,31 @@ setup_postgres_docker() {
 }
 
 # ---------------------------------------------------------------------------
+# Install the matching `postgresql-<major>-pgvector` apt package if we're
+# on Debian/Ubuntu and it isn't already present. No-op on other distros or
+# when apt/sudo aren't available — the subsequent CREATE EXTENSION falls
+# through to its own log_warn in that case.
+# ---------------------------------------------------------------------------
+install_pgvector_if_needed() {
+  command_exists psql || return 0
+  command_exists apt-get || return 0
+  command_exists dpkg || return 0
+
+  local pg_major
+  pg_major=$(psql --version 2>/dev/null | awk '{print $3}' | cut -d. -f1)
+  [ -n "$pg_major" ] || return 0
+
+  local pkg="postgresql-${pg_major}-pgvector"
+  if dpkg -s "$pkg" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  echo "  Installing ${pkg} for pgvector support..."
+  DEBIAN_FRONTEND=noninteractive sudo -E apt-get install -y "$pkg" >/dev/null 2>&1 || \
+    log_warn "Failed to install ${pkg} — pgvector will be unavailable"
+}
+
+# ---------------------------------------------------------------------------
 # Strategy 2: Native PostgreSQL (web environment fallback)
 # ---------------------------------------------------------------------------
 setup_postgres_native() {
@@ -132,7 +157,12 @@ setup_postgres_native() {
     $psql_super -c "CREATE DATABASE $PG_DB_TEST OWNER $PG_USER;" 2>/dev/null || true
   fi
 
-  # Install pgvector extension
+  # Install pgvector extension. On Debian/Ubuntu the extension is packaged
+  # separately as `postgresql-<major>-pgvector` — install it if missing
+  # before we try to CREATE EXTENSION, otherwise every web session hits
+  # `extension "vector" is not available` and migrations fail.
+  install_pgvector_if_needed
+
   $psql_super -d "$PG_DB_DEV" -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || \
     log_warn "pgvector extension not available — vector search will fail"
   $psql_super -d "$PG_DB_TEST" -c "CREATE EXTENSION IF NOT EXISTS vector;" 2>/dev/null || true

@@ -87,16 +87,140 @@ async fn happy_path_returns_all_concepts_and_direct_members(pool: PgPool) {
     );
     assert!(node_ids.contains(&uuid(C4_AUTH)), "c4 present");
 
-    // All direct members present
+    // All non-session direct members present
     assert!(
         node_ids.contains(&uuid(M1_OAUTH)),
         "m1 present (shared member)"
     );
     assert!(node_ids.contains(&uuid(M2_MIDDLEWARE)), "m2 present");
-    assert!(node_ids.contains(&uuid(M3_SESSION)), "m3 present");
     assert!(node_ids.contains(&uuid(M4_CIRCUIT_DESIGN)), "m4 present");
     assert!(node_ids.contains(&uuid(M5_CIRCUIT_IMPL)), "m5 present");
     assert!(node_ids.contains(&uuid(M6_JWT)), "m6 present");
+
+    // Sessions are annotations, not nodes — m3 must be excluded.
+    assert!(
+        !node_ids.contains(&uuid(M3_SESSION)),
+        "session-typed m3 must be excluded from nodes"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn sessions_excluded_from_nodes_and_edges(pool: PgPool) {
+    // Per R11: sessions annotate other resources via session_count, they are
+    // never graph participants. Verifies both the node exclusion and that no
+    // edge in the response points at (or from) a session.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    // No node in the result is a session.
+    for node in &result.nodes {
+        assert_ne!(
+            node.doc_type,
+            DocType::Session,
+            "no node should have DocType::Session (got {:?} for {})",
+            node.doc_type,
+            node.title,
+        );
+    }
+
+    // No edge touches m3 (the only session in the fixture).
+    let m3_edges: Vec<_> = result
+        .edges
+        .iter()
+        .filter(|e| e.source == uuid(M3_SESSION) || e.target == uuid(M3_SESSION))
+        .collect();
+    assert_eq!(
+        m3_edges.len(),
+        0,
+        "edges incident to the session (m3) must be dropped"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn aggregator_flag_set_correctly(pool: PgPool) {
+    // Concepts (and goals/decisions) are aggregators; research/task are
+    // participants. The flag is server-derived so the client doesn't
+    // repeat the classification.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    for node in &result.nodes {
+        let expected = matches!(
+            node.doc_type,
+            DocType::Concept | DocType::Goal | DocType::Decision
+        );
+        assert_eq!(
+            node.aggregator, expected,
+            "{:?} ({}) aggregator={} but expected {}",
+            node.doc_type, node.title, node.aggregator, expected,
+        );
+    }
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn session_count_reflects_incident_sessions(pool: PgPool) {
+    // c1 has an edge to m3 (a session); session_count for c1 should be 1.
+    // No other fixture resource has a session edge, so all others = 0.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let c1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
+        .expect("c1 should be in the result");
+    assert_eq!(
+        c1.session_count, 1,
+        "c1 has one session neighbor (m3); session_count reflects that"
+    );
+
+    // Every other node in the subgraph has zero session neighbors.
+    for node in &result.nodes {
+        if node.id == uuid(C1_IDEMPOTENCY) {
+            continue;
+        }
+        assert_eq!(
+            node.session_count, 0,
+            "{} ({:?}) has no session neighbors in the fixture",
+            node.title, node.doc_type,
+        );
+    }
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -416,6 +540,134 @@ async fn edge_count_reflects_total_not_subgraph(pool: PgPool) {
         .find(|n| n.id == uuid(C1_IDEMPOTENCY))
         .expect("c1 should be in the result");
     assert_eq!(c1.edge_count, 3, "c1 has 3 outgoing edges");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn excerpt_reflects_first_chunk_first_paragraph(pool: PgPool) {
+    // c1 is seeded with a two-paragraph body; excerpt must contain only the
+    // first paragraph, and m1 is seeded with a long single paragraph so the
+    // excerpt truncates with a trailing ellipsis.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let c1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C1_IDEMPOTENCY))
+        .expect("c1 should be in the result");
+    assert_eq!(
+        c1.excerpt.as_deref(),
+        Some("Idempotency keys let retries be safe."),
+        "c1 excerpt should be the first paragraph only"
+    );
+
+    let m1 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(M1_OAUTH))
+        .expect("m1 should be in the result");
+    let m1_excerpt = m1.excerpt.as_deref().expect("m1 excerpt present");
+    assert!(
+        m1_excerpt.ends_with('…'),
+        "long paragraph must truncate with ellipsis, got {m1_excerpt:?}"
+    );
+    assert!(
+        m1_excerpt.chars().count() <= 281,
+        "excerpt bounded to 280 chars + ellipsis"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn excerpt_is_none_when_no_body_chunk(pool: PgPool) {
+    // Most fixture resources have no chunk content seeded; those nodes should
+    // come back with excerpt = None rather than empty-string or a panic.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    // c3 (singleton, no chunk seeded) → None
+    let c3 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(C3_SINGLETON))
+        .expect("c3 should be in the result");
+    assert!(
+        c3.excerpt.is_none(),
+        "resource with no body chunk yields excerpt = None, got {:?}",
+        c3.excerpt,
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn stage_populated_only_for_task_doctype(pool: PgPool) {
+    // m2 is a task with managed_meta.temper-stage = "in-progress"; the
+    // server must surface that as GraphNode.stage. m1 is research with a
+    // manifest but no stage — the field must stay None for non-tasks even
+    // if the JSON blob happened to carry the key.
+    common::fixtures::clean_and_seed(&pool).await;
+    load_graph_fixtures(&pool).await;
+
+    let result = aggregator_subgraph(
+        &pool,
+        AggregatorSubgraphParams {
+            caller_profile_id: uuid(ALICE),
+            context_name: "graph-test-primary",
+            aggregator_types: &[DocType::Concept],
+            depth: 2,
+        },
+    )
+    .await
+    .expect("aggregator_subgraph");
+
+    let m2 = result
+        .nodes
+        .iter()
+        .find(|n| n.id == uuid(M2_MIDDLEWARE))
+        .expect("m2 (task) should be in the result");
+    assert_eq!(m2.doc_type, DocType::Task, "fixture sanity");
+    assert_eq!(
+        m2.stage.as_deref(),
+        Some("in-progress"),
+        "task stage must come from managed_meta.temper-stage",
+    );
+
+    // Every non-task node — including m1 which has a manifest — must have
+    // stage = None. The field is doctype-gated server-side.
+    for node in &result.nodes {
+        if node.doc_type == DocType::Task {
+            continue;
+        }
+        assert!(
+            node.stage.is_none(),
+            "{:?} ({}) must not carry a stage (got {:?})",
+            node.doc_type,
+            node.title,
+            node.stage,
+        );
+    }
 }
 
 // ─── Handler smoke tests (service layer already integration-tested) ─────────
