@@ -110,4 +110,23 @@ mod tests {
         // The important thing is it doesn't panic.
         assert!(result.is_ok() || result.is_err());
     }
+
+    #[test]
+    fn with_client_errors_when_cloud_mode_but_no_token() {
+        temp_env::with_vars(
+            [
+                ("TEMPER_VAULT_STATE", Some("cloud")),
+                ("TEMPER_TOKEN", None),
+            ],
+            || {
+                let result = with_client(|_client| Box::pin(async { Ok(()) }));
+                let err = result.unwrap_err();
+                let msg = format!("{err}");
+                assert!(
+                    msg.contains("TEMPER_TOKEN"),
+                    "expected TEMPER_TOKEN error: {msg}"
+                );
+            },
+        );
+    }
 }

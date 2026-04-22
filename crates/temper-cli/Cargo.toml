@@ -46,6 +46,7 @@ uuid = { version = "1", features = ["serde", "v7"] }
 validator = { version = "0.20", features = ["derive"] }
 
 [dev-dependencies]
+temp-env = "0.3"
 
 [features]
 default = ["embed", "extract", "hnsw"]
