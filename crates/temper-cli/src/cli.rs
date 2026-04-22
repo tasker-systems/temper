@@ -374,18 +374,26 @@ pub enum ContextAction {
 pub enum AuthAction {
     /// Log in via browser OAuth (PKCE flow)
     Login,
-    /// Store a JWT directly (for API-only clients or manual auth)
+    /// Store a JWT directly, reading from stdin (avoids shell-history /
+    /// `ps` / `/proc` leakage). Usage:
+    ///   temper auth export-token | temper auth token
+    ///   pbpaste | temper auth token
     Token {
-        /// The JWT access token
-        jwt: String,
-        /// Auth provider name (default: neon_auth)
-        #[arg(long, default_value = "neon_auth")]
+        /// Identity provider (default: auth0). Accepts `auth0` or
+        /// `auth0:DOMAIN` for custom Auth0 tenants.
+        #[arg(long, default_value = "auth0")]
         provider: String,
     },
     /// Clear stored credentials
     Logout,
     /// Show current auth status
     Status,
+    /// Export a refreshed access token (local mode only).
+    ///
+    /// Token goes to stdout (plain JWT, pipeable); security warning goes to
+    /// stderr. Pipe into a cloud session's secret manager as `TEMPER_TOKEN`.
+    /// Token is ~24h lifetime with no early-revoke — re-export to renew.
+    ExportToken,
 }
 
 #[derive(Subcommand)]

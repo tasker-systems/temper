@@ -282,11 +282,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         },
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(),
-            AuthAction::Token { jwt, provider } => {
-                temper_cli::commands::auth::token(&jwt, &provider)
-            }
+            AuthAction::Token { provider } => temper_cli::commands::auth::token(&provider),
             AuthAction::Logout => temper_cli::commands::auth::logout(),
             AuthAction::Status => temper_cli::commands::auth::status(),
+            AuthAction::ExportToken => temper_cli::commands::auth::export_token(),
         },
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
