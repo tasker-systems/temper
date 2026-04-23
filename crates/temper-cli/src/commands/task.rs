@@ -47,9 +47,10 @@ pub fn show(
             let config_clone = config.clone();
 
             // Tier 0: serve from disk if fresh — no runtime or API needed.
-            if let Some(body) =
-                super::resource::read_if_debounced(&path, show_cache::DEFAULT_DEBOUNCE_SECONDS)?
-            {
+            if let Some(body) = show_cache::read_if_fresh(
+                &path,
+                std::time::Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+            )? {
                 print!("{body}");
                 return Ok(());
             }

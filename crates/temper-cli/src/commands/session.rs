@@ -310,9 +310,10 @@ pub fn show(
             let (entry, path) = matches.remove(0);
 
             // Tier 0: serve from disk if fresh — no runtime or API needed.
-            if let Some(content) =
-                super::resource::read_if_debounced(&path, show_cache::DEFAULT_DEBOUNCE_SECONDS)?
-            {
+            if let Some(content) = show_cache::read_if_fresh(
+                &path,
+                std::time::Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+            )? {
                 if format == "json" {
                     let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
                     let info = SessionShow {

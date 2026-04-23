@@ -573,34 +573,6 @@ pub(crate) async fn resolve_resource_id(
     Ok(row.id)
 }
 
-/// Read a local file if its mtime is within `debounce_secs` of now.
-///
-/// Returns `Ok(Some(body))` if the file is fresh, `Ok(None)` if stale or
-/// missing. This mirrors `show_cache`'s debounce tier without requiring a
-/// resource id, letting us skip the runtime entirely for hot reads.
-pub(crate) fn read_if_debounced(
-    path: &std::path::Path,
-    debounce_secs: u64,
-) -> Result<Option<String>> {
-    use std::time::{Duration, SystemTime};
-    let meta = match std::fs::metadata(path) {
-        Ok(m) => m,
-        Err(_) => return Ok(None),
-    };
-    let mtime = meta
-        .modified()
-        .map_err(|e| TemperError::Vault(format!("mtime read: {e}")))?;
-    let age = SystemTime::now()
-        .duration_since(mtime)
-        .unwrap_or(Duration::ZERO);
-    if age < Duration::from_secs(debounce_secs) {
-        let body = std::fs::read_to_string(path).map_err(|e| TemperError::Vault(e.to_string()))?;
-        Ok(Some(body))
-    } else {
-        Ok(None)
-    }
-}
-
 /// Return the existing local path for a resource if found, or compute where
 /// it would live based on `Vault::doc_file`.
 fn find_or_compute_local_path(
@@ -732,7 +704,10 @@ fn show_generic(
             // Tier 0: debounce check before spinning up the runtime.
             // If the file is fresh we serve it immediately; no network, no
             // resource id resolution needed.
-            if let Some(body) = read_if_debounced(&path, show_cache::DEFAULT_DEBOUNCE_SECONDS)? {
+            if let Some(body) = show_cache::read_if_fresh(
+                &path,
+                std::time::Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+            )? {
                 return render_generic_output(
                     &doc_type_s,
                     &slug_s,

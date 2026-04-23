@@ -81,7 +81,9 @@ pub async fn fetch(params: ShowCacheParams<'_>) -> Result<ShowCacheResult> {
     }
 }
 
-fn read_if_fresh(path: &Path, debounce: Duration) -> Result<Option<String>> {
+/// Tier 1 check exposed standalone so callers can debounce without
+/// spinning up the async runtime. `fetch` uses this internally too.
+pub fn read_if_fresh(path: &Path, debounce: Duration) -> Result<Option<String>> {
     let meta = match fs::metadata(path) {
         Ok(m) => m,
         Err(_) => return Ok(None),
