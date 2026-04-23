@@ -531,27 +531,117 @@ pub fn show(
     Ok(())
 }
 
-/// Show a generic resource (goal, research, concept, decision) by finding and
-/// printing its file content.
-fn show_generic(
+/// Resolve `(doc_type, slug, context)` to a `ResourceId`.
+///
+/// In Local mode, fast-paths through the local file's `temper-id` frontmatter
+/// field when the file exists. Falls back to `GET /api/resources/by-uri` (the
+/// slow path) in Cloud mode or when the local file has no canonical id yet.
+///
+/// `pub(crate)` so that `task::show` and `session::show` share this logic
+/// without duplication.
+pub(crate) async fn resolve_resource_id(
+    config: &Config,
+    client: &temper_client::TemperClient,
+    doc_type: &str,
+    slug: &str,
+    context: Option<&str>,
+    vault_state: temper_core::types::VaultState,
+) -> Result<temper_core::types::ids::ResourceId> {
+    use temper_core::types::ids::ResourceId;
+
+    if matches!(vault_state, temper_core::types::VaultState::Local) {
+        if let Ok((path, _)) = find_resource_file(config, doc_type, slug, context) {
+            let body =
+                std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
+            if let Ok(fm) = temper_core::frontmatter::Frontmatter::try_from(body.as_str()) {
+                if let Some(id_str) = fm.value().get("temper-id").and_then(|v| v.as_str()) {
+                    if let Ok(uuid) = uuid::Uuid::parse_str(id_str) {
+                        return Ok(ResourceId::from(uuid));
+                    }
+                }
+            }
+        }
+    }
+
+    let ctx = require_context(config, context)?;
+    let owner = config.owner_for_context(&ctx);
+    let row = client
+        .resources()
+        .resolve_by_uri(&owner, &ctx, doc_type, slug)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+    Ok(row.id)
+}
+
+/// Read a local file if its mtime is within `debounce_secs` of now.
+///
+/// Returns `Ok(Some(body))` if the file is fresh, `Ok(None)` if stale or
+/// missing. This mirrors `show_cache`'s debounce tier without requiring a
+/// resource id, letting us skip the runtime entirely for hot reads.
+pub(crate) fn read_if_debounced(
+    path: &std::path::Path,
+    debounce_secs: u64,
+) -> Result<Option<String>> {
+    use std::time::{Duration, SystemTime};
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(_) => return Ok(None),
+    };
+    let mtime = meta
+        .modified()
+        .map_err(|e| TemperError::Vault(format!("mtime read: {e}")))?;
+    let age = SystemTime::now()
+        .duration_since(mtime)
+        .unwrap_or(Duration::ZERO);
+    if age < Duration::from_secs(debounce_secs) {
+        let body = std::fs::read_to_string(path).map_err(|e| TemperError::Vault(e.to_string()))?;
+        Ok(Some(body))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Return the existing local path for a resource if found, or compute where
+/// it would live based on `Vault::doc_file`.
+fn find_or_compute_local_path(
     config: &Config,
     doc_type: &str,
     slug: &str,
     context: Option<&str>,
+) -> Result<(std::path::PathBuf, String)> {
+    if let Ok((path, ctx)) = find_resource_file(config, doc_type, slug, context) {
+        return Ok((path, ctx));
+    }
+    let ctx = require_context(config, context)?;
+    let owner = config.owner_for_context(&ctx);
+    let vault_layout = Vault::new(&config.vault_root);
+    let path = vault_layout.doc_file(&owner, &ctx, doc_type, slug);
+    Ok((path, ctx))
+}
+
+/// Render generic resource output in the requested format.
+///
+/// `local_path` is `None` in Cloud mode (no file on disk).
+fn render_generic_output(
+    doc_type: &str,
+    slug: &str,
+    context: &str,
+    config: &Config,
+    local_path: Option<&std::path::Path>,
+    body: String,
     format: &str,
 ) -> Result<()> {
-    let (path, ctx) = find_resource_file(config, doc_type, slug, context)?;
-
-    let content = std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
-
     if format == "json" {
-        let fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str()).ok();
+        let fm = temper_core::frontmatter::Frontmatter::try_from(body.as_str()).ok();
         let title = fm
             .as_ref()
             .and_then(|f| f.value().get("title"))
             .and_then(|v| v.as_str())
             .unwrap_or(slug);
-        let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
+        let path_str = local_path
+            .and_then(|p| p.strip_prefix(&config.vault_root).ok())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
 
         #[derive(Serialize)]
         struct ResourceShow<'a> {
@@ -566,17 +656,127 @@ fn show_generic(
             doc_type,
             slug,
             title,
-            context: &ctx,
-            path: relative.to_string_lossy().to_string(),
-            content,
+            context,
+            path: path_str,
+            content: body,
         };
         let json = serde_json::to_string_pretty(&info).unwrap_or_default();
         println!("{json}");
         return Ok(());
     }
 
-    print!("{content}");
+    print!("{body}");
     Ok(())
+}
+
+/// Show a generic resource (goal, research, concept, decision).
+///
+/// In Local mode: resolves an id from frontmatter or by-uri, then uses the
+/// three-tier freshness ladder (`show_cache::fetch`) before rendering.
+/// In Cloud mode: fetches content directly from the API with no disk write.
+fn show_generic(
+    config: &Config,
+    doc_type: &str,
+    slug: &str,
+    context: Option<&str>,
+    format: &str,
+) -> Result<()> {
+    use crate::actions::{runtime, show_cache};
+    use std::time::Duration;
+    use temper_core::types::VaultState;
+
+    let vault_state = VaultState::from_env();
+    let doc_type_s = doc_type.to_string();
+    let slug_s = slug.to_string();
+    let context_owned = context.map(str::to_string);
+    let format_s = format.to_string();
+
+    match vault_state {
+        VaultState::Cloud => {
+            let config_clone = config.clone();
+            let doc_type_inner = doc_type_s.clone();
+            let slug_inner = slug_s.clone();
+            let ctx_inner = context_owned.clone();
+
+            let body = runtime::with_client(|client| {
+                Box::pin(async move {
+                    let id = resolve_resource_id(
+                        &config_clone,
+                        client,
+                        &doc_type_inner,
+                        &slug_inner,
+                        ctx_inner.as_deref(),
+                        VaultState::Cloud,
+                    )
+                    .await?;
+                    let resp = client
+                        .resources()
+                        .content(*id.as_uuid())
+                        .await
+                        .map_err(|e| TemperError::Api(e.to_string()))?;
+                    Ok(resp.markdown)
+                })
+            })?;
+
+            let ctx = context_owned.unwrap_or_default();
+            render_generic_output(&doc_type_s, &slug_s, &ctx, config, None, body, &format_s)
+        }
+        VaultState::Local => {
+            let config_clone = config.clone();
+            let doc_type_inner = doc_type_s.clone();
+            let slug_inner = slug_s.clone();
+            let ctx_inner = context_owned.clone();
+
+            let (path, ctx) = find_or_compute_local_path(config, &doc_type_s, &slug_s, context)?;
+
+            // Tier 0: debounce check before spinning up the runtime.
+            // If the file is fresh we serve it immediately; no network, no
+            // resource id resolution needed.
+            if let Some(body) = read_if_debounced(&path, show_cache::DEFAULT_DEBOUNCE_SECONDS)? {
+                return render_generic_output(
+                    &doc_type_s,
+                    &slug_s,
+                    &ctx,
+                    config,
+                    Some(&path),
+                    body,
+                    &format_s,
+                );
+            }
+
+            let (body, local_path_for_render) = runtime::with_client(|client| {
+                Box::pin(async move {
+                    let id = resolve_resource_id(
+                        &config_clone,
+                        client,
+                        &doc_type_inner,
+                        &slug_inner,
+                        ctx_inner.as_deref(),
+                        VaultState::Local,
+                    )
+                    .await?;
+                    let result = show_cache::fetch(show_cache::ShowCacheParams {
+                        client,
+                        resource_id: id,
+                        local_path: &path,
+                        debounce: Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+                    })
+                    .await?;
+                    Ok((result.content, path))
+                })
+            })?;
+
+            render_generic_output(
+                &doc_type_s,
+                &slug_s,
+                &ctx,
+                config,
+                Some(&local_path_for_render),
+                body,
+                &format_s,
+            )
+        }
+    }
 }
 
 /// Fetch and display edges for a resource via the API.
