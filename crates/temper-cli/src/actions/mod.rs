@@ -10,6 +10,7 @@ pub mod ingest;
 pub mod progress;
 pub mod runtime;
 pub mod search;
+pub mod show_cache;
 pub mod sync;
 pub mod task;
 pub mod types;

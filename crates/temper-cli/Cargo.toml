@@ -19,6 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dialoguer = "0.12"
 dirs = "5"
+filetime = "0.2"
 hnsw_rs = { version = "0.3", optional = true }
 ignore = "0.4"
 indicatif = "0.17"
