@@ -388,6 +388,113 @@ fn match_filters(row: &ResourceRow, filters: &ListFilters<'_>) -> bool {
     true
 }
 
+/// Cloud-first list: call the server, return rows sorted server-side
+/// (`ORDER BY updated DESC`).
+async fn fetch_list_rows(
+    client: &temper_client::TemperClient,
+    doc_type: &str,
+    context: Option<&str>,
+    limit: usize,
+) -> Result<Vec<temper_core::types::resource::ResourceRow>> {
+    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+
+    let params = ResourceListParams {
+        doc_type_name: Some(doc_type.to_string()),
+        context_name: context.map(ToString::to_string),
+        sort: Some(ResourceSortField::Updated),
+        order: Some(SortOrder::Desc),
+        limit: Some(limit as i64),
+        ..Default::default()
+    };
+    let resp = client
+        .resources()
+        .list(&params)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+    Ok(resp.rows)
+}
+
+/// Map a server `ResourceRow` to the frontmatter-shaped `serde_json::Value`
+/// that `col_registry::extract_row` expects. The registry was built for
+/// local scan_rows output; we adapt the server row shape to the same
+/// keys so rendering is unchanged.
+fn row_to_frontmatter_value(row: &temper_core::types::resource::ResourceRow) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert("title".into(), serde_json::Value::String(row.title.clone()));
+    if let Some(slug) = &row.slug {
+        map.insert("slug".into(), serde_json::Value::String(slug.clone()));
+    }
+    map.insert(
+        "temper-updated".into(),
+        serde_json::Value::String(row.updated.to_rfc3339()),
+    );
+    map.insert(
+        "temper-context".into(),
+        serde_json::Value::String(row.context_name.clone()),
+    );
+    map.insert(
+        "temper-type".into(),
+        serde_json::Value::String(row.doc_type_name.clone()),
+    );
+    if let Some(stage) = &row.stage {
+        map.insert(
+            "temper-stage".into(),
+            serde_json::Value::String(stage.clone()),
+        );
+    }
+    if let Some(mode) = &row.mode {
+        map.insert(
+            "temper-mode".into(),
+            serde_json::Value::String(mode.clone()),
+        );
+    }
+    if let Some(effort) = &row.effort {
+        map.insert(
+            "temper-effort".into(),
+            serde_json::Value::String(effort.clone()),
+        );
+    }
+    if let Some(seq) = row.seq {
+        map.insert("temper-seq".into(), serde_json::Value::Number(seq.into()));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Render server rows using the same per-doctype column registry used
+/// by the local-mode `render_list`. This keeps table output shape
+/// stable between the two modes.
+fn render_server_rows(
+    doc_type: &str,
+    rows: &[temper_core::types::resource::ResourceRow],
+    format: OutputFormat,
+) -> Result<String> {
+    match format {
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(
+            &rows
+                .iter()
+                .map(row_to_frontmatter_value)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default()),
+        OutputFormat::Pretty | OutputFormat::NoTty => {
+            let columns = col_registry::display_columns(doc_type);
+            if columns.is_empty() || rows.is_empty() {
+                return Ok(String::new());
+            }
+            let mut renderer = TableRenderer::new(columns.clone());
+            for row in rows {
+                let fm_value = row_to_frontmatter_value(row);
+                renderer.push_row(col_registry::extract_row(&fm_value, &columns));
+            }
+            Ok(if format == OutputFormat::Pretty {
+                renderer.render_pretty()
+            } else {
+                renderer.render_no_tty()
+            })
+        }
+    }
+}
+
 /// Render the unified list pipeline to a `String` for the given format.
 ///
 /// This is the testable core used by both `list()` (CLI entry) and the
@@ -436,9 +543,10 @@ pub fn render_list(params: &RenderListParams<'_>) -> Result<String> {
 
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
-    // Surface helpful hints when a filter is passed for an incompatible type
-    // (the filter is still applied; if nothing matches the user sees an empty
-    // list, which is the honest answer).
+    use crate::actions::runtime;
+    use temper_core::types::config::VaultState;
+
+    // Hints for filters that only apply to certain types (unchanged).
     if params.stage.is_some() && params.doc_type != "task" {
         output::hint(format!(
             "--stage filter is only meaningful for tasks; ignored for {}.",
@@ -465,44 +573,62 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     }
 
     let format = OutputFormat::parse(params.format);
+    let doc_type = params.doc_type.to_string();
+    let context = params.context.map(ToString::to_string);
+    let limit = params.limit.unwrap_or(20);
 
-    // Filters only pass through on compatible types; for others, drop them so
-    // the pipeline returns all rows (then the hint above tells the user why).
-    let stage = if params.doc_type == "task" {
-        params.stage
-    } else {
-        None
-    };
-    let goal = if params.doc_type == "task" {
-        params.goal
-    } else {
-        None
-    };
-    let status = if params.doc_type == "goal" {
-        params.status
-    } else {
-        None
+    let vault_state = VaultState::from_env();
+
+    // Attempt server-first. Fall back to local scan on network error
+    // in Local mode only; Cloud mode surfaces the error.
+    let rows_result = runtime::with_client(move |client| {
+        Box::pin(async move { fetch_list_rows(client, &doc_type, context.as_deref(), limit).await })
+    });
+
+    let server_rows = match (rows_result, vault_state) {
+        (Ok(rows), _) => Some(rows),
+        (Err(e), VaultState::Cloud) => return Err(e),
+        (Err(e), VaultState::Local) => {
+            output::hint(format!(
+                "cloud unreachable: {e}. Falling back to local scan."
+            ));
+            None
+        }
     };
 
-    let body = render_list(&RenderListParams {
-        doc_type: params.doc_type,
-        config,
-        context: params.context,
-        limit: params.limit,
-        filters: ListFilters {
-            stage,
-            goal,
-            status,
-        },
-        format,
-    })?;
+    let body = match server_rows {
+        Some(rows) => render_server_rows(params.doc_type, &rows, format)?,
+        None => render_list(&RenderListParams {
+            doc_type: params.doc_type,
+            config,
+            context: params.context,
+            limit: params.limit,
+            filters: ListFilters {
+                stage: if params.doc_type == "task" {
+                    params.stage
+                } else {
+                    None
+                },
+                goal: if params.doc_type == "task" {
+                    params.goal
+                } else {
+                    None
+                },
+                status: if params.doc_type == "goal" {
+                    params.status
+                } else {
+                    None
+                },
+            },
+            format,
+        })?,
+    };
 
     if body.trim().is_empty() {
         output::hint(format!("No {} resources found.", params.doc_type));
         return Ok(());
     }
 
-    // anstream handles TTY / no-TTY ANSI stripping based on the real stdout.
     output::plain(body.trim_end());
     Ok(())
 }
