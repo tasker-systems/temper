@@ -1284,6 +1284,39 @@ pub async fn push_one_resource(
     })
 }
 
+/// Publish a freshly-written local file to the server. For Local mode
+/// only. Loads the manifest, pushes via `push_one_resource(PushTarget::Path)`,
+/// saves the manifest.
+///
+/// Precondition: `file_path` exists and has either `temper-provisional-id`
+/// or `temper-id` in frontmatter.
+///
+/// Postcondition: server has the latest content; manifest entry reflects
+/// the canonical `temper-id` and current hashes.
+pub async fn publish_local_write(
+    client: &temper_client::TemperClient,
+    vault_root: &std::path::Path,
+    file_path: &std::path::Path,
+) -> Result<PushResult> {
+    use crate::actions::runtime;
+    use crate::manifest_io;
+
+    let temper_dir = vault_root.join(".temper");
+    let device_id = runtime::require_device_id()?;
+    let mut manifest = manifest_io::load_manifest(&temper_dir, &device_id)?;
+
+    let result = push_one_resource(
+        client,
+        vault_root,
+        PushTarget::Path(file_path),
+        Some(&mut manifest),
+    )
+    .await?;
+
+    manifest_io::save_manifest(&temper_dir, &manifest)?;
+    Ok(result)
+}
+
 async fn pull_resource(
     client: &temper_client::TemperClient,
     manifest: &mut Manifest,

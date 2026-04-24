@@ -208,6 +208,18 @@ pub fn create(
     let path = vault_layout.doc_file(&owner, context, "task", &slug);
     vault::write_note(&path, &content)?;
 
+    let vault_root = config.vault_root.clone();
+    let target_path = path.clone();
+    if let Err(e) = crate::actions::runtime::with_client(move |client| {
+        Box::pin(async move {
+            crate::actions::sync::publish_local_write(client, &vault_root, &target_path)
+                .await
+                .map(|_| ())
+        })
+    }) {
+        tracing::warn!("publish after create failed (will sync later): {e}");
+    }
+
     let event = discovery::Event::ResourceCreate {
         ts: datetime,
         doc_type: "task".to_string(),

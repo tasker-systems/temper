@@ -30,6 +30,19 @@ pub fn save(
             let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
             fm.set_body(body.to_string());
             fm.write_to(&note_path)?;
+
+            let vault_root = config.vault_root.clone();
+            let target_path = note_path.clone();
+            if let Err(e) = crate::actions::runtime::with_client(move |client| {
+                Box::pin(async move {
+                    crate::actions::sync::publish_local_write(client, &vault_root, &target_path)
+                        .await
+                        .map(|_| ())
+                })
+            }) {
+                tracing::warn!("publish after update failed (will sync later): {e}");
+            }
+
             let relative = note_path
                 .strip_prefix(&config.vault_root)
                 .unwrap_or(&note_path);
@@ -63,6 +76,18 @@ pub fn save(
         std::fs::create_dir_all(parent)?;
     }
     fm.write_to(&note_path)?;
+
+    let vault_root = config.vault_root.clone();
+    let target_path = note_path.clone();
+    if let Err(e) = crate::actions::runtime::with_client(move |client| {
+        Box::pin(async move {
+            crate::actions::sync::publish_local_write(client, &vault_root, &target_path)
+                .await
+                .map(|_| ())
+        })
+    }) {
+        tracing::warn!("publish after create failed (will sync later): {e}");
+    }
 
     let relative = note_path
         .strip_prefix(&config.vault_root)
