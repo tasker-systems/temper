@@ -41,4 +41,13 @@ pub enum ClientError {
     Other(String),
 }
 
+impl ClientError {
+    /// True if this error indicates the server could not be reached
+    /// (DNS failure, connection refused, TCP timeout, TLS handshake, etc.).
+    /// False for responses from the server itself (4xx/5xx, auth, conflicts).
+    pub fn is_network(&self) -> bool {
+        matches!(self, ClientError::Network(_))
+    }
+}
+
 pub type Result<T> = std::result::Result<T, ClientError>;

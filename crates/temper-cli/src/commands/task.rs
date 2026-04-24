@@ -100,7 +100,7 @@ pub fn show(
                         .resources()
                         .content(*id.as_uuid())
                         .await
-                        .map_err(|e| TemperError::Api(e.to_string()))?;
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     Ok(resp.markdown)
                 })
             })?;

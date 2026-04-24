@@ -15,9 +15,21 @@ use std::pin::Pin;
 use std::sync::Arc;
 
 use temper_client::auth::{DiskTokenStore, MemoryTokenStore, TokenStore};
+use temper_client::error::ClientError;
 use temper_core::types::VaultState;
 
 use crate::error::{Result, TemperError};
+
+/// Lift a [`ClientError`] into a [`TemperError`], preserving the network/
+/// server distinction so callers can choose to fall back to local state on
+/// unreachable-server errors without swallowing legitimate 4xx/5xx responses.
+pub fn client_err_to_temper(e: ClientError) -> TemperError {
+    if e.is_network() {
+        TemperError::Network(e.to_string())
+    } else {
+        TemperError::Api(e.to_string())
+    }
+}
 
 /// Resolve the active [`TokenStore`] for this process.
 fn resolve_token_store() -> Result<Arc<dyn TokenStore>> {

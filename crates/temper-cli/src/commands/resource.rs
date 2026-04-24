@@ -410,7 +410,7 @@ async fn fetch_list_rows(
         .resources()
         .list(&params)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     Ok(resp.rows)
 }
 
@@ -587,13 +587,17 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 
     let server_rows = match (rows_result, vault_state) {
         (Ok(rows), _) => Some(rows),
-        (Err(e), VaultState::Cloud) => return Err(e),
-        (Err(e), VaultState::Local) => {
+        // Local mode: fall back to the local vault scan only when the server
+        // is unreachable. Server-originated errors (4xx/5xx, auth) surface
+        // as-is — silently masking them with stale local data would hide
+        // real problems.
+        (Err(e @ TemperError::Network(_)), VaultState::Local) => {
             output::hint(format!(
                 "cloud unreachable: {e}. Falling back to local scan."
             ));
             None
         }
+        (Err(e), _) => return Err(e),
     };
 
     let body = match server_rows {
@@ -695,7 +699,7 @@ pub(crate) async fn resolve_resource_id(
         .resources()
         .resolve_by_uri(&owner, &ctx, doc_type, slug)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
     Ok(row.id)
 }
 
@@ -811,7 +815,7 @@ fn show_generic(
                         .resources()
                         .content(*id.as_uuid())
                         .await
-                        .map_err(|e| TemperError::Api(e.to_string()))?;
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     Ok(resp.markdown)
                 })
             })?;

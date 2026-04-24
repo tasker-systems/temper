@@ -28,6 +28,7 @@ use filetime::{set_file_mtime, FileTime};
 use temper_client::TemperClient;
 use temper_core::types::ids::ResourceId;
 
+use crate::actions::runtime::client_err_to_temper;
 use crate::error::{Result, TemperError};
 use crate::output;
 
@@ -63,7 +64,7 @@ pub async fn fetch(params: ShowCacheParams<'_>) -> Result<ShowCacheResult> {
     }
     match attempt_remote(&params).await {
         Ok(result) => Ok(result),
-        Err(err) if is_network_error(&err) => {
+        Err(err @ TemperError::Network(_)) => {
             if let Ok(body) = fs::read_to_string(params.local_path) {
                 output::hint(format!(
                     "offline: rendering cached copy of {} (reason: {err})",
@@ -108,11 +109,11 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
         .resources()
         .get(*params.resource_id.as_uuid())
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(client_err_to_temper)?;
 
     if let Ok(local_body) = fs::read_to_string(params.local_path) {
-        if let Some(local_updated) = parse_frontmatter_updated(&local_body) {
-            if local_updated == meta_check.updated {
+        match parse_frontmatter_updated(&local_body) {
+            Some(local_updated) if local_updated == meta_check.updated => {
                 let now = FileTime::from_system_time(SystemTime::now());
                 set_file_mtime(params.local_path, now)
                     .map_err(|e| TemperError::Vault(format!("touch mtime: {e}")))?;
@@ -121,6 +122,11 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
                     source: FreshnessTier::HashMatch,
                 });
             }
+            Some(_) => {}
+            None => tracing::debug!(
+                path = %params.local_path.display(),
+                "frontmatter missing or unparseable temper-updated; hash-verify tier skipped"
+            ),
         }
     }
 
@@ -129,7 +135,7 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
         .resources()
         .content(*params.resource_id.as_uuid())
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(client_err_to_temper)?;
     fs::write(params.local_path, &content.markdown)
         .map_err(|e| TemperError::Vault(format!("cache write: {e}")))?;
     Ok(ShowCacheResult {
@@ -145,10 +151,6 @@ fn parse_frontmatter_updated(body: &str) -> Option<chrono::DateTime<chrono::Utc>
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
         .map(|dt| dt.with_timezone(&chrono::Utc))
-}
-
-fn is_network_error(err: &TemperError) -> bool {
-    matches!(err, TemperError::Api(msg) if msg.contains("connect") || msg.contains("dns") || msg.contains("timeout"))
 }
 
 #[cfg(test)]
@@ -182,5 +184,21 @@ mod tests {
         let path = std::path::PathBuf::from("/tmp/definitely-not-a-file-xyz-123.md");
         let result = read_if_fresh(&path, Duration::from_secs(30)).expect("read_if_fresh");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_if_fresh_treats_future_mtime_as_fresh() {
+        // Laptop clock skew / filesystem weirdness can produce mtimes in the
+        // future. Treat them as fresh (age = 0) rather than as an error.
+        let file = NamedTempFile::new().expect("tempfile");
+        std::fs::write(file.path(), "future").expect("write");
+        let future = FileTime::from_system_time(SystemTime::now() + Duration::from_secs(120));
+        set_file_mtime(file.path(), future).expect("set mtime");
+
+        let result = read_if_fresh(file.path(), Duration::from_secs(30))
+            .expect("read_if_fresh")
+            .expect("future-mtime file should be treated as fresh");
+
+        assert_eq!(result, "future");
     }
 }
