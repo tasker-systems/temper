@@ -276,7 +276,12 @@ pub enum ResourceAction {
         #[arg(long)]
         edges: bool,
     },
-    /// Update a resource's frontmatter fields
+    /// Update a resource's frontmatter fields and push to server
+    ///
+    /// Update mutates frontmatter from args and pushes the whole file
+    /// (including manual body edits) to the server in one operation. Make
+    /// body edits before running update. For body-only changes use
+    /// `temper push`.
     Update {
         /// Resource slug
         slug: String,
