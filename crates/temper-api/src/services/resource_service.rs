@@ -529,11 +529,15 @@ pub async fn update(
 
     let mut tx = pool.begin().await?;
 
-    // 1. Update title/slug on kb_resources (existing behavior).
+    // 1. Update title/slug on kb_resources. We need current.title/slug for
+    //    fallback values and current.doc_type_name to compute the managed_hash
+    //    later, so read once via get_visible. Safety: the UPDATE below uses
+    //    `WHERE is_active = true` and we check `rows_affected()` to detect a
+    //    resource that became inactive between this read and the write.
     let current = get_visible(pool, profile_id, resource_id).await?;
     let new_title = req.title.as_deref().unwrap_or(&current.title);
     let new_slug = req.slug.as_deref().or(current.slug.as_deref());
-    sqlx::query!(
+    let update_result = sqlx::query!(
         r#"
         UPDATE kb_resources
            SET title   = $1,
@@ -549,7 +553,19 @@ pub async fn update(
     .execute(&mut *tx)
     .await?;
 
+    if update_result.rows_affected() == 0 {
+        // Resource was deleted (is_active = false) between the get_visible
+        // read and this UPDATE. Surface as NotFound rather than silently
+        // committing a manifest write for a deleted resource.
+        return Err(ApiError::NotFound);
+    }
+
     // 2. Merge managed_meta + open_meta into kb_resource_manifests.
+    //    `resource_service::create` does not create a manifest row (only
+    //    `ingest_service::create_resource_with_manifest` does), so resources
+    //    born via POST /api/resources have no manifest until their first
+    //    PATCH or ingest. The ON CONFLICT upsert below is load-bearing for
+    //    that create-then-patch flow; do not simplify to a plain UPDATE.
     if req.managed_meta.is_some() || req.open_meta.is_some() {
         let stored = sqlx::query!(
             r#"SELECT managed_meta as "managed_meta: serde_json::Value",
@@ -569,8 +585,13 @@ pub async fn update(
             ),
         };
 
-        let mut merged_managed: ManagedMeta =
-            serde_json::from_value(stored_managed_json).unwrap_or_default();
+        // Surface JSONB→ManagedMeta failures as data-integrity errors rather
+        // than silently overwriting the stored value with an empty default.
+        // ManagedMeta has a flatten extras bucket so the only way this fails
+        // is if the column holds a non-object JSON value, which would be
+        // structural corruption worth knowing about.
+        let mut merged_managed: ManagedMeta = serde_json::from_value(stored_managed_json)
+            .map_err(|e| ApiError::Internal(format!("malformed managed_meta JSONB: {e}")))?;
         if let Some(incoming) = req.managed_meta {
             apply_managed_meta_partial(&mut merged_managed, incoming);
         }
@@ -592,6 +613,9 @@ pub async fn update(
                    SET managed_meta = $1, managed_hash = $2,
                        open_meta    = $3, open_hash    = $4,
                        updated      = now()"#,
+            // body_hash defaults to '' on insert because Task 3 only handles
+            // meta. Task 4 introduces the body trio path and will populate
+            // body_hash on the same INSERT (or in a sibling write).
             managed_value,
             managed_hash,
             merged_open,
