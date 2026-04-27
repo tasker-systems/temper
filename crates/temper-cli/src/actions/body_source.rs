@@ -44,7 +44,15 @@ pub fn resolve_body_source<R: Read>(
                 stdin_reader
                     .read_to_string(&mut buf)
                     .map_err(|e| TemperError::Vault(format!("read stdin: {e}")))?;
-                Ok(Some(buf))
+                // Treat implicit empty stdin as "no body provided". An empty
+                // implicit stdin most commonly means no pipe was connected
+                // (e.g., a spawned thread in a test harness). For an explicit
+                // empty body, callers use `--body -`.
+                if buf.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(buf))
+                }
             } else {
                 Ok(None)
             }
@@ -107,5 +115,18 @@ mod tests {
     fn implicit_returns_none_when_tty_and_no_flag() {
         let result = resolve_body_source(None, /*stdin_is_tty:*/ true, Cursor::new(b"")).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn implicit_returns_none_for_empty_stdin() {
+        // An empty implicit stdin (no bytes) is treated as "no body provided".
+        // This prevents spawned threads (test harness) with unconnected stdin
+        // from accidentally issuing a body-replacing empty PATCH.
+        // For an explicit empty body, callers use `--body -`.
+        let result = resolve_body_source(None, /*stdin_is_tty:*/ false, Cursor::new(b"")).unwrap();
+        assert!(
+            result.is_none(),
+            "empty implicit stdin must be treated as no-body"
+        );
     }
 }

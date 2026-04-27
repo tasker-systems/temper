@@ -29,9 +29,20 @@ fn validate_doc_type(doc_type: &str) -> Result<()> {
 }
 
 /// Require a context, returning an error if none specified.
+///
+/// In cloud mode (no local vault) we skip the vault-filesystem fallback
+/// and trust the provided name directly — there are no context directories
+/// on disk to check.
 fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
+    use temper_core::types::config::VaultState;
     match context {
-        Some(ctx) => Ok(super::resolve_context_with_fallback(config, ctx).into_owned()),
+        Some(ctx) => {
+            if matches!(VaultState::from_env(), VaultState::Cloud) {
+                Ok(ctx.to_string())
+            } else {
+                Ok(super::resolve_context_with_fallback(config, ctx).into_owned())
+            }
+        }
         None => Err(TemperError::Project(
             "no context specified — use --context <name>".into(),
         )),
