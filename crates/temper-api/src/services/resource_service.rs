@@ -4,9 +4,10 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
-use crate::services::ingest_service::insert_event_and_audit;
+use crate::services::ingest_service::{insert_event_and_audit, replace_chunks};
 use temper_core::hash::{compute_managed_hash, compute_open_hash};
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::ingest::unpack_chunks;
 use temper_core::types::managed_meta::ManagedMeta;
 
 pub use temper_core::types::resource::{
@@ -191,13 +192,19 @@ const OWNER_HANDLE_EXPR: &str = r#"CASE
 END AS owner_handle"#;
 
 /// The SELECT columns for ResourceRow from the vault_resources_browse view.
+///
+/// `body_hash` is fetched via a correlated scalar subquery because
+/// `vault_resources_browse` joins `kb_resource_manifests` internally but does
+/// not expose `body_hash` as a view column. The subquery is a LEFT JOIN
+/// equivalent — `NULL` when no manifest row exists.
 fn select_columns() -> String {
     format!(
         r#"vb.id, vb.kb_context_id, vb.kb_doc_type_id, vb.origin_uri, vb.title,
        vb.slug, vb.originator_profile_id, vb.owner_profile_id, vb.is_active,
        vb.created, vb.updated, vb.context_name, vb.doc_type_name,
        {OWNER_HANDLE_EXPR},
-       vb.stage, vb.seq, vb.mode, vb.effort"#
+       vb.stage, vb.seq, vb.mode, vb.effort,
+       (SELECT m.body_hash FROM kb_resource_manifests m WHERE m.resource_id = vb.id) AS body_hash"#
     )
 }
 
@@ -506,12 +513,19 @@ pub async fn create(
 /// - `managed_meta.extra` bucket: incoming keys are merged in (incoming wins per-key).
 /// - `open_meta` (JSON object): incoming keys are merged in (incoming wins per-key).
 ///
+/// When `content`, `content_hash`, and `chunks_packed` are all `Some` (body
+/// trio), chunk-store is updated via `replace_chunks` inside the same
+/// transaction. If `content_hash` matches the stored `body_hash`, the chunk
+/// work is skipped (short-circuit dedupe). The handler validates the trio is
+/// all-or-nothing before this function is called.
+///
 /// `managed_hash` and `open_hash` are recomputed whenever their respective
 /// metadata changes.
 pub async fn update(
     pool: &PgPool,
     profile_id: Uuid,
     resource_id: Uuid,
+    device_id: &str,
     req: ResourceUpdateRequest,
 ) -> ApiResult<ResourceRow> {
     let can_modify = sqlx::query_scalar!(
@@ -613,9 +627,6 @@ pub async fn update(
                    SET managed_meta = $1, managed_hash = $2,
                        open_meta    = $3, open_hash    = $4,
                        updated      = now()"#,
-            // body_hash defaults to '' on insert because Task 3 only handles
-            // meta. Task 4 introduces the body trio path and will populate
-            // body_hash on the same INSERT (or in a sibling write).
             managed_value,
             managed_hash,
             merged_open,
@@ -624,6 +635,85 @@ pub async fn update(
         )
         .execute(&mut *tx)
         .await?;
+    }
+
+    // 3. Body trio path: persist + dedupe chunks if all three fields present.
+    //    The handler guarantees all-or-nothing — if any one is Some, all are Some.
+    if let (Some(incoming_hash), Some(chunks_packed_str)) = (req.content_hash, req.chunks_packed) {
+        // Read the stored body_hash to decide whether chunk work is needed.
+        // Returns None when no manifest row exists (fresh resource).
+        let stored_body_hash: String = sqlx::query_scalar!(
+            "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
+            resource_id,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or_default();
+
+        if incoming_hash != stored_body_hash {
+            // Hash changed — decode chunks and rewire via the shared primitive.
+            let chunks = unpack_chunks(&chunks_packed_str)
+                .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?;
+
+            // Fetch context_id and current hashes for the event + audit record.
+            let context_id: Uuid = sqlx::query_scalar!(
+                "SELECT kb_context_id FROM kb_resources WHERE id = $1",
+                resource_id,
+            )
+            .fetch_one(&mut *tx)
+            .await?;
+
+            // Fetch current manifest hashes for the audit trail; fall back to
+            // empty strings when no manifest row exists (body-trio-only PATCH on
+            // a resource that never had a manifest).
+            let (managed_hash, open_hash): (String, String) = sqlx::query_as(
+                "SELECT COALESCE(managed_hash, ''), COALESCE(open_hash, '') \
+                 FROM kb_resource_manifests WHERE resource_id = $1",
+            )
+            .bind(resource_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or_default();
+
+            let (_event_id, audit_id) = insert_event_and_audit(
+                &mut tx,
+                ProfileId::from(profile_id),
+                device_id,
+                ContextId::from(context_id),
+                ResourceId::from(resource_id),
+                "body_updated",
+                "update_body",
+                &incoming_hash,
+                &managed_hash,
+                &open_hash,
+            )
+            .await?;
+
+            // Replace chunks: version-bump old, batch-insert new, rebuild search.
+            replace_chunks(
+                &mut tx,
+                ResourceId::from(resource_id),
+                audit_id,
+                &incoming_hash,
+                &chunks,
+            )
+            .await?;
+
+            // Update body_hash in the manifest (upsert: body-trio-only PATCH may
+            // arrive before any managed_meta write on a fresh resource).
+            sqlx::query!(
+                r#"INSERT INTO kb_resource_manifests
+                       (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
+                   VALUES ($1, $2, '{}', '{}', '', '', now())
+                   ON CONFLICT (resource_id) DO UPDATE
+                       SET body_hash = $2, updated = now()"#,
+                resource_id,
+                incoming_hash,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        // else: hash matches stored → short-circuit, no chunk work.
     }
 
     tx.commit().await?;

@@ -141,6 +141,7 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
+    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
@@ -156,7 +157,11 @@ pub async fn update(
         ));
     }
 
-    resource_service::update(&state.pool, auth.0.profile.id, resource_id, req)
+    let device_id = device_id
+        .map(|d| d.0 .0.clone())
+        .unwrap_or_else(|| "api".to_string());
+
+    resource_service::update(&state.pool, auth.0.profile.id, resource_id, &device_id, req)
         .await
         .map(Json)
 }

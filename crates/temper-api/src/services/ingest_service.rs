@@ -241,7 +241,7 @@ async fn persist_chunks(
 /// Version-bump old chunks and batch-insert new ones via SQL function.
 /// Gates search triggers, does bulk version-bump + INSERT, rebuilds once.
 /// Returns the newly-created `RevisionId`.
-async fn replace_chunks(
+pub(crate) async fn replace_chunks(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     resource_id: ResourceId,
     audit_id: ResourceAuditId,

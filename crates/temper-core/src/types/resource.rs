@@ -37,6 +37,10 @@ pub struct ResourceRow {
     pub seq: Option<i64>,
     pub mode: Option<String>,
     pub effort: Option<String>,
+    /// SHA-256 hash of the resource body content, from `kb_resource_manifests`.
+    /// `None` when no manifest row exists (resource created via POST without a
+    /// body trio, or the manifest join returned NULL).
+    pub body_hash: Option<String>,
 }
 
 /// Sort field for resource listing.
