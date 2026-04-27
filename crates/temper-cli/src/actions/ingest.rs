@@ -115,6 +115,33 @@ pub fn slug_from_title(title: &str) -> String {
         .to_owned()
 }
 
+/// Body trio extracted from raw markdown — the chunk + hash output that
+/// goes onto IngestPayload (cloud create) or ResourceUpdateRequest (cloud update).
+pub struct BodyChunks {
+    pub content_hash: String,
+    pub chunks_packed: String,
+}
+
+/// Compute (content_hash, chunks_packed) from raw markdown without
+/// vault/manifest side effects. Single source of truth for chunk + hash
+/// extraction; used by both `build_ingest_payload` (cloud and local create)
+/// and the cloud-mode update path.
+#[cfg(feature = "embed")]
+pub fn compute_body_chunks(content: &str) -> Result<BodyChunks> {
+    use temper_core::types::ingest::pack_chunks;
+    use temper_ingest::pipeline::prepare_markdown;
+
+    let content_hash = temper_core::hash::compute_body_hash(content);
+    let packed_chunks = prepare_markdown(content)
+        .map_err(|e| TemperError::Extraction(format!("embedding failed: {e}")))?;
+    let chunks_packed = pack_chunks(&packed_chunks)
+        .map_err(|e| TemperError::Extraction(format!("chunk packing failed: {e}")))?;
+    Ok(BodyChunks {
+        content_hash,
+        chunks_packed,
+    })
+}
+
 /// Build a wire-ready `IngestPayload` from extracted markdown.
 ///
 /// Performs chunk → embed → pack locally, producing a payload ready
@@ -127,31 +154,22 @@ pub fn build_ingest_payload(
     doc_type: &str,
     metadata: Option<serde_json::Value>,
 ) -> Result<temper_core::types::IngestPayload> {
-    use temper_core::types::ingest::pack_chunks;
-    use temper_ingest::pipeline::prepare_markdown;
-
-    let content_hash = temper_core::hash::compute_body_hash(content);
     let slug = slug_from_title(title);
     let origin_uri = build_uri(context, doc_type, &slug);
-
-    let packed_chunks = prepare_markdown(content)
-        .map_err(|e| TemperError::Extraction(format!("embedding failed: {e}")))?;
-
-    let chunks_packed = pack_chunks(&packed_chunks)
-        .map_err(|e| TemperError::Extraction(format!("chunk packing failed: {e}")))?;
+    let body = compute_body_chunks(content)?;
 
     Ok(temper_core::types::IngestPayload {
         title: title.to_owned(),
         origin_uri,
         context_name: context.to_owned(),
         doc_type_name: doc_type.to_owned(),
-        content_hash: Some(content_hash),
+        content_hash: Some(body.content_hash),
         slug,
         content: content.to_owned(),
         metadata,
         managed_meta: None,
         open_meta: None,
-        chunks_packed: Some(chunks_packed),
+        chunks_packed: Some(body.chunks_packed),
     })
 }
 
@@ -1133,6 +1151,7 @@ created: 2026-03-23
             seq: None,
             mode: None,
             effort: None,
+            body_hash: None,
         }
     }
 
@@ -1320,6 +1339,18 @@ created: 2026-03-23
             id_pos < stage_pos.min(effort_pos).min(relates_pos),
             "identity fields must precede data fields. Got:\n{serialized}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "embed")]
+    fn compute_body_chunks_returns_hash_and_packed_chunks() {
+        let content = "# Heading\n\nParagraph one.\n\nParagraph two.";
+        let result = compute_body_chunks(content).expect("compute should succeed");
+        assert_eq!(
+            result.content_hash,
+            temper_core::hash::compute_body_hash(content)
+        );
+        assert!(!result.chunks_packed.is_empty());
     }
 
     #[test]

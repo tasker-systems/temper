@@ -3467,6 +3467,7 @@ mod tests {
             seq: Some(1),
             mode: None,
             effort: None,
+            body_hash: None,
         }
     }
 
