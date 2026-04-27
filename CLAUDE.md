@@ -113,6 +113,7 @@ Rust crates use feature flags to gate heavy dependencies:
 - **UUID v7** — All entity IDs use UUIDv7 (time-sortable).
 - **Auth** — Auth0 device authorization PKCE flow. Tokens cached locally. API validates JWTs via JWKS.
 - **CI** — GitHub Actions: `code-quality.yml` (fmt, clippy, machete), `test-rust.yml`, `test-typescript.yml`, `ci-success.yml` (merge gate).
+- **Cloud mode operations** — When `TEMPER_VAULT_STATE=cloud`, write paths route directly through the API: `temper resource create` POSTs to `/api/ingest`; `temper resource update` PATCHes `/api/resources/{id}` with a partial-merge payload (managed_meta + open_meta + optional body trio). **Do not invoke `temper sync run`** in cloud mode — it errors with a redirect message. Files on disk under cloud mode are derivative — the `show` debounce cache and any scratch tmpfile from the show-edit-cat pattern are read-cache or base-then-update artifacts, never authoritative. Body edits use the show-edit-cat idiom: `temper resource show <slug>` writes the current body to a temp path; modify it; then `cat tmpfile.md | temper resource update <slug> --stage done` posts the updated body + managed_meta in one PATCH. Body source can also be supplied explicitly via `--body @<path>` (read file) or `--body -` (read stdin); implicit stdin is auto-detected when stdin is non-TTY.
 
 ## Code Quality Rules
 
