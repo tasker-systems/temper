@@ -106,11 +106,14 @@ async fn patch_returns_400_when_content_present_without_hash(pool: PgPool) {
         .await
         .expect("PATCH request failed");
 
-    assert_eq!(
-        resp.status().as_u16(),
-        400,
-        "partial trio must return 400; body: {}",
-        resp.text().await.unwrap_or_default()
+    let status = resp.status().as_u16();
+    let body: Value = resp.json().await.expect("expected JSON body");
+
+    assert_eq!(status, 400, "partial trio must return 400; body: {body}",);
+    let message = body["error"]["message"].as_str().unwrap_or("");
+    assert!(
+        message.contains("content_hash"),
+        "error message must mention 'content_hash'; got: {message}"
     );
 }
 
