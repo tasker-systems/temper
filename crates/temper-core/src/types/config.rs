@@ -5,6 +5,14 @@ use validator::Validate;
 /// operation. See the cloud-mode design spec for semantics.
 pub const TEMPER_VAULT_STATE_ENV: &str = "TEMPER_VAULT_STATE";
 
+/// Environment variable that overrides the on-disk auth file location used by
+/// `DiskTokenStore`. Resolution precedence (highest to lowest): this env var,
+/// `auth.path` in `config.toml`, default (`~/.config/temper/auth.json`).
+///
+/// Cloud sessions never consult this — they read tokens from `TEMPER_TOKEN`
+/// via `MemoryTokenStore` and must not touch disk regardless.
+pub const TEMPER_AUTH_PATH_ENV: &str = "TEMPER_AUTH_PATH";
+
 /// Operating mode for a temper session.
 ///
 /// `Local` is the existing manifest-backed three-way sync flow.
@@ -181,6 +189,11 @@ pub struct AuthConfig {
     #[serde(default)]
     #[validate(nested)]
     pub providers: Vec<AuthProvider>,
+    /// Override for the on-disk auth file path. Tilde-expanded at resolution
+    /// time. When `None`, falls back to `~/.config/temper/auth.json`. Has
+    /// lower precedence than the `TEMPER_AUTH_PATH` env var.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 fn default_auth_provider() -> String {
@@ -205,6 +218,7 @@ impl Default for AuthConfig {
                     "offline_access".to_string(),
                 ],
             }],
+            path: None,
         }
     }
 }

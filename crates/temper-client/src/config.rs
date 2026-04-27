@@ -6,7 +6,7 @@
 //! adds client-specific conveniences (API URL resolution, OAuth config, and
 //! building a fully-configured client).
 
-use temper_core::types::config::{AuthProvider, TemperConfig};
+use temper_core::types::config::{expand_tilde, AuthProvider, TemperConfig, TEMPER_AUTH_PATH_ENV};
 
 // ---------------------------------------------------------------------------
 // Load / resolve  (delegated to temper-core)
@@ -28,6 +28,29 @@ pub fn load_cloud_config_from(path: &std::path::Path) -> crate::error::Result<Te
 /// Return the API base URL, letting `TEMPER_API_URL` take priority.
 pub fn api_url(config: &TemperConfig) -> String {
     std::env::var("TEMPER_API_URL").unwrap_or_else(|_| config.cloud.api_url.clone())
+}
+
+/// Resolve the on-disk auth file path for this session.
+///
+/// Precedence (highest to lowest):
+/// 1. `TEMPER_AUTH_PATH` env var
+/// 2. `auth.path` field in `config.toml` (tilde-expanded)
+/// 3. Default: `~/.config/temper/auth.json` via [`crate::auth::auth_json_path`]
+///
+/// Cloud sessions never call this — they read tokens from `TEMPER_TOKEN`
+/// via [`crate::auth::MemoryTokenStore`] and never touch disk.
+pub fn auth_path(config: &TemperConfig) -> std::path::PathBuf {
+    if let Ok(p) = std::env::var(TEMPER_AUTH_PATH_ENV) {
+        if !p.is_empty() {
+            return std::path::PathBuf::from(p);
+        }
+    }
+    if let Some(p) = &config.auth.path {
+        if !p.is_empty() {
+            return expand_tilde(p);
+        }
+    }
+    crate::auth::auth_json_path()
 }
 
 /// Build an [`OAuthConfig`](crate::login::OAuthConfig) from the active provider.
@@ -225,6 +248,49 @@ api_url = "https://api.example.com"
         assert_eq!(url, "https://localhost:3000");
     }
 
+    // --- auth_path ---
+
+    #[test]
+    fn auth_path_falls_back_to_default_when_neither_env_nor_config_set() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TEMPER_AUTH_PATH");
+        let config = TemperConfig::default();
+        let path = auth_path(&config);
+        assert_eq!(path, crate::auth::auth_json_path());
+    }
+
+    #[test]
+    fn auth_path_uses_config_field_when_env_unset() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("TEMPER_AUTH_PATH");
+        let mut config = TemperConfig::default();
+        config.auth.path = Some("/tmp/custom/auth.json".to_string());
+        let path = auth_path(&config);
+        assert_eq!(path, std::path::PathBuf::from("/tmp/custom/auth.json"));
+    }
+
+    #[test]
+    fn auth_path_env_var_takes_priority_over_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mut config = TemperConfig::default();
+        config.auth.path = Some("/tmp/from-config/auth.json".to_string());
+        std::env::set_var("TEMPER_AUTH_PATH", "/tmp/from-env/auth.json");
+        let path = auth_path(&config);
+        std::env::remove_var("TEMPER_AUTH_PATH");
+        assert_eq!(path, std::path::PathBuf::from("/tmp/from-env/auth.json"));
+    }
+
+    #[test]
+    fn auth_path_ignores_empty_env_var() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let mut config = TemperConfig::default();
+        config.auth.path = Some("/tmp/from-config/auth.json".to_string());
+        std::env::set_var("TEMPER_AUTH_PATH", "");
+        let path = auth_path(&config);
+        std::env::remove_var("TEMPER_AUTH_PATH");
+        assert_eq!(path, std::path::PathBuf::from("/tmp/from-config/auth.json"));
+    }
+
     // --- oauth_config ---
 
     #[test]
@@ -268,6 +334,7 @@ scopes        = ["openid"]
             auth: AuthConfig {
                 provider: "nonexistent".to_string(),
                 providers: Vec::new(),
+                path: None,
             },
             cloud: CloudSection::default(),
             llm: Default::default(),
@@ -293,6 +360,7 @@ scopes        = ["openid"]
             auth: AuthConfig {
                 provider: "none".to_string(),
                 providers: Vec::new(),
+                path: None,
             },
             cloud: CloudSection::default(),
             llm: Default::default(),

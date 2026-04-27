@@ -1,6 +1,9 @@
 use tempfile::TempDir;
 
+mod common;
+
 fn test_config(dir: &TempDir) -> temper_cli::config::Config {
+    common::init_isolated_auth();
     let state_dir = dir.path().join(".temper");
     std::fs::create_dir_all(&state_dir).unwrap();
     std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();

@@ -147,17 +147,7 @@ pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
 
-    let vault_root = config.vault_root.clone();
-    let target_path = path.clone();
-    if let Err(e) = crate::actions::runtime::with_client(move |client| {
-        Box::pin(async move {
-            crate::actions::sync::publish_local_write(client, &vault_root, &target_path)
-                .await
-                .map(|_| ())
-        })
-    }) {
-        tracing::warn!("publish after create failed (will sync later): {e}");
-    }
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
 
     let event = discovery::Event::ResourceCreate {
         ts: Local::now().to_rfc3339(),

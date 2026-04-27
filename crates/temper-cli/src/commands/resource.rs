@@ -185,17 +185,7 @@ fn create_simple_resource(
     std::fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     fm.write_to(&path)?;
 
-    let vault_root = config.vault_root.clone();
-    let target_path = path.clone();
-    if let Err(e) = crate::actions::runtime::with_client(move |client| {
-        Box::pin(async move {
-            crate::actions::sync::publish_local_write(client, &vault_root, &target_path)
-                .await
-                .map(|_| ())
-        })
-    }) {
-        tracing::warn!("publish after create failed (will sync later): {e}");
-    }
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
 
     let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
     let relative_str = relative.to_string_lossy();
@@ -1219,15 +1209,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         std::fs::remove_file(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     }
 
-    let vault_root = config.vault_root.clone();
-    let final_path_clone = final_path.clone();
-    crate::actions::runtime::with_client(move |client| {
-        Box::pin(async move {
-            crate::actions::sync::publish_local_write(client, &vault_root, &final_path_clone)
-                .await
-                .map(|_| ())
-        })
-    })?;
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &final_path)?;
 
     // Determine slug for output
     let final_slug = final_path
