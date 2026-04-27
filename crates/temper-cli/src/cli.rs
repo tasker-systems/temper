@@ -231,6 +231,10 @@ pub enum ResourceAction {
         show_template: bool,
         #[arg(long, hide = true)]
         stdin: bool,
+        /// Body content: '@PATH' reads a file, '-' reads stdin, omit to use
+        /// piped stdin implicitly (cloud mode only; ignored in local mode)
+        #[arg(long)]
+        body: Option<String>,
         /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
         #[arg(long)]
         format: Option<String>,

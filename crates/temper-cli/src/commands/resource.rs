@@ -39,6 +39,10 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
 }
 
 /// Create a new resource.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "per-doctype creators have different required args; params struct deferred to Task 12+"
+)]
 pub fn create(
     config: &Config,
     doc_type: &str,
@@ -48,11 +52,98 @@ pub fn create(
     mode: Option<&str>,
     effort: Option<&str>,
     slug: Option<&str>,
+    body_flag: Option<String>,
     format: &str,
 ) -> Result<()> {
+    use std::io::IsTerminal;
+
+    use temper_core::types::config::VaultState;
+
     validate_doc_type(doc_type)?;
 
     let ctx = require_context(config, context)?;
+
+    let vault_state = VaultState::from_env();
+
+    // Cloud-mode: skip vault writes; build IngestPayload and POST /api/ingest.
+    #[cfg(feature = "embed")]
+    if matches!(vault_state, VaultState::Cloud) {
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        let body_opt = crate::actions::body_source::resolve_body_source(
+            body_flag,
+            stdin_is_tty,
+            std::io::stdin(),
+        )?;
+        let body = body_opt.unwrap_or_else(|| format!("# {title}\n"));
+
+        let managed_meta = crate::actions::frontmatter::build_managed_meta_for_create(
+            crate::actions::frontmatter::NewResourceArgs {
+                doc_type,
+                context: &ctx,
+                title,
+                mode,
+                effort,
+                goal,
+                stage: None,
+                seq: None,
+                status: None,
+                provenance: None,
+                llm_model: None,
+                llm_run: None,
+            },
+        );
+
+        let payload = crate::actions::ingest::build_ingest_payload(
+            &body,
+            title,
+            &ctx,
+            doc_type,
+            None,
+            Some(managed_meta),
+            None,
+        )?;
+
+        let resource = crate::actions::runtime::with_client(|client| {
+            Box::pin(async move {
+                client
+                    .ingest()
+                    .create(&payload)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)
+            })
+        })?;
+
+        if format == "json" {
+            #[derive(serde::Serialize)]
+            struct CloudCreated {
+                id: String,
+                slug: Option<String>,
+                doc_type: String,
+                context: String,
+                title: String,
+            }
+            let info = CloudCreated {
+                id: resource.id.to_string(),
+                slug: resource.slug.clone(),
+                doc_type: doc_type.to_string(),
+                context: ctx.to_string(),
+                title: resource.title.clone(),
+            };
+            let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+            println!("{json}");
+        } else {
+            let id_str = resource.id.to_string();
+            let slug_display = resource.slug.as_deref().unwrap_or(&id_str);
+            output::success(format!("Created: {slug_display}"));
+        }
+        return Ok(());
+    }
+
+    // Local-mode: existing vault-file create flow.
+    // body_flag is intentionally unused in local mode (stdin piping handles body).
+    let _ = body_flag;
+    let _ = vault_state;
+
     let stdin_content = vault::read_stdin_if_piped();
 
     match doc_type {

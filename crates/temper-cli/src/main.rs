@@ -118,6 +118,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     slug,
                     show_template,
                     stdin: _,
+                    body,
                     format,
                 } => {
                     if show_template {
@@ -140,6 +141,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         mode.as_deref(),
                         effort.as_deref(),
                         slug.as_deref(),
+                        body,
                         format,
                     )
                 }
