@@ -132,6 +132,7 @@ pub async fn create(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Updated resource", body = ResourceRow),
+        (status = 400, description = "Partial body trio", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),

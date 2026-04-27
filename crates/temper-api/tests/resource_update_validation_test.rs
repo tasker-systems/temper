@@ -51,28 +51,10 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
     assert_eq!(
         create_resp.status().as_u16(),
         200,
-        "resource create must succeed; body: {}",
-        create_resp.text().await.unwrap_or_default()
+        "resource create must succeed",
     );
 
-    let created: Value = app
-        .client
-        .post(app.url("/api/resources"))
-        .header("Authorization", format!("Bearer {token}"))
-        .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
-            "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
-            "origin_uri": format!("test://body-trio-owned-{}", uuid::Uuid::new_v4()),
-            "title": "Body Trio Owned Resource",
-            "slug": null
-        }))
-        .send()
-        .await
-        .expect("second create resource request failed")
-        .json()
-        .await
-        .expect("expected JSON from create");
-
+    let created: Value = create_resp.json().await.expect("expected JSON from create");
     let resource_id = created["id"]
         .as_str()
         .expect("id field missing")
@@ -137,26 +119,13 @@ async fn patch_returns_400_when_hash_present_without_content(pool: PgPool) {
         .await
         .expect("PATCH request failed");
 
+    let status = resp.status().as_u16();
+    let body: Value = resp.json().await.expect("expected JSON body");
+
     assert_eq!(
-        resp.status().as_u16(),
-        400,
-        "hash without content must return 400; body: {}",
-        resp.text().await.unwrap_or_default()
+        status, 400,
+        "hash without content must return 400; body: {body}"
     );
-
-    let body: Value = app
-        .client
-        .patch(app.url(&format!("/api/resources/{resource_id}")))
-        .header("Authorization", format!("Bearer {token}"))
-        .json(&json!({ "content_hash": "sha256:abc" }))
-        .send()
-        .await
-        .expect("second PATCH request failed")
-        .json()
-        .await
-        .expect("expected JSON body");
-
-    // Error message must mention content_hash so the caller can diagnose.
     let message = body["error"]["message"].as_str().unwrap_or("");
     assert!(
         message.contains("content_hash"),
