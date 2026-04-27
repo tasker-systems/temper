@@ -1,3 +1,4 @@
+pub mod body_source;
 pub mod config;
 pub mod doctor;
 pub mod doctor_fix;
