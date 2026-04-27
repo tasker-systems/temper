@@ -124,12 +124,36 @@ pub struct ResourceCreateRequest {
 }
 
 /// Request body for updating a resource.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceUpdateRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
+    /// Partial managed_meta — only fields with `Some` apply.
+    /// Untouched fields preserve their stored value. There is no in-band
+    /// signal for "clear this field"; field-clearing is reserved for a
+    /// future PUT endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub managed_meta: Option<ManagedMeta>,
+    /// Partial open_meta — incoming keys win; absent keys preserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_meta: Option<serde_json::Value>,
+    /// New body markdown. Required iff `content_hash` and `chunks_packed`
+    /// are also `Some` (all-or-nothing trio).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    /// SHA-256 hash of `content`. Required iff `content` is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
+    /// Pre-computed chunks (base64-encoded MessagePack). Required iff
+    /// `content` is `Some`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chunks_packed: Option<String>,
 }
 
 /// Chunk used to reconstitute markdown content.
@@ -246,5 +270,55 @@ mod tests {
         assert_eq!(parsed.markdown, "hi");
         assert!(parsed.managed_meta.is_none());
         assert!(parsed.open_meta.is_none());
+    }
+
+    #[test]
+    fn resource_update_request_serde_round_trips_with_all_fields() {
+        use serde_json::json;
+        let req = ResourceUpdateRequest {
+            title: Some("New Title".to_string()),
+            slug: Some("new-slug".to_string()),
+            managed_meta: Some(ManagedMeta {
+                stage: Some("done".to_string()),
+                ..Default::default()
+            }),
+            open_meta: Some(json!({"tags": ["rust"]})),
+            content: Some("# Body\n".to_string()),
+            content_hash: Some("sha256:abc".to_string()),
+            chunks_packed: Some("base64-blob".to_string()),
+        };
+        let serialized = serde_json::to_string(&req).unwrap();
+        let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(parsed.title.as_deref(), Some("New Title"));
+        assert_eq!(
+            parsed
+                .managed_meta
+                .as_ref()
+                .and_then(|m| m.stage.as_deref()),
+            Some("done")
+        );
+        assert_eq!(parsed.content.as_deref(), Some("# Body\n"));
+        assert_eq!(parsed.content_hash.as_deref(), Some("sha256:abc"));
+        assert_eq!(parsed.chunks_packed.as_deref(), Some("base64-blob"));
+    }
+
+    #[test]
+    fn resource_update_request_omits_none_fields_on_serialize() {
+        let req = ResourceUpdateRequest {
+            title: None,
+            slug: None,
+            managed_meta: Some(ManagedMeta {
+                stage: Some("done".to_string()),
+                ..Default::default()
+            }),
+            open_meta: None,
+            content: None,
+            content_hash: None,
+            chunks_packed: None,
+        };
+        let serialized = serde_json::to_string(&req).unwrap();
+        assert!(!serialized.contains("\"title\""));
+        assert!(!serialized.contains("\"content\""));
+        assert!(serialized.contains("\"managed_meta\""));
     }
 }

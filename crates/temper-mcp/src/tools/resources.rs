@@ -455,6 +455,7 @@ pub async fn update_resource(
         let update_req = temper_core::types::resource::ResourceUpdateRequest {
             title: input.title.clone(),
             slug: input.slug.clone(),
+            ..Default::default()
         };
         resource_service::update(pool, profile.id, input.id, update_req)
             .await
