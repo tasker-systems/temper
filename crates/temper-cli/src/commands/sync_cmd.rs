@@ -40,6 +40,15 @@ fn warn_blocked_paths(report: &sync_actions::NormalizeReport) {
 
 /// Run a full sync cycle.
 pub fn run(contexts: &[String], format: &str) -> Result<()> {
+    use temper_core::types::config::VaultState;
+
+    if matches!(VaultState::from_env(), VaultState::Cloud) {
+        return Err(crate::error::TemperError::Project(
+            "cloud mode has no local vault to sync — use 'temper resource create' and 'temper resource update' directly. To sync, switch to local mode."
+                .to_string(),
+        ));
+    }
+
     let fmt = OutputFormat::parse(format);
     let vault_root = crate::config::resolve_vault(None)?;
     let temper_dir = vault_root.join(".temper");
