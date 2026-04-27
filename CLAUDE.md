@@ -27,6 +27,9 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 - `api/mcp.rs` — Vercel runtime adapter for the MCP server (same pattern as axum.rs).
 - `api/auth/`, `api/workflows/` — Vercel serverless endpoints (TypeScript).
 
+### End-to-End Tests (tests/e2e/)
+Standalone test crate (not in `crates/`) that exercises the full stack: spawns a real Axum server, hits a real Postgres test database, and drives flows through the actual `temper-cli` and `temper-client` code paths. Use this layer for tests that span CLI ↔ API ↔ DB or that need real auth (JWT, JWKS fixtures in `tests/e2e/tests/fixtures/`). Test files in `tests/e2e/tests/`, shared harness in `tests/e2e/tests/common/`. Run with `cargo make test-e2e`.
+
 ### Database
 - PostgreSQL 18 with pgvector. Migrations in `migrations/` using sqlx.
 - Dev database: `postgresql://temper:temper@localhost:5437/temper_development`
@@ -49,7 +52,7 @@ cargo make test
 cargo make docker-up
 cargo make test-db
 
-# E2E tests only
+# E2E tests (CLI ↔ API ↔ DB through real Axum + Postgres; lives at tests/e2e/, not crates/)
 cargo make test-e2e
 
 # All tests (Rust + TypeScript + integration)
@@ -96,7 +99,7 @@ bun run check          # svelte-check
 ## Feature Flags
 
 Rust crates use feature flags to gate heavy dependencies:
-- `test-db` — enables database integration tests (temper-api, temper-e2e)
+- `test-db` — enables database integration tests (temper-api, tests/e2e)
 - `test-embed` — enables embedding tests (temper-ingest)
 - `embed` / `extract` — gates ONNX and kreuzberg dependencies (temper-ingest)
 - `web-api` — enables utoipa OpenAPI derives (temper-core)
