@@ -209,6 +209,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     branch,
                     pr,
                     status,
+                    body,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
                         slug: &slug,
@@ -234,6 +235,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         branch: branch.as_deref(),
                         pr: pr.as_deref(),
                         status: status.as_deref(),
+                        body,
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }

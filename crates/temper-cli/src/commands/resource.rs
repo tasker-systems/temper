@@ -1145,10 +1145,181 @@ pub struct UpdateParams<'a> {
     pub pr: Option<&'a str>,
     // Goal-specific fields
     pub status: Option<&'a str>,
+    /// Body source: None (auto-detect stdin), Some("-") (explicit stdin), or Some("@\<path\>")
+    pub body: Option<String>,
+}
+
+/// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
+/// managed-meta-mutating flags were passed.
+#[cfg(feature = "embed")]
+fn build_partial_managed_meta_from_args(
+    params: &UpdateParams<'_>,
+) -> Option<temper_core::types::ManagedMeta> {
+    let any_set = params.stage.is_some()
+        || params.mode.is_some()
+        || params.effort.is_some()
+        || params.goal.is_some()
+        || params.seq.is_some()
+        || params.branch.is_some()
+        || params.pr.is_some()
+        || params.status.is_some();
+    if !any_set {
+        return None;
+    }
+    Some(temper_core::types::ManagedMeta {
+        stage: params.stage.map(String::from),
+        mode: params.mode.map(String::from),
+        effort: params.effort.map(String::from),
+        goal: params.goal.map(String::from),
+        seq: params.seq,
+        branch: params.branch.map(String::from),
+        pr: params.pr.map(String::from),
+        status: params.status.map(String::from),
+        ..Default::default()
+    })
+}
+
+/// Build a partial `open_meta` JSON object from update CLI list flags. Returns
+/// `None` if no open-meta list flags were passed.
+#[cfg(feature = "embed")]
+fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_json::Value> {
+    let mut obj = serde_json::Map::new();
+    if !params.tags.is_empty() {
+        obj.insert("tags".to_string(), serde_json::json!(params.tags));
+    }
+    if !params.aliases.is_empty() {
+        obj.insert("aliases".to_string(), serde_json::json!(params.aliases));
+    }
+    if !params.relates_to.is_empty() {
+        obj.insert(
+            "relates-to".to_string(),
+            serde_json::json!(params.relates_to),
+        );
+    }
+    if !params.references.is_empty() {
+        obj.insert(
+            "references".to_string(),
+            serde_json::json!(params.references),
+        );
+    }
+    if !params.depends_on.is_empty() {
+        obj.insert(
+            "depends-on".to_string(),
+            serde_json::json!(params.depends_on),
+        );
+    }
+    if !params.extends.is_empty() {
+        obj.insert("extends".to_string(), serde_json::json!(params.extends));
+    }
+    if !params.preceded_by.is_empty() {
+        obj.insert(
+            "preceded-by".to_string(),
+            serde_json::json!(params.preceded_by),
+        );
+    }
+    if !params.derived_from.is_empty() {
+        obj.insert(
+            "derived-from".to_string(),
+            serde_json::json!(params.derived_from),
+        );
+    }
+    if obj.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(obj))
+    }
+}
+
+/// Cloud-mode `temper resource update` — no vault file is touched. Resolves
+/// the resource id via the API, builds a partial `ResourceUpdateRequest`
+/// (managed_meta + open_meta + optional body trio), and posts
+/// `PATCH /api/resources/{id}`. Prints `{slug, content_hash}` for the
+/// agent's next show-edit-cat cycle.
+#[cfg(feature = "embed")]
+fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
+    use std::io::IsTerminal;
+
+    // Resolve body source first (sync, doesn't need the runtime).
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    let body_opt = crate::actions::body_source::resolve_body_source(
+        params.body.clone(),
+        stdin_is_tty,
+        std::io::stdin(),
+    )?;
+
+    let (content, content_hash, chunks_packed) = match body_opt {
+        Some(b) => {
+            let chunks = crate::actions::ingest::compute_body_chunks(&b)?;
+            (
+                Some(b),
+                Some(chunks.content_hash),
+                Some(chunks.chunks_packed),
+            )
+        }
+        None => (None, None, None),
+    };
+
+    let managed_meta = build_partial_managed_meta_from_args(params);
+    let open_meta = build_partial_open_meta_from_args(params);
+
+    let req = temper_core::types::ResourceUpdateRequest {
+        title: params.title.map(String::from),
+        slug: None,
+        managed_meta,
+        open_meta,
+        content,
+        content_hash,
+        chunks_packed,
+    };
+
+    // Compute owned values before the async block so the closure is 'static.
+    // In cloud mode, slug→id resolution goes through the API's by-uri lookup;
+    // we only need owner + context strings to form the URI.
+    let ctx = require_context(config, params.context)?.to_string();
+    let owner = config.owner_for_context(&ctx).to_string();
+    let doc_type = current_type.to_string();
+    let slug = params.slug.to_string();
+
+    let updated = crate::actions::runtime::with_client(move |client| {
+        let req = req.clone();
+        let owner = owner.clone();
+        let ctx = ctx.clone();
+        let doc_type = doc_type.clone();
+        let slug = slug.clone();
+        Box::pin(async move {
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner, &ctx, &doc_type, &slug)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            client
+                .resources()
+                .update(*row.id, &req)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let slug_display = updated
+        .slug
+        .as_deref()
+        .unwrap_or(&updated.id.to_string())
+        .to_string();
+    let hash_display = updated.body_hash.as_deref().unwrap_or("").to_string();
+    println!(
+        "{}",
+        serde_json::json!({
+            "slug": slug_display,
+            "content_hash": hash_display,
+        })
+    );
+    Ok(())
 }
 
 /// Update a resource's frontmatter fields.
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
+    use temper_core::types::config::VaultState;
+
     // Resolve current type from --type or --type-from (one is required)
     let current_type = params
         .doc_type
@@ -1159,6 +1330,16 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     if let Some(tt) = params.type_to {
         validate_doc_type(tt)?;
     }
+
+    let vault_state = VaultState::from_env();
+
+    // Cloud-mode: skip vault file edits; build ResourceUpdateRequest and PATCH /api/resources/{id}.
+    #[cfg(feature = "embed")]
+    if matches!(vault_state, VaultState::Cloud) {
+        return cloud_mode_update(config, params, current_type);
+    }
+    #[cfg(not(feature = "embed"))]
+    let _ = vault_state;
 
     // Find the resource file
     let (path, ctx) = find_resource_file(config, current_type, params.slug, params.context)?;

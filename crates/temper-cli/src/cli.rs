@@ -358,6 +358,9 @@ pub enum ResourceAction {
         /// Goal status (active, completed, paused, cancelled)
         #[arg(long)]
         status: Option<String>,
+        /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
+        #[arg(long)]
+        body: Option<String>,
     },
 }
 
