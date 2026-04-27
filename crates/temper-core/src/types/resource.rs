@@ -290,6 +290,7 @@ mod tests {
         let serialized = serde_json::to_string(&req).unwrap();
         let parsed: ResourceUpdateRequest = serde_json::from_str(&serialized).unwrap();
         assert_eq!(parsed.title.as_deref(), Some("New Title"));
+        assert_eq!(parsed.slug.as_deref(), Some("new-slug"));
         assert_eq!(
             parsed
                 .managed_meta
@@ -297,6 +298,7 @@ mod tests {
                 .and_then(|m| m.stage.as_deref()),
             Some("done")
         );
+        assert_eq!(parsed.open_meta, Some(json!({"tags": ["rust"]})));
         assert_eq!(parsed.content.as_deref(), Some("# Body\n"));
         assert_eq!(parsed.content_hash.as_deref(), Some("sha256:abc"));
         assert_eq!(parsed.chunks_packed.as_deref(), Some("base64-blob"));
