@@ -12,23 +12,43 @@
 //! here against an in-process Axum server backed by a real Postgres test
 //! database.
 //!
-//! Auth wiring uses env vars rather than `TEMPER_AUTH_PATH` because
-//! `temper_cli::config::load_device_id()` (called by
-//! `actions::sync::publish_local_write` via `runtime::require_device_id`)
-//! reads `auth_json_path()` directly and does not honor `TEMPER_AUTH_PATH`.
-//! That inconsistency between the disk-store load path and the device_id
-//! load path is a separate issue; the env-var path is uniform across both.
+//! Auth wiring uses `TEMPER_AUTH_PATH` to point both `DiskTokenStore` and
+//! the device_id loader (`load_auth` → `resolve_auth_path()`) at a per-
+//! test auth.json — exercising the unified resolver across every reader.
 //!
 //! Env vars set per test:
 //!   - `TEMPER_API_URL` — overrides `config.cloud.api_url`
-//!   - `TEMPER_TOKEN` / `TEMPER_DEVICE_ID` — env-based auth (publish path)
-//!   - `TEMPER_AUTH_PATH` — points at non-existent file (no-token path)
+//!   - `TEMPER_AUTH_PATH` — disk auth file written with the test JWT
+//!     (publish path) or a non-existent file (no-token path)
 //!   - `TEMPER_GLOBAL_CONFIG` — points at non-existent path so config
 //!     defaults take effect (no developer config file leakage)
 
 mod common;
 
+use chrono::{Duration, Utc};
+use temper_client::auth::{Provider, StoredAuth};
 use temper_core::frontmatter::Frontmatter;
+
+/// Write a `StoredAuth` JSON to `path` so `DiskTokenStore::at(path)` and the
+/// uniform path resolver (used by `load_device_id`) find real credentials.
+/// Mirrors the shape `temper auth login` produces.
+fn write_auth_json(path: &std::path::Path, jwt: &str) {
+    let auth = StoredAuth {
+        provider: Provider::Auth0 {
+            domain: "test".to_string(),
+        },
+        access_token: jwt.to_string().into(),
+        refresh_token: None,
+        expires_at: Utc::now() + Duration::hours(1),
+        profile_id: None,
+        device_id: Some("e2e-publish-tail-device".to_string()),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).expect("create auth dir");
+    }
+    let bytes = serde_json::to_vec(&auth).expect("serialize StoredAuth");
+    std::fs::write(path, bytes).expect("write auth.json");
+}
 
 /// CLI publish-tail end-to-end: `actions::goal::create` writes a goal
 /// locally, then the publish tail (`publish_local_write_best_effort`)
@@ -52,6 +72,12 @@ async fn local_mode_create_publishes_to_server(pool: sqlx::PgPool) {
         .await
         .expect("create myapp context");
 
+    // Disk auth at a tmp path inside the test vault dir. Both the disk
+    // token store (via TEMPER_AUTH_PATH) and `load_device_id` (via the
+    // unified resolver) read from this file — no env-var auth needed.
+    let auth_path = app.vault_dir.path().join(".temper/auth.json");
+    write_auth_json(&auth_path, &app.token);
+
     // Non-existent config path so load_cloud_config() returns defaults
     // (no developer ~/.config/temper/config.toml leakage).
     let global_config = app.vault_dir.path().join("no-such-config.toml");
@@ -64,17 +90,16 @@ async fn local_mode_create_publishes_to_server(pool: sqlx::PgPool) {
     // within a runtime".
     let cli_config = app.cli_config.clone();
     let api_url = format!("http://{}", app.addr);
-    let token = app.token.clone();
-    let device_id = "e2e-publish-tail-device".to_string();
+    let auth_path_string = auth_path.to_str().unwrap().to_string();
     let global_config_string = global_config.to_str().unwrap().to_string();
     let slug: String = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(
             [
                 ("TEMPER_API_URL", Some(api_url.as_str())),
-                ("TEMPER_TOKEN", Some(token.as_str())),
-                ("TEMPER_DEVICE_ID", Some(device_id.as_str())),
+                ("TEMPER_AUTH_PATH", Some(auth_path_string.as_str())),
                 ("TEMPER_GLOBAL_CONFIG", Some(global_config_string.as_str())),
                 ("TEMPER_VAULT_STATE", Some("local")),
+                ("TEMPER_TOKEN", None),
             ],
             || {
                 temper_cli::actions::goal::create(&cli_config, "myapp", "publish-tail-goal", None)

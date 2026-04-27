@@ -44,14 +44,17 @@ pub struct DiskTokenStore {
 }
 
 impl DiskTokenStore {
-    /// Use `~/.config/temper/auth.json`.
+    /// Use the resolved auth path — `TEMPER_AUTH_PATH` env, then
+    /// `config.auth.path`, then `~/.config/temper/auth.json`. See
+    /// [`resolve_auth_path`] for the full precedence.
     pub fn default_path() -> Self {
         Self {
-            path: auth_json_path(),
+            path: resolve_auth_path(),
         }
     }
 
-    /// Use an explicit path (tests, non-default installs).
+    /// Use an explicit path (tests, non-default installs, or callers that
+    /// already resolved the path via [`crate::config::auth_path`]).
     pub fn at(path: std::path::PathBuf) -> Self {
         Self { path }
     }
@@ -337,9 +340,61 @@ pub fn auth_dir() -> PathBuf {
         .join("temper")
 }
 
-/// Returns `~/.config/temper/auth.json`.
+/// Returns the bare default `~/.config/temper/auth.json` path.
+///
+/// Most callers should use [`resolve_auth_path`] (or `config::auth_path` when
+/// they have a [`temper_core::types::config::TemperConfig`] in scope) — those
+/// honor the full `TEMPER_AUTH_PATH` env / `auth.path` config / default
+/// precedence. This function exposes only the lowest-precedence fallback for
+/// callers that intentionally want the home-relative default.
 pub fn auth_json_path() -> PathBuf {
     auth_dir().join("auth.json")
+}
+
+/// Resolve the on-disk auth file path applying full precedence.
+///
+/// Single source of truth for "which file does `auth.json` live in":
+/// 1. `TEMPER_AUTH_PATH` env var (when set and non-empty)
+/// 2. `auth.path` field in the loaded `TemperConfig` (tilde-expanded)
+/// 3. Default: [`auth_json_path`]
+///
+/// `config` is `Option` because some callers already have a loaded
+/// [`temper_core::types::config::TemperConfig`] (preferred — passes through
+/// without a re-read), while the no-arg convenience layer (`load_auth`,
+/// `DiskTokenStore::default_path`) passes `None` and this function loads
+/// config internally.
+///
+/// The env-var branch is checked **first** even when `config` is `Some`,
+/// so per-test env overrides win regardless of who supplies the config.
+pub fn auth_path_with(config: Option<&temper_core::types::config::TemperConfig>) -> PathBuf {
+    // 1. Env override — wins regardless of config presence.
+    if let Ok(p) = std::env::var(temper_core::types::config::TEMPER_AUTH_PATH_ENV) {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
+    // 2. config.auth.path: use caller-provided config if available, else
+    // load (and on parse error, fall through to default rather than panic).
+    let from_config: Option<String> = match config {
+        Some(c) => c.auth.path.clone(),
+        None => temper_core::types::config::load_config()
+            .ok()
+            .and_then(|c| c.auth.path),
+    };
+    if let Some(p) = from_config {
+        if !p.is_empty() {
+            return temper_core::types::config::expand_tilde(&p);
+        }
+    }
+    // 3. Default.
+    auth_json_path()
+}
+
+/// No-arg wrapper around [`auth_path_with`] — used by [`load_auth`] and
+/// [`DiskTokenStore::default_path`] so the no-arg convenience layer honors
+/// the same precedence as [`crate::config::auth_path`].
+pub fn resolve_auth_path() -> PathBuf {
+    auth_path_with(None)
 }
 
 // ---------------------------------------------------------------------------
@@ -387,7 +442,12 @@ pub fn clear_auth_at(path: &Path) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 /// Load stored auth, preferring `TEMPER_TOKEN` when set, falling back to
-/// `~/.config/temper/auth.json`.
+/// the resolved on-disk auth file.
+///
+/// The disk path is resolved via [`resolve_auth_path`] so this function
+/// honors the same `TEMPER_AUTH_PATH` env / `auth.path` config precedence
+/// as [`DiskTokenStore::default_path`] and [`crate::config::auth_path`].
+/// All auth readers see the same path.
 ///
 /// Read-only; safe in cloud mode. Writers must go through [`TokenStore`] so
 /// `MemoryTokenStore` sessions cannot accidentally persist to disk — see
@@ -402,7 +462,7 @@ pub fn load_auth() -> Result<Option<StoredAuth>> {
     if let Some(stored) = stored_auth_from_env()? {
         return Ok(Some(stored));
     }
-    load_auth_from(&auth_json_path())
+    load_auth_from(&resolve_auth_path())
 }
 
 /// Return a lightweight status struct (no token values exposed).
@@ -755,6 +815,124 @@ mod tests {
         let path = dir.path().join("no_such_file.json");
         // Must not return an error.
         clear_auth_at(&path).unwrap();
+    }
+
+    // --- auth_path_with: the unified resolver ---
+    //
+    // Mirrors the api_url precedence pattern. These tests serialize on
+    // ENV_LOCK with the rest of the env-mutating tests in this module to
+    // avoid races over TEMPER_AUTH_PATH / TEMPER_GLOBAL_CONFIG.
+
+    #[test]
+    fn auth_path_with_env_var_takes_priority_over_config() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
+        let prev_global = std::env::var("TEMPER_GLOBAL_CONFIG").ok();
+
+        let mut config = temper_core::types::config::TemperConfig::default();
+        config.auth.path = Some("/tmp/from-config/auth.json".to_string());
+        std::env::set_var("TEMPER_AUTH_PATH", "/tmp/from-env/auth.json");
+
+        let path = auth_path_with(Some(&config));
+        assert_eq!(path, std::path::PathBuf::from("/tmp/from-env/auth.json"));
+
+        // Restore.
+        match prev_env {
+            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
+            None => std::env::remove_var("TEMPER_AUTH_PATH"),
+        }
+        match prev_global {
+            Some(v) => std::env::set_var("TEMPER_GLOBAL_CONFIG", v),
+            None => std::env::remove_var("TEMPER_GLOBAL_CONFIG"),
+        }
+    }
+
+    #[test]
+    fn auth_path_with_uses_config_field_when_env_unset() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
+        std::env::remove_var("TEMPER_AUTH_PATH");
+
+        let mut config = temper_core::types::config::TemperConfig::default();
+        config.auth.path = Some("/tmp/custom/auth.json".to_string());
+        let path = auth_path_with(Some(&config));
+        assert_eq!(path, std::path::PathBuf::from("/tmp/custom/auth.json"));
+
+        match prev_env {
+            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
+            None => std::env::remove_var("TEMPER_AUTH_PATH"),
+        }
+    }
+
+    #[test]
+    fn auth_path_with_falls_back_to_default_when_neither_set() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
+        std::env::remove_var("TEMPER_AUTH_PATH");
+
+        let config = temper_core::types::config::TemperConfig::default();
+        let path = auth_path_with(Some(&config));
+        assert_eq!(path, auth_json_path());
+
+        match prev_env {
+            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
+            None => std::env::remove_var("TEMPER_AUTH_PATH"),
+        }
+    }
+
+    #[test]
+    fn auth_path_with_loads_config_when_none_passed() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
+        let prev_global = std::env::var("TEMPER_GLOBAL_CONFIG").ok();
+        std::env::remove_var("TEMPER_AUTH_PATH");
+
+        // Point TEMPER_GLOBAL_CONFIG at a config.toml that sets auth.path,
+        // then call auth_path_with(None) so the resolver loads config itself.
+        let dir = TempDir::new().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        std::fs::write(
+            &cfg_path,
+            "[vault]\npath = \"~/vault\"\n[auth]\npath = \"/tmp/loaded-from-toml/auth.json\"\n",
+        )
+        .unwrap();
+        std::env::set_var("TEMPER_GLOBAL_CONFIG", &cfg_path);
+
+        let path = auth_path_with(None);
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/tmp/loaded-from-toml/auth.json")
+        );
+
+        match prev_env {
+            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
+            None => std::env::remove_var("TEMPER_AUTH_PATH"),
+        }
+        match prev_global {
+            Some(v) => std::env::set_var("TEMPER_GLOBAL_CONFIG", v),
+            None => std::env::remove_var("TEMPER_GLOBAL_CONFIG"),
+        }
+    }
+
+    #[test]
+    fn resolve_auth_path_honors_env_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
+        std::env::set_var("TEMPER_AUTH_PATH", "/tmp/resolve-test/auth.json");
+
+        // resolve_auth_path is the no-arg path used by load_auth and
+        // DiskTokenStore::default_path — must honor the env var even
+        // without a TemperConfig in scope.
+        let path = resolve_auth_path();
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/tmp/resolve-test/auth.json")
+        );
+
+        match prev_env {
+            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
+            None => std::env::remove_var("TEMPER_AUTH_PATH"),
+        }
     }
 
     // --- auth_status when no file ---

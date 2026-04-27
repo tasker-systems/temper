@@ -6,7 +6,7 @@
 //! adds client-specific conveniences (API URL resolution, OAuth config, and
 //! building a fully-configured client).
 
-use temper_core::types::config::{expand_tilde, AuthProvider, TemperConfig, TEMPER_AUTH_PATH_ENV};
+use temper_core::types::config::{AuthProvider, TemperConfig};
 
 // ---------------------------------------------------------------------------
 // Load / resolve  (delegated to temper-core)
@@ -32,25 +32,19 @@ pub fn api_url(config: &TemperConfig) -> String {
 
 /// Resolve the on-disk auth file path for this session.
 ///
+/// Thin wrapper over [`crate::auth::auth_path_with`] (the single source of
+/// truth for auth-path precedence) — passes the caller-provided config so
+/// the `auth.path` field is honored without an internal re-load.
+///
 /// Precedence (highest to lowest):
 /// 1. `TEMPER_AUTH_PATH` env var
 /// 2. `auth.path` field in `config.toml` (tilde-expanded)
-/// 3. Default: `~/.config/temper/auth.json` via [`crate::auth::auth_json_path`]
+/// 3. Default: `~/.config/temper/auth.json`
 ///
 /// Cloud sessions never call this — they read tokens from `TEMPER_TOKEN`
 /// via [`crate::auth::MemoryTokenStore`] and never touch disk.
 pub fn auth_path(config: &TemperConfig) -> std::path::PathBuf {
-    if let Ok(p) = std::env::var(TEMPER_AUTH_PATH_ENV) {
-        if !p.is_empty() {
-            return std::path::PathBuf::from(p);
-        }
-    }
-    if let Some(p) = &config.auth.path {
-        if !p.is_empty() {
-            return expand_tilde(p);
-        }
-    }
-    crate::auth::auth_json_path()
+    crate::auth::auth_path_with(Some(config))
 }
 
 /// Build an [`OAuthConfig`](crate::login::OAuthConfig) from the active provider.
