@@ -5,6 +5,7 @@ use chrono::Local;
 use serde::Serialize;
 use temper_core::vault::Vault;
 
+use crate::actions::frontmatter::{build_managed_meta_for_create, NewResourceArgs};
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::Result;
@@ -92,10 +93,21 @@ pub fn save(
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
     let mut fm = temper_core::frontmatter::Frontmatter::try_from(rendered.as_str())?;
-    fm.set_managed_field(
-        "temper-context",
-        serde_json::Value::String(context_name.clone()),
-    );
+    let meta = build_managed_meta_for_create(NewResourceArgs {
+        doc_type: "session",
+        context: &context_name,
+        title: note_title,
+        mode: None,
+        effort: None,
+        goal: None,
+        stage: None,
+        seq: None,
+        status: None,
+        provenance: None,
+        llm_model: None,
+        llm_run: None,
+    });
+    fm.set_managed_meta(&meta);
     if let Some(body) = stdin_content {
         fm.set_body(body.to_string());
     }
