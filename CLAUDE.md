@@ -125,6 +125,7 @@ These rules apply to all code in this repository. Subagents and implementation p
 - **Auth before writes** — Authorization checks go before any mutations. Never write-then-check.
 - **Profile scoping** — All data queries scope through `resources_visible_to`, `can_modify_resource`, or equivalent. Even async workflows verify the profile can access the resource before writing.
 - **Pino structured logging** — TypeScript uses pino (`packages/temper-cloud/src/logger.ts`) with contextual field objects. No `console.log`.
+- **Schema-required defaults at create/update, not later** — Doc-type schemas in `temper-core/types/schemas/` declare required frontmatter fields. Resource creation paths (templated file write, cloud-mode ingest, MCP create) and update paths must populate every schema-required field at write time, not rely on a downstream pass to backfill. Use `apply_doc_type_defaults` and `Frontmatter::set_managed_meta` (which honors the typed `ManagedMeta` shape) to keep this consistent. Pre-existing files without these fields stay valid until their next round-trip; new writes never produce them.
 
 ## SQL Query Checking
 

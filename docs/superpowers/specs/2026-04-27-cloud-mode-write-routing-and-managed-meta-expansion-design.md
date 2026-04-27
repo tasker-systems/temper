@@ -107,7 +107,9 @@ Today, local-mode `temper resource create --type session` and the other per-doct
 pub fn build_managed_meta_for_create(args: NewResourceArgs<'_>) -> ManagedMeta;
 ```
 
-Each per-doctype creator (`actions::session::create`, `actions::task::create`, `actions::goal::create`, `actions::research::create`, `actions::concept::create`, `actions::decision::create`) is migrated to call this builder. Local-mode then serializes the returned struct to YAML for the file. Cloud-mode passes the same struct directly into `build_ingest_payload`. After this lands, exactly one function knows what a session's, task's, goal's, etc., initial `managed_meta` looks like.
+Each per-doctype creator is migrated to call this builder where the existing flow already canonicalizes through `Frontmatter::write_to` (session, research). For doctypes whose creators bypass `Frontmatter` and write raw template strings via `vault::write_note` (task, goal, concept, decision), the builder is **not** wired into the local file write — instead, Task 11 (cloud create) calls the builder directly to construct the `ManagedMeta` for the `IngestPayload`. Local-mode behavior for those doctypes is unchanged; cloud and local converge at the wire-payload level via `build_ingest_payload`. The `Frontmatter::set_managed_meta(&ManagedMeta)` bridge method is added to support the migrated doctypes and any future migration of the templated-string doctypes.
+
+**Schema-defaults side effect (intentional)**: under the migrated path (session, research), `set_managed_meta` writes typed fields the existing template omitted but the doc-type schema requires — most visibly, `title` is now written on session frontmatter where it previously was not. This brings new files into compliance with `base.schema.json` and matches the `apply_doc_type_defaults` pattern temper doctor uses elsewhere. Existing vault files without these fields still parse and continue to work; they pick up the schema-required defaults the next time they round-trip through any update path. This is a deliberate change, not a regression — the regression test in Task 10 pins the new (schema-correct) output rather than the old (incomplete) one.
 
 ### `temper resource create` — cloud branch
 
@@ -184,7 +186,7 @@ A new file `tests/e2e/tests/cloud_writes_test.rs`, modeled on the existing `publ
 | `cloud_update_chunk_dedupe_skips_unchanged` | Send body where `content_hash` matches stored — server short-circuits, no chunk insert/rewire. Verified via `kb_chunks` row-count assertion before/after. |
 | `cloud_sync_run_redirects_with_message` | `temper sync run` under cloud mode returns the exact error string. |
 | `cloud_list_returns_remote_only_resources` | Cloud `temper list` returns server rows including resources never pulled to a vault — already shipped under Session A; this is a regression-guard reaffirmation. |
-| `local_mode_create_unchanged_after_helper_refactor` | Existing local-mode publish-tail test re-run after the helper consolidation lands, asserting bit-for-bit identical wire payload. Safety net for the `build_managed_meta_for_create` extraction. |
+| `local_mode_create_unchanged_after_helper_refactor` | Existing local-mode publish-tail test re-run after the helper consolidation lands, pinning the post-refactor wire payload. For task/goal/concept/decision doctypes (templated-string write path) the wire is bit-for-bit unchanged. For session/research (migrated to `set_managed_meta`) the wire picks up schema-required fields the template previously omitted (e.g. `title` on session) — see the schema-defaults note above. |
 
 ## Skill & Docs Guidance
 
