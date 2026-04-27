@@ -107,6 +107,7 @@ async fn resource_update(pool: sqlx::PgPool) {
             &ResourceUpdateRequest {
                 title: Some("Updated Title".to_string()),
                 slug: None,
+                ..Default::default()
             },
         )
         .await
