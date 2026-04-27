@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::ingest_service::insert_event_and_audit;
+use temper_core::hash::{compute_managed_hash, compute_open_hash};
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::managed_meta::ManagedMeta;
 
 pub use temper_core::types::resource::{
     ContentChunk, ContentResponse, ResourceCreateRequest, ResourceFacets, ResourceListParams,
@@ -498,6 +500,14 @@ pub async fn create(
 }
 
 /// Update mutable fields on a resource. Requires `can_modify_resource()` to return true.
+///
+/// Performs a partial merge for `managed_meta` and `open_meta`:
+/// - Typed `managed_meta` fields: `Some` incoming value overwrites stored; `None` preserves.
+/// - `managed_meta.extra` bucket: incoming keys are merged in (incoming wins per-key).
+/// - `open_meta` (JSON object): incoming keys are merged in (incoming wins per-key).
+///
+/// `managed_hash` and `open_hash` are recomputed whenever their respective
+/// metadata changes.
 pub async fn update(
     pool: &PgPool,
     profile_id: Uuid,
@@ -517,17 +527,18 @@ pub async fn update(
         return Err(ApiError::Forbidden);
     }
 
-    let current = get_visible(pool, profile_id, resource_id).await?;
+    let mut tx = pool.begin().await?;
 
+    // 1. Update title/slug on kb_resources (existing behavior).
+    let current = get_visible(pool, profile_id, resource_id).await?;
     let new_title = req.title.as_deref().unwrap_or(&current.title);
     let new_slug = req.slug.as_deref().or(current.slug.as_deref());
-
     sqlx::query!(
         r#"
         UPDATE kb_resources
-           SET title    = $1,
-               slug     = $2,
-               updated  = now()
+           SET title   = $1,
+               slug    = $2,
+               updated = now()
          WHERE id = $3
            AND is_active = true
         "#,
@@ -535,10 +546,139 @@ pub async fn update(
         new_slug,
         resource_id,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
+    // 2. Merge managed_meta + open_meta into kb_resource_manifests.
+    if req.managed_meta.is_some() || req.open_meta.is_some() {
+        let stored = sqlx::query!(
+            r#"SELECT managed_meta as "managed_meta: serde_json::Value",
+                      open_meta    as "open_meta: serde_json::Value"
+                 FROM kb_resource_manifests
+                WHERE resource_id = $1"#,
+            resource_id,
+        )
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        let (stored_managed_json, stored_open_json) = match stored {
+            Some(row) => (row.managed_meta, row.open_meta),
+            None => (
+                serde_json::Value::Object(Default::default()),
+                serde_json::Value::Object(Default::default()),
+            ),
+        };
+
+        let mut merged_managed: ManagedMeta =
+            serde_json::from_value(stored_managed_json).unwrap_or_default();
+        if let Some(incoming) = req.managed_meta {
+            apply_managed_meta_partial(&mut merged_managed, incoming);
+        }
+
+        let mut merged_open = stored_open_json;
+        if let Some(incoming_open) = req.open_meta {
+            apply_open_meta_partial(&mut merged_open, incoming_open);
+        }
+
+        let managed_value = serde_json::to_value(&merged_managed)?;
+        let managed_hash = compute_managed_hash(&current.doc_type_name, &managed_value);
+        let open_hash = compute_open_hash(&merged_open);
+
+        sqlx::query!(
+            r#"INSERT INTO kb_resource_manifests
+                   (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)
+               VALUES ($5, '', $1, $3, $2, $4, now())
+               ON CONFLICT (resource_id) DO UPDATE
+                   SET managed_meta = $1, managed_hash = $2,
+                       open_meta    = $3, open_hash    = $4,
+                       updated      = now()"#,
+            managed_value,
+            managed_hash,
+            merged_open,
+            open_hash,
+            resource_id,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
     get_visible(pool, profile_id, resource_id).await
+}
+
+/// Overlay `Some` fields from `incoming` onto `target`. `None` fields preserve target.
+/// The `extra` bucket merges by key — incoming keys win.
+fn apply_managed_meta_partial(target: &mut ManagedMeta, incoming: ManagedMeta) {
+    if incoming.doc_type.is_some() {
+        target.doc_type = incoming.doc_type;
+    }
+    if incoming.context.is_some() {
+        target.context = incoming.context;
+    }
+    if incoming.updated.is_some() {
+        target.updated = incoming.updated;
+    }
+    if incoming.source.is_some() {
+        target.source = incoming.source;
+    }
+    if incoming.stage.is_some() {
+        target.stage = incoming.stage;
+    }
+    if incoming.mode.is_some() {
+        target.mode = incoming.mode;
+    }
+    if incoming.effort.is_some() {
+        target.effort = incoming.effort;
+    }
+    if incoming.goal.is_some() {
+        target.goal = incoming.goal;
+    }
+    if incoming.seq.is_some() {
+        target.seq = incoming.seq;
+    }
+    if incoming.branch.is_some() {
+        target.branch = incoming.branch;
+    }
+    if incoming.pr.is_some() {
+        target.pr = incoming.pr;
+    }
+    if incoming.status.is_some() {
+        target.status = incoming.status;
+    }
+    if incoming.provenance.is_some() {
+        target.provenance = incoming.provenance;
+    }
+    if incoming.llm_model.is_some() {
+        target.llm_model = incoming.llm_model;
+    }
+    if incoming.llm_run.is_some() {
+        target.llm_run = incoming.llm_run;
+    }
+    if incoming.title.is_some() {
+        target.title = incoming.title;
+    }
+    if incoming.slug.is_some() {
+        target.slug = incoming.slug;
+    }
+    for (k, v) in incoming.extra {
+        target.extra.insert(k, v);
+    }
+}
+
+/// Merge incoming JSON object keys into `target`. Object types only.
+///
+/// For each key in `incoming`, it overwrites the corresponding key in
+/// `target`. Keys absent from `incoming` are untouched. If either side
+/// is not a JSON object, `incoming` replaces `target` entirely.
+fn apply_open_meta_partial(target: &mut serde_json::Value, incoming: serde_json::Value) {
+    if let (Some(target_obj), Some(incoming_obj)) = (target.as_object_mut(), incoming.as_object()) {
+        for (k, v) in incoming_obj {
+            target_obj.insert(k.clone(), v.clone());
+        }
+    } else {
+        // Either side is not an object — incoming replaces target (best-effort).
+        *target = incoming;
+    }
 }
 
 /// Soft-delete a resource. Requires `can_modify_resource()` to return true.
