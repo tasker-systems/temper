@@ -233,7 +233,15 @@ fn run_single_auto_file(
         }
     }
 
-    let payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, Some(metadata))?;
+    let payload = ingest::build_ingest_payload(
+        body,
+        &title,
+        &context,
+        &doc_type,
+        Some(metadata),
+        None,
+        None,
+    )?;
 
     let resource = rt.block_on(async {
         client
@@ -883,7 +891,15 @@ async fn add_single_auto_file(
         }
     }
 
-    let payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, Some(metadata))?;
+    let payload = ingest::build_ingest_payload(
+        body,
+        &title,
+        &context,
+        &doc_type,
+        Some(metadata),
+        None,
+        None,
+    )?;
 
     let resource = client
         .ingest()

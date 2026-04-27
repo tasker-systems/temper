@@ -153,10 +153,17 @@ pub fn build_ingest_payload(
     context: &str,
     doc_type: &str,
     metadata: Option<serde_json::Value>,
+    managed_meta: Option<temper_core::types::ManagedMeta>,
+    open_meta: Option<serde_json::Value>,
 ) -> Result<temper_core::types::IngestPayload> {
     let slug = slug_from_title(title);
     let origin_uri = build_uri(context, doc_type, &slug);
     let body = compute_body_chunks(content)?;
+
+    let managed_meta_value = managed_meta
+        .map(|m| serde_json::to_value(m))
+        .transpose()
+        .map_err(|e| TemperError::Extraction(format!("managed_meta serialization failed: {e}")))?;
 
     Ok(temper_core::types::IngestPayload {
         title: title.to_owned(),
@@ -167,8 +174,8 @@ pub fn build_ingest_payload(
         slug,
         content: content.to_owned(),
         metadata,
-        managed_meta: None,
-        open_meta: None,
+        managed_meta: managed_meta_value,
+        open_meta,
         chunks_packed: Some(body.chunks_packed),
     })
 }
@@ -313,6 +320,8 @@ pub async fn ingest_file(
         context,
         doc_type,
         Some(metadata),
+        None,
+        None,
     )?;
 
     let resource = client
@@ -354,6 +363,8 @@ pub async fn ingest_url(
         context,
         doc_type,
         Some(metadata),
+        None,
+        None,
     )?;
     // Override origin_uri with the original URL
     payload.origin_uri = url.to_string();
@@ -1338,6 +1349,65 @@ created: 2026-03-23
         assert!(
             id_pos < stage_pos.min(effort_pos).min(relates_pos),
             "identity fields must precede data fields. Got:\n{serialized}"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "embed")]
+    fn build_ingest_payload_attaches_managed_meta_when_some() {
+        let mm = temper_core::types::ManagedMeta {
+            stage: Some("backlog".to_string()),
+            ..Default::default()
+        };
+        let payload = build_ingest_payload(
+            "# Test\nBody",
+            "Test Title",
+            "temper",
+            "task",
+            None,
+            Some(mm.clone()),
+            None,
+        )
+        .expect("payload");
+        // managed_meta is serialized to serde_json::Value; stage is renamed to
+        // "temper-stage" by the ManagedMeta serde attribute.
+        assert_eq!(
+            payload
+                .managed_meta
+                .as_ref()
+                .and_then(|m| m.get("temper-stage"))
+                .and_then(|v| v.as_str()),
+            Some("backlog")
+        );
+        assert!(payload.open_meta.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "embed")]
+    fn build_ingest_payload_attaches_open_meta_when_some() {
+        let om = serde_json::json!({"tags": ["rust"]});
+        let payload = build_ingest_payload("# X", "T", "ctx", "session", None, None, Some(om))
+            .expect("payload");
+        assert_eq!(
+            payload.open_meta.as_ref().and_then(|o| o.get("tags")),
+            Some(&serde_json::json!(["rust"]))
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "embed")]
+    fn build_ingest_payload_uses_compute_body_chunks() {
+        let content = "# Test\n\nBody.";
+        let payload = build_ingest_payload(content, "Title", "ctx", "session", None, None, None)
+            .expect("payload");
+        let direct = compute_body_chunks(content).expect("direct compute");
+        assert_eq!(
+            payload.content_hash.as_deref(),
+            Some(direct.content_hash.as_str())
+        );
+        assert_eq!(
+            payload.chunks_packed.as_deref(),
+            Some(direct.chunks_packed.as_str())
         );
     }
 
