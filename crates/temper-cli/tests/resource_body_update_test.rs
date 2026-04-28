@@ -30,14 +30,8 @@ fn write_body_file(dir: &TempDir, name: &str, content: &str) -> std::path::PathB
 }
 
 fn read_body(file: &std::path::Path) -> String {
-    let raw = std::fs::read_to_string(file).unwrap();
-    // Strip frontmatter: everything after the second "---\n".
-    let after_first = raw.split_once("---\n").map(|(_, r)| r).unwrap_or(&raw);
-    let after_second = after_first
-        .split_once("---\n")
-        .map(|(_, r)| r)
-        .unwrap_or(after_first);
-    after_second.to_string()
+    let fm = temper_core::frontmatter::Frontmatter::parse_file(file).unwrap();
+    fm.body().to_string()
 }
 
 #[test]
