@@ -1,6 +1,6 @@
 [package]
 name = "temper-cli"
-version = "0.1.2"
+version = "0.1.3"
 edition = "2021"
 description = "Developer workflow tool for agent-assisted development"
 
