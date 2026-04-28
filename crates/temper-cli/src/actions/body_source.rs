@@ -21,6 +21,11 @@ pub fn resolve_body_source<R: Read>(
             let path = &s[1..];
             let content = std::fs::read_to_string(path)
                 .map_err(|e| TemperError::Vault(format!("read --body @{path}: {e}")))?;
+            if content.is_empty() {
+                return Err(TemperError::Project(format!(
+                    "--body @{path} resolved to empty content; refusing to write empty body"
+                )));
+            }
             Ok(Some(content))
         }
         Some("-") => {
@@ -33,6 +38,11 @@ pub fn resolve_body_source<R: Read>(
             stdin_reader
                 .read_to_string(&mut buf)
                 .map_err(|e| TemperError::Vault(format!("read stdin: {e}")))?;
+            if buf.is_empty() {
+                return Err(TemperError::Project(
+                    "--body - resolved to empty stdin; refusing to write empty body".to_string(),
+                ));
+            }
             Ok(Some(buf))
         }
         Some(other) => Err(TemperError::Project(format!(
@@ -127,6 +137,38 @@ mod tests {
         assert!(
             result.is_none(),
             "empty implicit stdin must be treated as no-body"
+        );
+    }
+
+    #[test]
+    fn errors_when_at_path_file_is_empty() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), "").unwrap();
+        let result = resolve_body_source(
+            Some(format!("@{}", temp.path().display())),
+            /*stdin_is_tty:*/ true,
+            Cursor::new(b""),
+        );
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("empty"),
+            "expected empty-body error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn errors_when_explicit_dash_stdin_is_empty() {
+        let result = resolve_body_source(
+            Some("-".to_string()),
+            /*stdin_is_tty:*/ false,
+            Cursor::new(b""),
+        );
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("empty"),
+            "expected empty-body error, got: {msg}"
         );
     }
 }
