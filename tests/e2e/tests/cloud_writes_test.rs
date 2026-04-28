@@ -894,7 +894,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: sync run returns cloud-mode error message
+// Test 7: sync run returns cloud-mode error message
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper sync run` returns the exact redirect error string instead of
@@ -938,7 +938,7 @@ async fn cloud_sync_run_redirects_with_message(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: cloud list returns remote-only resources
+// Test 8: cloud list returns remote-only resources
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper list --type session` returns server rows including resources
