@@ -14,11 +14,11 @@ use crate::error::{Result, TemperError};
 /// Returns Ok(Some(body)) if a body was resolved, Ok(None) for "no body
 /// available" (TTY stdin, no flag), Err on resolution failure.
 pub fn resolve_body_source<R: Read>(
-    flag: Option<String>,
+    flag: Option<&str>,
     stdin_is_tty: bool,
     mut stdin_reader: R,
 ) -> Result<Option<String>> {
-    match flag.as_deref() {
+    match flag {
         Some(s) if s.starts_with('@') => {
             let path = &s[1..];
             let content = std::fs::read_to_string(path)
@@ -82,8 +82,9 @@ mod tests {
     fn resolves_body_at_path_explicit() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp.path(), "# From file").unwrap();
+        let path_str = format!("@{}", temp.path().display());
         let result = resolve_body_source(
-            Some(format!("@{}", temp.path().display())),
+            Some(path_str.as_str()),
             /*stdin_is_tty:*/ true,
             Cursor::new(b""),
         )
@@ -94,7 +95,7 @@ mod tests {
     #[test]
     fn resolves_explicit_dash_reads_stdin() {
         let result = resolve_body_source(
-            Some("-".to_string()),
+            Some("-"),
             /*stdin_is_tty:*/ false,
             Cursor::new(b"# From stdin"),
         )
@@ -104,11 +105,7 @@ mod tests {
 
     #[test]
     fn resolves_explicit_dash_errors_on_tty() {
-        let result = resolve_body_source(
-            Some("-".to_string()),
-            /*stdin_is_tty:*/ true,
-            Cursor::new(b""),
-        );
+        let result = resolve_body_source(Some("-"), /*stdin_is_tty:*/ true, Cursor::new(b""));
         assert!(result.is_err());
     }
 
@@ -146,8 +143,9 @@ mod tests {
     fn errors_when_at_path_file_is_empty() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp.path(), "").unwrap();
+        let path_str = format!("@{}", temp.path().display());
         let result = resolve_body_source(
-            Some(format!("@{}", temp.path().display())),
+            Some(path_str.as_str()),
             /*stdin_is_tty:*/ true,
             Cursor::new(b""),
         );
@@ -161,11 +159,7 @@ mod tests {
 
     #[test]
     fn errors_when_explicit_dash_stdin_is_empty() {
-        let result = resolve_body_source(
-            Some("-".to_string()),
-            /*stdin_is_tty:*/ false,
-            Cursor::new(b""),
-        );
+        let result = resolve_body_source(Some("-"), /*stdin_is_tty:*/ false, Cursor::new(b""));
         let err = result.unwrap_err();
         let msg = format!("{err}");
         assert!(

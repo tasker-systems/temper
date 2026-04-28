@@ -81,7 +81,7 @@ pub fn create(
     if matches!(vault_state, VaultState::Cloud) {
         let stdin_is_tty = std::io::stdin().is_terminal();
         let body_opt = crate::actions::body_source::resolve_body_source(
-            body_flag,
+            body_flag.as_deref(),
             stdin_is_tty,
             std::io::stdin(),
         )?;
@@ -1253,7 +1253,7 @@ fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &
     // Resolve body source first (sync, doesn't need the runtime).
     let stdin_is_tty = std::io::stdin().is_terminal();
     let body_opt = crate::actions::body_source::resolve_body_source(
-        params.body.clone(),
+        params.body.as_deref(),
         stdin_is_tty,
         std::io::stdin(),
     )?;
@@ -1404,7 +1404,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         use std::io::IsTerminal;
         let stdin_is_tty = std::io::stdin().is_terminal();
         crate::actions::body_source::resolve_body_source(
-            params.body.clone(),
+            params.body.as_deref(),
             stdin_is_tty,
             std::io::stdin(),
         )?
