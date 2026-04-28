@@ -344,6 +344,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
 /// Cloud `temper resource update <slug> --type session --stage done --body @<path>`
 /// posts a single PATCH carrying both the body trio and managed_meta.
 /// Both `body_hash` and `managed_meta.temper-stage` should change.
+#[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -489,6 +490,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
 /// Cloud `temper resource update <slug> --type session --body @<path>` (no
 /// managed-meta-mutating flags) → PATCH carries only body trio. Stored
 /// managed_meta (typed fields) must be untouched after the update.
+#[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
@@ -633,6 +635,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
 /// 2. Count `kb_chunks` rows for the resource.
 /// 3. PATCH with the identical body again.
 /// 4. Count again — must be the same (short-circuit engaged).
+#[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;

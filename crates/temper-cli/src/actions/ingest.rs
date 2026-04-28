@@ -1353,7 +1353,7 @@ created: 2026-03-23
     }
 
     #[test]
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "test-embed")]
     fn build_ingest_payload_attaches_managed_meta_when_some() {
         let mm = temper_core::types::ManagedMeta {
             stage: Some("backlog".to_string()),
@@ -1383,7 +1383,7 @@ created: 2026-03-23
     }
 
     #[test]
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "test-embed")]
     fn build_ingest_payload_attaches_open_meta_when_some() {
         let om = serde_json::json!({"tags": ["rust"]});
         let payload = build_ingest_payload("# X", "T", "ctx", "session", None, None, Some(om))
@@ -1395,7 +1395,7 @@ created: 2026-03-23
     }
 
     #[test]
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "test-embed")]
     fn build_ingest_payload_uses_compute_body_chunks() {
         let content = "# Test\n\nBody.";
         let payload = build_ingest_payload(content, "Title", "ctx", "session", None, None, None)
@@ -1412,7 +1412,7 @@ created: 2026-03-23
     }
 
     #[test]
-    #[cfg(feature = "embed")]
+    #[cfg(feature = "test-embed")]
     fn compute_body_chunks_returns_hash_and_packed_chunks() {
         let content = "# Heading\n\nParagraph one.\n\nParagraph two.";
         let result = compute_body_chunks(content).expect("compute should succeed");

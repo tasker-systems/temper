@@ -1,4 +1,4 @@
-#![cfg(feature = "test-db")]
+#![cfg(all(feature = "test-db", feature = "test-embed"))]
 
 //! End-to-end tests for the `push_one_resource` primitive in
 //! `temper_cli::actions::sync`. Scenarios covered:

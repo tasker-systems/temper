@@ -42,3 +42,7 @@ uuid = { version = "1", features = ["v4", "v7"] }
 
 [features]
 test-db = []
+# Enables tests that exercise the CLI-side embed pipeline (compute_body_chunks /
+# build_ingest_payload). Requires ONNX Runtime at test time. CI runs these in
+# the dedicated "Embed & MCP Round-Trip Tests" job.
+test-embed = ["temper-cli/test-embed"]

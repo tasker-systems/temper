@@ -170,6 +170,7 @@ async fn local_mode_create_publishes_to_server(pool: sqlx::PgPool) {
 ///
 /// If any of these fail, a future change drifted the local-mode wire output from the
 /// schema-correct baseline established by Task 9.
+#[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn local_mode_session_create_wire_shape_regression(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
