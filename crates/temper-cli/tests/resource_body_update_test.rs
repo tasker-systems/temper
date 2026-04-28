@@ -171,12 +171,18 @@ fn local_mode_update_rewrites_session_body_via_body_at_path() {
     .unwrap();
 
     let session_dir = dir.path().join("@me").join("myapp").join("session");
-    let session_file = std::fs::read_dir(&session_dir)
+    let session_files: Vec<std::path::PathBuf> = std::fs::read_dir(&session_dir)
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.path())
-        .find(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
-        .expect("session file should exist");
+        .filter(|p| p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("md"))
+        .collect();
+    assert_eq!(
+        session_files.len(),
+        1,
+        "expected exactly one .md session file, found: {session_files:?}"
+    );
+    let session_file = session_files.into_iter().next().unwrap();
     let session_slug = session_file
         .file_stem()
         .unwrap()

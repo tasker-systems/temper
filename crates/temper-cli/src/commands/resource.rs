@@ -1156,7 +1156,10 @@ pub struct UpdateParams<'a> {
     pub pr: Option<&'a str>,
     // Goal-specific fields
     pub status: Option<&'a str>,
-    /// Body source: None (auto-detect stdin), Some("-") (explicit stdin), or Some("@\<path\>")
+    /// Body source flag: `None` (rely on stdin auto-detection — non-empty piped
+    /// stdin updates the body; empty implicit stdin means no body update),
+    /// `Some("-")` (explicit stdin; errors if empty), or `Some("@<path>")`
+    /// (read from file; errors if empty). Applies in both local and cloud mode.
     pub body: Option<String>,
 }
 
