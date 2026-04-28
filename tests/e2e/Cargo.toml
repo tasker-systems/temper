@@ -29,6 +29,7 @@ temper-cli = { path = "../../crates/temper-cli" }
 temper-client = { path = "../../crates/temper-client" }
 temper-core = { path = "../../crates/temper-core" }
 temper-mcp = { path = "../../crates/temper-mcp" }
+temp-env = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -41,3 +42,7 @@ uuid = { version = "1", features = ["v4", "v7"] }
 
 [features]
 test-db = []
+# Enables tests that exercise the CLI-side embed pipeline (compute_body_chunks /
+# build_ingest_payload). Requires ONNX Runtime at test time. CI runs these in
+# the dedicated "Embed & MCP Round-Trip Tests" job.
+test-embed = ["temper-cli/test-embed"]

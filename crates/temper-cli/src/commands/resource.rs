@@ -29,9 +29,20 @@ fn validate_doc_type(doc_type: &str) -> Result<()> {
 }
 
 /// Require a context, returning an error if none specified.
+///
+/// In cloud mode (no local vault) we skip the vault-filesystem fallback
+/// and trust the provided name directly — there are no context directories
+/// on disk to check.
 fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
+    use temper_core::types::config::VaultState;
     match context {
-        Some(ctx) => Ok(super::resolve_context_with_fallback(config, ctx).into_owned()),
+        Some(ctx) => {
+            if matches!(VaultState::from_env(), VaultState::Cloud) {
+                Ok(ctx.to_string())
+            } else {
+                Ok(super::resolve_context_with_fallback(config, ctx).into_owned())
+            }
+        }
         None => Err(TemperError::Project(
             "no context specified — use --context <name>".into(),
         )),
@@ -39,6 +50,10 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
 }
 
 /// Create a new resource.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "per-doctype creators have different required args; params struct deferred to Task 12+"
+)]
 pub fn create(
     config: &Config,
     doc_type: &str,
@@ -48,11 +63,98 @@ pub fn create(
     mode: Option<&str>,
     effort: Option<&str>,
     slug: Option<&str>,
+    body_flag: Option<String>,
     format: &str,
 ) -> Result<()> {
+    use std::io::IsTerminal;
+
+    use temper_core::types::config::VaultState;
+
     validate_doc_type(doc_type)?;
 
     let ctx = require_context(config, context)?;
+
+    let vault_state = VaultState::from_env();
+
+    // Cloud-mode: skip vault writes; build IngestPayload and POST /api/ingest.
+    #[cfg(feature = "embed")]
+    if matches!(vault_state, VaultState::Cloud) {
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        let body_opt = crate::actions::body_source::resolve_body_source(
+            body_flag,
+            stdin_is_tty,
+            std::io::stdin(),
+        )?;
+        let body = body_opt.unwrap_or_else(|| format!("# {title}\n"));
+
+        let managed_meta = crate::actions::frontmatter::build_managed_meta_for_create(
+            crate::actions::frontmatter::NewResourceArgs {
+                doc_type,
+                context: &ctx,
+                title,
+                mode,
+                effort,
+                goal,
+                stage: None,
+                seq: None,
+                status: None,
+                provenance: None,
+                llm_model: None,
+                llm_run: None,
+            },
+        );
+
+        let payload = crate::actions::ingest::build_ingest_payload(
+            &body,
+            title,
+            &ctx,
+            doc_type,
+            None,
+            Some(managed_meta),
+            None,
+        )?;
+
+        let resource = crate::actions::runtime::with_client(|client| {
+            Box::pin(async move {
+                client
+                    .ingest()
+                    .create(&payload)
+                    .await
+                    .map_err(crate::actions::runtime::client_err_to_temper)
+            })
+        })?;
+
+        if format == "json" {
+            #[derive(serde::Serialize)]
+            struct CloudCreated {
+                id: String,
+                slug: Option<String>,
+                doc_type: String,
+                context: String,
+                title: String,
+            }
+            let info = CloudCreated {
+                id: resource.id.to_string(),
+                slug: resource.slug.clone(),
+                doc_type: doc_type.to_string(),
+                context: ctx.to_string(),
+                title: resource.title.clone(),
+            };
+            let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+            println!("{json}");
+        } else {
+            let id_str = resource.id.to_string();
+            let slug_display = resource.slug.as_deref().unwrap_or(&id_str);
+            output::success(format!("Created: {slug_display}"));
+        }
+        return Ok(());
+    }
+
+    // Local-mode: existing vault-file create flow.
+    // body_flag is intentionally unused in local mode (stdin piping handles body).
+    let _ = body_flag;
+    let _ = vault_state;
+
     let stdin_content = vault::read_stdin_if_piped();
 
     match doc_type {
@@ -184,6 +286,8 @@ fn create_simple_resource(
 
     std::fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     fm.write_to(&path)?;
+
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
 
     let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
     let relative_str = relative.to_string_lossy();
@@ -388,6 +492,113 @@ fn match_filters(row: &ResourceRow, filters: &ListFilters<'_>) -> bool {
     true
 }
 
+/// Cloud-first list: call the server, return rows sorted server-side
+/// (`ORDER BY updated DESC`).
+async fn fetch_list_rows(
+    client: &temper_client::TemperClient,
+    doc_type: &str,
+    context: Option<&str>,
+    limit: usize,
+) -> Result<Vec<temper_core::types::resource::ResourceRow>> {
+    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+
+    let params = ResourceListParams {
+        doc_type_name: Some(doc_type.to_string()),
+        context_name: context.map(ToString::to_string),
+        sort: Some(ResourceSortField::Updated),
+        order: Some(SortOrder::Desc),
+        limit: Some(limit as i64),
+        ..Default::default()
+    };
+    let resp = client
+        .resources()
+        .list(&params)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    Ok(resp.rows)
+}
+
+/// Map a server `ResourceRow` to the frontmatter-shaped `serde_json::Value`
+/// that `col_registry::extract_row` expects. The registry was built for
+/// local scan_rows output; we adapt the server row shape to the same
+/// keys so rendering is unchanged.
+fn row_to_frontmatter_value(row: &temper_core::types::resource::ResourceRow) -> serde_json::Value {
+    let mut map = serde_json::Map::new();
+    map.insert("title".into(), serde_json::Value::String(row.title.clone()));
+    if let Some(slug) = &row.slug {
+        map.insert("slug".into(), serde_json::Value::String(slug.clone()));
+    }
+    map.insert(
+        "temper-updated".into(),
+        serde_json::Value::String(row.updated.to_rfc3339()),
+    );
+    map.insert(
+        "temper-context".into(),
+        serde_json::Value::String(row.context_name.clone()),
+    );
+    map.insert(
+        "temper-type".into(),
+        serde_json::Value::String(row.doc_type_name.clone()),
+    );
+    if let Some(stage) = &row.stage {
+        map.insert(
+            "temper-stage".into(),
+            serde_json::Value::String(stage.clone()),
+        );
+    }
+    if let Some(mode) = &row.mode {
+        map.insert(
+            "temper-mode".into(),
+            serde_json::Value::String(mode.clone()),
+        );
+    }
+    if let Some(effort) = &row.effort {
+        map.insert(
+            "temper-effort".into(),
+            serde_json::Value::String(effort.clone()),
+        );
+    }
+    if let Some(seq) = row.seq {
+        map.insert("temper-seq".into(), serde_json::Value::Number(seq.into()));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// Render server rows using the same per-doctype column registry used
+/// by the local-mode `render_list`. This keeps table output shape
+/// stable between the two modes.
+fn render_server_rows(
+    doc_type: &str,
+    rows: &[temper_core::types::resource::ResourceRow],
+    format: OutputFormat,
+) -> Result<String> {
+    match format {
+        OutputFormat::Json => Ok(serde_json::to_string_pretty(
+            &rows
+                .iter()
+                .map(row_to_frontmatter_value)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap_or_default()),
+        OutputFormat::Pretty | OutputFormat::NoTty => {
+            let columns = col_registry::display_columns(doc_type);
+            if columns.is_empty() || rows.is_empty() {
+                return Ok(String::new());
+            }
+            let mut renderer = TableRenderer::new(columns.clone());
+            for row in rows {
+                let fm_value = row_to_frontmatter_value(row);
+                renderer.push_row(col_registry::extract_row(&fm_value, &columns));
+            }
+            Ok(if format == OutputFormat::Pretty {
+                renderer.render_pretty()
+            } else {
+                renderer.render_no_tty()
+            })
+        }
+    }
+}
+
 /// Render the unified list pipeline to a `String` for the given format.
 ///
 /// This is the testable core used by both `list()` (CLI entry) and the
@@ -436,9 +647,10 @@ pub fn render_list(params: &RenderListParams<'_>) -> Result<String> {
 
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
-    // Surface helpful hints when a filter is passed for an incompatible type
-    // (the filter is still applied; if nothing matches the user sees an empty
-    // list, which is the honest answer).
+    use crate::actions::runtime;
+    use temper_core::types::config::VaultState;
+
+    // Hints for filters that only apply to certain types (unchanged).
     if params.stage.is_some() && params.doc_type != "task" {
         output::hint(format!(
             "--stage filter is only meaningful for tasks; ignored for {}.",
@@ -465,44 +677,66 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     }
 
     let format = OutputFormat::parse(params.format);
+    let doc_type = params.doc_type.to_string();
+    let context = params.context.map(ToString::to_string);
+    let limit = params.limit.unwrap_or(20);
 
-    // Filters only pass through on compatible types; for others, drop them so
-    // the pipeline returns all rows (then the hint above tells the user why).
-    let stage = if params.doc_type == "task" {
-        params.stage
-    } else {
-        None
-    };
-    let goal = if params.doc_type == "task" {
-        params.goal
-    } else {
-        None
-    };
-    let status = if params.doc_type == "goal" {
-        params.status
-    } else {
-        None
+    let vault_state = VaultState::from_env();
+
+    // Attempt server-first. Fall back to local scan on network error
+    // in Local mode only; Cloud mode surfaces the error.
+    let rows_result = runtime::with_client(move |client| {
+        Box::pin(async move { fetch_list_rows(client, &doc_type, context.as_deref(), limit).await })
+    });
+
+    let server_rows = match (rows_result, vault_state) {
+        (Ok(rows), _) => Some(rows),
+        // Local mode: fall back to the local vault scan only when the server
+        // is unreachable. Server-originated errors (4xx/5xx, auth) surface
+        // as-is — silently masking them with stale local data would hide
+        // real problems.
+        (Err(e @ TemperError::Network(_)), VaultState::Local) => {
+            output::hint(format!(
+                "cloud unreachable: {e}. Falling back to local scan."
+            ));
+            None
+        }
+        (Err(e), _) => return Err(e),
     };
 
-    let body = render_list(&RenderListParams {
-        doc_type: params.doc_type,
-        config,
-        context: params.context,
-        limit: params.limit,
-        filters: ListFilters {
-            stage,
-            goal,
-            status,
-        },
-        format,
-    })?;
+    let body = match server_rows {
+        Some(rows) => render_server_rows(params.doc_type, &rows, format)?,
+        None => render_list(&RenderListParams {
+            doc_type: params.doc_type,
+            config,
+            context: params.context,
+            limit: params.limit,
+            filters: ListFilters {
+                stage: if params.doc_type == "task" {
+                    params.stage
+                } else {
+                    None
+                },
+                goal: if params.doc_type == "task" {
+                    params.goal
+                } else {
+                    None
+                },
+                status: if params.doc_type == "goal" {
+                    params.status
+                } else {
+                    None
+                },
+            },
+            format,
+        })?,
+    };
 
     if body.trim().is_empty() {
         output::hint(format!("No {} resources found.", params.doc_type));
         return Ok(());
     }
 
-    // anstream handles TTY / no-TTY ANSI stripping based on the real stdout.
     output::plain(body.trim_end());
     Ok(())
 }
@@ -531,27 +765,89 @@ pub fn show(
     Ok(())
 }
 
-/// Show a generic resource (goal, research, concept, decision) by finding and
-/// printing its file content.
-fn show_generic(
+/// Resolve `(doc_type, slug, context)` to a `ResourceId`.
+///
+/// In Local mode, fast-paths through the local file's `temper-id` frontmatter
+/// field when the file exists. Falls back to `GET /api/resources/by-uri` (the
+/// slow path) in Cloud mode or when the local file has no canonical id yet.
+///
+/// `pub(crate)` so that `task::show` and `session::show` share this logic
+/// without duplication.
+pub(crate) async fn resolve_resource_id(
+    config: &Config,
+    client: &temper_client::TemperClient,
+    doc_type: &str,
+    slug: &str,
+    context: Option<&str>,
+    vault_state: temper_core::types::VaultState,
+) -> Result<temper_core::types::ids::ResourceId> {
+    use temper_core::types::ids::ResourceId;
+
+    if matches!(vault_state, temper_core::types::VaultState::Local) {
+        if let Ok((path, _)) = find_resource_file(config, doc_type, slug, context) {
+            let body =
+                std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
+            if let Ok(fm) = temper_core::frontmatter::Frontmatter::try_from(body.as_str()) {
+                if let Some(id_str) = fm.value().get("temper-id").and_then(|v| v.as_str()) {
+                    if let Ok(uuid) = uuid::Uuid::parse_str(id_str) {
+                        return Ok(ResourceId::from(uuid));
+                    }
+                }
+            }
+        }
+    }
+
+    let ctx = require_context(config, context)?;
+    let owner = config.owner_for_context(&ctx);
+    let row = client
+        .resources()
+        .resolve_by_uri(&owner, &ctx, doc_type, slug)
+        .await
+        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    Ok(row.id)
+}
+
+/// Return the existing local path for a resource if found, or compute where
+/// it would live based on `Vault::doc_file`.
+fn find_or_compute_local_path(
     config: &Config,
     doc_type: &str,
     slug: &str,
     context: Option<&str>,
+) -> Result<(std::path::PathBuf, String)> {
+    if let Ok((path, ctx)) = find_resource_file(config, doc_type, slug, context) {
+        return Ok((path, ctx));
+    }
+    let ctx = require_context(config, context)?;
+    let owner = config.owner_for_context(&ctx);
+    let vault_layout = Vault::new(&config.vault_root);
+    let path = vault_layout.doc_file(&owner, &ctx, doc_type, slug);
+    Ok((path, ctx))
+}
+
+/// Render generic resource output in the requested format.
+///
+/// `local_path` is `None` in Cloud mode (no file on disk).
+fn render_generic_output(
+    doc_type: &str,
+    slug: &str,
+    context: &str,
+    config: &Config,
+    local_path: Option<&std::path::Path>,
+    body: String,
     format: &str,
 ) -> Result<()> {
-    let (path, ctx) = find_resource_file(config, doc_type, slug, context)?;
-
-    let content = std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
-
     if format == "json" {
-        let fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str()).ok();
+        let fm = temper_core::frontmatter::Frontmatter::try_from(body.as_str()).ok();
         let title = fm
             .as_ref()
             .and_then(|f| f.value().get("title"))
             .and_then(|v| v.as_str())
             .unwrap_or(slug);
-        let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
+        let path_str = local_path
+            .and_then(|p| p.strip_prefix(&config.vault_root).ok())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
 
         #[derive(Serialize)]
         struct ResourceShow<'a> {
@@ -566,17 +862,130 @@ fn show_generic(
             doc_type,
             slug,
             title,
-            context: &ctx,
-            path: relative.to_string_lossy().to_string(),
-            content,
+            context,
+            path: path_str,
+            content: body,
         };
         let json = serde_json::to_string_pretty(&info).unwrap_or_default();
         println!("{json}");
         return Ok(());
     }
 
-    print!("{content}");
+    print!("{body}");
     Ok(())
+}
+
+/// Show a generic resource (goal, research, concept, decision).
+///
+/// In Local mode: resolves an id from frontmatter or by-uri, then uses the
+/// three-tier freshness ladder (`show_cache::fetch`) before rendering.
+/// In Cloud mode: fetches content directly from the API with no disk write.
+fn show_generic(
+    config: &Config,
+    doc_type: &str,
+    slug: &str,
+    context: Option<&str>,
+    format: &str,
+) -> Result<()> {
+    use crate::actions::{runtime, show_cache};
+    use std::time::Duration;
+    use temper_core::types::VaultState;
+
+    let vault_state = VaultState::from_env();
+    let doc_type_s = doc_type.to_string();
+    let slug_s = slug.to_string();
+    let context_owned = context.map(str::to_string);
+    let format_s = format.to_string();
+
+    match vault_state {
+        VaultState::Cloud => {
+            let config_clone = config.clone();
+            let doc_type_inner = doc_type_s.clone();
+            let slug_inner = slug_s.clone();
+            let ctx_inner = context_owned.clone();
+
+            let body = runtime::with_client(|client| {
+                Box::pin(async move {
+                    let id = resolve_resource_id(
+                        &config_clone,
+                        client,
+                        &doc_type_inner,
+                        &slug_inner,
+                        ctx_inner.as_deref(),
+                        VaultState::Cloud,
+                    )
+                    .await?;
+                    let resp = client
+                        .resources()
+                        .content(*id.as_uuid())
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
+                    Ok(resp.markdown)
+                })
+            })?;
+
+            let ctx = context_owned.unwrap_or_default();
+            render_generic_output(&doc_type_s, &slug_s, &ctx, config, None, body, &format_s)
+        }
+        VaultState::Local => {
+            let config_clone = config.clone();
+            let doc_type_inner = doc_type_s.clone();
+            let slug_inner = slug_s.clone();
+            let ctx_inner = context_owned.clone();
+
+            let (path, ctx) = find_or_compute_local_path(config, &doc_type_s, &slug_s, context)?;
+
+            // Tier 0: debounce check before spinning up the runtime.
+            // If the file is fresh we serve it immediately; no network, no
+            // resource id resolution needed.
+            if let Some(body) = show_cache::read_if_fresh(
+                &path,
+                std::time::Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+            )? {
+                return render_generic_output(
+                    &doc_type_s,
+                    &slug_s,
+                    &ctx,
+                    config,
+                    Some(&path),
+                    body,
+                    &format_s,
+                );
+            }
+
+            let (body, local_path_for_render) = runtime::with_client(|client| {
+                Box::pin(async move {
+                    let id = resolve_resource_id(
+                        &config_clone,
+                        client,
+                        &doc_type_inner,
+                        &slug_inner,
+                        ctx_inner.as_deref(),
+                        VaultState::Local,
+                    )
+                    .await?;
+                    let result = show_cache::fetch(show_cache::ShowCacheParams {
+                        client,
+                        resource_id: id,
+                        local_path: &path,
+                        debounce: Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+                    })
+                    .await?;
+                    Ok((result.content, path))
+                })
+            })?;
+
+            render_generic_output(
+                &doc_type_s,
+                &slug_s,
+                &ctx,
+                config,
+                Some(&local_path_for_render),
+                body,
+                &format_s,
+            )
+        }
+    }
 }
 
 /// Fetch and display edges for a resource via the API.
@@ -747,10 +1156,181 @@ pub struct UpdateParams<'a> {
     pub pr: Option<&'a str>,
     // Goal-specific fields
     pub status: Option<&'a str>,
+    /// Body source: None (auto-detect stdin), Some("-") (explicit stdin), or Some("@\<path\>")
+    pub body: Option<String>,
+}
+
+/// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
+/// managed-meta-mutating flags were passed.
+#[cfg(feature = "embed")]
+fn build_partial_managed_meta_from_args(
+    params: &UpdateParams<'_>,
+) -> Option<temper_core::types::ManagedMeta> {
+    let any_set = params.stage.is_some()
+        || params.mode.is_some()
+        || params.effort.is_some()
+        || params.goal.is_some()
+        || params.seq.is_some()
+        || params.branch.is_some()
+        || params.pr.is_some()
+        || params.status.is_some();
+    if !any_set {
+        return None;
+    }
+    Some(temper_core::types::ManagedMeta {
+        stage: params.stage.map(String::from),
+        mode: params.mode.map(String::from),
+        effort: params.effort.map(String::from),
+        goal: params.goal.map(String::from),
+        seq: params.seq,
+        branch: params.branch.map(String::from),
+        pr: params.pr.map(String::from),
+        status: params.status.map(String::from),
+        ..Default::default()
+    })
+}
+
+/// Build a partial `open_meta` JSON object from update CLI list flags. Returns
+/// `None` if no open-meta list flags were passed.
+#[cfg(feature = "embed")]
+fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_json::Value> {
+    let mut obj = serde_json::Map::new();
+    if !params.tags.is_empty() {
+        obj.insert("tags".to_string(), serde_json::json!(params.tags));
+    }
+    if !params.aliases.is_empty() {
+        obj.insert("aliases".to_string(), serde_json::json!(params.aliases));
+    }
+    if !params.relates_to.is_empty() {
+        obj.insert(
+            "relates-to".to_string(),
+            serde_json::json!(params.relates_to),
+        );
+    }
+    if !params.references.is_empty() {
+        obj.insert(
+            "references".to_string(),
+            serde_json::json!(params.references),
+        );
+    }
+    if !params.depends_on.is_empty() {
+        obj.insert(
+            "depends-on".to_string(),
+            serde_json::json!(params.depends_on),
+        );
+    }
+    if !params.extends.is_empty() {
+        obj.insert("extends".to_string(), serde_json::json!(params.extends));
+    }
+    if !params.preceded_by.is_empty() {
+        obj.insert(
+            "preceded-by".to_string(),
+            serde_json::json!(params.preceded_by),
+        );
+    }
+    if !params.derived_from.is_empty() {
+        obj.insert(
+            "derived-from".to_string(),
+            serde_json::json!(params.derived_from),
+        );
+    }
+    if obj.is_empty() {
+        None
+    } else {
+        Some(serde_json::Value::Object(obj))
+    }
+}
+
+/// Cloud-mode `temper resource update` — no vault file is touched. Resolves
+/// the resource id via the API, builds a partial `ResourceUpdateRequest`
+/// (managed_meta + open_meta + optional body trio), and posts
+/// `PATCH /api/resources/{id}`. Prints `{slug, content_hash}` for the
+/// agent's next show-edit-cat cycle.
+#[cfg(feature = "embed")]
+fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
+    use std::io::IsTerminal;
+
+    // Resolve body source first (sync, doesn't need the runtime).
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    let body_opt = crate::actions::body_source::resolve_body_source(
+        params.body.clone(),
+        stdin_is_tty,
+        std::io::stdin(),
+    )?;
+
+    let (content, content_hash, chunks_packed) = match body_opt {
+        Some(b) => {
+            let chunks = crate::actions::ingest::compute_body_chunks(&b)?;
+            (
+                Some(b),
+                Some(chunks.content_hash),
+                Some(chunks.chunks_packed),
+            )
+        }
+        None => (None, None, None),
+    };
+
+    let managed_meta = build_partial_managed_meta_from_args(params);
+    let open_meta = build_partial_open_meta_from_args(params);
+
+    let req = temper_core::types::ResourceUpdateRequest {
+        title: params.title.map(String::from),
+        slug: None,
+        managed_meta,
+        open_meta,
+        content,
+        content_hash,
+        chunks_packed,
+    };
+
+    // Compute owned values before the async block so the closure is 'static.
+    // In cloud mode, slug→id resolution goes through the API's by-uri lookup;
+    // we only need owner + context strings to form the URI.
+    let ctx = require_context(config, params.context)?.to_string();
+    let owner = config.owner_for_context(&ctx).to_string();
+    let doc_type = current_type.to_string();
+    let slug = params.slug.to_string();
+
+    let updated = crate::actions::runtime::with_client(move |client| {
+        let req = req.clone();
+        let owner = owner.clone();
+        let ctx = ctx.clone();
+        let doc_type = doc_type.clone();
+        let slug = slug.clone();
+        Box::pin(async move {
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner, &ctx, &doc_type, &slug)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            client
+                .resources()
+                .update(*row.id, &req)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let slug_display = updated
+        .slug
+        .as_deref()
+        .unwrap_or(&updated.id.to_string())
+        .to_string();
+    let hash_display = updated.body_hash.as_deref().unwrap_or("").to_string();
+    println!(
+        "{}",
+        serde_json::json!({
+            "slug": slug_display,
+            "content_hash": hash_display,
+        })
+    );
+    Ok(())
 }
 
 /// Update a resource's frontmatter fields.
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
+    use temper_core::types::config::VaultState;
+
     // Resolve current type from --type or --type-from (one is required)
     let current_type = params
         .doc_type
@@ -761,6 +1341,16 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     if let Some(tt) = params.type_to {
         validate_doc_type(tt)?;
     }
+
+    let vault_state = VaultState::from_env();
+
+    // Cloud-mode: skip vault file edits; build ResourceUpdateRequest and PATCH /api/resources/{id}.
+    #[cfg(feature = "embed")]
+    if matches!(vault_state, VaultState::Cloud) {
+        return cloud_mode_update(config, params, current_type);
+    }
+    #[cfg(not(feature = "embed"))]
+    let _ = vault_state;
 
     // Find the resource file
     let (path, ctx) = find_resource_file(config, current_type, params.slug, params.context)?;
@@ -901,6 +1491,8 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     if final_path != path && path.exists() {
         std::fs::remove_file(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
     }
+
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &final_path)?;
 
     // Determine slug for output
     let final_slug = final_path

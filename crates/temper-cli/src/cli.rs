@@ -123,6 +123,13 @@ pub enum Commands {
         resource_id: String,
     },
 
+    /// Push a single resource to the cloud. Target can be a UUID (requires
+    /// a manifest) or a filesystem path. Always sends body + meta together.
+    Push {
+        /// Resource UUID or path to a vault file
+        target: String,
+    },
+
     /// Remove a resource from the cloud
     Remove {
         /// Resource UUID
@@ -224,6 +231,10 @@ pub enum ResourceAction {
         show_template: bool,
         #[arg(long, hide = true)]
         stdin: bool,
+        /// Body content: '@PATH' reads a file, '-' reads stdin, omit to use
+        /// piped stdin implicitly (cloud mode only; ignored in local mode)
+        #[arg(long)]
+        body: Option<String>,
         /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
         #[arg(long)]
         format: Option<String>,
@@ -269,7 +280,12 @@ pub enum ResourceAction {
         #[arg(long)]
         edges: bool,
     },
-    /// Update a resource's frontmatter fields
+    /// Update a resource's frontmatter fields and push to server
+    ///
+    /// Update mutates frontmatter from args and pushes the whole file
+    /// (including manual body edits) to the server in one operation. Make
+    /// body edits before running update. For body-only changes use
+    /// `temper push`.
     Update {
         /// Resource slug
         slug: String,
@@ -342,6 +358,9 @@ pub enum ResourceAction {
         /// Goal status (active, completed, paused, cancelled)
         #[arg(long)]
         status: Option<String>,
+        /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
+        #[arg(long)]
+        body: Option<String>,
     },
 }
 
@@ -367,18 +386,26 @@ pub enum ContextAction {
 pub enum AuthAction {
     /// Log in via browser OAuth (PKCE flow)
     Login,
-    /// Store a JWT directly (for API-only clients or manual auth)
+    /// Store a JWT directly, reading from stdin (avoids shell-history /
+    /// `ps` / `/proc` leakage). Usage:
+    ///   temper auth export-token | temper auth token
+    ///   pbpaste | temper auth token
     Token {
-        /// The JWT access token
-        jwt: String,
-        /// Auth provider name (default: neon_auth)
-        #[arg(long, default_value = "neon_auth")]
+        /// Identity provider (default: auth0). Accepts `auth0` or
+        /// `auth0:DOMAIN` for custom Auth0 tenants.
+        #[arg(long, default_value = "auth0")]
         provider: String,
     },
     /// Clear stored credentials
     Logout,
     /// Show current auth status
     Status,
+    /// Export a refreshed access token (local mode only).
+    ///
+    /// Token goes to stdout (plain JWT, pipeable); security warning goes to
+    /// stderr. Pipe into a cloud session's secret manager as `TEMPER_TOKEN`.
+    /// Token is ~24h lifetime with no early-revoke — re-export to renew.
+    ExportToken,
 }
 
 #[derive(Subcommand)]

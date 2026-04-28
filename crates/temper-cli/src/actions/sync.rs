@@ -33,6 +33,60 @@ pub struct OwnershipMismatch {
     pub manifest_owner: String,
 }
 
+// ---------------------------------------------------------------------------
+// Single-resource push/pull primitives
+//
+// These are the factored-out, per-resource orchestration that sync_orchestration
+// batches over its diff sets. They also power `temper push <id|path>` and
+// `temper pull <id>` as first-class commands.
+//
+// The `manifest: Option<&mut Manifest>` parameter is the mode switch:
+// - Some(...) — local-vault mode, updates the manifest entry in place
+// - None     — cloud mode / raw push, no manifest side effects
+// ---------------------------------------------------------------------------
+
+/// What a single push targets. `Path` reads frontmatter to locate the id;
+/// `Id` requires a manifest to resolve the on-disk path.
+#[derive(Debug)]
+pub enum PushTarget<'a> {
+    Path(&'a std::path::Path),
+    Id(ResourceId),
+}
+
+/// Per-resource push outcome.
+///
+/// `kind` reflects the REQUEST shape — `PushKind::New` when the client POSTed
+/// (frontmatter had a provisional or missing id), `PushKind::Modified` when
+/// the client PUT (canonical id). A PUT that the server responds to with 404
+/// currently surfaces as an error; fallback-on-404 is deferred to the
+/// cloud-mode work (Unit B.2).
+#[derive(Debug, Clone)]
+pub struct PushResult {
+    pub resource_id: ResourceId,
+    pub path: std::path::PathBuf,
+    pub kind: PushKind,
+}
+
+/// Which pull branch ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullBranch {
+    /// Wrote to the manifest-resolved vault path and updated the entry.
+    ManifestTracked,
+    /// Wrote as `{id}.md` under the caller-provided write root (used when no
+    /// manifest is available or the id is not tracked). The CLI wrapper passes
+    /// CWD in the no-manifest case; the sync engine passes `vault_root`.
+    Snapshot,
+}
+
+/// Per-resource pull outcome.
+#[derive(Debug, Clone)]
+pub struct PullResult {
+    pub resource_id: ResourceId,
+    pub path: std::path::PathBuf,
+    pub branch: PullBranch,
+    pub title: String,
+}
+
 /// Validate every non-provisional manifest entry: the file's frontmatter
 /// `temper-owner` must match the owner segment of its manifest path.
 ///
@@ -805,7 +859,33 @@ async fn push_resource(
     item: &SyncPushItem,
 ) -> Result<()> {
     match item.kind {
-        SyncItemKind::Body => push_resource_body(client, manifest, vault_root, item).await,
+        SyncItemKind::Body => {
+            // Delegate body pushes to the unified primitive. Sync always has
+            // a manifest and the entry is guaranteed to exist (it's what
+            // surfaced this push in the sync diff). Resolve the id the same
+            // way push_resource_body used to.
+            //
+            // Semantic note vs. the old push_resource_body:
+            // - Old code rewrote the local file (provisional→canonical) only
+            //   inside the manifest-remove branch. The primitive rewrites
+            //   unconditionally when server_id differs from entry_id. Sync
+            //   always has a manifest + entry, so the difference only affects
+            //   the rare "manifest entry vanishes mid-push" race — in which
+            //   case rewriting the file is still the right thing to do
+            //   because the server took the payload.
+            // - The primitive also cross-checks frontmatter id against the
+            //   manifest-hinted id for PushTarget::Id. In sync, these are
+            //   guaranteed to match (the manifest entry is the sole source
+            //   of the id we resolved), but the check catches any future
+            //   corruption.
+            let entry_id = match item.resource_id {
+                Some(id) => id,
+                None => extract_resource_id(&item.uri)?,
+            };
+            push_one_resource(client, vault_root, PushTarget::Id(entry_id), Some(manifest))
+                .await
+                .map(|_| ())
+        }
         SyncItemKind::MetaOnly => push_resource_meta_only(client, manifest, vault_root, item).await,
     }
 }
@@ -917,143 +997,325 @@ async fn push_resource_meta_only(
     Ok(())
 }
 
-async fn push_resource_body(
-    client: &temper_client::TemperClient,
-    manifest: &mut Manifest,
-    vault_root: &Path,
-    item: &SyncPushItem,
-) -> Result<()> {
-    // Resolve the manifest entry ID — for new resources this is embedded in the URI,
-    // for existing resources the server provides the resource_id directly.
-    let entry_id = match item.resource_id {
-        Some(id) => id,
-        None => extract_resource_id(&item.uri)?,
-    };
+/// Try to extract a resource id from frontmatter. Returns `Some((id,
+/// is_provisional))` if exactly one of `temper-id` / `temper-provisional-id`
+/// is present, `None` if neither is present, and an error if both are present
+/// or a uuid fails to parse.
+///
+/// `Frontmatter` has no dedicated accessor for these keys, so we read them
+/// straight out of `fm.value()` (the parsed YAML mapping) — see
+/// `crates/temper-core/src/frontmatter/projections.rs:67-78` for the
+/// reference pattern.
+fn try_extract_id_from_frontmatter(fm: &Frontmatter) -> Result<Option<(ResourceId, bool)>> {
+    let mapping = fm
+        .value()
+        .as_mapping()
+        .ok_or_else(|| TemperError::Config("frontmatter is not a mapping".into()))?;
+    let canonical = mapping
+        .get(serde_yaml::Value::String("temper-id".into()))
+        .and_then(|v| v.as_str());
+    let provisional = mapping
+        .get(serde_yaml::Value::String("temper-provisional-id".into()))
+        .and_then(|v| v.as_str());
 
-    let entry = manifest
-        .entries
-        .get(&entry_id)
-        .ok_or_else(|| TemperError::NotFound(format!("manifest entry not found: {entry_id}")))?;
-
-    let file_path = vault_root.join(&entry.path);
-    if !file_path.exists() {
-        return Err(TemperError::NotFound(format!(
-            "vault file not found: {}",
-            file_path.display()
-        )));
+    match (canonical, provisional) {
+        (Some(s), None) => {
+            let uuid = Uuid::parse_str(s)
+                .map_err(|e| TemperError::Config(format!("invalid temper-id uuid: {e}")))?;
+            Ok(Some((ResourceId::from(uuid), false)))
+        }
+        (None, Some(s)) => {
+            let uuid = Uuid::parse_str(s).map_err(|e| {
+                TemperError::Config(format!("invalid temper-provisional-id uuid: {e}"))
+            })?;
+            Ok(Some((ResourceId::from(uuid), true)))
+        }
+        (Some(_), Some(_)) => Err(TemperError::Config(
+            "frontmatter has both temper-id and temper-provisional-id (invalid state)".into(),
+        )),
+        (None, None) => Ok(None),
     }
+}
 
+/// Push a single resource.
+///
+/// `PushTarget::Path` resolves the id from the file's frontmatter (either
+/// `temper-id` canonical → PUT, or `temper-provisional-id` → POST).
+/// `PushTarget::Id` requires a manifest to resolve the on-disk path; the
+/// entry's `provisional` flag determines POST vs PUT.
+///
+/// If `manifest` is `Some`, the entry is updated in place: on a
+/// provisional→canonical transition the key is remapped from the local id
+/// to the server-assigned id and the `provisional` flag is cleared; on every
+/// push the full nine-field entry state is refreshed (body/managed/open
+/// hashes for both local and remote, state, synced_at, mtime_secs). If
+/// `manifest` is `None`, the file is still rewritten when the server
+/// assigns a new id, but no manifest side effects occur — this is the
+/// cloud-mode / raw-push shape.
+///
+/// The "remote" hashes mirror the locally-computed values on push: the
+/// client-sent body IS the server's authoritative source after a
+/// successful POST/PUT, so there is no divergence to track (unlike pull,
+/// where `expected_remote_hash` threads the server-declared hash
+/// separately).
+pub async fn push_one_resource(
+    client: &temper_client::TemperClient,
+    vault_root: &Path,
+    target: PushTarget<'_>,
+    manifest: Option<&mut Manifest>,
+) -> Result<PushResult> {
+    // ---- Step A — resolve file_path (+ optional manifest hint) ------------
+    //
+    // The manifest hint (entry_id, provisional flag) is used for the
+    // `PushTarget::Id` branch as a cross-check against frontmatter: we read
+    // and parse the file exactly once in Step B, and frontmatter remains
+    // the authoritative source of the id. If a caller asks us to push by
+    // id and the on-disk file's frontmatter disagrees, that's surfaced as
+    // an error rather than silently pushing the wrong resource.
+    let (file_path, manifest_hint): (std::path::PathBuf, Option<(ResourceId, bool)>) =
+        match target {
+            PushTarget::Path(p) => {
+                let abs: std::path::PathBuf = if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    vault_root.join(p)
+                };
+                if !abs.exists() {
+                    return Err(TemperError::NotFound(format!(
+                        "file not found: {}",
+                        abs.display()
+                    )));
+                }
+                (abs, None)
+            }
+            PushTarget::Id(id) => {
+                let m = manifest.as_ref().ok_or_else(|| {
+                    TemperError::Config(
+                        "push by id requires a manifest; pass a path for manifest-less push".into(),
+                    )
+                })?;
+                let entry = m.entries.get(&id).ok_or_else(|| {
+                    TemperError::NotFound(format!("manifest entry not found: {id}"))
+                })?;
+                let abs = vault_root.join(&entry.path);
+                if !abs.exists() {
+                    return Err(TemperError::NotFound(format!(
+                        "vault file not found: {}",
+                        abs.display()
+                    )));
+                }
+                (abs, Some((id, entry.provisional)))
+            }
+        };
+
+    // ---- Step B — single file read + single frontmatter parse -------------
     let content = std::fs::read_to_string(&file_path)?;
-    let body = strip_frontmatter(&content);
+    let fm = Frontmatter::try_from(content.as_str()).map_err(|e| {
+        TemperError::Config(format!(
+            "push requires parseable frontmatter at {}: {e}",
+            file_path.display()
+        ))
+    })?;
+    let fm_id = try_extract_id_from_frontmatter(&fm)?;
 
-    let (context, doc_type) = match Vault::parse_rel(&entry.path) {
-        Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
-        None => ("default".to_string(), "resource".to_string()),
+    // Resolve the authoritative id + provisional flag. For `PushTarget::Path`
+    // the file's frontmatter is the sole source. For `PushTarget::Id` the
+    // manifest entry is authoritative (sync and other manifest-driven paths
+    // may legitimately push files whose frontmatter never received a
+    // temper-id — e.g. server-seeded resources whose vault file was written
+    // without id echo). When both are present we cross-check and surface any
+    // divergence as an error rather than silently pushing under the wrong id.
+    let (entry_id, is_provisional) = match (manifest_hint, fm_id) {
+        (Some((hinted_id, hinted_prov)), Some((fm_entry_id, fm_prov))) => {
+            if hinted_id != fm_entry_id {
+                return Err(TemperError::Config(format!(
+                    "push-by-id mismatch: manifest entry points to {} but file frontmatter says {}",
+                    Uuid::from(hinted_id),
+                    Uuid::from(fm_entry_id)
+                )));
+            }
+            // Prefer the manifest's provisional flag — it's the state machine
+            // of record. Any drift between fm and manifest on the provisional
+            // bit would be caught the next rehash/status pass.
+            let _ = fm_prov;
+            (hinted_id, hinted_prov)
+        }
+        (Some((hinted_id, hinted_prov)), None) => (hinted_id, hinted_prov),
+        (None, Some(pair)) => pair,
+        (None, None) => {
+            return Err(TemperError::Config(format!(
+                "push requires a resource id: {} has neither temper-id nor temper-provisional-id, and no manifest hint was supplied",
+                file_path.display()
+            )));
+        }
     };
 
-    // Parse frontmatter and split into managed/open tiers.
-    let (managed_meta, open_meta) = match Frontmatter::try_from(content.as_str()) {
-        Ok(fm) => (Some(fm.managed_json()), Some(fm.open_json())),
-        Err(_) => (None, None),
-    };
-    let title = ingest::title_from_path(&file_path);
+    let body = crate::actions::ingest::strip_frontmatter(&content);
 
-    let mut payload = ingest::build_ingest_payload(body, &title, &context, &doc_type, None)?;
+    // Prefer vault-relative path parsing; fall back to frontmatter fields
+    // for files outside the `@owner/context/doc-type/slug.md` layout (the
+    // case that motivates manifest-less push).
+    let rel_parsed = file_path
+        .strip_prefix(vault_root)
+        .ok()
+        .and_then(|p| p.to_str().map(String::from))
+        .and_then(|s| {
+            Vault::parse_rel(&s).map(|p| (p.context.to_string(), p.doc_type.to_string()))
+        });
+
+    let (context, doc_type) = match rel_parsed {
+        Some(cd) => cd,
+        None => {
+            let mapping = fm
+                .value()
+                .as_mapping()
+                .ok_or_else(|| TemperError::Config("frontmatter is not a mapping".into()))?;
+            let ctx = mapping
+                .get(serde_yaml::Value::String("temper-context".into()))
+                .and_then(|v| v.as_str())
+                .unwrap_or("default")
+                .to_string();
+            let doctype = fm.doc_type().as_str().to_string();
+            (ctx, doctype)
+        }
+    };
+
+    let managed_meta = Some(fm.managed_json());
+    let open_meta = Some(fm.open_json());
+    let title = crate::actions::ingest::title_from_path(&file_path);
+    let mut payload = crate::actions::ingest::build_ingest_payload(
+        body, &title, &context, &doc_type, None, None, None,
+    )?;
     payload.managed_meta = managed_meta;
     payload.open_meta = open_meta;
 
-    let is_provisional = manifest
-        .entries
-        .get(&entry_id)
-        .map_or(false, |e| e.provisional);
-
-    let resource = if item.resource_id.is_some() && !is_provisional {
-        // Existing resource — PUT update
-        client
-            .ingest()
-            .update(Uuid::from(entry_id), &payload)
-            .await
-            .map_err(crate::commands::client_err)?
+    // ---- Step C — POST (provisional / new) or PUT (canonical) -------------
+    let push_kind = if is_provisional {
+        PushKind::New
     } else {
-        // New resource — POST create (also used for provisional entries)
+        PushKind::Modified
+    };
+    let resource = if is_provisional {
         client
             .ingest()
             .create(&payload)
             .await
             .map_err(crate::commands::client_err)?
+    } else {
+        client
+            .ingest()
+            .update(Uuid::from(entry_id), &payload)
+            .await
+            .map_err(crate::commands::client_err)?
     };
+    let server_id = ResourceId::from(Uuid::from(resource.id));
 
-    // If the server assigned a different resource ID (POST create), remap the
-    // manifest entry so the local UUID matches the server's authoritative ID.
-    let server_id = resource.id;
+    // ---- Step D — provisional → canonical rewrite (file + manifest) ------
+    let mut manifest = manifest;
     if server_id != entry_id || is_provisional {
-        tracing::info!(
-            %entry_id,
-            %server_id,
-            is_provisional,
-            "remapping manifest entry: local ID → server ID"
-        );
-        if let Some(mut entry) = manifest.entries.remove(&entry_id) {
-            entry.provisional = false;
-            manifest.entries.insert(server_id, entry);
+        let file_content = std::fs::read_to_string(&file_path)?;
+        let entry_uuid = Uuid::from(entry_id);
+        let server_uuid = Uuid::from(server_id);
+        let updated = file_content
+            .replace(
+                &format!("temper-provisional-id: \"{entry_uuid}\""),
+                &format!("temper-id: \"{server_uuid}\""),
+            )
+            .replace(
+                &format!("temper-provisional-id: {entry_uuid}"),
+                &format!("temper-id: {server_uuid}"),
+            );
+        let updated = if updated != file_content {
+            updated
+        } else {
+            // Fallback: file already had temper-id with the local UUID.
+            file_content.replace(&entry_uuid.to_string(), &server_uuid.to_string())
+        };
+        if updated != file_content {
+            std::fs::write(&file_path, &updated)?;
+        } else {
+            tracing::warn!(
+                %entry_id,
+                "provisional id not found in file content — frontmatter not updated"
+            );
+        }
 
-            // Replace provisional frontmatter key+value with authoritative temper-id.
-            let file_content = std::fs::read_to_string(&file_path)?;
-            let updated = file_content
-                .replace(
-                    &format!("temper-provisional-id: \"{entry_id}\""),
-                    &format!("temper-id: \"{server_id}\""),
-                )
-                .replace(
-                    &format!("temper-provisional-id: {entry_id}"),
-                    &format!("temper-id: {server_id}"),
-                );
-
-            if updated != file_content {
-                std::fs::write(&file_path, &updated)?;
-                tracing::info!("replaced temper-provisional-id with temper-id in frontmatter");
-            } else {
-                // Fallback: try replacing old-style id: or temper-id: (for files
-                // that already had temper-id with a local UUID)
-                let fallback = file_content.replace(&entry_id.to_string(), &server_id.to_string());
-                if fallback != file_content {
-                    std::fs::write(&file_path, &fallback)?;
-                    tracing::info!("updated temper-id in file frontmatter (fallback path)");
-                } else {
-                    tracing::warn!(
-                        %entry_id,
-                        "temper-provisional-id not found in file content — frontmatter not updated"
-                    );
-                }
+        if let Some(m) = manifest.as_mut() {
+            if let Some(mut entry) = m.entries.remove(&entry_id) {
+                entry.provisional = false;
+                m.entries.insert(server_id, entry);
             }
         }
     }
 
-    // Compute frontmatter hashes so we can record them as the remote values.
-    // The file was just successfully pushed (and possibly had its
-    // temper-provisional-id rewritten in place above), so it must parse
-    // cleanly here — any failure is a bug in our write path, not a user
-    // data issue, so propagate the error with path context.
-    let (pushed_managed_hash, pushed_open_hash) = Frontmatter::parse_file(&file_path)
-        .map_err(|e| {
-            TemperError::Vault(format!(
-                "push_resource_body post-write hash compute {}: {e}",
-                file_path.display()
-            ))
-        })?
-        .hashes();
+    // ---- Step E — post-write hashes + full manifest entry update ---------
+    // The file was just rewritten (possibly with a new canonical id in the
+    // frontmatter), so re-parse from disk to get hashes reflecting what's
+    // actually there now.
+    let fm_written = Frontmatter::parse_file(&file_path).map_err(|e| {
+        TemperError::Vault(format!(
+            "push_one_resource post-write hash compute {}: {e}",
+            file_path.display()
+        ))
+    })?;
+    let (managed_hash, open_hash) = fm_written.hashes();
+    // Compute body hash from the on-disk body directly. We have `body`
+    // (stripped frontmatter) in scope from Step B, and this avoids
+    // depending on build_ingest_payload's Option<String> contract.
+    let body_hash = temper_core::hash::compute_body_hash(body);
 
-    if let Some(e) = manifest.entries.get_mut(&server_id) {
-        // After push, server hashes match what we sent
-        e.remote_body_hash = payload.content_hash.clone().unwrap_or_default();
-        e.remote_managed_hash = pushed_managed_hash;
-        e.remote_open_hash = pushed_open_hash;
-        e.state = ManifestEntryState::Clean;
-        e.synced_at = chrono::Utc::now();
-        e.mtime_secs = file_mtime_secs(&file_path).ok();
+    if let Some(m) = manifest.as_mut() {
+        if let Some(e) = m.entries.get_mut(&server_id) {
+            e.body_hash = body_hash.clone();
+            e.remote_body_hash = body_hash;
+            e.managed_hash = managed_hash.clone();
+            e.open_hash = open_hash.clone();
+            e.remote_managed_hash = managed_hash;
+            e.remote_open_hash = open_hash;
+            e.state = ManifestEntryState::Clean;
+            e.synced_at = chrono::Utc::now();
+            e.mtime_secs = file_mtime_secs(&file_path).ok();
+        }
     }
 
-    Ok(())
+    Ok(PushResult {
+        resource_id: server_id,
+        path: file_path,
+        kind: push_kind,
+    })
+}
+
+/// Publish a freshly-written local file to the server. For Local mode
+/// only. Loads the manifest, pushes via `push_one_resource(PushTarget::Path)`,
+/// saves the manifest.
+///
+/// Precondition: `file_path` exists and has either `temper-provisional-id`
+/// or `temper-id` in frontmatter.
+///
+/// Postcondition: server has the latest content; manifest entry reflects
+/// the canonical `temper-id` and current hashes.
+pub async fn publish_local_write(
+    client: &temper_client::TemperClient,
+    vault_root: &std::path::Path,
+    file_path: &std::path::Path,
+) -> Result<PushResult> {
+    use crate::actions::runtime;
+    use crate::manifest_io;
+
+    let temper_dir = vault_root.join(".temper");
+    let device_id = runtime::require_device_id()?;
+    let mut manifest = manifest_io::load_manifest(&temper_dir, &device_id)?;
+
+    let result = push_one_resource(
+        client,
+        vault_root,
+        PushTarget::Path(file_path),
+        Some(&mut manifest),
+    )
+    .await?;
+
+    manifest_io::save_manifest(&temper_dir, &manifest)?;
+    Ok(result)
 }
 
 async fn pull_resource(
@@ -1063,9 +1325,132 @@ async fn pull_resource(
     item: &SyncPullItem,
 ) -> Result<()> {
     match item.kind {
-        SyncItemKind::Body => pull_resource_body(client, manifest, vault_root, item).await,
+        SyncItemKind::Body => {
+            // Delegate body pulls to the unified primitive. The primitive
+            // writes the file, populates body_hash / remote_body_hash /
+            // state / synced_at on the tracked entry. The sync engine
+            // always has a manifest, so we pass Some(manifest).
+            //
+            // Semantic note vs. the old pull_resource_body:
+            // - If the id IS in the manifest, ManifestTracked branch fires
+            //   and writes to the manifest-resolved path (unchanged behavior).
+            // - If the id is NOT in the manifest (rare; sync diff says
+            //   pull but we have no entry yet), Snapshot branch writes
+            //   {id}.md under vault_root. The old code would have
+            //   slug-deduped into a doc-type dir; here it lands at the
+            //   vault root. That surface is rare enough that the
+            //   simplification is acceptable, and the manifest is the
+            //   authoritative path source going forward.
+            pull_one_resource(
+                client,
+                vault_root,
+                item.resource_id,
+                Some(manifest),
+                Some(item.content_hash.clone()),
+            )
+            .await
+            .map(|_| ())
+        }
         SyncItemKind::MetaOnly => pull_resource_meta_only(client, manifest, vault_root, item).await,
     }
+}
+
+/// Pull a single resource from the server.
+///
+/// With `Some(manifest)` and a tracked entry, writes to the manifest-resolved
+/// vault path (under `vault_root`) and updates the entry's hashes, state, and
+/// synced_at. With `None` or an untracked id, writes a snapshot as `{id}.md`
+/// under `vault_root` directly — the caller chooses where that is (the CLI
+/// wrapper uses CWD; the sync engine uses the vault root).
+///
+/// `expected_remote_hash` is the server-declared body hash for this resource
+/// (as carried on `SyncPullItem.content_hash`). When provided, it is stored
+/// verbatim as `remote_body_hash` on the manifest entry — this preserves the
+/// invariant that `remote_body_hash` mirrors the server's canonical hash,
+/// even when local vault normalization yields a different byte sequence than
+/// what the server stored. When `None` (e.g. from the CLI `pull` wrapper
+/// that has no sync-diff context), the locally-computed hash of the written
+/// body is used as a best-effort fallback.
+pub async fn pull_one_resource(
+    client: &temper_client::TemperClient,
+    vault_root: &Path,
+    resource_id: ResourceId,
+    manifest: Option<&mut Manifest>,
+    expected_remote_hash: Option<String>,
+) -> Result<PullResult> {
+    let id = Uuid::from(resource_id);
+
+    let resource = client
+        .resources()
+        .get(id)
+        .await
+        .map_err(crate::commands::client_err)?;
+    let content_response = client
+        .resources()
+        .content(id)
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    // Manifest-tracked branch: only when we have a manifest AND the id is in it.
+    if let Some(manifest) = manifest {
+        if let Some(entry) = manifest.entries.get_mut(&resource_id) {
+            let vault_path = vault_root.join(&entry.path);
+            if let Some(parent) = vault_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let (ctx, dtype) = match Vault::parse_rel(&entry.path) {
+                Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
+                None => ("default".to_string(), "resource".to_string()),
+            };
+            let managed_value = content_response
+                .managed_meta
+                .as_ref()
+                .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
+            let fm = ingest::build_frontmatter_from_resource(
+                &resource,
+                &ctx,
+                &dtype,
+                ingest::normalize_body_for_vault(&content_response.markdown),
+                managed_value.as_ref(),
+                content_response.open_meta.as_ref(),
+            )?;
+            fm.write_to(&vault_path).map_err(|e| {
+                TemperError::Vault(format!("pull write {}: {e}", vault_path.display()))
+            })?;
+
+            let content_hash = temper_core::hash::compute_body_hash(fm.body());
+            let (managed_hash, open_hash) = fm.hashes();
+
+            entry.body_hash = content_hash.clone();
+            entry.remote_body_hash = expected_remote_hash.unwrap_or(content_hash);
+            entry.managed_hash = managed_hash.clone();
+            entry.open_hash = open_hash.clone();
+            entry.remote_managed_hash = managed_hash;
+            entry.remote_open_hash = open_hash;
+            entry.synced_at = chrono::Utc::now();
+            entry.state = ManifestEntryState::Clean;
+            entry.mtime_secs = file_mtime_secs(&vault_path).ok();
+
+            return Ok(PullResult {
+                resource_id,
+                path: vault_path,
+                branch: PullBranch::ManifestTracked,
+                title: resource.title.clone(),
+            });
+        }
+    }
+
+    // Snapshot branch: no manifest, or id not tracked. Write to vault_root
+    // as `{id}.md`. Matches the ADDED branch in `commands/pull.rs` today.
+    let filename = format!("{id}.md");
+    let snapshot_path = vault_root.join(&filename);
+    std::fs::write(&snapshot_path, &content_response.markdown)?;
+    Ok(PullResult {
+        resource_id,
+        path: snapshot_path,
+        branch: PullBranch::Snapshot,
+        title: resource.title.clone(),
+    })
 }
 
 /// Relocation guard for meta-only pulls.
@@ -1098,10 +1483,10 @@ fn check_relocation_guard(
 
 /// Convert an optional typed `ManagedMeta` into an optional JSON
 /// `Value` for the generic frontmatter-emitter callers in this
-/// module (`build_frontmatter_from_resource`, `apply_pull_meta_only`,
-/// `write_pulled_file`). Those functions take `Option<&Value>` because
-/// they also need to emit arbitrary per-doc-type fields from the
-/// flatten bucket and from open_meta via the same YAML path.
+/// module (`build_frontmatter_from_resource`, `apply_pull_meta_only`).
+/// Those functions take `Option<&Value>` because they also need to
+/// emit arbitrary per-doc-type fields from the flatten bucket and
+/// from open_meta via the same YAML path.
 ///
 /// This is a pure boundary shim — it does not affect hash stability
 /// because the hash travels alongside the meta as its own field.
@@ -1305,169 +1690,6 @@ async fn pull_resource_meta_only(
     Ok(())
 }
 
-async fn pull_resource_body(
-    client: &temper_client::TemperClient,
-    manifest: &mut Manifest,
-    vault_root: &Path,
-    item: &SyncPullItem,
-) -> Result<()> {
-    let resource = client
-        .resources()
-        .get(Uuid::from(item.resource_id))
-        .await
-        .map_err(crate::commands::client_err)?;
-
-    let content_response = client
-        .resources()
-        .content(Uuid::from(item.resource_id))
-        .await
-        .map_err(crate::commands::client_err)?;
-
-    let (ctx, doc_type) = parse_kb_uri(&item.uri)?;
-
-    // Serialize the typed ManagedMeta back to JSON Value once for the
-    // generic frontmatter emitter callsites below. Lossless via the
-    // `extra` flatten bucket on ManagedMeta.
-    let managed_value = managed_meta_to_value(content_response.managed_meta.as_ref());
-
-    // If the resource is already in the manifest, overwrite the existing file
-    // instead of creating a deduplicated copy (slug-2, slug-3, etc.).
-    let vault_path = if let Some(existing) = manifest.entries.get(&item.resource_id) {
-        let existing_path = vault_root.join(&existing.path);
-        if existing_path.exists() {
-            // Overwrite the existing file in place — no slug dedup needed.
-            let fm = ingest::build_frontmatter_from_resource(
-                &resource,
-                &ctx,
-                &doc_type,
-                ingest::normalize_body_for_vault(&content_response.markdown),
-                managed_value.as_ref(),
-                content_response.open_meta.as_ref(),
-            )?;
-            fm.write_to(&existing_path).map_err(|e| {
-                crate::error::TemperError::Vault(format!(
-                    "pull_resource_body write {}: {e}",
-                    existing_path.display()
-                ))
-            })?;
-            existing_path
-        } else {
-            // Manifest entry exists but file is missing — write to expected path.
-            let slug = ingest::slug_from_title(&resource.title);
-            let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
-            write_pulled_file(
-                vault_root,
-                &ctx,
-                &doc_type,
-                &slug,
-                &resource,
-                &content_response.markdown,
-                managed_value.as_ref(),
-                content_response.open_meta.as_ref(),
-            )?
-        }
-    } else {
-        // Genuinely new resource — dedup slug as usual.
-        let slug = ingest::slug_from_title(&resource.title);
-        let slug = ingest::dedup_vault_slug(vault_root, &ctx, &doc_type, &slug);
-        write_pulled_file(
-            vault_root,
-            &ctx,
-            &doc_type,
-            &slug,
-            &resource,
-            &content_response.markdown,
-            managed_value.as_ref(),
-            content_response.open_meta.as_ref(),
-        )?
-    };
-
-    // Update the in-memory manifest directly (no disk reload).
-    // Read the file back and strip frontmatter to compute the hash — this
-    // must match what rehash_manifest() computes, which includes the newline
-    // separator between frontmatter and body.
-    let full_content = std::fs::read_to_string(&vault_path)?;
-    let body = strip_frontmatter(&full_content);
-    let content_hash = temper_core::hash::compute_body_hash(body);
-    let rel_path = vault_path
-        .strip_prefix(vault_root)
-        .unwrap_or(&vault_path)
-        .to_string_lossy()
-        .to_string();
-
-    // write_pulled_file just wrote the file through Frontmatter::write_to,
-    // so re-parsing it must succeed here — any failure would be a bug in
-    // the write path, not a user data issue. Propagate with path context.
-    let (managed_hash, open_hash) = Frontmatter::try_from(full_content.as_str())
-        .map_err(|e| {
-            TemperError::Vault(format!(
-                "pull_resource post-write hash compute {}: {e}",
-                vault_path.display()
-            ))
-        })?
-        .hashes();
-
-    let mtime_secs = file_mtime_secs(&vault_path).ok();
-
-    manifest.entries.insert(
-        item.resource_id,
-        temper_core::types::ManifestEntry {
-            path: rel_path,
-            body_hash: content_hash,
-            remote_body_hash: item.content_hash.clone(),
-            managed_hash: managed_hash.clone(),
-            open_hash: open_hash.clone(),
-            remote_managed_hash: managed_hash,
-            remote_open_hash: open_hash,
-            synced_at: chrono::Utc::now(),
-            state: ManifestEntryState::Clean,
-            mtime_secs,
-            last_audit_id: None,
-            provisional: false,
-        },
-    );
-
-    Ok(())
-}
-
-/// Write a pulled file to the vault (new resource or missing file).
-///
-/// Creates parent directories and writes frontmatter + content. Does NOT
-/// touch the manifest — the caller is responsible for that.
-fn write_pulled_file(
-    vault_root: &Path,
-    context: &str,
-    doc_type: &str,
-    slug: &str,
-    resource: &temper_core::types::ResourceRow,
-    content: &str,
-    managed_meta: Option<&serde_json::Value>,
-    open_meta: Option<&serde_json::Value>,
-) -> Result<std::path::PathBuf> {
-    let vault_path = ingest::build_vault_path(vault_root, context, doc_type, slug);
-
-    if let Some(parent) = vault_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let fm = ingest::build_frontmatter_from_resource(
-        resource,
-        context,
-        doc_type,
-        ingest::normalize_body_for_vault(content),
-        managed_meta,
-        open_meta,
-    )?;
-    fm.write_to(&vault_path).map_err(|e| {
-        crate::error::TemperError::Vault(format!(
-            "write_pulled_file write {}: {e}",
-            vault_path.display()
-        ))
-    })?;
-
-    Ok(vault_path)
-}
-
 fn remove_resource(
     manifest: &mut Manifest,
     vault_root: &Path,
@@ -1542,7 +1764,8 @@ async fn merge_and_push_resource(
     };
     let title = ingest::title_from_path(&file_path);
 
-    let payload = ingest::build_ingest_payload(merged_body, &title, &context, &doc_type, None)?;
+    let payload =
+        ingest::build_ingest_payload(merged_body, &title, &context, &doc_type, None, None, None)?;
 
     // 7. Push via update
     let _resource = client
@@ -3246,6 +3469,7 @@ mod tests {
             seq: Some(1),
             mode: None,
             effort: None,
+            body_hash: None,
         }
     }
 

@@ -86,6 +86,26 @@ impl<'a> ResourceClient<'a> {
             .await
     }
 
+    /// GET /api/resources/by-uri — resolve `(owner, context, doc_type, ident)` to a row.
+    pub async fn resolve_by_uri(
+        &self,
+        owner: &str,
+        context: &str,
+        doc_type: &str,
+        ident: &str,
+    ) -> Result<ResourceRow> {
+        let token = self.http.resolve_token()?;
+        let req = self.http.get("/api/resources/by-uri").query(&[
+            ("owner", owner),
+            ("context", context),
+            ("doc_type", doc_type),
+            ("ident", ident),
+        ]);
+        self.http
+            .send_json(&Method::GET, "/api/resources/by-uri", req, Some(&token))
+            .await
+    }
+
     /// Get the reconstituted markdown content for a resource.
     pub async fn content(&self, id: Uuid) -> Result<ContentResponse> {
         let token = self.http.resolve_token()?;

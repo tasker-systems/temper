@@ -3,7 +3,7 @@ use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::error::{ApiResult, ErrorBody};
+use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::resource_service::{
     self, ResolveByUriParams, ResourceCreateRequest, ResourceListParams, ResourceListResponse,
@@ -132,6 +132,7 @@ pub async fn create(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Updated resource", body = ResourceRow),
+        (status = 400, description = "Partial body trio", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
@@ -140,10 +141,27 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
+    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
-    resource_service::update(&state.pool, auth.0.profile.id, resource_id, req)
+    // Body trio is all-or-nothing.
+    let body_fields_present = [
+        req.content.is_some(),
+        req.content_hash.is_some(),
+        req.chunks_packed.is_some(),
+    ];
+    if body_fields_present.iter().any(|&p| p) && !body_fields_present.iter().all(|&p| p) {
+        return Err(ApiError::BadRequest(
+            "content, content_hash, and chunks_packed must all be present together or all be absent".to_string(),
+        ));
+    }
+
+    let device_id = device_id
+        .map(|d| d.0 .0.clone())
+        .unwrap_or_else(|| "api".to_string());
+
+    resource_service::update(&state.pool, auth.0.profile.id, resource_id, &device_id, req)
         .await
         .map(Json)
 }

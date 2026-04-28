@@ -155,9 +155,17 @@ jobs:
           cargo nextest run -p temper-api --features "test-db,ingest-pipeline" --locked --test-threads 1 --no-fail-fast
           cargo nextest run -p temper-ingest --features "test-embed" --locked --test-threads 1 --no-fail-fast
 
+      - name: Run CLI-side embed pipeline tests
+        # temper-cli unit tests gated on `feature = "test-embed"` cover
+        # compute_body_chunks / build_ingest_payload — they need ONNX at
+        # runtime, so they live here rather than in the Unit Tests job.
+        run: cargo nextest run -p temper-cli --features test-embed --locked --test-threads 1 --no-fail-fast
+
       - name: Run MCP round-trip + ingest-pipeline e2e tests
-        # Combined filter: the mcp_round_trip_test binary (all tests) plus
-        # sync_run_push_body_round_trip specifically — the one sync_test
-        # case that drives the server-side embed path by pushing an
-        # un-pre-packed body.
-        run: cargo nextest run -p temper-e2e --features test-db --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=sync_run_push_body_round_trip) + test(=graph_build_then_sync_materializes_edges)'
+        # Combined filter: the mcp_round_trip_test binary (all tests),
+        # sync_run_push_body_round_trip and graph_build_then_sync_materializes_edges
+        # for the server-side embed path. Plus push_command_test (whole file
+        # gated on test-embed since every test exercises push_one_resource →
+        # build_ingest_payload), and the local-mode publish-tail / cloud-mode
+        # body-bearing tests gated similarly.
+        run: cargo nextest run -p temper-e2e --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=sync_run_push_body_round_trip) + test(=graph_build_then_sync_materializes_edges) + binary(push_command_test) + test(=local_mode_session_create_wire_shape_regression) + test(=cloud_update_body_and_meta_in_one_request) + test(=cloud_update_body_only_no_managed_meta) + test(=cloud_update_chunk_dedupe_skips_unchanged)'

@@ -2,12 +2,11 @@
 
 use uuid::Uuid;
 
-use crate::actions::ingest;
 use crate::actions::runtime;
+use crate::actions::sync::pull_one_resource;
 use crate::error::TemperError;
 use crate::output;
 use temper_core::types::ResourceId;
-use temper_core::vault::Vault;
 
 pub fn run(resource_id: &str) -> crate::error::Result<()> {
     let id = Uuid::parse_str(resource_id)
@@ -16,79 +15,52 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
 
     runtime::with_client(|client| {
         Box::pin(async move {
-            // Fetch resource metadata and content.
-            let resource = client
-                .resources()
-                .get(id)
-                .await
-                .map_err(crate::commands::client_err)?;
-
-            let content_response = client
-                .resources()
-                .content(id)
-                .await
-                .map_err(crate::commands::client_err)?;
-
-            // Check if resource is in manifest (imported).
             let vault_root = crate::config::resolve_vault(None)?;
             let temper_dir = vault_root.join(".temper");
             let device_id =
                 crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
-            let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
-            if let Some(entry) = manifest.entries.get_mut(&resource_id_typed) {
-                // IMPORTED resource — write to vault path from manifest.
-                let vault_path = vault_root.join(&entry.path);
-                if let Some(parent) = vault_path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-
-                // Parse owner/context/doc_type from manifest path: "{owner}/{context}/{doc_type}/{slug}.md"
-                let (ctx, dtype) = match Vault::parse_rel(&entry.path) {
-                    Some(parsed) => (parsed.context.to_string(), parsed.doc_type.to_string()),
-                    None => ("default".to_string(), "resource".to_string()),
+            // Try to load a manifest; if missing, fall through to snapshot mode.
+            let (mut manifest_opt, persist) =
+                match crate::manifest_io::load_manifest(&temper_dir, &device_id) {
+                    Ok(m) => (Some(m), true),
+                    Err(_) => (None, false),
                 };
 
-                // Serialize the typed ManagedMeta back to JSON Value for
-                // the generic frontmatter emitter. Lossless round-trip
-                // via ManagedMeta::extra.
-                let managed_value = content_response
-                    .managed_meta
-                    .as_ref()
-                    .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
-                let fm = ingest::build_frontmatter_from_resource(
-                    &resource,
-                    &ctx,
-                    &dtype,
-                    ingest::normalize_body_for_vault(&content_response.markdown),
-                    managed_value.as_ref(),
-                    content_response.open_meta.as_ref(),
-                )?;
-                fm.write_to(&vault_path).map_err(|e| {
-                    TemperError::Vault(format!("pull write {}: {e}", vault_path.display()))
-                })?;
-
-                // Update manifest entry.
-                let content_hash = temper_core::hash::compute_body_hash(fm.body());
-                entry.body_hash = content_hash.clone();
-                // After pull, local content matches server — hashes are identical
-                entry.remote_body_hash = content_hash;
-                entry.synced_at = chrono::Utc::now();
-                entry.state = temper_core::types::ManifestEntryState::Clean;
-                crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
-
-                output::success(format!(
-                    "Pulled: \"{}\" -> {}",
-                    resource.title,
-                    vault_path.display()
-                ));
+            // When a manifest loads, snapshots (for untracked ids) and tracked
+            // writes both go under vault_root. When there's no manifest at all,
+            // snapshots must land in CWD — matching pre-refactor behavior
+            // (`commands/pull.rs:88` pre-refactor: bare relative path) and the
+            // design spec (Unit A acceptance criterion 3).
+            let write_root: std::path::PathBuf = if manifest_opt.is_some() {
+                vault_root.clone()
             } else {
-                // ADDED resource — write as snapshot to CWD.
-                let filename = format!("{id}.md");
-                std::fs::write(&filename, &content_response.markdown)?;
-                output::success(format!("Pulled: \"{}\" -> {filename}", resource.title));
+                std::env::current_dir()?
+            };
+
+            let result = pull_one_resource(
+                client,
+                &write_root,
+                resource_id_typed,
+                manifest_opt.as_mut(),
+                // CLI `pull` has no sync-diff context and no server-declared
+                // content hash to pin; the primitive falls back to the local
+                // hash, which keeps body_hash and remote_body_hash agreeing.
+                None,
+            )
+            .await?;
+
+            if persist {
+                if let Some(m) = &manifest_opt {
+                    crate::manifest_io::save_manifest(&temper_dir, m)?;
+                }
             }
 
+            output::success(format!(
+                "Pulled: \"{}\" -> {}",
+                result.title,
+                result.path.display()
+            ));
             Ok(())
         })
     })

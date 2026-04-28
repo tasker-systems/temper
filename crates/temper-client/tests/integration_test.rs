@@ -9,6 +9,9 @@
 
 #![cfg(feature = "integration-tests")]
 
+use std::sync::Arc;
+
+use temper_client::auth::{DiskTokenStore, TokenStore};
 use temper_client::config::build_client;
 use temper_client::error::ClientError;
 use temper_client::TemperClient;
@@ -18,16 +21,17 @@ use temper_core::types::resource::ResourceListParams;
 ///
 /// Returns `None` when no auth credentials are present so tests can skip.
 fn try_build_client() -> Option<TemperClient> {
-    match temper_client::auth::current_token() {
-        Ok(_) => {}
-        Err(_) => {
+    let store: Arc<dyn TokenStore> = Arc::new(DiskTokenStore::default_path());
+    match store.load() {
+        Ok(Some(auth)) if auth.expires_at > chrono::Utc::now() => {}
+        _ => {
             eprintln!(
                 "skipping integration test: no valid auth credentials (run `temper auth login`)"
             );
             return None;
         }
     }
-    match build_client() {
+    match build_client(store) {
         Ok(c) => Some(c),
         Err(e) => {
             eprintln!("skipping integration test: {e}");

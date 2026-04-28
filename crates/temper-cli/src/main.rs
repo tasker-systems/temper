@@ -118,6 +118,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     slug,
                     show_template,
                     stdin: _,
+                    body,
                     format,
                 } => {
                     if show_template {
@@ -140,6 +141,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         mode.as_deref(),
                         effort.as_deref(),
                         slug.as_deref(),
+                        body,
                         format,
                     )
                 }
@@ -207,6 +209,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     branch,
                     pr,
                     status,
+                    body,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
                         slug: &slug,
@@ -232,6 +235,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         branch: branch.as_deref(),
                         pr: pr.as_deref(),
                         status: status.as_deref(),
+                        body,
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
@@ -282,11 +286,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         },
         Commands::Auth { action } => match action {
             AuthAction::Login => temper_cli::commands::auth::login(),
-            AuthAction::Token { jwt, provider } => {
-                temper_cli::commands::auth::token(&jwt, &provider)
-            }
+            AuthAction::Token { provider } => temper_cli::commands::auth::token(&provider),
             AuthAction::Logout => temper_cli::commands::auth::logout(),
             AuthAction::Status => temper_cli::commands::auth::status(),
+            AuthAction::ExportToken => temper_cli::commands::auth::export_token(),
         },
         Commands::Skill { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
@@ -335,6 +338,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             )
         }
         Commands::Pull { resource_id } => commands::pull::run(&resource_id),
+        Commands::Push { target } => commands::push::run(&target),
         Commands::Remove { resource_id, force } => commands::remove::run(&resource_id, force),
         Commands::Sync { action } => match action {
             SyncAction::Run { context, format } => {

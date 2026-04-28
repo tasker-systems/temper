@@ -27,6 +27,9 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 - `api/mcp.rs` — Vercel runtime adapter for the MCP server (same pattern as axum.rs).
 - `api/auth/`, `api/workflows/` — Vercel serverless endpoints (TypeScript).
 
+### End-to-End Tests (tests/e2e/)
+Standalone test crate (not in `crates/`) that exercises the full stack: spawns a real Axum server, hits a real Postgres test database, and drives flows through the actual `temper-cli` and `temper-client` code paths. Use this layer for tests that span CLI ↔ API ↔ DB or that need real auth (JWT, JWKS fixtures in `tests/e2e/tests/fixtures/`). Test files in `tests/e2e/tests/`, shared harness in `tests/e2e/tests/common/`. Run with `cargo make test-e2e`.
+
 ### Database
 - PostgreSQL 18 with pgvector. Migrations in `migrations/` using sqlx.
 - Dev database: `postgresql://temper:temper@localhost:5437/temper_development`
@@ -49,7 +52,7 @@ cargo make test
 cargo make docker-up
 cargo make test-db
 
-# E2E tests only
+# E2E tests (CLI ↔ API ↔ DB through real Axum + Postgres; lives at tests/e2e/, not crates/)
 cargo make test-e2e
 
 # All tests (Rust + TypeScript + integration)
@@ -96,7 +99,7 @@ bun run check          # svelte-check
 ## Feature Flags
 
 Rust crates use feature flags to gate heavy dependencies:
-- `test-db` — enables database integration tests (temper-api, temper-e2e)
+- `test-db` — enables database integration tests (temper-api, tests/e2e)
 - `test-embed` — enables embedding tests (temper-ingest)
 - `embed` / `extract` — gates ONNX and kreuzberg dependencies (temper-ingest)
 - `web-api` — enables utoipa OpenAPI derives (temper-core)
@@ -110,6 +113,7 @@ Rust crates use feature flags to gate heavy dependencies:
 - **UUID v7** — All entity IDs use UUIDv7 (time-sortable).
 - **Auth** — Auth0 device authorization PKCE flow. Tokens cached locally. API validates JWTs via JWKS.
 - **CI** — GitHub Actions: `code-quality.yml` (fmt, clippy, machete), `test-rust.yml`, `test-typescript.yml`, `ci-success.yml` (merge gate).
+- **Cloud mode operations** — When `TEMPER_VAULT_STATE=cloud`, write paths route directly through the API: `temper resource create` POSTs to `/api/ingest`; `temper resource update` PATCHes `/api/resources/{id}` with a partial-merge payload (managed_meta + open_meta + optional body trio). **Do not invoke `temper sync run`** in cloud mode — it errors with a redirect message. Files on disk under cloud mode are derivative — the `show` debounce cache and any scratch tmpfile from the show-edit-cat pattern are read-cache or base-then-update artifacts, never authoritative. Body edits use the show-edit-cat idiom: `temper resource show <slug>` writes the current body to a temp path; modify it; then `cat tmpfile.md | temper resource update <slug> --stage done` posts the updated body + managed_meta in one PATCH. Body source can also be supplied explicitly via `--body @<path>` (read file) or `--body -` (read stdin); implicit stdin is auto-detected when stdin is non-TTY.
 
 ## Code Quality Rules
 
@@ -122,6 +126,7 @@ These rules apply to all code in this repository. Subagents and implementation p
 - **Auth before writes** — Authorization checks go before any mutations. Never write-then-check.
 - **Profile scoping** — All data queries scope through `resources_visible_to`, `can_modify_resource`, or equivalent. Even async workflows verify the profile can access the resource before writing.
 - **Pino structured logging** — TypeScript uses pino (`packages/temper-cloud/src/logger.ts`) with contextual field objects. No `console.log`.
+- **Schema-required defaults at create/update, not later** — Doc-type schemas in `temper-core/types/schemas/` declare required frontmatter fields. Resource creation paths (templated file write, cloud-mode ingest, MCP create) and update paths must populate every schema-required field at write time, not rely on a downstream pass to backfill. Use `apply_doc_type_defaults` and `Frontmatter::set_managed_meta` (which honors the typed `ManagedMeta` shape) to keep this consistent. Pre-existing files without these fields stay valid until their next round-trip; new writes never produce them.
 
 ## SQL Query Checking
 

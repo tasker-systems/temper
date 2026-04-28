@@ -53,6 +53,9 @@ pub enum TemperError {
     #[error("API error: {0}")]
     Api(String),
 
+    #[error("network error: {0}")]
+    Network(String),
+
     #[error("Not found: {0}")]
     NotFound(String),
 

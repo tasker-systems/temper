@@ -146,6 +146,9 @@ pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -
         .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
     fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
     vault::write_note(&path, &content)?;
+
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
+
     let event = discovery::Event::ResourceCreate {
         ts: Local::now().to_rfc3339(),
         doc_type: "goal".to_string(),

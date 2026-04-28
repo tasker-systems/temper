@@ -208,6 +208,8 @@ pub fn create(
     let path = vault_layout.doc_file(&owner, context, "task", &slug);
     vault::write_note(&path, &content)?;
 
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
+
     let event = discovery::Event::ResourceCreate {
         ts: datetime,
         doc_type: "task".to_string(),

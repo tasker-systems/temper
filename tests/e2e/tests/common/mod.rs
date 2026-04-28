@@ -21,7 +21,7 @@ use temper_api::{
     create_app,
     state::{AppState, JwksKeyStore},
 };
-use temper_client::auth::StoredAuth;
+use temper_client::auth::{MemoryTokenStore, Provider, StoredAuth};
 use temper_core::types::config::{CloudSection, CloudVaultConfig, TemperConfig};
 
 // Well-known UUIDs from seed migration.
@@ -291,15 +291,19 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
     };
 
     let stored_auth = StoredAuth {
-        provider: "test".to_string(),
-        access_token: token.clone(),
+        provider: Provider::Auth0 {
+            domain: "test".to_string(),
+        },
+        access_token: token.clone().into(),
         refresh_token: None,
         expires_at: Utc::now() + Duration::hours(1),
         profile_id: None,
         device_id: Some("e2e-test-device".to_string()),
     };
 
-    let client = temper_client::config::build_client_from(&temper_config, Some(&stored_auth))
+    let store: std::sync::Arc<dyn temper_client::auth::TokenStore> =
+        std::sync::Arc::new(MemoryTokenStore::with_auth(stored_auth));
+    let client = temper_client::config::build_client_from(&temper_config, store)
         .expect("Failed to build test client");
 
     let cli_config = temper_cli::config::load_from(&temper_config, None);

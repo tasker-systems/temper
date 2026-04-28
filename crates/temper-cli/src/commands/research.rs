@@ -1,13 +1,14 @@
 use askama::Template;
+use chrono::Local;
 use temper_core::vault::Vault;
 
+use crate::actions::frontmatter::{build_managed_meta_for_create, NewResourceArgs};
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::Result;
 use crate::output;
 use crate::templates::ResearchTemplate;
 use crate::vault;
-use chrono::Local;
 
 pub fn save(
     config: &Config,
@@ -30,6 +31,12 @@ pub fn save(
             let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
             fm.set_body(body.to_string());
             fm.write_to(&note_path)?;
+
+            crate::actions::runtime::publish_local_write_best_effort(
+                &config.vault_root,
+                &note_path,
+            )?;
+
             let relative = note_path
                 .strip_prefix(&config.vault_root)
                 .unwrap_or(&note_path);
@@ -51,10 +58,21 @@ pub fn save(
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
     let mut fm = temper_core::frontmatter::Frontmatter::try_from(rendered.as_str())?;
-    fm.set_managed_field(
-        "temper-context",
-        serde_json::Value::String(context_name.to_string()),
-    );
+    let meta = build_managed_meta_for_create(NewResourceArgs {
+        doc_type: "research",
+        context: context_name,
+        title,
+        mode: None,
+        effort: None,
+        goal: None,
+        stage: None,
+        seq: None,
+        status: None,
+        provenance: None,
+        llm_model: None,
+        llm_run: None,
+    });
+    fm.set_managed_meta(&meta);
     if let Some(body) = stdin_content {
         fm.set_body(body.to_string());
     }
@@ -63,6 +81,8 @@ pub fn save(
         std::fs::create_dir_all(parent)?;
     }
     fm.write_to(&note_path)?;
+
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &note_path)?;
 
     let relative = note_path
         .strip_prefix(&config.vault_root)

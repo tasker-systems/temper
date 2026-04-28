@@ -45,12 +45,48 @@ export type ResourceListResponse = { rows: Array<ResourceRow>, total: bigint, fa
  * Row type for resource listings — includes joined display fields
  * and managed_meta projections from `vault_resources_browse` view.
  */
-export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, kb_doc_type_id: DocTypeId, origin_uri: string, title: string, slug: string | null, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, context_name: string, doc_type_name: string, owner_handle: string, stage: string | null, seq: number | null, mode: string | null, effort: string | null, };
+export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, kb_doc_type_id: DocTypeId, origin_uri: string, title: string, slug: string | null, originator_profile_id: ProfileId, owner_profile_id: ProfileId, is_active: boolean, created: string, updated: string, context_name: string, doc_type_name: string, owner_handle: string, stage: string | null, seq: number | null, mode: string | null, effort: string | null, 
+/**
+ * SHA-256 hash of the resource body content, from `kb_resource_manifests`.
+ * `None` when no manifest row exists (resource created via POST without a
+ * body trio, or the manifest join returned NULL).
+ */
+body_hash: string | null, };
 
 /**
  * Sort field for resource listing.
  */
 export type ResourceSortField = "updated" | "created" | "title" | "stage" | "seq" | "context_name" | "doc_type_name";
+
+/**
+ * Request body for updating a resource.
+ */
+export type ResourceUpdateRequest = { title: string | null, slug: string | null, 
+/**
+ * Partial managed_meta — only fields with `Some` apply.
+ * Untouched fields preserve their stored value. There is no in-band
+ * signal for "clear this field"; field-clearing is reserved for a
+ * future PUT endpoint.
+ */
+managed_meta: ManagedMeta | null, 
+/**
+ * Partial open_meta — incoming keys win; absent keys preserved.
+ */
+open_meta: JsonValue | null, 
+/**
+ * New body markdown. Required iff `content_hash` and `chunks_packed`
+ * are also `Some` (all-or-nothing trio).
+ */
+content: string | null, 
+/**
+ * SHA-256 hash of `content`. Required iff `content` is `Some`.
+ */
+content_hash: string | null, 
+/**
+ * Pre-computed chunks (base64-encoded MessagePack). Required iff
+ * `content` is `Some`.
+ */
+chunks_packed: string | null, };
 
 /**
  * Sort direction.

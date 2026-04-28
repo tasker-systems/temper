@@ -5,6 +5,7 @@ use chrono::Local;
 use serde::Serialize;
 use temper_core::vault::Vault;
 
+use crate::actions::frontmatter::{build_managed_meta_for_create, NewResourceArgs};
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::Result;
@@ -66,6 +67,12 @@ pub fn save(
             let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
             fm.set_body(body.to_string());
             fm.write_to(&note_path)?;
+
+            crate::actions::runtime::publish_local_write_best_effort(
+                &config.vault_root,
+                &note_path,
+            )?;
+
             let relative = note_path
                 .strip_prefix(&config.vault_root)
                 .unwrap_or(&note_path);
@@ -86,10 +93,21 @@ pub fn save(
         .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
 
     let mut fm = temper_core::frontmatter::Frontmatter::try_from(rendered.as_str())?;
-    fm.set_managed_field(
-        "temper-context",
-        serde_json::Value::String(context_name.clone()),
-    );
+    let meta = build_managed_meta_for_create(NewResourceArgs {
+        doc_type: "session",
+        context: &context_name,
+        title: note_title,
+        mode: None,
+        effort: None,
+        goal: None,
+        stage: None,
+        seq: None,
+        status: None,
+        provenance: None,
+        llm_model: None,
+        llm_run: None,
+    });
+    fm.set_managed_meta(&meta);
     if let Some(body) = stdin_content {
         fm.set_body(body.to_string());
     }
@@ -98,6 +116,8 @@ pub fn save(
         std::fs::create_dir_all(parent)?;
     }
     fm.write_to(&note_path)?;
+
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &note_path)?;
 
     let relative = note_path
         .strip_prefix(&config.vault_root)
@@ -213,112 +233,212 @@ fn link_session_to_task(
     Ok(())
 }
 
-/// Show a single session's raw markdown content.
+/// Show a single session's content.
 ///
-/// Searches `<context>/session/` dirs for a file whose slug matches the given
-/// `slug_or_suffix`. Matches against the title portion of the filename (after the
-/// em-dash separator) or the full stem (date + title).
+/// Local mode: scans the vault for a matching session file, then uses the
+/// three-tier freshness ladder to produce content. JSON output preserves the
+/// `SessionShow` struct (date, context, title, path, content).
+///
+/// Cloud mode: requires a context; resolves the session id via
+/// `GET /api/resources/by-uri` and fetches content via
+/// `GET /api/resources/{id}/content`. No disk writes. JSON emits a
+/// `SessionShow`-shaped struct with an empty path field.
 pub fn show(
     config: &Config,
     slug_or_suffix: &str,
     context: Option<&str>,
     format: &str,
 ) -> Result<()> {
-    let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
-        vec![ctx.to_string()]
-    } else {
-        config.contexts.clone()
-    };
+    use crate::actions::{runtime, show_cache};
+    use std::time::Duration;
+    use temper_core::types::VaultState;
 
-    let needle = vault::slugify(slug_or_suffix);
-    let mut matches: Vec<(SessionEntry, PathBuf)> = Vec::new();
-    let vault_layout = Vault::new(&config.vault_root);
+    #[derive(Serialize)]
+    struct SessionShow {
+        date: String,
+        context: String,
+        title: String,
+        path: String,
+        content: String,
+    }
 
-    for ctx in &contexts_to_scan {
-        let owner = config.owner_for_context(ctx);
-        let session_dir = vault_layout.doc_type_dir(&owner, ctx, "session");
-        if !session_dir.is_dir() {
-            continue;
-        }
-        for file_entry in std::fs::read_dir(&session_dir)? {
-            let file_entry = file_entry?;
-            let path = file_entry.path();
-            if path.extension().is_none_or(|e| e != "md") {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-            let title_slug = if let Some(pos) = stem.find(" \u{2014} ") {
-                // Legacy format: "2026-04-05 — slug"
-                stem[pos + " \u{2014} ".len()..].to_string()
-            } else if stem.len() > 10 && stem.as_bytes().get(10) == Some(&b'-') {
-                // New format: "2026-04-05-slug"
-                stem[11..].to_string()
+    let vault_state = VaultState::from_env();
+
+    match vault_state {
+        VaultState::Local => {
+            let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
+                vec![ctx.to_string()]
             } else {
-                stem.clone()
+                config.contexts.clone()
             };
 
-            // Match: exact title slug, or full stem contains the needle
-            if title_slug == needle
-                || vault::slugify(&stem) == needle
-                || title_slug.contains(&needle)
-            {
-                let date = parse_date_from_file(&path)
-                    .or_else(|| extract_date_from_stem(&stem))
-                    .unwrap_or_else(|| "unknown".to_string());
-                matches.push((
-                    SessionEntry {
-                        date,
-                        context: ctx.clone(),
-                        title: title_slug,
-                    },
-                    path,
-                ));
+            let needle = vault::slugify(slug_or_suffix);
+            let mut matches: Vec<(SessionEntry, PathBuf)> = Vec::new();
+            let vault_layout = Vault::new(&config.vault_root);
+
+            for ctx in &contexts_to_scan {
+                let owner = config.owner_for_context(ctx);
+                let session_dir = vault_layout.doc_type_dir(&owner, ctx, "session");
+                if !session_dir.is_dir() {
+                    continue;
+                }
+                for file_entry in std::fs::read_dir(&session_dir)? {
+                    let file_entry = file_entry?;
+                    let path = file_entry.path();
+                    if path.extension().is_none_or(|e| e != "md") {
+                        continue;
+                    }
+                    let stem = path
+                        .file_stem()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
+                    let title_slug = if let Some(pos) = stem.find(" \u{2014} ") {
+                        stem[pos + " \u{2014} ".len()..].to_string()
+                    } else if stem.len() > 10 && stem.as_bytes().get(10) == Some(&b'-') {
+                        stem[11..].to_string()
+                    } else {
+                        stem.clone()
+                    };
+
+                    if title_slug == needle
+                        || vault::slugify(&stem) == needle
+                        || title_slug.contains(&needle)
+                    {
+                        let date = parse_date_from_file(&path)
+                            .or_else(|| extract_date_from_stem(&stem))
+                            .unwrap_or_else(|| "unknown".to_string());
+                        matches.push((
+                            SessionEntry {
+                                date,
+                                context: ctx.clone(),
+                                title: title_slug,
+                            },
+                            path,
+                        ));
+                    }
+                }
             }
+
+            if matches.is_empty() {
+                return Err(crate::error::TemperError::Vault(format!(
+                    "session not found: {slug_or_suffix}"
+                )));
+            }
+
+            matches.sort_by(|a, b| b.0.date.cmp(&a.0.date));
+            let (entry, path) = matches.remove(0);
+
+            // Tier 0: serve from disk if fresh — no runtime or API needed.
+            if let Some(content) = show_cache::read_if_fresh(
+                &path,
+                std::time::Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+            )? {
+                if format == "json" {
+                    let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
+                    let info = SessionShow {
+                        date: entry.date,
+                        context: entry.context,
+                        title: entry.title,
+                        path: relative.to_string_lossy().to_string(),
+                        content,
+                    };
+                    let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+                    println!("{json}");
+                    return Ok(());
+                }
+                print!("{content}");
+                return Ok(());
+            }
+
+            let entry_ctx = entry.context.clone();
+            let entry_title = entry.title.clone();
+            let config_clone = config.clone();
+
+            let (content, resolved_path) = runtime::with_client(|client| {
+                Box::pin(async move {
+                    let id = super::resource::resolve_resource_id(
+                        &config_clone,
+                        client,
+                        "session",
+                        &entry_title,
+                        Some(&entry_ctx),
+                        VaultState::Local,
+                    )
+                    .await?;
+                    let result = show_cache::fetch(show_cache::ShowCacheParams {
+                        client,
+                        resource_id: id,
+                        local_path: &path,
+                        debounce: Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
+                    })
+                    .await?;
+                    Ok((result.content, path))
+                })
+            })?;
+
+            if format == "json" {
+                let relative = resolved_path
+                    .strip_prefix(&config.vault_root)
+                    .unwrap_or(&resolved_path);
+                let info = SessionShow {
+                    date: entry.date,
+                    context: entry.context,
+                    title: entry.title,
+                    path: relative.to_string_lossy().to_string(),
+                    content,
+                };
+                let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+                println!("{json}");
+                return Ok(());
+            }
+
+            print!("{content}");
+            Ok(())
+        }
+        VaultState::Cloud => {
+            let ctx_s = context.map(str::to_string);
+            let slug_s = slug_or_suffix.to_string();
+            let config_clone = config.clone();
+
+            let body = runtime::with_client(|client| {
+                Box::pin(async move {
+                    let id = super::resource::resolve_resource_id(
+                        &config_clone,
+                        client,
+                        "session",
+                        &slug_s,
+                        ctx_s.as_deref(),
+                        VaultState::Cloud,
+                    )
+                    .await?;
+                    let resp = client
+                        .resources()
+                        .content(*id.as_uuid())
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
+                    Ok(resp.markdown)
+                })
+            })?;
+
+            if format == "json" {
+                let ctx = context.unwrap_or("");
+                let info = SessionShow {
+                    date: String::new(),
+                    context: ctx.to_string(),
+                    title: slug_or_suffix.to_string(),
+                    path: String::new(),
+                    content: body,
+                };
+                let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+                println!("{json}");
+                return Ok(());
+            }
+
+            print!("{body}");
+            Ok(())
         }
     }
-
-    if matches.is_empty() {
-        return Err(crate::error::TemperError::Vault(format!(
-            "session not found: {slug_or_suffix}"
-        )));
-    }
-
-    // Sort by date descending, take the most recent match
-    matches.sort_by(|a, b| b.0.date.cmp(&a.0.date));
-    let (entry, path) = &matches[0];
-
-    if format == "json" {
-        #[derive(Serialize)]
-        struct SessionShow<'a> {
-            date: &'a str,
-            context: &'a str,
-            title: &'a str,
-            path: String,
-            content: String,
-        }
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| crate::error::TemperError::Vault(e.to_string()))?;
-        let relative = path.strip_prefix(&config.vault_root).unwrap_or(path);
-        let info = SessionShow {
-            date: &entry.date,
-            context: &entry.context,
-            title: &entry.title,
-            path: relative.to_string_lossy().to_string(),
-            content,
-        };
-        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
-        println!("{json}");
-        return Ok(());
-    }
-
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| crate::error::TemperError::Vault(e.to_string()))?;
-    print!("{content}");
-    Ok(())
 }
 
 #[derive(Serialize)]

@@ -1,6 +1,64 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
+/// Environment variable that selects between local-vault and cloud-mode
+/// operation. See the cloud-mode design spec for semantics.
+pub const TEMPER_VAULT_STATE_ENV: &str = "TEMPER_VAULT_STATE";
+
+/// Environment variable that overrides the on-disk auth file location used by
+/// `DiskTokenStore`. Resolution precedence (highest to lowest): this env var,
+/// `auth.path` in `config.toml`, default (`~/.config/temper/auth.json`).
+///
+/// Cloud sessions never consult this — they read tokens from `TEMPER_TOKEN`
+/// via `MemoryTokenStore` and must not touch disk regardless.
+pub const TEMPER_AUTH_PATH_ENV: &str = "TEMPER_AUTH_PATH";
+
+/// Operating mode for a temper session.
+///
+/// `Local` is the existing manifest-backed three-way sync flow.
+/// `Cloud` routes resource commands straight through the API with no
+/// full-vault mirror — for ephemeral cloud agent sessions. Dispatch
+/// is not yet wired through to respect this mode (see the cloud-mode
+/// design spec, Unit B.2); this type is recognized but not yet enforced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VaultState {
+    #[default]
+    Local,
+    Cloud,
+}
+
+impl VaultState {
+    /// Resolve the active [`VaultState`] from the `TEMPER_VAULT_STATE` env var.
+    ///
+    /// Defaults to `Local` when the var is unset, empty, or an unrecognized
+    /// value (a warning is logged for unrecognized values so a typo is visible
+    /// but non-fatal).
+    pub fn from_env() -> Self {
+        match std::env::var(TEMPER_VAULT_STATE_ENV)
+            .ok()
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            None => Self::Local,
+            Some("local") => Self::Local,
+            Some("cloud") => Self::Cloud,
+            Some(other) => {
+                tracing::warn!(
+                    value = other,
+                    "unrecognized {TEMPER_VAULT_STATE_ENV} value — defaulting to local"
+                );
+                Self::Local
+            }
+        }
+    }
+
+    pub fn is_cloud(self) -> bool {
+        matches!(self, Self::Cloud)
+    }
+}
+
 /// Merge policy for conflict resolution within a subscription scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -131,6 +189,11 @@ pub struct AuthConfig {
     #[serde(default)]
     #[validate(nested)]
     pub providers: Vec<AuthProvider>,
+    /// Override for the on-disk auth file path. Tilde-expanded at resolution
+    /// time. When `None`, falls back to `~/.config/temper/auth.json`. Has
+    /// lower precedence than the `TEMPER_AUTH_PATH` env var.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 fn default_auth_provider() -> String {
@@ -155,6 +218,7 @@ impl Default for AuthConfig {
                     "offline_access".to_string(),
                 ],
             }],
+            path: None,
         }
     }
 }
@@ -487,6 +551,83 @@ mod tests {
     #[test]
     fn test_merge_policy_default() {
         assert_eq!(MergePolicy::default(), MergePolicy::Manual);
+    }
+
+    // --- VaultState ---
+
+    use std::sync::Mutex;
+
+    /// Serialize tests that mutate TEMPER_VAULT_STATE to prevent cross-thread races.
+    static VAULT_STATE_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn vault_state_defaults_to_local() {
+        assert_eq!(VaultState::default(), VaultState::Local);
+    }
+
+    #[test]
+    fn vault_state_serde_is_lowercase() {
+        assert_eq!(
+            serde_json::to_string(&VaultState::Cloud).unwrap(),
+            "\"cloud\""
+        );
+        assert_eq!(
+            serde_json::to_string(&VaultState::Local).unwrap(),
+            "\"local\""
+        );
+    }
+
+    #[test]
+    fn vault_state_from_env_unset_is_local() {
+        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
+        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
+        assert_eq!(VaultState::from_env(), VaultState::Local);
+    }
+
+    #[test]
+    fn vault_state_from_env_cloud() {
+        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
+        std::env::set_var(TEMPER_VAULT_STATE_ENV, "cloud");
+        let state = VaultState::from_env();
+        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
+        assert_eq!(state, VaultState::Cloud);
+        assert!(state.is_cloud());
+    }
+
+    #[test]
+    fn vault_state_from_env_explicit_local() {
+        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
+        std::env::set_var(TEMPER_VAULT_STATE_ENV, "local");
+        let state = VaultState::from_env();
+        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
+        assert_eq!(state, VaultState::Local);
+    }
+
+    #[test]
+    fn vault_state_from_env_unknown_value_falls_back_to_local() {
+        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
+        std::env::set_var(TEMPER_VAULT_STATE_ENV, "interstellar");
+        let state = VaultState::from_env();
+        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
+        assert_eq!(state, VaultState::Local);
+    }
+
+    #[test]
+    fn vault_state_from_env_empty_is_local() {
+        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
+        std::env::set_var(TEMPER_VAULT_STATE_ENV, "");
+        let state = VaultState::from_env();
+        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
+        assert_eq!(state, VaultState::Local);
+    }
+
+    #[test]
+    fn vault_state_from_env_trims_whitespace() {
+        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
+        std::env::set_var(TEMPER_VAULT_STATE_ENV, "  cloud  ");
+        let state = VaultState::from_env();
+        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
+        assert_eq!(state, VaultState::Cloud);
     }
 
     #[test]
