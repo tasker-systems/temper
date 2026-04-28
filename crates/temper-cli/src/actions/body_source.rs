@@ -1,4 +1,6 @@
-//! Body-source resolution for cloud-mode write commands.
+//! Body-source resolution for `--body` on resource create/update. Used by
+//! both local-mode (rewriting vault files) and cloud-mode (PATCH body trio)
+//! write paths.
 //!
 //! Resolution order, first match wins:
 //! 1. `--body @<path>` — read file contents; ignore stdin.

@@ -1397,6 +1397,19 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         }
     }
 
+    // Resolve --body before reading the file so a malformed flag fails fast,
+    // before any side effects. None means "no body update requested" — leave
+    // the existing on-disk body untouched.
+    let resolved_body = {
+        use std::io::IsTerminal;
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        crate::actions::body_source::resolve_body_source(
+            params.body.clone(),
+            stdin_is_tty,
+            std::io::stdin(),
+        )?
+    };
+
     // Parse the file once, apply all mutations to the aggregate, then write
     // exactly once to the (potentially moved) final path.
     let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
@@ -1483,6 +1496,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         "temper-updated",
         serde_json::Value::String(datetime.clone()),
     );
+
+    if let Some(new_body) = resolved_body {
+        fm.set_body(new_body);
+    }
 
     // Write the mutated frontmatter to the (possibly moved) final path.
     fm.write_to(&final_path)?;
