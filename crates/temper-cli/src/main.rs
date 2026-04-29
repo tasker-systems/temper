@@ -239,6 +239,18 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
+                ResourceAction::Delete {
+                    slug,
+                    r#type,
+                    context,
+                    force,
+                } => temper_cli::commands::resource::delete(
+                    &config,
+                    &r#type,
+                    &slug,
+                    context.as_deref(),
+                    force,
+                ),
             }
         }
         Commands::Context { action } => match action {
@@ -339,7 +351,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         }
         Commands::Pull { resource_id } => commands::pull::run(&resource_id),
         Commands::Push { target } => commands::push::run(&target),
-        Commands::Remove { resource_id, force } => commands::remove::run(&resource_id, force),
         Commands::Sync { action } => match action {
             SyncAction::Run { context, format } => {
                 let format = temper_cli::format::resolve_format_str(format.as_deref());

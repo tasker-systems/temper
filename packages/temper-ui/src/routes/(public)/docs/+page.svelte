@@ -187,7 +187,7 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
         <tr><td><code>temper sync refresh</code></td><td>Refresh manifest from server — non-destructive interleave.</td></tr>
         <tr><td><code>temper sync reset</code></td><td>Reset manifest from scratch (backs up first, then full rebuild).</td></tr>
         <tr><td><code>temper pull &lt;resource-id&gt;</code></td><td>Pull a single resource by UUID.</td></tr>
-        <tr><td><code>temper remove &lt;resource-id&gt;</code></td><td>Remove a resource from the cloud.</td></tr>
+        <tr><td><code>temper resource delete &lt;slug&gt; --type &lt;doctype&gt; [--force]</code></td><td>Delete a resource: cloud-first soft-delete, then local cleanup tail in local mode.</td></tr>
       </tbody>
     </table>
 

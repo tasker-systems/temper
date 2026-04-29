@@ -741,6 +741,138 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Delete a resource: cloud-first soft-delete via the API, then local
+/// cleanup as a tail action when running in `Local` mode.
+///
+/// In `Local` mode, the local-tail step removes the vault file from disk
+/// and clears the manifest entry. In `Cloud` mode the API call is the
+/// entire operation; there is no manifest to clean up.
+///
+/// `--force` skips the interactive confirmation prompt for the local-file
+/// removal. In non-TTY contexts (agents, CI), `--force` is required because
+/// we won't read confirmation from a non-terminal stdin.
+///
+/// Cloud-first ordering: API failure means no local mutation in either mode.
+pub fn delete(
+    config: &Config,
+    doc_type: &str,
+    slug: &str,
+    context: Option<&str>,
+    force: bool,
+) -> Result<()> {
+    use std::io::IsTerminal;
+    use temper_core::types::config::VaultState;
+    use temper_core::types::ResourceId;
+
+    validate_doc_type(doc_type)?;
+
+    let vault_state = VaultState::from_env();
+
+    // Non-TTY guard: in Local mode the local-tail prompt would hang on a
+    // disconnected stdin. Require --force explicitly for non-TTY callers.
+    // (Cloud mode skips the local tail entirely, so the prompt isn't reached.)
+    if matches!(vault_state, VaultState::Local) && !force && !std::io::stdin().is_terminal() {
+        return Err(TemperError::Vault(
+            "non-interactive stdin detected; pass --force to skip the local-file confirmation"
+                .to_string(),
+        ));
+    }
+
+    let config_clone = config.clone();
+    let doc_type_owned = doc_type.to_string();
+    let slug_owned = slug.to_string();
+    let context_owned = context.map(str::to_string);
+
+    crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            // Resolve slug → UUID. In Local mode this prefers reading the
+            // local file's `temper-id` frontmatter; in Cloud mode (or when
+            // the local file lacks a canonical id) it falls back to
+            // GET /api/resources/by-uri.
+            let rid: ResourceId = resolve_resource_id(
+                &config_clone,
+                client,
+                &doc_type_owned,
+                &slug_owned,
+                context_owned.as_deref(),
+                vault_state,
+            )
+            .await?;
+            let uuid: uuid::Uuid = *rid;
+
+            // Cloud-first ordering: API delete (server soft-delete) lands
+            // first. On API failure we never mutate local state.
+            client
+                .resources()
+                .delete(uuid)
+                .await
+                .map_err(crate::commands::client_err)?;
+            output::success(format!("Deleted {doc_type_owned}/{slug_owned} (cloud)"));
+
+            // Cloud mode stops here — no manifest to walk.
+            if matches!(vault_state, VaultState::Cloud) {
+                return Ok(());
+            }
+
+            // Local-mode tail: remove the file from disk and clear the
+            // manifest entry. Resolve the file path from the manifest
+            // entry when one exists; fall back to scanning the vault
+            // for slug-matched files (covers the not-yet-synced case
+            // where no manifest entry exists yet).
+            let vault_root = config_clone.vault_root.clone();
+            let temper_dir = config_clone.state_dir.clone();
+            let device_id =
+                crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
+            let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
+            let manifest_entry_path: Option<std::path::PathBuf> = manifest
+                .entries
+                .get(&rid)
+                .map(|entry| vault_root.join(&entry.path));
+
+            let vault_path = match manifest_entry_path {
+                Some(p) => p,
+                None => match find_resource_file(
+                    &config_clone,
+                    &doc_type_owned,
+                    &slug_owned,
+                    context_owned.as_deref(),
+                ) {
+                    Ok((p, _ctx)) => p,
+                    // No manifest entry and no on-disk file — server
+                    // delete already ran; nothing more to clean up.
+                    Err(_) => return Ok(()),
+                },
+            };
+
+            let should_remove = if force {
+                true
+            } else {
+                output::progress(format!(
+                    "Also remove vault file at {}? [y/N] ",
+                    vault_path.display()
+                ));
+                use std::io::Write as _;
+                std::io::stderr().flush().ok();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).ok();
+                input.trim().eq_ignore_ascii_case("y")
+            };
+
+            if should_remove {
+                if vault_path.exists() {
+                    std::fs::remove_file(&vault_path)?;
+                    output::dim(format!("Removed vault file: {}", vault_path.display()));
+                }
+                if manifest.entries.remove(&rid).is_some() {
+                    crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
+                }
+            }
+
+            Ok(())
+        })
+    })
+}
+
 /// Show a resource's content.
 pub fn show(
     config: &Config,

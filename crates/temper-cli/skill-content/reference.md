@@ -32,6 +32,7 @@ Do not fall back to `cargo run` as a workaround.
 | resource list | `temper resource list --type <type> [--context <ctx>] [--limit <n>] [--stage <stage>]` |
 | resource show | `temper resource show <slug> --type <type> [--context <ctx>]` |
 | resource update | `temper resource update <slug> --type <type> [--stage <stage>] [--mode <mode>] [--effort <effort>]` |
+| resource delete | `temper resource delete <slug> --type <type> [--context <ctx>] [--force]` |
 | warmup | `temper warmup [--context <ctx>]` |
 | events | `temper events [--limit <n>]` |
 | status | `temper status` |
