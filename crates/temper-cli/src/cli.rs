@@ -130,15 +130,6 @@ pub enum Commands {
         target: String,
     },
 
-    /// Remove a resource from the cloud
-    Remove {
-        /// Resource UUID
-        resource_id: String,
-        /// Skip confirmation for vault file removal
-        #[arg(long)]
-        force: bool,
-    },
-
     /// Sync local vault with temper cloud
     Sync {
         #[command(subcommand)]

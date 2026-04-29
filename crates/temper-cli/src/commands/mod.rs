@@ -11,7 +11,6 @@ pub mod index;
 pub mod init;
 pub mod pull;
 pub mod push;
-pub mod remove;
 pub mod research;
 pub mod resource;
 pub mod search_cmd;
