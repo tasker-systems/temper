@@ -130,15 +130,6 @@ pub enum Commands {
         target: String,
     },
 
-    /// Remove a resource from the cloud
-    Remove {
-        /// Resource UUID
-        resource_id: String,
-        /// Skip confirmation for vault file removal
-        #[arg(long)]
-        force: bool,
-    },
-
     /// Sync local vault with temper cloud
     Sync {
         #[command(subcommand)]
@@ -363,6 +354,26 @@ pub enum ResourceAction {
         /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
         #[arg(long)]
         body: Option<String>,
+    },
+    /// Delete a resource (cloud-first soft-delete; local cleanup as tail in local mode)
+    ///
+    /// Soft-deletes the resource server-side (`is_active = false`), then in
+    /// local mode removes the vault file and clears the manifest entry.
+    /// In cloud mode the API call is the entire operation. API failure means
+    /// no local mutation. Use `--force` to skip the local-file confirmation
+    /// prompt; non-TTY callers (agents, CI) must pass `--force`.
+    Delete {
+        /// Resource slug
+        slug: String,
+        /// Resource type (task, goal, session, research, concept, decision)
+        #[arg(long)]
+        r#type: String,
+        /// Filter by context
+        #[arg(long)]
+        context: Option<String>,
+        /// Skip the local-file confirmation prompt
+        #[arg(long)]
+        force: bool,
     },
 }
 

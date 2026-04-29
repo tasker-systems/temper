@@ -20,6 +20,23 @@ use temper_core::types::{
 };
 use temper_core::vault::Vault;
 
+/// Build the standard "vault file missing for tracked entry" error, with
+/// two-pronged recovery guidance (explicit delete vs. resync from server).
+///
+/// `rel_path` is the manifest entry's relative path
+/// (e.g. `task/2026-04-29-some-slug.md`). The slug is derived from the
+/// filename stem so the user can paste it directly into
+/// `temper resource delete`.
+fn vault_file_missing_err(rel_path: &str) -> TemperError {
+    let slug = std::path::Path::new(rel_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(rel_path);
+    TemperError::NotFound(format!(
+        "vault file missing for {slug} at {rel_path}\n\nEither:\n  • To delete the resource, run: temper resource delete {slug}\n  • To recover the file from the server, run: temper sync refresh"
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Ownership preflight
 // ---------------------------------------------------------------------------
@@ -935,10 +952,7 @@ async fn push_resource_meta_only(
 
     let file_path = vault_root.join(&entry.path);
     if !file_path.exists() {
-        return Err(TemperError::NotFound(format!(
-            "vault file not found: {}",
-            file_path.display()
-        )));
+        return Err(vault_file_missing_err(&entry.path));
     }
 
     let content = std::fs::read_to_string(&file_path)?;
@@ -1099,10 +1113,7 @@ pub async fn push_one_resource(
                 })?;
                 let abs = vault_root.join(&entry.path);
                 if !abs.exists() {
-                    return Err(TemperError::NotFound(format!(
-                        "vault file not found: {}",
-                        abs.display()
-                    )));
+                    return Err(vault_file_missing_err(&entry.path));
                 }
                 (abs, Some((id, entry.provisional)))
             }
@@ -1723,10 +1734,7 @@ async fn merge_and_push_resource(
 
     let file_path = vault_root.join(&entry.path);
     if !file_path.exists() {
-        return Err(TemperError::NotFound(format!(
-            "vault file not found: {}",
-            file_path.display()
-        )));
+        return Err(vault_file_missing_err(&entry.path));
     }
 
     // 1. Read local file, strip frontmatter
@@ -3714,6 +3722,28 @@ mod tests {
         assert!(
             final_content.contains("initial body"),
             "body must be preserved across meta-only pull"
+        );
+    }
+
+    #[test]
+    fn vault_file_missing_err_includes_both_recovery_hints() {
+        let err = super::vault_file_missing_err("task/2026-04-29-some-slug.md");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("2026-04-29-some-slug"),
+            "expected derived slug in message, got: {msg}"
+        );
+        assert!(
+            msg.contains("temper resource delete"),
+            "expected delete hint, got: {msg}"
+        );
+        assert!(
+            msg.contains("temper sync refresh"),
+            "expected refresh hint, got: {msg}"
+        );
+        assert!(
+            msg.contains("task/2026-04-29-some-slug.md"),
+            "expected original path in message, got: {msg}"
         );
     }
 }
