@@ -364,6 +364,26 @@ pub enum ResourceAction {
         #[arg(long)]
         body: Option<String>,
     },
+    /// Delete a resource (cloud-first soft-delete; local cleanup as tail in local mode)
+    ///
+    /// Soft-deletes the resource server-side (`is_active = false`), then in
+    /// local mode removes the vault file and clears the manifest entry.
+    /// In cloud mode the API call is the entire operation. API failure means
+    /// no local mutation. Use `--force` to skip the local-file confirmation
+    /// prompt; non-TTY callers (agents, CI) must pass `--force`.
+    Delete {
+        /// Resource slug
+        slug: String,
+        /// Resource type (task, goal, session, research, concept, decision)
+        #[arg(long)]
+        r#type: String,
+        /// Filter by context
+        #[arg(long)]
+        context: Option<String>,
+        /// Skip the local-file confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[derive(Subcommand)]

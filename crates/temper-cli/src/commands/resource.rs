@@ -741,6 +741,24 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// Delete a resource (cloud-first soft-delete, then local cleanup tail in
+/// local mode only).
+///
+/// Stub — replaced with the real implementation in plan Task 3. Returns an
+/// error rather than `Ok(())` so accidental dispatches during development
+/// fail loudly.
+pub fn delete(
+    _config: &Config,
+    _doc_type: &str,
+    _slug: &str,
+    _context: Option<&str>,
+    _force: bool,
+) -> Result<()> {
+    Err(TemperError::Vault(
+        "temper resource delete: not yet implemented".to_string(),
+    ))
+}
+
 /// Show a resource's content.
 pub fn show(
     config: &Config,

@@ -239,6 +239,18 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
+                ResourceAction::Delete {
+                    slug,
+                    r#type,
+                    context,
+                    force,
+                } => temper_cli::commands::resource::delete(
+                    &config,
+                    &r#type,
+                    &slug,
+                    context.as_deref(),
+                    force,
+                ),
             }
         }
         Commands::Context { action } => match action {
