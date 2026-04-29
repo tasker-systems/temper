@@ -280,12 +280,14 @@ pub enum ResourceAction {
         #[arg(long)]
         edges: bool,
     },
-    /// Update a resource's frontmatter fields and push to server
+    /// Update a resource's frontmatter and/or body
     ///
-    /// Update mutates frontmatter from args and pushes the whole file
-    /// (including manual body edits) to the server in one operation. Make
-    /// body edits before running update. For body-only changes use
-    /// `temper push`.
+    /// Mutates frontmatter from flag args. Optionally rewrites the body
+    /// via `--body @<path>` (file), `--body -` (explicit stdin), or
+    /// implicit non-TTY stdin (e.g. `cat new.md | temper resource update <slug>`).
+    /// Works in both local and cloud mode; in local mode the file is
+    /// rewritten and best-effort published; in cloud mode the body trio
+    /// (content + content_hash + chunks_packed) is PATCHed in one call.
     Update {
         /// Resource slug
         slug: String,

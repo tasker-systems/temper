@@ -81,7 +81,7 @@ pub fn create(
     if matches!(vault_state, VaultState::Cloud) {
         let stdin_is_tty = std::io::stdin().is_terminal();
         let body_opt = crate::actions::body_source::resolve_body_source(
-            body_flag,
+            body_flag.as_deref(),
             stdin_is_tty,
             std::io::stdin(),
         )?;
@@ -1156,7 +1156,10 @@ pub struct UpdateParams<'a> {
     pub pr: Option<&'a str>,
     // Goal-specific fields
     pub status: Option<&'a str>,
-    /// Body source: None (auto-detect stdin), Some("-") (explicit stdin), or Some("@\<path\>")
+    /// Body source flag: `None` (rely on stdin auto-detection — non-empty piped
+    /// stdin updates the body; empty implicit stdin means no body update),
+    /// `Some("-")` (explicit stdin; errors if empty), or `Some("@<path>")`
+    /// (read from file; errors if empty). Applies in both local and cloud mode.
     pub body: Option<String>,
 }
 
@@ -1253,7 +1256,7 @@ fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &
     // Resolve body source first (sync, doesn't need the runtime).
     let stdin_is_tty = std::io::stdin().is_terminal();
     let body_opt = crate::actions::body_source::resolve_body_source(
-        params.body.clone(),
+        params.body.as_deref(),
         stdin_is_tty,
         std::io::stdin(),
     )?;
@@ -1397,6 +1400,19 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         }
     }
 
+    // Resolve --body before reading the file so a malformed flag fails fast,
+    // before any side effects. None means "no body update requested" — leave
+    // the existing on-disk body untouched.
+    let resolved_body = {
+        use std::io::IsTerminal;
+        let stdin_is_tty = std::io::stdin().is_terminal();
+        crate::actions::body_source::resolve_body_source(
+            params.body.as_deref(),
+            stdin_is_tty,
+            std::io::stdin(),
+        )?
+    };
+
     // Parse the file once, apply all mutations to the aggregate, then write
     // exactly once to the (potentially moved) final path.
     let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
@@ -1483,6 +1499,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         "temper-updated",
         serde_json::Value::String(datetime.clone()),
     );
+
+    if let Some(new_body) = resolved_body {
+        fm.set_body(new_body);
+    }
 
     // Write the mutated frontmatter to the (possibly moved) final path.
     fm.write_to(&final_path)?;

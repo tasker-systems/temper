@@ -1,4 +1,6 @@
-//! Body-source resolution for cloud-mode write commands.
+//! Body-source resolution for `--body` on resource create/update. Used by
+//! both local-mode (rewriting vault files) and cloud-mode (PATCH body trio)
+//! write paths.
 //!
 //! Resolution order, first match wins:
 //! 1. `--body @<path>` — read file contents; ignore stdin.
@@ -12,15 +14,20 @@ use crate::error::{Result, TemperError};
 /// Returns Ok(Some(body)) if a body was resolved, Ok(None) for "no body
 /// available" (TTY stdin, no flag), Err on resolution failure.
 pub fn resolve_body_source<R: Read>(
-    flag: Option<String>,
+    flag: Option<&str>,
     stdin_is_tty: bool,
     mut stdin_reader: R,
 ) -> Result<Option<String>> {
-    match flag.as_deref() {
+    match flag {
         Some(s) if s.starts_with('@') => {
             let path = &s[1..];
             let content = std::fs::read_to_string(path)
                 .map_err(|e| TemperError::Vault(format!("read --body @{path}: {e}")))?;
+            if content.is_empty() {
+                return Err(TemperError::Project(format!(
+                    "--body @{path} resolved to empty content; refusing to write empty body"
+                )));
+            }
             Ok(Some(content))
         }
         Some("-") => {
@@ -33,6 +40,11 @@ pub fn resolve_body_source<R: Read>(
             stdin_reader
                 .read_to_string(&mut buf)
                 .map_err(|e| TemperError::Vault(format!("read stdin: {e}")))?;
+            if buf.is_empty() {
+                return Err(TemperError::Project(
+                    "--body - resolved to empty stdin; refusing to write empty body".to_string(),
+                ));
+            }
             Ok(Some(buf))
         }
         Some(other) => Err(TemperError::Project(format!(
@@ -70,8 +82,9 @@ mod tests {
     fn resolves_body_at_path_explicit() {
         let temp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(temp.path(), "# From file").unwrap();
+        let path_str = format!("@{}", temp.path().display());
         let result = resolve_body_source(
-            Some(format!("@{}", temp.path().display())),
+            Some(path_str.as_str()),
             /*stdin_is_tty:*/ true,
             Cursor::new(b""),
         )
@@ -82,7 +95,7 @@ mod tests {
     #[test]
     fn resolves_explicit_dash_reads_stdin() {
         let result = resolve_body_source(
-            Some("-".to_string()),
+            Some("-"),
             /*stdin_is_tty:*/ false,
             Cursor::new(b"# From stdin"),
         )
@@ -92,11 +105,7 @@ mod tests {
 
     #[test]
     fn resolves_explicit_dash_errors_on_tty() {
-        let result = resolve_body_source(
-            Some("-".to_string()),
-            /*stdin_is_tty:*/ true,
-            Cursor::new(b""),
-        );
+        let result = resolve_body_source(Some("-"), /*stdin_is_tty:*/ true, Cursor::new(b""));
         assert!(result.is_err());
     }
 
@@ -127,6 +136,35 @@ mod tests {
         assert!(
             result.is_none(),
             "empty implicit stdin must be treated as no-body"
+        );
+    }
+
+    #[test]
+    fn errors_when_at_path_file_is_empty() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), "").unwrap();
+        let path_str = format!("@{}", temp.path().display());
+        let result = resolve_body_source(
+            Some(path_str.as_str()),
+            /*stdin_is_tty:*/ true,
+            Cursor::new(b""),
+        );
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("empty"),
+            "expected empty-body error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn errors_when_explicit_dash_stdin_is_empty() {
+        let result = resolve_body_source(Some("-"), /*stdin_is_tty:*/ false, Cursor::new(b""));
+        let err = result.unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("empty"),
+            "expected empty-body error, got: {msg}"
         );
     }
 }

@@ -624,7 +624,137 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: chunk dedupe short-circuit skips unchanged bodies
+// Test 5: cloud --body @<empty-file> errors and does not mutate server
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource update <slug> --body @<empty-file>` must error with
+/// a message containing "empty" and leave the server's `body_hash` unchanged.
+///
+/// Proves Task 1's explicit-empty guard (`body_source::resolve_body_source`)
+/// reaches users through the live CLI → Axum → DB stack in cloud mode.
+#[cfg(feature = "test-embed")]
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+
+    // Seed: create with a known initial body so we can verify hash is unchanged.
+    use temper_core::types::ingest::{pack_chunks, IngestPayload};
+    let initial_body = "# Empty Guard Test\n\nInitial body.\n";
+    let initial_hash = temper_core::hash::compute_body_hash(initial_body);
+    let payload = IngestPayload {
+        title: "Body Empty Guard Test".to_string(),
+        origin_uri: "kb://myapp/session/body-empty-guard-test".to_string(),
+        context_name: "myapp".to_string(),
+        doc_type_name: "session".to_string(),
+        content_hash: Some(initial_hash.clone()),
+        slug: "body-empty-guard-test".to_string(),
+        content: initial_body.to_string(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({
+            "title": "Body Empty Guard Test",
+            "temper-stage": "backlog"
+        })),
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+    };
+    app.client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("seed resource");
+
+    // Write an empty file — the guard must reject this.
+    let empty_path = app.vault_dir.path().join("empty-body.md");
+    std::fs::write(&empty_path, "").expect("write empty file");
+    let body_flag = format!("@{}", empty_path.to_str().unwrap());
+
+    // Drive update on a blocking thread — expect it to error.
+    let cli_config = app.cli_config.clone();
+    let api_url2 = api_url.clone();
+    let token2 = token.clone();
+    let global_config_str2 = global_config_str.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
+            temper_cli::commands::resource::update(
+                &cli_config,
+                &temper_cli::commands::resource::UpdateParams {
+                    slug: "body-empty-guard-test",
+                    doc_type: Some("session"),
+                    type_from: None,
+                    type_to: None,
+                    context: Some("myapp"),
+                    context_to: None,
+                    title: None,
+                    tags: &[],
+                    aliases: &[],
+                    relates_to: &[],
+                    references: &[],
+                    depends_on: &[],
+                    extends: &[],
+                    preceded_by: &[],
+                    derived_from: &[],
+                    stage: None,
+                    mode: None,
+                    effort: None,
+                    goal: None,
+                    seq: None,
+                    branch: None,
+                    pr: None,
+                    status: None,
+                    body: Some(body_flag),
+                },
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    assert!(
+        result.is_err(),
+        "empty --body @path must error; got: {result:?}"
+    );
+    let err_msg = format!("{}", result.unwrap_err());
+    assert!(
+        err_msg.contains("empty"),
+        "error message should mention 'empty'; got: {err_msg}"
+    );
+
+    // ---- Assert no server-side mutation occurred ----
+    let body_hash_after: String = sqlx::query_scalar(
+        "SELECT m.body_hash
+         FROM kb_resource_manifests m
+         JOIN kb_resources r ON r.id = m.resource_id
+         WHERE r.slug = 'body-empty-guard-test'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("manifest after attempted update");
+
+    assert_eq!(
+        body_hash_after, initial_hash,
+        "body_hash must be unchanged when --body @empty.md errors"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: chunk dedupe short-circuit skips unchanged bodies
 // ---------------------------------------------------------------------------
 
 /// Re-sending the same body → server short-circuits, no new chunk rows
@@ -764,7 +894,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 6: sync run returns cloud-mode error message
+// Test 7: sync run returns cloud-mode error message
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper sync run` returns the exact redirect error string instead of
@@ -808,7 +938,7 @@ async fn cloud_sync_run_redirects_with_message(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: cloud list returns remote-only resources
+// Test 8: cloud list returns remote-only resources
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper list --type session` returns server rows including resources
