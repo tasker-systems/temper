@@ -815,36 +815,55 @@ pub fn delete(
             }
 
             // Local-mode tail: remove the file from disk and clear the
-            // manifest entry. Mirrors the legacy `temper remove` flow.
-            let vault_root = crate::config::resolve_vault(None)?;
-            let temper_dir = vault_root.join(".temper");
+            // manifest entry. Resolve the file path from the manifest
+            // entry when one exists; fall back to scanning the vault
+            // for slug-matched files (covers the not-yet-synced case
+            // where no manifest entry exists yet).
+            let vault_root = config_clone.vault_root.clone();
+            let temper_dir = config_clone.state_dir.clone();
             let device_id =
                 crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
             let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
+            let manifest_entry_path: Option<std::path::PathBuf> = manifest
+                .entries
+                .get(&rid)
+                .map(|entry| vault_root.join(&entry.path));
 
-            if let Some(entry) = manifest.entries.get(&rid) {
-                let vault_path = vault_root.join(&entry.path);
+            let vault_path = match manifest_entry_path {
+                Some(p) => p,
+                None => match find_resource_file(
+                    &config_clone,
+                    &doc_type_owned,
+                    &slug_owned,
+                    context_owned.as_deref(),
+                ) {
+                    Ok((p, _ctx)) => p,
+                    // No manifest entry and no on-disk file — server
+                    // delete already ran; nothing more to clean up.
+                    Err(_) => return Ok(()),
+                },
+            };
 
-                let should_remove = if force {
-                    true
-                } else {
-                    output::progress(format!(
-                        "Also remove vault file at {}? [y/N] ",
-                        vault_path.display()
-                    ));
-                    use std::io::Write as _;
-                    std::io::stderr().flush().ok();
-                    let mut input = String::new();
-                    std::io::stdin().read_line(&mut input).ok();
-                    input.trim().eq_ignore_ascii_case("y")
-                };
+            let should_remove = if force {
+                true
+            } else {
+                output::progress(format!(
+                    "Also remove vault file at {}? [y/N] ",
+                    vault_path.display()
+                ));
+                use std::io::Write as _;
+                std::io::stderr().flush().ok();
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).ok();
+                input.trim().eq_ignore_ascii_case("y")
+            };
 
-                if should_remove {
-                    if vault_path.exists() {
-                        std::fs::remove_file(&vault_path)?;
-                        output::dim(format!("Removed vault file: {}", vault_path.display()));
-                    }
-                    manifest.entries.remove(&rid);
+            if should_remove {
+                if vault_path.exists() {
+                    std::fs::remove_file(&vault_path)?;
+                    output::dim(format!("Removed vault file: {}", vault_path.display()));
+                }
+                if manifest.entries.remove(&rid).is_some() {
                     crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
                 }
             }
