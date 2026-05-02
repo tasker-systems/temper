@@ -10,6 +10,9 @@ use thiserror::Error;
 use crate::defaults::apply_doc_type_defaults;
 use crate::types::managed_meta::ManagedMeta;
 
+use super::commands::{CreateResource, UpdateResource};
+use super::resource_ref::ResourceRef;
+
 /// Errors that can arise during pure-action execution.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ActionError {
@@ -183,9 +186,50 @@ pub fn merge_open_meta(existing: &mut Value, patch: Value) {
     }
 }
 
+/// Pre-flight validation for a `CreateResource` command.
+///
+/// Checks slug, doctype, and context shape. Does not check uniqueness or
+/// authorization — those are backend concerns.
+pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
+    validate_slug(&cmd.slug)?;
+    validate_doctype(&cmd.doctype)?;
+    if cmd.context.is_empty() {
+        return Err(ActionError::MissingRequiredField("context".to_string()));
+    }
+    if cmd.title.is_empty() {
+        return Err(ActionError::MissingRequiredField("title".to_string()));
+    }
+    Ok(())
+}
+
+/// Pre-flight validation for an `UpdateResource` command.
+///
+/// Checks the `ResourceRef` is well-formed. Field-level validation of the
+/// patch payload (managed_meta enums, etc.) is the backend's responsibility
+/// after merging onto the resolved resource.
+pub fn validate_update(cmd: &UpdateResource) -> Result<(), ActionError> {
+    match &cmd.resource {
+        ResourceRef::Uuid { .. } => Ok(()),
+        ResourceRef::Scoped {
+            slug,
+            doctype,
+            context,
+        } => {
+            validate_slug(slug)?;
+            validate_doctype(doctype)?;
+            if context.is_empty() {
+                return Err(ActionError::MissingRequiredField("context".to_string()));
+            }
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ids::ResourceId;
+    use uuid::Uuid;
 
     #[test]
     fn apply_defaults_task_sets_stage_when_missing() {
@@ -387,5 +431,101 @@ mod tests {
         let mut existing = json!("scalar");
         merge_open_meta(&mut existing, json!({"a": 1}));
         assert_eq!(existing, json!({"a": 1}));
+    }
+
+    #[test]
+    fn validate_create_accepts_valid_command() {
+        let cmd = CreateResource {
+            slug: "valid-slug".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "Valid title".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: super::super::Surface::CliCloud,
+        };
+        assert!(validate_create(&cmd).is_ok());
+    }
+
+    #[test]
+    fn validate_create_rejects_invalid_slug() {
+        let cmd = CreateResource {
+            slug: "INVALID".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "X".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: super::super::Surface::CliCloud,
+        };
+        assert!(matches!(
+            validate_create(&cmd),
+            Err(ActionError::InvalidSlug(_))
+        ));
+    }
+
+    #[test]
+    fn validate_create_rejects_unknown_doctype() {
+        let cmd = CreateResource {
+            slug: "valid-slug".to_string(),
+            doctype: "widget".to_string(),
+            context: "temper".to_string(),
+            title: "X".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: super::super::Surface::CliCloud,
+        };
+        assert!(matches!(
+            validate_create(&cmd),
+            Err(ActionError::InvalidDoctype(_))
+        ));
+    }
+
+    #[test]
+    fn validate_create_rejects_empty_title() {
+        let cmd = CreateResource {
+            slug: "valid".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: super::super::Surface::CliCloud,
+        };
+        assert!(matches!(
+            validate_create(&cmd),
+            Err(ActionError::MissingRequiredField(_))
+        ));
+    }
+
+    #[test]
+    fn validate_update_accepts_uuid_ref() {
+        let cmd = UpdateResource {
+            resource: ResourceRef::uuid(ResourceId(Uuid::nil())),
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            origin: super::super::Surface::CliCloud,
+        };
+        assert!(validate_update(&cmd).is_ok());
+    }
+
+    #[test]
+    fn validate_update_validates_scoped_ref() {
+        let cmd = UpdateResource {
+            resource: ResourceRef::scoped("INVALID", "task", "temper"),
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            origin: super::super::Surface::CliCloud,
+        };
+        assert!(matches!(
+            validate_update(&cmd),
+            Err(ActionError::InvalidSlug(_))
+        ));
     }
 }
