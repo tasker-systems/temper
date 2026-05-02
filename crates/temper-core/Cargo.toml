@@ -8,6 +8,7 @@ description = "Shared types, traits, and models for the temper knowledge base sy
 ignored = ["tokio"]
 
 [dependencies]
+async-trait = "0.1"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
