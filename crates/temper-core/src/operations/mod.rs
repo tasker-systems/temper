@@ -6,6 +6,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 
+mod backend;
 mod commands;
 mod events;
 mod inputs;
@@ -13,6 +14,7 @@ mod output;
 mod resource_ref;
 mod surface;
 
+pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{
     CreateResource, DeleteResource, ListResources, SearchResources, ShowResource, UpdateResource,
 };
