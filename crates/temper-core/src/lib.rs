@@ -10,6 +10,7 @@ pub mod frontmatter;
 pub mod hash;
 pub mod ids;
 pub mod normalize;
+pub mod operations;
 pub mod schema;
 pub mod types;
 pub mod validation;

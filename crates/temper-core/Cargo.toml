@@ -5,7 +5,7 @@ edition = "2021"
 description = "Shared types, traits, and models for the temper knowledge base system"
 
 [package.metadata.cargo-machete]
-ignored = ["tokio"]
+ignored = ["async-trait", "tokio"]
 
 [dependencies]
 async-trait = "0.1"
