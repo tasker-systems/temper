@@ -6,8 +6,10 @@
 //!
 //! See `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 
+mod resource_ref;
 mod surface;
 
+pub use resource_ref::ResourceRef;
 pub use surface::Surface;
 
 #[cfg(test)]
