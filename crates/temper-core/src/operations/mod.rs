@@ -6,6 +6,10 @@
 //!
 //! See `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 
+mod surface;
+
+pub use surface::Surface;
+
 #[cfg(test)]
 mod smoke {
     /// Smoke test: the module compiles and is reachable.
