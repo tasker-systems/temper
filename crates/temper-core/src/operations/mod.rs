@@ -16,7 +16,8 @@ mod resource_ref;
 mod surface;
 
 pub use actions::{
-    apply_defaults, merge_managed_meta, validate_doctype, validate_slug, ActionError,
+    apply_defaults, merge_managed_meta, merge_open_meta, validate_doctype, validate_slug,
+    ActionError,
 };
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{

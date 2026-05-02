@@ -4,6 +4,7 @@
 //! No I/O, no DB, no file system. Side effects (persistence, network, file
 //! writes) belong to the backend's command handler, not to actions.
 
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::defaults::apply_doc_type_defaults;
@@ -156,6 +157,29 @@ pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
     // Merge extra HashMap key-by-key.
     for (k, v) in patch.extra {
         existing.extra.insert(k, v);
+    }
+}
+
+/// Partial-merge an open_meta patch onto an existing open_meta value.
+///
+/// open_meta is free-form JSON (an object). Patch semantics:
+/// - For each key in `patch`, overwrite the corresponding key in `existing`.
+/// - Keys in `existing` not present in `patch` are preserved.
+/// - Non-object inputs (e.g., a top-level array or scalar) overwrite outright.
+///
+/// This is shallow merge — nested objects are not deep-merged. Callers that
+/// need deep merge should compose this action with their own logic.
+pub fn merge_open_meta(existing: &mut Value, patch: Value) {
+    match (existing.as_object_mut(), patch) {
+        (Some(existing_map), Value::Object(patch_map)) => {
+            for (k, v) in patch_map {
+                existing_map.insert(k, v);
+            }
+        }
+        (_, patch) => {
+            // Either existing isn't an object, or patch isn't — overwrite outright.
+            *existing = patch;
+        }
     }
 }
 
@@ -339,5 +363,29 @@ mod tests {
         assert_eq!(existing.llm_run.as_deref(), Some("run-1"));
         assert_eq!(existing.title.as_deref(), Some("T"));
         assert_eq!(existing.slug.as_deref(), Some("s"));
+    }
+
+    #[test]
+    fn merge_open_meta_shallow_merges_objects() {
+        use serde_json::json;
+        let mut existing = json!({"a": 1, "b": 2});
+        merge_open_meta(&mut existing, json!({"b": 99, "c": 3}));
+        assert_eq!(existing, json!({"a": 1, "b": 99, "c": 3}));
+    }
+
+    #[test]
+    fn merge_open_meta_overwrites_when_patch_is_not_object() {
+        use serde_json::json;
+        let mut existing = json!({"a": 1});
+        merge_open_meta(&mut existing, json!([1, 2, 3]));
+        assert_eq!(existing, json!([1, 2, 3]));
+    }
+
+    #[test]
+    fn merge_open_meta_overwrites_when_existing_is_not_object() {
+        use serde_json::json;
+        let mut existing = json!("scalar");
+        merge_open_meta(&mut existing, json!({"a": 1}));
+        assert_eq!(existing, json!({"a": 1}));
     }
 }
