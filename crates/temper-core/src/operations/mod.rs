@@ -9,6 +9,7 @@
 mod commands;
 mod events;
 mod inputs;
+mod output;
 mod resource_ref;
 mod surface;
 
@@ -17,6 +18,7 @@ pub use commands::{
 };
 pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};
+pub use output::CommandOutput;
 pub use resource_ref::ResourceRef;
 pub use surface::Surface;
 
