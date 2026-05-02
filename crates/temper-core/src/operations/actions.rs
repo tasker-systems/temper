@@ -78,6 +78,22 @@ pub fn validate_slug(slug: &str) -> Result<(), ActionError> {
     Ok(())
 }
 
+/// Validate that a doctype is recognized.
+///
+/// Delegates to the canonical `crate::schema::DOC_TYPE_NAMES` slice — the
+/// same set of doctypes that have embedded JSON schemas. Updates to the
+/// recognized doctype set go in `schema.rs`, not here.
+pub fn validate_doctype(doctype: &str) -> Result<(), ActionError> {
+    if crate::schema::DOC_TYPE_NAMES.contains(&doctype) {
+        Ok(())
+    } else {
+        Err(ActionError::InvalidDoctype(format!(
+            "unknown doctype '{doctype}', expected one of: {}",
+            crate::schema::DOC_TYPE_NAMES.join(", ")
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +160,29 @@ mod tests {
     fn validate_slug_rejects_consecutive_hyphens() {
         let err = validate_slug("hello--world").unwrap_err();
         assert!(matches!(err, ActionError::InvalidSlug(_)));
+    }
+
+    #[test]
+    fn validate_doctype_accepts_known() {
+        assert!(validate_doctype("task").is_ok());
+        assert!(validate_doctype("goal").is_ok());
+        assert!(validate_doctype("session").is_ok());
+        assert!(validate_doctype("research").is_ok());
+        assert!(validate_doctype("concept").is_ok());
+        assert!(validate_doctype("decision").is_ok());
+    }
+
+    #[test]
+    fn validate_doctype_rejects_unknown() {
+        let err = validate_doctype("widget").unwrap_err();
+        assert!(matches!(err, ActionError::InvalidDoctype(_)));
+    }
+
+    #[test]
+    fn validate_doctype_rejects_memory_not_a_real_doctype() {
+        // "memory" is a temper memory-system concept (auto-memory), not a
+        // resource doctype. Guard against accidental re-introduction.
+        let err = validate_doctype("memory").unwrap_err();
+        assert!(matches!(err, ActionError::InvalidDoctype(_)));
     }
 }
