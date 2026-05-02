@@ -7,6 +7,7 @@
 //! See `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 
 mod commands;
+mod events;
 mod inputs;
 mod resource_ref;
 mod surface;
@@ -14,6 +15,7 @@ mod surface;
 pub use commands::{
     CreateResource, DeleteResource, ListResources, SearchResources, ShowResource, UpdateResource,
 };
+pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};
 pub use resource_ref::ResourceRef;
 pub use surface::Surface;
