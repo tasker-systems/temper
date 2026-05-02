@@ -94,6 +94,71 @@ pub fn validate_doctype(doctype: &str) -> Result<(), ActionError> {
     }
 }
 
+/// Partial-merge a `ManagedMeta` patch onto an existing `ManagedMeta`.
+///
+/// For each `Some(value)` in `patch`, overwrite the corresponding field in
+/// `existing`. Fields that are `None` in the patch are left unchanged on
+/// `existing`. The `extra` HashMap is merged key-by-key (patch keys
+/// overwrite, keys absent from patch are preserved).
+pub fn merge_managed_meta(existing: &mut ManagedMeta, patch: ManagedMeta) {
+    if patch.doc_type.is_some() {
+        existing.doc_type = patch.doc_type;
+    }
+    if patch.context.is_some() {
+        existing.context = patch.context;
+    }
+    if patch.updated.is_some() {
+        existing.updated = patch.updated;
+    }
+    if patch.source.is_some() {
+        existing.source = patch.source;
+    }
+    if patch.stage.is_some() {
+        existing.stage = patch.stage;
+    }
+    if patch.mode.is_some() {
+        existing.mode = patch.mode;
+    }
+    if patch.effort.is_some() {
+        existing.effort = patch.effort;
+    }
+    if patch.goal.is_some() {
+        existing.goal = patch.goal;
+    }
+    if patch.seq.is_some() {
+        existing.seq = patch.seq;
+    }
+    if patch.branch.is_some() {
+        existing.branch = patch.branch;
+    }
+    if patch.pr.is_some() {
+        existing.pr = patch.pr;
+    }
+    if patch.status.is_some() {
+        existing.status = patch.status;
+    }
+    if patch.provenance.is_some() {
+        existing.provenance = patch.provenance;
+    }
+    if patch.llm_model.is_some() {
+        existing.llm_model = patch.llm_model;
+    }
+    if patch.llm_run.is_some() {
+        existing.llm_run = patch.llm_run;
+    }
+    if patch.title.is_some() {
+        existing.title = patch.title;
+    }
+    if patch.slug.is_some() {
+        existing.slug = patch.slug;
+    }
+
+    // Merge extra HashMap key-by-key.
+    for (k, v) in patch.extra {
+        existing.extra.insert(k, v);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +249,95 @@ mod tests {
         // resource doctype. Guard against accidental re-introduction.
         let err = validate_doctype("memory").unwrap_err();
         assert!(matches!(err, ActionError::InvalidDoctype(_)));
+    }
+
+    #[test]
+    fn merge_managed_meta_overrides_present_fields() {
+        let mut existing = ManagedMeta {
+            stage: Some("backlog".to_string()),
+            ..ManagedMeta::default()
+        };
+        let patch = ManagedMeta {
+            stage: Some("done".to_string()),
+            ..ManagedMeta::default()
+        };
+        merge_managed_meta(&mut existing, patch);
+        assert_eq!(existing.stage.as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn merge_managed_meta_preserves_absent_fields() {
+        let mut existing = ManagedMeta {
+            stage: Some("backlog".to_string()),
+            doc_type: Some("task".to_string()),
+            ..ManagedMeta::default()
+        };
+        let patch = ManagedMeta {
+            stage: Some("done".to_string()),
+            ..ManagedMeta::default()
+        };
+        merge_managed_meta(&mut existing, patch);
+        assert_eq!(existing.stage.as_deref(), Some("done"));
+        assert_eq!(existing.doc_type.as_deref(), Some("task"));
+    }
+
+    #[test]
+    fn merge_managed_meta_merges_extra_map() {
+        use serde_json::json;
+        let mut existing = ManagedMeta::default();
+        existing.extra.insert("k1".to_string(), json!("v1"));
+        existing.extra.insert("k2".to_string(), json!("v2"));
+
+        let mut patch = ManagedMeta::default();
+        patch.extra.insert("k2".to_string(), json!("patched"));
+        patch.extra.insert("k3".to_string(), json!("v3"));
+
+        merge_managed_meta(&mut existing, patch);
+        assert_eq!(existing.extra.get("k1"), Some(&json!("v1")));
+        assert_eq!(existing.extra.get("k2"), Some(&json!("patched")));
+        assert_eq!(existing.extra.get("k3"), Some(&json!("v3")));
+    }
+
+    #[test]
+    fn merge_managed_meta_covers_all_typed_fields() {
+        let mut existing = ManagedMeta::default();
+        let patch = ManagedMeta {
+            doc_type: Some("task".to_string()),
+            context: Some("temper".to_string()),
+            updated: Some("2026-05-02".to_string()),
+            source: Some("user".to_string()),
+            stage: Some("done".to_string()),
+            mode: Some("build".to_string()),
+            effort: Some("medium".to_string()),
+            goal: Some("g1".to_string()),
+            seq: Some(7),
+            branch: Some("jct/x".to_string()),
+            pr: Some("123".to_string()),
+            status: Some("active".to_string()),
+            provenance: Some("user-created".to_string()),
+            llm_model: Some("opus".to_string()),
+            llm_run: Some("run-1".to_string()),
+            title: Some("T".to_string()),
+            slug: Some("s".to_string()),
+            extra: Default::default(),
+        };
+        merge_managed_meta(&mut existing, patch);
+        assert_eq!(existing.doc_type.as_deref(), Some("task"));
+        assert_eq!(existing.context.as_deref(), Some("temper"));
+        assert_eq!(existing.updated.as_deref(), Some("2026-05-02"));
+        assert_eq!(existing.source.as_deref(), Some("user"));
+        assert_eq!(existing.stage.as_deref(), Some("done"));
+        assert_eq!(existing.mode.as_deref(), Some("build"));
+        assert_eq!(existing.effort.as_deref(), Some("medium"));
+        assert_eq!(existing.goal.as_deref(), Some("g1"));
+        assert_eq!(existing.seq, Some(7));
+        assert_eq!(existing.branch.as_deref(), Some("jct/x"));
+        assert_eq!(existing.pr.as_deref(), Some("123"));
+        assert_eq!(existing.status.as_deref(), Some("active"));
+        assert_eq!(existing.provenance.as_deref(), Some("user-created"));
+        assert_eq!(existing.llm_model.as_deref(), Some("opus"));
+        assert_eq!(existing.llm_run.as_deref(), Some("run-1"));
+        assert_eq!(existing.title.as_deref(), Some("T"));
+        assert_eq!(existing.slug.as_deref(), Some("s"));
     }
 }

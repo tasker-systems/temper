@@ -15,7 +15,9 @@ mod output;
 mod resource_ref;
 mod surface;
 
-pub use actions::{apply_defaults, validate_doctype, validate_slug, ActionError};
+pub use actions::{
+    apply_defaults, merge_managed_meta, validate_doctype, validate_slug, ActionError,
+};
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{
     CreateResource, DeleteResource, ListResources, SearchResources, ShowResource, UpdateResource,
