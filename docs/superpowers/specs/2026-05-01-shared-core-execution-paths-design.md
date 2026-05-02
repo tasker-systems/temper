@@ -86,15 +86,64 @@ Resource-level commands are **coarse with optional fields**, not fine-grained pe
 ```rust
 // crates/temper-core/src/operations/commands.rs (sketch)
 pub struct UpdateResource {
-    pub slug: String,
-    pub doctype: DocType,
-    pub context: ContextId,
+    pub resource: ResourceRef,
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMetaPartial>,
     pub open_meta: Option<OpenMetaPartial>,
     pub origin: Surface,
 }
 ```
+
+### Resource Identification — `ResourceRef`
+
+Every resource-action command (`ShowResource`, `UpdateResource`, `DeleteResource`, plus sync-time variants like `SyncPushResource` and `SyncPullResource`) identifies its target through a `ResourceRef`, **not** a bare slug. Slug uniqueness is scoped to `(owner, context, doctype)`; UUID is globally unique. Both forms must be accepted everywhere a resource is named, so callers that hold a UUID (cross-context references, MCP tool handlers, agents that already resolved a resource earlier) don't have to round-trip through scoping fields.
+
+```rust
+// crates/temper-core/src/operations/commands.rs (sketch, continued)
+pub enum ResourceRef {
+    /// Globally-unique reference. Resolves directly without scoping fields.
+    Uuid(ResourceUuid),
+
+    /// Scoped reference. Slug + the fields needed to disambiguate it.
+    Scoped {
+        slug: String,
+        doctype: DocType,
+        context: ContextId,
+    },
+}
+```
+
+The enum shape (rather than a struct with two `Option` fields) makes the "exactly one form populated" invariant a compile-time guarantee, and forces the slug variant to carry its scoping fields explicitly.
+
+`CreateResource` does not use `ResourceRef` — the resource doesn't exist yet, so it carries the future identity directly:
+
+```rust
+pub struct CreateResource {
+    pub slug: String,
+    pub doctype: DocType,
+    pub context: ContextId,
+    pub title: String,
+    pub body: Option<BodyUpdate>,
+    pub managed_meta: ManagedMeta,
+    pub open_meta: OpenMeta,
+    pub origin: Surface,
+}
+```
+
+`ListResources` and `SearchResources` similarly do not use `ResourceRef` — they take filter and query inputs, not single-resource identifiers.
+
+Resolve actions branch on the `ResourceRef` variant:
+
+- `Uuid(_)` — `DbBackend.resolveDbRow` does a uuid lookup; `VaultBackend.resolveVaultFile` does a manifest reverse-index lookup (manifest stores `temper_id ↔ path` mapping).
+- `Scoped { slug, doctype, context }` — `DbBackend` does a `(owner, context, doctype, slug)` SQL lookup; `VaultBackend` walks the doctype's vault directory.
+
+Surfaces translate user input into the appropriate `ResourceRef` variant:
+
+- CLI parses `--uuid <UUID>` into `ResourceRef::Uuid`; `<slug> --type <doctype> --context <context>` into `ResourceRef::Scoped`. (CLI accepts either form everywhere it accepts a positional slug today.)
+- MCP tool params accept both `resource_uuid` and a (`slug`, `doctype`, `context`) triple; the tool handler picks one variant.
+- API handlers accept both `?uuid=<...>` and `?slug=<...>&doctype=<...>&context=<...>` query/path patterns.
+
+### Action chain by surface
 
 The action chain for `UpdateResource` differs by surface:
 
@@ -189,6 +238,7 @@ Each phase is independently shippable. Phases 3 and 4 are the largest and could 
 ## Acceptance Criteria
 
 - [ ] `temper-core/operations/` exists with `Backend` trait, `Surface` enum, command structs, event enum, and shared actions.
+- [ ] `ResourceRef` is the identifier type for every resource-action command. Both `Uuid` and `Scoped { slug, doctype, context }` variants accepted everywhere. CLI accepts `--uuid` alongside positional slug; MCP tool params accept either form; API handlers accept either form. No call site requires a slug where a uuid would also work.
 - [ ] All shared validation / default / merge logic lives in `temper-core/operations/actions.rs`. No duplicate copies in `temper-cli` or `temper-api`.
 - [ ] `temper-api/services/` implements `Backend`. API handlers and MCP tools both dispatch through the trait.
 - [ ] `temper-cli/src/vault_backend/` implements `Backend` for vault-file persistence.

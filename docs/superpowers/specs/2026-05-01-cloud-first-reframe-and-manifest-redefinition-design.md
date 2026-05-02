@@ -8,7 +8,7 @@
 
 **Related work:**
 - Path-to-alpha goal item #3
-- Companion spec: `2026-05-01-shared-core-execution-paths-design.md` (#4 — operations / backends / surfaces). The two specs are halves of the Wave 1 cloud-first reframe; #4 sets the architectural shape, this spec rides on it to define the conceptual model and lifecycle semantics.
+- Companion spec: `2026-05-01-shared-core-execution-paths-design.md` (#4 — operations / backends / surfaces). The two specs are halves of the Wave 1 cloud-first reframe; #4 sets the architectural shape, this spec rides on it to define the conceptual model and lifecycle semantics. The `<slug>` placeholders in CLI examples below are for readability; per #4, every resource-action command — and every CLI verb that targets an existing resource — accepts both `ResourceRef::Uuid` and `ResourceRef::Scoped { slug, doctype, context }`.
 
 ---
 
