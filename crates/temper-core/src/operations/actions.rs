@@ -37,6 +37,47 @@ pub fn apply_defaults(doctype: &str, meta: &mut ManagedMeta) {
     }
 }
 
+/// Validate that a slug conforms to the temper slug rules.
+///
+/// Rules: non-empty, lowercase alphanumeric + hyphens, must start and end with
+/// alphanumeric, no consecutive hyphens. Slugs are scoped to (owner, context,
+/// doctype); this validates lexical shape only.
+pub fn validate_slug(slug: &str) -> Result<(), ActionError> {
+    if slug.is_empty() {
+        return Err(ActionError::InvalidSlug(
+            "slug must not be empty".to_string(),
+        ));
+    }
+    let bytes = slug.as_bytes();
+    if !bytes[0].is_ascii_alphanumeric() {
+        return Err(ActionError::InvalidSlug(format!(
+            "slug must start with alphanumeric, got: {slug}"
+        )));
+    }
+    if !bytes[bytes.len() - 1].is_ascii_alphanumeric() {
+        return Err(ActionError::InvalidSlug(format!(
+            "slug must end with alphanumeric, got: {slug}"
+        )));
+    }
+    let mut prev_was_hyphen = false;
+    for &b in bytes {
+        let is_lower_alnum = b.is_ascii_lowercase() || b.is_ascii_digit();
+        let is_hyphen = b == b'-';
+        if !is_lower_alnum && !is_hyphen {
+            return Err(ActionError::InvalidSlug(format!(
+                "slug must be lowercase alphanumeric with hyphens, got: {slug}"
+            )));
+        }
+        if is_hyphen && prev_was_hyphen {
+            return Err(ActionError::InvalidSlug(format!(
+                "slug must not contain consecutive hyphens, got: {slug}"
+            )));
+        }
+        prev_was_hyphen = is_hyphen;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,5 +106,43 @@ mod tests {
         // No fields populated for unknown doctypes
         assert!(meta.stage.is_none());
         assert!(meta.status.is_none());
+    }
+
+    #[test]
+    fn validate_slug_accepts_valid_slugs() {
+        assert!(validate_slug("hello-world").is_ok());
+        assert!(validate_slug("task-2026-04-29").is_ok());
+        assert!(validate_slug("a").is_ok());
+        assert!(validate_slug("a1b2").is_ok());
+    }
+
+    #[test]
+    fn validate_slug_rejects_empty() {
+        let err = validate_slug("").unwrap_err();
+        assert!(matches!(err, ActionError::InvalidSlug(_)));
+    }
+
+    #[test]
+    fn validate_slug_rejects_uppercase() {
+        let err = validate_slug("Hello").unwrap_err();
+        assert!(matches!(err, ActionError::InvalidSlug(_)));
+    }
+
+    #[test]
+    fn validate_slug_rejects_leading_hyphen() {
+        let err = validate_slug("-hello").unwrap_err();
+        assert!(matches!(err, ActionError::InvalidSlug(_)));
+    }
+
+    #[test]
+    fn validate_slug_rejects_trailing_hyphen() {
+        let err = validate_slug("hello-").unwrap_err();
+        assert!(matches!(err, ActionError::InvalidSlug(_)));
+    }
+
+    #[test]
+    fn validate_slug_rejects_consecutive_hyphens() {
+        let err = validate_slug("hello--world").unwrap_err();
+        assert!(matches!(err, ActionError::InvalidSlug(_)));
     }
 }
