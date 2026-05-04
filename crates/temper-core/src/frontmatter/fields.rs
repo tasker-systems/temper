@@ -35,6 +35,9 @@ pub static KNOWN_TEMPER_FIELDS: &[&str] = &[
     "temper-updated",
     "temper-owner",
     "temper-source",
+    // managed-tier identity (post-rename)
+    "temper-title",
+    "temper-slug",
     // task
     "temper-stage",
     "temper-mode",
@@ -146,5 +149,17 @@ mod tests {
     fn legacy_fields_map_title_and_slug_to_temper_prefix() {
         assert!(LEGACY_FIELDS.contains(&("title", "temper-title")));
         assert!(LEGACY_FIELDS.contains(&("slug", "temper-slug")));
+    }
+
+    #[test]
+    fn known_temper_fields_includes_temper_title_and_temper_slug() {
+        assert!(
+            KNOWN_TEMPER_FIELDS.contains(&"temper-title"),
+            "missing temper-title"
+        );
+        assert!(
+            KNOWN_TEMPER_FIELDS.contains(&"temper-slug"),
+            "missing temper-slug"
+        );
     }
 }
