@@ -500,9 +500,12 @@ pub fn build_frontmatter_from_resource(
         "temper-created",
         serde_json::Value::String(resource.created.to_rfc3339()),
     );
-    fm.set_managed_field("title", serde_json::Value::String(resource.title.clone()));
+    fm.set_managed_field(
+        "temper-title",
+        serde_json::Value::String(resource.title.clone()),
+    );
     if let Some(slug) = &resource.slug {
-        fm.set_managed_field("slug", serde_json::Value::String(slug.clone()));
+        fm.set_managed_field("temper-slug", serde_json::Value::String(slug.clone()));
     }
     if !resource.owner_handle.is_empty() {
         fm.set_managed_field(
@@ -512,15 +515,11 @@ pub fn build_frontmatter_from_resource(
     }
     if let Some(obj) = managed_meta.and_then(|m| m.as_object()) {
         for (k, v) in obj {
-            // System fields plus `title` are set above from resource-row
-            // columns; skip them as defense-in-depth so a drifted
+            // System fields plus temper-title/temper-slug are set above from
+            // resource-row columns; skip them as defense-in-depth so a drifted
             // managed_meta payload can't overwrite the canonical values.
-            //
-            // `title` is not part of SYSTEM_MANAGED_FIELDS (that constant
-            // describes fields the CLI user cannot edit, not fields that
-            // are resource-row-sourced) — we hardcode the skip locally.
             if temper_core::frontmatter::fields::SYSTEM_MANAGED_FIELDS.contains(&k.as_str())
-                || k == "title"
+                || k == "temper-title"
             {
                 continue;
             }

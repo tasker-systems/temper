@@ -2110,7 +2110,7 @@ async fn sync_run_relocation_guard_rejects_context_change(pool: sqlx::PgPool) {
     let rewritten_managed = serde_json::json!({
         "temper-type": "research",
         "temper-context": "ctx-b",
-        "title": "Relocate Doc",
+        "temper-title": "Relocate Doc",
     });
     sqlx::query(
         "UPDATE kb_resource_manifests \

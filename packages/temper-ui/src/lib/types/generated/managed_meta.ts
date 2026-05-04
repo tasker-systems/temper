@@ -81,11 +81,13 @@ llm_model: string | null,
  */
 llm_run: string | null, 
 /**
- * Human-readable title (identity transport, no rename)
+ * Human-readable title. Renamed to `temper-title` per the
+ * temper-prefix contract for managed-tier keys.
  */
 title: string | null, 
 /**
- * URL-safe slug (identity transport, no rename)
+ * URL-safe slug. Renamed to `temper-slug` per the temper-prefix
+ * contract for managed-tier keys.
  */
 slug: string | null, };
 

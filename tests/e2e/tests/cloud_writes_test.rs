@@ -151,7 +151,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
         .as_object()
         .expect("managed_meta must be a JSON object");
     assert_eq!(
-        obj.get("title").and_then(|v| v.as_str()),
+        obj.get("temper-title").and_then(|v| v.as_str()),
         Some("Cloud Round-Trip Session"),
         "managed_meta must contain title; got: {managed_meta}"
     );
@@ -226,7 +226,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         content: body_text.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "title": "Meta-Only Update Test",
+            "temper-title": "Meta-Only Update Test",
             "temper-stage": "backlog"
         })),
         open_meta: None,
@@ -315,7 +315,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
 
     // ---- Assertion 2: title preserved ----
     assert_eq!(
-        obj.get("title").and_then(|v| v.as_str()),
+        obj.get("temper-title").and_then(|v| v.as_str()),
         Some("Meta-Only Update Test"),
         "title must be preserved after meta-only update; got: {managed_meta}"
     );
@@ -379,7 +379,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "title": "Body+Meta Update Test",
+            "temper-title": "Body+Meta Update Test",
             "temper-stage": "backlog"
         })),
         open_meta: None,
@@ -525,7 +525,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "title": "Body-Only Update Test",
+            "temper-title": "Body-Only Update Test",
             "temper-stage": "in-progress"
         })),
         open_meta: None,
@@ -667,7 +667,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         content: initial_body.to_string(),
         metadata: None,
         managed_meta: Some(serde_json::json!({
-            "title": "Body Empty Guard Test",
+            "temper-title": "Body Empty Guard Test",
             "temper-stage": "backlog"
         })),
         open_meta: None,
@@ -986,7 +986,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
             slug: format!("cloud-only-resource-{i}"),
             content: body,
             metadata: None,
-            managed_meta: Some(serde_json::json!({"title": format!("Cloud Only {i}")})),
+            managed_meta: Some(serde_json::json!({"temper-title": format!("Cloud Only {i}")})),
             open_meta: None,
             chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
         };

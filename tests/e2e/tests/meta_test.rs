@@ -641,7 +641,7 @@ async fn get_meta_returns_current_meta_without_touching_chunks(pool: sqlx::PgPoo
 
     let seeded_managed = serde_json::json!({
         "temper-type": "research",
-        "title": "Get Meta Doc",
+        "temper-title": "Get Meta Doc",
     });
     let seeded_open = serde_json::json!({
         "tags": ["get", "meta"],

@@ -294,7 +294,7 @@ async fn local_mode_session_create_wire_shape_regression(pool: sqlx::PgPool) {
     // → apply_doc_type_defaults → stored in kb_resource_manifests. If this fails, Task 9
     // regressed.
     assert_eq!(
-        obj.get("title").and_then(|v| v.as_str()),
+        obj.get("temper-title").and_then(|v| v.as_str()),
         Some("Snapshot Test"),
         "managed_meta must carry title: Snapshot Test (Task 9 schema-correct field); got: {stored_managed_meta}"
     );
