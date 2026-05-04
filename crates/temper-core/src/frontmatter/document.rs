@@ -397,8 +397,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: My Task
-slug: my-task
+temper-title: My Task
+temper-slug: my-task
 temper-stage: in-progress
 temper-mode: build
 temper-effort: small
@@ -467,8 +467,14 @@ depends-on: [b]
         let fm = Frontmatter::try_from(TASK_FIXTURE).unwrap();
         let m = fm.managed_json();
         let obj = m.as_object().unwrap();
-        assert_eq!(obj.get("title").and_then(|v| v.as_str()), Some("My Task"));
-        assert_eq!(obj.get("slug").and_then(|v| v.as_str()), Some("my-task"));
+        assert_eq!(
+            obj.get("temper-title").and_then(|v| v.as_str()),
+            Some("My Task")
+        );
+        assert_eq!(
+            obj.get("temper-slug").and_then(|v| v.as_str()),
+            Some("my-task")
+        );
         assert_eq!(
             obj.get("temper-stage").and_then(|v| v.as_str()),
             Some("in-progress")
@@ -494,7 +500,7 @@ depends-on: [b]
         let fm = Frontmatter::try_from(TASK_FIXTURE).unwrap();
         let (managed_hash, open_hash) = fm.hashes();
         assert_eq!(
-            managed_hash, "sha256:40c2c784826e73014d5acfadc2914f73e4a3dce70185ce0a31d0bb1d28182b6c",
+            managed_hash, "sha256:fc4093304d9da0bb8e24ae5e71a986fa4cfa71dd1b1991816057888bb40758ca",
             "task fixture managed hash drift"
         );
         assert_eq!(
@@ -509,7 +515,7 @@ depends-on: [b]
         let permuted = r#"---
 temper-type: task
 temper-created: "2026-04-13T00:00:00Z"
-title: My Task
+temper-title: My Task
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 relates_to: [other-task]
 temper-effort: small
@@ -517,7 +523,7 @@ temper-mode: build
 temper-context: temper
 temper-stage: in-progress
 tags: [auth]
-slug: my-task
+temper-slug: my-task
 ---
 body content here
 "#;
@@ -536,8 +542,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: T
-slug: t
+temper-title: T
+temper-slug: t
 relates_to: [a]
 depends_on: [b]
 ---
@@ -547,8 +553,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: T
-slug: t
+temper-title: T
+temper-slug: t
 relates-to: [a]
 depends-on: [b]
 ---
@@ -565,10 +571,10 @@ depends-on: [b]
     #[test]
     fn serialize_emits_canonical_order() {
         let permuted = r#"---
-slug: my-task
+temper-slug: my-task
 relates_to: [other]
 temper-stage: in-progress
-title: My Task
+temper-title: My Task
 temper-type: task
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-context: temper
@@ -583,7 +589,7 @@ body
         let yaml_part = out.split("---\n").nth(1).unwrap();
         let id_pos = yaml_part.find("temper-id:").unwrap();
         let type_pos = yaml_part.find("temper-type:").unwrap();
-        let title_pos = yaml_part.find("title:").unwrap();
+        let title_pos = yaml_part.find("temper-title:").unwrap();
         let stage_pos = yaml_part.find("temper-stage:").unwrap();
         assert!(id_pos < type_pos);
         assert!(type_pos < title_pos);
@@ -620,7 +626,7 @@ body
     #[test]
     fn new_constructor_allows_subsequent_field_population() {
         let mut fm = Frontmatter::new(DocType::Goal, String::new());
-        fm.set_managed_field("title", serde_json::json!("Ship the thing"));
+        fm.set_managed_field("temper-title", serde_json::json!("Ship the thing"));
         fm.set_managed_field("slug", serde_json::json!("ship-the-thing"));
         fm.set_managed_field(
             "temper-id",
@@ -632,7 +638,7 @@ body
         let parsed = Frontmatter::try_from(serialized.as_str()).expect("round-trip ok");
         assert_eq!(parsed.doc_type(), DocType::Goal);
         assert_eq!(
-            parsed.value().get("title").and_then(|v| v.as_str()),
+            parsed.value().get("temper-title").and_then(|v| v.as_str()),
             Some("Ship the thing"),
         );
         assert_eq!(
@@ -694,8 +700,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: T
-slug: t
+temper-title: T
+temper-slug: t
 ---
 "#;
         let fm = Frontmatter::try_from(input).unwrap();

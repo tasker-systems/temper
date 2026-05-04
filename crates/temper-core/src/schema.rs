@@ -581,7 +581,7 @@ temper-type: "task"
 temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
-title: "Test task"
+temper-title: "Test task"
 slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
@@ -601,7 +601,7 @@ temper-type: "task"
 temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
-title: "Test task"
+temper-title: "Test task"
 slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
@@ -624,7 +624,7 @@ temper-type: "task"
 temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
-title: "Test task"
+temper-title: "Test task"
 slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
@@ -647,7 +647,7 @@ temper-type: "task"
 temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
-title: "Test task"
+temper-title: "Test task"
 slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();

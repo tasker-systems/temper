@@ -36,9 +36,11 @@ impl TryFrom<&Frontmatter> for ResourceFrontmatter {
         // top-level mapping.
         let managed = fm.managed_json();
         let title = managed
-            .get("title")
+            .get("temper-title")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| TemperError::Config("ResourceFrontmatter requires `title`".to_string()))?
+            .ok_or_else(|| {
+                TemperError::Config("ResourceFrontmatter requires `temper-title`".to_string())
+            })?
             .to_string();
         let doc_type = fm.doc_type().as_str().to_string();
 
@@ -96,7 +98,7 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: My Task
+temper-title: My Task
 slug: my-task
 temper-stage: in-progress
 temper-mode: build

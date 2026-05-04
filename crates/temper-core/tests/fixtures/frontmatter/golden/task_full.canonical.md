@@ -5,7 +5,7 @@ temper-type: task
 temper-created: 2026-04-13T00:00:00Z
 temper-updated: 2026-04-13T12:00:00Z
 temper-owner: '@me'
-title: Full Task
+temper-title: Full Task
 slug: full-task
 temper-stage: in-progress
 temper-mode: build
