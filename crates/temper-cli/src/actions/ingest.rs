@@ -160,10 +160,12 @@ pub fn build_ingest_payload(
     let origin_uri = build_uri(context, doc_type, &slug);
     let body = compute_body_chunks(content)?;
 
-    let managed_meta_value = managed_meta
+    let mut managed_meta_value = managed_meta
         .map(|m| serde_json::to_value(m))
         .transpose()
-        .map_err(|e| TemperError::Extraction(format!("managed_meta serialization failed: {e}")))?;
+        .map_err(|e| TemperError::Extraction(format!("managed_meta serialization failed: {e}")))?
+        .unwrap_or_else(|| serde_json::json!({}));
+    temper_core::operations::ensure_managed_identity_keys(&mut managed_meta_value, title, &slug);
 
     Ok(temper_core::types::IngestPayload {
         title: title.to_owned(),
@@ -174,7 +176,7 @@ pub fn build_ingest_payload(
         slug,
         content: content.to_owned(),
         metadata,
-        managed_meta: managed_meta_value,
+        managed_meta: Some(managed_meta_value),
         open_meta,
         chunks_packed: Some(body.chunks_packed),
     })
@@ -1349,6 +1351,28 @@ created: 2026-03-23
             id_pos < stage_pos.min(effort_pos).min(relates_pos),
             "identity fields must precede data fields. Got:\n{serialized}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "test-embed")]
+    fn build_ingest_payload_injects_temper_title_and_slug_into_managed_meta() {
+        let payload = build_ingest_payload(
+            "# Hello\n\nbody",
+            "Hello World",
+            "test-ctx",
+            "task",
+            None,
+            Some(temper_core::types::ManagedMeta {
+                stage: Some("backlog".to_owned()),
+                ..Default::default()
+            }),
+            None,
+        )
+        .unwrap();
+        let managed = payload.managed_meta.expect("managed_meta set");
+        assert_eq!(managed["temper-title"], "Hello World");
+        assert_eq!(managed["temper-slug"], "hello-world");
+        assert_eq!(managed["temper-stage"], "backlog");
     }
 
     #[test]

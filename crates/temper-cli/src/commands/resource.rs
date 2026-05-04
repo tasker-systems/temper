@@ -1414,6 +1414,12 @@ fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &
     let managed_meta = build_partial_managed_meta_from_args(params);
     let open_meta = build_partial_open_meta_from_args(params);
 
+    // temper-title/temper-slug injection into managed_meta JSONB happens on the
+    // receive side via ensure_managed_identity_keys in resource_service::update
+    // (see Phase 5 plan, Task 5). Doing it here would require fetching the
+    // current resource for fallback title/slug values, then round-tripping the
+    // typed ManagedMeta partial through serde_json::Value and back — the
+    // server-side defense closes the gap with a single in-process call.
     let req = temper_core::types::ResourceUpdateRequest {
         title: params.title.map(String::from),
         slug: None,
