@@ -208,3 +208,87 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         "tier-3 output must be parseable as a vault document; got:\n{on_disk}"
     );
 }
+
+/// Phase 5 acceptance gate: the precondition for show-cache tier-2.
+///
+/// The local CLI computes a canonical-form `managed_hash` over a JSONB that
+/// includes `temper-title` / `temper-slug` keys. The server-stored
+/// `managed_hash` (in `kb_resource_manifests.managed_hash`) MUST be
+/// byte-identical to that local-computed hash for any newly-ingested
+/// resource. Without this invariant, tier-2 (the hash-equality short-circuit
+/// in `show_cache::attempt_remote`) cannot ever fire — it would always fall
+/// through to tier-3, which is the exact bug Phase 5 closes.
+///
+/// Phase 8 re-enables the tier-2 short-circuit in show_cache; this test is
+/// the gate that proves the precondition holds end-to-end against a real
+/// Axum + Postgres + temper-client round-trip.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn phase5_local_canonical_hash_matches_server_managed_hash(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("hash-invariant")
+        .await
+        .expect("context create");
+
+    // Build the canonical managed_meta locally, the way the CLI / MCP
+    // send-side wiring does after Phase 5: start with user fields, run the
+    // shared helper to inject the canonical identity keys, compute the
+    // canonical-form hash. This is the value tier-2 will compare against.
+    let title = "Hash Invariant";
+    let slug = "hash-invariant";
+    let mut canonical_managed_meta = serde_json::json!({"temper-stage": "draft"});
+    temper_core::operations::ensure_managed_identity_keys(
+        &mut canonical_managed_meta,
+        title,
+        Some(slug),
+    );
+    let local_canonical_hash =
+        temper_core::hash::compute_managed_hash("research", &canonical_managed_meta);
+
+    let body = "# Hash Invariant\n\nbody\n".to_string();
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: body.clone(),
+        content_hash: format!("{:0>64}", "i"),
+        embedding: vec![0.0_f32; 768],
+    };
+    let payload = IngestPayload {
+        title: title.to_string(),
+        origin_uri: "test://hash-invariant".to_string(),
+        context_name: "hash-invariant".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&body)),
+        slug: slug.to_string(),
+        content: body.clone(),
+        metadata: None,
+        managed_meta: Some(canonical_managed_meta.clone()),
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+    };
+    let seeded = app.client.ingest().create(&payload).await.expect("ingest");
+
+    // Fetch the manifest meta tier — the same path tier-2 will use.
+    let meta = app
+        .client
+        .resources()
+        .get_meta(*seeded.id)
+        .await
+        .expect("get_meta");
+
+    assert_eq!(
+        meta.managed_hash, local_canonical_hash,
+        "server-stored managed_hash must equal client-side canonical hash; \
+         this is the precondition for show-cache tier-2 (Phase 8). \
+         server={}, local={}, server_managed_meta={:?}",
+        meta.managed_hash, local_canonical_hash, meta.managed_meta
+    );
+}
