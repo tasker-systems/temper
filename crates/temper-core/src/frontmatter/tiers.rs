@@ -157,9 +157,9 @@ temper-slug: hello
     }
 
     #[test]
-    fn doc_type_specific_properties_go_to_managed() {
-        // `date` is declared in session.schema.json (not base), so it
-        // routes to managed for sessions.
+    fn date_routes_to_open_tier_for_sessions() {
+        // `date` is no longer in any managed-tier schema (Plan Task 13);
+        // it routes to open tier as user-content metadata.
         let v = yaml(
             r#"
 title: My session
@@ -168,8 +168,8 @@ date: "2026-04-13"
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Session);
-        assert_eq!(managed["date"], json!("2026-04-13"));
-        assert!(open.get("date").is_none());
+        assert!(managed.get("date").is_none());
+        assert_eq!(open["date"], json!("2026-04-13"));
     }
 
     #[test]
@@ -221,10 +221,10 @@ another: something
     }
 
     #[test]
-    fn session_date_does_not_accidentally_collide_with_metadata_date() {
-        // session.schema.json declares `date`, so it's managed for sessions.
-        // `date` is also in the metadata registry. Doc-type schema wins:
-        // session `date` must land in managed, not open.
+    fn session_date_routes_to_open_tier() {
+        // After Plan Task 13, `date` is open-tier user content, not
+        // managed-tier. Sessions, research, decisions, and concepts all
+        // emit `date` to open tier.
         let v = yaml(
             r#"
 title: S
@@ -233,8 +233,8 @@ date: "2026-04-13"
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Session);
-        assert_eq!(managed["date"], json!("2026-04-13"));
-        assert!(open.get("date").is_none());
+        assert!(managed.get("date").is_none());
+        assert_eq!(open["date"], json!("2026-04-13"));
     }
 
     #[test]
@@ -305,11 +305,11 @@ tags: [x]
         let open_hash = crate::hash::compute_open_hash(&open);
 
         assert_eq!(
-            managed_hash, "sha256:3aeb5a326ab865083de9eafb48bde76def61ea657bb4fb4980a20beee3a8696c",
+            managed_hash, "sha256:afe8ad81f8cfbd4b5bee52b7a6152ab9d00b6f5efa1b3eaca5a01ded46705bbd",
             "session fixture managed hash drift"
         );
         assert_eq!(
-            open_hash, "sha256:369e3bc13f15eb2e74b3e2e295ede908968421d0c53d3e17e828fe9f0ccc0d91",
+            open_hash, "sha256:d0c45999dca9e425cee891ecbda105e871592025782dd4482267f909009bc36c",
             "session fixture open hash drift"
         );
     }

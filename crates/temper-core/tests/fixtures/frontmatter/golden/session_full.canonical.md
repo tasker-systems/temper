@@ -5,10 +5,10 @@ temper-type: session
 temper-created: 2026-04-13T00:00:00Z
 temper-title: Full Session
 temper-slug: full-session
-date: 2026-04-13
 relates_to:
 - task-a
 tags:
 - retro
+date: 2026-04-13
 ---
 session body

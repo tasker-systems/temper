@@ -5,8 +5,8 @@ temper-type: research
 temper-created: 2026-04-13T00:00:00Z
 temper-title: Full Research
 temper-slug: full-research
-date: 2026-04-13
 references:
 - external-paper
+date: 2026-04-13
 ---
 research body

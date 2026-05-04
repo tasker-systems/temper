@@ -10,13 +10,8 @@
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "description": "URL-safe identifier"
-    },
-    "date": {
-      "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
-      "description": "Decision date (YYYY-MM-DD)"
     }
   },
-  "required": ["temper-slug", "date"],
+  "required": ["temper-slug"],
   "additionalProperties": true
 }

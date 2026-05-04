@@ -5,13 +5,8 @@
     { "$ref": "base.schema.json" }
   ],
   "properties": {
-    "temper-type": { "const": "session" },
-    "date": {
-      "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
-      "description": "Session date (YYYY-MM-DD)"
-    }
+    "temper-type": { "const": "session" }
   },
-  "required": ["date"],
+  "required": [],
   "additionalProperties": true
 }
