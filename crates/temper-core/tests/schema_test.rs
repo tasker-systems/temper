@@ -186,7 +186,22 @@ title: "My Task"
 
 #[test]
 fn test_check_legacy_fields_clean_doc_has_none() {
-    let fm = yaml(valid_task_frontmatter());
+    // Inline fixture with canonical (post-temper-prefix) keys. We deliberately
+    // do NOT use `valid_task_frontmatter()` here because that fixture still
+    // uses bare `title:` and `slug:` (required by the current schemas until
+    // the schema-rename tasks land); those bare keys are now in
+    // LEGACY_FIELDS and would trigger the scanner.
+    let fm = yaml(
+        r#"
+temper-id: "01930000-0000-7000-8000-000000000001"
+temper-type: task
+temper-context: my-project
+temper-created: "2024-01-01T00:00:00Z"
+temper-title: "My Task"
+temper-stage: backlog
+temper-slug: my-task
+"#,
+    );
     let issues = check_legacy_fields(&fm);
     assert!(
         issues.is_empty(),
