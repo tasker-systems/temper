@@ -401,6 +401,15 @@ pub async fn ingest(
         .map(strip_system_managed_fields)
         .unwrap_or_else(|| serde_json::json!({}));
     apply_doc_type_defaults(&payload.doc_type_name, &mut managed);
+    // Inject canonical identity keys before validation + hashing so the
+    // server-stored managed_meta JSONB matches the local canonical form.
+    // Idempotent — if the caller already injected (CLI / MCP send-side
+    // wiring), this is a byte-identical no-op.
+    temper_core::operations::ensure_managed_identity_keys(
+        &mut managed,
+        &payload.title,
+        &payload.slug,
+    );
     let validate_params = ValidateParams {
         doc_type: &payload.doc_type_name,
         managed_meta: Some(&managed),
