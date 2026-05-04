@@ -42,7 +42,11 @@ These three rules — and only these three — are what the rename mechanically 
 
 ### Why dual-write not generated columns
 
-Generated columns (`GENERATED ALWAYS AS (managed_meta->>'temper-title') STORED`) would make drift impossible by construction. The trade is: column writes leave the codebase. Today, several surfaces (search facets, list ordering, sync replay) read these columns directly. Confirming that every read still works under generation requires a re-audit. Dual-write keeps the read paths semantically identical and confines the change to write paths. Risk surface is smaller, even though the long-term clean answer is generated columns. **Revisit:** if dual-write drift is observed in practice after this work lands, the migration to generated columns is a one-shot, additive change.
+Two layers of "dual-write" need separating:
+
+1. **DB-level (intentional, retained):** `kb_resources.title`/`slug` columns AND `kb_resource_manifests.managed_meta` JSONB both carry the values. The columns are kept for query ergonomics — search facets, list ordering, sync replay all read them directly, and several SQL views depend on them. Replacing them with `GENERATED ALWAYS AS (managed_meta->>'temper-title') STORED` would close drift by construction but require a re-audit of every read path. Dual-write keeps reads semantically identical and confines the change to writes; revisitable as a one-shot additive change later if drift is observed.
+
+2. **Wire-level (acceptable as ergonomic sugar):** `IngestPayload` and `ResourceUpdateRequest` carry top-level `title`/`slug` fields alongside `managed_meta`. After this work, the canonical source of truth is the JSONB; the top-level fields are a convenience for CLI/MCP callers who already have title and slug as scalars and don't want to re-pack them into JSONB themselves. The shared `ensure_managed_identity_keys` helper makes the wire dual-write impossible to skew: send-side and receive-side both run it, and the values come from a single in-memory source on each side. Wire collapse (dropping the top-level fields entirely) was considered and deferred — its blast radius (~50 sites including ts-rs codegen, MCP JsonSchema input shapes, OpenAPI spec, e2e tests) is disproportionate to the correctness gain when the helper already closes the gap.
 
 ## Decisions Locked (this session)
 
@@ -150,7 +154,7 @@ Each phase ships in its own commit. Each phase has an explicit testable success 
 | 2 | `ManagedMeta` serde renames | `[controller]` | `title` and `slug` get `serde(rename = "temper-title"/"temper-slug")`; `TIER1_SYSTEM_FIELDS` and `KNOWN_TEMPER_FIELDS` updated; `SYSTEM_MANAGED_FIELDS` corrects `slug → temper-slug`; existing unit tests pass with new keys; `cargo make check` clean. **Phases 1+2 may need to ship together** — if Phase 1 schemas update `required` to `temper-title` but Phase 2's typed struct still emits bare `title`, server validation fails. Confirm this in Phase 1's local test run; if so, merge phases. |
 | 3 | Canonical-form display + hash | `[controller]` | `frontmatter/canonical.rs` lines 61-66 updated; doc-type-schema-property-order pass merges in `temper-title`/`temper-slug` from base.schema.json (or stays explicit, decided in this phase); hash-determinism tests still pass; existing canonicalize-idempotent tests still green |
 | 4 | CLI write paths + askama templates | `[subagent-OK]` | Templates emit `temper-title:` / `temper-slug:` / no `date:` in managed-tier; `actions/frontmatter::build_managed_meta_for_create` and friends emit canonical keys; `commands/resource.rs::validate_doc_type` removed (defer to `validate_doctype` in operations); golden-file CLI test verifies emitted frontmatter |
-| 5 | Server-side: stop extracting title/slug from JSONB | `[controller]` | `ingest_service::strip_system_managed_fields` continues to strip only IDENTITY+TIER1; the column-extraction path is updated to read from JSONB after store (non-destructive). New service test verifies `managed_meta` JSONB still contains `temper-title`/`temper-slug` post-ingest; `kb_resources.title/slug` columns continue to be populated. |
+| 5 | Server-side: canonical projection-key injection | `[controller]` | `temper-core::operations::ensure_managed_identity_keys` injects `temper-title`/`temper-slug` into `managed_meta` JSONB from the top-level identity fields. Called on both send-side (CLI/MCP build paths) and receive-side (`ingest_service::ingest`, `resource_service::update`) for defense in depth. New service test verifies `managed_meta` JSONB contains `temper-title`/`temper-slug` post-ingest; new integration test asserts `local_managed_hash == server.managed_hash` for any newly-ingested resource. `kb_resources.title`/`slug` columns continue to be populated from top-level fields. |
 | 6 | DB migration: rename keys + recompute hashes | `[controller]` | New migration in `migrations/`: existing rows have managed_meta JSONB rewritten to use `temper-title`/`temper-slug` keys, `date` extracted from managed_meta into open_meta, `managed_hash` and `open_hash` recomputed for all rows. Migration is hash-invalidating and explicit. Manifest replay test passes against migrated DB. |
 | 7 | Read-side cleanup | `[controller]` | Every consumer reads canonical keys (alias normalization at parse still tolerates legacy on read); `commands/session.rs:454`, `actions/ingest.rs:73`, `materialize.rs`, `research.rs`, `warmup.rs` all read `date` from open_meta. Service tests verify each path. |
 | 8 | Re-enable hash-based tier-2 | `[controller]` | `show_cache.rs::attempt_remote` tier-2 hash compare is re-enabled; the previously-removed e2e regression `tier2_hits_when_local_hashes_match_server_hashes` is restored and passes against a real server. This is the spec's primary acceptance gate. |
@@ -159,6 +163,17 @@ Each phase ships in its own commit. Each phase has an explicit testable success 
 **Working tests at every phase boundary.** If a phase doesn't compile until the next phase lands, the boundary moved — merge them. The phases above assume the boundaries hold; Phase 1+2 is flagged as the most likely consolidation.
 
 **Dogfood gate before merge.** Run the DB migration against a fresh-ingested vault, verify `show_cache` tier-2 actually hits — both via the e2e test and via a manual show-show round-trip on a real resource.
+
+### Phase 5 helper contract
+
+`ensure_managed_identity_keys(meta: &mut serde_json::Value, title: &str, slug: &str)`:
+
+- Coerces `meta` to a JSON object if it is not one already (replacing it with `{}` on a non-object value, since the alternative is silently dropping the data).
+- Inserts or overwrites `meta["temper-title"] = title` and `meta["temper-slug"] = slug`.
+- Idempotent: running twice with the same inputs produces the same output.
+- Pure: no I/O, no dependencies beyond `serde_json`.
+
+Callers: send-side runs it after serializing `ManagedMeta → Value` and before `compute_managed_hash` (so the local hash sees what the server will see); receive-side runs it after `strip_system_managed_fields` / `apply_managed_meta_partial` and before the server's own `compute_managed_hash` (so a non-CLI client that skipped injection still produces a canonical row).
 
 ## Test Plan
 
@@ -225,7 +240,7 @@ Flagged here so future-me can resolve before each phase rather than mid-phase.
 
 2. **Canonical-form schema-property-order pass:** `canonical.rs::schema_property_order` only reads the doc-type schema's top-level `properties`, not the merged closure across `allOf → base.schema.json`. After moving `temper-title`/`temper-slug` into base, the schema-order pass would skip them. Two options: (a) keep the explicit pre-list of `temper-title`/`temper-slug` (today's pattern, lines 61-66, just renamed), or (b) teach `schema_property_order` to follow `allOf`. Decision in Phase 3.
 
-3. **Server-side title/slug column extraction site:** I have not located the exact SQL where `kb_resources.title/slug` get populated from incoming managed_meta. Phase 5 needs this. Open research action: read `ingest_service::ingest` body and `create_resource_with_manifest` start-to-finish.
+3. **Server-side title/slug column extraction site (RESOLVED 2026-05-04):** Investigation showed `kb_resources.title`/`slug` are NOT extracted from `managed_meta` JSONB — they are populated from top-level `IngestPayload.title`/`slug` and `ResourceUpdateRequest.title`/`slug` fields. The asymmetry is the actual hash-invariant gap: the JSONB never had `temper-title`/`temper-slug` server-side, while the local canonical form does. Resolution: a shared `temper-core::operations::ensure_managed_identity_keys` helper injects the keys into the JSONB from the top-level fields, run on both the send side (CLI / MCP) and the receive side (`ingest_service::ingest`, `resource_service::update`) for defense in depth. See Phase 5 plan: `docs/superpowers/plans/2026-05-04-managed-meta-phase5-canonical-projection-injection.md`.
 
 4. **MCP tool description strings:** several tool descriptions reference bare field names in user-facing copy. Audit during Phase 4 — schema-validated wire format is already typed, but agent-readable strings may need updating to match the canonical contract.
 
