@@ -2,6 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Execution status (updated mid-flight, 2026-05-04):**
+> - Tasks 1, 2, 3 — landed cleanly (commits `e10dc9a`, `6b92071`, `1dd48b2`).
+> - Task 4 — landed in commit `add5b63` but over-scoped: the same commit also did **Task 7 (base.schema.json title rename)** and the **title-half of spec Phase 3 (canonical.rs)**. All test fixtures (input + golden + hash table) and the `ResourceFrontmatter::try_from` consumer were migrated forward to the canonical `temper-title` form. **Skip Task 7 when you reach it** — it's already done. Phase 3's slug-half remains for the separate Phase 3 plan.
+> - Tasks 5, 6, 8-13, 14 — still to do.
+
 **Goal:** Land the schema-and-types contract for the temper-prefix alignment. Renames `title` → `temper-title` and `slug` → `temper-slug` in the typed `ManagedMeta` struct, all 7 JSON schemas, the field-set constants, and the parse-boundary alias normalizer; drops `date` from managed-tier schemas (it becomes open_meta in Phase 2 of this plan via the doctor pass and DB migration, planned separately). After this plan lands, the contract is stated; the consumers (canonical-form rendering, server stripping, DB migration, doctor fix) get aligned in subsequent phase plans.
 
 **Architecture:** Pure type-and-schema work. No DB migrations, no server-side SQL changes, no template edits. The transition window is bridged by extending the existing parse-boundary alias normalizer (`crates/temper-core/src/frontmatter/parse.rs::normalize_aliases`) so files emitted under the old contract keep parsing correctly. Test coverage is unit-level only — DB-backed and e2e regressions belong to subsequent phases that touch persistence.
