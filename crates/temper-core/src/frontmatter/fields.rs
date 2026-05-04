@@ -70,6 +70,8 @@ pub static LEGACY_FIELDS: &[(&str, &str)] = &[
     ("goal", "temper-goal"),
     ("branch", "temper-branch"),
     ("pr", "temper-pr"),
+    ("title", "temper-title"),
+    ("slug", "temper-slug"),
 ];
 
 /// Fields that are system-managed and cannot be updated via CLI.
@@ -138,5 +140,11 @@ mod tests {
     #[test]
     fn system_managed_fields_includes_temper_owner() {
         assert!(SYSTEM_MANAGED_FIELDS.contains(&"temper-owner"));
+    }
+
+    #[test]
+    fn legacy_fields_map_title_and_slug_to_temper_prefix() {
+        assert!(LEGACY_FIELDS.contains(&("title", "temper-title")));
+        assert!(LEGACY_FIELDS.contains(&("slug", "temper-slug")));
     }
 }
