@@ -92,8 +92,9 @@ pub struct ManagedMeta {
     #[serde(rename = "temper-title", skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 
-    /// URL-safe slug (identity transport, no rename)
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// URL-safe slug. Renamed to `temper-slug` per the temper-prefix
+    /// contract for managed-tier keys.
+    #[serde(rename = "temper-slug", skip_serializing_if = "Option::is_none")]
     pub slug: Option<String>,
 
     /// Any additional keys not named by the typed fields above. Includes
@@ -247,7 +248,7 @@ mod tests {
         assert!(yaml.contains("temper-status:"), "missing temper-status key");
 
         assert!(yaml.contains("temper-title:"), "missing temper-title key");
-        assert!(yaml.contains("slug:"), "missing slug key");
+        assert!(yaml.contains("temper-slug:"), "missing temper-slug key");
 
         // Verify roundtrip
         let parsed: ManagedMeta = serde_yaml::from_str(&yaml).unwrap();
@@ -378,5 +379,29 @@ mod tests {
         let json = r#"{"temper-title":"Improve sync"}"#;
         let parsed: ManagedMeta = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.title.as_deref(), Some("Improve sync"));
+    }
+
+    #[test]
+    fn managed_meta_serializes_slug_as_temper_slug_key() {
+        let meta = ManagedMeta {
+            slug: Some("improve-sync".to_string()),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(
+            json.contains("\"temper-slug\""),
+            "expected temper-slug key, got: {json}"
+        );
+        assert!(
+            !json.contains("\"slug\":"),
+            "bare slug key must not appear, got: {json}"
+        );
+    }
+
+    #[test]
+    fn managed_meta_deserializes_temper_slug_into_slug_field() {
+        let json = r#"{"temper-slug":"improve-sync"}"#;
+        let parsed: ManagedMeta = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.slug.as_deref(), Some("improve-sync"));
     }
 }

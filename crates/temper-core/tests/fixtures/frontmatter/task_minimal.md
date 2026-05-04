@@ -4,7 +4,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-title: Minimal Task
-slug: minimal-task
+temper-slug: minimal-task
 temper-stage: in-progress
 ---
 minimal body

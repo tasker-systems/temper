@@ -4,7 +4,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 title: Tags Test
-slug: tags-test
+temper-slug: tags-test
 temper-stage: in-progress
 tags: [auth, observability, not-a-resource]
 ---

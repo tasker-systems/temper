@@ -268,7 +268,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: Test
-slug: test
+temper-slug: test
 ---
 body
 "#;
@@ -312,7 +312,7 @@ temper-context: temper
 temper-type: task
 temper-created: 2026-04-12T00:00:00Z
 temper-title: Test
-slug: test
+temper-slug: test
 temper-stage: in-progress
 ---
 body content
@@ -340,7 +340,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: Test
-slug: test
+temper-slug: test
 temper-stage: frobnicate
 ---
 body
@@ -384,7 +384,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: Test
-slug: test
+temper-slug: test
 ---
 body
 "#;
@@ -413,7 +413,7 @@ temper-type: goal
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: Ship
-slug: ship
+temper-slug: ship
 ---
 "#;
         let path = write_file(dir.path(), "goal.md", content);
@@ -438,7 +438,7 @@ temper-type: session
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: Planning
-slug: planning
+temper-slug: planning
 ---
 "#;
         let path = write_file(dir.path(), "session.md", content);
@@ -464,7 +464,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: X
-slug: x
+temper-slug: x
 ---
 "#;
         let path = write_file(dir.path(), "task.md", content);
@@ -497,7 +497,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: Test
-slug: test
+temper-slug: test
 ---
 {body}"#
         );
@@ -524,7 +524,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
 temper-title: Test
-slug: test
+temper-slug: test
 ---
 body
 "#;
@@ -564,7 +564,7 @@ temper-context: temper
 temper-type: task
 temper-created: 2026-04-12T00:00:00Z
 temper-title: Test
-slug: test
+temper-slug: test
 temper-stage: backlog
 ---
 hello body

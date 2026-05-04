@@ -42,7 +42,7 @@ temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
 temper-title: "My Task"
 temper-stage: backlog
-slug: my-task
+temper-slug: my-task
 "#
 }
 
@@ -94,7 +94,7 @@ temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
 temper-title: "My Task"
 temper-stage: active
-slug: my-task
+temper-slug: my-task
 "#,
     );
     let issues = validate_frontmatter("task", &fm).expect("validate_frontmatter succeeded");
@@ -135,7 +135,7 @@ temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
 temper-title: "My Task"
 temper-stage: backlog
-slug: my-task
+temper-slug: my-task
 my-custom-field: "hello"
 another-user-field: 42
 "#,

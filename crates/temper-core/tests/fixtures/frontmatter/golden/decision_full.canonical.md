@@ -4,7 +4,7 @@ temper-context: temper
 temper-type: decision
 temper-created: 2026-04-13T00:00:00Z
 temper-title: Full Decision
-slug: full-decision
+temper-slug: full-decision
 extends:
 - parent-decision
 ---

@@ -99,7 +99,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-title: My Task
-slug: my-task
+temper-slug: my-task
 temper-stage: in-progress
 temper-mode: build
 temper-effort: small
@@ -155,7 +155,7 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-slug: t
+temper-slug: t
 ---
 "#;
         // Missing `title`, which ResourceFrontmatter requires.
@@ -170,8 +170,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: T
-slug: t
+temper-title: T
+temper-slug: t
 temper-stage: in-progress
 ---
 "#;

@@ -4,7 +4,7 @@ temper-type: concept
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-title: Full Concept
-slug: full-concept
+temper-slug: full-concept
 tags: [core]
 ---
 concept body

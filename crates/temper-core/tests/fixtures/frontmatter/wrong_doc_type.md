@@ -4,6 +4,6 @@ temper-type: bogus-type
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 title: Wrong
-slug: wrong
+temper-slug: wrong
 ---
 body

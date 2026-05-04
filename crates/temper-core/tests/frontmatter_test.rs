@@ -102,42 +102,42 @@ const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
     // (stem, managed_hash, open_hash)
     (
         "task_minimal",
-        "sha256:12a8a1611ea0c84675af760894965c7f06bb0c305ec8e20931d4d3adc937de49",
+        "sha256:60ec84b155a2a72a53847c6127bbb6ae36ea4f253677d2981050463cba7d1310",
         "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
     ),
     (
         "task_full",
-        "sha256:7e4b9e4c68581e5179352ef7a1cbae6751bc9c2aa621c8892a18f1689d5f885d",
+        "sha256:9680d621f3dcf03d90c8b5e9362fbd2849b37df232086d345f6794e86aa74fc0",
         "sha256:998a5ed4c7ce3d2b6b453caa05a77c15590e69d63dd4d8d72fa313902fe143dc",
     ),
     (
         "task_with_aliases",
-        "sha256:232b7bc8146f665ef53303656ab3d99e09ed228bf40b4f16eb92086d577d992e",
+        "sha256:117c9f8b186e8ed88cc028a71546406edd5f48cf832f890e135ab5defc72cbd3",
         "sha256:7c2eb7eddf439213c8a1f9689b313a0dd28acf34cb16e4d3593e07bc9ffcc70c",
     ),
     (
         "goal_full",
-        "sha256:36c2826fa045feae6b62c55172b0aaccf5ebb3256dbf3e9cfc9a4f27435c5e32",
+        "sha256:ea2c9736c5b33ec28cbc2baf960540b3b49a7790a599eae78b78e1e205254f22",
         "sha256:2cc0d1501ab8d23caaf440e3e96476b2eb88eedfde19517740f237b4ac4aea0c",
     ),
     (
         "session_full",
-        "sha256:7f61daf758159c12020971864071ec89b3f7c44055cabe6c5f3246f2729043a7",
+        "sha256:8b15e983b1a44b6571971a7da7f0e6578dcaa6be3b3ba8c9433c0df73ab2d7e0",
         "sha256:504e5d7bf6bdc0acdfeed77a68b0aeaf58944e54d4056be90f63b65cb6ac663f",
     ),
     (
         "research_full",
-        "sha256:efd416adfde94b47109bf6801dd6c4b8b53b1818ef54e0b8397f249d4cada0e0",
+        "sha256:cd75d83e110f01b568a019b6933a0ec647a991644b88c8ef2d7fea05325ddca5",
         "sha256:111b91a43db2959cbbfa518e82606ec8cc8435bcb4d3c5f5d4cbc3c0e2f812cf",
     ),
     (
         "decision_full",
-        "sha256:5faba1cc3612da19f5c40c26cac8c4ebbbc3259e25bf2818645d522ad7235776",
+        "sha256:78d3cc088880e46958f51b42197d533472cacc79ab0073cf0db3be258d94d699",
         "sha256:2f8bc766b2649cb0b8efb9dd3eab08b6d4d37111b473666ddbb173059ecf78ce",
     ),
     (
         "concept_full",
-        "sha256:acd02c4364d7062920d622edff2bf6645edd4e7572f9137c1abb310562e31390",
+        "sha256:a010537170e654b6277b4efcf6982736557b60a4e98ddf1735887dc38b62004d",
         "sha256:e90feecd8af6e01e61b003b79f0dd7e74b7ccc186df842608985f450f522cd9a",
     ),
 ];
@@ -165,7 +165,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-title: Aliased Task
-slug: aliased-task
+temper-slug: aliased-task
 temper-stage: in-progress
 relates_to: [a]
 depends_on: [b]
@@ -190,13 +190,13 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-title: T
-slug: t
+temper-slug: t
 temper-stage: in-progress
 relates_to: [x]
 ---
 "#;
     let b = r#"---
-slug: t
+temper-slug: t
 temper-title: T
 temper-stage: in-progress
 relates_to: [x]
@@ -213,7 +213,7 @@ temper-created: "2026-04-13T00:00:00Z"
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-title: T
 temper-context: temper
-slug: t
+temper-slug: t
 temper-type: task
 ---
 "#;

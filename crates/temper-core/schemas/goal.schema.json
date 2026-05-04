@@ -16,12 +16,12 @@
       "minimum": 0,
       "description": "Ordering within context"
     },
-    "slug": {
+    "temper-slug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "description": "URL-safe identifier"
     }
   },
-  "required": ["slug"],
+  "required": ["temper-slug"],
   "additionalProperties": true
 }

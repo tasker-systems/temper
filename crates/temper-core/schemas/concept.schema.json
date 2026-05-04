@@ -6,7 +6,7 @@
   ],
   "properties": {
     "temper-type": { "const": "concept" },
-    "slug": {
+    "temper-slug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "description": "URL-safe identifier"
@@ -17,6 +17,6 @@
       "description": "Date concept was recorded (YYYY-MM-DD)"
     }
   },
-  "required": ["slug", "date"],
+  "required": ["temper-slug", "date"],
   "additionalProperties": true
 }

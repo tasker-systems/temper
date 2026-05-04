@@ -241,7 +241,12 @@ pub fn updatable_fields(doc_type: &str) -> Result<Vec<(String, serde_json::Value
 /// per-type extras. This is the single point of curation — adding a new
 /// doctype means extending the match here.
 pub fn display_fields(doc_type: &str) -> Result<Vec<String>> {
-    const UNIVERSAL: &[&str] = &["temper-context", "temper-type", "slug", "temper-updated"];
+    const UNIVERSAL: &[&str] = &[
+        "temper-context",
+        "temper-type",
+        "temper-slug",
+        "temper-updated",
+    ];
 
     let extras: &[&str] = match doc_type {
         "task" => &[
@@ -534,7 +539,7 @@ mod tests {
         // Universal first
         assert_eq!(names[0], "temper-context");
         assert_eq!(names[1], "temper-type");
-        assert_eq!(names[2], "slug");
+        assert_eq!(names[2], "temper-slug");
         assert_eq!(names[3], "temper-updated");
         // Task extras
         assert!(names.contains(&"temper-stage"));
@@ -558,7 +563,7 @@ mod tests {
             vec![
                 "temper-context".to_string(),
                 "temper-type".to_string(),
-                "slug".to_string(),
+                "temper-slug".to_string(),
                 "temper-updated".to_string(),
             ]
         );
@@ -582,7 +587,7 @@ temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
 temper-title: "Test task"
-slug: "test-task"
+temper-slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
         let issues = validate_allowing_provisional("task", &fm).unwrap();
@@ -602,7 +607,7 @@ temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
 temper-title: "Test task"
-slug: "test-task"
+temper-slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
         let issues = validate_allowing_provisional("task", &fm).unwrap();
@@ -625,7 +630,7 @@ temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
 temper-title: "Test task"
-slug: "test-task"
+temper-slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
         let issues = validate_allowing_provisional("task", &fm).unwrap();
@@ -648,7 +653,7 @@ temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
 temper-title: "Test task"
-slug: "test-task"
+temper-slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
         let issues = validate_allowing_provisional("task", &fm).unwrap();
@@ -679,7 +684,7 @@ temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
 title: "Test task"
-slug: "test-task"
+temper-slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
         let issues = validate_allowing_provisional("task", &fm).unwrap();
@@ -707,7 +712,7 @@ temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "backlog"
 title: "Test task"
-slug: "test-task"
+temper-slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
         let _ = validate_allowing_provisional("task", &fm).unwrap();
@@ -729,7 +734,7 @@ temper-context: "temper"
 temper-created: "2026-04-12T00:00:00Z"
 temper-stage: "nonsense"
 title: "Test task"
-slug: "test-task"
+temper-slug: "test-task"
 "#;
         let fm: serde_yaml::Value = serde_yaml::from_str(yaml_str).unwrap();
         let issues = validate_allowing_provisional("task", &fm).unwrap();

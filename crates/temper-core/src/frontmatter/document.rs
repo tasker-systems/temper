@@ -233,10 +233,10 @@ impl Frontmatter {
             self.set_raw_field("temper-llm-run", serde_json::Value::String(v.clone()));
         }
         if let Some(ref v) = meta.title {
-            self.set_raw_field("title", serde_json::Value::String(v.clone()));
+            self.set_raw_field("temper-title", serde_json::Value::String(v.clone()));
         }
         if let Some(ref v) = meta.slug {
-            self.set_raw_field("slug", serde_json::Value::String(v.clone()));
+            self.set_raw_field("temper-slug", serde_json::Value::String(v.clone()));
         }
         // Apply extra bucket last — these are passthrough fields.
         for (key, value) in &meta.extra {
@@ -450,7 +450,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 title: T
-slug: t
+temper-slug: t
 relates-to: [a]
 depends-on: [b]
 ---

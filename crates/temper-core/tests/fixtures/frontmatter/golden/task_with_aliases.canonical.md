@@ -4,7 +4,7 @@ temper-context: temper
 temper-type: task
 temper-created: 2026-04-13T00:00:00Z
 temper-title: Aliased Task
-slug: aliased-task
+temper-slug: aliased-task
 temper-stage: in-progress
 relates_to:
 - a

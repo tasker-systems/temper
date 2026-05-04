@@ -4,7 +4,7 @@ temper-context: temper
 temper-type: session
 temper-created: 2026-04-13T00:00:00Z
 temper-title: Full Session
-slug: full-session
+temper-slug: full-session
 date: 2026-04-13
 relates_to:
 - task-a

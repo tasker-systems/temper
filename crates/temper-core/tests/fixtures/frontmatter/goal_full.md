@@ -4,7 +4,7 @@ temper-type: goal
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-title: Full Goal
-slug: full-goal
+temper-slug: full-goal
 temper-status: active
 temper-seq: 1
 relates_to: [other-goal]
