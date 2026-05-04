@@ -33,20 +33,29 @@ pub enum ActionError {
 /// and on the receive side (server ingest / update services) before persisting and
 /// hashing. Idempotent: running twice with the same inputs produces the same output.
 ///
-/// If `meta` is not a JSON object, it is replaced with a fresh object containing
-/// only the two identity keys. This handles the (unusual) case of a caller passing
-/// `Value::Null` or a primitive; downstream validation (`schema::validate_frontmatter`)
-/// will reject it on shape grounds, but the helper does not silently drop the data.
+/// `slug` is `Option` because `kb_resources.slug` is nullable — a resource born
+/// without a slug should not have a `temper-slug` key in its managed_meta JSONB
+/// (otherwise the column-NULL / JSONB-empty-string mismatch becomes a fresh drift).
+/// When `slug` is `None`, any existing `temper-slug` key is removed.
 ///
-/// Empty-string title or slug is permitted; the schema layer is responsible for
-/// rejecting empty identity values.
-pub fn ensure_managed_identity_keys(meta: &mut Value, title: &str, slug: &str) {
+/// If `meta` is not a JSON object, it is replaced with a fresh object containing
+/// only the relevant identity keys. This handles the (unusual) case of a caller
+/// passing `Value::Null` or a primitive; downstream validation will reject it on
+/// shape grounds, but the helper does not silently drop the data.
+pub fn ensure_managed_identity_keys(meta: &mut Value, title: &str, slug: Option<&str>) {
     if !meta.is_object() {
         *meta = Value::Object(serde_json::Map::new());
     }
     let obj = meta.as_object_mut().expect("just-coerced to object");
     obj.insert("temper-title".to_owned(), Value::String(title.to_owned()));
-    obj.insert("temper-slug".to_owned(), Value::String(slug.to_owned()));
+    match slug {
+        Some(s) => {
+            obj.insert("temper-slug".to_owned(), Value::String(s.to_owned()));
+        }
+        None => {
+            obj.remove("temper-slug");
+        }
+    }
 }
 
 /// Apply doctype-specific defaults to a `ManagedMeta` value, in place.
@@ -555,7 +564,7 @@ mod tests {
     #[test]
     fn ensure_managed_identity_keys_inserts_when_absent() {
         let mut meta = serde_json::json!({"temper-stage": "backlog"});
-        ensure_managed_identity_keys(&mut meta, "My Title", "my-slug");
+        ensure_managed_identity_keys(&mut meta, "My Title", Some("my-slug"));
         assert_eq!(meta["temper-title"], "My Title");
         assert_eq!(meta["temper-slug"], "my-slug");
         assert_eq!(meta["temper-stage"], "backlog");
@@ -567,7 +576,7 @@ mod tests {
             "temper-title": "Stale",
             "temper-slug": "stale-slug",
         });
-        ensure_managed_identity_keys(&mut meta, "Fresh", "fresh-slug");
+        ensure_managed_identity_keys(&mut meta, "Fresh", Some("fresh-slug"));
         assert_eq!(meta["temper-title"], "Fresh");
         assert_eq!(meta["temper-slug"], "fresh-slug");
     }
@@ -575,18 +584,43 @@ mod tests {
     #[test]
     fn ensure_managed_identity_keys_is_idempotent() {
         let mut meta = serde_json::json!({});
-        ensure_managed_identity_keys(&mut meta, "T", "s");
+        ensure_managed_identity_keys(&mut meta, "T", Some("s"));
         let after_first = meta.clone();
-        ensure_managed_identity_keys(&mut meta, "T", "s");
+        ensure_managed_identity_keys(&mut meta, "T", Some("s"));
         assert_eq!(meta, after_first);
     }
 
     #[test]
     fn ensure_managed_identity_keys_replaces_non_object_with_object() {
         let mut meta = serde_json::Value::Null;
-        ensure_managed_identity_keys(&mut meta, "T", "s");
+        ensure_managed_identity_keys(&mut meta, "T", Some("s"));
         assert!(meta.is_object());
         assert_eq!(meta["temper-title"], "T");
         assert_eq!(meta["temper-slug"], "s");
+    }
+
+    #[test]
+    fn ensure_managed_identity_keys_omits_slug_when_none() {
+        let mut meta = serde_json::json!({"temper-stage": "backlog"});
+        ensure_managed_identity_keys(&mut meta, "T", None);
+        assert_eq!(meta["temper-title"], "T");
+        assert!(
+            meta.get("temper-slug").is_none(),
+            "temper-slug must be absent when slug is None; got: {meta}"
+        );
+        assert_eq!(meta["temper-stage"], "backlog");
+    }
+
+    #[test]
+    fn ensure_managed_identity_keys_removes_existing_slug_when_none() {
+        let mut meta = serde_json::json!({
+            "temper-title": "T",
+            "temper-slug": "stale-slug",
+        });
+        ensure_managed_identity_keys(&mut meta, "T", None);
+        assert!(
+            meta.get("temper-slug").is_none(),
+            "existing temper-slug must be removed when slug is None; got: {meta}"
+        );
     }
 }

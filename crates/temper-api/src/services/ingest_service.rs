@@ -405,10 +405,15 @@ pub async fn ingest(
     // server-stored managed_meta JSONB matches the local canonical form.
     // Idempotent — if the caller already injected (CLI / MCP send-side
     // wiring), this is a byte-identical no-op.
+    let injected_slug = if payload.slug.is_empty() {
+        None
+    } else {
+        Some(payload.slug.as_str())
+    };
     temper_core::operations::ensure_managed_identity_keys(
         &mut managed,
         &payload.title,
-        &payload.slug,
+        injected_slug,
     );
     let validate_params = ValidateParams {
         doc_type: &payload.doc_type_name,

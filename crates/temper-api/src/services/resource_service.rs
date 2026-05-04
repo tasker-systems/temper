@@ -625,13 +625,14 @@ pub async fn update(
 
         let mut managed_value = serde_json::to_value(&merged_managed)?;
         // Inject canonical identity keys from the resolved top-level title /
-        // slug before hashing. new_slug is Option — empty-string fallback is
-        // a non-issue because schema validation rejects empty identity values
-        // upstream of any hash work.
+        // slug before hashing. `new_slug` is `Option<&str>` and flows through
+        // unchanged: when the resource has no slug (column NULL on a resource
+        // born via POST /api/resources without one), the helper drops the
+        // `temper-slug` key so column-NULL and JSONB-key-absent agree.
         temper_core::operations::ensure_managed_identity_keys(
             &mut managed_value,
             new_title,
-            new_slug.unwrap_or(""),
+            new_slug,
         );
         let managed_hash = compute_managed_hash(&current.doc_type_name, &managed_value);
         let open_hash = compute_open_hash(&merged_open);

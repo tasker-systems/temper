@@ -131,30 +131,51 @@ async fn ingest_stores_temper_title_and_temper_slug_in_managed_meta_jsonb(pool: 
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn server_managed_hash_equals_local_canonical_hash_post_ingest(pool: PgPool) {
+async fn client_pre_send_canonical_hash_equals_server_post_storage_hash(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;
 
+    // Client-side: build managed_meta exactly the way the CLI / MCP send-side
+    // wiring (Tasks 3 + 4) does — start with user fields, run the helper to
+    // inject temper-title / temper-slug, compute the canonical-form hash.
+    // This hash is what show-cache tier-2 will compare against the server's
+    // stored managed_hash on a future show; the two MUST be byte-identical
+    // for tier-2 to short-circuit correctly.
+    let title = "Client-Hash Doc";
+    let slug = "client-hash-doc";
+    let mut canonicalized_managed_meta = json!({"date": "2026-04-10"});
+    temper_core::operations::ensure_managed_identity_keys(
+        &mut canonicalized_managed_meta,
+        title,
+        Some(slug),
+    );
+    let client_pre_send_hash = compute_managed_hash("research", &canonicalized_managed_meta);
+
+    // Send the canonicalized payload through the real /api/ingest path.
+    // The server runs strip_system_managed_fields → apply_doc_type_defaults →
+    // ensure_managed_identity_keys → validate → store → compute_managed_hash.
+    // For caller-canonicalized input with no tier-1 fields, the server's
+    // pipeline is byte-identical to the client's compute_managed_hash chain.
     let resource_id = ingest_research(
         &app,
         &token,
-        "Invariant Test",
-        "invariant-test",
-        Some(json!({"date": "2026-04-10"})),
+        title,
+        slug,
+        Some(canonicalized_managed_meta.clone()),
     )
     .await;
 
-    let (managed_meta, server_hash) = read_manifest(&pool, &resource_id).await;
-
-    // Recompute the hash locally over the stored JSONB. Same function that
-    // CLI sync uses for its canonical-form hash. The two MUST be byte-identical
-    // — that is the precondition for show-cache tier-2 to be useful.
-    let local_hash = compute_managed_hash("research", &managed_meta);
+    let (stored_managed_meta, server_hash) = read_manifest(&pool, &resource_id).await;
 
     assert_eq!(
-        server_hash, local_hash,
-        "server-stored managed_hash must equal locally-recomputed hash over stored managed_meta JSONB; \
-         server={server_hash}, local={local_hash}, stored_managed_meta={managed_meta}"
+        stored_managed_meta, canonicalized_managed_meta,
+        "server-stored JSONB must match client-prepared canonical JSONB byte-for-byte"
+    );
+    assert_eq!(
+        server_hash, client_pre_send_hash,
+        "client-precomputed canonical hash must equal server-stored hash; \
+         this is the precondition for show-cache tier-2 (Phase 8). \
+         client={client_pre_send_hash}, server={server_hash}, stored_managed_meta={stored_managed_meta}"
     );
 }
 

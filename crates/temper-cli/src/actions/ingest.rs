@@ -165,7 +165,11 @@ pub fn build_ingest_payload(
         .transpose()
         .map_err(|e| TemperError::Extraction(format!("managed_meta serialization failed: {e}")))?
         .unwrap_or_else(|| serde_json::json!({}));
-    temper_core::operations::ensure_managed_identity_keys(&mut managed_meta_value, title, &slug);
+    temper_core::operations::ensure_managed_identity_keys(
+        &mut managed_meta_value,
+        title,
+        Some(&slug),
+    );
 
     Ok(temper_core::types::IngestPayload {
         title: title.to_owned(),

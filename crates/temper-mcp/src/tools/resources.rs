@@ -264,7 +264,7 @@ pub async fn create_resource(
     temper_core::operations::ensure_managed_identity_keys(
         &mut managed_meta_value,
         &input.title,
-        &slug,
+        Some(&slug),
     );
 
     // Route through the ingest service — handles validation, chunking,
@@ -498,7 +498,9 @@ pub async fn update_resource(
             })?;
 
         let payload_title = input.title.clone().unwrap_or(existing.title);
-        let payload_slug = existing.slug.unwrap_or_default();
+        // Slug is nullable on kb_resources; preserve column-NULL semantics in
+        // the JSONB by passing Option<&str> through to the helper.
+        let payload_slug_opt = existing.slug.as_deref();
 
         // Inject canonical temper-title / temper-slug into managed_meta JSONB
         // so the local canonical form matches what the server will hash.
@@ -507,7 +509,7 @@ pub async fn update_resource(
         temper_core::operations::ensure_managed_identity_keys(
             &mut managed_meta_value,
             &payload_title,
-            &payload_slug,
+            payload_slug_opt,
         );
 
         let payload = temper_core::types::IngestPayload {
@@ -516,7 +518,11 @@ pub async fn update_resource(
             context_name: existing.context_name,
             doc_type_name: existing.doc_type_name,
             content_hash: None,
-            slug: payload_slug,
+            // IngestPayload::slug is required (non-Option String); fall back to
+            // empty string when the row has no slug. The canonical JSONB has
+            // no temper-slug key per the helper above, and the kb_resources
+            // column stays NULL via the existing row state.
+            slug: payload_slug_opt.unwrap_or("").to_owned(),
             content,
             metadata: None,
             managed_meta: Some(managed_meta_value),
