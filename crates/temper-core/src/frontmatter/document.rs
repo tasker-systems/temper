@@ -627,7 +627,7 @@ body
     fn new_constructor_allows_subsequent_field_population() {
         let mut fm = Frontmatter::new(DocType::Goal, String::new());
         fm.set_managed_field("temper-title", serde_json::json!("Ship the thing"));
-        fm.set_managed_field("slug", serde_json::json!("ship-the-thing"));
+        fm.set_managed_field("temper-slug", serde_json::json!("ship-the-thing"));
         fm.set_managed_field(
             "temper-id",
             serde_json::json!("019d8110-8ff3-70c2-85ae-57e04ed62885"),
@@ -642,7 +642,7 @@ body
             Some("Ship the thing"),
         );
         assert_eq!(
-            parsed.value().get("slug").and_then(|v| v.as_str()),
+            parsed.value().get("temper-slug").and_then(|v| v.as_str()),
             Some("ship-the-thing"),
         );
     }
