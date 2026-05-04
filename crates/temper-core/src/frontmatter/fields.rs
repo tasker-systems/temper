@@ -88,7 +88,7 @@ pub static SYSTEM_MANAGED_FIELDS: &[&str] = &[
     "temper-updated",
     "temper-source",
     "temper-legacy-id",
-    "slug",
+    "temper-slug",
 ];
 
 #[cfg(test)]
@@ -160,6 +160,18 @@ mod tests {
         assert!(
             KNOWN_TEMPER_FIELDS.contains(&"temper-slug"),
             "missing temper-slug"
+        );
+    }
+
+    #[test]
+    fn system_managed_fields_uses_temper_slug_not_bare_slug() {
+        assert!(
+            SYSTEM_MANAGED_FIELDS.contains(&"temper-slug"),
+            "expected temper-slug in SYSTEM_MANAGED_FIELDS"
+        );
+        assert!(
+            !SYSTEM_MANAGED_FIELDS.contains(&"slug"),
+            "bare `slug` should have been renamed to `temper-slug`"
         );
     }
 }
