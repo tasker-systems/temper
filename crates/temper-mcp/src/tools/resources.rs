@@ -257,6 +257,16 @@ pub async fn create_resource(
 
     let content = input.content.unwrap_or_default();
 
+    // Inject canonical temper-title / temper-slug into managed_meta JSONB so
+    // the local canonical form matches what the server will hash. Symmetric
+    // with the CLI send-side wiring in build_ingest_payload (Phase 5 Task 3).
+    let mut managed_meta_value = input.managed_meta.unwrap_or_else(|| serde_json::json!({}));
+    temper_core::operations::ensure_managed_identity_keys(
+        &mut managed_meta_value,
+        &input.title,
+        &slug,
+    );
+
     // Route through the ingest service — handles validation, chunking,
     // embedding, dedup, and resource creation atomically.
     let payload = temper_core::types::IngestPayload {
@@ -268,7 +278,7 @@ pub async fn create_resource(
         slug,
         content,
         metadata: None,
-        managed_meta: input.managed_meta,
+        managed_meta: Some(managed_meta_value),
         open_meta: input.open_meta,
         chunks_packed: None, // server-side pipeline will generate
     };
@@ -452,9 +462,22 @@ pub async fn update_resource(
 
     // Update title/slug if provided
     if input.title.is_some() || input.slug.is_some() {
+        // Mirror the identity fields into the typed managed_meta partial so
+        // the server's merge path rewrites temper-title / temper-slug in the
+        // JSONB. Setting ManagedMeta.title / .slug (Option<String>) is the
+        // typed-direct equivalent of running ensure_managed_identity_keys —
+        // serde renames produce the canonical `temper-title` / `temper-slug`
+        // keys in the resulting JSONB. Symmetric with the CLI send-side
+        // wiring (Phase 5 Task 3).
+        let managed_meta_partial = ManagedMeta {
+            title: input.title.clone(),
+            slug: input.slug.clone(),
+            ..Default::default()
+        };
         let update_req = temper_core::types::resource::ResourceUpdateRequest {
             title: input.title.clone(),
             slug: input.slug.clone(),
+            managed_meta: Some(managed_meta_partial),
             ..Default::default()
         };
         resource_service::update(pool, profile.id, input.id, "mcp", update_req)
@@ -474,16 +497,29 @@ pub async fn update_resource(
                 rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
             })?;
 
+        let payload_title = input.title.clone().unwrap_or(existing.title);
+        let payload_slug = existing.slug.unwrap_or_default();
+
+        // Inject canonical temper-title / temper-slug into managed_meta JSONB
+        // so the local canonical form matches what the server will hash.
+        // Symmetric with the CLI send-side wiring (Phase 5 Task 3).
+        let mut managed_meta_value = input.managed_meta.unwrap_or_else(|| serde_json::json!({}));
+        temper_core::operations::ensure_managed_identity_keys(
+            &mut managed_meta_value,
+            &payload_title,
+            &payload_slug,
+        );
+
         let payload = temper_core::types::IngestPayload {
-            title: input.title.clone().unwrap_or(existing.title),
+            title: payload_title,
             origin_uri: existing.origin_uri,
             context_name: existing.context_name,
             doc_type_name: existing.doc_type_name,
             content_hash: None,
-            slug: existing.slug.unwrap_or_default(),
+            slug: payload_slug,
             content,
             metadata: None,
-            managed_meta: input.managed_meta,
+            managed_meta: Some(managed_meta_value),
             open_meta: input.open_meta,
             chunks_packed: None,
         };
