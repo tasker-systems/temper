@@ -171,9 +171,9 @@ pub fn create(
             if format == "json" {
                 let json = serde_json::json!({
                     "type": "task",
-                    "slug": created_slug,
-                    "title": title,
-                    "context": &*ctx,
+                    "temper-slug": created_slug,
+                    "temper-title": title,
+                    "temper-context": &*ctx,
                 });
                 println!(
                     "{}",
@@ -361,7 +361,7 @@ impl ResourceRow {
     #[cfg(test)]
     pub fn slug_for_tests(&self) -> String {
         self.frontmatter
-            .get("slug")
+            .get("temper-slug")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string()
@@ -524,9 +524,15 @@ async fn fetch_list_rows(
 /// keys so rendering is unchanged.
 fn row_to_frontmatter_value(row: &temper_core::types::resource::ResourceRow) -> serde_json::Value {
     let mut map = serde_json::Map::new();
-    map.insert("title".into(), serde_json::Value::String(row.title.clone()));
+    map.insert(
+        "temper-title".into(),
+        serde_json::Value::String(row.title.clone()),
+    );
     if let Some(slug) = &row.slug {
-        map.insert("slug".into(), serde_json::Value::String(slug.clone()));
+        map.insert(
+            "temper-slug".into(),
+            serde_json::Value::String(slug.clone()),
+        );
     }
     map.insert(
         "temper-updated".into(),
@@ -973,7 +979,7 @@ fn render_generic_output(
         let fm = temper_core::frontmatter::Frontmatter::try_from(body.as_str()).ok();
         let title = fm
             .as_ref()
-            .and_then(|f| f.value().get("title"))
+            .and_then(|f| f.value().get("temper-title"))
             .and_then(|v| v.as_str())
             .unwrap_or(slug);
         let path_str = local_path
@@ -1455,7 +1461,7 @@ fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &
     println!(
         "{}",
         serde_json::json!({
-            "slug": slug_display,
+            "temper-slug": slug_display,
             "content_hash": hash_display,
         })
     );
@@ -1495,7 +1501,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 
     // Build list of scalar field updates: (frontmatter_key, value)
     let scalar_updates: Vec<(&str, String)> = [
-        ("title", params.title.map(String::from)),
+        ("temper-title", params.title.map(String::from)),
         ("temper-stage", params.stage.map(String::from)),
         ("temper-mode", params.mode.map(String::from)),
         ("temper-effort", params.effort.map(String::from)),
@@ -1510,7 +1516,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     .collect();
 
     // Base fields valid on all types (from base.schema.json)
-    const BASE_FIELDS: &[&str] = &["title"];
+    const BASE_FIELDS: &[&str] = &["temper-title"];
 
     // Validate scalar fields against schema
     for (field_name, value) in &scalar_updates {
@@ -2033,8 +2039,8 @@ mod list_pipeline_tests {
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         let arr = parsed.as_array().unwrap();
         assert_eq!(arr.len(), 1);
-        assert_eq!(arr[0]["slug"], "note");
-        assert_eq!(arr[0]["title"], "Title note");
+        assert_eq!(arr[0]["temper-slug"], "note");
+        assert_eq!(arr[0]["temper-title"], "Title note");
         assert_eq!(arr[0]["temper-type"], "research");
     }
 

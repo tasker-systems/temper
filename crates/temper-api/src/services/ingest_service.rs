@@ -771,8 +771,8 @@ pub(crate) fn validate_managed_meta(params: &ValidateParams<'_>) -> Result<(), I
     let obj = synthetic.as_object_mut().unwrap();
 
     // 4. Inject tier-2 fields and tier-1 placeholders for schema required checks
-    obj.insert("slug".to_owned(), json!(params.slug));
-    obj.insert("title".to_owned(), json!(params.title));
+    obj.insert("temper-slug".to_owned(), json!(params.slug));
+    obj.insert("temper-title".to_owned(), json!(params.title));
     obj.insert("temper-context".to_owned(), json!(params.context_name));
     obj.insert("temper-type".to_owned(), json!(params.doc_type));
     obj.insert(

@@ -3,36 +3,40 @@ use serde::{Deserialize, Serialize};
 /// Task metadata parsed from frontmatter.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TaskInfo {
+    #[serde(rename = "temper-title")]
     pub title: String,
+    #[serde(rename = "temper-slug")]
     pub slug: String,
-    #[serde(alias = "context", alias = "temper-context")]
+    #[serde(rename = "temper-context")]
     pub context: String,
-    #[serde(default, alias = "goal", alias = "temper-goal")]
+    #[serde(default, rename = "temper-goal")]
     pub goal: Option<String>,
-    #[serde(alias = "stage", alias = "temper-stage")]
+    #[serde(rename = "temper-stage")]
     pub stage: String,
-    #[serde(alias = "mode", alias = "temper-mode")]
+    #[serde(rename = "temper-mode")]
     pub mode: Option<String>,
-    #[serde(alias = "effort", alias = "temper-effort")]
+    #[serde(rename = "temper-effort")]
     pub effort: Option<String>,
-    #[serde(default, alias = "seq", alias = "temper-seq")]
+    #[serde(default, rename = "temper-seq")]
     pub seq: Option<u32>,
-    #[serde(alias = "branch", alias = "temper-branch")]
+    #[serde(rename = "temper-branch")]
     pub branch: Option<String>,
-    #[serde(alias = "pr", alias = "temper-pr")]
+    #[serde(rename = "temper-pr")]
     pub pr: Option<String>,
 }
 
 /// Goal metadata parsed from frontmatter.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GoalInfo {
+    #[serde(rename = "temper-title")]
     pub title: String,
+    #[serde(rename = "temper-slug")]
     pub slug: String,
-    #[serde(alias = "context", alias = "temper-context")]
+    #[serde(rename = "temper-context")]
     pub context: String,
-    #[serde(default, alias = "seq", alias = "temper-seq")]
+    #[serde(default, rename = "temper-seq")]
     pub seq: Option<u32>,
-    #[serde(alias = "status", alias = "temper-status")]
+    #[serde(rename = "temper-status")]
     pub status: String,
 }
 

@@ -38,7 +38,7 @@ fn field_key_for(header: &str) -> &'static str {
     match header {
         "Context" => "temper-context",
         "Type" => "temper-type",
-        "Slug" => "slug",
+        "Slug" => "temper-slug",
         "Updated" => "temper-updated",
         "Stage" => "temper-stage",
         "Mode" => "temper-mode",
@@ -134,7 +134,7 @@ mod tests {
         let fm = json!({
             "temper-context": "temper",
             "temper-type": "task",
-            "slug": "2026-04-07-thing",
+            "temper-slug": "2026-04-07-thing",
             "temper-updated": "2026-04-07T12:34:56Z",
             "temper-stage": "in-progress",
             "temper-mode": "build",
@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn extract_row_missing_fields_render_empty() {
         let cols = display_columns("task");
-        let fm = json!({ "temper-context": "temper", "slug": "x" });
+        let fm = json!({ "temper-context": "temper", "temper-slug": "x" });
         let row = extract_row(&fm, &cols);
         assert_eq!(row[0], "temper");
         assert_eq!(row[1], "");

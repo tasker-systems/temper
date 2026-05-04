@@ -133,8 +133,8 @@ fn doctor_fix_canonicalizes_hyphen_aliases() {
          temper-context: temper\n\
          temper-created: \"2026-04-14T00:00:00Z\"\n\
          temper-owner: \"@me\"\n\
-         title: T\n\
-         slug: hyphen-test\n\
+         temper-title: T\n\
+         temper-slug: hyphen-test\n\
          temper-stage: in-progress\n\
          relates-to:\n  - foo\n\
          ---\n\

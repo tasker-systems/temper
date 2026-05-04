@@ -176,7 +176,7 @@ fn load_member_preview(vault_root: &Path, rel_path: &str) -> MemberPreview {
             let title = fm
                 .value()
                 .as_mapping()
-                .and_then(|m| m.get(serde_yaml::Value::String("title".to_string())))
+                .and_then(|m| m.get(serde_yaml::Value::String("temper-title".to_string())))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -328,9 +328,9 @@ temper-type: task\n\
 temper-context: temper\n\
 temper-created: \"2026-01-01T00:00:00Z\"\n\
 temper-owner: \"@me\"\n\
-title: \"{title}\"\n\
+temper-title: \"{title}\"\n\
 temper-stage: backlog\n\
-slug: foo\n\
+temper-slug: foo\n\
 ---\n\
 \n\
 {body}\n"

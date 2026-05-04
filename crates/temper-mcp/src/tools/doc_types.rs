@@ -46,8 +46,8 @@ pub struct DescribeDocTypeInput {
 /// Tier-1 and tier-2 fields that are system-managed — excluded from
 /// `example_managed_meta` because agents never supply them.
 const SYSTEM_FIELDS: &[&str] = &[
-    "slug",
-    "title",
+    "temper-slug",
+    "temper-title",
     "temper-context",
     "temper-type",
     "temper-id",
@@ -176,8 +176,8 @@ mod tests {
             summary.required_fields
         );
         assert!(
-            summary.required_fields.contains(&"slug".to_string()),
-            "task required_fields should include slug, got: {:?}",
+            summary.required_fields.contains(&"temper-slug".to_string()),
+            "task required_fields should include temper-slug, got: {:?}",
             summary.required_fields
         );
     }
@@ -225,8 +225,8 @@ mod tests {
             "example should not contain system field temper-id"
         );
         assert!(
-            !example.contains_key("slug"),
-            "example should not contain system field slug"
+            !example.contains_key("temper-slug"),
+            "example should not contain system field temper-slug"
         );
     }
 

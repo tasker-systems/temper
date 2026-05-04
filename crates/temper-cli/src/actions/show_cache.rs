@@ -216,9 +216,12 @@ pub(super) fn reconstruct_full_file_content(
         "temper-updated",
         serde_json::Value::String(meta.updated.to_rfc3339()),
     );
-    fm.set_managed_field("title", serde_json::Value::String(meta.title.clone()));
+    fm.set_managed_field(
+        "temper-title",
+        serde_json::Value::String(meta.title.clone()),
+    );
     if let Some(slug) = &meta.slug {
-        fm.set_managed_field("slug", serde_json::Value::String(slug.clone()));
+        fm.set_managed_field("temper-slug", serde_json::Value::String(slug.clone()));
     }
     if !meta.owner_handle.is_empty() {
         fm.set_managed_field(

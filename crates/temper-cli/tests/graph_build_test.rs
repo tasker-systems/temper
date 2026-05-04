@@ -34,8 +34,8 @@ fn file_content(temper_ctx: &str, slug: &str, body: &str) -> String {
 temper-context: {temper_ctx}\n\
 temper-type: task\n\
 temper-owner: '@me'\n\
-title: {slug}\n\
-slug: {slug}\n\
+temper-title: {slug}\n\
+temper-slug: {slug}\n\
 ---\n\
 {body}\n"
     )
