@@ -2,13 +2,26 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-> **Execution status (updated mid-flight, 2026-05-04):**
-> - Tasks 1, 2, 3 — landed cleanly (commits `e10dc9a`, `6b92071`, `1dd48b2`).
-> - Task 4 — landed in commit `add5b63` but over-scoped: the same commit also did **Task 7 (base.schema.json title rename)** and the **title-half of spec Phase 3 (canonical.rs)**. All test fixtures (input + golden + hash table) and the `ResourceFrontmatter::try_from` consumer were migrated forward to the canonical `temper-title` form.
-> - Task 5 — landed in commit `7648b1d`, intentionally consolidated for symmetry with add5b63: the same commit did **slug halves of Tasks 8, 9, 10, 11, 12** (task/goal/research/decision/concept schemas) and the **slug-half of spec Phase 3 (canonical.rs)**. Date drops from research/decision/concept (the other half of Tasks 10-12) and the session date drop (Task 13) are NOT in this commit.
-> - **Skip Task 7 and the slug halves of Tasks 8-12 when you reach them** — already done.
-> - Task 6 (normalize_aliases extension) — still to do; this is what retires the bare-form legacy bridges (LEGACY_FIELDS, tiers.rs literals, etc.).
-> - Tasks 13, 14, plus Tasks 10/11/12 date-drop halves — still to do.
+> **Execution status (final, 2026-05-04):** Phase 1 complete.
+>
+> | Task | Commit | Notes |
+> |---|---|---|
+> | 1 — LEGACY_FIELDS title/slug | `e10dc9a` | clean |
+> | 2 — KNOWN_TEMPER_FIELDS | `6b92071` | clean |
+> | 3 — SYSTEM_MANAGED_FIELDS slug rename | `1dd48b2` | clean |
+> | 4 — ManagedMeta.title serde rename | `add5b63` | absorbed Task 7 + spec Phase 3 title-half + ResourceFrontmatter consumer migration |
+> | 5 — ManagedMeta.slug serde rename | `7648b1d` | absorbed Tasks 8-12 slug-halves + spec Phase 3 slug-half |
+> | 6 — normalize_aliases extension | `7bad6f6` | clean |
+> | 7 — base.schema.json title rename | `add5b63` | absorbed into Task 4 |
+> | 8 — task.schema.json slug rename | `7648b1d` | absorbed into Task 5 |
+> | 9 — goal.schema.json slug rename | `7648b1d` | absorbed into Task 5 |
+> | 10 — research.schema.json slug + date drop | `7648b1d` (slug) + `7a684f3` (date) | split |
+> | 11 — decision.schema.json slug + date drop | `7648b1d` (slug) + `7a684f3` (date) | split |
+> | 12 — concept.schema.json slug + date drop | `7648b1d` (slug) + `7a684f3` (date) | split |
+> | 13 — session.schema.json date drop | `7a684f3` | clean |
+> | 14 — cross-crate verification | `9238acf` + `eeea7eb` | workspace tests, DB tests, e2e (1221), sqlx prepare, ts-rs regen, biome — all green |
+>
+> Plan Phase 3 (canonical.rs) was effectively absorbed by the consolidated commits above for the title and slug halves; a separate Phase 3 plan is no longer needed. Spec Phases 5/6 (server-side stripping + DB migration of stored JSONB), 8 (re-enable show_cache tier-2), and 9 (doctor fix legacy vault rewrite) remain as separate plans.
 
 **Goal:** Land the schema-and-types contract for the temper-prefix alignment. Renames `title` → `temper-title` and `slug` → `temper-slug` in the typed `ManagedMeta` struct, all 7 JSON schemas, the field-set constants, and the parse-boundary alias normalizer; drops `date` from managed-tier schemas (it becomes open_meta in Phase 2 of this plan via the doctor pass and DB migration, planned separately). After this plan lands, the contract is stated; the consumers (canonical-form rendering, server stripping, DB migration, doctor fix) get aligned in subsequent phase plans.
 
