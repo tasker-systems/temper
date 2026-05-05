@@ -180,6 +180,71 @@ async fn client_pre_send_canonical_hash_equals_server_post_storage_hash(pool: Pg
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn meta_service_update_meta_preserves_temper_title_in_jsonb(pool: PgPool) {
+    let app = common::setup_test_app(pool.clone()).await;
+    let token = provision_profile(&app).await;
+
+    let resource_id =
+        ingest_research(&app, &token, "Preserve Original", "preserve-original", None).await;
+
+    // Sanity: ingest produced canonical JSONB with temper-title.
+    let (initial_meta, _) = read_manifest(&pool, &resource_id).await;
+    assert_eq!(
+        initial_meta.get("temper-title"),
+        Some(&Value::String("Preserve Original".to_string())),
+    );
+
+    // PUT /api/resources/{id}/meta with a typed ManagedMeta that does NOT
+    // carry title — only a stage change. Without server-side receive defense,
+    // the JSONB written to the manifest would drop the temper-title key
+    // (typed `title: None` serializes to absent), drifting from the
+    // kb_resources.title column. The receive-side helper must inject
+    // temper-title from the existing column so the canonical shape survives.
+    let put_resp = app
+        .client
+        .put(app.url(&format!("/api/resources/{resource_id}/meta")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({
+            "resource_id": resource_id,
+            "managed_meta": {"temper-stage": "done"},
+            "open_meta": {},
+            "managed_hash": "",
+            "open_hash": "",
+        }))
+        .send()
+        .await
+        .expect("put meta failed");
+    assert_eq!(
+        put_resp.status().as_u16(),
+        200,
+        "PUT meta must return 200; body: {}",
+        put_resp.text().await.unwrap_or_default(),
+    );
+
+    let (after_meta, after_hash) = read_manifest(&pool, &resource_id).await;
+    assert_eq!(
+        after_meta.get("temper-title"),
+        Some(&Value::String("Preserve Original".to_string())),
+        "after PUT meta without title, temper-title must survive in JSONB \
+         via receive-side defense; got: {after_meta}"
+    );
+    assert_eq!(
+        after_meta.get("temper-stage"),
+        Some(&Value::String("done".to_string())),
+        "the stage update must have landed; got: {after_meta}",
+    );
+
+    // Server-side recompute must produce a hash that matches a local
+    // canonical-form recompute over the stored JSONB.
+    let local_hash = compute_managed_hash("research", &after_meta);
+    assert_eq!(
+        after_hash, local_hash,
+        "after PUT meta, server-recomputed hash must equal local canonical hash; \
+         server={after_hash}, local={local_hash}, stored={after_meta}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn partial_patch_with_top_level_title_change_updates_jsonb_temper_title(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
     let token = provision_profile(&app).await;

@@ -230,21 +230,27 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         manifest_after.0, manifest_before.0,
         "body_hash must NOT change on a meta-only update"
     );
+    // Phase 5: server now recomputes managed_hash / open_hash on meta
+    // updates rather than trusting caller-supplied values, so the
+    // assertion shifts from "matches the payload" to "is the canonical
+    // server hash" and "advanced from the pre-update value".
     assert_ne!(
         manifest_after.1, manifest_before.1,
         "managed_hash must advance on a meta update"
     );
-    assert_eq!(
-        manifest_after.1, meta_payload.managed_hash,
-        "managed_hash must match the payload value"
+    assert!(
+        manifest_after.1.starts_with("sha256:"),
+        "managed_hash must be a server-computed sha256 hash; got {}",
+        manifest_after.1,
     );
     assert_ne!(
         manifest_after.2, manifest_before.2,
         "open_hash must advance on a meta update"
     );
-    assert_eq!(
-        manifest_after.2, meta_payload.open_hash,
-        "open_hash must match the payload value"
+    assert!(
+        manifest_after.2.starts_with("sha256:"),
+        "open_hash must be a server-computed sha256 hash; got {}",
+        manifest_after.2,
     );
 
     // Chunks: count and content bytes unchanged.
