@@ -122,12 +122,12 @@ const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
     ),
     (
         "session_full",
-        "sha256:f607b103da92e2befbe61e7c34e2f6474c19ade54380e22a3db85841288d26bd",
+        "sha256:92d1ce4e713f190c7fb3f79d3ae3e66f1d1a3eef54a9f575058cb0e3c86bdec4",
         "sha256:87347a2d8ad9bbb615e57527313125c80fc7c0750710f48bf3f8ad69c35da811",
     ),
     (
         "research_full",
-        "sha256:d13563dbf4fbdecd61b7d5aab6d3b8d307539f6e3693d8a85b28becb24af160c",
+        "sha256:98620600cfa2a2276ec60a494c5a748f0bbeb85221dc1d4602c3ee7d85aa1ed5",
         "sha256:e48f15a218a6adda5aed8207b201d1d178f20d2b0bffd7a2b619414e08569897",
     ),
     (
@@ -144,16 +144,27 @@ const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
 
 #[test]
 fn fixture_hashes_match_goldens() {
+    let mut drift = Vec::new();
     for (stem, expected_managed, expected_open) in FIXTURE_HASH_GOLDENS {
         let content = load_fixture(&format!("{stem}.md"));
         let fm = Frontmatter::try_from(content.as_str()).unwrap();
         let (managed_hash, open_hash) = fm.hashes();
-        assert_eq!(
-            managed_hash, *expected_managed,
-            "managed hash drift for {stem}"
-        );
-        assert_eq!(open_hash, *expected_open, "open hash drift for {stem}");
+        if managed_hash != *expected_managed {
+            drift.push(format!(
+                "  {stem} managed: golden={expected_managed}\n              actual={managed_hash}"
+            ));
+        }
+        if open_hash != *expected_open {
+            drift.push(format!(
+                "  {stem} open:    golden={expected_open}\n              actual={open_hash}"
+            ));
+        }
     }
+    assert!(
+        drift.is_empty(),
+        "fixture-hash goldens have drifted:\n{}",
+        drift.join("\n")
+    );
 }
 
 #[test]

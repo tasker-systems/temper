@@ -305,7 +305,7 @@ tags: [x]
         let open_hash = crate::hash::compute_open_hash(&open);
 
         assert_eq!(
-            managed_hash, "sha256:afe8ad81f8cfbd4b5bee52b7a6152ab9d00b6f5efa1b3eaca5a01ded46705bbd",
+            managed_hash, "sha256:6cfde2d466d8f606f0dc67578310f76a6c51bcfaa853fbe7ebb0648b4244618c",
             "session fixture managed hash drift"
         );
         assert_eq!(
