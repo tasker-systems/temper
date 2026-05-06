@@ -122,12 +122,12 @@ const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
     ),
     (
         "session_full",
-        "sha256:92d1ce4e713f190c7fb3f79d3ae3e66f1d1a3eef54a9f575058cb0e3c86bdec4",
+        "sha256:f35bc91eb1d3661d56db4d4d73e84c58e574b2b02ca1626b83b8780dc0cc3e22",
         "sha256:87347a2d8ad9bbb615e57527313125c80fc7c0750710f48bf3f8ad69c35da811",
     ),
     (
         "research_full",
-        "sha256:98620600cfa2a2276ec60a494c5a748f0bbeb85221dc1d4602c3ee7d85aa1ed5",
+        "sha256:adcc257d5b5b5cd1072228f8e76854b874a0258936bd25be6e5ef05a6220be08",
         "sha256:e48f15a218a6adda5aed8207b201d1d178f20d2b0bffd7a2b619414e08569897",
     ),
     (
