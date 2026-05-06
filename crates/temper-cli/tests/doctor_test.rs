@@ -31,9 +31,9 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
 temper-owner: "@me"
-title: "Implement feature X"
+temper-title: "Implement feature X"
 temper-stage: backlog
-slug: implement-feature-x
+temper-slug: implement-feature-x
 ---
 
 Body text.
@@ -48,9 +48,9 @@ temper-type: goal
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
 temper-owner: "@me"
-title: "Ship v1"
+temper-title: "Ship v1"
 temper-status: active
-slug: ship-v1
+temper-slug: ship-v1
 ---
 
 Goal body.
@@ -65,7 +65,7 @@ temper-type: session
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
 temper-owner: "@me"
-title: "Session 2026-01-01"
+temper-title: "Session 2026-01-01"
 date: "2026-01-01"
 ---
 
@@ -96,9 +96,9 @@ temper-id: "01900000-0000-7000-8000-000000000020"
 temper-type: task
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
-title: "Bad stage task"
+temper-title: "Bad stage task"
 temper-stage: active
-slug: bad-stage-task
+temper-slug: bad-stage-task
 ---
 
 Body.
@@ -347,9 +347,9 @@ fn doctor_scan_provisional_task_reports_no_issues() {
          temper-context: temper\n\
          temper-created: \"2026-01-01T00:00:00Z\"\n\
          temper-owner: \"@me\"\n\
-         title: \"Provisional task\"\n\
+         temper-title: \"Provisional task\"\n\
          temper-stage: backlog\n\
-         slug: provisional-task\n\
+         temper-slug: provisional-task\n\
          ---\n\n\
          Body.\n",
     );

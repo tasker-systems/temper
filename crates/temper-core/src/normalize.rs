@@ -267,8 +267,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: Test
-slug: test
+temper-title: Test
+temper-slug: test
 ---
 body
 "#;
@@ -305,13 +305,14 @@ body
         // Frontmatter::serialize — identity → tier1 (temper-context before
         // temper-type per TIER1_SYSTEM_FIELDS order) → managed in schema order.
         // serde_yaml serializes UUID and datetime strings without quotes.
+        // title is renamed to temper-title per temper-prefix contract.
         let canonical = r#"---
 temper-id: 019d8110-8ff3-70c2-85ae-57e04ed62885
 temper-context: temper
 temper-type: task
 temper-created: 2026-04-12T00:00:00Z
-title: Test
-slug: test
+temper-title: Test
+temper-slug: test
 temper-stage: in-progress
 ---
 body content
@@ -338,8 +339,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: Test
-slug: test
+temper-title: Test
+temper-slug: test
 temper-stage: frobnicate
 ---
 body
@@ -382,8 +383,8 @@ temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: Test
-slug: test
+temper-title: Test
+temper-slug: test
 ---
 body
 "#;
@@ -411,8 +412,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62886"
 temper-type: goal
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: Ship
-slug: ship
+temper-title: Ship
+temper-slug: ship
 ---
 "#;
         let path = write_file(dir.path(), "goal.md", content);
@@ -430,13 +431,14 @@ slug: ship
     #[test]
     fn normalize_session_missing_date_rewrites_with_default() {
         let dir = tempdir().unwrap();
+        // Session uses canonical form with temper-title
         let content = r#"---
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62887"
 temper-type: session
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: Planning
-slug: planning
+temper-title: Planning
+temper-slug: planning
 ---
 "#;
         let path = write_file(dir.path(), "session.md", content);
@@ -461,20 +463,20 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62888"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: X
-slug: x
+temper-title: X
+temper-slug: x
 ---
 "#;
         let path = write_file(dir.path(), "task.md", content);
         let _ = normalize_file(&path, "task").expect("normalize ok");
 
         let on_disk = read_file(&path);
-        let pos_title = on_disk.find("title:").expect("title present");
+        let pos_title = on_disk.find("temper-title:").expect("temper-title present");
         let pos_slug = on_disk.find("slug:").expect("slug present");
         let pos_stage = on_disk.find("temper-stage:").expect("temper-stage present");
         assert!(
             pos_title < pos_slug,
-            "title should appear before slug:\n{on_disk}"
+            "temper-title should appear before slug:\n{on_disk}"
         );
         assert!(
             pos_slug < pos_stage,
@@ -494,8 +496,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62889"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: Test
-slug: test
+temper-title: Test
+temper-slug: test
 ---
 {body}"#
         );
@@ -521,8 +523,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed6288a"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-12T00:00:00Z"
-title: Test
-slug: test
+temper-title: Test
+temper-slug: test
 ---
 body
 "#;
@@ -555,13 +557,14 @@ body
         let dir = tempdir().unwrap();
         // Canonical form: serde_yaml serializes UUIDs and datetimes unquoted;
         // tier1 order: temper-context before temper-type per TIER1_SYSTEM_FIELDS.
+        // title is renamed to temper-title per temper-prefix contract.
         let canonical_text = r#"---
 temper-id: 019d8110-8ff3-70c2-85ae-57e04ed6288b
 temper-context: temper
 temper-type: task
 temper-created: 2026-04-12T00:00:00Z
-title: Test
-slug: test
+temper-title: Test
+temper-slug: test
 temper-stage: backlog
 ---
 hello body

@@ -38,12 +38,12 @@
       "type": ["string", "null"],
       "description": "Pull request URL or identifier"
     },
-    "slug": {
+    "temper-slug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "description": "URL-safe identifier"
     }
   },
-  "required": ["temper-stage", "slug"],
+  "required": ["temper-stage", "temper-slug"],
   "additionalProperties": true
 }

@@ -262,7 +262,7 @@ fn parse_doc_fields(raw: &str) -> DocFields {
             let title = fm
                 .value()
                 .as_mapping()
-                .and_then(|m| m.get(serde_yaml::Value::String("title".to_string())))
+                .and_then(|m| m.get(serde_yaml::Value::String("temper-title".to_string())))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
@@ -449,8 +449,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: Graph Indexing Pipeline
-slug: graph-indexing
+temper-title: Graph Indexing Pipeline
+temper-slug: graph-indexing
 ---
 
 # Top Level Heading
@@ -571,9 +571,9 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
 temper-owner: "@me"
-title: "Graph Indexing Pipeline"
+temper-title: "Graph Indexing Pipeline"
 temper-stage: backlog
-slug: graph-indexing-pipeline
+temper-slug: graph-indexing-pipeline
 ---
 
 We will build a pipeline for graph indexing. The pipeline has many stages.
@@ -584,9 +584,9 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-01-01T00:00:00Z"
 temper-owner: "@me"
-title: "Pipeline Notes"
+temper-title: "Pipeline Notes"
 temper-stage: backlog
-slug: pipeline-notes
+temper-slug: pipeline-notes
 ---
 
 The pipeline runs nightly. The pipeline emits logs. The pipeline has stages.
@@ -645,9 +645,9 @@ temper-type: task\n\
 temper-context: alpha\n\
 temper-created: \"2026-01-01T00:00:00Z\"\n\
 temper-owner: \"@me\"\n\
-title: \"{title}\"\n\
+temper-title: \"{title}\"\n\
 temper-stage: backlog\n\
-slug: {slug}\n\
+temper-slug: {slug}\n\
 ---\n\
 \n\
 {body}\n"

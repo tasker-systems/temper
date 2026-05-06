@@ -6,17 +6,12 @@
   ],
   "properties": {
     "temper-type": { "const": "research" },
-    "slug": {
+    "temper-slug": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9-]*$",
       "description": "URL-safe identifier"
-    },
-    "date": {
-      "type": "string",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
-      "description": "Research date (YYYY-MM-DD)"
     }
   },
-  "required": ["slug", "date"],
+  "required": ["temper-slug"],
   "additionalProperties": true
 }

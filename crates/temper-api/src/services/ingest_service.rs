@@ -401,6 +401,20 @@ pub async fn ingest(
         .map(strip_system_managed_fields)
         .unwrap_or_else(|| serde_json::json!({}));
     apply_doc_type_defaults(&payload.doc_type_name, &mut managed);
+    // Inject canonical identity keys before validation + hashing so the
+    // server-stored managed_meta JSONB matches the local canonical form.
+    // Idempotent — if the caller already injected (CLI / MCP send-side
+    // wiring), this is a byte-identical no-op.
+    let injected_slug = if payload.slug.is_empty() {
+        None
+    } else {
+        Some(payload.slug.as_str())
+    };
+    temper_core::operations::ensure_managed_identity_keys(
+        &mut managed,
+        &payload.title,
+        injected_slug,
+    );
     let validate_params = ValidateParams {
         doc_type: &payload.doc_type_name,
         managed_meta: Some(&managed),
@@ -771,8 +785,8 @@ pub(crate) fn validate_managed_meta(params: &ValidateParams<'_>) -> Result<(), I
     let obj = synthetic.as_object_mut().unwrap();
 
     // 4. Inject tier-2 fields and tier-1 placeholders for schema required checks
-    obj.insert("slug".to_owned(), json!(params.slug));
-    obj.insert("title".to_owned(), json!(params.title));
+    obj.insert("temper-slug".to_owned(), json!(params.slug));
+    obj.insert("temper-title".to_owned(), json!(params.title));
     obj.insert("temper-context".to_owned(), json!(params.context_name));
     obj.insert("temper-type".to_owned(), json!(params.doc_type));
     obj.insert(

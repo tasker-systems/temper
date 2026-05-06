@@ -102,58 +102,69 @@ const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
     // (stem, managed_hash, open_hash)
     (
         "task_minimal",
-        "sha256:8464342b589301fd11cda8a7c8d18cdc6db30ad3ed814b515b989c8142b2c107",
+        "sha256:60ec84b155a2a72a53847c6127bbb6ae36ea4f253677d2981050463cba7d1310",
         "sha256:44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
     ),
     (
         "task_full",
-        "sha256:a8c66dd78ce09956d64c234b31b9c92e841ee3c76a67ae279263b74b31d7fb65",
+        "sha256:9680d621f3dcf03d90c8b5e9362fbd2849b37df232086d345f6794e86aa74fc0",
         "sha256:998a5ed4c7ce3d2b6b453caa05a77c15590e69d63dd4d8d72fa313902fe143dc",
     ),
     (
         "task_with_aliases",
-        "sha256:fc8aff40618fd7d08853c7e6331bc11066d667b60de354f02b9f802e50a0de41",
+        "sha256:117c9f8b186e8ed88cc028a71546406edd5f48cf832f890e135ab5defc72cbd3",
         "sha256:7c2eb7eddf439213c8a1f9689b313a0dd28acf34cb16e4d3593e07bc9ffcc70c",
     ),
     (
         "goal_full",
-        "sha256:d8fcc5d25cb17d1e22ec8ba58226e50c96773d0a7693e19fea91f06ba5954a11",
+        "sha256:ea2c9736c5b33ec28cbc2baf960540b3b49a7790a599eae78b78e1e205254f22",
         "sha256:2cc0d1501ab8d23caaf440e3e96476b2eb88eedfde19517740f237b4ac4aea0c",
     ),
     (
         "session_full",
-        "sha256:fee366cbb8d17dc0a048bdf667021b77266bc7b2323a4162aeba0c8828255946",
-        "sha256:504e5d7bf6bdc0acdfeed77a68b0aeaf58944e54d4056be90f63b65cb6ac663f",
+        "sha256:f35bc91eb1d3661d56db4d4d73e84c58e574b2b02ca1626b83b8780dc0cc3e22",
+        "sha256:87347a2d8ad9bbb615e57527313125c80fc7c0750710f48bf3f8ad69c35da811",
     ),
     (
         "research_full",
-        "sha256:f79b0842ed742e89b7650213762e4366ada37e2e6eace1f80841a582ffa8a4a2",
-        "sha256:111b91a43db2959cbbfa518e82606ec8cc8435bcb4d3c5f5d4cbc3c0e2f812cf",
+        "sha256:adcc257d5b5b5cd1072228f8e76854b874a0258936bd25be6e5ef05a6220be08",
+        "sha256:e48f15a218a6adda5aed8207b201d1d178f20d2b0bffd7a2b619414e08569897",
     ),
     (
         "decision_full",
-        "sha256:0afdce6816e71b7ccaab8ba67b9f344f64c6b21350ab7b6623c22898a0263f7c",
+        "sha256:78d3cc088880e46958f51b42197d533472cacc79ab0073cf0db3be258d94d699",
         "sha256:2f8bc766b2649cb0b8efb9dd3eab08b6d4d37111b473666ddbb173059ecf78ce",
     ),
     (
         "concept_full",
-        "sha256:0cc1542ddec0896021b2c73f091696d6c976224b93327cb4ccd50b3cdc32f619",
+        "sha256:a010537170e654b6277b4efcf6982736557b60a4e98ddf1735887dc38b62004d",
         "sha256:e90feecd8af6e01e61b003b79f0dd7e74b7ccc186df842608985f450f522cd9a",
     ),
 ];
 
 #[test]
 fn fixture_hashes_match_goldens() {
+    let mut drift = Vec::new();
     for (stem, expected_managed, expected_open) in FIXTURE_HASH_GOLDENS {
         let content = load_fixture(&format!("{stem}.md"));
         let fm = Frontmatter::try_from(content.as_str()).unwrap();
         let (managed_hash, open_hash) = fm.hashes();
-        assert_eq!(
-            managed_hash, *expected_managed,
-            "managed hash drift for {stem}"
-        );
-        assert_eq!(open_hash, *expected_open, "open hash drift for {stem}");
+        if managed_hash != *expected_managed {
+            drift.push(format!(
+                "  {stem} managed: golden={expected_managed}\n              actual={managed_hash}"
+            ));
+        }
+        if open_hash != *expected_open {
+            drift.push(format!(
+                "  {stem} open:    golden={expected_open}\n              actual={open_hash}"
+            ));
+        }
     }
+    assert!(
+        drift.is_empty(),
+        "fixture-hash goldens have drifted:\n{}",
+        drift.join("\n")
+    );
 }
 
 #[test]
@@ -164,8 +175,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: Aliased Task
-slug: aliased-task
+temper-title: Aliased Task
+temper-slug: aliased-task
 temper-stage: in-progress
 relates_to: [a]
 depends_on: [b]
@@ -189,15 +200,15 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: T
-slug: t
+temper-title: T
+temper-slug: t
 temper-stage: in-progress
 relates_to: [x]
 ---
 "#;
     let b = r#"---
-slug: t
-title: T
+temper-slug: t
+temper-title: T
 temper-stage: in-progress
 relates_to: [x]
 temper-created: "2026-04-13T00:00:00Z"
@@ -211,9 +222,9 @@ relates_to: [x]
 temper-stage: in-progress
 temper-created: "2026-04-13T00:00:00Z"
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
-title: T
+temper-title: T
 temper-context: temper
-slug: t
+temper-slug: t
 temper-type: task
 ---
 "#;

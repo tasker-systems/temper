@@ -35,7 +35,7 @@
       "pattern": "^[@+][a-z0-9][a-z0-9-]*$",
       "description": "Owner sigil: @profile-slug or +team-slug. Defaults to @me."
     },
-    "title": {
+    "temper-title": {
       "type": "string",
       "minLength": 1,
       "description": "Display name"
@@ -104,6 +104,6 @@
       "description": "UUIDv7 of the graph-index run that created this resource"
     }
   },
-  "required": ["temper-id", "temper-type", "temper-context", "temper-created", "title"],
+  "required": ["temper-id", "temper-type", "temper-context", "temper-created", "temper-title"],
   "additionalProperties": true
 }

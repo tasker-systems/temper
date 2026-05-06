@@ -355,7 +355,7 @@ fn infer_temper_context(ctx: &InferContext<'_>) -> Option<(String, String, Strin
 }
 
 fn infer_title(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
-    if fm_str(ctx.fm, "title").is_some() {
+    if fm_str(ctx.fm, "temper-title").is_some() {
         return None;
     }
     let slug = slug_from_filename(&ctx.filename);
@@ -364,18 +364,18 @@ fn infer_title(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
     }
     let title = humanize_slug(&slug);
     Some((
-        "title".to_string(),
+        "temper-title".to_string(),
         title,
         "humanized from filename".to_string(),
     ))
 }
 
 fn infer_slug(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
-    if fm_str(ctx.fm, "slug").is_some() {
+    if fm_str(ctx.fm, "temper-slug").is_some() {
         return None;
     }
     // Prefer title from frontmatter, fall back to filename
-    let slug = if let Some(title) = fm_str(ctx.fm, "title") {
+    let slug = if let Some(title) = fm_str(ctx.fm, "temper-title") {
         crate::vault::slugify(&title)
     } else {
         slug_from_filename(&ctx.filename)
@@ -384,7 +384,7 @@ fn infer_slug(ctx: &InferContext<'_>) -> Option<(String, String, String)> {
         return None;
     }
     Some((
-        "slug".to_string(),
+        "temper-slug".to_string(),
         slug,
         "slugified from title or filename".to_string(),
     ))
@@ -566,9 +566,9 @@ pub fn fix_filename(path: &Path, fm: &Value, vault_root: &Path) -> Vec<FixAction
         None => return Vec::new(),
     };
 
-    // Derive slug: prefer fm slug, then slugify fm title, then slug_from_filename
-    let slug = fm_str(fm, "slug")
-        .or_else(|| fm_str(fm, "title").map(|t| crate::vault::slugify(&t)))
+    // Derive slug: prefer fm temper-slug, then slugify fm temper-title, then slug_from_filename
+    let slug = fm_str(fm, "temper-slug")
+        .or_else(|| fm_str(fm, "temper-title").map(|t| crate::vault::slugify(&t)))
         .unwrap_or_else(|| slug_from_filename(&filename));
 
     if slug.is_empty() {
@@ -1201,20 +1201,20 @@ mod tests {
         let result = infer_title(&ctx);
         assert!(result.is_some());
         let (key, value, _) = result.unwrap();
-        assert_eq!(key, "title");
+        assert_eq!(key, "temper-title");
         assert_eq!(value, "My Task");
     }
 
     #[test]
     fn rule_infer_slug_from_title() {
         let path = PathBuf::from("/vault/project/task/foo.md");
-        let fm = yaml_fm(&[("title", "My Great Task")]);
+        let fm = yaml_fm(&[("temper-title", "My Great Task")]);
         let root = vault_root();
         let ctx = InferContext::new(&path, &fm, &root);
         let result = infer_slug(&ctx);
         assert!(result.is_some());
         let (key, value, _) = result.unwrap();
-        assert_eq!(key, "slug");
+        assert_eq!(key, "temper-slug");
         assert_eq!(value, "my-great-task");
     }
 
@@ -1382,7 +1382,7 @@ mod tests {
     #[test]
     fn f4_no_rename_when_already_correct_task() {
         let path = PathBuf::from("/vault/project/task/my-task.md");
-        let fm = yaml_fm(&[("temper-type", "task"), ("slug", "my-task")]);
+        let fm = yaml_fm(&[("temper-type", "task"), ("temper-slug", "my-task")]);
         let root = PathBuf::from("/vault");
         let actions = fix_filename(&path, &fm, &root);
         assert!(
@@ -1397,7 +1397,7 @@ mod tests {
         let fm = yaml_fm(&[
             ("temper-type", "session"),
             ("date", "2026-04-05"),
-            ("slug", "my-session"),
+            ("temper-slug", "my-session"),
         ]);
         let root = PathBuf::from("/vault");
         let actions = fix_filename(&path, &fm, &root);
@@ -1411,7 +1411,7 @@ mod tests {
     fn f4_slugifies_non_slug_task_filename() {
         // Filename has non-slug chars; fm slug tells us the correct slug
         let path = PathBuf::from("/vault/project/task/My Feature!.md");
-        let fm = yaml_fm(&[("temper-type", "task"), ("slug", "my-feature")]);
+        let fm = yaml_fm(&[("temper-type", "task"), ("temper-slug", "my-feature")]);
         let root = PathBuf::from("/vault");
         let actions = fix_filename(&path, &fm, &root);
         assert_eq!(actions.len(), 1, "expected one RenameFile action");
@@ -1439,8 +1439,8 @@ mod tests {
             ("temper-id", "01234567-0000-7000-8000-000000000000"),
             ("temper-type", "task"),
             ("temper-context", "project"),
-            ("title", "My Task"),
-            ("slug", "my-task"),
+            ("temper-title", "My Task"),
+            ("temper-slug", "my-task"),
             ("date", "2026-01-01"),
             ("temper-created", "2026-01-01"),
             ("temper-stage", "backlog"),
@@ -1569,13 +1569,14 @@ mod tests {
 
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("test.md");
-        let original = "---\ntype: task\ntitle: Test\n---\nBody\n";
+        // Truly unparseable: malformed YAML (unterminated quoted string).
+        let original = "---\ntemper-type: task\ntemper-title: \"unterminated\n---\nBody\n";
         fs::write(&file, original).unwrap();
 
         let mut plan = FixPlan::new();
         plan.add(FixAction::RenameField {
             path: file.clone(),
-            old_key: "type".into(),
+            old_key: "temper-type".into(),
             new_key: "temper-type".into(),
         });
 
@@ -1594,12 +1595,16 @@ mod tests {
 
         let dir = TempDir::new().unwrap();
         let file = dir.path().join("test.md");
-        fs::write(&file, "---\ntemper-type: task\ntitle: Test\n---\nBody\n").unwrap();
+        fs::write(
+            &file,
+            "---\ntemper-type: task\ntemper-title: Test\n---\nBody\n",
+        )
+        .unwrap();
 
         let mut plan = FixPlan::new();
         plan.add(FixAction::SetField {
             path: file.clone(),
-            key: "slug".into(),
+            key: "temper-slug".into(),
             value: "test".into(),
             reason: "inferred".into(),
         });
@@ -1608,7 +1613,7 @@ mod tests {
         assert_eq!(report.fields_set, 1);
 
         let content = fs::read_to_string(&file).unwrap();
-        assert!(content.contains("slug: test"));
+        assert!(content.contains("temper-slug: test"));
     }
 
     #[test]

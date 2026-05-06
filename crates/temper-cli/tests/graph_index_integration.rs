@@ -59,9 +59,9 @@ temper-type: task\n\
 temper-context: {context}\n\
 temper-created: \"2026-01-01T00:00:00Z\"\n\
 temper-owner: \"@me\"\n\
-title: \"{title}\"\n\
+temper-title: \"{title}\"\n\
 temper-stage: backlog\n\
-slug: {slug}\n\
+temper-slug: {slug}\n\
 ---\n\
 \n\
 {body}\n"
@@ -76,9 +76,9 @@ temper-type: goal\n\
 temper-context: temper\n\
 temper-created: \"2026-01-01T00:00:00Z\"\n\
 temper-owner: \"@me\"\n\
-title: \"{title}\"\n\
+temper-title: \"{title}\"\n\
 temper-status: active\n\
-slug: {slug}\n\
+temper-slug: {slug}\n\
 ---\n\
 \n\
 {body}\n"

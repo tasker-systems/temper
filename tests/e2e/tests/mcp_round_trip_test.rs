@@ -295,8 +295,8 @@ async fn mcp_describe_doc_type_returns_usable_example(_pool: sqlx::PgPool) {
     let example = response.example_managed_meta.clone();
     let mut synthetic = example.as_object().cloned().unwrap_or_default();
     // Inject system-managed fields that the schema requires
-    synthetic.insert("slug".to_owned(), serde_json::json!("test-slug"));
-    synthetic.insert("title".to_owned(), serde_json::json!("Test Title"));
+    synthetic.insert("temper-slug".to_owned(), serde_json::json!("test-slug"));
+    synthetic.insert("temper-title".to_owned(), serde_json::json!("Test Title"));
     synthetic.insert("temper-context".to_owned(), serde_json::json!("test-ctx"));
     synthetic.insert("temper-type".to_owned(), serde_json::json!("task"));
     synthetic.insert(
@@ -515,7 +515,8 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     let content = "# Section A\n\nBody for section A.\n\n# Section B\n\nBody for section B.";
     let body_hash = format!("sha256:{}", sha2_hex(content));
     let packed = temper_core::types::ingest::pack_chunks(&[chunk_a, chunk_b]).expect("pack chunks");
-    let seeded_managed = serde_json::json!({"temper-type": "research", "title": "MCP Meta Parity"});
+    let seeded_managed =
+        serde_json::json!({"temper-type": "research", "temper-title": "MCP Meta Parity"});
     let seeded_open = serde_json::json!({"tags": ["mcp", "parity"]});
 
     let resource = ingest_service::create_resource_with_manifest(
@@ -599,21 +600,27 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         manifest_after.0, manifest_before.0,
         "body_hash must NOT change on a meta-only MCP update",
     );
-    assert_eq!(
-        manifest_after.1, payload.managed_hash,
-        "managed_hash must match the payload",
-    );
+    // Phase 5: server now recomputes managed_hash and open_hash on meta
+    // updates rather than trusting caller-supplied values, so the assertion
+    // shifts from "matches the payload" to "is the canonical server hash"
+    // and "advanced from the pre-update value".
     assert_ne!(
         manifest_after.1, manifest_before.1,
         "managed_hash must advance from its pre-update value",
     );
-    assert_eq!(
-        manifest_after.2, payload.open_hash,
-        "open_hash must match the payload",
+    assert!(
+        manifest_after.1.starts_with("sha256:"),
+        "managed_hash must be a server-computed sha256 hash; got {}",
+        manifest_after.1,
     );
     assert_ne!(
         manifest_after.2, manifest_before.2,
         "open_hash must advance from its pre-update value",
+    );
+    assert!(
+        manifest_after.2.starts_with("sha256:"),
+        "open_hash must be a server-computed sha256 hash; got {}",
+        manifest_after.2,
     );
 
     let chunks_after: Vec<(i32, String, String)> = sqlx::query_as(

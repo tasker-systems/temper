@@ -84,7 +84,7 @@ mod tests {
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62886"
 title: Hello
-slug: hello
+temper-slug: hello
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Task);
@@ -104,7 +104,7 @@ temper-updated: "2026-04-13T00:00:00Z"
 temper-owner: "@me"
 temper-source: manual
 title: T
-slug: t
+temper-slug: t
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Task);
@@ -126,7 +126,7 @@ slug: t
         let v = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 temper-stage: in-progress
 temper-mode: build
 temper-effort: medium
@@ -140,33 +140,36 @@ temper-effort: medium
 
     #[test]
     fn title_and_slug_go_to_managed() {
+        // Mixed-form input: bare `title` exercises the legacy-bare classifier
+        // (until Task 6 normalize_aliases retires the literal); `temper-slug`
+        // exercises the temper-* prefix classifier.
         let v = yaml(
             r#"
 title: Hello
-slug: hello
+temper-slug: hello
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Task);
         assert_eq!(managed["title"], json!("Hello"));
-        assert_eq!(managed["slug"], json!("hello"));
+        assert_eq!(managed["temper-slug"], json!("hello"));
         assert!(open.get("title").is_none());
-        assert!(open.get("slug").is_none());
+        assert!(open.get("temper-slug").is_none());
     }
 
     #[test]
-    fn doc_type_specific_properties_go_to_managed() {
-        // `date` is declared in session.schema.json (not base), so it
-        // routes to managed for sessions.
+    fn date_routes_to_open_tier_for_sessions() {
+        // `date` is no longer in any managed-tier schema (Plan Task 13);
+        // it routes to open tier as user-content metadata.
         let v = yaml(
             r#"
 title: My session
-slug: my-session
+temper-slug: my-session
 date: "2026-04-13"
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Session);
-        assert_eq!(managed["date"], json!("2026-04-13"));
-        assert!(open.get("date").is_none());
+        assert!(managed.get("date").is_none());
+        assert_eq!(open["date"], json!("2026-04-13"));
     }
 
     #[test]
@@ -174,7 +177,7 @@ date: "2026-04-13"
         let v = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 relates_to: [a, b]
 depends_on: [c]
 parent: p
@@ -192,7 +195,7 @@ parent: p
         let v = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 tags: [auth, observability]
 aliases: [alt]
 "#,
@@ -207,7 +210,7 @@ aliases: [alt]
         let v = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 custom_field: 42
 another: something
 "#,
@@ -218,20 +221,20 @@ another: something
     }
 
     #[test]
-    fn session_date_does_not_accidentally_collide_with_metadata_date() {
-        // session.schema.json declares `date`, so it's managed for sessions.
-        // `date` is also in the metadata registry. Doc-type schema wins:
-        // session `date` must land in managed, not open.
+    fn session_date_routes_to_open_tier() {
+        // After Plan Task 13, `date` is open-tier user content, not
+        // managed-tier. Sessions, research, decisions, and concepts all
+        // emit `date` to open tier.
         let v = yaml(
             r#"
 title: S
-slug: s
+temper-slug: s
 date: "2026-04-13"
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Session);
-        assert_eq!(managed["date"], json!("2026-04-13"));
-        assert!(open.get("date").is_none());
+        assert!(managed.get("date").is_none());
+        assert_eq!(open["date"], json!("2026-04-13"));
     }
 
     #[test]
@@ -257,7 +260,7 @@ temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-updated: "2026-04-13T00:00:00Z"
 title: T
-slug: t
+temper-slug: t
 temper-stage: in-progress
 temper-mode: build
 temper-effort: small
@@ -273,7 +276,7 @@ custom: ok
         let open_hash = crate::hash::compute_open_hash(&open);
 
         assert_eq!(
-            managed_hash, "sha256:b15f4e2091c5f52a18fcb2220f91c3b542bf94b81527aabaad6bb69241ca8949",
+            managed_hash, "sha256:4c01d11757eb68e3c3879a647f6db771b17d7f37d5ce4e3a815d92f626a7b550",
             "task fixture managed hash drift"
         );
         assert_eq!(
@@ -291,7 +294,7 @@ temper-type: session
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 title: S
-slug: s
+temper-slug: s
 date: "2026-04-13"
 relates_to: [a]
 tags: [x]
@@ -302,11 +305,11 @@ tags: [x]
         let open_hash = crate::hash::compute_open_hash(&open);
 
         assert_eq!(
-            managed_hash, "sha256:4d8186ecb2a225ef07ebbcf4aa2c0c4187e666895a648906c6489784795ed75a",
+            managed_hash, "sha256:2c354b983f8dbc9f2c96153f2f674cdbefb069c0166afdb8dae6366cfdc89ca7",
             "session fixture managed hash drift"
         );
         assert_eq!(
-            open_hash, "sha256:369e3bc13f15eb2e74b3e2e295ede908968421d0c53d3e17e828fe9f0ccc0d91",
+            open_hash, "sha256:d0c45999dca9e425cee891ecbda105e871592025782dd4482267f909009bc36c",
             "session fixture open hash drift"
         );
     }

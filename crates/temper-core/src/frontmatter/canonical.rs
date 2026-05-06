@@ -57,8 +57,8 @@ pub fn canonicalize(fm: &serde_yaml::Value, doc_type: DocType) -> serde_yaml::Va
         }
     }
 
-    // Tier 2: managed fields — title, slug, then schema-declared order.
-    for fixed in ["title", "slug"] {
+    // Tier 2: managed fields — temper-title, temper-slug, then schema-declared order.
+    for fixed in ["temper-title", "temper-slug"] {
         if let Some(v) = get(fixed) {
             out.insert(serde_yaml::Value::String(fixed.to_string()), v);
             emitted.insert(fixed.to_string());
@@ -66,7 +66,7 @@ pub fn canonicalize(fm: &serde_yaml::Value, doc_type: DocType) -> serde_yaml::Va
     }
     let schema_order = schema_property_order(doc_type);
     for key in &schema_order {
-        if key == "title" || key == "slug" {
+        if key == "temper-title" || key == "temper-slug" {
             continue;
         }
         if !emitted.contains(key) {
@@ -162,7 +162,7 @@ mod tests {
         let v = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 temper-provisional-id: "019d8110-8ff3-70c2-85ae-57e04ed62886"
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 "#,
@@ -177,8 +177,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
     fn tier1_system_fields_follow_identity_in_fixed_order() {
         let v = yaml(
             r#"
-title: T
-slug: t
+temper-title: T
+temper-slug: t
 temper-updated: "2026-04-13T00:00:00Z"
 temper-context: temper
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
@@ -204,9 +204,9 @@ temper-created: "2026-04-12T00:00:00Z"
                 prev_idx = pos;
             }
         }
-        // And tier1 precedes managed (title).
+        // And tier1 precedes managed (temper-title).
         let first_tier1 = ks.iter().position(|k| k == "temper-context").unwrap();
-        let title_idx = ks.iter().position(|k| k == "title").unwrap();
+        let title_idx = ks.iter().position(|k| k == "temper-title").unwrap();
         assert!(first_tier1 < title_idx, "tier1 must precede managed");
     }
 
@@ -214,16 +214,16 @@ temper-created: "2026-04-12T00:00:00Z"
     fn title_comes_before_slug_in_managed_tier() {
         let v = yaml(
             r#"
-slug: t
-title: T
+temper-slug: t
+temper-title: T
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 "#,
         );
         let out = canonicalize(&v, DocType::Task);
         let ks = keys_of(&out);
-        let title_idx = ks.iter().position(|k| k == "title").unwrap();
-        let slug_idx = ks.iter().position(|k| k == "slug").unwrap();
+        let title_idx = ks.iter().position(|k| k == "temper-title").unwrap();
+        let slug_idx = ks.iter().position(|k| k == "temper-slug").unwrap();
         assert!(title_idx < slug_idx);
     }
 
@@ -257,7 +257,7 @@ temper-effort: small
         let v = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 tags: [x]
@@ -283,7 +283,7 @@ parent: p
         let v = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 zebra: 1
@@ -306,7 +306,7 @@ mango: 3
             r#"
 relates_to: [a]
 title: T
-slug: t
+temper-slug: t
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 custom: 1
@@ -322,7 +322,7 @@ custom: 1
         let a = yaml(
             r#"
 title: T
-slug: t
+temper-slug: t
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 relates_to: [x]
@@ -335,7 +335,7 @@ tags: [y]
 relates_to: [x]
 temper-type: task
 temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
-slug: t
+temper-slug: t
 title: T
 "#,
         );

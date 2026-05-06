@@ -185,8 +185,8 @@ mod tests {
     // 9. managed_hash_strips_tier1_system_fields
     #[test]
     fn managed_hash_strips_tier1_system_fields() {
-        let without = json!({"title": "Test"});
-        let with_tier1 = json!({"title": "Test", "temper-created": "2026-01-01T00:00:00Z"});
+        let without = json!({"temper-title": "Test"});
+        let with_tier1 = json!({"temper-title": "Test", "temper-created": "2026-01-01T00:00:00Z"});
         assert_eq!(
             compute_managed_hash("task", &without),
             compute_managed_hash("task", &with_tier1),
@@ -196,8 +196,8 @@ mod tests {
     // 10. managed_hash_deterministic_regardless_of_key_order
     #[test]
     fn managed_hash_deterministic_regardless_of_key_order() {
-        let v1 = json!({"title": "A", "temper-stage": "backlog"});
-        let v2 = json!({"temper-stage": "backlog", "title": "A"});
+        let v1 = json!({"temper-title": "A", "temper-stage": "backlog"});
+        let v2 = json!({"temper-stage": "backlog", "temper-title": "A"});
         assert_eq!(
             compute_managed_hash("task", &v1),
             compute_managed_hash("task", &v2),
@@ -239,8 +239,8 @@ temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
 temper-updated: "2026-01-01T00:00:00Z"
 temper-owner: user1
-title: "My Task"
-slug: my-task
+temper-title: "My Task"
+temper-slug: my-task
 temper-stage: in-progress
 ---
 "#;
@@ -250,8 +250,8 @@ temper-stage: in-progress
         // Simulate API path: JSON without tier-1 fields
         let api_json = json!({
             "temper-stage": "in-progress",
-            "title": "My Task",
-            "slug": "my-task",
+            "temper-title": "My Task",
+            "temper-slug": "my-task",
         });
         let api_hash = compute_managed_hash("task", &api_json);
 
@@ -272,8 +272,8 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
-title: "My Task"
-slug: my-task
+temper-title: "My Task"
+temper-slug: my-task
 ---
 "#;
         let fm = Frontmatter::try_from(content).unwrap();
@@ -281,8 +281,8 @@ slug: my-task
 
         // API: JSON with explicit default temper-stage: "backlog"
         let api_json = json!({
-            "title": "My Task",
-            "slug": "my-task",
+            "temper-title": "My Task",
+            "temper-slug": "my-task",
             "temper-stage": "backlog",
         });
         let api_hash = compute_managed_hash("task", &api_json);
@@ -309,16 +309,16 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: task
 temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
-title: "My Task"
-slug: my-task
+temper-title: "My Task"
+temper-slug: my-task
 temper-stage: in-progress
 ---
 "#
                 .to_string(),
                 json!({
                     "temper-stage": "in-progress",
-                    "title": "My Task",
-                    "slug": "my-task",
+                    "temper-title": "My Task",
+                    "temper-slug": "my-task",
                 }),
             ),
             (
@@ -328,16 +328,16 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: goal
 temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
-title: "Ship v1"
-slug: ship-v1
+temper-title: "Ship v1"
+temper-slug: ship-v1
 temper-status: achieved
 ---
 "#
                 .to_string(),
                 json!({
                     "temper-status": "achieved",
-                    "title": "Ship v1",
-                    "slug": "ship-v1",
+                    "temper-title": "Ship v1",
+                    "temper-slug": "ship-v1",
                 }),
             ),
             (
@@ -348,16 +348,16 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: session
 temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
-title: "Planning"
-slug: planning
+temper-title: "Planning"
+temper-slug: planning
 date: "{today}"
 ---
 "#
                 ),
                 json!({
                     "date": today.clone(),
-                    "title": "Planning",
-                    "slug": "planning",
+                    "temper-title": "Planning",
+                    "temper-slug": "planning",
                 }),
             ),
             (
@@ -368,16 +368,16 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: research
 temper-context: ctx
 temper-created: "2026-01-01T00:00:00Z"
-title: "Survey"
-slug: survey
+temper-title: "Survey"
+temper-slug: survey
 date: "{today}"
 ---
 "#
                 ),
                 json!({
                     "date": today,
-                    "title": "Survey",
-                    "slug": "survey",
+                    "temper-title": "Survey",
+                    "temper-slug": "survey",
                 }),
             ),
         ];
@@ -400,8 +400,8 @@ date: "{today}"
     // `temper-status: active` (the default).
     #[test]
     fn defaults_make_hashes_converge() {
-        let without = json!({"title": "Ship v1"});
-        let with_default = json!({"title": "Ship v1", "temper-status": "active"});
+        let without = json!({"temper-title": "Ship v1"});
+        let with_default = json!({"temper-title": "Ship v1", "temper-status": "active"});
         assert_eq!(
             compute_managed_hash("goal", &without),
             compute_managed_hash("goal", &with_default),

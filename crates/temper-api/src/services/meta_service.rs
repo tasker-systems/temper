@@ -9,6 +9,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::services::ingest_service::insert_event_and_audit;
 use crate::services::resource_service;
 use temper_core::frontmatter::registry;
+use temper_core::hash::{compute_managed_hash, compute_open_hash};
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 
 use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload, ResourceMetaResponse};
@@ -119,15 +120,69 @@ pub async fn update_meta(
 
     let mut tx = pool.begin().await?;
 
-    // 2. Update kb_resource_manifests (plain UPDATE — must already exist;
-    //    we don't want to insert a row with an empty body_hash).
-    //
-    // The typed `ManagedMeta` is serialized back to a canonical JSONB
-    // value here so the DB column stays a JSONB blob. The managed_hash
-    // was computed by the caller over the canonical form, so the hash
-    // stays stable across the typed round-trip.
-    let managed_meta_json =
+    // 2. Read current row state for canonical-key injection (Phase 5
+    //    receive-side defense): the helper needs `title` and `slug` to
+    //    keep the JSONB in lockstep with the columns even when the
+    //    typed payload's `ManagedMeta.title` / `slug` are `None`. We
+    //    also need `doc_type_name` for `compute_managed_hash`, which is
+    //    now recomputed server-side.
+    let current = sqlx::query!(
+        r#"
+        SELECT r.title          AS "title!",
+               r.slug,
+               dt.name          AS "doc_type_name!"
+          FROM kb_resources r
+          JOIN kb_doc_types dt ON dt.id = r.kb_doc_type_id
+         WHERE r.id = $1
+        "#,
+        *resource_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Resolve the post-update identity for canonical injection. The
+    // typed `ManagedMeta.title` / `slug` win when present; otherwise we
+    // fall back to the existing column values so the JSONB and columns
+    // can never drift across this update.
+    let new_title = payload
+        .managed_meta
+        .title
+        .as_deref()
+        .unwrap_or(current.title.as_str());
+    let new_slug = payload
+        .managed_meta
+        .slug
+        .as_deref()
+        .or(current.slug.as_deref());
+    let new_doc_type = payload
+        .managed_meta
+        .doc_type
+        .as_deref()
+        .unwrap_or(current.doc_type_name.as_str());
+
+    // Serialize the typed `ManagedMeta` to a canonical JSONB value, then
+    // inject `temper-title` / `temper-slug` so the stored JSONB always
+    // carries the canonical identity keys regardless of what the caller
+    // sent. Idempotent — if the caller's typed `ManagedMeta` already had
+    // both fields populated, the helper is a byte-identical no-op.
+    let mut managed_meta_json =
         serde_json::to_value(&payload.managed_meta).unwrap_or(serde_json::Value::Null);
+    temper_core::operations::ensure_managed_identity_keys(
+        &mut managed_meta_json,
+        new_title,
+        new_slug,
+    );
+
+    // 3. Recompute hashes server-side. `payload.managed_hash` and
+    //    `payload.open_hash` are no longer load-bearing — the server is
+    //    the single canonical source. The wire fields stay for caller
+    //    compatibility (CLI / MCP still construct them) but their values
+    //    are advisory; the manifest stores what the server computes.
+    let managed_hash = compute_managed_hash(new_doc_type, &managed_meta_json);
+    let open_hash = compute_open_hash(&payload.open_meta);
+
+    // 4. Update kb_resource_manifests (plain UPDATE — must already exist;
+    //    we don't want to insert a row with an empty body_hash).
     let rows = sqlx::query!(
         r#"
         UPDATE kb_resource_manifests
@@ -136,8 +191,8 @@ pub async fn update_meta(
         "#,
         &managed_meta_json,
         &payload.open_meta as &serde_json::Value,
-        &payload.managed_hash,
-        &payload.open_hash,
+        &managed_hash,
+        &open_hash,
         *resource_id,
     )
     .execute(&mut *tx)
@@ -228,8 +283,8 @@ pub async fn update_meta(
         "managed_meta_updated",
         "update_meta",
         &body_hash,
-        &payload.managed_hash,
-        &payload.open_hash,
+        &managed_hash,
+        &open_hash,
     )
     .await?;
 
@@ -243,13 +298,12 @@ pub async fn update_meta(
     // change in managed_meta was applied earlier in the same tx), so we can
     // reuse the local directly instead of re-querying.
     let ctx_id = ContextId::from(context_id);
-    let doc_type_str = payload.managed_meta.doc_type.as_deref().unwrap_or("");
     if let Err(e) = super::edge_service::reconcile_edges(
         pool,
         &profile_id,
         &ctx_id,
         &resource_id,
-        doc_type_str,
+        new_doc_type,
         &managed_meta_json,
         &payload.open_meta,
     )

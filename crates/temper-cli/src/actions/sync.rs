@@ -1193,7 +1193,18 @@ pub async fn push_one_resource(
 
     let managed_meta = Some(fm.managed_json());
     let open_meta = Some(fm.open_json());
-    let title = crate::actions::ingest::title_from_path(&file_path);
+    // Title comes from frontmatter (parse-time normalize_aliases means both
+    // legacy `title:` and canonical `temper-title:` files surface as
+    // `temper-title` in managed_json). The path stem is the slug, not the
+    // title — using it here would propagate slug-as-title to payload.title,
+    // and Phase 5's receive-side ensure_managed_identity_keys would then
+    // overwrite the (correct) temper-title in managed_meta with that slug.
+    let title = managed_meta
+        .as_ref()
+        .and_then(|m| m.get("temper-title"))
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .unwrap_or_else(|| crate::actions::ingest::title_from_path(&file_path));
     let mut payload = crate::actions::ingest::build_ingest_payload(
         body, &title, &context, &doc_type, None, None, None,
     )?;

@@ -3,8 +3,8 @@ temper-provisional-id: "{{ id }}"
 temper-type: research
 date: {{ date }}
 temper-context: "{{ project }}"
-title: "{{ title }}"
-slug: "{{ slug }}"
+temper-title: "{{ title }}"
+temper-slug: "{{ slug }}"
 ---
 
 # {{ title }}

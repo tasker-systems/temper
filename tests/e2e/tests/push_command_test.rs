@@ -86,17 +86,18 @@ async fn push_one_resource_path_no_manifest_posts_and_rewrites_provisional(pool:
         "temper-id with server id must be present; got:\n{updated}"
     );
 
-    // Primitive's title source is `title_from_path` (file stem), matching
-    // the existing sync body-push path. That's the contract here — this
-    // test asserts the ingest POST went through with a non-empty title
-    // and the server round-trips the same value we sent.
+    // Primitive's title source is the file's frontmatter (`temper-title`
+    // after parse-time normalize_aliases turns the bare `title:` into the
+    // canonical key). Path stem is the slug, not the title — using it would
+    // propagate slug-as-title to the wire payload and Phase 5's receive-side
+    // ensure_managed_identity_keys would then store temper-title=slug.
     let server = app
         .client
         .resources()
         .get(*result.resource_id.as_uuid())
         .await
         .expect("get resource");
-    assert_eq!(server.title, "push-test-seed");
+    assert_eq!(server.title, "Push Seed");
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]

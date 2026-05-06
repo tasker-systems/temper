@@ -133,7 +133,7 @@ async fn audit_row_created_on_meta_update(pool: sqlx::PgPool) {
     // Update meta via the API using raw reqwest (the typed client may not have this method)
     let meta_payload = serde_json::json!({
         "resource_id": resource_id.to_string(),
-        "managed_meta": {"title": "Updated Title"},
+        "managed_meta": {"temper-title": "Updated Title"},
         "open_meta": {},
         "managed_hash": "sha256:newmanaged",
         "open_hash": "sha256:newopen",

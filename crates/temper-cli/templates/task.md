@@ -1,8 +1,8 @@
 ---
 temper-provisional-id: "{{ id }}"
 temper-type: task
-title: "{{ title }}"
-slug: "{{ slug }}"
+temper-title: "{{ title }}"
+temper-slug: "{{ slug }}"
 temper-context: "{{ context }}"
 temper-goal: "{{ goal }}"
 temper-stage: backlog

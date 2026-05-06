@@ -40,9 +40,9 @@ temper-id: "01930000-0000-7000-8000-000000000001"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 temper-stage: backlog
-slug: my-task
+temper-slug: my-task
 "#
 }
 
@@ -66,7 +66,7 @@ temper-id: "01930000-0000-7000-8000-000000000002"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 "#,
     );
     let issues = validate_frontmatter("task", &fm).expect("validate_frontmatter succeeded");
@@ -92,9 +92,9 @@ temper-id: "01930000-0000-7000-8000-000000000003"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 temper-stage: active
-slug: my-task
+temper-slug: my-task
 "#,
     );
     let issues = validate_frontmatter("task", &fm).expect("validate_frontmatter succeeded");
@@ -112,7 +112,7 @@ temper-id: "01930000-0000-7000-8000-000000000010"
 temper-type: session
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "Session 1"
+temper-title: "Session 1"
 date: "2024-01-01"
 "#,
     );
@@ -133,9 +133,9 @@ temper-id: "01930000-0000-7000-8000-000000000020"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 temper-stage: backlog
-slug: my-task
+temper-slug: my-task
 my-custom-field: "hello"
 another-user-field: 42
 "#,
@@ -161,7 +161,7 @@ type: task
 context: my-project
 project: my-project
 doc_type: task
-title: "My Task"
+temper-title: "My Task"
 "#,
     );
     let issues = check_legacy_fields(&fm);
@@ -186,7 +186,22 @@ title: "My Task"
 
 #[test]
 fn test_check_legacy_fields_clean_doc_has_none() {
-    let fm = yaml(valid_task_frontmatter());
+    // Inline fixture with canonical (post-temper-prefix) keys. We deliberately
+    // do NOT use `valid_task_frontmatter()` here because that fixture still
+    // uses bare `title:` and `slug:` (required by the current schemas until
+    // the schema-rename tasks land); those bare keys are now in
+    // LEGACY_FIELDS and would trigger the scanner.
+    let fm = yaml(
+        r#"
+temper-id: "01930000-0000-7000-8000-000000000001"
+temper-type: task
+temper-context: my-project
+temper-created: "2024-01-01T00:00:00Z"
+temper-temper-title: "My Task"
+temper-stage: backlog
+temper-slug: my-task
+"#,
+    );
     let issues = check_legacy_fields(&fm);
     assert!(
         issues.is_empty(),
@@ -208,7 +223,7 @@ temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
 temper-stge: backlog
-title: "My Task"
+temper-title: "My Task"
 "#,
     );
     let issues = check_unknown_temper_fields(&fm);
@@ -246,7 +261,7 @@ temper-id: "01930000-0000-7000-8000-000000000040"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 open-field: "hello"
 ---
 "#,
@@ -258,7 +273,7 @@ temper-id: "01930000-0000-7000-8000-000000000041"
 temper-type: goal
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 open-field: "hello"
 ---
 "#,
@@ -299,7 +314,7 @@ temper-id: "01930000-0000-7000-8000-000000000050"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 custom: "hello"
 ---
 "#,
@@ -311,7 +326,7 @@ temper-id: "01930000-0000-7000-8000-000000000050"
 temper-type: task
 temper-context: my-project
 temper-created: "2024-01-01T00:00:00Z"
-title: "My Task"
+temper-title: "My Task"
 custom: "world"
 ---
 "#,

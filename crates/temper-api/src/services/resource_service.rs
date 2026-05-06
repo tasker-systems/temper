@@ -580,7 +580,15 @@ pub async fn update(
     //    born via POST /api/resources have no manifest until their first
     //    PATCH or ingest. The ON CONFLICT upsert below is load-bearing for
     //    that create-then-patch flow; do not simplify to a plain UPDATE.
-    if req.managed_meta.is_some() || req.open_meta.is_some() {
+    // Enter the manifest-rewrite block whenever ANY field that affects the
+    // canonical managed_meta JSONB is present. A title/slug-only PATCH still
+    // needs to refresh the JSONB so its temper-title / temper-slug keys (and
+    // the managed_hash) stay in lockstep with the kb_resources columns.
+    if req.managed_meta.is_some()
+        || req.open_meta.is_some()
+        || req.title.is_some()
+        || req.slug.is_some()
+    {
         let stored = sqlx::query!(
             r#"SELECT managed_meta as "managed_meta: serde_json::Value",
                       open_meta    as "open_meta: serde_json::Value"
@@ -615,7 +623,17 @@ pub async fn update(
             apply_open_meta_partial(&mut merged_open, incoming_open);
         }
 
-        let managed_value = serde_json::to_value(&merged_managed)?;
+        let mut managed_value = serde_json::to_value(&merged_managed)?;
+        // Inject canonical identity keys from the resolved top-level title /
+        // slug before hashing. `new_slug` is `Option<&str>` and flows through
+        // unchanged: when the resource has no slug (column NULL on a resource
+        // born via POST /api/resources without one), the helper drops the
+        // `temper-slug` key so column-NULL and JSONB-key-absent agree.
+        temper_core::operations::ensure_managed_identity_keys(
+            &mut managed_value,
+            new_title,
+            new_slug,
+        );
         let managed_hash = compute_managed_hash(&current.doc_type_name, &managed_value);
         let open_hash = compute_open_hash(&merged_open);
 
