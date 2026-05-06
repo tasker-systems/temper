@@ -3489,6 +3489,8 @@ mod tests {
             mode: None,
             effort: None,
             body_hash: None,
+            managed_hash: None,
+            open_hash: None,
         }
     }
 

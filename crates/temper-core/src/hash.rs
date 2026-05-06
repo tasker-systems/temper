@@ -72,8 +72,8 @@ pub fn compute_managed_hash(doc_type: &str, managed_meta: &serde_json::Value) ->
         }
     }
 
-    // Fill in doc-type defaults so both sides agree.
-    crate::defaults::apply_doc_type_defaults(doc_type, &mut meta);
+    // Fill in managed-tier doc-type defaults so both sides agree.
+    crate::defaults::apply_managed_defaults(doc_type, &mut meta);
 
     hash_canonical_json(&meta)
 }
@@ -354,8 +354,11 @@ date: "{today}"
 ---
 "#
                 ),
+                // Phase 6: `date` lives in open_meta server-side, not managed_meta.
+                // The API's managed_meta JSONB therefore does not include `date`;
+                // CLI's `fm.managed_json()` correctly routes `date` to open via
+                // `split_managed_open`, so both sides converge here.
                 json!({
-                    "date": today.clone(),
                     "temper-title": "Planning",
                     "temper-slug": "planning",
                 }),
@@ -375,7 +378,6 @@ date: "{today}"
 "#
                 ),
                 json!({
-                    "date": today,
                     "temper-title": "Survey",
                     "temper-slug": "survey",
                 }),

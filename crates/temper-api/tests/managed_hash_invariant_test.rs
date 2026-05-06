@@ -152,7 +152,7 @@ async fn client_pre_send_canonical_hash_equals_server_post_storage_hash(pool: Pg
     let client_pre_send_hash = compute_managed_hash("research", &canonicalized_managed_meta);
 
     // Send the canonicalized payload through the real /api/ingest path.
-    // The server runs strip_system_managed_fields → apply_doc_type_defaults →
+    // The server runs strip_system_managed_fields → apply_managed_defaults →
     // ensure_managed_identity_keys → validate → store → compute_managed_hash.
     // For caller-canonicalized input with no tier-1 fields, the server's
     // pipeline is byte-identical to the client's compute_managed_hash chain.

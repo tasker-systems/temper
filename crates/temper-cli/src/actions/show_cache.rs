@@ -116,8 +116,8 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
 
     let mut local_was_corrupted = false;
     if let Ok(local_body) = fs::read_to_string(params.local_path) {
-        match parse_frontmatter_updated(&local_body) {
-            Some(local_updated) if local_updated == meta_check.updated => {
+        match try_hash_match(&local_body, &meta_check) {
+            HashMatchOutcome::Match => {
                 let now = FileTime::from_system_time(SystemTime::now());
                 set_file_mtime(params.local_path, now)
                     .map_err(|e| TemperError::Vault(format!("touch mtime: {e}")))?;
@@ -126,14 +126,18 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
                     source: FreshnessTier::HashMatch,
                 });
             }
-            Some(_) => {}
-            None => {
-                // Local file exists but its frontmatter is missing or
-                // unparseable — heal it from the server below.
+            HashMatchOutcome::Mismatch => {}
+            HashMatchOutcome::LocalUnparseable => {
                 local_was_corrupted = true;
                 tracing::debug!(
                     path = %params.local_path.display(),
-                    "frontmatter missing or unparseable temper-updated; hash-verify tier skipped"
+                    "frontmatter unparseable; tier-2 hash check skipped, full fetch"
+                );
+            }
+            HashMatchOutcome::ServerHashesMissing => {
+                tracing::debug!(
+                    path = %params.local_path.display(),
+                    "server returned no canonical hashes (manifest missing or empty-string sentinel); tier-2 skipped"
                 );
             }
         }
@@ -163,13 +167,43 @@ async fn attempt_remote(params: &ShowCacheParams<'_>) -> Result<ShowCacheResult>
     })
 }
 
-fn parse_frontmatter_updated(body: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    let fm = temper_core::frontmatter::Frontmatter::try_from(body).ok()?;
-    let updated = fm.value().get("temper-updated")?;
-    let s = updated.as_str()?;
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.with_timezone(&chrono::Utc))
+enum HashMatchOutcome {
+    Match,
+    Mismatch,
+    LocalUnparseable,
+    ServerHashesMissing,
+}
+
+/// Tier-2 short-circuit: do the locally-computed canonical hashes match the
+/// server's stored hashes?
+///
+/// Compares `managed_hash` and `open_hash` only. `body_hash` is intentionally
+/// excluded because the canonical body form for hashing is not unified across
+/// the ingest path (hashes the raw user-submitted body) and the on-disk form
+/// (hashes after `normalize_body_for_vault` prepends a leading newline). A
+/// future phase will reconcile the body canonical form and add `body_hash` to
+/// this check; until then a server-side body-only edit (no managed-meta
+/// projection change) can fall through this match — tier-3 still heals on
+/// the next forced fetch.
+fn try_hash_match(local_body: &str, meta: &temper_core::types::ResourceRow) -> HashMatchOutcome {
+    use temper_core::frontmatter::Frontmatter;
+
+    let (server_managed, server_open) = match (&meta.managed_hash, &meta.open_hash) {
+        (Some(m), Some(o)) if !m.is_empty() && !o.is_empty() => (m.as_str(), o.as_str()),
+        _ => return HashMatchOutcome::ServerHashesMissing,
+    };
+
+    let fm = match Frontmatter::try_from(local_body) {
+        Ok(fm) => fm,
+        Err(_) => return HashMatchOutcome::LocalUnparseable,
+    };
+    let (local_managed, local_open) = fm.hashes();
+
+    if local_managed == server_managed && local_open == server_open {
+        HashMatchOutcome::Match
+    } else {
+        HashMatchOutcome::Mismatch
+    }
 }
 
 /// Reconstruct the full vault file (frontmatter + body) from a metadata
@@ -322,6 +356,8 @@ mod tests {
             mode: None,
             effort: None,
             body_hash: None,
+            managed_hash: None,
+            open_hash: None,
         }
     }
 

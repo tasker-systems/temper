@@ -1168,6 +1168,8 @@ created: 2026-03-23
             mode: None,
             effort: None,
             body_hash: None,
+            managed_hash: None,
+            open_hash: None,
         }
     }
 

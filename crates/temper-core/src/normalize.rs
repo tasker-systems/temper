@@ -196,9 +196,11 @@ pub fn is_missing_default(fm: &serde_yaml::Value, doc_type: &str) -> bool {
 }
 
 /// Apply doc-type-specific defaults to a YAML frontmatter mapping in place.
-/// Only adds keys that are absent. Mirrors `defaults::apply_doc_type_defaults`
-/// but operates on `serde_yaml::Mapping` to preserve key ordering as typed
-/// by the user.
+/// Only adds keys that are absent. Operates on the merged YAML form (where
+/// managed and open keys coexist at top level); the JSON-form helpers in
+/// [`crate::defaults`] are tier-aware (`apply_managed_defaults` /
+/// `apply_open_defaults`) and route by tier. This YAML helper inserts at
+/// top level; downstream `split_managed_open` routes keys to the right tier.
 ///
 /// The set of keys touched here must match [`default_keys_for`] — that
 /// function is the shared source of truth consumers outside this module

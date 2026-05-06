@@ -7,7 +7,7 @@
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::defaults::apply_doc_type_defaults;
+use crate::defaults::apply_managed_defaults;
 use crate::types::managed_meta::ManagedMeta;
 
 use super::commands::{CreateResource, UpdateResource};
@@ -58,16 +58,17 @@ pub fn ensure_managed_identity_keys(meta: &mut Value, title: &str, slug: Option<
     }
 }
 
-/// Apply doctype-specific defaults to a `ManagedMeta` value, in place.
+/// Apply managed-tier doctype-specific defaults to a `ManagedMeta` value,
+/// in place.
 ///
-/// Wraps the existing `temper_core::defaults::apply_doc_type_defaults` for
-/// ergonomic use from operations callers and to keep all action logic
-/// importable from one path.
+/// Open-tier defaults (e.g. `date` for session/research) belong in `open_meta`
+/// and are not handled here; callers route those through
+/// [`crate::defaults::apply_open_defaults`] on the open-tier JSON.
 pub fn apply_defaults(doctype: &str, meta: &mut ManagedMeta) {
     // ManagedMeta serializes round-trip-lossless through serde_json::Value;
     // round-trip into Value, apply defaults to the Value's object, deserialize back.
     let mut value = serde_json::to_value(&*meta).unwrap_or(serde_json::Value::Null);
-    apply_doc_type_defaults(doctype, &mut value);
+    apply_managed_defaults(doctype, &mut value);
     if let Ok(updated) = serde_json::from_value::<ManagedMeta>(value) {
         *meta = updated;
     }
