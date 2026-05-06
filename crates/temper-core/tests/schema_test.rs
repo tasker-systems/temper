@@ -1,8 +1,6 @@
 use serde_yaml::Value;
 use temper_core::frontmatter::Frontmatter;
-use temper_core::schema::{
-    check_legacy_fields, check_unknown_temper_fields, load_schema, validate_frontmatter,
-};
+use temper_core::schema::{check_unknown_temper_fields, load_schema, validate_frontmatter};
 
 fn yaml(s: &str) -> Value {
     serde_yaml::from_str(s).expect("valid YAML")
@@ -144,68 +142,6 @@ another-user-field: 42
     assert!(
         issues.is_empty(),
         "user-defined fields should not cause validation errors, got: {:?}",
-        issues
-    );
-}
-
-// ---------------------------------------------------------------------------
-// check_legacy_fields tests
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_check_legacy_fields_detects_old_names() {
-    let fm = yaml(
-        r#"
-id: "some-old-uuid"
-type: task
-context: my-project
-project: my-project
-doc_type: task
-temper-title: "My Task"
-"#,
-    );
-    let issues = check_legacy_fields(&fm);
-    assert!(!issues.is_empty(), "expected legacy field issues, got none");
-
-    // All legacy field issues should be auto-fixable
-    for issue in &issues {
-        assert!(
-            issue.auto_fixable,
-            "legacy field issue should be auto_fixable: {:?}",
-            issue
-        );
-    }
-
-    // Should detect the known legacy fields
-    let paths: Vec<_> = issues.iter().map(|i| i.path.as_str()).collect();
-    assert!(
-        paths.contains(&"id") || paths.contains(&"type") || paths.contains(&"context"),
-        "expected 'id', 'type', or 'context' in paths, got: {paths:?}"
-    );
-}
-
-#[test]
-fn test_check_legacy_fields_clean_doc_has_none() {
-    // Inline fixture with canonical (post-temper-prefix) keys. We deliberately
-    // do NOT use `valid_task_frontmatter()` here because that fixture still
-    // uses bare `title:` and `slug:` (required by the current schemas until
-    // the schema-rename tasks land); those bare keys are now in
-    // LEGACY_FIELDS and would trigger the scanner.
-    let fm = yaml(
-        r#"
-temper-id: "01930000-0000-7000-8000-000000000001"
-temper-type: task
-temper-context: my-project
-temper-created: "2024-01-01T00:00:00Z"
-temper-temper-title: "My Task"
-temper-stage: backlog
-temper-slug: my-task
-"#,
-    );
-    let issues = check_legacy_fields(&fm);
-    assert!(
-        issues.is_empty(),
-        "expected no legacy issues for clean doc, got: {:?}",
         issues
     );
 }

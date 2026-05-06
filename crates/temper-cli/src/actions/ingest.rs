@@ -430,7 +430,7 @@ pub fn build_provisional_frontmatter(
 ) -> String {
     let now = chrono::Utc::now().to_rfc3339();
     format!(
-        "---\ntemper-provisional-id: {id}\ntemper-type: {doc_type}\ntemper-context: {context}\ntemper-created: {now}\ntitle: \"{title}\"\n---\n\n"
+        "---\ntemper-provisional-id: {id}\ntemper-type: {doc_type}\ntemper-context: {context}\ntemper-created: {now}\ntemper-title: \"{title}\"\n---\n\n"
     )
 }
 
@@ -982,7 +982,7 @@ created: 2026-03-23
 
     #[test]
     fn strip_frontmatter_removes_yaml_block() {
-        let content = "---\ntype: task\ntitle: Test\n---\n# Body\n";
+        let content = "---\ntype: task\ntemper-title: Test\n---\n# Body\n";
         let body = strip_frontmatter(content);
         assert_eq!(body, "# Body\n");
     }
@@ -1128,7 +1128,7 @@ created: 2026-03-23
 
     #[test]
     fn test_parse_provisional_id() {
-        let content = "---\ntemper-provisional-id: \"019d6088-3a3b-71a3-b26c-d38b8338773e\"\ntitle: \"Test\"\n---\n\nBody";
+        let content = "---\ntemper-provisional-id: \"019d6088-3a3b-71a3-b26c-d38b8338773e\"\ntemper-title: \"Test\"\n---\n\nBody";
         let fm = parse_source_frontmatter(content).unwrap();
         assert_eq!(
             fm.provisional_id.as_deref(),
@@ -1140,7 +1140,7 @@ created: 2026-03-23
     #[test]
     fn test_parse_both_ids_prefers_temper_id() {
         let content =
-            "---\ntemper-id: \"aaa\"\ntemper-provisional-id: \"bbb\"\ntitle: \"Test\"\n---\n\nBody";
+            "---\ntemper-id: \"aaa\"\ntemper-provisional-id: \"bbb\"\ntemper-title: \"Test\"\n---\n\nBody";
         let fm = parse_source_frontmatter(content).unwrap();
         assert_eq!(fm.legacy_id.as_deref(), Some("aaa"));
         assert_eq!(fm.provisional_id.as_deref(), Some("bbb"));

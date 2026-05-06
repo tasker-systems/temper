@@ -1754,7 +1754,7 @@ mod list_pipeline_tests {
         let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
         fs::create_dir_all(&dir).unwrap();
         let content = format!(
-            "---\ntemper-id: \"id-{slug}\"\ntemper-type: {doc_type}\ntemper-context: {ctx}\nslug: {slug}\ntitle: \"Title {slug}\"\ntemper-updated: \"{updated}\"\n{extras}---\n\nbody\n"
+            "---\ntemper-id: \"id-{slug}\"\ntemper-type: {doc_type}\ntemper-context: {ctx}\ntemper-slug: {slug}\ntemper-title: \"Title {slug}\"\ntemper-updated: \"{updated}\"\n{extras}---\n\nbody\n"
         );
         fs::write(dir.join(format!("{slug}.md")), content).unwrap();
     }

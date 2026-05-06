@@ -73,22 +73,6 @@ Session notes.
 "#;
 
 // ---------------------------------------------------------------------------
-// Old-format task using legacy field names
-// ---------------------------------------------------------------------------
-const LEGACY_TASK_FM: &str = r#"---
-id: "01900000-0000-7000-8000-000000000010"
-type: task
-context: temper
-created: "2026-01-01T00:00:00Z"
-title: "Old task"
-stage: backlog
-slug: old-task
----
-
-Legacy body.
-"#;
-
-// ---------------------------------------------------------------------------
 // Task with invalid enum value for temper-stage
 // ---------------------------------------------------------------------------
 const INVALID_STAGE_TASK_FM: &str = r#"---
@@ -130,36 +114,6 @@ fn test_doctor_valid_task_no_issues() {
             .iter()
             .flat_map(|r| &r.issues)
             .collect::<Vec<_>>()
-    );
-}
-
-#[test]
-fn test_doctor_detects_legacy_fields() {
-    let dir = TempDir::new().unwrap();
-    let config = test_config(&dir);
-    write_vault_file(&dir, "@me/temper/task/old-task.md", LEGACY_TASK_FM);
-
-    let report = temper_cli::actions::doctor::scan(&config, None).unwrap();
-
-    assert_eq!(report.files_checked, 1);
-    assert!(
-        report.total_issues > 0,
-        "legacy fields should produce issues"
-    );
-    assert!(
-        report.auto_fixable > 0,
-        "legacy field issues should be auto-fixable"
-    );
-
-    // Verify the legacy field messages are present
-    let all_messages: Vec<&str> = report
-        .file_results
-        .iter()
-        .flat_map(|r| r.issues.iter().map(|i| i.message.as_str()))
-        .collect();
-    assert!(
-        all_messages.iter().any(|m| m.contains("legacy field")),
-        "should mention 'legacy field' in at least one issue message"
     );
 }
 

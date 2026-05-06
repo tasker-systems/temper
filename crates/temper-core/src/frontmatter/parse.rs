@@ -100,11 +100,8 @@ pub fn normalize_aliases(value: &mut serde_yaml::Value) {
     };
 
     // Collect (alias_key, canonical_key) pairs first — we can't mutate
-    // while iterating. Sources:
-    //   1. Open-field hyphen-form aliases (e.g. relates-to → relates_to),
-    //      via the open-field registry.
-    //   2. Managed-tier legacy bare-key aliases (e.g. title → temper-title),
-    //      via the LEGACY_FIELDS table in frontmatter::fields.
+    // while iterating. Source: open-field hyphen-form aliases
+    // (e.g. relates-to → relates_to), via the open-field registry.
     let mut rewrites: Vec<(serde_yaml::Value, serde_yaml::Value)> = Vec::new();
     for (k, _) in mapping.iter() {
         let Some(k_str) = k.as_str() else {
@@ -116,11 +113,7 @@ pub fn normalize_aliases(value: &mut serde_yaml::Value) {
                     k.clone(),
                     serde_yaml::Value::String(entry.canonical.to_string()),
                 ));
-                continue;
             }
-        }
-        if let Some(canonical) = managed_legacy_target(k_str) {
-            rewrites.push((k.clone(), serde_yaml::Value::String(canonical.to_string())));
         }
     }
 
@@ -140,17 +133,6 @@ pub fn normalize_aliases(value: &mut serde_yaml::Value) {
 /// Look up whether `key` matches any known open field (canonical or alias).
 fn alias_target(key: &str) -> Option<&'static KnownOpenField> {
     lookup(key)
-}
-
-/// Look up whether `key` is a managed-tier legacy alias.
-///
-/// Returns the canonical `temper-*` form if `key` matches an entry in
-/// `LEGACY_FIELDS`, otherwise None.
-fn managed_legacy_target(key: &str) -> Option<&'static str> {
-    crate::frontmatter::fields::LEGACY_FIELDS
-        .iter()
-        .find(|(legacy, _)| *legacy == key)
-        .map(|(_, canonical)| *canonical)
 }
 
 #[cfg(test)]
@@ -261,45 +243,5 @@ mod tests {
             .as_sequence()
             .unwrap();
         assert_eq!(list[0].as_str().unwrap(), "canonical");
-    }
-
-    #[test]
-    fn normalize_aliases_rewrites_managed_tier_legacy_keys() {
-        let mut v: serde_yaml::Value = serde_yaml::from_str("title: Hello\nslug: hello\n").unwrap();
-        normalize_aliases(&mut v);
-        let m = v.as_mapping().unwrap();
-        assert!(
-            m.contains_key(serde_yaml::Value::String("temper-title".into())),
-            "expected temper-title after normalization"
-        );
-        assert!(
-            m.contains_key(serde_yaml::Value::String("temper-slug".into())),
-            "expected temper-slug after normalization"
-        );
-        assert!(
-            !m.contains_key(serde_yaml::Value::String("title".into())),
-            "bare title should be removed"
-        );
-        assert!(
-            !m.contains_key(serde_yaml::Value::String("slug".into())),
-            "bare slug should be removed"
-        );
-    }
-
-    #[test]
-    fn normalize_aliases_managed_tier_canonical_wins_on_collision() {
-        // If both bare and temper-prefixed forms are present, temper- wins
-        // and bare is dropped. Mirrors the open-field collision behavior.
-        let mut v: serde_yaml::Value =
-            serde_yaml::from_str("title: legacy-value\ntemper-title: canonical-value\n").unwrap();
-        normalize_aliases(&mut v);
-        let m = v.as_mapping().unwrap();
-        let title_val = m
-            .get(serde_yaml::Value::String("temper-title".into()))
-            .unwrap()
-            .as_str()
-            .unwrap();
-        assert_eq!(title_val, "canonical-value");
-        assert!(!m.contains_key(serde_yaml::Value::String("title".into())));
     }
 }

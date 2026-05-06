@@ -1,10 +1,7 @@
 //! Consolidated frontmatter field constants. Single source of truth for
 //! every place in the codebase that needs to know "is X an identity field?"
 //! / "is X a tier-1 system field?" / "is X a system-managed managed-tier
-//! field?" / "is X a known temper-* field?" / "is X a legacy-form alias?".
-//!
-//! Owned here in Session 3 (Session 1 re-exported these from hash.rs and
-//! schema.rs to keep the additive phase strictly non-breaking).
+//! field?" / "is X a known temper-* field?".
 
 /// Identity fields are never included in any hash tier — they identify the
 /// record but aren't content. Always rendered first in the canonical
@@ -53,28 +50,6 @@ pub static KNOWN_TEMPER_FIELDS: &[&str] = &[
     "temper-provenance",
     "temper-llm-model",
     "temper-llm-run",
-];
-
-/// Legacy field names that have been renamed to temper-* equivalents.
-/// Maps old name → suggested new name.
-pub static LEGACY_FIELDS: &[(&str, &str)] = &[
-    ("id", "temper-id"),
-    ("type", "temper-type"),
-    ("doc_type", "temper-type"),
-    ("context", "temper-context"),
-    ("project", "temper-context"),
-    ("created", "temper-created"),
-    ("updated", "temper-updated"),
-    ("source", "temper-source"),
-    ("stage", "temper-stage"),
-    ("status", "temper-status"),
-    ("mode", "temper-mode"),
-    ("effort", "temper-effort"),
-    ("goal", "temper-goal"),
-    ("branch", "temper-branch"),
-    ("pr", "temper-pr"),
-    ("title", "temper-title"),
-    ("slug", "temper-slug"),
 ];
 
 /// Fields that are system-managed and cannot be updated via CLI.
@@ -135,20 +110,8 @@ mod tests {
     }
 
     #[test]
-    fn legacy_fields_map_id_and_type() {
-        assert!(LEGACY_FIELDS.contains(&("id", "temper-id")));
-        assert!(LEGACY_FIELDS.contains(&("type", "temper-type")));
-    }
-
-    #[test]
     fn system_managed_fields_includes_temper_owner() {
         assert!(SYSTEM_MANAGED_FIELDS.contains(&"temper-owner"));
-    }
-
-    #[test]
-    fn legacy_fields_map_title_and_slug_to_temper_prefix() {
-        assert!(LEGACY_FIELDS.contains(&("title", "temper-title")));
-        assert!(LEGACY_FIELDS.contains(&("slug", "temper-slug")));
     }
 
     #[test]
