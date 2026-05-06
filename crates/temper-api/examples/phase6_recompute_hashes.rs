@@ -29,17 +29,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&database_url)
         .await?;
 
-    let rows = sqlx::query!(
+    // Runtime query (not the `sqlx::query!` macro): `cargo sqlx prepare`'s
+    // `cargo check` pass doesn't include examples, so the macro has no cache
+    // entry under SQLX_OFFLINE=true and CI fails. This helper is throwaway
+    // and runs against a real DB anyway — no compile-time cross-check needed.
+    let rows: Vec<(Uuid, Value, Value, String)> = sqlx::query_as(
         r#"
-        SELECT m.resource_id AS "resource_id!: Uuid",
-               m.managed_meta AS "managed_meta!: Value",
-               m.open_meta    AS "open_meta!: Value",
-               dt.name        AS "doc_type!: String"
+        SELECT m.resource_id, m.managed_meta, m.open_meta, dt.name
         FROM kb_resource_manifests m
         JOIN kb_resources r       ON r.id = m.resource_id
         JOIN kb_doc_types dt      ON dt.id = r.kb_doc_type_id
         ORDER BY m.resource_id
-        "#
+        "#,
     )
     .fetch_all(&pool)
     .await?;
@@ -62,12 +63,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("BEGIN;");
     println!();
 
-    for row in &rows {
-        let managed_hash = compute_managed_hash(&row.doc_type, &row.managed_meta);
-        let open_hash = compute_open_hash(&row.open_meta);
+    for (resource_id, managed_meta, open_meta, doc_type) in &rows {
+        let managed_hash = compute_managed_hash(doc_type, managed_meta);
+        let open_hash = compute_open_hash(open_meta);
         println!(
-            "UPDATE kb_resource_manifests SET managed_hash = '{}', open_hash = '{}' WHERE resource_id = '{}';",
-            managed_hash, open_hash, row.resource_id,
+            "UPDATE kb_resource_manifests SET managed_hash = '{managed_hash}', open_hash = '{open_hash}' WHERE resource_id = '{resource_id}';",
         );
     }
 
