@@ -292,3 +292,117 @@ async fn phase5_local_canonical_hash_matches_server_managed_hash(pool: sqlx::PgP
         meta.managed_hash, local_canonical_hash, meta.managed_meta
     );
 }
+
+/// Tier-2 hash match (Phase 8 acceptance): when a local file's
+/// frontmatter+body produce hashes that byte-match the server's stored
+/// hashes, `attempt_remote` returns `FreshnessTier::HashMatch` without
+/// rewriting the file — even when `temper-updated` has drifted between
+/// local and server.
+///
+/// Hashes intentionally exclude `TIER1_SYSTEM_FIELDS` (including
+/// `temper-updated`), so timestamp drift does NOT change managed_hash /
+/// open_hash / body_hash. This is the strict-improvement guarantee Phase
+/// 8 delivers over the prior timestamp-based tier-2 logic: server-side
+/// `updated` bumps that don't change actual content no longer force a
+/// tier-3 round-trip.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn tier2_hash_match_fires_when_local_temper_updated_drifts_from_server(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("show-tier2")
+        .await
+        .expect("context create");
+
+    let body = "# Tier 2\n\nbody\n".to_string();
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: body.clone(),
+        content_hash: format!("{:0>64}", "t"),
+        embedding: vec![0.0_f32; 768],
+    };
+    let payload = IngestPayload {
+        title: "Tier 2".to_string(),
+        origin_uri: "test://show-tier2".to_string(),
+        context_name: "show-tier2".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&body)),
+        slug: "tier-2".to_string(),
+        content: body.clone(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({"temper-stage": "draft"})),
+        open_meta: Some(serde_json::json!({"tags": ["tier2"]})),
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+    };
+    let seeded = app.client.ingest().create(&payload).await.expect("ingest");
+
+    // First fetch: tier-3 populates a canonical local file. Hashes computed
+    // from this file's frontmatter + body match server (Phase 5 invariant).
+    let local_path = app.vault_dir.path().join("tier-2.md");
+    let first = show_cache::fetch(ShowCacheParams {
+        client: &app.client,
+        resource_id: seeded.id,
+        local_path: &local_path,
+        debounce: Duration::from_secs(30),
+    })
+    .await
+    .expect("first fetch (tier-3 populate)");
+    assert_eq!(
+        first.source,
+        FreshnessTier::FullFetch,
+        "first fetch should populate via tier-3"
+    );
+
+    // Drift `temper-updated` on the local file. Hashes are unaffected
+    // because `temper-updated` is in TIER1_SYSTEM_FIELDS and is stripped
+    // from the canonical hash input.
+    let drifted_updated = "2020-01-01T00:00:00+00:00";
+    let canonical_text = std::fs::read_to_string(&local_path).expect("read canonical");
+    let mut fm = temper_core::frontmatter::Frontmatter::try_from(canonical_text.as_str())
+        .expect("parse canonical");
+    fm.set_managed_field(
+        "temper-updated",
+        serde_json::Value::String(drifted_updated.to_string()),
+    );
+    let drifted_text = fm.serialize().expect("serialize drifted");
+    std::fs::write(&local_path, &drifted_text).expect("write drifted");
+
+    // Set mtime past debounce so tier-1 doesn't short-circuit.
+    let stale = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(120));
+    set_file_mtime(&local_path, stale).expect("set stale mtime");
+
+    let result = show_cache::fetch(ShowCacheParams {
+        client: &app.client,
+        resource_id: seeded.id,
+        local_path: &local_path,
+        debounce: Duration::from_secs(30),
+    })
+    .await
+    .expect("second fetch");
+
+    assert_eq!(
+        result.source,
+        FreshnessTier::HashMatch,
+        "tier-2 must fire when managed/open/body hashes byte-match server, \
+         even when temper-updated has drifted"
+    );
+
+    // The drifted temper-updated must be preserved on disk: tier-2 returns
+    // local content untouched (mtime is bumped, but file contents are not
+    // overwritten). If we accidentally fell through to tier-3, the local
+    // file would be rewritten with the server's `updated` value.
+    let on_disk = std::fs::read_to_string(&local_path).expect("read after tier-2");
+    assert!(
+        on_disk.contains(drifted_updated),
+        "tier-2 must NOT overwrite the local file; expected to find drifted \
+         temper-updated `{drifted_updated}` on disk, got:\n{on_disk}"
+    );
+}

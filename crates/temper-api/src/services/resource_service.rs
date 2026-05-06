@@ -193,10 +193,11 @@ END AS owner_handle"#;
 
 /// The SELECT columns for ResourceRow from the vault_resources_browse view.
 ///
-/// `body_hash` is fetched via a correlated scalar subquery because
-/// `vault_resources_browse` joins `kb_resource_manifests` internally but does
-/// not expose `body_hash` as a view column. The subquery is a LEFT JOIN
-/// equivalent — `NULL` when no manifest row exists.
+/// `body_hash`, `managed_hash`, and `open_hash` are fetched via correlated
+/// scalar subqueries because `vault_resources_browse` joins
+/// `kb_resource_manifests` internally but does not expose these columns.
+/// Each subquery is a LEFT JOIN equivalent — `NULL` when no manifest row
+/// exists.
 fn select_columns() -> String {
     format!(
         r#"vb.id, vb.kb_context_id, vb.kb_doc_type_id, vb.origin_uri, vb.title,
@@ -204,7 +205,9 @@ fn select_columns() -> String {
        vb.created, vb.updated, vb.context_name, vb.doc_type_name,
        {OWNER_HANDLE_EXPR},
        vb.stage, vb.seq, vb.mode, vb.effort,
-       (SELECT m.body_hash FROM kb_resource_manifests m WHERE m.resource_id = vb.id) AS body_hash"#
+       (SELECT m.body_hash    FROM kb_resource_manifests m WHERE m.resource_id = vb.id) AS body_hash,
+       (SELECT m.managed_hash FROM kb_resource_manifests m WHERE m.resource_id = vb.id) AS managed_hash,
+       (SELECT m.open_hash    FROM kb_resource_manifests m WHERE m.resource_id = vb.id) AS open_hash"#
     )
 }
 
