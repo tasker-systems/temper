@@ -120,14 +120,19 @@ const FIXTURE_HASH_GOLDENS: &[(&str, &str, &str)] = &[
         "sha256:ea2c9736c5b33ec28cbc2baf960540b3b49a7790a599eae78b78e1e205254f22",
         "sha256:2cc0d1501ab8d23caaf440e3e96476b2eb88eedfde19517740f237b4ac4aea0c",
     ),
+    // session/research managed hashes refreshed in Phase 8: `date` no longer
+    // contributes to managed_hash because `apply_managed_defaults` only
+    // handles managed-tier defaults (`temper-stage`, `temper-status`); `date`
+    // is routed to open_meta via `apply_open_defaults`, matching Phase 6's
+    // Migration A. Open hashes unchanged.
     (
         "session_full",
-        "sha256:f35bc91eb1d3661d56db4d4d73e84c58e574b2b02ca1626b83b8780dc0cc3e22",
+        "sha256:48d99d5321409e646c9e5bc6fcdf922cdab0233efbfde08bb34901db272de235",
         "sha256:87347a2d8ad9bbb615e57527313125c80fc7c0750710f48bf3f8ad69c35da811",
     ),
     (
         "research_full",
-        "sha256:adcc257d5b5b5cd1072228f8e76854b874a0258936bd25be6e5ef05a6220be08",
+        "sha256:b49ba4a480e799f06fb3cc7e50f1c15b5b34f679b05128466c9e262f4cfdc367",
         "sha256:e48f15a218a6adda5aed8207b201d1d178f20d2b0bffd7a2b619414e08569897",
     ),
     (

@@ -291,7 +291,7 @@ async fn local_mode_session_create_wire_shape_regression(pool: sqlx::PgPool) {
 
     // `title` is the schema-correct field added by Task 9's build_managed_meta_for_create.
     // It flows from local frontmatter → fm.managed_json() → IngestPayload → strip_system_fields
-    // → apply_doc_type_defaults → stored in kb_resource_manifests. If this fails, Task 9
+    // → apply_managed_defaults → stored in kb_resource_manifests. If this fails, Task 9
     // regressed.
     assert_eq!(
         obj.get("temper-title").and_then(|v| v.as_str()),
@@ -299,10 +299,29 @@ async fn local_mode_session_create_wire_shape_regression(pool: sqlx::PgPool) {
         "managed_meta must carry title: Snapshot Test (Task 9 schema-correct field); got: {stored_managed_meta}"
     );
 
-    // `date` is the doc-type default applied by apply_doc_type_defaults for sessions.
+    // `date` is the doc-type default for sessions, but Phase 6 / Migration A
+    // established that it lives in open_meta, not managed_meta. The
+    // `apply_open_defaults` helper writes it on the open side; managed_meta
+    // therefore must NOT contain `date` for new ingests.
     assert!(
-        obj.contains_key("date"),
-        "managed_meta must contain 'date' (session doc-type default); got: {stored_managed_meta}"
+        !obj.contains_key("date"),
+        "managed_meta must NOT contain 'date' (Phase 6 canonical: date lives in open_meta); got: {stored_managed_meta}"
+    );
+
+    // Cross-check: `date` IS present in the stored open_meta.
+    let stored_open_meta: serde_json::Value = sqlx::query_scalar!(
+        "SELECT open_meta FROM kb_resource_manifests WHERE resource_id = $1",
+        id_uuid
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("kb_resource_manifests open_meta lookup for session");
+    let open_obj = stored_open_meta
+        .as_object()
+        .expect("stored open_meta must be a JSON object");
+    assert!(
+        open_obj.contains_key("date"),
+        "open_meta must contain 'date' (session doc-type default lives here per Phase 6); got: {stored_open_meta}"
     );
 
     // By design, tier-1 system fields (temper-type, temper-context) are intentionally

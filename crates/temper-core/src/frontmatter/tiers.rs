@@ -304,8 +304,10 @@ tags: [x]
         let managed_hash = crate::hash::compute_managed_hash("session", &managed);
         let open_hash = crate::hash::compute_open_hash(&open);
 
+        // Refreshed in Phase 8: `date` no longer contributes to managed_hash
+        // for session/research (Phase 6 / Migration A: date lives in open_meta).
         assert_eq!(
-            managed_hash, "sha256:2c354b983f8dbc9f2c96153f2f674cdbefb069c0166afdb8dae6366cfdc89ca7",
+            managed_hash, "sha256:f44eaac9f600cbc3f4a4738291741e2dc6407ef066a492bb660e7214dbb5b47e",
             "session fixture managed hash drift"
         );
         assert_eq!(

@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
-use temper_core::defaults::apply_doc_type_defaults;
+use temper_core::defaults::{apply_managed_defaults, apply_open_defaults};
 #[cfg(feature = "ingest-pipeline")]
 use temper_core::hash::compute_body_hash;
 use temper_core::hash::{compute_managed_hash, compute_open_hash};
@@ -400,7 +400,7 @@ pub async fn ingest(
         .take()
         .map(strip_system_managed_fields)
         .unwrap_or_else(|| serde_json::json!({}));
-    apply_doc_type_defaults(&payload.doc_type_name, &mut managed);
+    apply_managed_defaults(&payload.doc_type_name, &mut managed);
     // Inject canonical identity keys before validation + hashing so the
     // server-stored managed_meta JSONB matches the local canonical form.
     // Idempotent — if the caller already injected (CLI / MCP send-side
@@ -460,10 +460,14 @@ pub async fn ingest(
         .managed_meta
         .clone()
         .unwrap_or_else(|| empty_json.clone());
-    let open_meta = payload
+    let mut open_meta = payload
         .open_meta
         .clone()
         .unwrap_or_else(|| empty_json.clone());
+    // Apply open-tier doc-type defaults (e.g. `date` for session/research).
+    // Phase 6's Migration A established `date` lives in open_meta; this
+    // matches that canonical shape on new ingests.
+    apply_open_defaults(&payload.doc_type_name, &mut open_meta);
 
     // 5. Create resource + manifest + event + chunks atomically
     let resource = create_resource_with_manifest(
@@ -648,7 +652,7 @@ pub async fn update(
             }
         }
     }
-    apply_doc_type_defaults(&payload.doc_type_name, &mut managed);
+    apply_managed_defaults(&payload.doc_type_name, &mut managed);
     payload.managed_meta = Some(managed);
 
     // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
@@ -686,10 +690,12 @@ pub async fn update(
         .managed_meta
         .clone()
         .unwrap_or_else(|| empty_json.clone());
-    let open_meta = payload
+    let mut open_meta = payload
         .open_meta
         .clone()
         .unwrap_or_else(|| empty_json.clone());
+    // Apply open-tier doc-type defaults (e.g. `date` for session/research).
+    apply_open_defaults(&payload.doc_type_name, &mut open_meta);
 
     let mut tx = pool.begin().await?;
 

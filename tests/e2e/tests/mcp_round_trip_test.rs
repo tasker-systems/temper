@@ -136,7 +136,7 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
     let empty_chunks = temper_core::types::ingest::pack_chunks(&[]).expect("pack empty chunks");
 
     // Build a task payload with an INVALID temper-stage enum value.
-    // (Previously this tested missing temper-stage, but apply_doc_type_defaults
+    // (Previously this tested missing temper-stage, but apply_managed_defaults
     // now auto-fills it to "backlog". Testing an invalid enum value still
     // exercises the validation pipeline and error detail surfacing.)
     let payload = temper_core::types::ingest::IngestPayload {
