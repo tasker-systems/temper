@@ -154,15 +154,15 @@ async fn phase6_migration_a_idempotent_on_already_canonical_rows(pool: PgPool) {
         sqlx::query_scalar("SELECT id FROM kb_doc_types WHERE name = 'session'")
             .fetch_one(&pool)
             .await
-            .unwrap();
+            .expect("session doctype must be seeded");
     let profile_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles LIMIT 1")
         .fetch_one(&pool)
         .await
-        .unwrap();
+        .expect("at least one profile must be seeded");
     let context_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_contexts LIMIT 1")
         .fetch_one(&pool)
         .await
-        .unwrap();
+        .expect("at least one context must be seeded");
 
     let resource_id = Uuid::now_v7();
     let origin_uri = format!("phase6-test://{resource_id}");
@@ -180,7 +180,7 @@ async fn phase6_migration_a_idempotent_on_already_canonical_rows(pool: PgPool) {
     .bind(profile_id)
     .execute(&pool)
     .await
-    .unwrap();
+    .expect("insert kb_resources");
 
     let canonical_managed: Value = json!({
         "temper-title": "Canonical",
@@ -199,7 +199,7 @@ async fn phase6_migration_a_idempotent_on_already_canonical_rows(pool: PgPool) {
     .bind(&canonical_open)
     .execute(&pool)
     .await
-    .unwrap();
+    .expect("insert kb_resource_manifests");
 
     apply_migration_a(&pool).await;
 
@@ -210,7 +210,7 @@ async fn phase6_migration_a_idempotent_on_already_canonical_rows(pool: PgPool) {
     .bind(resource_id)
     .fetch_one(&pool)
     .await
-    .unwrap();
+    .expect("row should still exist");
 
     let (stored_managed, stored_open, stored_mhash, stored_ohash) = row;
 
@@ -241,15 +241,15 @@ async fn phase6_migration_a_does_not_move_date_for_non_dated_doctypes(pool: PgPo
     let doc_type_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_doc_types WHERE name = 'task'")
         .fetch_one(&pool)
         .await
-        .unwrap();
+        .expect("task doctype must be seeded");
     let profile_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles LIMIT 1")
         .fetch_one(&pool)
         .await
-        .unwrap();
+        .expect("at least one profile must be seeded");
     let context_id: Uuid = sqlx::query_scalar("SELECT id FROM kb_contexts LIMIT 1")
         .fetch_one(&pool)
         .await
-        .unwrap();
+        .expect("at least one context must be seeded");
 
     let resource_id = Uuid::now_v7();
     let origin_uri = format!("phase6-test://{resource_id}");
@@ -267,7 +267,7 @@ async fn phase6_migration_a_does_not_move_date_for_non_dated_doctypes(pool: PgPo
     .bind(profile_id)
     .execute(&pool)
     .await
-    .unwrap();
+    .expect("insert kb_resources");
 
     let stray_managed: Value = json!({"title": "Stray Date Task", "date": "2026-04-01"});
 
@@ -281,20 +281,20 @@ async fn phase6_migration_a_does_not_move_date_for_non_dated_doctypes(pool: PgPo
     .bind(&stray_managed)
     .execute(&pool)
     .await
-    .unwrap();
+    .expect("insert kb_resource_manifests");
 
     apply_migration_a(&pool).await;
 
-    let row = sqlx::query_as::<_, (Value, Value, String)>(
-        "SELECT managed_meta, open_meta, open_hash
+    let row = sqlx::query_as::<_, (Value, Value, String, String)>(
+        "SELECT managed_meta, open_meta, managed_hash, open_hash
          FROM kb_resource_manifests WHERE resource_id = $1",
     )
     .bind(resource_id)
     .fetch_one(&pool)
     .await
-    .unwrap();
+    .expect("row should still exist");
 
-    let (managed_meta, open_meta, open_hash) = row;
+    let (managed_meta, open_meta, managed_hash, open_hash) = row;
 
     // Title rename DID happen.
     assert_eq!(
@@ -310,6 +310,10 @@ async fn phase6_migration_a_does_not_move_date_for_non_dated_doctypes(pool: PgPo
     assert!(
         open_meta.get("date").is_none(),
         "date should NOT be added to open_meta for non-dated doctypes"
+    );
+    assert_eq!(
+        managed_hash, "",
+        "managed_hash should be reset by the title-rename pass even for non-dated doctypes"
     );
     assert_eq!(
         open_hash, "sha256:legacy_o",
