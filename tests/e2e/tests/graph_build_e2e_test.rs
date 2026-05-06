@@ -288,7 +288,7 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
     write_vault_file(
         app.vault_dir.path(),
         &format!("{owner}/temper/task/source.md"),
-        format!("temper-context: temper\ntemper-type: task\ntemper-owner: '{owner}'\ntitle: source\nslug: source"),
+        format!("temper-context: temper\ntemper-type: task\ntemper-owner: '{owner}'\ntemper-title: source\ntemper-slug: source"),
         "See [[task-a]] for the background.\n",
     );
 
