@@ -78,6 +78,13 @@ cargo nextest run --workspace -E 'test(test_name)'        # exact filter
 cargo nextest run -p temper-api --features test-db test_name  # specific crate with features
 ```
 
+### Embed-gated e2e tests
+`cargo make test-e2e` only enables `--features test-db`. CI's separate "Embed & MCP Round-Trip Tests" job additionally enables `test-embed`, which gates push-body and ingest-pipeline tests that exercise the embed pipeline (10 extra tests at last count). When touching push-body, ingest-pipeline, or YAML fixture loading code, run with both features locally to match CI:
+```bash
+cargo nextest run --manifest-path tests/e2e/Cargo.toml --features test-db,test-embed
+```
+The Embed CI job is the only one with ONNX Runtime installed, so it's also the one that catches workspace-feature-unification surprises (see `temper-cloud` enabling `ingest-pipeline` on `temper-api`).
+
 ### TypeScript (temper-cloud)
 ```bash
 cd packages/temper-cloud
