@@ -9,7 +9,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::operations::{
-    Backend, CreateResource, DomainEvent, ResourceRef, ShowResource, Surface, UpdateResource,
+    Backend, CreateResource, DeleteResource, DomainEvent, ResourceRef, ShowResource, Surface,
+    UpdateResource,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -217,4 +218,70 @@ async fn update_resource_unknown_uuid_returns_not_found(pool: PgPool) {
     );
     // resource_service::update returns Forbidden when can_modify_resource()
     // is false, which is what an unknown id produces. Either is acceptable.
+}
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn delete_resource_soft_deletes_and_emits_event(pool: PgPool) {
+    let backend = make_backend(pool);
+
+    let created = backend
+        .create_resource(CreateResource {
+            slug: "delete-test".to_string(),
+            doctype: "task".to_string(),
+            context: TEMPER_CONTEXT_NAME.to_string(),
+            title: "Delete test".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .unwrap();
+
+    let cmd = DeleteResource {
+        resource: ResourceRef::Uuid {
+            id: created.value.id,
+        },
+        force: false,
+        origin: Surface::ApiHttp,
+    };
+    let out = backend.delete_resource(cmd).await.expect("delete succeeds");
+
+    match &out.events[..] {
+        [DomainEvent::DbResourceSoftDeleted { resource_id }] => {
+            assert_eq!(*resource_id, created.value.id);
+        }
+        other => panic!("expected single DbResourceSoftDeleted event, got {other:?}"),
+    }
+
+    // Confirm the row is no longer visible.
+    let show_err = backend
+        .show_resource(ShowResource {
+            resource: ResourceRef::Uuid {
+                id: created.value.id,
+            },
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .unwrap_err();
+    use temper_core::error::TemperError;
+    assert!(matches!(show_err, TemperError::NotFound(_)));
+}
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn delete_resource_unknown_uuid_returns_error(pool: PgPool) {
+    let backend = make_backend(pool);
+    let cmd = DeleteResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId(Uuid::new_v4()),
+        },
+        force: false,
+        origin: Surface::ApiHttp,
+    };
+    let err = backend.delete_resource(cmd).await.unwrap_err();
+    use temper_core::error::TemperError;
+    assert!(
+        matches!(err, TemperError::NotFound(_) | TemperError::Forbidden),
+        "got {err:?}"
+    );
 }

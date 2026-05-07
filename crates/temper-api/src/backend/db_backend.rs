@@ -121,13 +121,20 @@ impl Backend for DbBackend {
         Ok(CommandOutput::with_events(row, vec![event]))
     }
 
-    async fn delete_resource(
-        &self,
-        _cmd: DeleteResource,
-    ) -> Result<CommandOutput<()>, TemperError> {
-        Err(TemperError::Api(
-            "delete_resource not yet implemented".to_string(),
-        ))
+    async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
+        let resource_id =
+            super::translators::resolve_resource_ref(self.pool(), self.profile_id(), cmd.resource)
+                .await?;
+        resource_service::delete(
+            self.pool(),
+            self.profile_id(),
+            resource_id,
+            self.device_id(),
+        )
+        .await
+        .map_err(TemperError::from)?;
+        let event = DomainEvent::DbResourceSoftDeleted { resource_id };
+        Ok(CommandOutput::with_events((), vec![event]))
     }
 
     async fn list_resources(
