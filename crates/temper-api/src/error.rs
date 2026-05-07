@@ -148,6 +148,58 @@ impl From<ApiError> for temper_core::error::TemperError {
     }
 }
 
+impl From<temper_core::error::TemperError> for ApiError {
+    fn from(err: temper_core::error::TemperError) -> Self {
+        use temper_core::error::TemperError;
+        use temper_core::types::access_gate::{JoinRequestStatus, SystemAccessDetails};
+
+        match err {
+            // Clean cases that mirror the inbound conversion
+            TemperError::NotFound(_) => ApiError::NotFound,
+            TemperError::Forbidden => ApiError::Forbidden,
+            TemperError::Unauthorized(s) => ApiError::Unauthorized(s),
+            TemperError::BadRequest(s) => ApiError::BadRequest(s),
+            TemperError::Conflict(s) => ApiError::Conflict(s),
+            TemperError::Api(s) => ApiError::Internal(s),
+            TemperError::SystemAccessRequired(details) => {
+                // Round-trip the join_request_status string back to the enum.
+                // The inbound conversion stringified it as `format!("{s:?}").to_lowercase()`,
+                // which produces strings like "pending", "approved", "rejected", "withdrawn".
+                // Since JoinRequestStatus derives serde::Deserialize with rename_all = "snake_case",
+                // we can deserialize those strings back directly.
+                let join_request_status = details.join_request_status.as_ref().and_then(|s| {
+                    serde_json::from_str::<JoinRequestStatus>(&format!("\"{s}\"")).ok()
+                });
+
+                ApiError::SystemAccessRequired {
+                    details: Box::new(SystemAccessDetails {
+                        email: details.email,
+                        display_name: details.display_name,
+                        access_mode: details.access_mode,
+                        join_request_status,
+                        request_url: details.request_url,
+                        cli_command: details.cli_command,
+                    }),
+                }
+            }
+
+            // CLI-facing variants that shouldn't normally bubble out of a server-side DbBackend
+            TemperError::VaultNotFound => ApiError::Internal("vault not found".into()),
+            TemperError::Config(s) => ApiError::Internal(format!("config: {s}")),
+            TemperError::Vault(s) => ApiError::Internal(format!("vault: {s}")),
+            TemperError::Project(s) => ApiError::Internal(format!("project: {s}")),
+            TemperError::Embedding(s) => ApiError::Internal(format!("embedding: {s}")),
+            TemperError::Index(s) => ApiError::Internal(format!("index: {s}")),
+            TemperError::Io(e) => ApiError::Internal(format!("io: {e}")),
+            TemperError::Yaml(e) => ApiError::BadRequest(format!("yaml: {e}")),
+            TemperError::Json(e) => ApiError::BadRequest(format!("json: {e}")),
+            TemperError::Toml(e) => ApiError::BadRequest(format!("toml: {e}")),
+            TemperError::Extraction(s) => ApiError::Internal(format!("extraction: {s}")),
+            TemperError::Network(s) => ApiError::Internal(format!("network: {s}")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +275,94 @@ mod tests {
                 assert_eq!(details.access_mode, "join_request");
                 assert_eq!(details.request_url.as_deref(), Some("https://x"));
                 assert_eq!(details.cli_command.as_deref(), Some("temper join"));
+            }
+            other => panic!("expected SystemAccessRequired, got {other:?}"),
+        }
+    }
+
+    // Outbound conversion tests (TemperError -> ApiError)
+
+    #[test]
+    fn temper_error_not_found_maps_to_api_not_found() {
+        let t: ApiError = TemperError::NotFound("item missing".into()).into();
+        assert!(matches!(t, ApiError::NotFound));
+    }
+
+    #[test]
+    fn temper_error_forbidden_maps_to_api_forbidden() {
+        let t: ApiError = TemperError::Forbidden.into();
+        assert!(matches!(t, ApiError::Forbidden));
+    }
+
+    #[test]
+    fn temper_error_bad_request_carries_message() {
+        let a: ApiError = TemperError::BadRequest("missing field".into()).into();
+        match a {
+            ApiError::BadRequest(s) => assert_eq!(s, "missing field"),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn temper_error_conflict_carries_message() {
+        let a: ApiError = TemperError::Conflict("duplicate key".into()).into();
+        match a {
+            ApiError::Conflict(s) => assert_eq!(s, "duplicate key"),
+            other => panic!("expected Conflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn temper_error_unauthorized_carries_message() {
+        let a: ApiError = TemperError::Unauthorized("invalid token".into()).into();
+        match a {
+            ApiError::Unauthorized(s) => assert_eq!(s, "invalid token"),
+            other => panic!("expected Unauthorized, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn temper_error_api_maps_to_internal() {
+        let a: ApiError = TemperError::Api("internal issue".into()).into();
+        match a {
+            ApiError::Internal(s) => assert_eq!(s, "internal issue"),
+            other => panic!("expected Internal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn temper_error_system_access_required_round_trip() {
+        use temper_core::error::CliAccessDetails;
+        use temper_core::types::access_gate::JoinRequestStatus;
+
+        // Create a TemperError with a join_request_status that will round-trip cleanly.
+        let details = CliAccessDetails {
+            email: Some("test@example.com".into()),
+            display_name: Some("Test User".into()),
+            access_mode: "join_request".into(),
+            join_request_status: Some("pending".into()), // stringified enum value
+            request_url: Some("https://example.com/join".into()),
+            cli_command: Some("temper join-request".into()),
+        };
+
+        let t_err = TemperError::SystemAccessRequired(Box::new(details));
+        let a: ApiError = t_err.into();
+
+        match a {
+            ApiError::SystemAccessRequired { details } => {
+                assert_eq!(details.email.as_deref(), Some("test@example.com"));
+                assert_eq!(details.display_name.as_deref(), Some("Test User"));
+                assert_eq!(details.access_mode, "join_request");
+                // join_request_status should have round-tripped to the enum
+                assert_eq!(
+                    details.join_request_status,
+                    Some(JoinRequestStatus::Pending)
+                );
+                assert_eq!(
+                    details.request_url.as_deref(),
+                    Some("https://example.com/join")
+                );
+                assert_eq!(details.cli_command.as_deref(), Some("temper join-request"));
             }
             other => panic!("expected SystemAccessRequired, got {other:?}"),
         }
