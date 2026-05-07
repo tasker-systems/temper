@@ -6,12 +6,13 @@ use sqlx::PgPool;
 use temper_core::error::TemperError;
 use temper_core::operations::{
     Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent, ListResources,
-    ResourceSummary, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
+    ResourceRef, ResourceSummary, SearchHit, SearchResources, ShowResource, Surface,
+    UpdateResource,
 };
 use temper_core::types::ids::ProfileId;
 use temper_core::types::resource::ResourceRow;
 
-use crate::services::ingest_service;
+use crate::services::{ingest_service, resource_service};
 
 use super::translators::create_resource_to_ingest_payload;
 
@@ -67,11 +68,31 @@ impl Backend for DbBackend {
 
     async fn show_resource(
         &self,
-        _cmd: ShowResource,
+        cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        Err(TemperError::Api(
-            "show_resource not yet implemented".to_string(),
-        ))
+        let row = match cmd.resource {
+            ResourceRef::Uuid { id } => {
+                resource_service::get_visible(self.pool(), *self.profile_id(), *id)
+                    .await
+                    .map_err(TemperError::from)?
+            }
+            ResourceRef::Scoped {
+                slug,
+                doctype,
+                context,
+            } => {
+                let params = resource_service::ResolveByUriParams {
+                    owner: "@me".to_string(),
+                    context,
+                    doc_type: doctype,
+                    ident: slug,
+                };
+                resource_service::resolve_by_uri(self.pool(), *self.profile_id(), &params)
+                    .await
+                    .map_err(TemperError::from)?
+            }
+        };
+        Ok(CommandOutput::new(row))
     }
 
     async fn update_resource(

@@ -8,8 +8,10 @@
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::operations::{Backend, CreateResource, DomainEvent, Surface};
-use temper_core::types::ids::ProfileId;
+use temper_core::operations::{
+    Backend, CreateResource, DomainEvent, ResourceRef, ShowResource, Surface,
+};
+use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
 
 use crate::backend::DbBackend;
@@ -81,4 +83,74 @@ async fn create_resource_unknown_doctype_returns_temper_error(pool: PgPool) {
         !matches!(err, TemperError::Api(_)),
         "expected typed variant for unknown doctype, got generic Api: {err:?}"
     );
+}
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn show_resource_by_uuid_returns_row(pool: PgPool) {
+    let backend = make_backend(pool);
+
+    // Seed via create_resource so we have a real row to look up.
+    let created = backend
+        .create_resource(CreateResource {
+            slug: "show-by-uuid".to_string(),
+            doctype: "task".to_string(),
+            context: TEMPER_CONTEXT_NAME.to_string(),
+            title: "Show by uuid".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .unwrap();
+
+    let cmd = ShowResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId(*created.value.id),
+        },
+        origin: Surface::ApiHttp,
+    };
+    let out = backend.show_resource(cmd).await.expect("show succeeds");
+    assert_eq!(out.value.id, created.value.id);
+    assert!(out.events.is_empty(), "read methods emit no events");
+}
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn show_resource_by_scoped_slug_returns_row(pool: PgPool) {
+    let backend = make_backend(pool);
+
+    backend
+        .create_resource(CreateResource {
+            slug: "show-by-slug".to_string(),
+            doctype: "task".to_string(),
+            context: TEMPER_CONTEXT_NAME.to_string(),
+            title: "Show by slug".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .unwrap();
+
+    let cmd = ShowResource {
+        resource: ResourceRef::scoped("show-by-slug", "task", TEMPER_CONTEXT_NAME),
+        origin: Surface::ApiHttp,
+    };
+    let out = backend.show_resource(cmd).await.expect("show succeeds");
+    assert_eq!(out.value.slug.as_deref(), Some("show-by-slug"));
+}
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn show_resource_missing_uuid_returns_not_found(pool: PgPool) {
+    let backend = make_backend(pool);
+    let cmd = ShowResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId(Uuid::new_v4()),
+        },
+        origin: Surface::ApiHttp,
+    };
+    let err = backend.show_resource(cmd).await.unwrap_err();
+    use temper_core::error::TemperError;
+    assert!(matches!(err, TemperError::NotFound(_)), "got {err:?}");
 }
