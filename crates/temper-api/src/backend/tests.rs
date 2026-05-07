@@ -366,3 +366,16 @@ async fn search_resources_returns_hits_or_empty(pool: PgPool) {
     assert!(out.events.is_empty(), "search emits no events");
     let _ = out.value.len();
 }
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn db_backend_dispatches_via_dyn_backend(pool: PgPool) {
+    let concrete = make_backend(pool);
+    let boxed: Box<dyn Backend> = Box::new(concrete);
+
+    let cmd = ListResources {
+        filter: ListFilter::default(),
+        origin: Surface::ApiHttp,
+    };
+    let out = boxed.list_resources(cmd).await.expect("dyn dispatch ok");
+    let _ = out.value;
+}
