@@ -155,10 +155,16 @@ impl Backend for DbBackend {
 
     async fn search_resources(
         &self,
-        _cmd: SearchResources,
+        cmd: SearchResources,
     ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
-        Err(TemperError::Api(
-            "search_resources not yet implemented".to_string(),
-        ))
+        let params = super::translators::search_query_to_params(cmd.query);
+        let rows = crate::services::search_service::search(self.pool(), *self.profile_id(), params)
+            .await
+            .map_err(TemperError::from)?;
+        let hits: Vec<SearchHit> = rows
+            .iter()
+            .map(super::translators::unified_hit_to_search_hit)
+            .collect();
+        Ok(CommandOutput::new(hits))
     }
 }

@@ -9,8 +9,10 @@
 use sqlx::PgPool;
 use temper_core::error::TemperError;
 use temper_core::operations::{
-    CreateResource, ListFilter, ResourceRef, ResourceSummary, UpdateResource,
+    CreateResource, ListFilter, ResourceRef, ResourceSummary, SearchHit, SearchQuery,
+    UpdateResource,
 };
+use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::resource::{ResourceListParams, ResourceRow, ResourceUpdateRequest};
@@ -99,6 +101,36 @@ pub(crate) fn resource_row_to_summary(row: &ResourceRow) -> ResourceSummary {
         doctype: row.doc_type_name.clone(),
         context: row.context_name.clone(),
         title: row.title.clone(),
+    }
+}
+
+/// Translate `SearchQuery` → `SearchParams` for `search_service::search`.
+pub(crate) fn search_query_to_params(q: SearchQuery) -> SearchParams {
+    SearchParams {
+        query: Some(q.query),
+        context_name: q.context,
+        doc_type: q.doctype,
+        limit: q.limit.map(|n| n as i64),
+        ..Default::default()
+    }
+}
+
+/// Project a search-service row into the trait's `SearchHit`.
+///
+/// `UnifiedSearchResultRow` is defined in `temper-core/src/types/api.rs`.
+/// Field set: `resource_id`, `title`, `slug: String` (not Option),
+/// `kb_uri`, `origin_uri`, `context: Option<String>`, `doc_type: String`,
+/// `fts_score`, `vector_score`, `combined_score: f32`, `origin: String`.
+/// The summary's `context` falls back to empty when absent.
+pub(crate) fn unified_hit_to_search_hit(row: &UnifiedSearchResultRow) -> SearchHit {
+    SearchHit {
+        summary: ResourceSummary {
+            slug: row.slug.clone(),
+            doctype: row.doc_type.clone(),
+            context: row.context.clone().unwrap_or_default(),
+            title: row.title.clone(),
+        },
+        score: row.combined_score,
     }
 }
 
