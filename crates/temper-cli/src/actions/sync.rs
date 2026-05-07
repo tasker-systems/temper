@@ -2359,7 +2359,7 @@ mod tests {
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("12345678-1234-1234-1234-123456789abc.md"),
-            "---\ntemper-type: task\ntemper-context: temper\ntitle: t\nslug: t\n---\n\nnew content\n",
+            "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: t\n---\n\nnew content\n",
         )
         .unwrap();
 
@@ -2393,7 +2393,8 @@ mod tests {
         let mut manifest = sample_manifest();
 
         // File with frontmatter so we can compute all three hashes
-        let content = "---\ntemper-type: task\ntitle: Test\ndate: 2026-01-01\n---\ntest content";
+        let content =
+            "---\ntemper-type: task\ntemper-title: Test\ndate: 2026-01-01\n---\ntest content";
         let body = strip_frontmatter(content);
         let hash = temper_core::hash::compute_body_hash(body);
 
@@ -2432,7 +2433,8 @@ mod tests {
         let vault = dir.path();
         let mut manifest = sample_manifest();
 
-        let content = "---\ntemper-type: task\ntitle: Test\ndate: 2026-01-01\n---\ntest content";
+        let content =
+            "---\ntemper-type: task\ntemper-title: Test\ndate: 2026-01-01\n---\ntest content";
         let body = strip_frontmatter(content);
         let hash = temper_core::hash::compute_body_hash(body);
 
@@ -2517,7 +2519,7 @@ mod tests {
 
     #[test]
     fn strip_frontmatter_removes_yaml() {
-        let content = "---\ntitle: test\n---\n\n# Hello";
+        let content = "---\ntemper-title: test\n---\n\n# Hello";
         assert_eq!(strip_frontmatter(content), "\n# Hello");
     }
 
@@ -2574,8 +2576,8 @@ mod tests {
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
         // Fixtures carry temper-type so Frontmatter::try_from succeeds.
-        let file_v1 = "---\ntemper-type: task\ntitle: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
-        let file_v2 = "---\ntemper-type: task\ntitle: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
+        let file_v1 = "---\ntemper-type: task\ntemper-title: Old Title\ncreated: 2026-01-01\n---\n\n# My Document\n\nSome content here.\n";
+        let file_v2 = "---\ntemper-type: task\ntemper-title: New Title\ncreated: 2026-04-03\n---\n\n# My Document\n\nSome content here.\n";
 
         // Compute hashes for v1 via the authoritative frontmatter module.
         let body_hash = temper_core::hash::compute_body_hash(strip_frontmatter(file_v1));
@@ -2631,8 +2633,8 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let original = "---\ntemper-type: task\ntemper-context: temper\ntitle: Test\nslug: test\n---\n\n# Original body\n";
-        let modified = "---\ntemper-type: task\ntemper-context: temper\ntitle: Test\nslug: test\n---\n\n# Modified body\n";
+        let original = "---\ntemper-type: task\ntemper-context: temper\ntemper-title: Test\ntemper-slug: test\n---\n\n# Original body\n";
+        let modified = "---\ntemper-type: task\ntemper-context: temper\ntemper-title: Test\ntemper-slug: test\n---\n\n# Modified body\n";
 
         let original_body_hash = temper_core::hash::compute_body_hash(strip_frontmatter(original));
 
@@ -2727,7 +2729,7 @@ mod tests {
         let file_path = file_dir.join("12345678-1234-1234-1234-123456789abc.md");
         fs::write(
             &file_path,
-            "---\ntemper-type: task\ntitle: Test\n---\nbody content",
+            "---\ntemper-type: task\ntemper-title: Test\n---\nbody content",
         )
         .unwrap();
 
@@ -2766,7 +2768,7 @@ mod tests {
         let vault = dir.path();
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
 
-        let content = "---\ntemper-type: task\ntemper-context: temper\ntitle: t\nslug: t\n---\n\nbody content\n";
+        let content = "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: t\n---\n\nbody content\n";
         let file_dir = vault.join("@me/temper/task");
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
@@ -2876,7 +2878,7 @@ mod tests {
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("overridden.md"),
-            "---\ntemper-type: session\ntemper-context: custom\ntitle: overridden\nslug: overridden\n---\n\n# Overridden\n",
+            "---\ntemper-type: session\ntemper-context: custom\ntemper-title: overridden\ntemper-slug: overridden\n---\n\n# Overridden\n",
         )
         .unwrap();
 
@@ -2911,9 +2913,9 @@ mod tests {
 
     #[test]
     fn extract_frontmatter_block_returns_block() {
-        let content = "---\ntitle: Test\ncontext: temper\n---\n\n# Body\n";
+        let content = "---\ntemper-title: Test\ncontext: temper\n---\n\n# Body\n";
         let block = extract_frontmatter_block(content);
-        assert_eq!(block, "---\ntitle: Test\ncontext: temper\n---\n");
+        assert_eq!(block, "---\ntemper-title: Test\ncontext: temper\n---\n");
     }
 
     #[test]
@@ -3020,7 +3022,7 @@ mod tests {
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(
             file_dir.join("my-task.md"),
-            "---\ntemper-type: task\ntitle: My Task\ntemper-id: 019d0000-0000-0000-0000-000000000001\ntemper-context: temper\ndate: 2026-01-01\n---\n\n# My Task\n\nBody content here.\n",
+            "---\ntemper-type: task\ntemper-title: My Task\ntemper-id: 019d0000-0000-0000-0000-000000000001\ntemper-context: temper\ndate: 2026-01-01\n---\n\n# My Task\n\nBody content here.\n",
         )
         .unwrap();
 
@@ -3070,7 +3072,7 @@ mod tests {
         std::fs::create_dir_all(&file_dir).unwrap();
         std::fs::write(
             file_dir.join("drifted.md"),
-            "---\ntemper-type: task\ntemper-owner: \"+team\"\ntitle: d\nslug: d\n---\n\nbody\n",
+            "---\ntemper-type: task\ntemper-owner: \"+team\"\ntemper-title: d\ntemper-slug: d\n---\n\nbody\n",
         )
         .unwrap();
 
@@ -3109,7 +3111,7 @@ mod tests {
         std::fs::create_dir_all(&file_dir).unwrap();
         std::fs::write(
             file_dir.join("new.md"),
-            "---\ntemper-type: task\ntemper-owner: \"+different\"\ntitle: n\nslug: n\n---\n\nbody\n",
+            "---\ntemper-type: task\ntemper-owner: \"+different\"\ntemper-title: n\ntemper-slug: n\n---\n\nbody\n",
         )
         .unwrap();
 
@@ -3149,7 +3151,7 @@ mod tests {
         std::fs::create_dir_all(&file_dir).unwrap();
         std::fs::write(
             file_dir.join("clean.md"),
-            "---\ntemper-type: task\ntemper-owner: \"@me\"\ntitle: c\nslug: c\n---\n\nbody\n",
+            "---\ntemper-type: task\ntemper-owner: \"@me\"\ntemper-title: c\ntemper-slug: c\n---\n\nbody\n",
         )
         .unwrap();
 
@@ -3224,8 +3226,8 @@ mod tests {
              temper-type: task\n\
              temper-context: temper\n\
              temper-created: \"2026-04-12T00:00:00Z\"\n\
-             title: Test\n\
-             slug: test\n\
+             temper-title: Test\n\
+             temper-slug: test\n\
              ---\n\
              body\n",
         );
@@ -3268,8 +3270,8 @@ mod tests {
              temper-type: task\n\
              temper-context: temper\n\
              temper-created: \"2026-04-12T00:00:00Z\"\n\
-             title: Test\n\
-             slug: test\n\
+             temper-title: Test\n\
+             temper-slug: test\n\
              temper-stage: frobnicate\n\
              ---\n\
              body\n",
@@ -3316,8 +3318,8 @@ mod tests {
              temper-type: task\n\
              temper-context: temper\n\
              temper-created: \"2026-04-12T00:00:00Z\"\n\
-             title: A\n\
-             slug: a\n\
+             temper-title: A\n\
+             temper-slug: a\n\
              temper-stage: backlog\n\
              ---\n\
              body A\n",
@@ -3333,8 +3335,8 @@ mod tests {
              temper-type: task\n\
              temper-context: temper\n\
              temper-created: \"2026-04-12T00:00:00Z\"\n\
-             title: B\n\
-             slug: b\n\
+             temper-title: B\n\
+             temper-slug: b\n\
              ---\n\
              body B\n",
         );
@@ -3413,8 +3415,8 @@ mod tests {
              temper-type: task\n\
              temper-context: temper\n\
              temper-created: \"2026-04-12T00:00:00Z\"\n\
-             title: Test\n\
-             slug: test\n\
+             temper-title: Test\n\
+             temper-slug: test\n\
              temper-stage: backlog\n\
              ---\n\
              body\n",
@@ -3502,8 +3504,8 @@ mod tests {
              temper-id: \"{id}\"\n\
              temper-type: task\n\
              temper-context: temper\n\
-             title: Payload Roundtrip\n\
-             slug: payload-roundtrip\n\
+             temper-title: Payload Roundtrip\n\
+             temper-slug: payload-roundtrip\n\
              temper-stage: backlog\n\
              tags: [rust, meta]\n\
              notes: hello\n\
@@ -3558,7 +3560,7 @@ mod tests {
         let original_file = "---\n\
                              temper-id: \"019d0000-0000-7000-8000-000000000001\"\n\
                              temper-type: task\n\
-                             title: Original\n\
+                             temper-title: Original\n\
                              ---\n\
                              \n\
                              # Heading\n\
@@ -3668,8 +3670,8 @@ mod tests {
              temper-type: task\n\
              temper-context: temper\n\
              temper-created: \"2026-04-12T00:00:00Z\"\n\
-             title: Initial\n\
-             slug: initial\n\
+             temper-title: Initial\n\
+             temper-slug: initial\n\
              temper-stage: backlog\n\
              ---\n\
              initial body\n",

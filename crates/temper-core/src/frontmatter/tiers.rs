@@ -10,14 +10,13 @@ use std::collections::HashSet;
 /// Routing rules, applied in order:
 /// 1. Keys in [`IDENTITY_FIELDS`] or [`TIER1_SYSTEM_FIELDS`] → dropped.
 /// 2. Keys prefixed `temper-` → managed.
-/// 3. Keys `title` / `slug` → managed.
-/// 4. Keys in the doc-type schema's own `properties` (not base) → managed.
-/// 5. Everything else → open (known open fields and unknowns both land here).
+/// 3. Keys in the doc-type schema's own `properties` (not base) → managed.
+/// 4. Everything else → open (known open fields and unknowns both land here).
 ///
-/// Rule 4 uses `crate::schema::schema_value` which returns the doc-type
+/// Rule 3 uses `crate::schema::schema_value` which returns the doc-type
 /// schema's own `properties` object — it does NOT follow `$ref`. That is
 /// deliberate: base-schema fields like `relates_to` must route to open
-/// via rule 5, not via rule 4.
+/// via rule 4, not via rule 3.
 pub fn split_managed_open(
     fm: &serde_yaml::Value,
     doc_type: DocType,
@@ -50,10 +49,7 @@ pub fn split_managed_open(
         }
         let json_value = serde_json::to_value(value).unwrap_or(serde_json::Value::Null);
 
-        let to_managed = key_str.starts_with("temper-")
-            || key_str == "title"
-            || key_str == "slug"
-            || schema_keys.contains(key_str);
+        let to_managed = key_str.starts_with("temper-") || schema_keys.contains(key_str);
 
         if to_managed {
             managed.insert(key_str.to_string(), json_value);
@@ -139,20 +135,17 @@ temper-effort: medium
     }
 
     #[test]
-    fn title_and_slug_go_to_managed() {
-        // Mixed-form input: bare `title` exercises the legacy-bare classifier
-        // (until Task 6 normalize_aliases retires the literal); `temper-slug`
-        // exercises the temper-* prefix classifier.
+    fn temper_title_and_temper_slug_go_to_managed() {
         let v = yaml(
             r#"
-title: Hello
+temper-title: Hello
 temper-slug: hello
 "#,
         );
         let (managed, open) = split_managed_open(&v, DocType::Task);
-        assert_eq!(managed["title"], json!("Hello"));
+        assert_eq!(managed["temper-title"], json!("Hello"));
         assert_eq!(managed["temper-slug"], json!("hello"));
-        assert!(open.get("title").is_none());
+        assert!(open.get("temper-title").is_none());
         assert!(open.get("temper-slug").is_none());
     }
 
@@ -246,10 +239,8 @@ date: "2026-04-13"
     }
 
     // Regression anchor: the tier-split output produces stable hashes
-    // for a known task fixture. Golden hashes captured in session 2 task 10
-    // when the legacy hash::split_frontmatter_tiers API was deleted. If
-    // these change, either the schema or canonicalization moved; investigate
-    // before regenerating.
+    // for a known task fixture. If these change, either the schema or
+    // canonicalization moved; investigate before regenerating.
     #[test]
     fn task_fixture_produces_stable_hashes() {
         let v = yaml(
@@ -259,7 +250,7 @@ temper-type: task
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
 temper-updated: "2026-04-13T00:00:00Z"
-title: T
+temper-title: T
 temper-slug: t
 temper-stage: in-progress
 temper-mode: build
@@ -275,8 +266,11 @@ custom: ok
         let managed_hash = crate::hash::compute_managed_hash("task", &managed);
         let open_hash = crate::hash::compute_open_hash(&open);
 
+        // Refreshed in Phase 9: fixture migrated from bare `title:` to
+        // canonical `temper-title:`; bare title no longer has a literal
+        // routing bridge to managed (rule 3 retired with LEGACY_FIELDS).
         assert_eq!(
-            managed_hash, "sha256:4c01d11757eb68e3c3879a647f6db771b17d7f37d5ce4e3a815d92f626a7b550",
+            managed_hash, "sha256:56a6008f0c61cd73801a1cf5ee1aae0a9b649ad5b546bccc5462b7027c1a8f18",
             "task fixture managed hash drift"
         );
         assert_eq!(
@@ -293,7 +287,7 @@ temper-id: "019d8110-8ff3-70c2-85ae-57e04ed62885"
 temper-type: session
 temper-context: temper
 temper-created: "2026-04-13T00:00:00Z"
-title: S
+temper-title: S
 temper-slug: s
 date: "2026-04-13"
 relates_to: [a]
@@ -304,10 +298,11 @@ tags: [x]
         let managed_hash = crate::hash::compute_managed_hash("session", &managed);
         let open_hash = crate::hash::compute_open_hash(&open);
 
-        // Refreshed in Phase 8: `date` no longer contributes to managed_hash
-        // for session/research (Phase 6 / Migration A: date lives in open_meta).
+        // Refreshed in Phase 9: fixture migrated from bare `title:` to
+        // canonical `temper-title:`. (Phase 8 also refreshed for `date`
+        // routing to open_meta per Phase 6 / Migration A.)
         assert_eq!(
-            managed_hash, "sha256:f44eaac9f600cbc3f4a4738291741e2dc6407ef066a492bb660e7214dbb5b47e",
+            managed_hash, "sha256:ca6a4c39b73152fcdde71a7a9896f39de031a75224ef918e6f423c939095ab87",
             "session fixture managed hash drift"
         );
         assert_eq!(

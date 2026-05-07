@@ -54,8 +54,8 @@ async fn push_one_resource_path_no_manifest_posts_and_rewrites_provisional(pool:
              temper-type: research\n\
              temper-created: 2026-04-18T00:00:00Z\n\
              temper-owner: '@me'\n\
-             title: Push Seed\n\
-             slug: push-seed\n\
+             temper-title: Push Seed\n\
+             temper-slug: push-seed\n\
              date: 2026-04-18\n\
              ---\n\
              Body content.\n"
@@ -86,10 +86,9 @@ async fn push_one_resource_path_no_manifest_posts_and_rewrites_provisional(pool:
         "temper-id with server id must be present; got:\n{updated}"
     );
 
-    // Primitive's title source is the file's frontmatter (`temper-title`
-    // after parse-time normalize_aliases turns the bare `title:` into the
-    // canonical key). Path stem is the slug, not the title — using it would
-    // propagate slug-as-title to the wire payload and Phase 5's receive-side
+    // Primitive's title source is the file's frontmatter (`temper-title`).
+    // Path stem is the slug, not the title — using it would propagate
+    // slug-as-title to the wire payload and Phase 5's receive-side
     // ensure_managed_identity_keys would then store temper-title=slug.
     let server = app
         .client
@@ -127,8 +126,8 @@ async fn push_one_resource_path_with_manifest_remaps_entry(pool: sqlx::PgPool) {
              temper-type: research\n\
              temper-created: 2026-04-18T00:00:00Z\n\
              temper-owner: '@me'\n\
-             title: Push Seed 2\n\
-             slug: push-seed-2\n\
+             temper-title: Push Seed 2\n\
+             temper-slug: push-seed-2\n\
              date: 2026-04-18\n\
              ---\n\
              Body.\n"
@@ -261,8 +260,8 @@ async fn push_one_resource_id_target_pushes_existing_resource(pool: sqlx::PgPool
              temper-type: research\n\
              temper-created: 2026-04-18T00:00:00Z\n\
              temper-owner: '@me'\n\
-             title: Push Id Seed\n\
-             slug: push-id-seed\n\
+             temper-title: Push Id Seed\n\
+             temper-slug: push-id-seed\n\
              date: 2026-04-18\n\
              ---\n\
              {edited_body}\n",
@@ -391,8 +390,8 @@ async fn push_one_resource_path_canonical_id_puts_existing_resource(pool: sqlx::
              temper-type: research\n\
              temper-created: 2026-04-18T00:00:00Z\n\
              temper-owner: '@me'\n\
-             title: Push Path Canonical Seed\n\
-             slug: push-path-canonical-seed\n\
+             temper-title: Push Path Canonical Seed\n\
+             temper-slug: push-path-canonical-seed\n\
              date: 2026-04-18\n\
              ---\n\
              {edited_body}\n",
@@ -499,8 +498,8 @@ async fn push_one_resource_id_target_accepts_file_without_frontmatter_id(pool: s
              temper-type: research\n\
              temper-created: 2026-04-18T00:00:00Z\n\
              temper-owner: '@me'\n\
-             title: Push No-FM-Id Seed\n\
-             slug: push-no-fm-id-seed\n\
+             temper-title: Push No-FM-Id Seed\n\
+             temper-slug: push-no-fm-id-seed\n\
              date: 2026-04-18\n\
              ---\n\
              {edited_body}\n"

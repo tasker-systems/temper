@@ -1,10 +1,10 @@
 //! Schema validation for temper vault frontmatter.
 //!
 //! Loads JSON Schema files embedded at compile time, validates YAML frontmatter
-//! against them, detects legacy field names, and finds unknown temper-* fields.
+//! against them, and finds unknown temper-* fields.
 
 use crate::error::{Result, TemperError};
-use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, LEGACY_FIELDS, SYSTEM_MANAGED_FIELDS};
+use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, SYSTEM_MANAGED_FIELDS};
 use jsonschema::{Resource, Validator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
@@ -153,28 +153,6 @@ pub fn validate_allowing_provisional(
     }
 
     validate_frontmatter(doc_type, &clone)
-}
-
-/// Check for legacy field names that have been superseded by temper-* names.
-///
-/// All returned issues have `auto_fixable: true` because the fix is
-/// deterministic (rename the field).
-pub fn check_legacy_fields(frontmatter: &serde_yaml::Value) -> Vec<ValidationIssue> {
-    let Some(mapping) = frontmatter.as_mapping() else {
-        return vec![];
-    };
-
-    let mut issues = Vec::new();
-    for (legacy, replacement) in LEGACY_FIELDS {
-        if mapping.contains_key(*legacy) {
-            issues.push(ValidationIssue {
-                path: (*legacy).to_string(),
-                message: format!("legacy field '{legacy}' should be renamed to '{replacement}'"),
-                auto_fixable: true,
-            });
-        }
-    }
-    issues
 }
 
 /// Check for temper-* fields that are not in the known set (likely typos).

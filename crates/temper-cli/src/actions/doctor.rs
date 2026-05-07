@@ -5,9 +5,7 @@ use std::path::Path;
 
 use serde::Serialize;
 use temper_core::normalize::normalize_file_inspect;
-use temper_core::schema::{
-    check_legacy_fields, check_unknown_temper_fields, ValidationIssue, ValidationResult,
-};
+use temper_core::schema::{check_unknown_temper_fields, ValidationIssue, ValidationResult};
 use temper_core::vault::Vault;
 
 use crate::actions::doctor_fix::{
@@ -171,14 +169,11 @@ fn scan_file(
         });
     };
 
-    // 1. Legacy field check — normalize does not touch legacy field detection.
-    issues.extend(check_legacy_fields(frontmatter));
-
-    // 2. Detect effective doc type from frontmatter or directory name.
+    // 1. Detect effective doc type from frontmatter or directory name.
     let effective_doc_type =
         detect_doc_type(frontmatter, dir_doc_type).unwrap_or_else(|| dir_doc_type.to_string());
 
-    // 3. Schema validation + default-materialization preview via the normalize
+    // 2. Schema validation + default-materialization preview via the normalize
     //    primitive. Dry-run (`_inspect`) variant never writes. Its issues are
     //    the same `ValidationIssue` type, so they extend our list directly.
     //    `normalize_file_inspect` uses `validate_allowing_provisional` under
@@ -215,12 +210,12 @@ fn scan_file(
         }
     }
 
-    // 4. Unknown temper-* fields — not covered by normalize (its underlying
+    // 3. Unknown temper-* fields — not covered by normalize (its underlying
     //    JSON Schema validator does not flag typo-d temper-* keys). Keep this
     //    as a separate doctor-only check.
     issues.extend(check_unknown_temper_fields(frontmatter));
 
-    // 5. temper-owner validation
+    // 4. temper-owner validation
     {
         let owner_opt = extract_temper_owner(frontmatter);
         match owner_opt {

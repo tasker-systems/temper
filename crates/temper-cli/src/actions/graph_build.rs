@@ -799,8 +799,8 @@ mod tests {
              temper-type: {doc_type}\n\
              temper-owner: '{owner}'\n\
              {id_line}\
-             title: {slug}\n\
-             slug: {slug}\n\
+             temper-title: {slug}\n\
+             temper-slug: {slug}\n\
              ---\n\
              {body}\n"
         );
@@ -1239,8 +1239,8 @@ Back to prose [[another-real]].
 temper-context: temper\n\
 temper-type: task\n\
 temper-owner: '@me'\n\
-title: alpha\n\
-slug: alpha\n\
+temper-title: alpha\n\
+temper-slug: alpha\n\
 references:\n  - existing1\n  - existing2\n\
 ---\nbody\n";
         fs::write(&file, content).unwrap();

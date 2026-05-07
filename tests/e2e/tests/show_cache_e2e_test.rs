@@ -177,7 +177,7 @@ async fn tier3_preserves_frontmatter_when_local_temper_updated_diverges(pool: sq
         temper-type: research\n\
         temper-context: show-mismatch\n\
         temper-updated: 2020-01-01T00:00:00+00:00\n\
-        title: Mismatch\n\
+        temper-title: Mismatch\n\
         ---\n\n# Mismatch\n\nbody\n";
     std::fs::write(&local_path, local_body).expect("write local");
     let stale = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(120));
