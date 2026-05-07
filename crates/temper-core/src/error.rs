@@ -59,6 +59,18 @@ pub enum TemperError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+
+    #[error("Conflict: {0}")]
+    Conflict(String),
+
+    #[error("Forbidden")]
+    Forbidden,
+
+    #[error("Unauthorized: {0}")]
+    Unauthorized(String),
+
     #[error("system access required")]
     SystemAccessRequired(Box<CliAccessDetails>),
 }
