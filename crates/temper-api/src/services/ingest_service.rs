@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
-use temper_core::defaults::{apply_managed_defaults, apply_open_defaults};
+use temper_core::defaults::apply_open_defaults;
 #[cfg(feature = "ingest-pipeline")]
 use temper_core::hash::compute_body_hash;
 use temper_core::hash::{compute_managed_hash, compute_open_hash};
@@ -400,7 +400,7 @@ pub async fn ingest(
         .take()
         .map(strip_system_managed_fields)
         .unwrap_or_else(|| serde_json::json!({}));
-    apply_managed_defaults(&payload.doc_type_name, &mut managed);
+    temper_core::operations::apply_defaults_value(&payload.doc_type_name, &mut managed);
     // Inject canonical identity keys before validation + hashing so the
     // server-stored managed_meta JSONB matches the local canonical form.
     // Idempotent — if the caller already injected (CLI / MCP send-side
@@ -652,7 +652,7 @@ pub async fn update(
             }
         }
     }
-    apply_managed_defaults(&payload.doc_type_name, &mut managed);
+    temper_core::operations::apply_defaults_value(&payload.doc_type_name, &mut managed);
     payload.managed_meta = Some(managed);
 
     // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
