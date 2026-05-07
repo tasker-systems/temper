@@ -1,9 +1,11 @@
 //! Trait-impl integration tests for `DbBackend`.
 //!
 //! Each test uses `#[sqlx::test(migrator = "crate::MIGRATOR")]` for an
-//! isolated per-test database.
+//! isolated per-test database. Gated behind `test-db` to match
+//! `crates/temper-api/tests/*.rs`'s convention — CI's unit-tests job runs
+//! without a Postgres service, so DB-touching tests must not compile there.
 
-#![cfg(test)]
+#![cfg(all(test, feature = "test-db"))]
 
 use sqlx::PgPool;
 use uuid::Uuid;

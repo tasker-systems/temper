@@ -10,7 +10,7 @@
 mod db_backend;
 mod translators;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "test-db"))]
 mod tests;
 
 pub use db_backend::DbBackend;
