@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::services::context_service;
-use temper_core::defaults::{apply_managed_defaults, apply_open_defaults};
+use temper_core::defaults::apply_open_defaults;
 #[cfg(feature = "ingest-pipeline")]
 use temper_core::hash::compute_body_hash;
 use temper_core::hash::{compute_managed_hash, compute_open_hash};
@@ -400,7 +400,7 @@ pub async fn ingest(
         .take()
         .map(strip_system_managed_fields)
         .unwrap_or_else(|| serde_json::json!({}));
-    apply_managed_defaults(&payload.doc_type_name, &mut managed);
+    temper_core::operations::apply_defaults_value(&payload.doc_type_name, &mut managed);
     // Inject canonical identity keys before validation + hashing so the
     // server-stored managed_meta JSONB matches the local canonical form.
     // Idempotent — if the caller already injected (CLI / MCP send-side
@@ -428,7 +428,12 @@ pub async fn ingest(
     // 2.6. If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
     #[cfg(feature = "ingest-pipeline")]
     if payload.chunks_packed.is_none() {
-        payload.content_hash = Some(compute_body_hash(&payload.content));
+        // Only compute a body hash when there is actual content — empty strings
+        // are not deduplicated because two resources with no body are not
+        // semantically equivalent to a single resource with an empty body.
+        if !payload.content.is_empty() {
+            payload.content_hash = Some(compute_body_hash(&payload.content));
+        }
         let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
             .map_err(|e| IngestError::Embed(e.to_string()))
             .map_err(ApiError::from)?;
@@ -652,7 +657,7 @@ pub async fn update(
             }
         }
     }
-    apply_managed_defaults(&payload.doc_type_name, &mut managed);
+    temper_core::operations::apply_defaults_value(&payload.doc_type_name, &mut managed);
     payload.managed_meta = Some(managed);
 
     // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)

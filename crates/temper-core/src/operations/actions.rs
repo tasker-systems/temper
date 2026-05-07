@@ -74,6 +74,16 @@ pub fn apply_defaults(doctype: &str, meta: &mut ManagedMeta) {
     }
 }
 
+/// Apply managed-tier doctype defaults to a `serde_json::Value` in place.
+///
+/// Sibling to [`apply_defaults`] for callers that work with `Value` directly
+/// (e.g. ingest_service's pre-validation pipeline). Both functions are thin
+/// wrappers over the same underlying default-application — pick the variant
+/// that matches your call site's natural type.
+pub fn apply_defaults_value(doctype: &str, meta: &mut serde_json::Value) {
+    crate::defaults::apply_managed_defaults(doctype, meta);
+}
+
 /// Validate that a slug conforms to the temper slug rules.
 ///
 /// Rules: non-empty, lowercase alphanumeric + hyphens, must start and end with
@@ -623,5 +633,26 @@ mod tests {
             meta.get("temper-slug").is_none(),
             "existing temper-slug must be removed when slug is None; got: {meta}"
         );
+    }
+
+    #[test]
+    fn apply_defaults_value_task_sets_stage_when_missing() {
+        let mut meta = serde_json::json!({});
+        apply_defaults_value("task", &mut meta);
+        assert_eq!(meta["temper-stage"], "backlog");
+    }
+
+    #[test]
+    fn apply_defaults_value_task_does_not_overwrite_existing_stage() {
+        let mut meta = serde_json::json!({"temper-stage": "in-progress"});
+        apply_defaults_value("task", &mut meta);
+        assert_eq!(meta["temper-stage"], "in-progress");
+    }
+
+    #[test]
+    fn apply_defaults_value_unknown_doctype_is_noop() {
+        let mut meta = serde_json::json!({});
+        apply_defaults_value("nonexistent", &mut meta);
+        assert!(meta.as_object().unwrap().is_empty());
     }
 }
