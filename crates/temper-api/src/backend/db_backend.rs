@@ -1,28 +1,31 @@
 //! `DbBackend` struct + `impl Backend`. Per-request construction.
 
+use async_trait::async_trait;
 use sqlx::PgPool;
 
-use temper_core::operations::Surface;
+use temper_core::error::TemperError;
+use temper_core::operations::{
+    Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent, ListResources,
+    ResourceSummary, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
+};
 use temper_core::types::ids::ProfileId;
+use temper_core::types::resource::ResourceRow;
+
+use crate::services::ingest_service;
+
+use super::translators::create_resource_to_ingest_payload;
 
 /// Postgres-backed backend impl. Constructed per inbound request.
-///
-/// Carries the request-scoped auth context (`profile_id`, `device_id`) and the
-/// originating `Surface` so each command can be threaded into the existing
-/// service-layer functions and so emitted events can be tagged appropriately.
-// Fields and accessors are unused until Tasks 6-11 fill in the trait methods;
-// suppress until the Backend impl lands.
-#[allow(dead_code)]
 pub struct DbBackend {
     pool: PgPool,
     profile_id: ProfileId,
     device_id: String,
     /// Origin of the inbound command. Stored for forward-compat (Phase 6
     /// telemetry/event tagging); not used by Phase 3a's coarse events.
+    #[allow(dead_code)]
     surface: Surface,
 }
 
-#[allow(dead_code)]
 impl DbBackend {
     pub fn new(pool: PgPool, profile_id: ProfileId, device_id: String, surface: Surface) -> Self {
         Self {
@@ -43,5 +46,67 @@ impl DbBackend {
 
     pub(crate) fn device_id(&self) -> &str {
         &self.device_id
+    }
+}
+
+#[async_trait]
+impl Backend for DbBackend {
+    async fn create_resource(
+        &self,
+        cmd: CreateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        let payload = create_resource_to_ingest_payload(cmd);
+        let row = ingest_service::ingest(self.pool(), self.profile_id(), self.device_id(), payload)
+            .await
+            .map_err(TemperError::from)?;
+        let event = DomainEvent::DbResourceCreated {
+            resource_id: row.id,
+        };
+        Ok(CommandOutput::with_events(row, vec![event]))
+    }
+
+    async fn show_resource(
+        &self,
+        _cmd: ShowResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        Err(TemperError::Api(
+            "show_resource not yet implemented".to_string(),
+        ))
+    }
+
+    async fn update_resource(
+        &self,
+        _cmd: UpdateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        Err(TemperError::Api(
+            "update_resource not yet implemented".to_string(),
+        ))
+    }
+
+    async fn delete_resource(
+        &self,
+        _cmd: DeleteResource,
+    ) -> Result<CommandOutput<()>, TemperError> {
+        Err(TemperError::Api(
+            "delete_resource not yet implemented".to_string(),
+        ))
+    }
+
+    async fn list_resources(
+        &self,
+        _cmd: ListResources,
+    ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
+        Err(TemperError::Api(
+            "list_resources not yet implemented".to_string(),
+        ))
+    }
+
+    async fn search_resources(
+        &self,
+        _cmd: SearchResources,
+    ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
+        Err(TemperError::Api(
+            "search_resources not yet implemented".to_string(),
+        ))
     }
 }
