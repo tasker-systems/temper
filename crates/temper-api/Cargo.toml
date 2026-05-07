@@ -11,6 +11,7 @@ path = "src/main.rs"
 [dependencies]
 temper-core = { path = "../temper-core", features = ["web-api"] }
 temper-ingest = { path = "../temper-ingest", default-features = false, features = ["embed"], optional = true }
+async-trait = "0.1"
 axum = { version = "0.8", features = ["json", "query"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }

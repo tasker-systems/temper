@@ -5000,6 +5000,7 @@ dependencies = [
 name = "temper-api"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum",
  "chrono",
  "jsonwebtoken",
