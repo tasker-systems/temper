@@ -428,7 +428,12 @@ pub async fn ingest(
     // 2.6. If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
     #[cfg(feature = "ingest-pipeline")]
     if payload.chunks_packed.is_none() {
-        payload.content_hash = Some(compute_body_hash(&payload.content));
+        // Only compute a body hash when there is actual content — empty strings
+        // are not deduplicated because two resources with no body are not
+        // semantically equivalent to a single resource with an empty body.
+        if !payload.content.is_empty() {
+            payload.content_hash = Some(compute_body_hash(&payload.content));
+        }
         let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
             .map_err(|e| IngestError::Embed(e.to_string()))
             .map_err(ApiError::from)?;
