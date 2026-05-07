@@ -139,11 +139,18 @@ impl Backend for DbBackend {
 
     async fn list_resources(
         &self,
-        _cmd: ListResources,
+        cmd: ListResources,
     ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-        Err(TemperError::Api(
-            "list_resources not yet implemented".to_string(),
-        ))
+        let params = super::translators::list_filter_to_params(cmd.filter);
+        let response = resource_service::list_visible(self.pool(), *self.profile_id(), params)
+            .await
+            .map_err(TemperError::from)?;
+        let summaries: Vec<ResourceSummary> = response
+            .rows
+            .iter()
+            .map(super::translators::resource_row_to_summary)
+            .collect();
+        Ok(CommandOutput::new(summaries))
     }
 
     async fn search_resources(

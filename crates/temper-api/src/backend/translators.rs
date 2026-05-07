@@ -8,10 +8,12 @@
 
 use sqlx::PgPool;
 use temper_core::error::TemperError;
-use temper_core::operations::{CreateResource, ResourceRef, UpdateResource};
+use temper_core::operations::{
+    CreateResource, ListFilter, ResourceRef, ResourceSummary, UpdateResource,
+};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
-use temper_core::types::resource::ResourceUpdateRequest;
+use temper_core::types::resource::{ResourceListParams, ResourceRow, ResourceUpdateRequest};
 
 use crate::services::resource_service;
 
@@ -66,6 +68,37 @@ pub(crate) fn update_resource_to_request(cmd: UpdateResource) -> ResourceUpdateR
         content: cmd.body.as_ref().map(|b| b.content.clone()),
         content_hash: None,
         chunks_packed: None,
+    }
+}
+
+/// Translate `ListFilter` → `ResourceListParams`.
+///
+/// Only the filters represented in both shapes are forwarded. `stage` and
+/// `goal` are not first-class params on `ResourceListParams` today and would
+/// require a `q`-string extension or a service-layer change — captured in
+/// the spec's "Open Questions" as a follow-up; for 3a they're ignored.
+pub(crate) fn list_filter_to_params(filter: ListFilter) -> ResourceListParams {
+    ResourceListParams {
+        kb_context_id: None,
+        kb_doc_type_id: None,
+        context_name: filter.context,
+        doc_type_name: filter.doctype,
+        owner: Some("@me".to_string()),
+        q: None,
+        sort: None,
+        order: None,
+        limit: filter.limit.map(|n| n as i64),
+        offset: None,
+    }
+}
+
+/// Project a `ResourceRow` into the trait's `ResourceSummary`.
+pub(crate) fn resource_row_to_summary(row: &ResourceRow) -> ResourceSummary {
+    ResourceSummary {
+        slug: row.slug.clone().unwrap_or_default(),
+        doctype: row.doc_type_name.clone(),
+        context: row.context_name.clone(),
+        title: row.title.clone(),
     }
 }
 
