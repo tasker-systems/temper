@@ -9,7 +9,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::operations::{
-    Backend, CreateResource, DomainEvent, ResourceRef, ShowResource, Surface,
+    Backend, CreateResource, DomainEvent, ResourceRef, ShowResource, Surface, UpdateResource,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -153,4 +153,68 @@ async fn show_resource_missing_uuid_returns_not_found(pool: PgPool) {
     let err = backend.show_resource(cmd).await.unwrap_err();
     use temper_core::error::TemperError;
     assert!(matches!(err, TemperError::NotFound(_)), "got {err:?}");
+}
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn update_resource_changes_title_and_emits_event(pool: PgPool) {
+    let backend = make_backend(pool);
+
+    let created = backend
+        .create_resource(CreateResource {
+            slug: "update-test".to_string(),
+            doctype: "task".to_string(),
+            context: TEMPER_CONTEXT_NAME.to_string(),
+            title: "Original title".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .unwrap();
+
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: created.value.id,
+        },
+        body: None,
+        managed_meta: Some(ManagedMeta {
+            title: Some("New title".to_string()),
+            ..ManagedMeta::default()
+        }),
+        open_meta: None,
+        origin: Surface::ApiHttp,
+    };
+    let out = backend.update_resource(cmd).await.expect("update succeeds");
+
+    assert_eq!(out.value.id, created.value.id);
+    assert_eq!(out.value.title, "New title");
+    match &out.events[..] {
+        [DomainEvent::DbResourceUpdated { resource_id }] => {
+            assert_eq!(*resource_id, created.value.id);
+        }
+        other => panic!("expected single DbResourceUpdated event, got {other:?}"),
+    }
+}
+
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn update_resource_unknown_uuid_returns_not_found(pool: PgPool) {
+    let backend = make_backend(pool);
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId(Uuid::new_v4()),
+        },
+        body: None,
+        managed_meta: None,
+        open_meta: None,
+        origin: Surface::ApiHttp,
+    };
+    let err = backend.update_resource(cmd).await.unwrap_err();
+    use temper_core::error::TemperError;
+    assert!(
+        matches!(err, TemperError::NotFound(_) | TemperError::Forbidden),
+        "got {err:?}"
+    );
+    // resource_service::update returns Forbidden when can_modify_resource()
+    // is false, which is what an unknown id produces. Either is acceptable.
 }

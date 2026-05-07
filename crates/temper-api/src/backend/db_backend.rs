@@ -97,11 +97,28 @@ impl Backend for DbBackend {
 
     async fn update_resource(
         &self,
-        _cmd: UpdateResource,
+        cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        Err(TemperError::Api(
-            "update_resource not yet implemented".to_string(),
-        ))
+        let resource_id = super::translators::resolve_resource_ref(
+            self.pool(),
+            self.profile_id(),
+            cmd.resource.clone(),
+        )
+        .await?;
+        let req = super::translators::update_resource_to_request(cmd);
+        let row = resource_service::update(
+            self.pool(),
+            *self.profile_id(),
+            *resource_id,
+            self.device_id(),
+            req,
+        )
+        .await
+        .map_err(TemperError::from)?;
+        let event = DomainEvent::DbResourceUpdated {
+            resource_id: row.id,
+        };
+        Ok(CommandOutput::with_events(row, vec![event]))
     }
 
     async fn delete_resource(
