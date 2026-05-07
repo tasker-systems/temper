@@ -131,6 +131,8 @@ impl From<ApiError> for temper_core::error::TemperError {
             ApiError::Conflict(s) => TemperError::Conflict(s),
             ApiError::Internal(s) => TemperError::Api(format!("internal: {s}")),
             ApiError::SystemAccessRequired { details } => {
+                // Lowercased Debug intentionally matches serde's snake_case rename for JoinRequestStatus
+                // — see From<TemperError> for ApiError below for the inverse parse path.
                 let join_request_status = details
                     .join_request_status
                     .as_ref()
@@ -168,7 +170,11 @@ impl From<temper_core::error::TemperError> for ApiError {
                 // Since JoinRequestStatus derives serde::Deserialize with rename_all = "snake_case",
                 // we can deserialize those strings back directly.
                 let join_request_status = details.join_request_status.as_ref().and_then(|s| {
-                    serde_json::from_str::<JoinRequestStatus>(&format!("\"{s}\"")).ok()
+                    let parsed = serde_json::from_value::<JoinRequestStatus>(serde_json::Value::String(s.clone()));
+                    if let Err(ref e) = parsed {
+                        tracing::warn!(status = s, error = %e, "could not parse join_request_status enum from string; dropping field");
+                    }
+                    parsed.ok()
                 });
 
                 ApiError::SystemAccessRequired {
@@ -365,6 +371,26 @@ mod tests {
                 assert_eq!(details.cli_command.as_deref(), Some("temper join-request"));
             }
             other => panic!("expected SystemAccessRequired, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn temper_error_yaml_maps_to_bad_request() {
+        let yaml_err: serde_yaml::Error =
+            serde_yaml::from_str::<serde_yaml::Value>("invalid: : :").unwrap_err();
+        let a: ApiError = TemperError::Yaml(yaml_err).into();
+        match a {
+            ApiError::BadRequest(s) => assert!(s.starts_with("yaml: ")),
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn temper_error_vault_not_found_maps_to_internal() {
+        let a: ApiError = TemperError::VaultNotFound.into();
+        match a {
+            ApiError::Internal(s) => assert!(s.contains("vault not found")),
+            other => panic!("expected Internal, got {other:?}"),
         }
     }
 }
