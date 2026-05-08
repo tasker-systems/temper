@@ -1461,10 +1461,23 @@ pub async fn pull_one_resource(
                 .managed_meta
                 .as_ref()
                 .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
+            let canonical_owner_owned;
+            let canonical_owner = if resource.owner_handle == "@me" {
+                let profile = client
+                    .profile()
+                    .get()
+                    .await
+                    .map_err(crate::commands::client_err)?;
+                canonical_owner_owned = format!("@{}", profile.slug);
+                canonical_owner_owned.as_str()
+            } else {
+                resource.owner_handle.as_str()
+            };
             let fm = ingest::build_frontmatter_from_resource(
                 &resource,
                 &ctx,
                 &dtype,
+                canonical_owner,
                 ingest::normalize_body_for_vault(&content_response.markdown),
                 managed_value.as_ref(),
                 content_response.open_meta.as_ref(),
@@ -1548,6 +1561,7 @@ pub async fn pull_one_resource(
             &resource,
             context,
             doc_type,
+            owner,
             ingest::normalize_body_for_vault(&content_response.markdown),
             managed_value.as_ref(),
             content_response.open_meta.as_ref(),
@@ -1662,6 +1676,7 @@ fn rebuild_file_with_new_meta(
     resource: &temper_core::types::ResourceRow,
     ctx: &str,
     doc_type: &str,
+    canonical_owner: &str,
     managed_meta: Option<&serde_json::Value>,
     open_meta: Option<&serde_json::Value>,
 ) -> Result<String> {
@@ -1670,6 +1685,7 @@ fn rebuild_file_with_new_meta(
         resource,
         ctx,
         doc_type,
+        canonical_owner,
         ingest::normalize_body_for_vault(body_after_separator),
         managed_meta,
         open_meta,
@@ -1691,6 +1707,7 @@ struct ApplyPullMetaOnly<'a> {
     resource: &'a temper_core::types::ResourceRow,
     ctx: &'a str,
     doc_type: &'a str,
+    canonical_owner: &'a str,
     managed_meta: Option<&'a serde_json::Value>,
     open_meta: Option<&'a serde_json::Value>,
 }
@@ -1709,12 +1726,20 @@ fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry
         resource,
         ctx,
         doc_type,
+        canonical_owner,
         managed_meta,
         open_meta,
     } = params;
 
-    let rebuilt =
-        rebuild_file_with_new_meta(local_body, resource, ctx, doc_type, managed_meta, open_meta)?;
+    let rebuilt = rebuild_file_with_new_meta(
+        local_body,
+        resource,
+        ctx,
+        doc_type,
+        canonical_owner,
+        managed_meta,
+        open_meta,
+    )?;
     std::fs::write(file_path, &rebuilt)?;
 
     let outcome = temper_core::normalize::normalize_file(file_path, doc_type)?;
@@ -1821,6 +1846,19 @@ async fn pull_resource_meta_only(
     // on ManagedMeta makes this round-trip lossless.
     let managed_value = managed_meta_to_value(meta_response.managed_meta.as_ref());
 
+    let canonical_owner_owned;
+    let canonical_owner = if resource.owner_handle == "@me" {
+        let profile = client
+            .profile()
+            .get()
+            .await
+            .map_err(crate::commands::client_err)?;
+        canonical_owner_owned = format!("@{}", profile.slug);
+        canonical_owner_owned.as_str()
+    } else {
+        resource.owner_handle.as_str()
+    };
+
     apply_pull_meta_only(
         ApplyPullMetaOnly {
             file_path: &file_path,
@@ -1828,6 +1866,7 @@ async fn pull_resource_meta_only(
             resource: &resource,
             ctx: &ctx,
             doc_type: &doc_type,
+            canonical_owner,
             managed_meta: managed_value.as_ref(),
             open_meta: meta_response.open_meta.as_ref(),
         },
@@ -3750,6 +3789,7 @@ mod tests {
             &resource,
             "temper",
             "task",
+            "@me",
             Some(&managed),
             Some(&open),
         )
@@ -3863,6 +3903,7 @@ mod tests {
                 resource: &resource,
                 ctx: "temper",
                 doc_type: "task",
+                canonical_owner: "@me",
                 managed_meta: Some(&managed),
                 open_meta: Some(&open),
             },
