@@ -566,6 +566,8 @@ pub async fn update(
     let meta_touched = req.managed_meta.is_some() || req.open_meta.is_some();
     let mut post_merge_managed: Option<serde_json::Value> = None;
     let mut post_merge_open: Option<serde_json::Value> = None;
+    let mut post_merge_managed_hash: Option<String> = None;
+    let mut post_merge_open_hash: Option<String> = None;
 
     if req.managed_meta.is_some()
         || req.open_meta.is_some()
@@ -595,6 +597,15 @@ pub async fn update(
         // ManagedMeta has a flatten extras bucket so the only way this fails
         // is if the column holds a non-object JSON value, which would be
         // structural corruption worth knowing about.
+        // Capture caller-supplied doc_type / context before the partial
+        // moves into apply_managed_meta_partial. Used below to cascade into
+        // kb_resources.kb_doc_type_id / kb_context_id with validation —
+        // mirrors meta_service::update_meta:204-237 (the path 3b folded into
+        // this function); without it, PUT /api/resources/{id}/meta silently
+        // accepts unknown doc_type / context names.
+        let incoming_doc_type = req.managed_meta.as_ref().and_then(|m| m.doc_type.clone());
+        let incoming_context = req.managed_meta.as_ref().and_then(|m| m.context.clone());
+
         let mut merged_managed: ManagedMeta = serde_json::from_value(stored_managed_json)
             .map_err(|e| ApiError::Internal(format!("malformed managed_meta JSONB: {e}")))?;
         if let Some(incoming) = req.managed_meta {
@@ -646,10 +657,54 @@ pub async fn update(
         .execute(&mut *tx)
         .await?;
 
-        // Capture post-merge values for edge reconciliation after tx.commit().
+        // Cascade caller-supplied doc_type / context to kb_resources FK
+        // columns. Validation: unknown name → 400 BadRequest. Mirrors
+        // meta_service::update_meta:204-237.
+        if let Some(doc_type) = incoming_doc_type.as_deref() {
+            let dt_id =
+                sqlx::query_scalar!("SELECT id FROM kb_doc_types WHERE name = $1", doc_type,)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(format!("unknown doc_type: '{doc_type}'"))
+                    })?;
+            sqlx::query!(
+                "UPDATE kb_resources SET kb_doc_type_id = $1, updated = now() WHERE id = $2",
+                dt_id,
+                resource_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        if let Some(context_name) = incoming_context.as_deref() {
+            let ctx_id =
+                sqlx::query_scalar!("SELECT id FROM kb_contexts WHERE name = $1", context_name,)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(format!("unknown context: '{context_name}'"))
+                    })?;
+            sqlx::query!(
+                "UPDATE kb_resources SET kb_context_id = $1, updated = now() WHERE id = $2",
+                ctx_id,
+                resource_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        // Capture post-merge values for edge reconciliation after tx.commit()
+        // and for the meta-only audit emission below.
         post_merge_managed = Some(managed_value);
         post_merge_open = Some(merged_open);
+        post_merge_managed_hash = Some(managed_hash);
+        post_merge_open_hash = Some(open_hash);
     }
+
+    // Track whether the body-trio block emitted an audit row. When meta is
+    // also touched in the same call, we want exactly one audit — "update_body"
+    // wins over "update_meta" (the body change is the more significant event).
+    let mut body_audit_emitted = false;
 
     // 3. Body trio path: persist + dedupe chunks if all three fields present.
     //    The handler guarantees all-or-nothing — if any one is Some, all are Some.
@@ -702,6 +757,7 @@ pub async fn update(
                 &open_hash,
             )
             .await?;
+            body_audit_emitted = true;
 
             // Replace chunks: version-bump old, batch-insert new, rebuild search.
             replace_chunks(
@@ -728,6 +784,42 @@ pub async fn update(
             .await?;
         }
         // else: hash matches stored → short-circuit, no chunk work.
+    }
+
+    // 4. Meta-only audit: emit "update_meta" when meta_touched but the body
+    //    block did not write an audit row. Mirrors the contract that
+    //    meta_service::update_meta enforced before 3b folded that path into
+    //    DbBackend::update_resource. Fetches body_hash from the post-merge
+    //    manifest so the audit row carries a coherent snapshot.
+    if meta_touched && !body_audit_emitted {
+        let body_hash: String = sqlx::query_scalar!(
+            "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
+            resource_id,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or_default();
+
+        let managed_hash = post_merge_managed_hash
+            .as_deref()
+            .expect("populated by manifest-rewrite block when meta_touched");
+        let open_hash = post_merge_open_hash
+            .as_deref()
+            .expect("populated by manifest-rewrite block when meta_touched");
+
+        insert_event_and_audit(
+            &mut tx,
+            ProfileId::from(profile_id),
+            device_id,
+            current.kb_context_id,
+            ResourceId::from(resource_id),
+            "managed_meta_updated",
+            "update_meta",
+            &body_hash,
+            managed_hash,
+            open_hash,
+        )
+        .await?;
     }
 
     tx.commit().await?;
