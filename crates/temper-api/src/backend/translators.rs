@@ -8,6 +8,7 @@
 
 use sqlx::PgPool;
 use temper_core::error::TemperError;
+#[cfg(feature = "ingest-pipeline")]
 use temper_core::hash::compute_body_hash;
 use temper_core::operations::{
     CreateResource, ListFilter, ResourceRef, ResourceSummary, SearchHit, SearchQuery,
@@ -194,7 +195,7 @@ pub(crate) fn prepare_body_trio(_body: &str) -> Result<(String, String), TemperE
 mod tests {
     use super::*;
 
-    #[cfg(all(feature = "ingest-pipeline", feature = "test-embed"))]
+    #[cfg(feature = "test-embed")]
     #[test]
     fn prepare_body_trio_computes_hash_and_packs_chunks() {
         let body = "# heading\n\nparagraph text.\n";
@@ -207,7 +208,7 @@ mod tests {
         assert!(!packed.is_empty(), "packed chunks should be non-empty");
     }
 
-    #[cfg(all(feature = "ingest-pipeline", feature = "test-embed"))]
+    #[cfg(feature = "test-embed")]
     #[test]
     fn prepare_body_trio_empty_body_ok() {
         let (hash, _packed) = prepare_body_trio("").expect("empty body still hashable");
