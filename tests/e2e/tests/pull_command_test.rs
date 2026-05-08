@@ -406,3 +406,95 @@ async fn pull_one_resource_with_manifest_but_untracked_id_writes_canonical_layou
         "newly-tracked entry must be Clean (in sync with server)"
     );
 }
+
+/// Round-trip regression for the ownership-bug-warning fix
+/// (docs/superpowers/specs/2026-05-08-ownership-bug-warning-design.md).
+///
+/// After a NewlyTracked pull, the file's frontmatter must record the
+/// canonical `@<profile.slug>` owner sigil (not the API's `@me` shorthand)
+/// AND `preflight_ownership_check` must report no mismatches when called
+/// with the requester's profile slug. Together these prove the write side
+/// (build_frontmatter_from_resource) and the read side (preflight) agree
+/// on the canonical owner.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_one_resource_newly_tracked_writes_canonical_owner_and_passes_preflight(
+    pool: sqlx::PgPool,
+) {
+    use temper_cli::actions::sync::preflight_ownership_check;
+
+    let app = common::setup(pool).await;
+
+    let profile = app
+        .client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("ownership-test")
+        .await
+        .expect("context create");
+
+    let body = "# Ownership Round-Trip\n\nBody arrived from the server.".to_string();
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: body.clone(),
+        content_hash: format!("{:0>64}", "e"),
+        embedding: vec![0.0_f32; 768],
+    };
+    let payload = IngestPayload {
+        title: "Ownership Round-Trip".to_string(),
+        origin_uri: "test://ownership".to_string(),
+        context_name: "ownership-test".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&body)),
+        slug: "ownership-roundtrip".to_string(),
+        content: body.clone(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-05-08"})),
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+    };
+    let seeded = app.client.ingest().create(&payload).await.expect("ingest");
+
+    let mut manifest = Manifest::new("e2e-ownership-device".to_string());
+    let result = pull_one_resource(
+        &app.client,
+        app.vault_dir.path(),
+        seeded.id,
+        Some(&mut manifest),
+        Some(temper_core::hash::compute_body_hash(&body)),
+    )
+    .await
+    .expect("pull_one_resource");
+
+    assert_eq!(result.branch, PullBranch::NewlyTracked);
+
+    // Frontmatter must record the canonical @<profile.slug>, not @me.
+    let on_disk = std::fs::read_to_string(&result.path).expect("file written");
+    let canonical_owner_sq = format!("temper-owner: '@{}'", profile.slug);
+    let canonical_owner_dq = format!("temper-owner: \"@{}\"", profile.slug);
+    let canonical_owner_bare = format!("temper-owner: @{}", profile.slug);
+    assert!(
+        on_disk.contains(&canonical_owner_sq)
+            || on_disk.contains(&canonical_owner_dq)
+            || on_disk.contains(&canonical_owner_bare),
+        "frontmatter must record canonical owner @{}; got:\n{on_disk}",
+        profile.slug
+    );
+    assert!(
+        !on_disk.contains("temper-owner: '@me'") && !on_disk.contains("temper-owner: \"@me\""),
+        "frontmatter must NOT contain literal @me shorthand; got:\n{on_disk}"
+    );
+
+    // Preflight must accept the round-trip cleanly.
+    let mismatches = preflight_ownership_check(&manifest, app.vault_dir.path(), &profile.slug);
+    assert!(
+        mismatches.is_empty(),
+        "preflight must report no mismatches for the round-tripped resource; got {mismatches:?}"
+    );
+}
