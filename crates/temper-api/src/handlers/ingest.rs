@@ -3,13 +3,16 @@ use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::error::ApiResult;
+use crate::backend::DbBackend;
+use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::ingest_service;
 use crate::state::AppState;
 
+use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
+use temper_core::types::managed_meta::ManagedMeta;
 use temper_core::types::resource::ResourceRow;
 
 #[utoipa::path(
@@ -33,14 +36,48 @@ pub async fn create(
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
-    ingest_service::ingest(
-        &state.pool,
+
+    // Convert IngestPayload's Option<Value> managed_meta to typed ManagedMeta.
+    // Parse failures (malformed JSON for ManagedMeta shape) surface as BadRequest.
+    let managed_meta: ManagedMeta = match payload.managed_meta {
+        Some(v) => serde_json::from_value(v)
+            .map_err(|e| ApiError::BadRequest(format!("invalid managed_meta: {e}")))?,
+        None => ManagedMeta::default(),
+    };
+
+    let body = if payload.content.is_empty() {
+        None
+    } else {
+        Some(BodyUpdate {
+            content: payload.content,
+        })
+    };
+
+    let cmd = CreateResource {
+        context: payload.context_name,
+        doctype: payload.doc_type_name,
+        slug: payload.slug,
+        title: payload.title,
+        body,
+        managed_meta,
+        open_meta: payload.open_meta,
+        origin_uri: Some(payload.origin_uri),
+        // Forward caller-supplied chunks so ingest_service can skip the embed
+        // pipeline when pre-computed chunks are present. content_hash is left
+        // None — ingest_service recomputes it from content when the pipeline
+        // runs, and leaves it absent (empty string stored) otherwise.
+        chunks_packed: payload.chunks_packed,
+        origin: Surface::ApiHttp,
+    };
+
+    let backend = DbBackend::new(
+        state.pool.clone(),
         ProfileId::from(auth.0.profile.id),
-        &device_id,
-        payload,
-    )
-    .await
-    .map(Json)
+        device_id,
+        Surface::ApiHttp,
+    );
+    let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
+    Ok(Json(out.value))
 }
 
 #[utoipa::path(

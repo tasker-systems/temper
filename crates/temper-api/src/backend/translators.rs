@@ -31,16 +31,21 @@ pub(crate) fn create_resource_to_ingest_payload(cmd: CreateResource) -> IngestPa
 
     IngestPayload {
         title: cmd.title,
-        origin_uri: String::new(),
+        origin_uri: cmd.origin_uri.unwrap_or_default(),
         context_name: cmd.context,
         doc_type_name: cmd.doctype,
+        // content_hash is always left None: the server recomputes from content
+        // (via the ingest-pipeline feature) or from the body hash after the
+        // chunks pipeline runs. Callers should not pre-compute this.
         content_hash: None,
         slug: cmd.slug,
         content: body,
         metadata: None,
         managed_meta: Some(serde_json::to_value(&cmd.managed_meta).unwrap_or_default()),
         open_meta: cmd.open_meta,
-        chunks_packed: None,
+        // Forward caller-supplied pre-computed chunks when present; the
+        // ingest_service pipeline is skipped for that case.
+        chunks_packed: cmd.chunks_packed,
     }
 }
 

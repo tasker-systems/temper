@@ -180,6 +180,10 @@ pub async fn create(
         body: None,
         managed_meta: ManagedMeta::default(),
         open_meta: None,
+        origin_uri: Some(req.origin_uri),
+        // POST /api/resources is a metadata-only create (no body); chunks are
+        // produced by a follow-up async ingest job.
+        chunks_packed: None,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(

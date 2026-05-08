@@ -34,6 +34,17 @@ pub struct CreateResource {
     pub managed_meta: ManagedMeta,
     /// Free-form user metadata (open_meta tier).
     pub open_meta: Option<Value>,
+    /// Canonical resource URI for dedup and storage. Callers that derive a
+    /// `kb://`-scheme URI from context/doctype/slug should set this; callers
+    /// without a pre-computed URI may leave it `None` and the server will
+    /// store an empty string (the existing behavior for the HTTP create path).
+    pub origin_uri: Option<String>,
+    /// Pre-computed chunks (base64-encoded MessagePack) supplied by the caller.
+    /// When `Some`, passed through to `ingest_service::ingest` so the server
+    /// does not need to run the embed pipeline. When `None`, the server
+    /// recomputes via the pipeline (if enabled) or returns an error for
+    /// non-empty bodies without the pipeline feature.
+    pub chunks_packed: Option<String>,
     pub origin: Surface,
 }
 
@@ -118,6 +129,8 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
             origin: Surface::CliCloud,
         };
         assert_eq!(cmd.slug, "new-task");

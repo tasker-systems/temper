@@ -513,6 +513,8 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_create(&cmd).is_ok());
@@ -528,6 +530,8 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -546,6 +550,8 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -564,6 +570,8 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
