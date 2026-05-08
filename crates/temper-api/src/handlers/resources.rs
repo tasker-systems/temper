@@ -95,9 +95,24 @@ pub async fn get(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceRow>> {
-    resource_service::get_visible(&state.pool, auth.0.profile.id, resource_id)
-        .await
-        .map(Json)
+    use temper_core::operations::{Backend, ResourceRef, ShowResource, Surface};
+    use temper_core::types::ids::ResourceId;
+
+    let cmd = ShowResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(resource_id),
+        },
+        origin: Surface::ApiHttp,
+    };
+    // Reads don't write audit, so device_id is "api" (not threaded through).
+    let backend = DbBackend::new(
+        state.pool.clone(),
+        ProfileId::from(auth.0.profile.id),
+        "api".to_string(),
+        Surface::ApiHttp,
+    );
+    let out = backend.show_resource(cmd).await.map_err(ApiError::from)?;
+    Ok(Json(out.value))
 }
 
 #[utoipa::path(
