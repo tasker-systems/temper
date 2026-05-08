@@ -761,8 +761,8 @@ pub async fn update(
         let res_id = ResourceId::from(resource_id);
         let prof_id = ProfileId::from(profile_id);
         let managed =
-            post_merge_managed.unwrap_or_else(|| serde_json::Value::Object(Default::default()));
-        let open = post_merge_open.unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+            post_merge_managed.expect("populated by manifest-rewrite block when meta_touched");
+        let open = post_merge_open.expect("populated by manifest-rewrite block when meta_touched");
         if let Err(e) = super::edge_service::reconcile_edges(
             pool,
             &prof_id,
