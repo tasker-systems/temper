@@ -6,13 +6,11 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
-use temper_api::services::{
-    context_service, doc_type_service, ingest_service, meta_service, resource_service,
-};
+use temper_api::services::{context_service, doc_type_service, ingest_service, resource_service};
 use temper_core::error::TemperError;
 use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
+use temper_core::types::managed_meta::ManagedMeta;
 
 use crate::service::TemperMcpService;
 
@@ -111,13 +109,6 @@ pub struct UpdateResourceMetaInput {
     pub managed_meta: ManagedMeta,
     /// New open (user-defined) frontmatter as JSON.
     pub open_meta: serde_json::Value,
-    /// SHA-256 hash of the managed_meta JSON. The caller computes this
-    /// the same way the CLI sync path does (over the canonical form);
-    /// the server writes it verbatim into
-    /// `kb_resource_manifests.managed_hash`.
-    pub managed_hash: String,
-    /// SHA-256 hash of the open_meta JSON. Stored verbatim.
-    pub open_hash: String,
 }
 
 /// MCP input for delete_resource.
@@ -538,37 +529,35 @@ pub async fn update_resource_meta(
     let profile_id = ProfileId::from(profile.id);
     let resource_id = ResourceId::from(input.id);
 
-    // Delegate to the shared service used by the REST PUT handler.
-    // `meta_service::update_meta` runs its own `can_modify_resource`
-    // check, updates the manifest, cascades identity fields, writes
-    // the event + audit, and reconciles edges. The MCP tool does not
-    // duplicate any of that.
-    let payload = MetaUpdatePayload {
-        resource_id,
-        managed_meta: input.managed_meta,
-        open_meta: input.open_meta,
-        managed_hash: input.managed_hash,
-        open_hash: input.open_hash,
+    // Dispatch through the unified DbBackend write path. The translator's
+    // meta-only branch runs resource_service::update with body=None, which
+    // merges managed_meta / open_meta into the manifest, cascades identity
+    // fields (doc_type / context), recomputes managed_hash / open_hash
+    // server-side (Phase 5: caller-supplied hashes are no longer trusted),
+    // emits the update_meta audit, and reconciles edges.
+    let cmd = temper_core::operations::UpdateResource {
+        resource: temper_core::operations::ResourceRef::Uuid { id: resource_id },
+        body: None,
+        managed_meta: Some(input.managed_meta),
+        open_meta: Some(input.open_meta),
+        origin: Surface::Mcp,
     };
 
-    meta_service::update_meta(pool, profile_id, resource_id, "mcp", payload)
-        .await
-        .map_err(|e| match e {
-            temper_api::error::ApiError::Forbidden => rmcp::ErrorData::invalid_params(
-                "Resource not found or not modifiable".to_string(),
-                None,
-            ),
-            temper_api::error::ApiError::NotFound => {
-                rmcp::ErrorData::invalid_params("Resource not found".to_string(), None)
-            }
-            temper_api::error::ApiError::BadRequest(msg) => {
-                rmcp::ErrorData::invalid_params(msg, None)
-            }
-            other => rmcp::ErrorData::internal_error(
-                format!("Failed to update resource meta: {other}"),
-                None,
-            ),
-        })?;
+    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    backend.update_resource(cmd).await.map_err(|e| match e {
+        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Resource not found or not modifiable".to_string(),
+            None,
+        ),
+        TemperError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
+        }
+        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        other => rmcp::ErrorData::internal_error(
+            format!("Failed to update resource meta: {other}"),
+            None,
+        ),
+    })?;
 
     let response = UpdateResourceMetaResponse {
         updated: true,
