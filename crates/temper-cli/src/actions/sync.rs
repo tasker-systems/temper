@@ -89,9 +89,14 @@ pub struct PushResult {
 pub enum PullBranch {
     /// Wrote to the manifest-resolved vault path and updated the entry.
     ManifestTracked,
-    /// Wrote as `{id}.md` under the caller-provided write root (used when no
-    /// manifest is available or the id is not tracked). The CLI wrapper passes
-    /// CWD in the no-manifest case; the sync engine passes `vault_root`.
+    /// First-sync path: a manifest was available but the id was not yet
+    /// tracked. Reconstructed `{owner}/{context}/{doc_type}/{slug}.md` from
+    /// server data, wrote full frontmatter, and inserted a manifest entry so
+    /// subsequent pulls hit `ManifestTracked`.
+    NewlyTracked,
+    /// Wrote as `{id}.md` under the caller-provided write root. Reserved for
+    /// the no-manifest case (CLI `pull` wrapper passing CWD); sync run never
+    /// hits this branch because it always supplies a manifest.
     Snapshot,
 }
 
@@ -1413,9 +1418,13 @@ pub async fn pull_one_resource(
         .await
         .map_err(crate::commands::client_err)?;
 
-    // Manifest-tracked branch: only when we have a manifest AND the id is in it.
     if let Some(manifest) = manifest {
-        if let Some(entry) = manifest.entries.get_mut(&resource_id) {
+        if manifest.entries.contains_key(&resource_id) {
+            // Manifest-tracked branch: write to the entry's recorded path.
+            let entry = manifest
+                .entries
+                .get_mut(&resource_id)
+                .expect("contains_key returned true");
             let vault_path = vault_root.join(&entry.path);
             if let Some(parent) = vault_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -1460,10 +1469,102 @@ pub async fn pull_one_resource(
                 title: resource.title.clone(),
             });
         }
+
+        // First-sync branch: manifest is loaded but this id isn't tracked yet
+        // (cross-device sync, fresh device, or any resource ingested elsewhere
+        // since last pull). Reconstruct the canonical layout from server data
+        // and insert a manifest entry — never dump `<uuid>.md` at vault_root.
+        //
+        // `resource.owner_handle` shorthands the requester's own profile to
+        // literal "@me" (see OWNER_HANDLE_EXPR in resource_service.rs). Vault
+        // layout uses the actual profile slug (matching the canonical kb://
+        // URIs that sync_refresh parses), so resolve "@me" → @{profile.slug}.
+        // Team handles ("+team-slug") are already canonical.
+        let context = resource.context_name.as_str();
+        let doc_type = resource.doc_type_name.as_str();
+        let slug_owned;
+        let slug = match resource.slug.as_deref() {
+            Some(s) if !s.is_empty() => s,
+            _ => {
+                slug_owned = ingest::slug_from_title(&resource.title);
+                slug_owned.as_str()
+            }
+        };
+        let owner_owned;
+        let owner = if resource.owner_handle == "@me" {
+            let profile = client
+                .profile()
+                .get()
+                .await
+                .map_err(crate::commands::client_err)?;
+            owner_owned = format!("@{}", profile.slug);
+            owner_owned.as_str()
+        } else {
+            resource.owner_handle.as_str()
+        };
+        if owner.is_empty() || context.is_empty() || doc_type.is_empty() || slug.is_empty() {
+            return Err(TemperError::Vault(format!(
+                "pull untracked id {id}: server response missing routing info \
+                 (owner={owner:?}, context={context:?}, doc_type={doc_type:?}, slug={slug:?})"
+            )));
+        }
+
+        let vault = Vault::new(vault_root);
+        let rel_path = vault.rel_path(owner, context, doc_type, slug);
+        let vault_path = vault.doc_file(owner, context, doc_type, slug);
+        if let Some(parent) = vault_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let managed_value = content_response
+            .managed_meta
+            .as_ref()
+            .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
+        let fm = ingest::build_frontmatter_from_resource(
+            &resource,
+            context,
+            doc_type,
+            ingest::normalize_body_for_vault(&content_response.markdown),
+            managed_value.as_ref(),
+            content_response.open_meta.as_ref(),
+        )?;
+        fm.write_to(&vault_path)
+            .map_err(|e| TemperError::Vault(format!("pull write {}: {e}", vault_path.display())))?;
+
+        let content_hash = temper_core::hash::compute_body_hash(fm.body());
+        let (managed_hash, open_hash) = fm.hashes();
+        let remote_body_hash = expected_remote_hash.unwrap_or_else(|| content_hash.clone());
+        let mtime_secs = file_mtime_secs(&vault_path).ok();
+
+        manifest.entries.insert(
+            resource_id,
+            ManifestEntry {
+                path: rel_path,
+                body_hash: content_hash,
+                remote_body_hash,
+                managed_hash: managed_hash.clone(),
+                open_hash: open_hash.clone(),
+                remote_managed_hash: managed_hash,
+                remote_open_hash: open_hash,
+                synced_at: chrono::Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        return Ok(PullResult {
+            resource_id,
+            path: vault_path,
+            branch: PullBranch::NewlyTracked,
+            title: resource.title.clone(),
+        });
     }
 
-    // Snapshot branch: no manifest, or id not tracked. Write to vault_root
-    // as `{id}.md`. Matches the ADDED branch in `commands/pull.rs` today.
+    // Snapshot branch: no manifest at all. CLI `pull` wrapper passes CWD here
+    // when no manifest can be loaded — file lands as `{id}.md` under the
+    // caller-provided root. Sync run never reaches this branch.
     let filename = format!("{id}.md");
     let snapshot_path = vault_root.join(&filename);
     std::fs::write(&snapshot_path, &content_response.markdown)?;
