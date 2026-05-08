@@ -481,34 +481,6 @@ pub async fn check_can_modify(pool: &PgPool, profile_id: Uuid, resource_id: Uuid
     Ok(())
 }
 
-/// Create a new resource. The caller is set as both originator and owner.
-pub async fn create(
-    pool: &PgPool,
-    profile_id: Uuid,
-    req: ResourceCreateRequest,
-) -> ApiResult<ResourceRow> {
-    let id = Uuid::now_v7();
-    sqlx::query!(
-        r#"
-        INSERT INTO kb_resources
-            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
-             originator_profile_id, owner_profile_id, is_active, created, updated)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())
-        "#,
-        id,
-        req.kb_context_id,
-        req.kb_doc_type_id,
-        req.origin_uri,
-        req.title,
-        req.slug,
-        profile_id,
-    )
-    .execute(pool)
-    .await?;
-
-    get_visible(pool, profile_id, id).await
-}
-
 /// Update mutable fields on a resource. Requires `can_modify_resource()` to return true.
 ///
 /// Performs a partial merge for `managed_meta` and `open_meta`:
