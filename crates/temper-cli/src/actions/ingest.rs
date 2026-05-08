@@ -480,9 +480,12 @@ pub fn build_frontmatter(
 ///
 /// `canonical_owner` is the value to write into `temper-owner`. The caller
 /// is responsible for resolving the API's `@me` shorthand to
-/// `@<profile.slug>` (use `crate::actions::sync::resolve_owner_for_frontmatter`).
-/// Team handles (`+<team-slug>`) and other users' handles can be passed
-/// through unchanged.
+/// `@<profile.slug>`. Async/loop callers should use
+/// `crate::actions::sync::OwnerResolver` (caches the profile fetch across
+/// multiple resources); callers that already have the profile slug in scope
+/// can use `crate::actions::sync::resolve_owner_for_frontmatter` (pure, no
+/// client). Team handles (`+<team-slug>`) and other users' handles can be
+/// passed through unchanged by both helpers.
 ///
 /// Combines resource-level fields (id, type, context, created, title) with
 /// managed_meta fields (temper-* keys, stage, mode, effort, etc.) and

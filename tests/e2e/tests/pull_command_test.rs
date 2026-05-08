@@ -17,7 +17,7 @@
 
 mod common;
 
-use temper_cli::actions::sync::{pull_one_resource, PullBranch};
+use temper_cli::actions::sync::{pull_one_resource, OwnerResolver, PullBranch};
 use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
 use temper_core::types::{Manifest, ManifestEntry, ManifestEntryState, ResourceId};
 
@@ -63,9 +63,17 @@ async fn pull_one_resource_without_manifest_writes_snapshot(pool: sqlx::PgPool) 
     };
     let seeded = app.client.ingest().create(&payload).await.expect("ingest");
 
-    let result = pull_one_resource(&app.client, app.vault_dir.path(), seeded.id, None, None)
-        .await
-        .expect("pull_one_resource");
+    let mut resolver = OwnerResolver::new(&app.client);
+    let result = pull_one_resource(
+        &app.client,
+        app.vault_dir.path(),
+        seeded.id,
+        None,
+        None,
+        &mut resolver,
+    )
+    .await
+    .expect("pull_one_resource");
 
     assert_eq!(result.branch, PullBranch::Snapshot);
     assert_eq!(result.title, "Pull Snapshot Test");
@@ -151,12 +159,14 @@ async fn pull_one_resource_with_manifest_writes_to_vault_and_updates_entry(pool:
         },
     );
 
+    let mut resolver = OwnerResolver::new(&app.client);
     let result = pull_one_resource(
         &app.client,
         app.vault_dir.path(),
         ResourceId::from(uuid::Uuid::from(seeded.id)),
         Some(&mut manifest),
         None,
+        &mut resolver,
     )
     .await
     .expect("pull_one_resource");
@@ -240,9 +250,17 @@ async fn pull_one_resource_snapshot_lands_in_caller_provided_root(pool: sqlx::Pg
         "snapshot_dir must differ from vault_dir for this test to be meaningful"
     );
 
-    let result = pull_one_resource(&app.client, snapshot_dir.path(), seeded.id, None, None)
-        .await
-        .expect("pull_one_resource");
+    let mut resolver = OwnerResolver::new(&app.client);
+    let result = pull_one_resource(
+        &app.client,
+        snapshot_dir.path(),
+        seeded.id,
+        None,
+        None,
+        &mut resolver,
+    )
+    .await
+    .expect("pull_one_resource");
 
     assert_eq!(result.branch, PullBranch::Snapshot);
     let expected_path = snapshot_dir.path().join(format!("{}.md", seeded.id));
@@ -324,12 +342,14 @@ async fn pull_one_resource_with_manifest_but_untracked_id_writes_canonical_layou
         "precondition: id must not be tracked"
     );
 
+    let mut resolver = OwnerResolver::new(&app.client);
     let result = pull_one_resource(
         &app.client,
         app.vault_dir.path(),
         seeded.id,
         Some(&mut manifest),
         Some(temper_core::hash::compute_body_hash(&body)),
+        &mut resolver,
     )
     .await
     .expect("pull_one_resource");
@@ -462,12 +482,14 @@ async fn pull_one_resource_newly_tracked_writes_canonical_owner_and_passes_prefl
     let seeded = app.client.ingest().create(&payload).await.expect("ingest");
 
     let mut manifest = Manifest::new("e2e-ownership-device".to_string());
+    let mut resolver = OwnerResolver::new(&app.client);
     let result = pull_one_resource(
         &app.client,
         app.vault_dir.path(),
         seeded.id,
         Some(&mut manifest),
         Some(temper_core::hash::compute_body_hash(&body)),
+        &mut resolver,
     )
     .await
     .expect("pull_one_resource");

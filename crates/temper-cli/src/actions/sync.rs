@@ -223,6 +223,61 @@ pub fn resolve_owner_for_frontmatter(handle: &str, profile_slug: &str) -> String
     }
 }
 
+/// Stateful resolver for the API's `@me` shorthand. Wraps `&TemperClient`
+/// with a lazily-populated cache of the requester's canonical owner sigil
+/// so a sync run with N `@me`-owned resources fetches the profile at most
+/// once, not N times.
+///
+/// One-shot callers (CLI `pull`, e2e tests, any code path that resolves
+/// exactly one handle) construct an ephemeral resolver and discard it.
+/// `sync_orchestration` constructs one resolver per run and threads
+/// `&mut OwnerResolver` through the pull primitives.
+///
+/// For the pure-sync case (caller already has the profile slug in scope),
+/// see `resolve_owner_for_frontmatter`.
+///
+/// # Test coverage
+///
+/// The `@me` resolution path requires a live client and is covered by the
+/// e2e tests in `pull_command_test.rs` (specifically
+/// `pull_one_resource_newly_tracked_writes_canonical_owner_and_passes_preflight`).
+/// Non-`@me` passthrough cannot be unit-tested in this crate without
+/// fabricating a `TemperClient`, which requires a non-trivial token store
+/// setup. Rely on the e2e layer for full coverage.
+pub struct OwnerResolver<'c> {
+    client: &'c temper_client::TemperClient,
+    canonical: Option<String>,
+}
+
+impl<'c> OwnerResolver<'c> {
+    pub fn new(client: &'c temper_client::TemperClient) -> Self {
+        Self {
+            client,
+            canonical: None,
+        }
+    }
+
+    /// Resolve `handle` (typically `resource.owner_handle`) to the canonical
+    /// owner sigil. Fetches the profile once per resolver lifetime; subsequent
+    /// `@me` lookups return the cached value. Non-`@me` handles pass through
+    /// without touching the client.
+    pub async fn resolve(&mut self, handle: &str) -> crate::error::Result<String> {
+        if handle != "@me" {
+            return Ok(handle.to_string());
+        }
+        if self.canonical.is_none() {
+            let profile = self
+                .client
+                .profile()
+                .get()
+                .await
+                .map_err(crate::commands::client_err)?;
+            self.canonical = Some(format!("@{}", profile.slug));
+        }
+        Ok(self.canonical.as_deref().unwrap().to_string())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // normalize_all_entries report
 // ---------------------------------------------------------------------------
@@ -783,9 +838,10 @@ pub async fn sync_orchestration(
     progress.phase_summary("push", push_count);
 
     // Step 5: Pull
+    let mut resolver = OwnerResolver::new(client);
     for item in &diff.to_pull {
         progress.pull_start(&item.uri);
-        match pull_resource(client, manifest, vault_root, item).await {
+        match pull_resource(client, manifest, vault_root, item, &mut resolver).await {
             Ok(()) => {
                 if let Some(entry) = manifest.entries.get(&item.resource_id) {
                     progress.pull_done(&entry.path);
@@ -1395,6 +1451,7 @@ async fn pull_resource(
     manifest: &mut Manifest,
     vault_root: &Path,
     item: &SyncPullItem,
+    resolver: &mut OwnerResolver<'_>,
 ) -> Result<()> {
     match item.kind {
         SyncItemKind::Body => {
@@ -1419,11 +1476,14 @@ async fn pull_resource(
                 item.resource_id,
                 Some(manifest),
                 Some(item.content_hash.clone()),
+                resolver,
             )
             .await
             .map(|_| ())
         }
-        SyncItemKind::MetaOnly => pull_resource_meta_only(client, manifest, vault_root, item).await,
+        SyncItemKind::MetaOnly => {
+            pull_resource_meta_only(client, manifest, vault_root, item, resolver).await
+        }
     }
 }
 
@@ -1449,6 +1509,7 @@ pub async fn pull_one_resource(
     resource_id: ResourceId,
     manifest: Option<&mut Manifest>,
     expected_remote_hash: Option<String>,
+    resolver: &mut OwnerResolver<'_>,
 ) -> Result<PullResult> {
     let id = Uuid::from(resource_id);
 
@@ -1482,23 +1543,12 @@ pub async fn pull_one_resource(
                 .managed_meta
                 .as_ref()
                 .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
-            let canonical_owner_owned;
-            let canonical_owner = if resource.owner_handle == "@me" {
-                let profile = client
-                    .profile()
-                    .get()
-                    .await
-                    .map_err(crate::commands::client_err)?;
-                canonical_owner_owned = format!("@{}", profile.slug);
-                canonical_owner_owned.as_str()
-            } else {
-                resource.owner_handle.as_str()
-            };
+            let canonical_owner = resolver.resolve(&resource.owner_handle).await?;
             let fm = ingest::build_frontmatter_from_resource(
                 &resource,
                 &ctx,
                 &dtype,
-                canonical_owner,
+                &canonical_owner,
                 ingest::normalize_body_for_vault(&content_response.markdown),
                 managed_value.as_ref(),
                 content_response.open_meta.as_ref(),
@@ -1548,18 +1598,7 @@ pub async fn pull_one_resource(
                 slug_owned.as_str()
             }
         };
-        let owner_owned;
-        let owner = if resource.owner_handle == "@me" {
-            let profile = client
-                .profile()
-                .get()
-                .await
-                .map_err(crate::commands::client_err)?;
-            owner_owned = format!("@{}", profile.slug);
-            owner_owned.as_str()
-        } else {
-            resource.owner_handle.as_str()
-        };
+        let owner = resolver.resolve(&resource.owner_handle).await?;
         if owner.is_empty() || context.is_empty() || doc_type.is_empty() || slug.is_empty() {
             return Err(TemperError::Vault(format!(
                 "pull untracked id {id}: server response missing routing info \
@@ -1568,8 +1607,8 @@ pub async fn pull_one_resource(
         }
 
         let vault = Vault::new(vault_root);
-        let rel_path = vault.rel_path(owner, context, doc_type, slug);
-        let vault_path = vault.doc_file(owner, context, doc_type, slug);
+        let rel_path = vault.rel_path(&owner, context, doc_type, slug);
+        let vault_path = vault.doc_file(&owner, context, doc_type, slug);
         if let Some(parent) = vault_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -1582,7 +1621,7 @@ pub async fn pull_one_resource(
             &resource,
             context,
             doc_type,
-            owner,
+            &owner,
             ingest::normalize_body_for_vault(&content_response.markdown),
             managed_value.as_ref(),
             content_response.open_meta.as_ref(),
@@ -1806,6 +1845,7 @@ async fn pull_resource_meta_only(
     manifest: &mut Manifest,
     vault_root: &Path,
     item: &SyncPullItem,
+    resolver: &mut OwnerResolver<'_>,
 ) -> Result<()> {
     // A MetaOnly diff presupposes the client already knows this resource
     // — if we have no manifest entry, the server's body-hash agreement
@@ -1867,18 +1907,7 @@ async fn pull_resource_meta_only(
     // on ManagedMeta makes this round-trip lossless.
     let managed_value = managed_meta_to_value(meta_response.managed_meta.as_ref());
 
-    let canonical_owner_owned;
-    let canonical_owner = if resource.owner_handle == "@me" {
-        let profile = client
-            .profile()
-            .get()
-            .await
-            .map_err(crate::commands::client_err)?;
-        canonical_owner_owned = format!("@{}", profile.slug);
-        canonical_owner_owned.as_str()
-    } else {
-        resource.owner_handle.as_str()
-    };
+    let canonical_owner = resolver.resolve(&resource.owner_handle).await?;
 
     apply_pull_meta_only(
         ApplyPullMetaOnly {
@@ -1887,7 +1916,7 @@ async fn pull_resource_meta_only(
             resource: &resource,
             ctx: &ctx,
             doc_type: &doc_type,
-            canonical_owner,
+            canonical_owner: &canonical_owner,
             managed_meta: managed_value.as_ref(),
             open_meta: meta_response.open_meta.as_ref(),
         },
