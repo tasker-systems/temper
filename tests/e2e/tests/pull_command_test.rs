@@ -263,3 +263,146 @@ async fn pull_one_resource_snapshot_lands_in_caller_provided_root(pool: sqlx::Pg
         "snapshot must not appear in vault_dir when caller passed a different root"
     );
 }
+
+/// Cross-device sync regression: when sync run pulls a `Body` resource
+/// whose ID is not in the local manifest, the primitive must reconstruct
+/// the canonical `{owner}/{context}/{doc_type}/{slug}.md` layout, write
+/// full frontmatter, and insert a manifest entry — so subsequent syncs
+/// hit the ManifestTracked branch instead of looping the bug.
+///
+/// Pre-fix behavior: dumped raw body markdown to `<vault_root>/<uuid>.md`
+/// at the vault root with no frontmatter (the seven stranded UUID files
+/// observed after a real `temper sync run`).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_one_resource_with_manifest_but_untracked_id_writes_canonical_layout(
+    pool: sqlx::PgPool,
+) {
+    let app = common::setup(pool).await;
+
+    let profile = app
+        .client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+
+    app.client
+        .contexts()
+        .create("first-sync")
+        .await
+        .expect("context create");
+
+    let body = "# First Sync\n\nBody arrived from the server.".to_string();
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: body.clone(),
+        content_hash: format!("{:0>64}", "d"),
+        embedding: vec![0.0_f32; 768],
+    };
+    let payload = IngestPayload {
+        title: "First Sync Test".to_string(),
+        origin_uri: "test://first-sync".to_string(),
+        context_name: "first-sync".to_string(),
+        doc_type_name: "research".to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&body)),
+        slug: "first-sync-test".to_string(),
+        content: body.clone(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({"date": "2026-05-07"})),
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+    };
+    let seeded = app.client.ingest().create(&payload).await.expect("ingest");
+
+    // Manifest is loaded but has NO entry for the seeded id — exactly the
+    // cross-device case (laptop ingested, desktop syncs for the first time).
+    let mut manifest = Manifest::new("e2e-untracked-device".to_string());
+    assert!(
+        !manifest.entries.contains_key(&seeded.id),
+        "precondition: id must not be tracked"
+    );
+
+    let result = pull_one_resource(
+        &app.client,
+        app.vault_dir.path(),
+        seeded.id,
+        Some(&mut manifest),
+        Some(temper_core::hash::compute_body_hash(&body)),
+    )
+    .await
+    .expect("pull_one_resource");
+
+    assert_eq!(
+        result.branch,
+        PullBranch::NewlyTracked,
+        "manifest-Some + untracked id must take the NewlyTracked branch, not Snapshot"
+    );
+
+    // Canonical path: @{owner}/{context}/{doc_type}/{slug}.md
+    let expected_rel = format!("@{}/first-sync/research/first-sync-test.md", profile.slug);
+    let expected_abs = app.vault_dir.path().join(&expected_rel);
+    assert_eq!(
+        result.path, expected_abs,
+        "untracked-id pull must land at canonical layout, not <vault_root>/<uuid>.md"
+    );
+
+    // The orphan UUID file must NOT have been written.
+    let orphan = app.vault_dir.path().join(format!("{}.md", seeded.id));
+    assert!(
+        !orphan.exists(),
+        "untracked-id pull must not produce orphan UUID file at vault root: {}",
+        orphan.display()
+    );
+
+    // Frontmatter must be reconstructed — file should have a YAML fence and
+    // the canonical managed identity keys, not be a raw body dump.
+    let on_disk = std::fs::read_to_string(&expected_abs).expect("file written at canonical layout");
+    assert!(
+        on_disk.starts_with("---\n"),
+        "file must start with YAML fence; got:\n{on_disk}"
+    );
+    assert!(
+        on_disk.contains(&format!("temper-id: {}", seeded.id))
+            || on_disk.contains(&format!("temper-id: \"{}\"", seeded.id)),
+        "frontmatter must include temper-id (quoted or bare); got:\n{on_disk}"
+    );
+    assert!(
+        on_disk.contains("temper-context: first-sync"),
+        "frontmatter must include temper-context; got:\n{on_disk}"
+    );
+    assert!(
+        on_disk.contains("temper-slug: first-sync-test"),
+        "frontmatter must include temper-slug; got:\n{on_disk}"
+    );
+    assert!(
+        on_disk.contains("temper-title:"),
+        "frontmatter must include temper-title; got:\n{on_disk}"
+    );
+
+    // Manifest must now track the resource at the canonical rel_path with
+    // populated hashes — so the next sync hits ManifestTracked, not this
+    // branch again.
+    let entry = manifest
+        .entries
+        .get(&seeded.id)
+        .expect("manifest must now track the previously-untracked id");
+    assert_eq!(
+        entry.path, expected_rel,
+        "manifest entry must record canonical rel_path"
+    );
+    assert!(
+        entry.body_hash.starts_with("sha256:"),
+        "manifest entry must have body_hash populated"
+    );
+    assert!(
+        entry.managed_hash.starts_with("sha256:"),
+        "manifest entry must have managed_hash populated"
+    );
+    assert_eq!(
+        entry.state,
+        ManifestEntryState::Clean,
+        "newly-tracked entry must be Clean (in sync with server)"
+    );
+}
