@@ -106,18 +106,21 @@ pub fn build_runtime_and_client() -> Result<(tokio::runtime::Runtime, temper_cli
     Ok((rt, client))
 }
 
-/// Ensure the user's profile exists on the server.
+/// Ensure the user's profile exists on the server, returning the resolved
+/// `Profile` so callers can reuse fields like `slug` without a second
+/// network round-trip.
 ///
 /// Calls `GET /api/profile` which hits the Axum endpoint that auto-provisions
 /// profiles for new users. This must be called before any TypeScript-routed
 /// endpoints (ingest, sync) which require a pre-existing profile.
-pub async fn ensure_profile(client: &temper_client::TemperClient) -> Result<()> {
+pub async fn ensure_profile(
+    client: &temper_client::TemperClient,
+) -> Result<temper_core::types::Profile> {
     client
         .profile()
         .get()
         .await
-        .map_err(|e| TemperError::Api(format!("profile pre-flight: {e}")))?;
-    Ok(())
+        .map_err(|e| TemperError::Api(format!("profile pre-flight: {e}")))
 }
 
 /// Require a device_id or return a clear auth error.
