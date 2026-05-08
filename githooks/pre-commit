@@ -12,7 +12,7 @@ cargo clippy --all-targets --all-features -- -D warnings
 echo "  ✓ Clippy OK"
 
 echo "  Checking docs..."
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --quiet
+SQLX_OFFLINE=true RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --quiet
 echo "  ✓ Docs OK"
 
 # TypeScript checks (packages/temper-cloud)
