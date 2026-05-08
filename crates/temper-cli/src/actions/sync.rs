@@ -179,6 +179,30 @@ pub struct SyncResult {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// Owner sigil resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the API's `owner_handle` shorthand to the canonical owner sigil
+/// used in vault paths and `kb_resource_uri()`.
+///
+/// The API returns the literal string `"@me"` for the requester's own
+/// resources (see `OWNER_HANDLE_EXPR` in `resource_service.rs`). The vault
+/// layout and the server's `kb_resource_uri()` SQL function use
+/// `@<profile.slug>` as the canonical owner segment. This helper closes the
+/// gap: callers pass `resource.owner_handle` plus the requester's own
+/// `profile.slug` (without leading `@`) and get back the canonical sigil.
+///
+/// Team handles (`+<team-slug>`) are already canonical and pass through
+/// unchanged; so do other users' personal handles.
+pub fn resolve_owner_for_frontmatter(handle: &str, profile_slug: &str) -> String {
+    if handle == "@me" {
+        format!("@{profile_slug}")
+    } else {
+        handle.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // normalize_all_entries report
 // ---------------------------------------------------------------------------
 
@@ -3159,6 +3183,32 @@ mod tests {
         assert_eq!(
             slug, "my-document-2",
             "new resource should get deduplicated slug"
+        );
+    }
+
+    // --- resolve_owner_for_frontmatter ---
+
+    #[test]
+    fn resolve_owner_for_frontmatter_resolves_at_me() {
+        assert_eq!(
+            resolve_owner_for_frontmatter("@me", "j-cole-taylor"),
+            "@j-cole-taylor"
+        );
+    }
+
+    #[test]
+    fn resolve_owner_for_frontmatter_passes_through_team_handle() {
+        assert_eq!(
+            resolve_owner_for_frontmatter("+platform-eng", "j-cole-taylor"),
+            "+platform-eng"
+        );
+    }
+
+    #[test]
+    fn resolve_owner_for_frontmatter_passes_through_other_user() {
+        assert_eq!(
+            resolve_owner_for_frontmatter("@some-other-user", "j-cole-taylor"),
+            "@some-other-user"
         );
     }
 
