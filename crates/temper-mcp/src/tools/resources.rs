@@ -5,9 +5,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_api::backend::DbBackend;
 use temper_api::services::{
     context_service, doc_type_service, ingest_service, meta_service, resource_service,
 };
+use temper_core::error::TemperError;
+use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
@@ -267,37 +270,47 @@ pub async fn create_resource(
         Some(&slug),
     );
 
-    // Route through the ingest service — handles validation, chunking,
-    // embedding, dedup, and resource creation atomically.
-    let payload = temper_core::types::IngestPayload {
-        title: input.title,
-        origin_uri,
-        context_name: input.context_name,
-        doc_type_name: input.doc_type_name,
-        content_hash: None, // ingest() computes if needed
-        slug,
-        content,
-        metadata: None,
-        managed_meta: Some(managed_meta_value),
-        open_meta: input.open_meta,
-        chunks_packed: None, // server-side pipeline will generate
+    // Dispatch through DbBackend so MCP shares the unified write path with
+    // HTTP. The send-side ensure_managed_identity_keys above ran on the
+    // JSONB form; deserialize back to the typed ManagedMeta the cmd carries
+    // (extras bucket preserves unknown keys; serde renames re-emit canonical
+    // temper-* keys on round-trip).
+    let managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
+
+    let body = if content.is_empty() {
+        None
+    } else {
+        Some(BodyUpdate::new(content))
     };
 
-    let resource = ingest_service::ingest(pool, profile_id, "mcp", payload)
-        .await
-        .map_err(|e| match e {
-            temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
-                "Context or doc_type not found. Use create_context / list_doc_types to verify."
-                    .to_string(),
-                None,
-            ),
-            temper_api::error::ApiError::BadRequest(msg) => {
-                rmcp::ErrorData::invalid_params(msg, None)
-            }
-            other => {
-                rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
-            }
-        })?;
+    let cmd = CreateResource {
+        slug,
+        doctype: input.doc_type_name,
+        context: input.context_name,
+        title: input.title,
+        body,
+        managed_meta,
+        open_meta: input.open_meta,
+        origin_uri: Some(origin_uri),
+        chunks_packed: None,
+        content_hash: None,
+        origin: Surface::Mcp,
+    };
+
+    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let out = backend.create_resource(cmd).await.map_err(|e| match e {
+        TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
+            "Context or doc_type not found. Use create_context / list_doc_types to verify."
+                .to_string(),
+            None,
+        ),
+        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to create resource: {other}"), None)
+        }
+    })?;
+    let resource = out.value;
 
     let enriched = enrich_resource(pool, profile_id, &resource).await?;
     let response = CreateResourceResponse {
