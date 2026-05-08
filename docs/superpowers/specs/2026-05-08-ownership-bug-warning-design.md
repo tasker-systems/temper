@@ -163,18 +163,30 @@ pub fn preflight_ownership_check(
 New signature: add `current_owner_slug: &str` (without the `@` prefix; matches the
 shape of `profile.slug`).
 
-Equivalence rule: before the `frontmatter_owner != manifest_owner` check, if
-`frontmatter_owner == "@me"`, treat it as `format!("@{current_owner_slug}")` for the
-comparison. All other values (other users, team handles) compare as before.
+Equivalence rule: `@me` and `@<current_owner_slug>` are aliases for the current
+user — they should be treated as equal *in either direction*. Two owner strings are
+equivalent when:
+
+1. They are byte-for-byte equal, OR
+2. One side is `"@me"` and the other side is `format!("@{current_owner_slug}")`.
+
+Symmetric handling matters because the legacy vault state has files with
+`manifest_path = @me/...` AND `frontmatter = @me` (literal match — case 1 keeps
+working), while the post-PR-#70 state has `manifest_path = @<slug>/...` AND
+`frontmatter = @me` (case 2 — the new tolerance). A one-sided rule would regress
+case 1.
 
 ```rust
-let frontmatter_owner_canonical = if frontmatter_owner == "@me" {
-    format!("@{current_owner_slug}")
-} else {
-    frontmatter_owner.clone()
-};
+fn owners_equivalent(a: &str, b: &str, current_owner_slug: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let resolved = format!("@{current_owner_slug}");
+    (a == "@me" && b == resolved) || (b == "@me" && a == resolved)
+}
 
-if frontmatter_owner_canonical != manifest_owner {
+// inside preflight_ownership_check:
+if !owners_equivalent(&frontmatter_owner, &manifest_owner, current_owner_slug) {
     mismatches.push(OwnershipMismatch {
         file_path: entry.path.clone(),
         frontmatter_owner,        // report the raw value the user sees in the file
@@ -257,6 +269,8 @@ respective files.
 | `resolve_owner_for_frontmatter_passes_through_team_handle` | `("+platform-eng", "j-cole-taylor")` | `== "+platform-eng"` |
 | `resolve_owner_for_frontmatter_passes_through_other_user` | `("@some-other-user", "j-cole-taylor")` | `== "@some-other-user"` |
 | `preflight_ownership_check_treats_at_me_as_current_owner_alias` | manifest path `@j-cole-taylor/temper/task/x.md`, file frontmatter `temper-owner: '@me'`, `current_owner_slug = "j-cole-taylor"` | `mismatches.is_empty()` |
+| `preflight_ownership_check_treats_legacy_at_me_path_as_current_owner_alias` | manifest path `@me/temper/task/y.md`, frontmatter `temper-owner: '@j-cole-taylor'`, `current_owner_slug = "j-cole-taylor"` | `mismatches.is_empty()` (symmetric direction) |
+| `preflight_ownership_check_keeps_legacy_at_me_at_me_clean` | manifest path `@me/...`, frontmatter `temper-owner: '@me'`, `current_owner_slug = "j-cole-taylor"` | `mismatches.is_empty()` (literal match still wins) |
 | `preflight_ownership_check_flags_other_owner_mismatch` | manifest path `@j-cole-taylor/...`, frontmatter `temper-owner: '@some-other-user'`, `current_owner_slug = "j-cole-taylor"` | one mismatch reported, `frontmatter_owner == "@some-other-user"` |
 | `preflight_ownership_check_flags_team_handle_mismatch_when_path_is_personal` | manifest `@j-cole-taylor/...`, frontmatter `+platform-eng`, current `j-cole-taylor` | flagged (defends against over-tolerance) |
 
