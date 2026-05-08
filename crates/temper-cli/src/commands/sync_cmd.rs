@@ -69,7 +69,11 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
     warn_blocked_paths(&normalize_report);
 
     // Preflight: detect and warn about ownership mismatches.
-    let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
+    let ownership_mismatches = sync_actions::preflight_ownership_check(
+        &manifest,
+        &vault_root,
+        "", // TEMP: placeholder, replaced in Task 5 when profile is fetched first
+    );
     if !ownership_mismatches.is_empty() {
         output::warning(format!(
             "{} file(s) have ownership mismatches and will be skipped from upload:",
@@ -202,7 +206,11 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
     warn_blocked_paths(&normalize_report);
 
     // Preflight: surface ownership mismatches in the status diff.
-    let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
+    let ownership_mismatches = sync_actions::preflight_ownership_check(
+        &manifest,
+        &vault_root,
+        "", // TEMP: placeholder, replaced in Task 5 when profile is fetched first
+    );
 
     let (rt, client) = runtime::build_runtime_and_client()?;
 

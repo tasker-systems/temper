@@ -109,6 +109,23 @@ pub struct PullResult {
     pub title: String,
 }
 
+/// Two owner sigils are equivalent if they are byte-equal OR one side is
+/// the API's `@me` display alias and the other is `@<current_owner_slug>`.
+///
+/// Used to keep `preflight_ownership_check` from spuriously flagging files
+/// whose frontmatter still says `@me` (legacy state, or files written via
+/// `build_frontmatter_from_resource` before the canonical-owner fix landed)
+/// against manifest paths that already use the canonical `@<profile.slug>`
+/// segment — and vice versa for legacy `@me/` vault paths whose frontmatter
+/// has been canonicalized.
+fn owners_equivalent(a: &str, b: &str, current_owner_slug: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let resolved = format!("@{current_owner_slug}");
+    (a == "@me" && b == resolved) || (b == "@me" && a == resolved)
+}
+
 /// Validate every non-provisional manifest entry: the file's frontmatter
 /// `temper-owner` must match the owner segment of its manifest path.
 ///
@@ -117,7 +134,11 @@ pub struct PullResult {
 /// source until they're first synced. Files missing their frontmatter,
 /// unreadable, or with a malformed manifest path are also skipped (surfaced
 /// by other code paths).
-pub fn preflight_ownership_check(manifest: &Manifest, vault_root: &Path) -> Vec<OwnershipMismatch> {
+pub fn preflight_ownership_check(
+    manifest: &Manifest,
+    vault_root: &Path,
+    current_owner_slug: &str,
+) -> Vec<OwnershipMismatch> {
     let mut mismatches = Vec::new();
 
     for entry in manifest.entries.values() {
@@ -145,7 +166,7 @@ pub fn preflight_ownership_check(manifest: &Manifest, vault_root: &Path) -> Vec<
             .map(|s| s.to_string())
             .unwrap_or_else(|| "@me".to_string());
 
-        if frontmatter_owner != manifest_owner {
+        if !owners_equivalent(&frontmatter_owner, &manifest_owner, current_owner_slug) {
             mismatches.push(OwnershipMismatch {
                 file_path: entry.path.clone(),
                 frontmatter_owner,
@@ -3286,7 +3307,7 @@ mod tests {
             },
         );
 
-        let mismatches = preflight_ownership_check(&manifest, vault);
+        let mismatches = preflight_ownership_check(&manifest, vault, "dev-user");
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].frontmatter_owner, "+team");
         assert_eq!(mismatches[0].manifest_owner, "@me");
@@ -3325,7 +3346,7 @@ mod tests {
             },
         );
 
-        let mismatches = preflight_ownership_check(&manifest, vault);
+        let mismatches = preflight_ownership_check(&manifest, vault, "dev-user");
         assert!(
             mismatches.is_empty(),
             "provisional entries should be ignored"
@@ -3365,8 +3386,169 @@ mod tests {
             },
         );
 
-        let mismatches = preflight_ownership_check(&manifest, vault);
+        let mismatches = preflight_ownership_check(&manifest, vault, "dev-user");
         assert!(mismatches.is_empty());
+    }
+
+    // --- owners_equivalent (pure helper) ---
+
+    #[test]
+    fn owners_equivalent_treats_at_me_and_resolved_slug_as_equal() {
+        assert!(owners_equivalent("@me", "@j-cole-taylor", "j-cole-taylor"));
+        assert!(owners_equivalent("@j-cole-taylor", "@me", "j-cole-taylor"));
+    }
+
+    #[test]
+    fn owners_equivalent_treats_byte_equal_strings_as_equal() {
+        assert!(owners_equivalent("@me", "@me", "j-cole-taylor"));
+        assert!(owners_equivalent(
+            "@j-cole-taylor",
+            "@j-cole-taylor",
+            "j-cole-taylor"
+        ));
+        assert!(owners_equivalent("+team", "+team", "j-cole-taylor"));
+    }
+
+    #[test]
+    fn owners_equivalent_rejects_other_user() {
+        assert!(!owners_equivalent("@me", "@some-other", "j-cole-taylor"));
+        assert!(!owners_equivalent(
+            "@some-other",
+            "@j-cole-taylor",
+            "j-cole-taylor"
+        ));
+    }
+
+    #[test]
+    fn owners_equivalent_rejects_team_vs_personal() {
+        assert!(!owners_equivalent("+platform-eng", "@me", "j-cole-taylor"));
+        assert!(!owners_equivalent(
+            "+platform-eng",
+            "@j-cole-taylor",
+            "j-cole-taylor"
+        ));
+    }
+
+    // --- preflight_ownership_check tolerance ---
+
+    #[test]
+    fn preflight_ownership_check_treats_at_me_as_current_owner_alias() {
+        // The bug case: PR #70 wrote a NewlyTracked file at
+        // @<profile.slug>/temper/task/x.md but the frontmatter still says @me.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@j-cole-taylor").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("x.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@me\"\ntemper-title: x\ntemper-slug: x\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@j-cole-taylor/temper/task/x.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault, "j-cole-taylor");
+        assert!(
+            mismatches.is_empty(),
+            "@me in frontmatter must be tolerated as alias for the current user; got {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn preflight_ownership_check_treats_legacy_at_me_path_as_current_owner_alias() {
+        // Symmetric: legacy on-disk path is @me/... but frontmatter has been
+        // updated to the canonical @<slug>.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("y.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@j-cole-taylor\"\ntemper-title: y\ntemper-slug: y\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/y.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault, "j-cole-taylor");
+        assert!(mismatches.is_empty(), "got {mismatches:?}");
+    }
+
+    #[test]
+    fn preflight_ownership_check_flags_other_owner_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@j-cole-taylor").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("z.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@some-other-user\"\ntemper-title: z\ntemper-slug: z\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@j-cole-taylor/temper/task/z.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault, "j-cole-taylor");
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].frontmatter_owner, "@some-other-user");
+        assert_eq!(mismatches[0].manifest_owner, "@j-cole-taylor");
     }
 
     // -----------------------------------------------------------------
