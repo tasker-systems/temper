@@ -13,7 +13,7 @@ use crate::services::resource_service::{
 use crate::services::{context_service, ingest_service};
 use crate::state::AppState;
 
-use temper_core::operations::{Backend, CreateResource, Surface};
+use temper_core::operations::{Backend, CreateResource, DeleteResource, ResourceRef, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
 use temper_core::types::resource::{ContentResponse, DeleteResponse};
@@ -286,12 +286,20 @@ pub async fn delete(
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
-    resource_service::delete(
-        &state.pool,
+
+    let cmd = DeleteResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(resource_id),
+        },
+        force: false,
+        origin: Surface::ApiHttp,
+    };
+    let backend = DbBackend::new(
+        state.pool.clone(),
         ProfileId::from(auth.0.profile.id),
-        ResourceId::from(resource_id),
-        &device_id,
-    )
-    .await?;
+        device_id,
+        Surface::ApiHttp,
+    );
+    backend.delete_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(DeleteResponse { deleted: true }))
 }
