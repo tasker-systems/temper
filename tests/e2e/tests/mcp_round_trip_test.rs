@@ -2,7 +2,9 @@
 
 mod common;
 
-use temper_api::services::{context_service, ingest_service, meta_service};
+use temper_api::backend::DbBackend;
+use temper_api::services::{context_service, ingest_service, meta_service, resource_service};
+use temper_core::operations::{Backend, BodyUpdate, ResourceRef, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
 
@@ -418,30 +420,35 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
         temper_core::types::ingest::pack_chunks(&updated_chunks).expect("pack updated");
     let updated_hash = format!("sha256:{}", sha2_hex(updated_content));
 
-    let update_payload = temper_core::types::ingest::IngestPayload {
-        title: "Reindex Test Resource".to_string(),
-        origin_uri: "mcp://test/reindex".to_string(),
-        context_name: "update-reindex-test".to_string(),
-        doc_type_name: "research".to_string(),
-        content_hash: Some(updated_hash.clone()),
-        slug: "reindex-test-resource".to_string(),
-        content: updated_content.to_string(),
-        metadata: None,
-        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(resource.id),
+        },
+        body: Some(BodyUpdate {
+            content: updated_content.to_string(),
+            content_hash: Some(updated_hash.clone()),
+            chunks_packed: Some(updated_packed),
+        }),
+        managed_meta: Some(
+            serde_json::from_value(serde_json::json!({"date": "2026-04-10"}))
+                .expect("managed_meta"),
+        ),
         open_meta: None,
-        chunks_packed: Some(updated_packed),
+        origin: Surface::Mcp,
     };
-
-    let updated_resource = ingest_service::update(
-        &pool,
+    DbBackend::new(
+        pool.clone(),
         profile_id,
-        resource.id,
-        "e2e-test-device",
-        update_payload,
+        "e2e-test-device".to_string(),
+        Surface::Mcp,
     )
+    .update_resource(cmd)
     .await
-    .expect("update resource");
+    .expect("update via DbBackend");
 
+    let updated_resource = resource_service::get_visible(&pool, *profile_id, *resource.id)
+        .await
+        .expect("get_visible after update");
     assert_eq!(updated_resource.id, resource.id);
 
     // 3. Verify manifest body_hash changed

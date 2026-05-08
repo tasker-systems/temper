@@ -516,6 +516,28 @@ pub async fn update(
         return Err(ApiError::Forbidden);
     }
 
+    // Reject structural moves on body-bearing updates. Mirrors the check that
+    // ingest_service::update performed before 3b folded its callers into this
+    // function: if the caller is writing new body content AND attempting to
+    // change context or doc_type via managed_meta, refuse the combined op.
+    // Meta-only updates may still cascade context/doc_type via the merge
+    // block below — that's the historical PUT /api/resources/{id}/meta path.
+    let body_present = req.content.is_some();
+    if body_present {
+        if let Some(ref m) = req.managed_meta {
+            for (field, set) in [
+                ("temper-context", m.context.is_some()),
+                ("temper-type", m.doc_type.is_some()),
+            ] {
+                if set {
+                    return Err(ApiError::BadRequest(format!(
+                        "structural move via field '{field}' is not supported: use dedicated move command to change {field}"
+                    )));
+                }
+            }
+        }
+    }
+
     let mut tx = pool.begin().await?;
 
     // 1. Update title/slug on kb_resources. We need current.title/slug for
