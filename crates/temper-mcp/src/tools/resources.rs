@@ -573,16 +573,31 @@ pub async fn delete_resource(
     input: DeleteResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
+    let pool = &svc.api_state.pool;
+    let profile_id = ProfileId::from(profile.id);
 
-    temper_api::services::resource_service::delete(
-        &svc.api_state.pool,
-        ProfileId::from(profile.id),
-        ResourceId::from(input.id),
-        "mcp",
-    )
-    .await
-    .map_err(|e| {
-        rmcp::ErrorData::internal_error(format!("Failed to delete resource: {e}"), None)
+    let cmd = temper_core::operations::DeleteResource {
+        resource: temper_core::operations::ResourceRef::Uuid {
+            id: ResourceId::from(input.id),
+        },
+        // CLI-side concern; DbBackend ignores per spec (the local-file
+        // confirmation prompt lives in CliLocalVault, not here).
+        force: false,
+        origin: Surface::Mcp,
+    };
+
+    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    backend.delete_resource(cmd).await.map_err(|e| match e {
+        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Resource not found or not modifiable".to_string(),
+            None,
+        ),
+        TemperError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
+        }
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to delete resource: {other}"), None)
+        }
     })?;
 
     let response = DeleteResourceResponse {
