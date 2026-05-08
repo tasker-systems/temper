@@ -17,20 +17,11 @@ use sqlx::PgPool;
 /// Creates a test profile and a resource owned by that profile.
 /// Returns `(token, resource_id_string)`.
 async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
-    let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("body-trio-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
-
-    // Authenticate (this auto-creates the profile).
-    let auth_resp = app
-        .client
-        .get(app.url("/api/auth/me"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .expect("auth/me request failed");
-    // 200 or 404 both fine — we just need the profile to exist.
-    let _ = auth_resp.status();
 
     // Create a resource owned by this profile via POST /api/resources.
     let create_resp = app
@@ -38,7 +29,7 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://body-trio-{}", uuid::Uuid::new_v4()),
             "title": "Body Trio Test Resource",

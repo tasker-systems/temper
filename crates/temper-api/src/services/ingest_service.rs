@@ -179,6 +179,20 @@ pub async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
     id.ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type: '{name}'")))
 }
 
+/// Resolve doc_type name by UUID from kb_doc_types.
+///
+/// Used by handlers that receive a `kb_doc_type_id` UUID on the wire and need
+/// the corresponding name to construct a typed operations command.
+///
+/// Returns `ApiError::BadRequest` when no doc_type with the given ID exists.
+pub async fn resolve_doc_type_name_by_id(pool: &PgPool, id: Uuid) -> ApiResult<String> {
+    let name = sqlx::query_scalar!("SELECT name FROM kb_doc_types WHERE id = $1", id)
+        .fetch_optional(pool)
+        .await?;
+
+    name.ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type id: '{id}'")))
+}
+
 /// Check for body-hash dedup — returns existing resource ID if hash matches.
 pub async fn find_by_body_hash(
     pool: &PgPool,

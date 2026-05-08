@@ -79,6 +79,22 @@ pub async fn resolve_by_name(
     .ok_or(ApiError::NotFound)
 }
 
+/// Resolve a context name by ID without a visibility gate.
+///
+/// Used by handlers that receive a `kb_context_id` UUID on the wire and need
+/// the corresponding name to construct a typed operations command. The
+/// visibility check is enforced downstream by `ingest_service::ingest` (via
+/// `resolve_by_name`, which is visibility-gated through `contexts_visible_to`).
+///
+/// Returns `ApiError::BadRequest` when no context with the given ID exists.
+pub async fn resolve_name_by_id(pool: &PgPool, context_id: uuid::Uuid) -> ApiResult<String> {
+    let name = sqlx::query_scalar!("SELECT name FROM kb_contexts WHERE id = $1", context_id)
+        .fetch_optional(pool)
+        .await?;
+
+    name.ok_or_else(|| ApiError::BadRequest(format!("unknown context id: '{context_id}'")))
+}
+
 /// Create a new context owned by the profile.
 ///
 /// Returns 409 Conflict if a context with the same name already exists

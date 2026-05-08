@@ -20,25 +20,18 @@ use uuid::Uuid;
 /// Creates a JWT-authenticated profile + resource, seeds a manifest row with
 /// the given `managed_meta` JSON, and returns `(token, resource_id_str)`.
 ///
-/// Pattern: generate JWT → call auth/me (auto-creates profile) → create
+/// Pattern: create profile with context → generate matching JWT → create
 /// resource via HTTP → write manifest row directly for test setup.
 async fn setup_resource_with_managed_meta(
     app: &common::TestApp,
     pool: &PgPool,
     managed_meta: serde_json::Value,
 ) -> (String, String) {
-    let sub = format!("test-sub-merge-{}", Uuid::new_v4());
     let email = format!("merge-test-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
-
-    // Auto-provision the profile.
-    let _ = app
-        .client
-        .get(app.url("/api/auth/me"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .expect("auth/me failed");
 
     // Create a resource owned by this profile.
     let create_resp = app
@@ -46,7 +39,7 @@ async fn setup_resource_with_managed_meta(
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://merge-managed-{}", Uuid::new_v4()),
             "title": "Managed Meta Merge Test",
@@ -99,24 +92,18 @@ async fn setup_resource_with_open_meta(
     pool: &PgPool,
     open_meta: serde_json::Value,
 ) -> (String, String) {
-    let sub = format!("test-sub-merge-{}", Uuid::new_v4());
     let email = format!("merge-test-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
-
-    let _ = app
-        .client
-        .get(app.url("/api/auth/me"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .expect("auth/me failed");
 
     let create_resp = app
         .client
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://merge-open-{}", Uuid::new_v4()),
             "title": "Open Meta Merge Test",

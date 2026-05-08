@@ -41,26 +41,19 @@ fn encode_chunks(chunks: &[PackedChunk]) -> String {
 /// Create a JWT-authenticated profile + resource with a manifest row containing
 /// an initial body. Returns `(token, resource_id_str)`.
 ///
-/// Pattern: generate JWT → call auth/me → create resource via HTTP → seed
-/// manifest + chunks directly via sqlx for fixture setup.
+/// Pattern: create profile with context → generate matching JWT → create
+/// resource via HTTP → seed manifest + chunks directly via sqlx for fixture setup.
 async fn setup_resource_with_body(
     app: &common::TestApp,
     pool: &PgPool,
     body_hash: &str,
     chunks: &[PackedChunk],
 ) -> (String, String) {
-    let sub = format!("test-sub-body-{}", Uuid::new_v4());
     let email = format!("body-test-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
-
-    // Auto-provision profile.
-    let _ = app
-        .client
-        .get(app.url("/api/auth/me"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .expect("auth/me failed");
 
     // Create resource via HTTP.
     let create_resp = app
@@ -68,7 +61,7 @@ async fn setup_resource_with_body(
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://body-trio-{}", Uuid::new_v4()),
             "title": "Body Trio Test",

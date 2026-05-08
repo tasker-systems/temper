@@ -10,8 +10,10 @@ use sqlx::PgPool;
 async fn test_list_resources_returns_wrapped_response(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
 
-    let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("browse-user-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
 
     // Create a resource so there's at least one row.
@@ -19,7 +21,7 @@ async fn test_list_resources_returns_wrapped_response(pool: PgPool) {
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://browse-{}", uuid::Uuid::new_v4()),
             "title": "Browse Test Resource",
@@ -76,8 +78,10 @@ async fn test_list_resources_returns_wrapped_response(pool: PgPool) {
 async fn test_list_resources_filter_by_context_name(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
 
-    let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("filter-user-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
 
     // Create a resource in the "temper" context.
@@ -85,7 +89,7 @@ async fn test_list_resources_filter_by_context_name(pool: PgPool) {
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://filter-{}", uuid::Uuid::new_v4()),
             "title": "Filter Test Resource",
@@ -122,8 +126,10 @@ async fn test_list_resources_filter_by_context_name(pool: PgPool) {
 async fn test_list_resources_sort_by_title_asc(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
 
-    let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("sort-user-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
 
     // Create two resources with known titles.
@@ -132,7 +138,7 @@ async fn test_list_resources_sort_by_title_asc(pool: PgPool) {
             .post(app.url("/api/resources"))
             .header("Authorization", format!("Bearer {token}"))
             .json(&json!({
-                "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+                "kb_context_id": context_id.to_string(),
                 "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
                 "origin_uri": format!("test://sort-{}", uuid::Uuid::new_v4()),
                 "title": title,

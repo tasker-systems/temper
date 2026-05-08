@@ -6,17 +6,26 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 
 /// POST /api/resources creates a resource; GET /api/resources lists it.
+///
+/// Pre-creates the profile and its 'temper' context so that
+/// `ingest_service::ingest`'s `contexts_visible_to` gate passes. The JWT
+/// `sub` matches the auth link created by `create_test_profile_with_context`
+/// (format: `"test|{profile_id}"`), so the middleware resolves the existing
+/// profile rather than auto-provisioning a new one.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn test_create_and_list_resources(pool: PgPool) {
-    let app = common::setup_test_app(pool).await;
+    let app = common::setup_test_app(pool.clone()).await;
 
-    let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("resource-user-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, &email).await;
+    // JWT sub must match the auth link installed by create_test_profile_with_context.
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
 
     // Create a resource.
     let payload = json!({
-        "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+        "kb_context_id": context_id.to_string(),
         "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
         "origin_uri": format!("test://resource-{}", uuid::Uuid::new_v4()),
         "title": "My Integration Test Resource",
@@ -45,7 +54,7 @@ async fn test_create_and_list_resources(pool: PgPool) {
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://listed-resource-{}", uuid::Uuid::new_v4()),
             "title": "Listed Resource",
@@ -83,13 +92,18 @@ async fn test_create_and_list_resources(pool: PgPool) {
 }
 
 /// User A's private resource must NOT be visible to User B.
+///
+/// Both users have their own 'temper' context so that
+/// `ingest_service::ingest`'s `contexts_visible_to` gate passes on create.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn test_resource_visibility_scoping(pool: PgPool) {
-    let app = common::setup_test_app(pool).await;
+    let app = common::setup_test_app(pool.clone()).await;
 
-    // User A creates a resource.
-    let sub_a = format!("test-sub-a-{}", uuid::Uuid::new_v4());
+    // User A: pre-create profile + context so ingest can resolve 'temper'.
     let email_a = format!("user-a-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id_a, context_id_a) =
+        common::fixtures::create_test_profile_with_context(&pool, &email_a).await;
+    let sub_a = format!("test|{profile_id_a}");
     let token_a = common::generate_test_jwt(&sub_a, &email_a);
 
     let created: Value = app
@@ -97,7 +111,7 @@ async fn test_resource_visibility_scoping(pool: PgPool) {
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token_a}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id_a.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://private-{}", uuid::Uuid::new_v4()),
             "title": "User A's Private Resource",
