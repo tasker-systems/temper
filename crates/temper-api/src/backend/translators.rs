@@ -45,34 +45,53 @@ pub(crate) fn create_resource_to_ingest_payload(cmd: CreateResource) -> IngestPa
 }
 
 /// Translate `UpdateResource` → `ResourceUpdateRequest` for
-/// `resource_service::update`. The body trio is all-or-nothing in the service
-/// layer; the operations command surfaces it via `body: Option<BodyUpdate>`,
-/// so when a body is present we recompute its hash and pack chunks here.
+/// `resource_service::update`. Branches on cmd shape:
 ///
-/// 3a-only behavior: if `body` is `Some`, the translator leaves
-/// `content_hash` and `chunks_packed` as `None`. This forces the service to
-/// reject the update with `BadRequest` because today's `resource_service::update`
-/// requires the trio to be all-Some-or-all-None and the handler-layer guard
-/// asserts that. **The 3b handler migration must take over hash/chunk
-/// computation before passing through DbBackend** — until then, body-bearing
-/// UpdateResource commands cannot be fulfilled. This is acceptable for 3a
-/// because no caller dispatches through DbBackend yet (it's dark-launched).
-pub(crate) fn update_resource_to_request(cmd: UpdateResource) -> ResourceUpdateRequest {
+/// - `body` present: run the body pipeline (`prepare_body_trio`) to produce
+///   `(content_hash, chunks_packed)` so `resource_service::update`'s body-trio
+///   guard accepts the call. Title/slug from `managed_meta` (if present) are
+///   forwarded so they can update alongside the body.
+/// - `body` absent, `managed_meta` or `open_meta` present: meta-only update.
+///   `open_meta` keys are validated via `temper_core::operations::
+///   validate_open_meta_keys`; an unknown key surfaces as `TemperError::
+///   BadRequest`. The body-trio fields stay `None`.
+/// - All-None: title/slug fall through as `None`; downstream `resource_service::
+///   update` becomes a no-op (no fields touched).
+pub(crate) fn update_resource_to_request(
+    cmd: UpdateResource,
+) -> Result<ResourceUpdateRequest, TemperError> {
     let (title, slug) = cmd
         .managed_meta
         .as_ref()
         .map(|m| (m.title.clone(), m.slug.clone()))
         .unwrap_or((None, None));
 
-    ResourceUpdateRequest {
+    // Validate open_meta keys upfront; this guard fires for both body-bearing
+    // and meta-only updates that include open_meta.
+    if let Some(open_meta) = cmd.open_meta.as_ref() {
+        if let Err(bad_key) = temper_core::operations::validate_open_meta_keys(open_meta) {
+            return Err(TemperError::BadRequest(format!(
+                "unknown open_meta key '{bad_key}'"
+            )));
+        }
+    }
+
+    let (content, content_hash, chunks_packed) = if let Some(body) = cmd.body.as_ref() {
+        let (hash, packed) = prepare_body_trio(&body.content)?;
+        (Some(body.content.clone()), Some(hash), Some(packed))
+    } else {
+        (None, None, None)
+    };
+
+    Ok(ResourceUpdateRequest {
         title,
         slug,
         managed_meta: cmd.managed_meta,
         open_meta: cmd.open_meta,
-        content: cmd.body.as_ref().map(|b| b.content.clone()),
-        content_hash: None,
-        chunks_packed: None,
-    }
+        content,
+        content_hash,
+        chunks_packed,
+    })
 }
 
 /// Translate `ListFilter` → `ResourceListParams`.
@@ -173,7 +192,6 @@ pub(crate) async fn resolve_resource_ref(
 /// `cmd.body.is_some()`. Gated on the `ingest-pipeline` feature; without it,
 /// returns `BadRequest` preserving the contract from `ingest_service.rs:678-683`.
 #[cfg(feature = "ingest-pipeline")]
-#[expect(dead_code)]
 pub(crate) fn prepare_body_trio(body: &str) -> Result<(String, String), TemperError> {
     let hash = compute_body_hash(body);
     let packed_chunks = temper_ingest::pipeline::prepare_markdown(body)
@@ -184,7 +202,6 @@ pub(crate) fn prepare_body_trio(body: &str) -> Result<(String, String), TemperEr
 }
 
 #[cfg(not(feature = "ingest-pipeline"))]
-#[expect(dead_code)]
 pub(crate) fn prepare_body_trio(_body: &str) -> Result<(String, String), TemperError> {
     Err(TemperError::BadRequest(
         "chunks_packed required when server-side pipeline is not available".to_owned(),
@@ -224,5 +241,75 @@ mod tests {
             err,
             temper_core::error::TemperError::BadRequest(_)
         ));
+    }
+
+    #[test]
+    fn update_translator_meta_branch_leaves_body_fields_none() {
+        use temper_core::operations::{ResourceRef, Surface, UpdateResource};
+        use temper_core::types::ids::ResourceId;
+        use temper_core::types::managed_meta::ManagedMeta;
+
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid {
+                id: ResourceId(uuid::Uuid::new_v4()),
+            },
+            body: None,
+            managed_meta: Some(ManagedMeta::default()),
+            open_meta: Some(serde_json::json!({"tags": ["x"]})),
+            origin: Surface::ApiHttp,
+        };
+        let req = update_resource_to_request(cmd).expect("ok");
+        assert!(req.content.is_none());
+        assert!(req.content_hash.is_none());
+        assert!(req.chunks_packed.is_none());
+        assert!(req.managed_meta.is_some());
+        assert!(req.open_meta.is_some());
+    }
+
+    #[test]
+    fn update_translator_meta_branch_rejects_unknown_open_key() {
+        use temper_core::operations::{ResourceRef, Surface, UpdateResource};
+        use temper_core::types::ids::ResourceId;
+
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid {
+                id: ResourceId(uuid::Uuid::new_v4()),
+            },
+            body: None,
+            managed_meta: None,
+            open_meta: Some(serde_json::json!({"totally_made_up": 1})),
+            origin: Surface::ApiHttp,
+        };
+        let err = update_resource_to_request(cmd).expect_err("unknown key");
+        match err {
+            TemperError::BadRequest(msg) => {
+                assert!(msg.contains("totally_made_up"), "msg = {msg}");
+                assert!(msg.contains("unknown open_meta key"), "msg = {msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "ingest-pipeline")]
+    #[test]
+    fn update_translator_body_branch_populates_trio_for_empty_body() {
+        use temper_core::operations::{BodyUpdate, ResourceRef, Surface, UpdateResource};
+        use temper_core::types::ids::ResourceId;
+
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid {
+                id: ResourceId(uuid::Uuid::new_v4()),
+            },
+            body: Some(BodyUpdate {
+                content: String::new(),
+            }),
+            managed_meta: None,
+            open_meta: None,
+            origin: Surface::ApiHttp,
+        };
+        let req = update_resource_to_request(cmd).expect("empty-body trio");
+        assert_eq!(req.content.as_deref(), Some(""));
+        assert!(req.content_hash.is_some());
+        assert!(req.chunks_packed.is_some());
     }
 }
