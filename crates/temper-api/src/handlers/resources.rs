@@ -202,7 +202,7 @@ pub async fn create(
     security(("bearer_auth" = [])),
     responses(
         (status = 200, description = "Updated resource", body = ResourceRow),
-        (status = 400, description = "Partial body trio", body = ErrorBody),
+        (status = 400, description = "Bad request (e.g. unknown open_meta key, or content sent without server-side pipeline)", body = ErrorBody),
         (status = 401, description = "Unauthorized", body = ErrorBody),
         (status = 403, description = "Forbidden", body = ErrorBody),
         (status = 404, description = "Not found", body = ErrorBody),
@@ -215,25 +215,53 @@ pub async fn update(
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
-    // Body trio is all-or-nothing.
-    let body_fields_present = [
-        req.content.is_some(),
-        req.content_hash.is_some(),
-        req.chunks_packed.is_some(),
-    ];
-    if body_fields_present.iter().any(|&p| p) && !body_fields_present.iter().all(|&p| p) {
-        return Err(ApiError::BadRequest(
-            "content, content_hash, and chunks_packed must all be present together or all be absent".to_string(),
-        ));
-    }
+    use temper_core::operations::{BodyUpdate, ResourceRef, UpdateResource};
+    use temper_core::types::ids::ResourceId;
 
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
 
-    resource_service::update(&state.pool, auth.0.profile.id, resource_id, &device_id, req)
-        .await
-        .map(Json)
+    // Wire-supplied content_hash and chunks_packed are intentionally ignored —
+    // the server is the single source of truth for body-trio derivation. Clients
+    // should send content only; the translator (prepare_body_trio) recomputes
+    // hash + chunks server-side. (Contract tightening from Phase 3b.)
+    let body = req.content.map(|c| BodyUpdate { content: c });
+
+    // Fold top-level title/slug into managed_meta so the translator can extract
+    // them uniformly. Only materialise Some(managed) when there's actually
+    // something to fold (avoids routing a no-op through the meta branch).
+    let managed_meta = match (req.title, req.slug, req.managed_meta) {
+        (None, None, m) => m,
+        (t, s, m) => {
+            let mut merged = m.unwrap_or_default();
+            if t.is_some() {
+                merged.title = t;
+            }
+            if s.is_some() {
+                merged.slug = s;
+            }
+            Some(merged)
+        }
+    };
+
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(resource_id),
+        },
+        body,
+        managed_meta,
+        open_meta: req.open_meta,
+        origin: Surface::ApiHttp,
+    };
+    let backend = DbBackend::new(
+        state.pool.clone(),
+        ProfileId::from(auth.0.profile.id),
+        device_id,
+        Surface::ApiHttp,
+    );
+    let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
+    Ok(Json(out.value))
 }
 
 #[utoipa::path(
