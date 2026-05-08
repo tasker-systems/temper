@@ -587,6 +587,14 @@ pub async fn update(
     // canonical managed_meta JSONB is present. A title/slug-only PATCH still
     // needs to refresh the JSONB so its temper-title / temper-slug keys (and
     // the managed_hash) stay in lockstep with the kb_resources columns.
+    //
+    // Capture before the if-block moves req.managed_meta / req.open_meta.
+    // post_merge_managed/open are hoisted so reconcile_edges (after tx.commit())
+    // can read the post-merge JSONB values without re-querying.
+    let meta_touched = req.managed_meta.is_some() || req.open_meta.is_some();
+    let mut post_merge_managed: Option<serde_json::Value> = None;
+    let mut post_merge_open: Option<serde_json::Value> = None;
+
     if req.managed_meta.is_some()
         || req.open_meta.is_some()
         || req.title.is_some()
@@ -656,6 +664,10 @@ pub async fn update(
         )
         .execute(&mut *tx)
         .await?;
+
+        // Capture post-merge values for edge reconciliation after tx.commit().
+        post_merge_managed = Some(managed_value);
+        post_merge_open = Some(merged_open);
     }
 
     // 3. Body trio path: persist + dedupe chunks if all three fields present.
@@ -738,6 +750,38 @@ pub async fn update(
     }
 
     tx.commit().await?;
+
+    // Reconcile frontmatter-provenance edges when managed/open meta were touched.
+    // Mirrors the call in meta_service::update_meta (line 275) and
+    // ingest_service::ingest (line 744). Errors are warn-and-continue: the
+    // update itself succeeded and the edge table is an eventually-consistent
+    // derived view of the frontmatter declarations.
+    if meta_touched {
+        let context_id = current.kb_context_id;
+        let res_id = ResourceId::from(resource_id);
+        let prof_id = ProfileId::from(profile_id);
+        let managed =
+            post_merge_managed.unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        let open = post_merge_open.unwrap_or_else(|| serde_json::Value::Object(Default::default()));
+        if let Err(e) = super::edge_service::reconcile_edges(
+            pool,
+            &prof_id,
+            &context_id,
+            &res_id,
+            &current.doc_type_name,
+            &managed,
+            &open,
+        )
+        .await
+        {
+            tracing::warn!(
+                resource_id = %resource_id,
+                error = %e,
+                "edge reconciliation failed during resource update"
+            );
+        }
+    }
+
     get_visible(pool, profile_id, resource_id).await
 }
 
