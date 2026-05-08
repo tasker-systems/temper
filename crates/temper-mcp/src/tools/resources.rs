@@ -459,102 +459,62 @@ pub async fn update_resource(
     let profile_id = ProfileId::from(profile.id);
     let resource_id = ResourceId::from(input.id);
 
-    // Auth check via service layer
-    resource_service::check_can_modify(pool, profile.id, input.id)
-        .await
-        .map_err(|e| match e {
-            temper_api::error::ApiError::Forbidden => rmcp::ErrorData::invalid_params(
-                "Resource not found or not modifiable".to_string(),
-                None,
-            ),
-            other => rmcp::ErrorData::internal_error(
-                format!("Failed to check permissions: {other}"),
-                None,
-            ),
-        })?;
-
-    // Update title/slug if provided
-    if input.title.is_some() || input.slug.is_some() {
-        // Mirror the identity fields into the typed managed_meta partial so
-        // the server's merge path rewrites temper-title / temper-slug in the
-        // JSONB. Setting ManagedMeta.title / .slug (Option<String>) is the
-        // typed-direct equivalent of running ensure_managed_identity_keys —
-        // serde renames produce the canonical `temper-title` / `temper-slug`
-        // keys in the resulting JSONB. Symmetric with the CLI send-side
-        // wiring (Phase 5 Task 3).
-        let managed_meta_partial = ManagedMeta {
-            title: input.title.clone(),
-            slug: input.slug.clone(),
-            ..Default::default()
-        };
-        let update_req = temper_core::types::resource::ResourceUpdateRequest {
-            title: input.title.clone(),
-            slug: input.slug.clone(),
-            managed_meta: Some(managed_meta_partial),
-            ..Default::default()
-        };
-        resource_service::update(pool, profile.id, input.id, "mcp", update_req)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to update resource: {e}"), None)
-            })?;
-    }
-
-    // Update content if provided — route through the ingest service update
-    // which handles managed_meta validation, chunking, and embedding.
-    if let Some(content) = input.content {
-        // Fetch the existing resource to get context/doc_type names for the payload
+    // Send-side canonical-key injection (Phase 5 symmetric defense). When the
+    // caller is also touching title or slug, fetch existing.title for the
+    // canonical-key fill so the wire payload's temper-title / temper-slug
+    // match what the receive-side will write. Pure meta-only updates skip
+    // the fetch — resource_service::update's receive-side ensure call fills
+    // canonical keys from the stored title/slug for us.
+    let mut managed_meta_value = input.managed_meta.unwrap_or_else(|| serde_json::json!({}));
+    if input.title.is_some() || input.slug.is_some() || input.content.is_some() {
         let existing = resource_service::get_visible(pool, profile.id, input.id)
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
             })?;
-
-        let payload_title = input.title.clone().unwrap_or(existing.title);
-        // Slug is nullable on kb_resources; preserve column-NULL semantics in
-        // the JSONB by passing Option<&str> through to the helper.
-        let payload_slug_opt = existing.slug.as_deref();
-
-        // Inject canonical temper-title / temper-slug into managed_meta JSONB
-        // so the local canonical form matches what the server will hash.
-        // Symmetric with the CLI send-side wiring (Phase 5 Task 3).
-        let mut managed_meta_value = input.managed_meta.unwrap_or_else(|| serde_json::json!({}));
+        let title = input.title.clone().unwrap_or(existing.title);
+        let slug_opt = input.slug.clone().or(existing.slug);
         temper_core::operations::ensure_managed_identity_keys(
             &mut managed_meta_value,
-            &payload_title,
-            payload_slug_opt,
+            &title,
+            slug_opt.as_deref(),
         );
-
-        let payload = temper_core::types::IngestPayload {
-            title: payload_title,
-            origin_uri: existing.origin_uri,
-            context_name: existing.context_name,
-            doc_type_name: existing.doc_type_name,
-            content_hash: None,
-            // IngestPayload::slug is required (non-Option String); fall back to
-            // empty string when the row has no slug. The canonical JSONB has
-            // no temper-slug key per the helper above, and the kb_resources
-            // column stays NULL via the existing row state.
-            slug: payload_slug_opt.unwrap_or("").to_owned(),
-            content,
-            metadata: None,
-            managed_meta: Some(managed_meta_value),
-            open_meta: input.open_meta,
-            chunks_packed: None,
-        };
-
-        ingest_service::update(pool, profile_id, resource_id, "mcp", payload)
-            .await
-            .map_err(|e| match e {
-                temper_api::error::ApiError::BadRequest(msg) => {
-                    rmcp::ErrorData::invalid_params(msg, None)
-                }
-                other => rmcp::ErrorData::internal_error(
-                    format!("Failed to update resource: {other}"),
-                    None,
-                ),
-            })?;
     }
+
+    // Build the typed cmd. Mirror title/slug onto ManagedMeta so the
+    // translator's manifest-merge path picks them up from cmd.managed_meta
+    // alongside any caller-supplied managed_meta keys.
+    let mut managed_meta: ManagedMeta = serde_json::from_value(managed_meta_value)
+        .map_err(|e| rmcp::ErrorData::invalid_params(format!("invalid managed_meta: {e}"), None))?;
+    if input.title.is_some() {
+        managed_meta.title = input.title.clone();
+    }
+    if input.slug.is_some() {
+        managed_meta.slug = input.slug.clone();
+    }
+
+    let cmd = temper_core::operations::UpdateResource {
+        resource: temper_core::operations::ResourceRef::Uuid { id: resource_id },
+        body: input.content.map(BodyUpdate::new),
+        managed_meta: Some(managed_meta),
+        open_meta: input.open_meta,
+        origin: Surface::Mcp,
+    };
+
+    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    backend.update_resource(cmd).await.map_err(|e| match e {
+        TemperError::Forbidden => rmcp::ErrorData::invalid_params(
+            "Resource not found or not modifiable".to_string(),
+            None,
+        ),
+        TemperError::NotFound(msg) => {
+            rmcp::ErrorData::invalid_params(format!("Resource not found: {msg}"), None)
+        }
+        TemperError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to update resource: {other}"), None)
+        }
+    })?;
 
     // Return enriched current state
     let row = resource_service::get_visible(pool, profile.id, input.id)
