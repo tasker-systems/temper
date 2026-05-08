@@ -3,10 +3,10 @@
 mod common;
 
 use temper_api::backend::DbBackend;
-use temper_api::services::{context_service, ingest_service, meta_service, resource_service};
+use temper_api::services::{context_service, ingest_service, resource_service};
 use temper_core::operations::{Backend, BodyUpdate, ResourceRef, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
+use temper_core::types::managed_meta::ManagedMeta;
 
 /// Helper: SHA256 hex digest of content.
 fn sha2_hex(content: &str) -> String {
@@ -565,33 +565,27 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     .await
     .expect("manifest before");
 
-    // Drive the same service entry point the MCP tool delegates to.
-    // The input→payload conversion in `tools::resources::update_resource_meta`
-    // is a direct 5-field copy, so constructing `MetaUpdatePayload`
-    // here is equivalent to invoking the tool with the same fields.
+    // Dispatch via DbBackend on Surface::Mcp — the same path tools::resources::
+    // update_resource_meta uses in production after the 3c migration.
     let new_managed = ManagedMeta {
         doc_type: Some("research".to_string()),
         title: Some("MCP Meta Parity (updated)".to_string()),
         ..Default::default()
     };
     let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
-    let payload = MetaUpdatePayload {
-        resource_id: ResourceId::from(*resource.id),
-        managed_meta: new_managed,
-        open_meta: new_open,
-        managed_hash: "sha256:mcp_meta_parity_managed".to_string(),
-        open_hash: "sha256:mcp_meta_parity_open".to_string(),
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(*resource.id),
+        },
+        body: None,
+        managed_meta: Some(new_managed),
+        open_meta: Some(new_open),
+        origin: Surface::Mcp,
     };
-
-    meta_service::update_meta(
-        &pool,
-        profile_id,
-        ResourceId::from(*resource.id),
-        "mcp",
-        payload.clone(),
-    )
-    .await
-    .expect("meta_service::update_meta failed");
+    DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp)
+        .update_resource(cmd)
+        .await
+        .expect("update via DbBackend");
 
     // Invariants: body_hash unchanged, managed/open hashes advance,
     // chunk rows byte-identical, title cascaded.
