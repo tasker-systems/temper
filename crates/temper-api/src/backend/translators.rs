@@ -8,6 +8,7 @@
 
 use sqlx::PgPool;
 use temper_core::error::TemperError;
+use temper_core::hash::compute_body_hash;
 use temper_core::operations::{
     CreateResource, ListFilter, ResourceRef, ResourceSummary, SearchHit, SearchQuery,
     UpdateResource,
@@ -162,5 +163,65 @@ pub(crate) async fn resolve_resource_ref(
                 .map_err(TemperError::from)?;
             Ok(row.id)
         }
+    }
+}
+
+/// Compute `(content_hash, chunks_packed)` for an update-resource body. Mirrors
+/// the in-place pipeline at `ingest_service::ingest:663-682` (body-trio
+/// computation) so DbBackend's `update_resource` can populate the trio when
+/// `cmd.body.is_some()`. Gated on the `ingest-pipeline` feature; without it,
+/// returns `BadRequest` preserving the contract from `ingest_service.rs:678-683`.
+#[cfg(feature = "ingest-pipeline")]
+#[expect(dead_code)]
+pub(crate) fn prepare_body_trio(body: &str) -> Result<(String, String), TemperError> {
+    let hash = compute_body_hash(body);
+    let packed_chunks = temper_ingest::pipeline::prepare_markdown(body)
+        .map_err(|e| TemperError::Api(format!("embed: {e}")))?;
+    let packed = temper_core::types::ingest::pack_chunks(&packed_chunks)
+        .map_err(|e| TemperError::Api(format!("pack: {e}")))?;
+    Ok((hash, packed))
+}
+
+#[cfg(not(feature = "ingest-pipeline"))]
+#[expect(dead_code)]
+pub(crate) fn prepare_body_trio(_body: &str) -> Result<(String, String), TemperError> {
+    Err(TemperError::BadRequest(
+        "chunks_packed required when server-side pipeline is not available".to_owned(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(all(feature = "ingest-pipeline", feature = "test-embed"))]
+    #[test]
+    fn prepare_body_trio_computes_hash_and_packs_chunks() {
+        let body = "# heading\n\nparagraph text.\n";
+        let (hash, packed) = prepare_body_trio(body).expect("pipeline ok");
+        assert!(
+            hash.starts_with("sha256:"),
+            "hash should be sha256: prefixed"
+        );
+        assert_eq!(hash.len(), 71, "sha256:<64-char-hex>"); // "sha256:" (7) + 64 hex chars
+        assert!(!packed.is_empty(), "packed chunks should be non-empty");
+    }
+
+    #[cfg(all(feature = "ingest-pipeline", feature = "test-embed"))]
+    #[test]
+    fn prepare_body_trio_empty_body_ok() {
+        let (hash, _packed) = prepare_body_trio("").expect("empty body still hashable");
+        assert!(hash.starts_with("sha256:"));
+        assert_eq!(hash.len(), 71);
+    }
+
+    #[cfg(not(feature = "ingest-pipeline"))]
+    #[test]
+    fn prepare_body_trio_no_pipeline_returns_bad_request() {
+        let err = prepare_body_trio("body").expect_err("no-pipeline path");
+        assert!(matches!(
+            err,
+            temper_core::error::TemperError::BadRequest(_)
+        ));
     }
 }
