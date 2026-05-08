@@ -45,6 +45,10 @@ pub struct CreateResource {
     /// recomputes via the pipeline (if enabled) or returns an error for
     /// non-empty bodies without the pipeline feature.
     pub chunks_packed: Option<String>,
+    /// Caller-supplied content hash. Sync clients pre-compute this so the
+    /// canonical body_hash round-trips verbatim into `kb_resource_audits`
+    /// and the manifest. When `None`, the server recomputes from `body`.
+    pub content_hash: Option<String>,
     pub origin: Surface,
 }
 
@@ -131,6 +135,7 @@ mod tests {
             open_meta: None,
             origin_uri: None,
             chunks_packed: None,
+            content_hash: None,
             origin: Surface::CliCloud,
         };
         assert_eq!(cmd.slug, "new-task");

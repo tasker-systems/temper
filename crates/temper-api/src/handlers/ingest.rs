@@ -61,11 +61,8 @@ pub async fn create(
         managed_meta,
         open_meta: payload.open_meta,
         origin_uri: Some(payload.origin_uri),
-        // Forward caller-supplied chunks so ingest_service can skip the embed
-        // pipeline when pre-computed chunks are present. content_hash is left
-        // None — ingest_service recomputes it from content when the pipeline
-        // runs, and leaves it absent (empty string stored) otherwise.
         chunks_packed: payload.chunks_packed,
+        content_hash: payload.content_hash,
         origin: Surface::ApiHttp,
     };
 

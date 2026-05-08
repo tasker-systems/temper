@@ -515,6 +515,7 @@ mod tests {
             open_meta: None,
             origin_uri: None,
             chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_create(&cmd).is_ok());
@@ -532,6 +533,7 @@ mod tests {
             open_meta: None,
             origin_uri: None,
             chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -552,6 +554,7 @@ mod tests {
             open_meta: None,
             origin_uri: None,
             chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -572,6 +575,7 @@ mod tests {
             open_meta: None,
             origin_uri: None,
             chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(

@@ -23,9 +23,10 @@ use crate::services::resource_service;
 
 /// Translate `CreateResource` → `IngestPayload` for `ingest_service::ingest`.
 ///
-/// `content_hash` and `chunks_packed` are left `None` so the server runs the
-/// shared pipeline (when the `ingest-pipeline` feature is enabled). `metadata`
-/// is the legacy unstructured field — left absent for new commands.
+/// `content_hash` and `chunks_packed` are forwarded when the caller supplied
+/// them (sync clients pre-compute hashes so they round-trip verbatim into
+/// `kb_resource_audits.body_hash`); the server recomputes them otherwise.
+/// `metadata` is the legacy unstructured field — left absent for new commands.
 pub(crate) fn create_resource_to_ingest_payload(cmd: CreateResource) -> IngestPayload {
     let body = cmd.body.map(|b| b.content).unwrap_or_default();
 
@@ -34,17 +35,12 @@ pub(crate) fn create_resource_to_ingest_payload(cmd: CreateResource) -> IngestPa
         origin_uri: cmd.origin_uri.unwrap_or_default(),
         context_name: cmd.context,
         doc_type_name: cmd.doctype,
-        // content_hash is always left None: the server recomputes from content
-        // (via the ingest-pipeline feature) or from the body hash after the
-        // chunks pipeline runs. Callers should not pre-compute this.
-        content_hash: None,
+        content_hash: cmd.content_hash,
         slug: cmd.slug,
         content: body,
         metadata: None,
         managed_meta: Some(serde_json::to_value(&cmd.managed_meta).unwrap_or_default()),
         open_meta: cmd.open_meta,
-        // Forward caller-supplied pre-computed chunks when present; the
-        // ingest_service pipeline is skipped for that case.
         chunks_packed: cmd.chunks_packed,
     }
 }

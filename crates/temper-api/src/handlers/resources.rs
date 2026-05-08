@@ -184,6 +184,7 @@ pub async fn create(
         // POST /api/resources is a metadata-only create (no body); chunks are
         // produced by a follow-up async ingest job.
         chunks_packed: None,
+        content_hash: None,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(
