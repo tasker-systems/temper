@@ -645,6 +645,15 @@ pub async fn update(
             new_title,
             new_slug,
         );
+        // Apply doc-type defaults to fill in any required fields that aren't
+        // already present. Mirrors ingest_service::update:674 — the canonical
+        // site for defaulting on meta-bearing updates. Without this, meta
+        // updates routed through DbBackend → resource_service::update would
+        // silently regress required-field defaulting.
+        // This affects PATCH /api/resources, PUT /api/ingest/{id}, and
+        // PUT /api/resources/{id}/meta, making defaulting consistent across
+        // all meta-touching update paths.
+        temper_core::operations::apply_defaults_value(&current.doc_type_name, &mut managed_value);
         let managed_hash = compute_managed_hash(&current.doc_type_name, &managed_value);
         let open_hash = compute_open_hash(&merged_open);
 

@@ -82,7 +82,15 @@ pub(crate) fn update_resource_to_request(
     }
 
     let (content, content_hash, chunks_packed) = if let Some(body) = cmd.body.as_ref() {
-        let (hash, packed) = prepare_body_trio(&body.content)?;
+        // Short-circuit: when the caller supplies pre-computed chunks (e.g.
+        // from the PUT /api/ingest/{id} handler forwarding IngestPayload), use
+        // them directly without running the server-side pipeline. Both fields
+        // must be present for the short-circuit; if either is absent, fall
+        // through to prepare_body_trio.
+        let (hash, packed) = match (&body.content_hash, &body.chunks_packed) {
+            (Some(h), Some(p)) => (h.clone(), p.clone()),
+            _ => prepare_body_trio(&body.content)?,
+        };
         (Some(body.content.clone()), Some(hash), Some(packed))
     } else {
         (None, None, None)
@@ -305,9 +313,7 @@ mod tests {
             resource: ResourceRef::Uuid {
                 id: ResourceId(uuid::Uuid::new_v4()),
             },
-            body: Some(BodyUpdate {
-                content: String::new(),
-            }),
+            body: Some(BodyUpdate::new(String::new())),
             managed_meta: None,
             open_meta: None,
             origin: Surface::ApiHttp,

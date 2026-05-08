@@ -230,7 +230,7 @@ pub async fn update(
     // the server is the single source of truth for body-trio derivation. Clients
     // should send content only; the translator (prepare_body_trio) recomputes
     // hash + chunks server-side. (Contract tightening from Phase 3b.)
-    let body = req.content.map(|c| BodyUpdate { content: c });
+    let body = req.content.map(BodyUpdate::new);
 
     // Fold top-level title/slug into managed_meta so the translator can extract
     // them uniformly. Only materialise Some(managed) when there's actually
