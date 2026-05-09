@@ -646,6 +646,16 @@ pub fn needs_refresh(auth: &StoredAuth) -> bool {
     Utc::now() + Duration::minutes(5) >= auth.expires_at
 }
 
+/// Returns the duration until `stored`'s token expires, relative to `now`.
+///
+/// Negative when the token has already expired. Use the sign to distinguish
+/// "expired" from "expiring soon" at call sites — see
+/// `temper-cli/src/actions/runtime.rs` for the cloud-mode bootstrap warning
+/// that consumes this.
+pub fn time_until_expiry(stored: &StoredAuth, now: DateTime<Utc>) -> Duration {
+    stored.expires_at - now
+}
+
 /// OAuth2 token response shape — only the fields we care about.
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -1363,5 +1373,31 @@ mod tests {
         assert_eq!(loaded.access_token.expose_secret(), jwt);
         assert_eq!(loaded.profile_id, Some(env_profile));
         assert!(loaded.refresh_token.is_none());
+    }
+
+    #[test]
+    fn time_until_expiry_positive_for_future() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let auth = make_auth(
+            chrono::DateTime::parse_from_rfc3339("2026-05-09T14:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        assert_eq!(time_until_expiry(&auth, now).num_minutes(), 150);
+    }
+
+    #[test]
+    fn time_until_expiry_negative_for_expired() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let auth = make_auth(
+            chrono::DateTime::parse_from_rfc3339("2026-05-09T11:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        assert!(time_until_expiry(&auth, now).num_seconds() < 0);
     }
 }
