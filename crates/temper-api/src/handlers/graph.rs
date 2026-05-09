@@ -38,9 +38,10 @@ pub async fn get_subgraph(
     Query(query): Query<SubgraphQuery>,
 ) -> ApiResult<Json<SubgraphResponse>> {
     // Resolve `owner` — v1 only supports "@me" (caller's own vault).
-    // Cross-owner querying is deferred; handles are left as a later migration.
-    // A client-supplied handle other than "@me" is an invalid query parameter,
-    // so we return 400 Bad Request rather than 404.
+    // Multi-owner queries are a v1-scope boundary: expanding requires a
+    // permission-model design that defines who can read whose graph and
+    // how handles resolve to profile IDs. Treat handles other than "@me"
+    // as an invalid query parameter and return 400 (rather than 404).
     if query.owner != "@me" {
         return Err(ApiError::BadRequest(format!(
             "owner handle '{}' not supported — only '@me' in v1",
