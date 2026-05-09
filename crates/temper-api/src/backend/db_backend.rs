@@ -105,7 +105,7 @@ impl Backend for DbBackend {
             cmd.resource.clone(),
         )
         .await?;
-        let req = super::translators::update_resource_to_request(cmd);
+        let req = super::translators::update_resource_to_request(cmd)?;
         let row = resource_service::update(
             self.pool(),
             *self.profile_id(),

@@ -47,6 +47,9 @@ async fn create_resource_inserts_row_and_emits_event(pool: PgPool) {
         body: None,
         managed_meta: ManagedMeta::default(),
         open_meta: None,
+        origin_uri: None,
+        chunks_packed: None,
+        content_hash: None,
         origin: Surface::ApiHttp,
     };
 
@@ -74,6 +77,9 @@ async fn create_resource_unknown_doctype_returns_temper_error(pool: PgPool) {
         body: None,
         managed_meta: ManagedMeta::default(),
         open_meta: None,
+        origin_uri: None,
+        chunks_packed: None,
+        content_hash: None,
         origin: Surface::ApiHttp,
     };
 
@@ -102,6 +108,9 @@ async fn show_resource_by_uuid_returns_row(pool: PgPool) {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: Surface::ApiHttp,
         })
         .await
@@ -131,6 +140,9 @@ async fn show_resource_by_scoped_slug_returns_row(pool: PgPool) {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: Surface::ApiHttp,
         })
         .await
@@ -171,6 +183,9 @@ async fn update_resource_changes_title_and_emits_event(pool: PgPool) {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: Surface::ApiHttp,
         })
         .await
@@ -235,6 +250,9 @@ async fn delete_resource_soft_deletes_and_emits_event(pool: PgPool) {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: Surface::ApiHttp,
         })
         .await
@@ -302,6 +320,9 @@ async fn list_resources_returns_summaries(pool: PgPool) {
                 body: None,
                 managed_meta: ManagedMeta::default(),
                 open_meta: None,
+                origin_uri: None,
+                chunks_packed: None,
+                content_hash: None,
                 origin: Surface::ApiHttp,
             })
             .await
@@ -342,6 +363,9 @@ async fn search_resources_returns_hits_or_empty(pool: PgPool) {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: Surface::ApiHttp,
         })
         .await

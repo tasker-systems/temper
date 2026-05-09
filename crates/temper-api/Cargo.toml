@@ -32,6 +32,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 [features]
 test-db = []
 ingest-pipeline = ["dep:temper-ingest"]
+test-embed = ["ingest-pipeline", "temper-ingest/test-embed"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -2,8 +2,10 @@
 
 mod common;
 
-use temper_api::services::{context_service, ingest_service};
-use temper_core::types::ids::ProfileId;
+use temper_api::backend::DbBackend;
+use temper_api::services::{context_service, ingest_service, resource_service};
+use temper_core::operations::{Backend, BodyUpdate, ResourceRef, Surface, UpdateResource};
+use temper_core::types::ids::{ProfileId, ResourceId};
 
 /// Helper: SHA256 hex digest of content.
 fn sha2_hex(content: &str) -> String {
@@ -385,30 +387,35 @@ async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
     let updated_packed =
         temper_core::types::ingest::pack_chunks(&updated_chunks).expect("pack updated chunks");
 
-    let update_payload = temper_core::types::ingest::IngestPayload {
-        title: "Chunk Update Test".to_string(),
-        origin_uri: "mcp://test/chunk-update".to_string(),
-        context_name: "chunk-update-test".to_string(),
-        doc_type_name: "research".to_string(),
-        content_hash: Some(format!("sha256:{}", sha2_hex(updated_content))),
-        slug: "chunk-update-test".to_string(),
-        content: updated_content.to_string(),
-        metadata: None,
-        managed_meta: Some(serde_json::json!({"date": "2026-04-10"})),
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(*resource.id),
+        },
+        body: Some(BodyUpdate {
+            content: updated_content.to_string(),
+            content_hash: Some(format!("sha256:{}", sha2_hex(updated_content))),
+            chunks_packed: Some(updated_packed),
+        }),
+        managed_meta: Some(
+            serde_json::from_value(serde_json::json!({"date": "2026-04-10"}))
+                .expect("managed_meta"),
+        ),
         open_meta: None,
-        chunks_packed: Some(updated_packed),
+        origin: Surface::Mcp,
     };
-
-    let updated_resource = ingest_service::update(
-        &pool,
+    DbBackend::new(
+        pool.clone(),
         profile_id,
-        resource.id,
-        "e2e-test-device",
-        update_payload,
+        "e2e-test-device".to_string(),
+        Surface::Mcp,
     )
+    .update_resource(cmd)
     .await
-    .expect("ingest update");
+    .expect("update via DbBackend");
 
+    let updated_resource = resource_service::get_visible(&pool, *profile_id, *resource.id)
+        .await
+        .expect("get_visible after update");
     assert_eq!(updated_resource.id, resource.id);
 
     // 3. Verify chunks were atomically replaced: old 1 chunk retired, new 3 current chunks
@@ -692,29 +699,33 @@ async fn update_resource_rejects_tier2_fields_in_managed_meta(pool: sqlx::PgPool
     .await
     .expect("create resource");
 
-    // Attempt update with tier-2 field temper-context
+    // Attempt body+meta update that tries to change context — must be rejected
+    // as a structural move. The check lives in resource_service::update; the
+    // message format mirrors the original IngestError::StructuralMoveNotSupported.
     let empty_chunks = temper_core::types::ingest::pack_chunks(&[]).expect("pack empty chunks");
-    let update_payload = temper_core::types::ingest::IngestPayload {
-        title: "Tier-2 Rejection Test".to_string(),
-        origin_uri: "mcp://test/tier2-reject".to_string(),
-        context_name: "tier2-reject-test".to_string(),
-        doc_type_name: "research".to_string(),
-        content_hash: Some(body_hash.clone()),
-        slug: "tier2-rejection-test".to_string(),
-        content: content.to_string(),
-        metadata: None,
-        managed_meta: Some(serde_json::json!({"temper-context": "other-context"})),
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(*resource.id),
+        },
+        body: Some(BodyUpdate {
+            content: content.to_string(),
+            content_hash: Some(body_hash.clone()),
+            chunks_packed: Some(empty_chunks),
+        }),
+        managed_meta: Some(
+            serde_json::from_value(serde_json::json!({"temper-context": "other-context"}))
+                .expect("managed_meta"),
+        ),
         open_meta: None,
-        chunks_packed: Some(empty_chunks),
+        origin: Surface::Mcp,
     };
-
-    let result = ingest_service::update(
-        &pool,
+    let result = DbBackend::new(
+        pool.clone(),
         profile_id,
-        resource.id,
-        "e2e-test-device",
-        update_payload,
+        "e2e-test-device".to_string(),
+        Surface::Mcp,
     )
+    .update_resource(cmd)
     .await;
 
     assert!(

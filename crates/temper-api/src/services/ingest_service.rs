@@ -179,6 +179,20 @@ pub async fn resolve_doc_type(pool: &PgPool, name: &str) -> ApiResult<Uuid> {
     id.ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type: '{name}'")))
 }
 
+/// Resolve doc_type name by UUID from kb_doc_types.
+///
+/// Used by handlers that receive a `kb_doc_type_id` UUID on the wire and need
+/// the corresponding name to construct a typed operations command.
+///
+/// Returns `ApiError::BadRequest` when no doc_type with the given ID exists.
+pub async fn resolve_doc_type_name_by_id(pool: &PgPool, id: Uuid) -> ApiResult<String> {
+    let name = sqlx::query_scalar!("SELECT name FROM kb_doc_types WHERE id = $1", id)
+        .fetch_optional(pool)
+        .await?;
+
+    name.ok_or_else(|| ApiError::BadRequest(format!("unknown doc_type id: '{id}'")))
+}
+
 /// Check for body-hash dedup — returns existing resource ID if hash matches.
 pub async fn find_by_body_hash(
     pool: &PgPool,
@@ -613,157 +627,6 @@ pub async fn update_resource_manifest(
 }
 
 /// Update an existing resource's content — re-chunk and re-embed.
-#[cfg_attr(
-    not(feature = "ingest-pipeline"),
-    allow(
-        unused_mut,
-        reason = "mut needed when ingest-pipeline feature is enabled"
-    )
-)]
-pub async fn update(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    resource_id: ResourceId,
-    device_id: &str,
-    mut payload: IngestPayload,
-) -> ApiResult<ResourceRow> {
-    // Verify the profile can modify this resource
-    let can_modify = sqlx::query_scalar!(
-        "SELECT true FROM can_modify_resource($1, $2)",
-        *profile_id,
-        *resource_id,
-    )
-    .fetch_optional(pool)
-    .await?;
-
-    if can_modify.is_none() {
-        return Err(ApiError::NotFound);
-    }
-
-    // Strip tier-1 fields, apply doc-type defaults, and check for tier-2 structural moves
-    let mut managed = payload
-        .managed_meta
-        .take()
-        .map(strip_system_managed_fields)
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let Some(obj) = managed.as_object() {
-        for field in &["temper-context", "temper-type"] {
-            if obj.contains_key(*field) {
-                return Err(IngestError::StructuralMoveNotSupported {
-                    field: field.to_string(),
-                    message: format!("use dedicated move command to change {field}"),
-                }
-                .into());
-            }
-        }
-    }
-    temper_core::operations::apply_defaults_value(&payload.doc_type_name, &mut managed);
-    payload.managed_meta = Some(managed);
-
-    // If chunks_packed is absent, run the shared pipeline (ingest-pipeline feature)
-    #[cfg(feature = "ingest-pipeline")]
-    if payload.chunks_packed.is_none() {
-        payload.content_hash = Some(compute_body_hash(&payload.content));
-        let packed_chunks = temper_ingest::pipeline::prepare_markdown(&payload.content)
-            .map_err(|e| IngestError::Embed(e.to_string()))
-            .map_err(ApiError::from)?;
-        payload.chunks_packed = Some(
-            temper_core::types::ingest::pack_chunks(&packed_chunks)
-                .map_err(|e| IngestError::Pack(e.to_string()))
-                .map_err(ApiError::from)?,
-        );
-    }
-
-    // If ingest-pipeline feature is not enabled and chunks are missing, caller must provide them
-    #[cfg(not(feature = "ingest-pipeline"))]
-    if payload.chunks_packed.is_none() && !payload.content.is_empty() {
-        return Err(ApiError::BadRequest(
-            "chunks_packed required when server-side pipeline is not available".to_owned(),
-        ));
-    }
-
-    let chunks = if let Some(ref packed) = payload.chunks_packed {
-        unpack_chunks(packed)
-            .map_err(|e| ApiError::BadRequest(format!("invalid chunks_packed: {e}")))?
-    } else {
-        vec![]
-    };
-
-    // Compute meta
-    let empty_json = serde_json::json!({});
-    let managed_meta = payload
-        .managed_meta
-        .clone()
-        .unwrap_or_else(|| empty_json.clone());
-    let mut open_meta = payload
-        .open_meta
-        .clone()
-        .unwrap_or_else(|| empty_json.clone());
-    // Apply open-tier doc-type defaults (e.g. `date` for session/research).
-    apply_open_defaults(&payload.doc_type_name, &mut open_meta);
-
-    let mut tx = pool.begin().await?;
-
-    // Update manifest + fire event (context_id derived from resource row)
-    let audit_id = update_resource_manifest(
-        &mut tx,
-        &UpdateManifestParams {
-            profile_id,
-            device_id,
-            resource_id,
-            doc_type_name: &payload.doc_type_name,
-            content_hash: payload.content_hash.as_deref().unwrap_or(""),
-            managed_meta: &managed_meta,
-            open_meta: &open_meta,
-        },
-    )
-    .await?;
-
-    // Replace chunks — version-bump + batch insert + search rebuild in one call
-    replace_chunks(
-        &mut tx,
-        resource_id,
-        audit_id,
-        payload.content_hash.as_deref().unwrap_or(""),
-        &chunks,
-    )
-    .await?;
-
-    tx.commit().await?;
-
-    // Reconcile edges from updated frontmatter
-    if payload.open_meta.is_some() {
-        let ctx_id = sqlx::query_scalar!(
-            "SELECT kb_context_id FROM kb_resources WHERE id = $1",
-            *resource_id,
-        )
-        .fetch_one(pool)
-        .await?;
-
-        let ctx_id = ContextId::from(ctx_id);
-        if let Err(e) = super::edge_service::reconcile_edges(
-            pool,
-            &profile_id,
-            &ctx_id,
-            &resource_id,
-            payload.doc_type_name.as_str(),
-            &managed_meta,
-            &open_meta,
-        )
-        .await
-        {
-            tracing::warn!(
-                resource_id = %resource_id,
-                error = %e,
-                "edge reconciliation failed during update"
-            );
-        }
-    }
-
-    // Re-fetch via the view to get full ResourceRow with joined fields
-    resource_service::get_visible(pool, *profile_id, *resource_id).await
-}
-
 /// Parameters for schema validation at the service-layer boundary.
 pub(crate) struct ValidateParams<'a> {
     pub doc_type: &'a str,

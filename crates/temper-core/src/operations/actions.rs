@@ -268,10 +268,37 @@ pub fn validate_update(cmd: &UpdateResource) -> Result<(), ActionError> {
     }
 }
 
+/// Validate every top-level key in `open_meta` against the
+/// `KNOWN_OPEN_FIELDS` registry. Accepts both canonical underscore form
+/// (e.g. `relates_to`) and hyphen-form aliases (e.g. `relates-to`) via
+/// `crate::frontmatter::registry::lookup`.
+///
+/// Returns the offending key on first miss so the caller can surface a
+/// specific error. `Ok(())` if `open_meta` is not an object or is empty.
+///
+/// Server-side safety net for typo-d or unknown open-meta keys coming
+/// from MCP / API clients that bypass the CLI's `Frontmatter::try_from`
+/// alias normalization. The CLI's strict `Frontmatter` pipeline already
+/// rejects unknown keys client-side, so well-formed CLI payloads pass
+/// this check unchanged. Used by both DbBackend's update path and (future)
+/// VaultBackend.
+pub fn validate_open_meta_keys(open_meta: &serde_json::Value) -> Result<(), String> {
+    let Some(obj) = open_meta.as_object() else {
+        return Ok(());
+    };
+    for key in obj.keys() {
+        if crate::frontmatter::registry::lookup(key.as_str()).is_none() {
+            return Err(key.clone());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::types::ids::ResourceId;
+    use serde_json::json;
     use uuid::Uuid;
 
     #[test]
@@ -486,6 +513,9 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_create(&cmd).is_ok());
@@ -501,6 +531,9 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -519,6 +552,9 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -537,6 +573,9 @@ mod tests {
             body: None,
             managed_meta: ManagedMeta::default(),
             open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(
@@ -654,5 +693,89 @@ mod tests {
         let mut meta = serde_json::json!({});
         apply_defaults_value("nonexistent", &mut meta);
         assert!(meta.as_object().unwrap().is_empty());
+    }
+
+    #[test]
+    fn validate_open_meta_accepts_canonical_keys() {
+        let v = json!({
+            "relates_to": ["foo"],
+            "depends_on": ["bar"],
+            "tags": ["auth"],
+            "parent": "parent-slug",
+        });
+        assert!(validate_open_meta_keys(&v).is_ok());
+    }
+
+    #[test]
+    fn validate_open_meta_accepts_hyphen_aliases() {
+        let v = json!({
+            "relates-to": ["foo"],
+            "depends-on": ["bar"],
+            "preceded-by": ["baz"],
+            "derived-from": ["qux"],
+        });
+        assert!(validate_open_meta_keys(&v).is_ok());
+    }
+
+    #[test]
+    fn validate_open_meta_accepts_mixed_canonical_and_alias() {
+        let v = json!({
+            "relates_to": ["foo"],
+            "depends-on": ["bar"],
+        });
+        assert!(validate_open_meta_keys(&v).is_ok());
+    }
+
+    #[test]
+    fn validate_open_meta_rejects_unknown_key() {
+        let v = json!({
+            "relates_to": ["foo"],
+            "totally_made_up": "nope",
+        });
+        let err = validate_open_meta_keys(&v).unwrap_err();
+        assert_eq!(err, "totally_made_up");
+    }
+
+    #[test]
+    fn validate_open_meta_rejects_typo_of_known_key() {
+        let v = json!({
+            "relats_to": ["foo"],
+        });
+        let err = validate_open_meta_keys(&v).unwrap_err();
+        assert_eq!(err, "relats_to");
+    }
+
+    #[test]
+    fn validate_open_meta_empty_object_ok() {
+        let v = json!({});
+        assert!(validate_open_meta_keys(&v).is_ok());
+    }
+
+    #[test]
+    fn validate_open_meta_non_object_ok() {
+        // Non-object values are passed through — the caller's typed
+        // MetaUpdatePayload wraps this in a Value that may be null or
+        // some other shape during deserialization. Validation only
+        // applies to well-formed object payloads.
+        assert!(validate_open_meta_keys(&json!(null)).is_ok());
+        assert!(validate_open_meta_keys(&json!([])).is_ok());
+        assert!(validate_open_meta_keys(&json!("string")).is_ok());
+    }
+
+    #[test]
+    fn validate_open_meta_reports_first_bad_key() {
+        // BTreeMap key ordering in serde_json::Value::Object is insertion
+        // order on recent versions, so this test documents the "first miss
+        // wins" contract rather than asserting a specific order.
+        let v = json!({
+            "relates_to": ["a"],
+            "bogus_one": "x",
+            "bogus_two": "y",
+        });
+        let err = validate_open_meta_keys(&v).unwrap_err();
+        assert!(
+            err == "bogus_one" || err == "bogus_two",
+            "expected first-bad-key to be one of the two unknowns, got: {err}"
+        );
     }
 }

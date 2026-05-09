@@ -1,11 +1,15 @@
-//! Body trio path: body_hash + chunk dedupe through PATCH /api/resources/{id}.
+//! Body path: body_hash + chunk dedupe through PATCH /api/resources/{id}.
 //!
-//! Tests that when `content`, `content_hash`, and `chunks_packed` are all
-//! supplied in a PATCH request, the service:
-//!  - persists new chunks and updates `kb_resource_manifests.body_hash`
-//!  - short-circuits when content_hash matches stored body_hash (no chunk work)
-//!  - handles body trio + managed_meta in a single atomic transaction
-//!  - exposes `body_hash` on the returned `ResourceRow`
+//! After Phase 3b's contract tightening, clients send only `content`; the
+//! server recomputes `content_hash` and `chunks_packed` via `prepare_body_trio`.
+//! Wire-supplied `content_hash`/`chunks_packed` fields are silently ignored.
+//!
+//! Tests that verify body persistence (hash update, chunk dedupe, combined
+//! body+meta) are gated on `test-embed` because `prepare_body_trio` requires
+//! the `ingest-pipeline` feature (ONNX Runtime).
+//!
+//! The `update_response_includes_body_hash` test is safe under `test-db` only
+//! because it does a meta-only PATCH (no content body sent).
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -14,7 +18,9 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use temper_core::types::ingest::{pack_chunks, PackedChunk};
+#[cfg(feature = "test-embed")]
+use temper_core::types::ingest::pack_chunks;
+use temper_core::types::ingest::PackedChunk;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -34,6 +40,8 @@ fn make_packed_chunk(index: u32, content: &str, content_hash: &str) -> PackedChu
 }
 
 /// Encode a list of chunks into the `chunks_packed` wire format.
+/// Only needed by test-embed seeding helpers.
+#[cfg(feature = "test-embed")]
 fn encode_chunks(chunks: &[PackedChunk]) -> String {
     pack_chunks(chunks).expect("pack_chunks must succeed for test data")
 }
@@ -41,26 +49,19 @@ fn encode_chunks(chunks: &[PackedChunk]) -> String {
 /// Create a JWT-authenticated profile + resource with a manifest row containing
 /// an initial body. Returns `(token, resource_id_str)`.
 ///
-/// Pattern: generate JWT → call auth/me → create resource via HTTP → seed
-/// manifest + chunks directly via sqlx for fixture setup.
+/// Pattern: create profile with context → generate matching JWT → create
+/// resource via HTTP → seed manifest + chunks directly via sqlx for fixture setup.
 async fn setup_resource_with_body(
     app: &common::TestApp,
     pool: &PgPool,
     body_hash: &str,
     chunks: &[PackedChunk],
 ) -> (String, String) {
-    let sub = format!("test-sub-body-{}", Uuid::new_v4());
     let email = format!("body-test-{}@example.com", Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
-
-    // Auto-provision profile.
-    let _ = app
-        .client
-        .get(app.url("/api/auth/me"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .expect("auth/me failed");
 
     // Create resource via HTTP.
     let create_resp = app
@@ -68,7 +69,7 @@ async fn setup_resource_with_body(
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://body-trio-{}", Uuid::new_v4()),
             "title": "Body Trio Test",
@@ -173,6 +174,7 @@ async fn setup_resource_with_body(
 }
 
 /// Count current (non-superseded) chunks for a resource in kb_chunks.
+#[cfg(feature = "test-embed")]
 async fn count_current_chunks(pool: &PgPool, resource_id: Uuid) -> i64 {
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM kb_chunks WHERE resource_id = $1 AND is_current = true",
@@ -184,6 +186,7 @@ async fn count_current_chunks(pool: &PgPool, resource_id: Uuid) -> i64 {
 }
 
 /// Fetch body_hash from kb_resource_manifests.
+#[cfg(feature = "test-embed")]
 async fn fetch_body_hash(pool: &PgPool, resource_id: Uuid) -> String {
     sqlx::query_scalar::<_, String>(
         "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
@@ -198,8 +201,11 @@ async fn fetch_body_hash(pool: &PgPool, resource_id: Uuid) -> String {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// PATCH with body trio (content + content_hash + chunks_packed) must update
+/// PATCH with `content` (no wire hash/chunks) must update
 /// `kb_resource_manifests.body_hash` and insert new chunks in kb_chunks.
+/// The server recomputes the hash and chunks from content via `prepare_body_trio`.
+/// Requires `test-embed` (ONNX Runtime).
+#[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn body_update_changes_body_hash_and_persists_chunks(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -221,23 +227,16 @@ async fn body_update_changes_body_hash_and_persists_chunks(pool: PgPool) {
     let stored_hash_before = fetch_body_hash(&pool, rid).await;
     assert_eq!(stored_hash_before, initial_hash);
 
-    // PATCH with a new body trio: 3 chunks, different hash.
-    let new_hash = "sha256:updated-body-hash-11223344";
-    let new_chunks = vec![
-        make_packed_chunk(0, "# Updated\n\nNew content here.", "uh1"),
-        make_packed_chunk(1, "Second updated section.", "uh2"),
-        make_packed_chunk(2, "Third new section.", "uh3"),
-    ];
-    let chunks_packed = encode_chunks(&new_chunks);
-
+    // PATCH with content only — server recomputes hash + chunks.
+    // Wire content_hash/chunks_packed are intentionally omitted (they'd be ignored anyway).
+    let new_content =
+        "# Updated\n\nNew content here.\n\nSecond updated section.\n\nThird new section.";
     let resp = app
         .client
         .patch(app.url(&format!("/api/resources/{resource_id}")))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "content": "# Updated\n\nNew content here.\n\nSecond updated section.\n\nThird new section.",
-            "content_hash": new_hash,
-            "chunks_packed": chunks_packed,
+            "content": new_content,
         }))
         .send()
         .await
@@ -246,74 +245,96 @@ async fn body_update_changes_body_hash_and_persists_chunks(pool: PgPool) {
     assert_eq!(
         resp.status().as_u16(),
         200,
-        "body trio PATCH must return 200; body: {}",
+        "content-only PATCH must return 200; body: {}",
         resp.text().await.unwrap_or_default()
     );
 
-    // Assert: body_hash changed in db.
+    // Assert: body_hash changed (server recomputed a real sha256).
     let stored_hash_after = fetch_body_hash(&pool, rid).await;
-    assert_eq!(
-        stored_hash_after, new_hash,
-        "body_hash must be updated in kb_resource_manifests"
+    assert_ne!(
+        stored_hash_after, initial_hash,
+        "body_hash must change after content update"
+    );
+    assert!(
+        stored_hash_after.starts_with("sha256:"),
+        "server-computed hash must be sha256-prefixed; got: {stored_hash_after}"
     );
 
-    // Assert: chunks reflect new state (3 current).
+    // Assert: chunks reflect new state (pipeline produces chunks from content).
     let new_chunk_count = count_current_chunks(&pool, rid).await;
-    assert_eq!(
-        new_chunk_count, 3,
-        "kb_chunks must reflect new chunks (3 current)"
+    assert!(
+        new_chunk_count > 0,
+        "kb_chunks must be populated after body update; count: {new_chunk_count}"
     );
 }
 
-/// PATCH with the SAME content_hash as already stored must short-circuit:
-/// no chunk rewire, chunk count unchanged.
+/// PATCH with the SAME content sent twice must short-circuit:
+/// no chunk rewire, chunk count unchanged. The server computes the same hash
+/// from the same content and skips the chunk update.
+/// Requires `test-embed` (ONNX Runtime).
+#[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn body_update_with_unchanged_content_short_circuits(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
 
-    let body_hash = "sha256:same-hash-no-change-aabbcc";
-    let chunks = vec![
-        make_packed_chunk(0, "Unchanged content.", "h1"),
-        make_packed_chunk(1, "Still unchanged.", "h2"),
-    ];
-    let (token, resource_id) = setup_resource_with_body(&app, &pool, body_hash, &chunks).await;
+    // We can't pre-seed with a meaningful hash here because the pipeline will
+    // compute its own. Instead: do a first PATCH to establish content, then
+    // PATCH again with the same content and assert chunk count is unchanged.
+    let empty_chunks: Vec<PackedChunk> = vec![];
+    let (token, resource_id) =
+        setup_resource_with_body(&app, &pool, "sha256:placeholder", &empty_chunks).await;
 
     let rid = Uuid::parse_str(&resource_id).unwrap();
-    let chunk_count_before = count_current_chunks(&pool, rid).await;
-    assert_eq!(chunk_count_before, 2, "should have 2 initial chunks");
 
-    // PATCH with the SAME hash — should short-circuit.
-    let same_chunks_packed = encode_chunks(&chunks);
-    let resp = app
+    let content = "Unchanged content.\n\nStill unchanged.";
+
+    // First PATCH: establish content.
+    let resp1 = app
         .client
         .patch(app.url(&format!("/api/resources/{resource_id}")))
         .header("Authorization", format!("Bearer {token}"))
-        .json(&json!({
-            "content": "Unchanged content.\n\nStill unchanged.",
-            "content_hash": body_hash,
-            "chunks_packed": same_chunks_packed,
-        }))
+        .json(&json!({ "content": content }))
         .send()
         .await
-        .expect("PATCH request failed");
+        .expect("first PATCH failed");
+    assert_eq!(
+        resp1.status().as_u16(),
+        200,
+        "first content PATCH must succeed; body: {}",
+        resp1.text().await.unwrap_or_default()
+    );
+
+    let chunk_count_after_first = count_current_chunks(&pool, rid).await;
+
+    // Second PATCH: same content → server computes same hash → short-circuit.
+    let resp2 = app
+        .client
+        .patch(app.url(&format!("/api/resources/{resource_id}")))
+        .header("Authorization", format!("Bearer {token}"))
+        .json(&json!({ "content": content }))
+        .send()
+        .await
+        .expect("second PATCH failed");
 
     assert_eq!(
-        resp.status().as_u16(),
+        resp2.status().as_u16(),
         200,
-        "same-hash PATCH must return 200; body: {}",
-        resp.text().await.unwrap_or_default()
+        "same-content PATCH must return 200; body: {}",
+        resp2.text().await.unwrap_or_default()
     );
 
     // Chunk count must be unchanged (no rewire happened).
-    let chunk_count_after = count_current_chunks(&pool, rid).await;
+    let chunk_count_after_second = count_current_chunks(&pool, rid).await;
     assert_eq!(
-        chunk_count_after, chunk_count_before,
-        "chunk count must not change when content_hash matches stored body_hash"
+        chunk_count_after_second, chunk_count_after_first,
+        "chunk count must not change when content is identical (hash short-circuit)"
     );
 }
 
-/// PATCH carrying BOTH body trio AND managed_meta must apply both changes in
-/// one transaction: body_hash updated AND managed_meta merged.
+/// PATCH carrying BOTH content AND managed_meta must apply both changes in
+/// one transaction: body_hash updated (server-computed) AND managed_meta merged.
+/// Requires `test-embed` (ONNX Runtime).
+#[cfg(feature = "test-embed")]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn body_update_combined_with_managed_meta_in_one_tx(pool: PgPool) {
     let app = common::setup_test_app(pool.clone()).await;
@@ -345,22 +366,15 @@ async fn body_update_combined_with_managed_meta_in_one_tx(pool: PgPool) {
     .await
     .expect("update managed_meta fixture");
 
-    // PATCH with body trio + managed_meta change.
-    let new_hash = "sha256:combined-updated-hash-334455";
-    let new_chunks = vec![
-        make_packed_chunk(0, "Updated content.", "uh1"),
-        make_packed_chunk(1, "New second chunk.", "uh2"),
-    ];
-    let chunks_packed = encode_chunks(&new_chunks);
-
+    // PATCH with content + managed_meta change. Wire hash/chunks intentionally
+    // omitted — server recomputes them from content.
+    let new_content = "Updated content.\n\nNew second chunk.";
     let resp = app
         .client
         .patch(app.url(&format!("/api/resources/{resource_id}")))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "content": "Updated content.\n\nNew second chunk.",
-            "content_hash": new_hash,
-            "chunks_packed": chunks_packed,
+            "content": new_content,
             "managed_meta": { "temper-stage": "done" },
         }))
         .send()
@@ -374,11 +388,15 @@ async fn body_update_combined_with_managed_meta_in_one_tx(pool: PgPool) {
         resp.text().await.unwrap_or_default()
     );
 
-    // Assert: body_hash changed.
+    // Assert: body_hash changed (server recomputed from new content).
     let stored_hash = fetch_body_hash(&pool, rid).await;
-    assert_eq!(
-        stored_hash, new_hash,
-        "body_hash must be updated in combined patch"
+    assert_ne!(
+        stored_hash, initial_hash,
+        "body_hash must change after content update"
+    );
+    assert!(
+        stored_hash.starts_with("sha256:"),
+        "server-computed hash must be sha256-prefixed; got: {stored_hash}"
     );
 
     // Assert: managed_meta stage changed to "done".
@@ -395,9 +413,12 @@ async fn body_update_combined_with_managed_meta_in_one_tx(pool: PgPool) {
         "managed_meta stage must be merged in the same transaction"
     );
 
-    // Assert: chunks updated to 2.
+    // Assert: chunks populated from new content.
     let chunk_count = count_current_chunks(&pool, rid).await;
-    assert_eq!(chunk_count, 2, "chunk count must reflect new 2-chunk body");
+    assert!(
+        chunk_count > 0,
+        "kb_chunks must be populated after combined body+meta update; count: {chunk_count}"
+    );
 }
 
 /// PATCH response ResourceRow must include body_hash when a manifest exists.

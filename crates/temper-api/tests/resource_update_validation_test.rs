@@ -1,8 +1,17 @@
-//! Body-trio validation: content + content_hash + chunks_packed are all-or-nothing.
+//! Body-trio contract tests for PATCH /api/resources/{id}.
 //!
-//! The handler must reject any PATCH /api/resources/{id} where some but not all
-//! of the body-trio fields are present, with a 400 and a descriptive message.
-//! A request with all trio fields absent (meta-only update) must pass through.
+//! After Phase 3b's contract tightening, the handler no longer enforces an
+//! all-or-nothing guard at the wire level. Instead:
+//!
+//! - Wire-supplied `content_hash` and `chunks_packed` are intentionally ignored;
+//!   the server recomputes them from `content` via `prepare_body_trio`.
+//! - Sending `content` without `content_hash` or `chunks_packed` is now valid
+//!   (server fills in the pair). Without the `ingest-pipeline` feature, the
+//!   server returns 400 because `prepare_body_trio` is not available.
+//! - Sending only `content_hash` or `chunks_packed` without `content` is now a
+//!   meta-only no-op — wire hash/chunks fields are silently ignored and the
+//!   request succeeds with no body change (200).
+//! - A request with all trio fields absent (meta-only update) continues to pass.
 #![cfg(feature = "test-db")]
 
 mod common;
@@ -17,20 +26,11 @@ use sqlx::PgPool;
 /// Creates a test profile and a resource owned by that profile.
 /// Returns `(token, resource_id_string)`.
 async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
-    let sub = format!("test-sub-{}", uuid::Uuid::new_v4());
     let email = format!("body-trio-{}@example.com", uuid::Uuid::new_v4());
+    let (profile_id, context_id) =
+        common::fixtures::create_test_profile_with_context(&app.pool, &email).await;
+    let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
-
-    // Authenticate (this auto-creates the profile).
-    let auth_resp = app
-        .client
-        .get(app.url("/api/auth/me"))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .await
-        .expect("auth/me request failed");
-    // 200 or 404 both fine — we just need the profile to exist.
-    let _ = auth_resp.status();
 
     // Create a resource owned by this profile via POST /api/resources.
     let create_resp = app
@@ -38,7 +38,7 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
         .post(app.url("/api/resources"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
-            "kb_context_id": common::fixtures::TEMPER_CONTEXT_ID,
+            "kb_context_id": context_id.to_string(),
             "kb_doc_type_id": common::fixtures::RESEARCH_DOC_TYPE_ID,
             "origin_uri": format!("test://body-trio-{}", uuid::Uuid::new_v4()),
             "title": "Body Trio Test Resource",
@@ -67,16 +67,25 @@ async fn setup_profile_and_resource(app: &common::TestApp) -> (String, String) {
 // Tests
 // ---------------------------------------------------------------------------
 
-/// PATCH with content but no content_hash (partial trio) must return 400.
+/// PATCH with content but no content_hash returns 400 when the server-side
+/// ingest pipeline is not available (no `ingest-pipeline` feature). The
+/// all-or-nothing guard moved from the handler into `prepare_body_trio`: the
+/// wire hash/chunks fields are now ignored and the server attempts to recompute
+/// the pair. Without the pipeline it cannot, so it returns 400.
+///
+/// When `ingest-pipeline` IS enabled (Embed CI job), sending content without a
+/// wire-supplied hash succeeds — see the body-bearing tests in
+/// `resource_update_body_test.rs` (gated on `test-embed`).
+#[cfg(not(feature = "ingest-pipeline"))]
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn patch_returns_400_when_content_present_without_hash(pool: PgPool) {
+async fn patch_returns_400_when_content_present_without_pipeline(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (token, resource_id) = setup_profile_and_resource(&app).await;
 
     let req_body = json!({
-        "content": "new body",
-        "chunks_packed": "blob"
-        // content_hash intentionally absent
+        "content": "new body"
+        // content_hash and chunks_packed intentionally absent;
+        // server ignores any wire-supplied values anyway
     });
 
     let resp = app
@@ -91,17 +100,22 @@ async fn patch_returns_400_when_content_present_without_hash(pool: PgPool) {
     let status = resp.status().as_u16();
     let body: Value = resp.json().await.expect("expected JSON body");
 
-    assert_eq!(status, 400, "partial trio must return 400; body: {body}",);
+    assert_eq!(
+        status, 400,
+        "content without pipeline must return 400; body: {body}"
+    );
     let message = body["error"]["message"].as_str().unwrap_or("");
     assert!(
-        message.contains("content_hash"),
-        "error message must mention 'content_hash'; got: {message}"
+        message.contains("chunks_packed"),
+        "error message must mention 'chunks_packed'; got: {message}"
     );
 }
 
-/// PATCH with content_hash but no content (another partial trio) must return 400.
+/// PATCH with only `content_hash` (no `content`) must succeed with a 200:
+/// the wire hash is now silently ignored; no body branch fires, so the
+/// request is treated as a meta-only no-op.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn patch_returns_400_when_hash_present_without_content(pool: PgPool) {
+async fn patch_accepts_hash_only_as_noop(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
     let (token, resource_id) = setup_profile_and_resource(&app).await;
 
@@ -120,16 +134,12 @@ async fn patch_returns_400_when_hash_present_without_content(pool: PgPool) {
         .expect("PATCH request failed");
 
     let status = resp.status().as_u16();
-    let body: Value = resp.json().await.expect("expected JSON body");
 
     assert_eq!(
-        status, 400,
-        "hash without content must return 400; body: {body}"
-    );
-    let message = body["error"]["message"].as_str().unwrap_or("");
-    assert!(
-        message.contains("content_hash"),
-        "error message must mention 'content_hash'; got: {message}"
+        status,
+        200,
+        "hash-only (no content) must return 200 — wire hash silently ignored; body: {}",
+        resp.text().await.unwrap_or_default()
     );
 }
 

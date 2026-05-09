@@ -87,8 +87,9 @@ async fn update_meta_cascades_title(pool: sqlx::PgPool) {
     );
 
     let body: serde_json::Value = resp.json().await.expect("parse response body");
-    assert_eq!(body["updated"], true);
-    assert_eq!(body["resource_id"], resource.id.to_string());
+    // Phase 3b: response shape is ResourceRow (was {updated, resource_id} before
+    // the PUT /api/resources/{id}/meta migration through DbBackend).
+    assert_eq!(body["id"], resource.id.to_string());
 
     // Verify title was cascaded to kb_resources.
     let fetched = app

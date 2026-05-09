@@ -2,30 +2,48 @@
 
 //! C1: meta-only updates must reconcile frontmatter-provenance edges.
 //!
-//! The meta-only sync path (`meta_service::update_meta`) updates
-//! `kb_resource_manifests.open_meta` without re-chunking. Before C1 it did
-//! not call `edge_service::reconcile_edges`, so relationship frontmatter
-//! written by `temper graph build` never produced knowledge-graph edges
-//! on the server. These tests pin the fixed behavior.
+//! Before C1 the meta-only update path did not call
+//! `edge_service::reconcile_edges`, so relationship frontmatter written
+//! by `temper graph build` never produced knowledge-graph edges on the
+//! server. These tests pin the fixed behavior. Dispatch is now through
+//! `DbBackend::update_resource` (translator's meta-only branch).
 
 mod common;
 
 use serde_json::json;
 use sqlx::PgPool;
-use temper_core::types::ids::ProfileId;
-use temper_core::types::ids::ResourceId;
-use temper_core::types::managed_meta::{ManagedMeta, MetaUpdatePayload};
+use temper_api::backend::DbBackend;
+use temper_core::operations::{Backend, ResourceRef, Surface, UpdateResource};
+use temper_core::types::ids::{ProfileId, ResourceId};
+use temper_core::types::managed_meta::ManagedMeta;
 
-/// Build a MetaUpdatePayload with the given open_meta value. Uses stable
-/// dummy hashes — the service just stores them, it does not validate.
-fn meta_payload(resource_id: uuid::Uuid, open_meta: serde_json::Value) -> MetaUpdatePayload {
-    MetaUpdatePayload {
-        resource_id: ResourceId::from(resource_id),
-        managed_meta: ManagedMeta::default(),
-        open_meta,
-        managed_hash: "test-mhash".to_string(),
-        open_hash: "test-ohash".to_string(),
-    }
+/// Dispatch a meta-only update with the given open_meta. Mirrors what the
+/// MCP `update_resource_meta` tool does: build an UpdateResource cmd with
+/// `body=None`, dispatch through DbBackend.
+async fn meta_only_update(
+    pool: &PgPool,
+    profile_id: ProfileId,
+    resource_id: uuid::Uuid,
+    open_meta: serde_json::Value,
+) {
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(resource_id),
+        },
+        body: None,
+        managed_meta: Some(ManagedMeta::default()),
+        open_meta: Some(open_meta),
+        origin: Surface::Mcp,
+    };
+    DbBackend::new(
+        pool.clone(),
+        profile_id,
+        "test-device".to_string(),
+        Surface::Mcp,
+    )
+    .update_resource(cmd)
+    .await
+    .expect("meta-only update via DbBackend");
 }
 
 /// A meta-only update with a new `extends` relationship must create the
@@ -68,16 +86,13 @@ async fn meta_update_reconciles_edges(pool: PgPool) {
             .expect("count chunks before");
 
     // --- Act 1: meta update adds an `extends` relationship ---
-    let payload = meta_payload(source, json!({"extends": ["target-doc"]}));
-    temper_api::services::meta_service::update_meta(
+    meta_only_update(
         &pool,
         profile_id,
-        ResourceId::from(source),
-        "test-device",
-        payload,
+        source,
+        json!({"extends": ["target-doc"]}),
     )
-    .await
-    .expect("update_meta with extends");
+    .await;
 
     // The edge should exist: source -> target, type extends, frontmatter provenance.
     let created_count: i64 = sqlx::query_scalar(
@@ -109,17 +124,11 @@ async fn meta_update_reconciles_edges(pool: PgPool) {
         "meta update must not change chunk rows"
     );
 
-    // --- Act 2: meta update removes the relationship (empty open_meta) ---
-    let payload = meta_payload(source, json!({}));
-    temper_api::services::meta_service::update_meta(
-        &pool,
-        profile_id,
-        ResourceId::from(source),
-        "test-device",
-        payload,
-    )
-    .await
-    .expect("update_meta clearing relationships");
+    // --- Act 2: meta update clears the relationship by setting extends=[] ---
+    // Partial-merge semantics: passing `{}` would be a no-op; the caller must
+    // explicitly set `extends: []` to retract the declaration. Mirrors the
+    // pattern in tests/e2e/tests/meta_test.rs::meta_patch_reconciles_edges_add_and_remove.
+    meta_only_update(&pool, profile_id, source, json!({"extends": []})).await;
 
     // The frontmatter edge must be gone.
     let remaining: i64 = sqlx::query_scalar(

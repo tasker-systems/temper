@@ -481,34 +481,6 @@ pub async fn check_can_modify(pool: &PgPool, profile_id: Uuid, resource_id: Uuid
     Ok(())
 }
 
-/// Create a new resource. The caller is set as both originator and owner.
-pub async fn create(
-    pool: &PgPool,
-    profile_id: Uuid,
-    req: ResourceCreateRequest,
-) -> ApiResult<ResourceRow> {
-    let id = Uuid::now_v7();
-    sqlx::query!(
-        r#"
-        INSERT INTO kb_resources
-            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
-             originator_profile_id, owner_profile_id, is_active, created, updated)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $7, true, now(), now())
-        "#,
-        id,
-        req.kb_context_id,
-        req.kb_doc_type_id,
-        req.origin_uri,
-        req.title,
-        req.slug,
-        profile_id,
-    )
-    .execute(pool)
-    .await?;
-
-    get_visible(pool, profile_id, id).await
-}
-
 /// Update mutable fields on a resource. Requires `can_modify_resource()` to return true.
 ///
 /// Performs a partial merge for `managed_meta` and `open_meta`:
@@ -542,6 +514,28 @@ pub async fn update(
 
     if !can_modify {
         return Err(ApiError::Forbidden);
+    }
+
+    // Reject structural moves on body-bearing updates. Mirrors the check that
+    // ingest_service::update performed before 3b folded its callers into this
+    // function: if the caller is writing new body content AND attempting to
+    // change context or doc_type via managed_meta, refuse the combined op.
+    // Meta-only updates may still cascade context/doc_type via the merge
+    // block below — that's the historical PUT /api/resources/{id}/meta path.
+    let body_present = req.content.is_some();
+    if body_present {
+        if let Some(ref m) = req.managed_meta {
+            for (field, set) in [
+                ("temper-context", m.context.is_some()),
+                ("temper-type", m.doc_type.is_some()),
+            ] {
+                if set {
+                    return Err(ApiError::BadRequest(format!(
+                        "structural move via field '{field}' is not supported: use dedicated move command to change {field}"
+                    )));
+                }
+            }
+        }
     }
 
     let mut tx = pool.begin().await?;
@@ -587,6 +581,16 @@ pub async fn update(
     // canonical managed_meta JSONB is present. A title/slug-only PATCH still
     // needs to refresh the JSONB so its temper-title / temper-slug keys (and
     // the managed_hash) stay in lockstep with the kb_resources columns.
+    //
+    // Capture before the if-block moves req.managed_meta / req.open_meta.
+    // post_merge_managed/open are hoisted so reconcile_edges (after tx.commit())
+    // can read the post-merge JSONB values without re-querying.
+    let meta_touched = req.managed_meta.is_some() || req.open_meta.is_some();
+    let mut post_merge_managed: Option<serde_json::Value> = None;
+    let mut post_merge_open: Option<serde_json::Value> = None;
+    let mut post_merge_managed_hash: Option<String> = None;
+    let mut post_merge_open_hash: Option<String> = None;
+
     if req.managed_meta.is_some()
         || req.open_meta.is_some()
         || req.title.is_some()
@@ -615,6 +619,15 @@ pub async fn update(
         // ManagedMeta has a flatten extras bucket so the only way this fails
         // is if the column holds a non-object JSON value, which would be
         // structural corruption worth knowing about.
+        // Capture caller-supplied doc_type / context before the partial
+        // moves into apply_managed_meta_partial. Used below to cascade into
+        // kb_resources.kb_doc_type_id / kb_context_id with validation —
+        // mirrors meta_service::update_meta:204-237 (the path 3b folded into
+        // this function); without it, PUT /api/resources/{id}/meta silently
+        // accepts unknown doc_type / context names.
+        let incoming_doc_type = req.managed_meta.as_ref().and_then(|m| m.doc_type.clone());
+        let incoming_context = req.managed_meta.as_ref().and_then(|m| m.context.clone());
+
         let mut merged_managed: ManagedMeta = serde_json::from_value(stored_managed_json)
             .map_err(|e| ApiError::Internal(format!("malformed managed_meta JSONB: {e}")))?;
         if let Some(incoming) = req.managed_meta {
@@ -637,6 +650,15 @@ pub async fn update(
             new_title,
             new_slug,
         );
+        // Apply doc-type defaults to fill in any required fields that aren't
+        // already present. Mirrors ingest_service::update:674 — the canonical
+        // site for defaulting on meta-bearing updates. Without this, meta
+        // updates routed through DbBackend → resource_service::update would
+        // silently regress required-field defaulting.
+        // This affects PATCH /api/resources, PUT /api/ingest/{id}, and
+        // PUT /api/resources/{id}/meta, making defaulting consistent across
+        // all meta-touching update paths.
+        temper_core::operations::apply_defaults_value(&current.doc_type_name, &mut managed_value);
         let managed_hash = compute_managed_hash(&current.doc_type_name, &managed_value);
         let open_hash = compute_open_hash(&merged_open);
 
@@ -656,7 +678,55 @@ pub async fn update(
         )
         .execute(&mut *tx)
         .await?;
+
+        // Cascade caller-supplied doc_type / context to kb_resources FK
+        // columns. Validation: unknown name → 400 BadRequest. Mirrors
+        // meta_service::update_meta:204-237.
+        if let Some(doc_type) = incoming_doc_type.as_deref() {
+            let dt_id =
+                sqlx::query_scalar!("SELECT id FROM kb_doc_types WHERE name = $1", doc_type,)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(format!("unknown doc_type: '{doc_type}'"))
+                    })?;
+            sqlx::query!(
+                "UPDATE kb_resources SET kb_doc_type_id = $1, updated = now() WHERE id = $2",
+                dt_id,
+                resource_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        if let Some(context_name) = incoming_context.as_deref() {
+            let ctx_id =
+                sqlx::query_scalar!("SELECT id FROM kb_contexts WHERE name = $1", context_name,)
+                    .fetch_optional(&mut *tx)
+                    .await?
+                    .ok_or_else(|| {
+                        ApiError::BadRequest(format!("unknown context: '{context_name}'"))
+                    })?;
+            sqlx::query!(
+                "UPDATE kb_resources SET kb_context_id = $1, updated = now() WHERE id = $2",
+                ctx_id,
+                resource_id,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        // Capture post-merge values for edge reconciliation after tx.commit()
+        // and for the meta-only audit emission below.
+        post_merge_managed = Some(managed_value);
+        post_merge_open = Some(merged_open);
+        post_merge_managed_hash = Some(managed_hash);
+        post_merge_open_hash = Some(open_hash);
     }
+
+    // Track whether the body-trio block emitted an audit row. When meta is
+    // also touched in the same call, we want exactly one audit — "update_body"
+    // wins over "update_meta" (the body change is the more significant event).
+    let mut body_audit_emitted = false;
 
     // 3. Body trio path: persist + dedupe chunks if all three fields present.
     //    The handler guarantees all-or-nothing — if any one is Some, all are Some.
@@ -709,6 +779,7 @@ pub async fn update(
                 &open_hash,
             )
             .await?;
+            body_audit_emitted = true;
 
             // Replace chunks: version-bump old, batch-insert new, rebuild search.
             replace_chunks(
@@ -737,7 +808,75 @@ pub async fn update(
         // else: hash matches stored → short-circuit, no chunk work.
     }
 
+    // 4. Meta-only audit: emit "update_meta" when meta_touched but the body
+    //    block did not write an audit row. Mirrors the contract that
+    //    meta_service::update_meta enforced before 3b folded that path into
+    //    DbBackend::update_resource. Fetches body_hash from the post-merge
+    //    manifest so the audit row carries a coherent snapshot.
+    if meta_touched && !body_audit_emitted {
+        let body_hash: String = sqlx::query_scalar!(
+            "SELECT body_hash FROM kb_resource_manifests WHERE resource_id = $1",
+            resource_id,
+        )
+        .fetch_optional(&mut *tx)
+        .await?
+        .unwrap_or_default();
+
+        let managed_hash = post_merge_managed_hash
+            .as_deref()
+            .expect("populated by manifest-rewrite block when meta_touched");
+        let open_hash = post_merge_open_hash
+            .as_deref()
+            .expect("populated by manifest-rewrite block when meta_touched");
+
+        insert_event_and_audit(
+            &mut tx,
+            ProfileId::from(profile_id),
+            device_id,
+            current.kb_context_id,
+            ResourceId::from(resource_id),
+            "managed_meta_updated",
+            "update_meta",
+            &body_hash,
+            managed_hash,
+            open_hash,
+        )
+        .await?;
+    }
+
     tx.commit().await?;
+
+    // Reconcile frontmatter-provenance edges when managed/open meta were touched.
+    // Mirrors the call in meta_service::update_meta (line 275) and
+    // ingest_service::ingest (line 744). Errors are warn-and-continue: the
+    // update itself succeeded and the edge table is an eventually-consistent
+    // derived view of the frontmatter declarations.
+    if meta_touched {
+        let context_id = current.kb_context_id;
+        let res_id = ResourceId::from(resource_id);
+        let prof_id = ProfileId::from(profile_id);
+        let managed =
+            post_merge_managed.expect("populated by manifest-rewrite block when meta_touched");
+        let open = post_merge_open.expect("populated by manifest-rewrite block when meta_touched");
+        if let Err(e) = super::edge_service::reconcile_edges(
+            pool,
+            &prof_id,
+            &context_id,
+            &res_id,
+            &current.doc_type_name,
+            &managed,
+            &open,
+        )
+        .await
+        {
+            tracing::warn!(
+                resource_id = %resource_id,
+                error = %e,
+                "edge reconciliation failed during resource update"
+            );
+        }
+    }
+
     get_visible(pool, profile_id, resource_id).await
 }
 

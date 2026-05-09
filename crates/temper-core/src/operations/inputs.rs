@@ -9,15 +9,32 @@ use serde::{Deserialize, Serialize};
 ///
 /// Wraps a String so we can extend with body-meta fields (e.g., explicit
 /// content hash, encoding) without breaking the command struct.
+///
+/// When `chunks_packed` and `content_hash` are `Some`, the translator skips
+/// `prepare_body_trio` and uses the pre-computed trio directly. This mirrors
+/// the `IngestPayload.chunks_packed` short-circuit in `ingest_service` and
+/// allows the PUT /api/ingest/{id} handler to forward client-supplied chunks
+/// without requiring server-side ONNX Runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BodyUpdate {
     pub content: String,
+    /// Pre-computed body hash, if available. When `Some`, the translator skips
+    /// the server-side hash computation and uses this value directly alongside
+    /// `chunks_packed`.
+    #[serde(default)]
+    pub content_hash: Option<String>,
+    /// Pre-packed chunks, if available. When `Some` alongside `content_hash`,
+    /// the translator skips `prepare_body_trio` entirely.
+    #[serde(default)]
+    pub chunks_packed: Option<String>,
 }
 
 impl BodyUpdate {
     pub fn new(content: impl Into<String>) -> Self {
         Self {
             content: content.into(),
+            content_hash: None,
+            chunks_packed: None,
         }
     }
 }

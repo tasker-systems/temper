@@ -17,8 +17,8 @@ mod surface;
 
 pub use actions::{
     apply_defaults, apply_defaults_value, ensure_managed_identity_keys, merge_managed_meta,
-    merge_open_meta, validate_create, validate_doctype, validate_slug, validate_update,
-    ActionError,
+    merge_open_meta, validate_create, validate_doctype, validate_open_meta_keys, validate_slug,
+    validate_update, ActionError,
 };
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{

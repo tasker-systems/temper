@@ -129,16 +129,35 @@ pub async fn clean_and_seed(pool: &PgPool) {
 
 /// Create a test profile and return its UUID.
 pub async fn create_test_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
-    let id = uuid::Uuid::now_v7();
-    let sub = format!("test|{id}");
+    let (profile_id, _context_id) = create_test_profile_with_context(pool, email).await;
+    profile_id
+}
+
+/// Create a test profile together with a profile-owned 'temper' context.
+///
+/// Returns `(profile_id, context_id)`. The owned context satisfies the
+/// `contexts_visible_to(profile_id)` gate enforced by
+/// `context_service::resolve_by_name` inside `ingest_service::ingest`, so
+/// tests that POST to `/api/resources` or `/api/ingest` with `context_name =
+/// "temper"` will find a visible context.
+///
+/// The `kb_contexts_owner_name_unique` constraint is per-owner, so each test
+/// profile gets its own 'temper' context that does not collide with the
+/// system-seeded one or with other test profiles' contexts.
+pub async fn create_test_profile_with_context(
+    pool: &PgPool,
+    email: &str,
+) -> (uuid::Uuid, uuid::Uuid) {
+    let profile_id = uuid::Uuid::now_v7();
+    let sub = format!("test|{profile_id}");
     let slug = email.split('@').next().unwrap_or("test-user");
-    let unique_slug = format!("{slug}-{}", &id.to_string()[..8]);
+    let unique_slug = format!("{slug}-{}", &profile_id.to_string()[..8]);
     sqlx::query(
         r#"INSERT INTO kb_profiles (id, display_name, email, slug)
            VALUES ($1, $2, $3, $4)
            ON CONFLICT (id) DO NOTHING"#,
     )
-    .bind(id)
+    .bind(profile_id)
     .bind(email)
     .bind(email)
     .bind(&unique_slug)
@@ -152,13 +171,27 @@ pub async fn create_test_profile(pool: &PgPool, email: &str) -> uuid::Uuid {
            ON CONFLICT DO NOTHING"#,
     )
     .bind(uuid::Uuid::now_v7())
-    .bind(id)
+    .bind(profile_id)
     .bind(&sub)
     .execute(pool)
     .await
     .expect("create test auth link");
 
-    id
+    // Create a profile-owned 'temper' context so contexts_visible_to(profile_id)
+    // returns a row when ingest_service::ingest calls
+    // context_service::resolve_by_name with name = "temper".
+    let context_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
+           VALUES ($1, 'temper', 'kb_profiles', $2)"#,
+    )
+    .bind(context_id)
+    .bind(profile_id)
+    .execute(pool)
+    .await
+    .expect("create test profile-owned temper context");
+
+    (profile_id, context_id)
 }
 
 /// Create a test resource owned by the given profile and return its UUID.
