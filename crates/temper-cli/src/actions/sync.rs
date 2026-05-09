@@ -109,6 +109,23 @@ pub struct PullResult {
     pub title: String,
 }
 
+/// Two owner sigils are equivalent if they are byte-equal OR one side is
+/// the API's `@me` display alias and the other is `@<current_owner_slug>`.
+///
+/// Used to keep `preflight_ownership_check` from spuriously flagging files
+/// whose frontmatter still says `@me` (legacy state, or files written via
+/// `build_frontmatter_from_resource` before the canonical-owner fix landed)
+/// against manifest paths that already use the canonical `@<profile.slug>`
+/// segment — and vice versa for legacy `@me/` vault paths whose frontmatter
+/// has been canonicalized.
+fn owners_equivalent(a: &str, b: &str, current_owner_slug: &str) -> bool {
+    if a == b {
+        return true;
+    }
+    let resolved = format!("@{current_owner_slug}");
+    (a == "@me" && b == resolved) || (b == "@me" && a == resolved)
+}
+
 /// Validate every non-provisional manifest entry: the file's frontmatter
 /// `temper-owner` must match the owner segment of its manifest path.
 ///
@@ -117,7 +134,11 @@ pub struct PullResult {
 /// source until they're first synced. Files missing their frontmatter,
 /// unreadable, or with a malformed manifest path are also skipped (surfaced
 /// by other code paths).
-pub fn preflight_ownership_check(manifest: &Manifest, vault_root: &Path) -> Vec<OwnershipMismatch> {
+pub fn preflight_ownership_check(
+    manifest: &Manifest,
+    vault_root: &Path,
+    current_owner_slug: &str,
+) -> Vec<OwnershipMismatch> {
     let mut mismatches = Vec::new();
 
     for entry in manifest.entries.values() {
@@ -145,7 +166,7 @@ pub fn preflight_ownership_check(manifest: &Manifest, vault_root: &Path) -> Vec<
             .map(|s| s.to_string())
             .unwrap_or_else(|| "@me".to_string());
 
-        if frontmatter_owner != manifest_owner {
+        if !owners_equivalent(&frontmatter_owner, &manifest_owner, current_owner_slug) {
             mismatches.push(OwnershipMismatch {
                 file_path: entry.path.clone(),
                 frontmatter_owner,
@@ -177,6 +198,85 @@ pub struct SyncResult {
 // ---------------------------------------------------------------------------
 // Pure functions (no client, no async — fully unit-testable)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Owner sigil resolution
+// ---------------------------------------------------------------------------
+
+/// Resolve the API's `owner_handle` shorthand to the canonical owner sigil
+/// used in vault paths and `kb_resource_uri()`.
+///
+/// The API returns the literal string `"@me"` for the requester's own
+/// resources (see `OWNER_HANDLE_EXPR` in `resource_service.rs`). The vault
+/// layout and the server's `kb_resource_uri()` SQL function use
+/// `@<profile.slug>` as the canonical owner segment. This helper closes the
+/// gap: callers pass `resource.owner_handle` plus the requester's own
+/// `profile.slug` (without leading `@`) and get back the canonical sigil.
+///
+/// Team handles (`+<team-slug>`) are already canonical and pass through
+/// unchanged; so do other users' personal handles.
+pub fn resolve_owner_for_frontmatter(handle: &str, profile_slug: &str) -> String {
+    if handle == "@me" {
+        format!("@{profile_slug}")
+    } else {
+        handle.to_string()
+    }
+}
+
+/// Stateful resolver for the API's `@me` shorthand. Wraps `&TemperClient`
+/// with a lazily-populated cache of the requester's canonical owner sigil
+/// so a sync run with N `@me`-owned resources fetches the profile at most
+/// once, not N times.
+///
+/// One-shot callers (CLI `pull`, e2e tests, any code path that resolves
+/// exactly one handle) construct an ephemeral resolver and discard it.
+/// `sync_orchestration` constructs one resolver per run and threads
+/// `&mut OwnerResolver` through the pull primitives.
+///
+/// For the pure-sync case (caller already has the profile slug in scope),
+/// see `resolve_owner_for_frontmatter`.
+///
+/// # Test coverage
+///
+/// The `@me` resolution path requires a live client and is covered by the
+/// e2e tests in `pull_command_test.rs` (specifically
+/// `pull_one_resource_newly_tracked_writes_canonical_owner_and_passes_preflight`).
+/// Non-`@me` passthrough cannot be unit-tested in this crate without
+/// fabricating a `TemperClient`, which requires a non-trivial token store
+/// setup. Rely on the e2e layer for full coverage.
+pub struct OwnerResolver<'c> {
+    client: &'c temper_client::TemperClient,
+    canonical: Option<String>,
+}
+
+impl<'c> OwnerResolver<'c> {
+    pub fn new(client: &'c temper_client::TemperClient) -> Self {
+        Self {
+            client,
+            canonical: None,
+        }
+    }
+
+    /// Resolve `handle` (typically `resource.owner_handle`) to the canonical
+    /// owner sigil. Fetches the profile once per resolver lifetime; subsequent
+    /// `@me` lookups return the cached value. Non-`@me` handles pass through
+    /// without touching the client.
+    pub async fn resolve(&mut self, handle: &str) -> crate::error::Result<String> {
+        if handle != "@me" {
+            return Ok(handle.to_string());
+        }
+        if self.canonical.is_none() {
+            let profile = self
+                .client
+                .profile()
+                .get()
+                .await
+                .map_err(crate::commands::client_err)?;
+            self.canonical = Some(format!("@{}", profile.slug));
+        }
+        Ok(self.canonical.as_deref().unwrap().to_string())
+    }
+}
 
 // ---------------------------------------------------------------------------
 // normalize_all_entries report
@@ -738,9 +838,10 @@ pub async fn sync_orchestration(
     progress.phase_summary("push", push_count);
 
     // Step 5: Pull
+    let mut resolver = OwnerResolver::new(client);
     for item in &diff.to_pull {
         progress.pull_start(&item.uri);
-        match pull_resource(client, manifest, vault_root, item).await {
+        match pull_resource(client, manifest, vault_root, item, &mut resolver).await {
             Ok(()) => {
                 if let Some(entry) = manifest.entries.get(&item.resource_id) {
                     progress.pull_done(&entry.path);
@@ -1350,6 +1451,7 @@ async fn pull_resource(
     manifest: &mut Manifest,
     vault_root: &Path,
     item: &SyncPullItem,
+    resolver: &mut OwnerResolver<'_>,
 ) -> Result<()> {
     match item.kind {
         SyncItemKind::Body => {
@@ -1374,11 +1476,14 @@ async fn pull_resource(
                 item.resource_id,
                 Some(manifest),
                 Some(item.content_hash.clone()),
+                resolver,
             )
             .await
             .map(|_| ())
         }
-        SyncItemKind::MetaOnly => pull_resource_meta_only(client, manifest, vault_root, item).await,
+        SyncItemKind::MetaOnly => {
+            pull_resource_meta_only(client, manifest, vault_root, item, resolver).await
+        }
     }
 }
 
@@ -1404,6 +1509,7 @@ pub async fn pull_one_resource(
     resource_id: ResourceId,
     manifest: Option<&mut Manifest>,
     expected_remote_hash: Option<String>,
+    resolver: &mut OwnerResolver<'_>,
 ) -> Result<PullResult> {
     let id = Uuid::from(resource_id);
 
@@ -1437,10 +1543,12 @@ pub async fn pull_one_resource(
                 .managed_meta
                 .as_ref()
                 .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
+            let canonical_owner = resolver.resolve(&resource.owner_handle).await?;
             let fm = ingest::build_frontmatter_from_resource(
                 &resource,
                 &ctx,
                 &dtype,
+                &canonical_owner,
                 ingest::normalize_body_for_vault(&content_response.markdown),
                 managed_value.as_ref(),
                 content_response.open_meta.as_ref(),
@@ -1490,18 +1598,7 @@ pub async fn pull_one_resource(
                 slug_owned.as_str()
             }
         };
-        let owner_owned;
-        let owner = if resource.owner_handle == "@me" {
-            let profile = client
-                .profile()
-                .get()
-                .await
-                .map_err(crate::commands::client_err)?;
-            owner_owned = format!("@{}", profile.slug);
-            owner_owned.as_str()
-        } else {
-            resource.owner_handle.as_str()
-        };
+        let owner = resolver.resolve(&resource.owner_handle).await?;
         if owner.is_empty() || context.is_empty() || doc_type.is_empty() || slug.is_empty() {
             return Err(TemperError::Vault(format!(
                 "pull untracked id {id}: server response missing routing info \
@@ -1510,8 +1607,8 @@ pub async fn pull_one_resource(
         }
 
         let vault = Vault::new(vault_root);
-        let rel_path = vault.rel_path(owner, context, doc_type, slug);
-        let vault_path = vault.doc_file(owner, context, doc_type, slug);
+        let rel_path = vault.rel_path(&owner, context, doc_type, slug);
+        let vault_path = vault.doc_file(&owner, context, doc_type, slug);
         if let Some(parent) = vault_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -1524,6 +1621,7 @@ pub async fn pull_one_resource(
             &resource,
             context,
             doc_type,
+            &owner,
             ingest::normalize_body_for_vault(&content_response.markdown),
             managed_value.as_ref(),
             content_response.open_meta.as_ref(),
@@ -1638,6 +1736,7 @@ fn rebuild_file_with_new_meta(
     resource: &temper_core::types::ResourceRow,
     ctx: &str,
     doc_type: &str,
+    canonical_owner: &str,
     managed_meta: Option<&serde_json::Value>,
     open_meta: Option<&serde_json::Value>,
 ) -> Result<String> {
@@ -1646,6 +1745,7 @@ fn rebuild_file_with_new_meta(
         resource,
         ctx,
         doc_type,
+        canonical_owner,
         ingest::normalize_body_for_vault(body_after_separator),
         managed_meta,
         open_meta,
@@ -1667,6 +1767,7 @@ struct ApplyPullMetaOnly<'a> {
     resource: &'a temper_core::types::ResourceRow,
     ctx: &'a str,
     doc_type: &'a str,
+    canonical_owner: &'a str,
     managed_meta: Option<&'a serde_json::Value>,
     open_meta: Option<&'a serde_json::Value>,
 }
@@ -1685,12 +1786,20 @@ fn apply_pull_meta_only(params: ApplyPullMetaOnly<'_>, entry: &mut ManifestEntry
         resource,
         ctx,
         doc_type,
+        canonical_owner,
         managed_meta,
         open_meta,
     } = params;
 
-    let rebuilt =
-        rebuild_file_with_new_meta(local_body, resource, ctx, doc_type, managed_meta, open_meta)?;
+    let rebuilt = rebuild_file_with_new_meta(
+        local_body,
+        resource,
+        ctx,
+        doc_type,
+        canonical_owner,
+        managed_meta,
+        open_meta,
+    )?;
     std::fs::write(file_path, &rebuilt)?;
 
     let outcome = temper_core::normalize::normalize_file(file_path, doc_type)?;
@@ -1736,6 +1845,7 @@ async fn pull_resource_meta_only(
     manifest: &mut Manifest,
     vault_root: &Path,
     item: &SyncPullItem,
+    resolver: &mut OwnerResolver<'_>,
 ) -> Result<()> {
     // A MetaOnly diff presupposes the client already knows this resource
     // — if we have no manifest entry, the server's body-hash agreement
@@ -1797,6 +1907,8 @@ async fn pull_resource_meta_only(
     // on ManagedMeta makes this round-trip lossless.
     let managed_value = managed_meta_to_value(meta_response.managed_meta.as_ref());
 
+    let canonical_owner = resolver.resolve(&resource.owner_handle).await?;
+
     apply_pull_meta_only(
         ApplyPullMetaOnly {
             file_path: &file_path,
@@ -1804,6 +1916,7 @@ async fn pull_resource_meta_only(
             resource: &resource,
             ctx: &ctx,
             doc_type: &doc_type,
+            canonical_owner: &canonical_owner,
             managed_meta: managed_value.as_ref(),
             open_meta: meta_response.open_meta.as_ref(),
         },
@@ -3162,6 +3275,32 @@ mod tests {
         );
     }
 
+    // --- resolve_owner_for_frontmatter ---
+
+    #[test]
+    fn resolve_owner_for_frontmatter_resolves_at_me() {
+        assert_eq!(
+            resolve_owner_for_frontmatter("@me", "j-cole-taylor"),
+            "@j-cole-taylor"
+        );
+    }
+
+    #[test]
+    fn resolve_owner_for_frontmatter_passes_through_team_handle() {
+        assert_eq!(
+            resolve_owner_for_frontmatter("+platform-eng", "j-cole-taylor"),
+            "+platform-eng"
+        );
+    }
+
+    #[test]
+    fn resolve_owner_for_frontmatter_passes_through_other_user() {
+        assert_eq!(
+            resolve_owner_for_frontmatter("@some-other-user", "j-cole-taylor"),
+            "@some-other-user"
+        );
+    }
+
     // --- preflight_ownership_check ---
 
     #[test]
@@ -3197,7 +3336,7 @@ mod tests {
             },
         );
 
-        let mismatches = preflight_ownership_check(&manifest, vault);
+        let mismatches = preflight_ownership_check(&manifest, vault, "dev-user");
         assert_eq!(mismatches.len(), 1);
         assert_eq!(mismatches[0].frontmatter_owner, "+team");
         assert_eq!(mismatches[0].manifest_owner, "@me");
@@ -3236,7 +3375,7 @@ mod tests {
             },
         );
 
-        let mismatches = preflight_ownership_check(&manifest, vault);
+        let mismatches = preflight_ownership_check(&manifest, vault, "dev-user");
         assert!(
             mismatches.is_empty(),
             "provisional entries should be ignored"
@@ -3276,8 +3415,169 @@ mod tests {
             },
         );
 
-        let mismatches = preflight_ownership_check(&manifest, vault);
+        let mismatches = preflight_ownership_check(&manifest, vault, "dev-user");
         assert!(mismatches.is_empty());
+    }
+
+    // --- owners_equivalent (pure helper) ---
+
+    #[test]
+    fn owners_equivalent_treats_at_me_and_resolved_slug_as_equal() {
+        assert!(owners_equivalent("@me", "@j-cole-taylor", "j-cole-taylor"));
+        assert!(owners_equivalent("@j-cole-taylor", "@me", "j-cole-taylor"));
+    }
+
+    #[test]
+    fn owners_equivalent_treats_byte_equal_strings_as_equal() {
+        assert!(owners_equivalent("@me", "@me", "j-cole-taylor"));
+        assert!(owners_equivalent(
+            "@j-cole-taylor",
+            "@j-cole-taylor",
+            "j-cole-taylor"
+        ));
+        assert!(owners_equivalent("+team", "+team", "j-cole-taylor"));
+    }
+
+    #[test]
+    fn owners_equivalent_rejects_other_user() {
+        assert!(!owners_equivalent("@me", "@some-other", "j-cole-taylor"));
+        assert!(!owners_equivalent(
+            "@some-other",
+            "@j-cole-taylor",
+            "j-cole-taylor"
+        ));
+    }
+
+    #[test]
+    fn owners_equivalent_rejects_team_vs_personal() {
+        assert!(!owners_equivalent("+platform-eng", "@me", "j-cole-taylor"));
+        assert!(!owners_equivalent(
+            "+platform-eng",
+            "@j-cole-taylor",
+            "j-cole-taylor"
+        ));
+    }
+
+    // --- preflight_ownership_check tolerance ---
+
+    #[test]
+    fn preflight_ownership_check_treats_at_me_as_current_owner_alias() {
+        // The bug case: PR #70 wrote a NewlyTracked file at
+        // @<profile.slug>/temper/task/x.md but the frontmatter still says @me.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@j-cole-taylor").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("x.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@me\"\ntemper-title: x\ntemper-slug: x\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@j-cole-taylor/temper/task/x.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault, "j-cole-taylor");
+        assert!(
+            mismatches.is_empty(),
+            "@me in frontmatter must be tolerated as alias for the current user; got {mismatches:?}"
+        );
+    }
+
+    #[test]
+    fn preflight_ownership_check_treats_legacy_at_me_path_as_current_owner_alias() {
+        // Symmetric: legacy on-disk path is @me/... but frontmatter has been
+        // updated to the canonical @<slug>.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@me").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("y.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@j-cole-taylor\"\ntemper-title: y\ntemper-slug: y\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/y.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault, "j-cole-taylor");
+        assert!(mismatches.is_empty(), "got {mismatches:?}");
+    }
+
+    #[test]
+    fn preflight_ownership_check_flags_other_owner_mismatch() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let vault = tmp.path();
+
+        let file_dir = vault.join("@j-cole-taylor").join("temper").join("task");
+        std::fs::create_dir_all(&file_dir).unwrap();
+        std::fs::write(
+            file_dir.join("z.md"),
+            "---\ntemper-type: task\ntemper-owner: \"@some-other-user\"\ntemper-title: z\ntemper-slug: z\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let mut manifest = Manifest::new("dev".to_string());
+        let id = ResourceId::from(Uuid::now_v7());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@j-cole-taylor/temper/task/z.md".to_string(),
+                body_hash: "h".to_string(),
+                remote_body_hash: "h".to_string(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                last_audit_id: None,
+                provisional: false,
+            },
+        );
+
+        let mismatches = preflight_ownership_check(&manifest, vault, "j-cole-taylor");
+        assert_eq!(mismatches.len(), 1);
+        assert_eq!(mismatches[0].frontmatter_owner, "@some-other-user");
+        assert_eq!(mismatches[0].manifest_owner, "@j-cole-taylor");
     }
 
     // -----------------------------------------------------------------
@@ -3700,6 +4000,7 @@ mod tests {
             &resource,
             "temper",
             "task",
+            "@me",
             Some(&managed),
             Some(&open),
         )
@@ -3813,6 +4114,7 @@ mod tests {
                 resource: &resource,
                 ctx: "temper",
                 doc_type: "task",
+                canonical_owner: "@me",
                 managed_meta: Some(&managed),
                 open_meta: Some(&open),
             },

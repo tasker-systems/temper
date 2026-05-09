@@ -68,8 +68,16 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
     )?;
     warn_blocked_paths(&normalize_report);
 
+    // Build runtime + client + ensure profile *before* preflight so we can
+    // pass profile.slug into preflight_ownership_check. Preflight gains a
+    // network dependency, but every other branch of `sync run` already
+    // requires connectivity.
+    let (rt, client) = runtime::build_runtime_and_client()?;
+    let profile = rt.block_on(runtime::ensure_profile(&client))?;
+
     // Preflight: detect and warn about ownership mismatches.
-    let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
+    let ownership_mismatches =
+        sync_actions::preflight_ownership_check(&manifest, &vault_root, &profile.slug);
     if !ownership_mismatches.is_empty() {
         output::warning(format!(
             "{} file(s) have ownership mismatches and will be skipped from upload:",
@@ -96,11 +104,6 @@ pub fn run(contexts: &[String], format: &str) -> Result<()> {
     for (path, _) in &normalize_report.issues_by_path {
         mismatch_paths.insert(path.clone());
     }
-
-    let (rt, client) = runtime::build_runtime_and_client()?;
-
-    // Ensure profile exists before hitting sync endpoints
-    rt.block_on(runtime::ensure_profile(&client))?;
 
     let result = rt.block_on(async {
         sync_actions::sync_orchestration(
@@ -201,10 +204,12 @@ pub fn status(contexts: &[String], format: &str) -> Result<()> {
     )?;
     warn_blocked_paths(&normalize_report);
 
-    // Preflight: surface ownership mismatches in the status diff.
-    let ownership_mismatches = sync_actions::preflight_ownership_check(&manifest, &vault_root);
-
     let (rt, client) = runtime::build_runtime_and_client()?;
+    let profile = rt.block_on(runtime::ensure_profile(&client))?;
+
+    // Preflight: surface ownership mismatches in the status diff.
+    let ownership_mismatches =
+        sync_actions::preflight_ownership_check(&manifest, &vault_root, &profile.slug);
 
     let diff = rt.block_on(async {
         sync_actions::sync_status_check(&client, &mut manifest, &vault_root, contexts, &progress)

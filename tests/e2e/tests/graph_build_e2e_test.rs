@@ -91,6 +91,7 @@ async fn seed_manifest_entry(
         &resource,
         context,
         doc_type,
+        &format!("@{profile_slug}"),
         temper_cli::actions::ingest::normalize_body_for_vault(&content_response.markdown),
         managed_value.as_ref(),
         content_response.open_meta.as_ref(),

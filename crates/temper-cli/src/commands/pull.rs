@@ -3,7 +3,7 @@
 use uuid::Uuid;
 
 use crate::actions::runtime;
-use crate::actions::sync::pull_one_resource;
+use crate::actions::sync::{pull_one_resource, OwnerResolver};
 use crate::error::TemperError;
 use crate::output;
 use temper_core::types::ResourceId;
@@ -38,6 +38,7 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                 std::env::current_dir()?
             };
 
+            let mut resolver = OwnerResolver::new(client);
             let result = pull_one_resource(
                 client,
                 &write_root,
@@ -47,6 +48,7 @@ pub fn run(resource_id: &str) -> crate::error::Result<()> {
                 // content hash to pin; the primitive falls back to the local
                 // hash, which keeps body_hash and remote_body_hash agreeing.
                 None,
+                &mut resolver,
             )
             .await?;
 

@@ -475,7 +475,17 @@ pub fn build_frontmatter(
     Ok(fm)
 }
 
-/// Generate YAML frontmatter for a vault file from server data.
+/// Build a complete `Frontmatter` from a server `ResourceRow` plus the
+/// caller-resolved canonical owner sigil.
+///
+/// `canonical_owner` is the value to write into `temper-owner`. The caller
+/// is responsible for resolving the API's `@me` shorthand to
+/// `@<profile.slug>`. Async/loop callers should use
+/// `crate::actions::sync::OwnerResolver` (caches the profile fetch across
+/// multiple resources); callers that already have the profile slug in scope
+/// can use `crate::actions::sync::resolve_owner_for_frontmatter` (pure, no
+/// client). Team handles (`+<team-slug>`) and other users' handles can be
+/// passed through unchanged by both helpers.
 ///
 /// Combines resource-level fields (id, type, context, created, title) with
 /// managed_meta fields (temper-* keys, stage, mode, effort, etc.) and
@@ -486,6 +496,7 @@ pub fn build_frontmatter_from_resource(
     resource: &temper_core::types::ResourceRow,
     context: &str,
     doc_type: &str,
+    canonical_owner: &str,
     body: String,
     managed_meta: Option<&serde_json::Value>,
     open_meta: Option<&serde_json::Value>,
@@ -513,10 +524,10 @@ pub fn build_frontmatter_from_resource(
     if let Some(slug) = &resource.slug {
         fm.set_managed_field("temper-slug", serde_json::Value::String(slug.clone()));
     }
-    if !resource.owner_handle.is_empty() {
+    if !canonical_owner.is_empty() {
         fm.set_managed_field(
             "temper-owner",
-            serde_json::Value::String(resource.owner_handle.clone()),
+            serde_json::Value::String(canonical_owner.to_string()),
         );
     }
     if let Some(obj) = managed_meta.and_then(|m| m.as_object()) {
@@ -1174,6 +1185,57 @@ created: 2026-03-23
     }
 
     #[test]
+    fn build_frontmatter_from_resource_writes_canonical_owner_for_at_me() {
+        let resource = test_resource_row();
+        // Caller is responsible for resolving @me -> @<slug> before calling.
+
+        let fm = build_frontmatter_from_resource(
+            &resource,
+            "temper",
+            "research",
+            "@j-cole-taylor",
+            String::new(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let owner = fm
+            .value()
+            .get("temper-owner")
+            .and_then(|v| v.as_str())
+            .expect("temper-owner must be set");
+        assert_eq!(
+            owner, "@j-cole-taylor",
+            "frontmatter must record the canonical owner the caller passed in, \
+             not the API's @me shorthand"
+        );
+    }
+
+    #[test]
+    fn build_frontmatter_from_resource_passes_team_handle_through() {
+        let resource = test_resource_row();
+
+        let fm = build_frontmatter_from_resource(
+            &resource,
+            "temper",
+            "research",
+            "+platform-eng",
+            String::new(),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let owner = fm
+            .value()
+            .get("temper-owner")
+            .and_then(|v| v.as_str())
+            .expect("temper-owner must be set");
+        assert_eq!(owner, "+platform-eng");
+    }
+
+    #[test]
     fn test_build_frontmatter_from_resource_preserves_arrays_and_objects() {
         let resource = test_resource_row();
 
@@ -1188,6 +1250,7 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            "@me",
             String::new(),
             Some(&meta),
             None,
@@ -1231,6 +1294,7 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            "@me",
             String::new(),
             None,
             Some(&open_meta),
@@ -1278,6 +1342,7 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            "@me",
             String::new(),
             None,
             Some(&open_meta),
@@ -1318,6 +1383,7 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            "@me",
             String::new(),
             Some(&managed_meta),
             Some(&open_meta),
@@ -1465,6 +1531,7 @@ created: 2026-03-23
             &resource,
             "temper",
             "research",
+            "@me",
             String::new(),
             Some(&managed_meta),
             None,
