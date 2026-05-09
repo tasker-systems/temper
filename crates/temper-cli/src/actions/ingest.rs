@@ -593,7 +593,7 @@ pub fn normalize_body_for_vault(content: &str) -> String {
 #[expect(
     clippy::too_many_arguments,
     reason = "vault write needs owner, context, slug, resource, content, source, and extra fields; \
-              candidate for VaultWritePlan params struct (see audit-followups task follow-ups)."
+              collapse into a VaultWritePlan struct once the surface stabilizes."
 )]
 pub fn write_vault_file_and_register(
     vault_root: &Path,
