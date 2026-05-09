@@ -124,19 +124,34 @@ pub struct ManifestManager {
 impl ManifestManager {
     pub fn load(temper_dir: &Path, device_id: &str) -> Result<Self> { /* wraps manifest_io::load_manifest */ }
 
-    // intent-shaped mutators — invariants enforced inside
+    // intent-shaped mutators — invariants enforced inside; addressing
+    // through ResourceRef so callers don't mix UUID and slug-tuple forms.
+    // Internal storage is always UUID-keyed; Scoped variants resolve via
+    // the manifest's slug index as the manager's first step.
     pub fn record_local_write(&self, row: &ResourceRow, hash: &str) -> Result<()>;
-    pub fn record_push_outcome(&self, id: Uuid, outcome: PushOutcome) -> Result<()>;
-    pub fn record_deletion(&self, id: Uuid) -> Result<()>;
+    pub fn record_push_outcome(&self, r: &ResourceRef, outcome: PushOutcome) -> Result<()>;
+    pub fn record_deletion(&self, r: &ResourceRef) -> Result<()>;
 
     // read APIs — no caller ever sees Manifest
-    pub fn read_record(&self, slug: &str, doctype: &str, context: &str) -> Result<Option<ManifestRecord>>;
+    pub fn read_record(&self, r: &ResourceRef) -> Result<Option<ManifestRecord>>;
     pub fn snapshot_for_sync(&self) -> ManifestSnapshot;     // immutable view for bulk sync
+
+    // slug → UUID resolution as a standalone primitive for callers that
+    // want the UUID without performing an action.
+    pub fn resolve(
+        &self,
+        owner: &str,
+        context: &str,
+        doctype: &str,
+        slug: &str,
+    ) -> Result<Option<ResourceId>>;
 
     // explicit save — manager flushes at end-of-command
     pub fn flush(&self) -> Result<()>;
 }
 ```
+
+The canonical `kb://<owner>/<context>/<doctype>/<uuid>` URI form is the **Display/serialization** of `ResourceRef::Uuid` (built via the existing `temper-core::vault::Vault::build_uri` helper) — used for event payloads, audit log entries, and structured-log fields. It is not a separate parameter type for the manager. `ResourceRef::Scoped` is the slug-form input the manager canonicalizes via its index; UUID is the internal key everything resolves to.
 
 Three things this buys that `Arc<RwLock<Manifest>>` does not:
 1. **Compound operations are atomic by construction.** `record_push_outcome` reads + mutates + (optionally) saves inside one method — no caller takes a write lock around a sequence.
@@ -159,7 +174,7 @@ async fn create_resource(&self, cmd: CreateResource) -> Result<CommandOutput<Res
     let row         = self.write_vault_file(&path, &frontmatter, &cmd.body).await?;
     self.manifest.record_local_write(&row, &row.content_hash)?;
     let push_outcome = self.try_tail_push_create(&row, &cmd).await;       // Result, not ?
-    self.manifest.record_push_outcome(row.id, push_outcome.clone())?;
+    self.manifest.record_push_outcome(&ResourceRef::uuid(row.id), push_outcome.clone())?;
     self.manifest.flush()?;
     let events = build_events(&row, &push_outcome);
     Ok(CommandOutput::with_events(row, events))
@@ -261,7 +276,15 @@ The `translate_*` functions are the inverse of the translators in `temper-api/sr
 
 ## Sub-phase decomposition
 
-Three sub-phases mirroring Phase 3's cadence (3a / 3b / 3c). Each lands as its own PR.
+Three sub-phases mirroring Phase 3's cadence (3a / 3b / 3c), preceded by a small prep PR for the cross-cutting `ResourceRef::Scoped` change. Each lands as its own PR.
+
+### Phase 4-prep — `ResourceRef::Scoped` gains owner field
+
+- Extend `temper-core::operations::resource_ref::ResourceRef::Scoped` with an `owner: String` field.
+- Update every constructor and call site (HTTP handlers, MCP tools, CLI commands, sync code, tests). All current callers pass the implicit owner (`@me` for solo use; the profile's owner handle for the request).
+- Strict prerequisite for both the `ManifestManager` API shape and team support.
+- Lands as a small isolated PR before 4a — keeps the Backend impl work in 4a from being mixed with a cross-cutting type extension.
+- Acceptance: workspace + e2e green; no behavioral change (owner today is always the caller's `@me` handle).
 
 ### Phase 4a — Foundation (dark-launched)
 
@@ -298,7 +321,7 @@ Three sub-phases mirroring Phase 3's cadence (3a / 3b / 3c). Each lands as its o
 VaultBackend (`temper-cli/src/vault_backend/tests.rs`):
 1. Per-method happy paths for `create`, `update`, `delete`, `show`, `list`, `search`. Run each twice: with `remote: None` (vault-only) and with `remote: Some(MockBackend)` (full pipeline). Assert file written, manifest updated, events emitted.
 2. Tail-action push failure modes — `MockBackend` returns `Network`, `Auth`, `Validation { 422 }`, `Conflict`. For each: assert `PendingPush { kind }` recorded, `PushDeferred` event emitted, command returns `Ok`.
-3. `ManifestManager` invariants — `record_local_write` for new vs. existing slug, `record_push_outcome` clearing prior pending_push on Synced, monotonic `attempt_count`, mutual exclusion of `Synced` and `PendingPush`, `record_deletion` removing the record cleanly. Tested independently of any backend.
+3. `ManifestManager` invariants — `record_local_write` for new vs. existing slug, `record_push_outcome` clearing prior pending_push on Synced, monotonic `attempt_count`, mutual exclusion of `Synced` and `PendingPush`, `record_deletion` removing the record cleanly, `resolve(owner, ctx, doctype, slug) → uuid` slug-index correctness across owner boundaries. Tested independently of any backend.
 4. Path resolution — `{vault_root}/{ctx}/{type}/{slug}.md`, including doctype-qualified lookups.
 5. Idempotency — repeated `create_resource` with same slug matches existing `commands/resource.rs::create_simple_resource` semantics. Plan-writing pins the contract.
 6. Reads — fixture vault directory via `tempfile`.
@@ -322,7 +345,8 @@ For 4c, additionally: manual `temper resource create --type task ...` in both `T
 
 ## Acceptance criteria
 
-- [ ] **4a**: `Backend` is implemented by `VaultBackend` (in `temper-cli/src/vault_backend/`) and `RemoteBackend` (in `temper-client/src/backend.rs`). `ManifestManager` lives in `temper-cli/src/manifest_manager.rs` and is the only mutator of `Manifest` reachable from `VaultBackend`. Unit tests cover all 6 trait methods on both backends and `ManifestManager`'s invariants independently. No callers rewired. `cargo make check` clean. All four test suites at the baseline.
+- [ ] **4-prep**: `ResourceRef::Scoped` carries `owner: String`. Every existing call site (HTTP, MCP, CLI, sync, tests) passes the caller's profile-owner handle. Workspace + four test suites green. No behavioral change.
+- [ ] **4a**: `Backend` is implemented by `VaultBackend` (in `temper-cli/src/vault_backend/`) and `RemoteBackend` (in `temper-client/src/backend.rs`). `ManifestManager` lives in `temper-cli/src/manifest_manager.rs` and is the only mutator of `Manifest` reachable from `VaultBackend`. ManifestManager addressing is uniform via `&ResourceRef`; UUID is the internal storage key. Unit tests cover all 6 trait methods on both backends and `ManifestManager`'s invariants (slug-resolution, owner-aware lookup, etc.) independently. No callers rewired. `cargo make check` clean. All four test suites at the baseline.
 - [ ] **4b**: `commands/resource.rs` local-mode arms for `create`, `update`, `delete` dispatch through `VaultBackend` via `dispatch::build_backend`. Cloud arms unchanged. `commands/resource.rs` LOC dropped ≥30%. All four test suites green.
 - [ ] **4c**: `dispatch::build_backend` is the only construction site for backend trait objects in CLI write paths. `match VaultState` branches removed from `commands/resource.rs::create`, `update`, `delete`. Reads, sync, `update_meta` untouched. All four test suites green plus manual mode-flip sanity check.
 - [ ] Manifest format upgraded with `pending_push` field. Load is backward-compatible; pre-4a manifests load with `pending_push: None`.
