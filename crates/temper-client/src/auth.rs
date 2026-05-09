@@ -552,21 +552,33 @@ pub fn parse_jwt_claims(jwt: &str) -> Result<JwtClaims> {
 
 /// If `TEMPER_TOKEN` is set, build an in-memory [`StoredAuth`] from it.
 ///
-/// Returns `Ok(None)` when `TEMPER_TOKEN` is unset or empty — the caller then
-/// falls back to disk-backed auth. Returns `Err(_)` when the env var is set
-/// but malformed.
+/// Returns `Ok(None)` when `TEMPER_TOKEN` is unset or empty — the caller
+/// then falls back to disk-backed auth. Returns `Err(_)` when the env var
+/// is set but malformed.
 ///
 /// Provider defaults to `"auth0"` when `TEMPER_PROVIDER` is unset (matches
 /// the out-of-box config default). Device id is taken from `TEMPER_DEVICE_ID`
 /// when set; otherwise a fresh UUIDv7 is generated for this session — per
-/// the cloud-mode design, the session is ephemeral and a fresh device id is
-/// acceptable.
+/// the cloud-mode design, the session is ephemeral and a fresh device id
+/// is acceptable.
 ///
-/// The returned `StoredAuth` has `refresh_token: None` — env-var auth is
-/// intentionally refresh-less in this pass. When the token approaches expiry
-/// the caller receives `ClientError::TokenExpired` and must re-export a fresh
-/// token. Refresh semantics for cloud sessions are Unit B.4 research work,
-/// not B.1.
+/// **Refresh-less by design.** The returned [`StoredAuth`] has
+/// `refresh_token: None` because env-var auth deliberately does not carry
+/// a refresh token. Per Unit B.4 §Q1/W1
+/// (`docs/superpowers/specs/2026-04-19-cloud-mode-auth0-design.md`),
+/// exporting a refresh token to a cloud session would entangle it with the
+/// user's local Auth0 grant under refresh-token rotation: the first side
+/// to refresh invalidates the other's RT, and the next refresh triggers
+/// reuse-detection that kills the entire grant family. The only safe
+/// contract is access-token-only export with the Auth0-default 24h AT TTL
+/// as the ceiling. Users re-export via `temper auth export-token` to renew.
+///
+/// **Where this fits.** This is the parsing primitive shared by
+/// [`MemoryTokenStore::from_env`] (the user-facing cloud-mode API) and
+/// [`DiskTokenStore::load`]'s env fallback. The cloud-mode bootstrap in
+/// `temper-cli/src/actions/runtime.rs` emits a stderr warning when an
+/// env-var token is within an hour of expiry; on actual expiry, callers
+/// receive `ClientError::TokenExpired` and must re-export.
 pub fn stored_auth_from_env() -> Result<Option<StoredAuth>> {
     let jwt = match std::env::var(TEMPER_TOKEN_ENV) {
         Ok(v) if !v.is_empty() => v,
@@ -632,6 +644,16 @@ pub fn load_device_id() -> Option<String> {
 /// Returns `true` when the token expires within 5 minutes (or is already expired).
 pub fn needs_refresh(auth: &StoredAuth) -> bool {
     Utc::now() + Duration::minutes(5) >= auth.expires_at
+}
+
+/// Returns the duration until `stored`'s token expires, relative to `now`.
+///
+/// Negative when the token has already expired. Use the sign to distinguish
+/// "expired" from "expiring soon" at call sites — see
+/// `temper-cli/src/actions/runtime.rs` for the cloud-mode bootstrap warning
+/// that consumes this.
+pub fn time_until_expiry(stored: &StoredAuth, now: DateTime<Utc>) -> Duration {
+    stored.expires_at - now
 }
 
 /// OAuth2 token response shape — only the fields we care about.
@@ -1351,5 +1373,31 @@ mod tests {
         assert_eq!(loaded.access_token.expose_secret(), jwt);
         assert_eq!(loaded.profile_id, Some(env_profile));
         assert!(loaded.refresh_token.is_none());
+    }
+
+    #[test]
+    fn time_until_expiry_positive_for_future() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let auth = make_auth(
+            chrono::DateTime::parse_from_rfc3339("2026-05-09T14:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        assert_eq!(time_until_expiry(&auth, now).num_minutes(), 150);
+    }
+
+    #[test]
+    fn time_until_expiry_negative_for_expired() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-05-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let auth = make_auth(
+            chrono::DateTime::parse_from_rfc3339("2026-05-09T11:30:00Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc),
+        );
+        assert!(time_until_expiry(&auth, now).num_seconds() < 0);
     }
 }

@@ -33,6 +33,49 @@ pub fn client_err_to_temper(e: ClientError) -> TemperError {
     }
 }
 
+/// Returns a stderr-shaped warning message when `stored`'s token is at or
+/// past `threshold` of expiry, or already expired. Returns `None` for
+/// healthy tokens.
+///
+/// Pure function; takes `now` explicitly so tests don't depend on
+/// wall-clock time. Used by `resolve_token_store`'s `Cloud` branch.
+fn token_expiry_warning(
+    stored: &temper_client::auth::StoredAuth,
+    now: chrono::DateTime<chrono::Utc>,
+    threshold: chrono::Duration,
+) -> Option<String> {
+    let remaining = temper_client::auth::time_until_expiry(stored, now);
+    if remaining < chrono::Duration::zero() {
+        Some(format!(
+            "error: TEMPER_TOKEN expired at {} (~{} ago). \
+             Re-run `temper auth export-token` and re-set TEMPER_TOKEN to renew.",
+            stored.expires_at.to_rfc3339(),
+            humanize_duration(-remaining),
+        ))
+    } else if remaining <= threshold {
+        Some(format!(
+            "warning: TEMPER_TOKEN expires at {} (~{} from now). \
+             Re-run `temper auth export-token` and re-set TEMPER_TOKEN to renew.",
+            stored.expires_at.to_rfc3339(),
+            humanize_duration(remaining),
+        ))
+    } else {
+        None
+    }
+}
+
+/// Render a non-negative `chrono::Duration` in `<N>h<M>m` or `<N>m` form.
+/// Sub-minute durations clamp to `0m` — the warning is human-scale, not
+/// stopwatch-precise.
+fn humanize_duration(d: chrono::Duration) -> String {
+    let total_mins = d.num_minutes().max(0);
+    if total_mins >= 60 {
+        format!("{}h{}m", total_mins / 60, total_mins % 60)
+    } else {
+        format!("{total_mins}m")
+    }
+}
+
 /// Resolve the active [`TokenStore`] for this process.
 ///
 /// In `Local` mode the disk path is computed via
@@ -45,6 +88,16 @@ fn resolve_token_store(config: &TemperConfig) -> Result<Arc<dyn TokenStore>> {
         VaultState::Cloud => {
             let mem = MemoryTokenStore::from_env_required()
                 .map_err(|e| TemperError::Config(e.to_string()))?;
+            // Cloud-mode AT is refresh-less by design (see
+            // `stored_auth_from_env` docstring). Warn early when the token
+            // is approaching expiry so users have time to re-export.
+            if let Ok(Some(stored)) = mem.load() {
+                if let Some(msg) =
+                    token_expiry_warning(&stored, chrono::Utc::now(), chrono::Duration::hours(1))
+                {
+                    eprintln!("{msg}");
+                }
+            }
             Ok(Arc::new(mem))
         }
         VaultState::Local => Ok(Arc::new(DiskTokenStore::at(auth_path(config)))),
@@ -244,5 +297,57 @@ mod tests {
                 );
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod expiry_warning_tests {
+    use super::*;
+    use chrono::{DateTime, Duration, Utc};
+    use temper_client::auth::{Provider, StoredAuth};
+
+    fn fixed_now() -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339("2026-05-09T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc)
+    }
+
+    fn auth_expiring_at(when: DateTime<Utc>) -> StoredAuth {
+        StoredAuth {
+            provider: Provider::auth0("temperkb.us.auth0.com"),
+            access_token: "tok".to_string().into(),
+            refresh_token: None,
+            expires_at: when,
+            profile_id: None,
+            device_id: None,
+        }
+    }
+
+    #[test]
+    fn warns_when_token_within_threshold() {
+        let now = fixed_now();
+        let auth = auth_expiring_at(now + Duration::minutes(30));
+        let msg = token_expiry_warning(&auth, now, Duration::hours(1))
+            .expect("expected warning for 30-min-out token");
+        assert!(msg.starts_with("warning:"), "got: {msg}");
+        assert!(msg.contains("30m"), "got: {msg}");
+        assert!(msg.contains("temper auth export-token"), "got: {msg}");
+    }
+
+    #[test]
+    fn silent_when_token_healthy() {
+        let now = fixed_now();
+        let auth = auth_expiring_at(now + Duration::hours(2));
+        assert!(token_expiry_warning(&auth, now, Duration::hours(1)).is_none());
+    }
+
+    #[test]
+    fn errors_when_token_expired() {
+        let now = fixed_now();
+        let auth = auth_expiring_at(now - Duration::minutes(30));
+        let msg = token_expiry_warning(&auth, now, Duration::hours(1))
+            .expect("expected error-shaped warning for expired token");
+        assert!(msg.starts_with("error:"), "got: {msg}");
+        assert!(msg.contains("expired"), "got: {msg}");
     }
 }
