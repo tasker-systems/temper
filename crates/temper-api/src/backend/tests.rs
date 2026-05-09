@@ -149,11 +149,55 @@ async fn show_resource_by_scoped_slug_returns_row(pool: PgPool) {
         .unwrap();
 
     let cmd = ShowResource {
-        resource: ResourceRef::scoped("show-by-slug", "task", TEMPER_CONTEXT_NAME),
+        resource: ResourceRef::scoped("@me", TEMPER_CONTEXT_NAME, "task", "show-by-slug"),
         origin: Surface::ApiHttp,
     };
     let out = backend.show_resource(cmd).await.expect("show succeeds");
     assert_eq!(out.value.slug.as_deref(), Some("show-by-slug"));
+}
+
+/// Phase 4-prep regression guard: a `ResourceRef::Scoped` carrying a non-`@me`
+/// owner must reach `resolve_by_uri` with that owner value (not the previously
+/// hardcoded `@me`). The existing seed creates a resource owned by `@me`; the
+/// query targets the same slug under `+team-acme`. If the owner field is
+/// honored, the lookup misses and returns NotFound. If anything still defaults
+/// the lookup owner to `@me`, the row is found and this test fails.
+#[sqlx::test(migrator = "crate::MIGRATOR")]
+async fn show_resource_uses_resource_ref_owner_for_resolve(pool: PgPool) {
+    let backend = make_backend(pool);
+
+    backend
+        .create_resource(CreateResource {
+            slug: "team-owner-probe".to_string(),
+            doctype: "task".to_string(),
+            context: TEMPER_CONTEXT_NAME.to_string(),
+            title: "Owned by @me".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::ApiHttp,
+        })
+        .await
+        .unwrap();
+
+    let cmd = ShowResource {
+        resource: ResourceRef::scoped(
+            "+team-acme",
+            TEMPER_CONTEXT_NAME,
+            "task",
+            "team-owner-probe",
+        ),
+        origin: Surface::ApiHttp,
+    };
+    let err = backend.show_resource(cmd).await.unwrap_err();
+    use temper_core::error::TemperError;
+    assert!(
+        matches!(err, TemperError::NotFound(_)),
+        "expected NotFound for team-owner mismatch; got {err:?}",
+    );
 }
 
 #[sqlx::test(migrator = "crate::MIGRATOR")]

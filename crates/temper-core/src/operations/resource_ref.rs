@@ -18,11 +18,13 @@ pub enum ResourceRef {
         #[serde(rename = "resource_id")]
         id: ResourceId,
     },
-    /// Slug-based reference scoped by doctype + context.
+    /// Owner-qualified slug-based reference. Maps to the canonical
+    /// `kb://<owner>/<context>/<doctype>/<slug>` URI form.
     Scoped {
-        slug: String,
-        doctype: String,
+        owner: String,
         context: String,
+        doctype: String,
+        slug: String,
     },
 }
 
@@ -32,16 +34,19 @@ impl ResourceRef {
         Self::Uuid { id }
     }
 
-    /// Construct a scoped (slug-based) reference.
+    /// Construct an owner-scoped reference. Argument order matches
+    /// `Vault::canonical_uri(owner, context, doc_type, ident)`.
     pub fn scoped(
-        slug: impl Into<String>,
-        doctype: impl Into<String>,
+        owner: impl Into<String>,
         context: impl Into<String>,
+        doctype: impl Into<String>,
+        slug: impl Into<String>,
     ) -> Self {
         Self::Scoped {
-            slug: slug.into(),
-            doctype: doctype.into(),
+            owner: owner.into(),
             context: context.into(),
+            doctype: doctype.into(),
+            slug: slug.into(),
         }
     }
 }
@@ -53,16 +58,18 @@ mod tests {
 
     #[test]
     fn scoped_constructor_sets_fields() {
-        let r = ResourceRef::scoped("hello-world", "task", "temper");
+        let r = ResourceRef::scoped("@me", "temper", "task", "hello-world");
         match r {
             ResourceRef::Scoped {
-                slug,
-                doctype,
+                owner,
                 context,
+                doctype,
+                slug,
             } => {
-                assert_eq!(slug, "hello-world");
-                assert_eq!(doctype, "task");
+                assert_eq!(owner, "@me");
                 assert_eq!(context, "temper");
+                assert_eq!(doctype, "task");
+                assert_eq!(slug, "hello-world");
             }
             ResourceRef::Uuid { .. } => panic!("expected Scoped variant"),
         }
@@ -80,7 +87,7 @@ mod tests {
 
     #[test]
     fn scoped_round_trips_via_serde() {
-        let r = ResourceRef::scoped("foo", "task", "temper");
+        let r = ResourceRef::scoped("@me", "temper", "task", "foo");
         let s = serde_json::to_string(&r).unwrap();
         let back: ResourceRef = serde_json::from_str(&s).unwrap();
         assert_eq!(r, back);
@@ -92,5 +99,31 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         let back: ResourceRef = serde_json::from_str(&s).unwrap();
         assert_eq!(r, back);
+    }
+
+    #[test]
+    fn scoped_carries_team_owner() {
+        let r = ResourceRef::scoped("+team-acme", "engineering", "doc", "design-spec");
+        match &r {
+            ResourceRef::Scoped {
+                owner,
+                context,
+                doctype,
+                slug,
+            } => {
+                assert_eq!(owner, "+team-acme");
+                assert_eq!(context, "engineering");
+                assert_eq!(doctype, "doc");
+                assert_eq!(slug, "design-spec");
+            }
+            ResourceRef::Uuid { .. } => panic!("expected Scoped variant"),
+        }
+
+        // serde wire form must include owner
+        let s = serde_json::to_string(&r).unwrap();
+        assert!(
+            s.contains("\"owner\":\"+team-acme\""),
+            "serde body did not include owner: {s}"
+        );
     }
 }

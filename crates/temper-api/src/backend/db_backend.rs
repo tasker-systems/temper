@@ -77,12 +77,13 @@ impl Backend for DbBackend {
                     .map_err(TemperError::from)?
             }
             ResourceRef::Scoped {
-                slug,
-                doctype,
+                owner,
                 context,
+                doctype,
+                slug,
             } => {
                 let params = resource_service::ResolveByUriParams {
-                    owner: "@me".to_string(),
+                    owner,
                     context,
                     doc_type: doctype,
                     ident: slug,
