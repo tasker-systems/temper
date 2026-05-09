@@ -257,6 +257,7 @@ pub fn validate_update(cmd: &UpdateResource) -> Result<(), ActionError> {
             slug,
             doctype,
             context,
+            ..
         } => {
             validate_slug(slug)?;
             validate_doctype(doctype)?;
@@ -599,7 +600,7 @@ mod tests {
     #[test]
     fn validate_update_validates_scoped_ref() {
         let cmd = UpdateResource {
-            resource: ResourceRef::scoped("INVALID", "task", "temper"),
+            resource: ResourceRef::scoped("@me", "temper", "task", "INVALID"),
             body: None,
             managed_meta: None,
             open_meta: None,

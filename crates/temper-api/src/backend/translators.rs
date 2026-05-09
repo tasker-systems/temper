@@ -167,8 +167,8 @@ pub(crate) fn unified_hit_to_search_hit(row: &UnifiedSearchResultRow) -> SearchH
 /// Resolve a `ResourceRef` to a concrete `ResourceId`.
 ///
 /// `Uuid` short-circuits without I/O; `Scoped` queries via `resolve_by_uri`
-/// with `owner="@me"` (the self-scope idiom — see `push_owner` in
-/// `resource_service.rs`).
+/// with the ref's `owner` (today always `@me` for solo use; future team
+/// callers pass a `+team-...` handle).
 pub(crate) async fn resolve_resource_ref(
     pool: &PgPool,
     profile_id: ProfileId,
@@ -177,12 +177,13 @@ pub(crate) async fn resolve_resource_ref(
     match rref {
         ResourceRef::Uuid { id } => Ok(id),
         ResourceRef::Scoped {
-            slug,
-            doctype,
+            owner,
             context,
+            doctype,
+            slug,
         } => {
             let params = resource_service::ResolveByUriParams {
-                owner: "@me".to_string(),
+                owner,
                 context,
                 doc_type: doctype,
                 ident: slug,

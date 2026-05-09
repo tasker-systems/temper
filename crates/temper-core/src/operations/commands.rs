@@ -102,7 +102,7 @@ mod tests {
     #[test]
     fn show_resource_carries_resource_ref() {
         let cmd = ShowResource {
-            resource: ResourceRef::scoped("hello", "task", "temper"),
+            resource: ResourceRef::scoped("@me", "temper", "task", "hello"),
             origin: Surface::CliLocalVault,
         };
         // Exercises the type compiles + the field is reachable.
@@ -112,7 +112,7 @@ mod tests {
     #[test]
     fn update_resource_all_optional_fields_default_none() {
         let cmd = UpdateResource {
-            resource: ResourceRef::scoped("x", "task", "temper"),
+            resource: ResourceRef::scoped("@me", "temper", "task", "x"),
             body: None,
             managed_meta: None,
             open_meta: None,
