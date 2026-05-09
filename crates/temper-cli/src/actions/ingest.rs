@@ -390,26 +390,38 @@ pub async fn ingest_url(
 
 /// Canonical vault path for a managed resource.
 ///
-/// `{vault_root}/{context}/{doc_type}/{slug}.md`
+/// `{vault_root}/{owner}/{context}/{doc_type}/{slug}.md`
 ///
-/// The slug is a human-readable identifier derived from the resource title.
-/// Falls back to the UUID string when no slug is available.
-pub fn build_vault_path(vault_root: &Path, context: &str, doc_type: &str, slug: &str) -> PathBuf {
-    // TODO(owner-scoped): thread owner through when subscriptions sync lands.
-    // Until then the stub matches Config::owner_for_context's @me fallback.
-    Vault::new(vault_root).doc_file("@me", context, doc_type, slug)
+/// `owner` is the profile-handle component (e.g. `"@me"` or `"@alice"`).
+/// Callers should resolve via `Config::owner_for_context(context)` when
+/// they have a `Config` in scope; the literal `"@me"` is appropriate for
+/// tests and contexts without a configured subscription.
+pub fn build_vault_path(
+    vault_root: &Path,
+    owner: &str,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+) -> PathBuf {
+    Vault::new(vault_root).doc_file(owner, context, doc_type, slug)
 }
 
 /// De-duplicate a vault slug by appending `-2`, `-3`, etc. when the target
 /// path already exists.
-pub fn dedup_vault_slug(vault_root: &Path, context: &str, doc_type: &str, slug: &str) -> String {
-    let base_path = build_vault_path(vault_root, context, doc_type, slug);
+pub fn dedup_vault_slug(
+    vault_root: &Path,
+    owner: &str,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+) -> String {
+    let base_path = build_vault_path(vault_root, owner, context, doc_type, slug);
     if !base_path.exists() {
         return slug.to_string();
     }
     for i in 2..1000 {
         let candidate = format!("{slug}-{i}");
-        let path = build_vault_path(vault_root, context, doc_type, &candidate);
+        let path = build_vault_path(vault_root, owner, context, doc_type, &candidate);
         if !path.exists() {
             return candidate;
         }
@@ -572,16 +584,20 @@ pub fn normalize_body_for_vault(content: &str) -> String {
 
 /// Write a vault file and register the resource in the manifest.
 ///
-/// `slug` determines the vault filename (`{slug}.md`).  Pass
+/// `slug` determines the vault filename (`{slug}.md`). Pass
 /// `slug_from_title(&resource.title)` when no better slug is available.
+/// `owner` is the profile-handle directory component — resolve via
+/// `Config::owner_for_context(context)`.
 ///
 /// Returns the absolute vault path.
 #[expect(
     clippy::too_many_arguments,
-    reason = "vault write needs context, slug, resource, content, source, and extra fields"
+    reason = "vault write needs owner, context, slug, resource, content, source, and extra fields; \
+              candidate for VaultWritePlan params struct (see audit-followups task follow-ups)."
 )]
 pub fn write_vault_file_and_register(
     vault_root: &Path,
+    owner: &str,
     context: &str,
     doc_type: &str,
     slug: &str,
@@ -590,7 +606,7 @@ pub fn write_vault_file_and_register(
     ingestion_source: Option<&str>,
     extra_fields: Option<&[(&str, &str)]>,
 ) -> Result<PathBuf> {
-    let vault_path = build_vault_path(vault_root, context, doc_type, slug);
+    let vault_path = build_vault_path(vault_root, owner, context, doc_type, slug);
 
     if let Some(parent) = vault_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -791,17 +807,27 @@ mod tests {
     #[test]
     fn build_vault_path_produces_correct_path() {
         let root = Path::new("/vault");
-        let path = build_vault_path(root, "work", "note", "my-document");
+        let path = build_vault_path(root, "@me", "work", "note", "my-document");
         assert_eq!(path, PathBuf::from("/vault/@me/work/note/my-document.md"));
     }
 
     #[test]
     fn build_vault_path_nested_context() {
         let root = Path::new("/home/user/kb");
-        let path = build_vault_path(root, "personal", "resource", "research-paper");
+        let path = build_vault_path(root, "@me", "personal", "resource", "research-paper");
         assert_eq!(
             path,
             PathBuf::from("/home/user/kb/@me/personal/resource/research-paper.md")
+        );
+    }
+
+    #[test]
+    fn build_vault_path_threads_non_me_owner() {
+        let root = std::path::Path::new("/vault");
+        let path = build_vault_path(root, "@petetaylor", "work", "note", "my-document");
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/vault/@petetaylor/work/note/my-document.md")
         );
     }
 

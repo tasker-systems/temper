@@ -3268,7 +3268,7 @@ mod tests {
         fs::create_dir_all(&file_dir).unwrap();
         fs::write(file_dir.join("my-document.md"), "existing content").unwrap();
 
-        let slug = ingest::dedup_vault_slug(vault, "temper", "task", "my-document");
+        let slug = ingest::dedup_vault_slug(vault, "@me", "temper", "task", "my-document");
         assert_eq!(
             slug, "my-document-2",
             "new resource should get deduplicated slug"
