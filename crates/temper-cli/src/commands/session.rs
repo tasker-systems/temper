@@ -499,6 +499,7 @@ mod tests {
             contexts: vec!["temper".to_string(), "default".to_string()],
             subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/test-skill"),
+            profile_slug: None,
         };
         (tmp, config)
     }

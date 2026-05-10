@@ -384,6 +384,7 @@ mod tests {
             contexts: vec!["temper".to_string()],
             subscriptions: Vec::new(),
             skill_output: vault_root.join(".skill"),
+            profile_slug: None,
         };
         let graph_config = GraphIndexConfig::default();
 

@@ -274,6 +274,7 @@ body\n",
             contexts: vec!["temper".to_string()],
             subscriptions: Vec::new(),
             skill_output: vault_root.join(".skill"),
+            profile_slug: None,
         };
         let graph_config = GraphIndexConfig {
             concept_default_edge_type: "relates-to".to_string(),
@@ -367,6 +368,7 @@ body\n",
             contexts: vec!["temper".to_string(), "tasker".to_string()],
             subscriptions: Vec::new(),
             skill_output: vault_root.join(".skill"),
+            profile_slug: None,
         };
         let graph_config = GraphIndexConfig {
             concept_default_edge_type: "relates-to".to_string(),

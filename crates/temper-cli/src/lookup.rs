@@ -77,35 +77,52 @@ pub fn find_resource(req: FindableResource<'_>) -> Result<ResolvedResource> {
     let mut matches: Vec<(PathBuf, String, String)> = Vec::new();
 
     for ctx in &contexts {
-        let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type_str);
-        if !dir.is_dir() {
-            continue;
+        // Primary directory + optional legacy fallback. When the
+        // requested owner is `@me`, also scan `@<profile.slug>/...`
+        // for files written during the PR #70 / PR #72 window before
+        // the canonical direction was reversed.
+        let mut dirs_to_scan: Vec<(PathBuf, String)> = Vec::new();
+        let primary = vault_layout.doc_type_dir(&owner, ctx, doc_type_str);
+        dirs_to_scan.push((primary, owner.clone()));
+
+        if owner == "@me" {
+            if let Some(profile_slug) = req.config.profile_slug.as_deref() {
+                let legacy_owner = format!("@{profile_slug}");
+                let legacy = vault_layout.doc_type_dir(&legacy_owner, ctx, doc_type_str);
+                dirs_to_scan.push((legacy, legacy_owner));
+            }
         }
-        for entry in std::fs::read_dir(&dir).map_err(|e| TemperError::Vault(e.to_string()))? {
-            let entry = entry.map_err(|e| TemperError::Vault(e.to_string()))?;
-            let path = entry.path();
-            if path.extension().is_none_or(|e| e != "md") {
+
+        for (dir, dir_owner) in dirs_to_scan {
+            if !dir.is_dir() {
                 continue;
             }
-            let stem = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
+            for entry in std::fs::read_dir(&dir).map_err(|e| TemperError::Vault(e.to_string()))? {
+                let entry = entry.map_err(|e| TemperError::Vault(e.to_string()))?;
+                let path = entry.path();
+                if path.extension().is_none_or(|e| e != "md") {
+                    continue;
+                }
+                let stem = path
+                    .file_stem()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
 
-            // Slug portion after `YYYY-MM-DD-` prefix, if present.
-            let slug_portion = if stem.len() > 11
-                && stem.as_bytes().get(4) == Some(&b'-')
-                && stem.as_bytes().get(7) == Some(&b'-')
-                && stem.as_bytes().get(10) == Some(&b'-')
-            {
-                &stem[11..]
-            } else {
-                stem.as_str()
-            };
+                // Slug portion after `YYYY-MM-DD-` prefix, if present.
+                let slug_portion = if stem.len() > 11
+                    && stem.as_bytes().get(4) == Some(&b'-')
+                    && stem.as_bytes().get(7) == Some(&b'-')
+                    && stem.as_bytes().get(10) == Some(&b'-')
+                {
+                    &stem[11..]
+                } else {
+                    stem.as_str()
+                };
 
-            if stem == needle || slug_portion == needle || stem.ends_with(needle) {
-                matches.push((path, ctx.clone(), owner.clone()));
+                if stem == needle || slug_portion == needle || stem.ends_with(needle) {
+                    matches.push((path, ctx.clone(), dir_owner.clone()));
+                }
             }
         }
     }
@@ -148,9 +165,18 @@ pub fn find_resource(req: FindableResource<'_>) -> Result<ResolvedResource> {
         }
     }
 
-    // Sort by path descending so the most recent date-prefixed file wins
-    // when multiple files match.
-    matches.sort_by(|a, b| b.0.cmp(&a.0));
+    // Prefer @me-resident matches over legacy @<slug>/ matches when the
+    // same logical resource exists in both directories. Otherwise tiebreak
+    // by descending path so the most recent date-prefixed file wins.
+    matches.sort_by(|a, b| {
+        let a_is_me = a.2 == "@me";
+        let b_is_me = b.2 == "@me";
+        match (a_is_me, b_is_me) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => b.0.cmp(&a.0),
+        }
+    });
     let (path, context, owner) = matches.into_iter().next().unwrap();
 
     // Best-effort id resolution from frontmatter; parse failure is not a
@@ -219,6 +245,7 @@ mod tests {
             contexts: vec!["temper".to_string()],
             subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/skills"),
+            profile_slug: None,
         }
     }
 
@@ -418,6 +445,78 @@ mod tests {
             "id should resolve from manifest path lookup"
         );
         assert!(res.provisional_id.is_none());
+    }
+
+    #[test]
+    fn find_resource_falls_back_to_legacy_slug_directory() {
+        // PR #70/72 wrote some own-resource files under @<profile.slug>/.
+        // After the canonical-direction reversal we still want those
+        // files reachable without a vault migration. find_resource scans
+        // both @me/ and @<profile.slug>/ when the requested owner is @me.
+        let tmp = TempDir::new().unwrap();
+        write_task(
+            tmp.path(),
+            "@j-cole-taylor",
+            "temper",
+            "legacy-pull",
+            "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: legacy-pull\ntemper-owner: '@j-cole-taylor'\n---\n\n",
+        );
+
+        let mut config = test_config(tmp.path());
+        config.profile_slug = Some("j-cole-taylor".to_string());
+
+        let res = find_resource(FindableResource {
+            config: &config,
+            manifest: None,
+            owner: None,
+            context: None,
+            doc_type: DocType::Task,
+            slug_or_suffix: "legacy-pull".into(),
+        })
+        .unwrap();
+
+        assert!(
+            res.path
+                .ends_with("@j-cole-taylor/temper/task/legacy-pull.md"),
+            "expected legacy @<slug>/ path, got {:?}",
+            res.path
+        );
+        assert_eq!(res.owner, "@j-cole-taylor");
+    }
+
+    #[test]
+    fn find_resource_prefers_at_me_over_legacy_when_both_exist() {
+        let tmp = TempDir::new().unwrap();
+        write_task(
+            tmp.path(),
+            "@me",
+            "temper",
+            "dual-resident",
+            "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: dual-resident\n---\n\nfresh\n",
+        );
+        write_task(
+            tmp.path(),
+            "@j-cole-taylor",
+            "temper",
+            "dual-resident",
+            "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: dual-resident\n---\n\nlegacy\n",
+        );
+        let mut config = test_config(tmp.path());
+        config.profile_slug = Some("j-cole-taylor".to_string());
+
+        let res = find_resource(FindableResource {
+            config: &config,
+            manifest: None,
+            owner: None,
+            context: None,
+            doc_type: DocType::Task,
+            slug_or_suffix: "dual-resident".into(),
+        })
+        .unwrap();
+        assert_eq!(
+            res.owner, "@me",
+            "@me/ should be preferred over legacy fallback"
+        );
     }
 
     #[test]

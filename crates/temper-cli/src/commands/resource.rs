@@ -1738,6 +1738,7 @@ mod list_pipeline_tests {
             contexts: vec!["temper".into(), "default".into()],
             subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/skill"),
+            profile_slug: None,
         }
     }
 

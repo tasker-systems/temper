@@ -815,6 +815,7 @@ mod tests {
             contexts: contexts.iter().map(|s| s.to_string()).collect(),
             subscriptions: Vec::new(),
             skill_output: tmp.path().join(".skill"),
+            profile_slug: None,
         }
     }
 
