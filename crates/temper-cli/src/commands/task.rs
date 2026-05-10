@@ -29,8 +29,18 @@ pub fn show(
 
     match vault_state {
         VaultState::Local => {
-            let task = find_task(config, slug_or_suffix, context)?
-                .ok_or_else(|| TemperError::Vault(format!("task not found: {slug_or_suffix}")))?;
+            let Some(task) = find_task(config, slug_or_suffix, context)? else {
+                // Local lookup miss in local mode: fall back to the API.
+                // The vault stays untouched — recovery to disk happens via
+                // `temper sync run`.
+                return super::resource::show_via_api_fallback(
+                    config,
+                    "task",
+                    slug_or_suffix,
+                    context,
+                    format,
+                );
+            };
 
             if format == "json" {
                 let json = serde_json::to_string_pretty(&task)

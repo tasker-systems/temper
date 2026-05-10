@@ -935,6 +935,74 @@ pub(crate) async fn resolve_resource_id(
     Ok(row.id)
 }
 
+/// API fallback for `temper resource show` when the local vault file is
+/// missing in local mode. Resolves the resource id via
+/// `GET /api/resources/by-uri`, fetches body via
+/// `GET /api/resources/{id}/content`, and prints it. Does not write to the
+/// vault — recovery to disk is `temper sync run`'s job.
+///
+/// Distinguishes `TemperError::Network(_)` (couldn't reach server) from
+/// `TemperError::Api(_)` (server confirms not-found) so the caller sees
+/// a clearer error than the prior local-only `"<doctype> not found"`.
+pub(crate) fn show_via_api_fallback(
+    config: &Config,
+    doc_type: &str,
+    slug_or_suffix: &str,
+    context: Option<&str>,
+    format: &str,
+) -> Result<()> {
+    use crate::actions::runtime;
+    use temper_core::types::VaultState;
+
+    let ctx = context.map(str::to_string);
+    let slug = slug_or_suffix.to_string();
+    let dt = doc_type.to_string();
+    let config_clone = config.clone();
+    let format_owned = format.to_string();
+
+    let body = runtime::with_client(|client| {
+        Box::pin(async move {
+            let id = resolve_resource_id(
+                &config_clone,
+                client,
+                &dt,
+                &slug,
+                ctx.as_deref(),
+                VaultState::Local,
+            )
+            .await
+            .map_err(|e| match e {
+                TemperError::Network(msg) => TemperError::Vault(format!(
+                    "couldn't reach server to verify resource exists; \
+                     offline lookup failed for {slug}: {msg}"
+                )),
+                _ => TemperError::Vault(format!("{dt} not found locally or on server: {slug}")),
+            })?;
+            let content = client
+                .resources()
+                .content(*id.as_uuid())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+                .map_err(|e| match e {
+                    TemperError::Network(msg) => TemperError::Vault(format!(
+                        "couldn't reach server to fetch body for {slug}: {msg}"
+                    )),
+                    _ => TemperError::Vault(format!("{dt} not found locally or on server: {slug}")),
+                })?;
+
+            if format_owned == "json" {
+                Ok(serde_json::to_string_pretty(&content)
+                    .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?)
+            } else {
+                Ok(content.markdown)
+            }
+        })
+    })?;
+
+    print!("{body}");
+    Ok(())
+}
+
 /// Return the existing local path for a resource if found, or compute where
 /// it would live based on `Vault::doc_file`.
 fn find_or_compute_local_path(
@@ -1069,6 +1137,26 @@ fn show_generic(
             let doc_type_inner = doc_type_s.clone();
             let slug_inner = slug_s.clone();
             let ctx_inner = context_owned.clone();
+
+            // If the local file isn't resolvable on disk at all, route to
+            // the API fallback so the vault stays untouched. The
+            // show_cache path below would write the rebuilt file as
+            // tier-3 — that's correct when the file *was* present but
+            // stale, but cloud-only resources should not be materialized
+            // implicitly. Recovery to disk is `temper sync run`'s job.
+            if temper_core::frontmatter::DocType::from_str(&doc_type_s).is_ok()
+                && crate::lookup::find_resource(crate::lookup::FindableResource {
+                    config,
+                    manifest: None,
+                    owner: None,
+                    context: context.map(str::to_string),
+                    doc_type: temper_core::frontmatter::DocType::from_str(&doc_type_s)?,
+                    slug_or_suffix: slug_s.clone(),
+                })
+                .is_err()
+            {
+                return show_via_api_fallback(config, &doc_type_s, &slug_s, context, &format_s);
+            }
 
             let (path, ctx) = find_or_compute_local_path(config, &doc_type_s, &slug_s, context)?;
 
