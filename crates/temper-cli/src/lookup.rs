@@ -14,6 +14,7 @@
 //! files) so callers don't need a second frontmatter parse.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use temper_core::frontmatter::DocType;
 use temper_core::types::ids::ResourceId;
@@ -21,6 +22,29 @@ use temper_core::types::Manifest;
 
 use crate::config::Config;
 use crate::error::{Result, TemperError};
+
+/// Process-wide cache of the requester's profile slug (without leading
+/// `@`). Populated by `actions::runtime::ensure_profile` on the first
+/// authed CLI call that hits the API; consulted by `find_resource` to
+/// scan the legacy `@<profile.slug>/` directory for files written
+/// during the PR #70 / PR #72 window.
+///
+/// The cache is fire-and-forget: once set, never cleared. CLI processes
+/// are short-lived, so this is sufficient.
+static PROFILE_SLUG_CACHE: OnceLock<String> = OnceLock::new();
+
+/// Read the cached profile slug. Returns `None` until
+/// `set_cached_profile_slug` runs at least once in this process.
+pub fn cached_profile_slug() -> Option<&'static str> {
+    PROFILE_SLUG_CACHE.get().map(String::as_str)
+}
+
+/// Populate the profile-slug cache. Safe to call multiple times — the
+/// `OnceLock` guarantees only the first call wins. Subsequent calls
+/// with different values are silently ignored.
+pub fn set_cached_profile_slug(slug: String) {
+    let _ = PROFILE_SLUG_CACHE.set(slug);
+}
 
 /// Lookup request for a single resource by slug-or-suffix.
 ///
@@ -86,7 +110,15 @@ pub fn find_resource(req: FindableResource<'_>) -> Result<ResolvedResource> {
         dirs_to_scan.push((primary, owner.clone()));
 
         if owner == "@me" {
-            if let Some(profile_slug) = req.config.profile_slug.as_deref() {
+            // Prefer config-provided slug (test fixtures + future
+            // architecture); fall back to the process-wide cache
+            // populated by ensure_profile on the first authed call.
+            let resolved_slug: Option<String> = req
+                .config
+                .profile_slug
+                .clone()
+                .or_else(|| cached_profile_slug().map(String::from));
+            if let Some(profile_slug) = resolved_slug {
                 let legacy_owner = format!("@{profile_slug}");
                 let legacy = vault_layout.doc_type_dir(&legacy_owner, ctx, doc_type_str);
                 dirs_to_scan.push((legacy, legacy_owner));
@@ -517,6 +549,65 @@ mod tests {
             res.owner, "@me",
             "@me/ should be preferred over legacy fallback"
         );
+    }
+
+    #[test]
+    fn find_resource_legacy_fallback_uses_process_wide_cache() {
+        // The cache is a OnceLock — first set wins, never cleared. To
+        // keep this test independent of suite ordering, populate the
+        // cache with a slug that's specific to this fixture's directory
+        // shape. Other tests in this module either (a) pass an explicit
+        // `profile_slug: None` Config and don't rely on legacy scan, or
+        // (b) pass an explicit `profile_slug: Some(...)` which
+        // overrides the cache via the `or_else` chain. Either way, this
+        // test's set call cannot break them.
+        let tmp = TempDir::new().unwrap();
+        let slug_for_cache = "cache-test-only-slug";
+        write_task(
+            tmp.path(),
+            &format!("@{slug_for_cache}"),
+            "temper",
+            "cache-fallback-target",
+            "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: cache-fallback-target\n---\n\n",
+        );
+
+        // Config has profile_slug: None — only the OnceLock can supply it.
+        let config = test_config(tmp.path());
+        assert!(config.profile_slug.is_none());
+
+        // Populate the cache. Other tests in the suite may or may not
+        // have already populated it with a different slug; OnceLock's
+        // set returns Err in that case which we ignore. Either way, by
+        // the end of this call the cache holds *some* string. We
+        // therefore can only assert legacy fallback fires when the
+        // cache happens to point at our fixture's slug, which only
+        // works deterministically if this test gets to set it first.
+        // For a deterministic check, derive the cache value once and
+        // skip if it doesn't match.
+        set_cached_profile_slug(slug_for_cache.to_string());
+        if cached_profile_slug() != Some(slug_for_cache) {
+            // Another test won the race. The Config-driven path is
+            // already covered by find_resource_falls_back_to_legacy_slug_directory;
+            // skip rather than flake.
+            eprintln!(
+                "skipping cache-path assertion: OnceLock already holds {:?}",
+                cached_profile_slug()
+            );
+            return;
+        }
+
+        let res = find_resource(FindableResource {
+            config: &config,
+            manifest: None,
+            owner: None,
+            context: None,
+            doc_type: DocType::Task,
+            slug_or_suffix: "cache-fallback-target".into(),
+        })
+        .unwrap();
+
+        assert_eq!(res.owner, format!("@{slug_for_cache}"));
+        assert!(res.path.ends_with("cache-fallback-target.md"));
     }
 
     #[test]

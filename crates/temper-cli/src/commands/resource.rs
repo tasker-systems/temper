@@ -825,7 +825,7 @@ pub fn delete(
                 Some(p) => p,
                 None => match crate::lookup::find_resource(crate::lookup::FindableResource {
                     config: &config_clone,
-                    manifest: None,
+                    manifest: Some(&manifest),
                     owner: None,
                     context: context_owned.clone(),
                     doc_type: temper_core::frontmatter::DocType::from_str(&doc_type_owned)?,
