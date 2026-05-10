@@ -155,7 +155,7 @@ pub fn find_resource(req: FindableResource<'_>) -> Result<ResolvedResource> {
 
     // Best-effort id resolution from frontmatter; parse failure is not a
     // lookup failure (caller may still want the path).
-    let (resource_id, provisional_id) = match std::fs::read_to_string(&path)
+    let (mut resource_id, provisional_id) = match std::fs::read_to_string(&path)
         .ok()
         .and_then(|content| Frontmatter::try_from(content.as_str()).ok())
     {
@@ -175,6 +175,23 @@ pub fn find_resource(req: FindableResource<'_>) -> Result<ResolvedResource> {
         }
         None => (None, None),
     };
+
+    // Manifest fallback: if frontmatter didn't yield an id, try to look
+    // it up by relative path. Manifest entries are keyed by ResourceId,
+    // so we iterate to find the entry whose `path` matches the resolved
+    // file's vault-relative path.
+    if resource_id.is_none() {
+        if let Some(manifest) = req.manifest {
+            if let Ok(rel) = path.strip_prefix(&req.config.vault_root) {
+                let rel_str = rel.to_string_lossy().to_string();
+                resource_id = manifest
+                    .entries
+                    .iter()
+                    .find(|(_, e)| e.path == rel_str)
+                    .map(|(id, _)| *id);
+            }
+        }
+    }
 
     Ok(ResolvedResource {
         path,
@@ -341,6 +358,90 @@ mod tests {
             TemperError::Vault(msg) => assert!(msg.contains("ambiguous"), "got: {msg}"),
             other => panic!("expected Vault error, got: {other:?}"),
         }
+    }
+
+    #[test]
+    fn find_resource_resolves_resource_id_from_manifest() {
+        use std::collections::HashMap;
+        use temper_core::types::{Manifest, ManifestEntry, ManifestEntryState};
+        use uuid::Uuid;
+
+        let tmp = TempDir::new().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+
+        // File with NO `temper-id` in frontmatter, but listed in manifest.
+        write_task(
+            tmp.path(),
+            "@me",
+            "temper",
+            "tracked",
+            "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: tracked\n---\n\n",
+        );
+
+        let mut manifest = Manifest {
+            device_id: "device-test".to_string(),
+            last_sync: None,
+            entries: HashMap::new(),
+        };
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/tracked.md".to_string(),
+                body_hash: String::new(),
+                remote_body_hash: String::new(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: chrono::Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: None,
+                provisional: false,
+                last_audit_id: None,
+            },
+        );
+
+        let config = test_config(tmp.path());
+        let res = find_resource(FindableResource {
+            config: &config,
+            manifest: Some(&manifest),
+            owner: None,
+            context: None,
+            doc_type: DocType::Task,
+            slug_or_suffix: "tracked".into(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            res.resource_id,
+            Some(id),
+            "id should resolve from manifest path lookup"
+        );
+        assert!(res.provisional_id.is_none());
+    }
+
+    #[test]
+    fn find_resource_picks_up_provisional_id_from_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        write_task(
+            tmp.path(),
+            "@me",
+            "temper",
+            "unsynced",
+            "---\ntemper-type: task\ntemper-context: temper\ntemper-title: t\ntemper-slug: unsynced\ntemper-provisional-id: prov-abc-123\n---\n\n",
+        );
+        let config = test_config(tmp.path());
+        let res = find_resource(FindableResource {
+            config: &config,
+            manifest: None,
+            owner: None,
+            context: None,
+            doc_type: DocType::Task,
+            slug_or_suffix: "unsynced".into(),
+        })
+        .unwrap();
+        assert_eq!(res.provisional_id.as_deref(), Some("prov-abc-123"));
+        assert!(res.resource_id.is_none());
     }
 
     #[test]
