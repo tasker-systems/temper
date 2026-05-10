@@ -40,8 +40,8 @@ fn rejects_invalid_doctype() {
     let err = result.expect_err("invalid doctype must error before the API call");
     let msg = format!("{err}");
     assert!(
-        msg.contains("invalid resource type"),
-        "expected validate_doc_type error, got: {msg}"
+        msg.contains("unknown doctype") && msg.contains("widget"),
+        "expected DocType::from_str rejection, got: {msg}"
     );
 }
 

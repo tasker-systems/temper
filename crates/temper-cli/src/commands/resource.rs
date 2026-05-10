@@ -14,18 +14,6 @@ use crate::output::table::TableRenderer;
 use crate::templates::{ConceptTemplate, DecisionTemplate};
 use crate::vault;
 
-const VALID_DOC_TYPES: &[&str] = &["task", "goal", "session", "research", "concept", "decision"];
-
-fn validate_doc_type(doc_type: &str) -> Result<()> {
-    if !VALID_DOC_TYPES.contains(&doc_type) {
-        return Err(TemperError::Vault(format!(
-            "invalid resource type: {doc_type}. Must be one of: {}",
-            VALID_DOC_TYPES.join(", ")
-        )));
-    }
-    Ok(())
-}
-
 /// Require a context, returning an error if none specified.
 ///
 /// In cloud mode (no local vault) we skip the vault-filesystem fallback
@@ -68,7 +56,7 @@ pub fn create(
 
     use temper_core::types::config::VaultState;
 
-    validate_doc_type(doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     let ctx = require_context(config, context)?;
 
@@ -612,7 +600,7 @@ fn render_server_rows(
 /// Pretty/NoTty return an empty string so the caller (`list()`) can surface
 /// a user-friendly "No X resources found" hint instead of a bare header row.
 pub fn render_list(params: &RenderListParams<'_>) -> Result<String> {
-    validate_doc_type(params.doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(params.doc_type)?;
     // Filter first, then sort — sorting unfiltered rows wastes work on rows
     // we're about to discard.
     let rows = scan_rows(params.config, params.doc_type, params.context)?;
@@ -768,7 +756,7 @@ pub fn delete(
     use temper_core::types::config::VaultState;
     use temper_core::types::ResourceId;
 
-    validate_doc_type(doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     let vault_state = VaultState::from_env();
 
@@ -888,7 +876,7 @@ pub fn show(
     format: &str,
     edges: bool,
 ) -> Result<()> {
-    validate_doc_type(doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     match doc_type {
         "task" => crate::commands::task::show(config, slug, context, format),
@@ -1432,10 +1420,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         .doc_type
         .or(params.type_from)
         .ok_or_else(|| TemperError::Project("--type or --type-from is required".into()))?;
-    validate_doc_type(current_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(current_type)?;
 
     if let Some(tt) = params.type_to {
-        validate_doc_type(tt)?;
+        let _ = temper_core::frontmatter::DocType::from_str(tt)?;
     }
 
     let vault_state = VaultState::from_env();
@@ -1641,45 +1629,6 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         .unwrap_or(&final_path);
     output::success(format!("Updated: {}", relative.display()));
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    // -------------------------------------------------------------------------
-    // validate_doc_type tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn validate_doc_type_valid_types() {
-        for doc_type in &["task", "goal", "session", "research", "concept", "decision"] {
-            assert!(
-                validate_doc_type(doc_type).is_ok(),
-                "expected '{doc_type}' to be valid"
-            );
-        }
-    }
-
-    #[test]
-    fn validate_doc_type_invalid_returns_error() {
-        let result = validate_doc_type("foo");
-        assert!(result.is_err(), "expected 'foo' to be invalid");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("invalid resource type"),
-            "error should mention invalid resource type: {err_msg}"
-        );
-        assert!(
-            err_msg.contains("foo"),
-            "error should include the invalid value: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn validate_doc_type_empty_string_returns_error() {
-        assert!(validate_doc_type("").is_err());
-    }
 }
 
 #[cfg(test)]
