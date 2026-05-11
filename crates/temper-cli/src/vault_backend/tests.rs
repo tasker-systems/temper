@@ -1496,3 +1496,50 @@ mod delete_resource_tests {
         todo!("implement when a mock TemperClient fixture is available")
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Object-safety smoke test
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "test-db"))]
+mod object_safety_tests {
+    use std::sync::Arc;
+
+    use tokio::sync::Mutex;
+
+    use temper_core::operations::{Backend, Surface};
+    use temper_core::types::manifest::Manifest;
+
+    use crate::config::Config;
+    use crate::vault_backend::{VaultBackend, VaultBackendCtx};
+
+    /// Verify that `VaultBackend` is object-safe via `dyn Backend`.
+    /// This catches accidental introduction of generics or non-object-safe trait methods.
+    /// Mirrors `temper-api/src/backend/tests.rs::db_backend_dispatches_via_dyn_backend`.
+    #[tokio::test]
+    async fn vault_backend_is_object_safe() {
+        fn assert_object_safe(_: &dyn Backend) {}
+
+        let tmp = tempfile::tempdir().unwrap();
+        let config = Arc::new(Config {
+            vault_root: tmp.path().to_path_buf(),
+            state_dir: tmp.path().join(".temper"),
+            contexts: vec!["temper".to_string()],
+            subscriptions: vec![],
+            skill_output: tmp.path().join("skills"),
+            profile_slug: None,
+        });
+
+        let ctx = VaultBackendCtx {
+            vault_root: tmp.path().to_path_buf(),
+            manifest: Arc::new(Mutex::new(Manifest::new("test-device".to_string()))),
+            client: None,
+            owner: "@me".to_string(),
+            config,
+            surface: Surface::CliLocalVault,
+        };
+
+        let backend: Box<dyn Backend> = Box::new(VaultBackend::new(ctx));
+        assert_object_safe(&*backend);
+    }
+}
