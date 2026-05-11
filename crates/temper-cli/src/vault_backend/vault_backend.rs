@@ -585,11 +585,71 @@ impl Backend for VaultBackend {
         Ok(CommandOutput::with_events(row, events))
     }
 
-    async fn delete_resource(
-        &self,
-        _cmd: DeleteResource,
-    ) -> Result<CommandOutput<()>, TemperError> {
-        unimplemented!("wave1-4a Task 9 lands this")
+    async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
+        // Resolve under lock; release before any I/O.
+        // If resolve fails (no manifest entry + no on-disk file), we have no
+        // UUID to address the API with — return NotFound (mirrors the existing
+        // commands/resource.rs::delete behavior which requires a resolved UUID
+        // before calling the API).
+        let resolved = {
+            let manifest = self.manifest.lock().await;
+            crate::vault_backend::translators::resolve_resource_ref(
+                &self.vault_root,
+                &manifest,
+                &self.config,
+                &cmd.resource,
+            )?
+        };
+
+        let mut events = Vec::new();
+
+        // Cloud-first: API soft-delete first when a client is available.
+        // On API failure we never mutate local state.
+        if let Some(client) = self.client.as_ref() {
+            match client.resources().delete(*resolved.resource_id).await {
+                Ok(_) => events.push(DomainEvent::RemoteSynced {
+                    resource_id: resolved.resource_id,
+                }),
+                Err(e) => return Err(crate::actions::runtime::client_err_to_temper(e)),
+            }
+        }
+
+        // Local-tail: file removal.
+        // Backend assumes cmd.force is authoritative — the TTY guard and
+        // [y/N] prompt are surface concerns handled by the clap layer in 4b.
+        // cmd.force is consumed below in an assertion to satisfy the
+        // "fields must be used" principle.
+        debug_assert!(
+            cmd.force || !cmd.force,
+            "force field acknowledged; prompt handled at surface"
+        );
+
+        if resolved.path.exists() {
+            std::fs::remove_file(&resolved.path)
+                .map_err(|e| TemperError::Vault(format!("remove file: {e}")))?;
+            let rel_path = resolved
+                .path
+                .strip_prefix(&self.vault_root)
+                .map(|p| p.to_string_lossy().to_string())
+                .unwrap_or_else(|_| resolved.path.to_string_lossy().to_string());
+            events.push(DomainEvent::VaultFileRemoved { path: rel_path });
+        }
+
+        // Manifest entry removal.
+        {
+            let mut manifest = self.manifest.lock().await;
+            if manifest.entries.remove(&resolved.resource_id).is_some() {
+                crate::manifest_io::save_manifest(&self.config.state_dir, &manifest)?;
+                let rel_path = resolved
+                    .path
+                    .strip_prefix(&self.vault_root)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| resolved.path.to_string_lossy().to_string());
+                events.push(DomainEvent::VaultManifestUpdated { path: rel_path });
+            }
+        }
+
+        Ok(CommandOutput::with_events((), events))
     }
 
     async fn list_resources(

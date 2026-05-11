@@ -1212,3 +1212,287 @@ mod update_resource_tests {
         todo!("implement when a mock TemperClient fixture is available")
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// delete_resource tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "test-db"))]
+mod delete_resource_tests {
+    use std::fs;
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use tokio::sync::Mutex;
+    use uuid::Uuid;
+
+    use temper_core::error::TemperError;
+    use temper_core::operations::{Backend, DeleteResource, DomainEvent, ResourceRef, Surface};
+    use temper_core::types::ids::ResourceId;
+    use temper_core::types::manifest::{Manifest, ManifestEntry, ManifestEntryState};
+
+    use crate::config::Config;
+    use crate::vault_backend::{VaultBackend, VaultBackendCtx};
+
+    fn make_config(vault_root: &std::path::Path) -> Arc<Config> {
+        Arc::new(Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: vault_root.join(".temper"),
+            contexts: vec!["temper".to_string()],
+            subscriptions: vec![],
+            skill_output: vault_root.join("skills"),
+            profile_slug: None,
+        })
+    }
+
+    fn make_backend(vault_root: &std::path::Path, manifest: Manifest) -> VaultBackend {
+        let config = make_config(vault_root);
+        VaultBackend::new(VaultBackendCtx {
+            vault_root: vault_root.to_path_buf(),
+            manifest: Arc::new(Mutex::new(manifest)),
+            client: None,
+            owner: "@me".to_string(),
+            config,
+            surface: Surface::CliLocalVault,
+        })
+    }
+
+    fn make_manifest_entry(rel_path: &str) -> ManifestEntry {
+        ManifestEntry {
+            path: rel_path.to_string(),
+            body_hash: "sha256:abc".to_string(),
+            remote_body_hash: "sha256:abc".to_string(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs: None,
+            provisional: false,
+            last_audit_id: None,
+        }
+    }
+
+    fn write_task_file(path: &std::path::Path, id: &ResourceId) {
+        let content = format!(
+            "---\ntemper-id: \"{}\"\ntemper-type: task\ntemper-context: temper\ntemper-title: 'Delete Test'\ntemper-slug: delete-test\ntemper-stage: backlog\n---\n\nBody.\n",
+            **id
+        );
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    // ── delete_resource_no_client_removes_local_when_manifest_present ─────────
+
+    #[tokio::test]
+    async fn delete_resource_no_client_removes_local_when_manifest_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/delete-test.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(&abs, &id);
+        assert!(abs.exists(), "file must exist before delete");
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = DeleteResource {
+            resource: ResourceRef::Uuid { id },
+            force: true,
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.delete_resource(cmd).await.expect("delete ok");
+
+        // File must be gone.
+        assert!(!abs.exists(), "vault file must be removed after delete");
+
+        // Manifest entry must be cleared.
+        let manifest = backend.manifest().lock().await;
+        assert!(
+            !manifest.entries.contains_key(&id),
+            "manifest entry must be cleared after delete"
+        );
+
+        // Events: VaultFileRemoved + VaultManifestUpdated (no RemoteSynced; no client).
+        assert_eq!(
+            output.events.len(),
+            2,
+            "expected 2 events (no client), got: {:?}",
+            output.events
+        );
+        assert!(
+            matches!(&output.events[0], DomainEvent::VaultFileRemoved { path } if path.ends_with(".md")),
+            "first event must be VaultFileRemoved, got: {:?}",
+            output.events[0]
+        );
+        assert!(
+            matches!(&output.events[1], DomainEvent::VaultManifestUpdated { .. }),
+            "second event must be VaultManifestUpdated, got: {:?}",
+            output.events[1]
+        );
+        // Crucially: no RemoteSynced.
+        assert!(
+            !output
+                .events
+                .iter()
+                .any(|e| matches!(e, DomainEvent::RemoteSynced { .. })),
+            "must not emit RemoteSynced when no client present"
+        );
+    }
+
+    // ── delete_resource_local_only_no_manifest_returns_error ─────────────────
+
+    #[tokio::test]
+    async fn delete_resource_local_only_no_manifest_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+
+        // Empty manifest — no entry for this id.
+        let manifest = Manifest::new("test-device".to_string());
+        let backend = make_backend(tmp.path(), manifest);
+
+        let cmd = DeleteResource {
+            resource: ResourceRef::Uuid { id },
+            force: true,
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend.delete_resource(cmd).await.expect_err("should fail");
+        assert!(
+            matches!(err, TemperError::NotFound(_)),
+            "expected NotFound when no manifest entry, got: {err:?}"
+        );
+    }
+
+    // ── delete_resource_no_local_file_no_client_returns_error ────────────────
+
+    #[tokio::test]
+    async fn delete_resource_no_local_file_no_client_returns_error() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Completely empty vault — no manifest, no file, no client.
+        let manifest = Manifest::new("test-device".to_string());
+        let backend = make_backend(tmp.path(), manifest);
+
+        let cmd = DeleteResource {
+            resource: ResourceRef::Scoped {
+                owner: "@me".to_string(),
+                context: "temper".to_string(),
+                doctype: "task".to_string(),
+                slug: "nonexistent-slug".to_string(),
+            },
+            force: true,
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend.delete_resource(cmd).await.expect_err("should fail");
+        // Scoped resolution via find_resource returns TemperError::Vault when
+        // no on-disk file exists; Uuid resolution returns TemperError::NotFound.
+        // Either is an expected "resource not found" error kind.
+        assert!(
+            matches!(err, TemperError::NotFound(_) | TemperError::Vault(_)),
+            "expected a not-found-class error for nonexistent resource, got: {err:?}"
+        );
+    }
+
+    // ── delete_resource_emits_only_local_events_when_no_client ───────────────
+
+    #[tokio::test]
+    async fn delete_resource_emits_only_local_events_when_no_client() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/event-test.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(&abs, &id);
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = DeleteResource {
+            resource: ResourceRef::Uuid { id },
+            force: true,
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.delete_resource(cmd).await.expect("delete ok");
+
+        // Must emit exactly: VaultFileRemoved + VaultManifestUpdated.
+        // Must NOT emit: RemoteSynced, PushDeferred, or any Db* events.
+        for event in &output.events {
+            assert!(
+                matches!(
+                    event,
+                    DomainEvent::VaultFileRemoved { .. } | DomainEvent::VaultManifestUpdated { .. }
+                ),
+                "unexpected event when no client: {event:?}"
+            );
+        }
+        assert_eq!(
+            output.events.len(),
+            2,
+            "expected exactly 2 local events, got: {:?}",
+            output.events
+        );
+    }
+
+    // ── delete_resource_manifest_only_no_file_still_clears_entry ─────────────
+    // Covers the edge case where the file was already removed from disk but
+    // the manifest entry remains (e.g., a previous partial delete).
+
+    #[tokio::test]
+    async fn delete_resource_manifest_only_no_file_still_clears_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/ghost.md";
+        // File does NOT exist on disk, but manifest entry IS present.
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = DeleteResource {
+            resource: ResourceRef::Uuid { id },
+            force: true,
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.delete_resource(cmd).await.expect("delete ok");
+
+        // No file existed, so no VaultFileRemoved event.
+        // But the manifest entry must be cleared.
+        let manifest = backend.manifest().lock().await;
+        assert!(
+            !manifest.entries.contains_key(&id),
+            "manifest entry must be cleared even when file is already missing"
+        );
+
+        // Only VaultManifestUpdated (no VaultFileRemoved since file was absent).
+        assert_eq!(
+            output.events.len(),
+            1,
+            "expected 1 event (manifest only), got: {:?}",
+            output.events
+        );
+        assert!(
+            matches!(&output.events[0], DomainEvent::VaultManifestUpdated { .. }),
+            "event must be VaultManifestUpdated, got: {:?}",
+            output.events[0]
+        );
+    }
+
+    // ── delete_resource_with_client_emits_remote_synced (stubbed) ────────────
+
+    #[tokio::test]
+    #[ignore = "no TemperClient test fixture available; tracked as backlog task"]
+    async fn delete_resource_with_client_emits_remote_synced_on_success() {
+        todo!("implement when a mock TemperClient fixture is available")
+    }
+}
