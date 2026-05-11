@@ -361,14 +361,15 @@ pub fn normalize_all_entries(
 
         let abs_path = vault_root.join(&rel_path);
 
-        // Missing file: mirror rehash_manifest's prior behavior.
+        // Missing file: mark as LocallyMissing so the orchestration
+        // pull set picks it up. Preserve hashes — the server-diff path
+        // uses them to confirm we're not sending stale partial state.
         if !abs_path.exists() {
             report.missing += 1;
             if let Some(entry) = manifest.entries.get_mut(id) {
-                if entry.state != ManifestEntryState::LocalModified {
-                    entry.state = ManifestEntryState::LocalModified;
+                if entry.state != ManifestEntryState::LocallyMissing {
+                    entry.state = ManifestEntryState::LocallyMissing;
                 }
-                entry.body_hash = String::new();
                 entry.mtime_secs = None;
             }
             crate::manifest_io::save_manifest(temper_dir, manifest)?;
@@ -3840,8 +3841,40 @@ mod tests {
         assert_eq!(report.blocked, 0);
 
         let entry = manifest.entries.get(&id).unwrap();
-        assert_eq!(entry.state, ManifestEntryState::LocalModified);
-        assert!(entry.body_hash.is_empty());
+        assert_eq!(entry.state, ManifestEntryState::LocallyMissing);
+    }
+
+    #[test]
+    fn normalize_marks_missing_file_as_locally_missing() {
+        let tmp = TempDir::new().unwrap();
+        let temper_dir = tmp.path().join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+
+        let mut manifest = Manifest::new("test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/missing.md".to_string(),
+                body_hash: "sha256:keepme".to_string(),
+                remote_body_hash: "sha256:remote".to_string(),
+                managed_hash: "sha256:keepmanaged".to_string(),
+                open_hash: "sha256:keepopen".to_string(),
+                remote_managed_hash: "sha256:rmanaged".to_string(),
+                remote_open_hash: "sha256:ropen".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: Some(1_700_000_000),
+                provisional: false,
+                last_audit_id: None,
+            },
+        );
+
+        let _report = normalize_all_entries(&mut manifest, tmp.path(), &temper_dir, None).unwrap();
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(entry.state, ManifestEntryState::LocallyMissing);
+        assert_eq!(entry.body_hash, "sha256:keepme", "body_hash preserved");
     }
 
     #[test]
