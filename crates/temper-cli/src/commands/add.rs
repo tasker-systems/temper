@@ -143,16 +143,18 @@ fn run_single_file(
         ));
     }
 
-    let vault_root = crate::config::resolve_vault(None)?;
+    let config = crate::config::load(None)?;
+    let owner = config.owner_for_context(context);
     let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(&vault_root, context, doc_type, &slug);
+    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, context, doc_type, &slug);
     let canonical_path = std::fs::canonicalize(&file_path)
         .unwrap_or_else(|_| file_path.clone())
         .to_string_lossy()
         .to_string();
 
     let vault_path = ingest::write_vault_file_and_register(
-        &vault_root,
+        &config.vault_root,
+        &owner,
         context,
         doc_type,
         &slug,
@@ -255,8 +257,9 @@ fn run_single_auto_file(
         output::plain(format!("done ({} KB markdown)", body.len() / 1024));
     }
 
-    let vault_root = crate::config::resolve_vault(None)?;
-    let slug = ingest::dedup_vault_slug(&vault_root, &context, &doc_type, &slug);
+    let config = crate::config::load(None)?;
+    let owner = config.owner_for_context(&context);
+    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, &context, &doc_type, &slug);
 
     // Build extra frontmatter fields from legacy metadata.
     let extra_fields = build_extra_fields(parsed.as_ref());
@@ -266,7 +269,8 @@ fn run_single_auto_file(
         .collect();
 
     let vault_path = ingest::write_vault_file_and_register(
-        &vault_root,
+        &config.vault_root,
+        &owner,
         &context,
         &doc_type,
         &slug,
@@ -351,12 +355,20 @@ fn promote_resource(
             )
         })?;
 
-    let vault_root = crate::config::resolve_vault(None)?;
+    let config = crate::config::load(None)?;
+    let owner = config.owner_for_context(&resolved_context);
     let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(&vault_root, &resolved_context, doc_type, &slug);
+    let slug = ingest::dedup_vault_slug(
+        &config.vault_root,
+        &owner,
+        &resolved_context,
+        doc_type,
+        &slug,
+    );
 
     let vault_path = ingest::write_vault_file_and_register(
-        &vault_root,
+        &config.vault_root,
+        &owner,
         &resolved_context,
         doc_type,
         &slug,
@@ -416,12 +428,14 @@ fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::err
         ));
     }
 
-    let vault_root = crate::config::resolve_vault(None)?;
+    let config = crate::config::load(None)?;
+    let owner = config.owner_for_context(context);
     let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(&vault_root, context, doc_type, &slug);
+    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, context, doc_type, &slug);
 
     let vault_path = ingest::write_vault_file_and_register(
-        &vault_root,
+        &config.vault_root,
+        &owner,
         context,
         doc_type,
         &slug,
@@ -643,7 +657,7 @@ fn run_directory(
     let mut skipped = 0u64;
     let mut type_counts: HashMap<String, u64> = HashMap::new();
 
-    let vault_root = crate::config::resolve_vault(None)?;
+    let temper_cfg = crate::config::load(None)?;
 
     if is_auto {
         let (rt, client) = runtime::build_runtime_and_client()?;
@@ -657,7 +671,7 @@ fn run_directory(
                     .unwrap_or("unknown")
                     .to_string();
 
-                match add_single_auto_file(&client, file, context, &vault_root).await {
+                match add_single_auto_file(&client, file, context, &temper_cfg).await {
                     Ok(Some((doc_type_resolved, _vault_path))) => {
                         *type_counts.entry(doc_type_resolved).or_default() += 1;
                         if !json_mode {
@@ -701,6 +715,7 @@ fn run_directory(
     } else {
         let context =
             context.ok_or_else(|| TemperError::Config("--context is required".to_string()))?;
+        let owner = temper_cfg.owner_for_context(context);
 
         let (rt, client) = runtime::build_runtime_and_client()?;
         rt.block_on(runtime::ensure_profile(&client))?;
@@ -716,14 +731,21 @@ fn run_directory(
                 match ingest::ingest_file(&client, file, context, doc_type).await {
                     Ok((resource, extracted_content)) => {
                         let slug = ingest::slug_from_title(&resource.title);
-                        let slug = ingest::dedup_vault_slug(&vault_root, context, doc_type, &slug);
+                        let slug = ingest::dedup_vault_slug(
+                            &temper_cfg.vault_root,
+                            &owner,
+                            context,
+                            doc_type,
+                            &slug,
+                        );
                         let canonical_path = std::fs::canonicalize(file)
                             .unwrap_or_else(|_| file.clone())
                             .to_string_lossy()
                             .to_string();
 
                         if let Err(e) = ingest::write_vault_file_and_register(
-                            &vault_root,
+                            &temper_cfg.vault_root,
+                            &owner,
                             context,
                             doc_type,
                             &slug,
@@ -849,7 +871,7 @@ async fn add_single_auto_file(
     client: &temper_client::TemperClient,
     file: &std::path::Path,
     context_override: Option<&str>,
-    vault_root: &std::path::Path,
+    config: &crate::config::Config,
 ) -> crate::error::Result<Option<(String, PathBuf)>> {
     let raw = std::fs::read_to_string(file)?;
     let parsed = ingest::parse_source_frontmatter(&raw);
@@ -907,7 +929,8 @@ async fn add_single_auto_file(
         .await
         .map_err(crate::commands::client_err)?;
 
-    let slug = ingest::dedup_vault_slug(vault_root, &context, &doc_type, &slug);
+    let owner = config.owner_for_context(&context);
+    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, &context, &doc_type, &slug);
 
     let extra_fields = build_extra_fields(parsed.as_ref());
     let extra_refs: Vec<(&str, &str)> = extra_fields
@@ -916,7 +939,8 @@ async fn add_single_auto_file(
         .collect();
 
     let vault_path = ingest::write_vault_file_and_register(
-        vault_root,
+        &config.vault_root,
+        &owner,
         &context,
         &doc_type,
         &slug,
