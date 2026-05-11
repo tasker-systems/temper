@@ -20,20 +20,18 @@ use temper_core::types::{
 };
 use temper_core::vault::Vault;
 
-/// Build the standard "vault file missing for tracked entry" error, with
-/// two-pronged recovery guidance (explicit delete vs. resync from server).
+/// Build the "vault file vanished during sync" error.
 ///
-/// `rel_path` is the manifest entry's relative path
-/// (e.g. `task/2026-04-29-some-slug.md`). The slug is derived from the
-/// filename stem so the user can paste it directly into
-/// `temper resource delete`.
+/// After the `LocallyMissing` classifier change (Tasks 9-11), the
+/// rehash-time-missing case is reclassified as `LocallyMissing` and
+/// routed to the pull set. This helper now covers only the residual
+/// race case: the file was present at scan-time but vanished before
+/// push could read it. Recovery is `temper sync run` either way —
+/// the next sync cycle reclassifies the missing entry and pulls it
+/// back from the server.
 fn vault_file_missing_err(rel_path: &str) -> TemperError {
-    let slug = std::path::Path::new(rel_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(rel_path);
     TemperError::NotFound(format!(
-        "vault file missing for {slug} at {rel_path}\n\nEither:\n  • To delete the resource, run: temper resource delete {slug}\n  • To recover the file from the server, run: temper sync refresh"
+        "vault file vanished during sync at {rel_path}; run `temper sync run` to recover"
     ))
 }
 
@@ -4348,24 +4346,24 @@ mod tests {
     }
 
     #[test]
-    fn vault_file_missing_err_includes_both_recovery_hints() {
-        let err = super::vault_file_missing_err("task/2026-04-29-some-slug.md");
-        let msg = format!("{err}");
+    fn vault_file_missing_err_points_to_sync_run() {
+        let err = super::vault_file_missing_err("@me/temper/task/foo.md");
+        let msg = err.to_string();
         assert!(
-            msg.contains("2026-04-29-some-slug"),
-            "expected derived slug in message, got: {msg}"
+            msg.contains("vault file vanished during sync"),
+            "expected new wording, got: {msg}"
         );
         assert!(
-            msg.contains("temper resource delete"),
-            "expected delete hint, got: {msg}"
+            msg.contains("temper sync run"),
+            "expected recovery to point at sync run, got: {msg}"
         );
         assert!(
-            msg.contains("temper sync refresh"),
-            "expected refresh hint, got: {msg}"
+            !msg.contains("temper sync refresh"),
+            "old wording referenced refresh which doesn't pull; should be removed"
         );
         assert!(
-            msg.contains("task/2026-04-29-some-slug.md"),
-            "expected original path in message, got: {msg}"
+            !msg.contains("temper resource delete"),
+            "old wording suggested delete; ambiguous and removed"
         );
     }
 }
