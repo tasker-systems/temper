@@ -207,3 +207,245 @@ mod show_resource_tests {
         todo!("implement when a mock TemperClient fixture is available")
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// list_resources tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "test-db"))]
+mod list_resources_tests {
+    use std::fs;
+    use std::sync::Arc;
+
+    use tokio::sync::Mutex;
+
+    use temper_core::operations::{Backend, ListFilter, ListResources, Surface};
+    use temper_core::types::manifest::Manifest;
+
+    use crate::config::Config;
+    use crate::vault_backend::{VaultBackend, VaultBackendCtx};
+
+    fn make_config(vault_root: &std::path::Path) -> Arc<Config> {
+        Arc::new(Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: vault_root.join(".temper"),
+            // One context so scan_rows has a context to iterate over
+            contexts: vec!["temper".to_string()],
+            subscriptions: vec![],
+            skill_output: vault_root.join("skills"),
+            profile_slug: None,
+        })
+    }
+
+    fn make_backend(vault_root: &std::path::Path) -> VaultBackend {
+        let config = make_config(vault_root);
+        let manifest = Arc::new(Mutex::new(Manifest::new("test-device".to_string())));
+        VaultBackend::new(VaultBackendCtx {
+            vault_root: vault_root.to_path_buf(),
+            manifest,
+            client: None,
+            owner: "@me".to_string(),
+            config,
+            surface: Surface::CliLocalVault,
+        })
+    }
+
+    /// Write a minimal `.md` file for a given doctype/context combination.
+    fn write_md(path: &std::path::Path, slug: &str, title: &str, doc_type: &str, context: &str) {
+        let content = format!(
+            "---\ntemper-type: {doc_type}\ntemper-context: {context}\ntemper-title: '{title}'\ntemper-slug: {slug}\ntemper-stage: backlog\n---\n\nBody.\n"
+        );
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    // ── list_resources_filters_by_context_and_doctype ────────────────────────
+
+    #[tokio::test]
+    async fn list_resources_filters_by_context_and_doctype() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        // Seed two task files under @me/temper/task/
+        let base = tmp.path().join("@me/temper/task");
+        write_md(&base.join("foo.md"), "foo", "Foo Task", "task", "temper");
+        write_md(&base.join("bar.md"), "bar", "Bar Task", "task", "temper");
+
+        let backend = make_backend(tmp.path());
+        let cmd = ListResources {
+            filter: ListFilter {
+                doctype: Some("task".to_string()),
+                context: Some("temper".to_string()),
+                stage: None,
+                goal: None,
+                limit: None,
+            },
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.list_resources(cmd).await.expect("list ok");
+        assert_eq!(output.value.len(), 2, "expected 2 task summaries");
+        // Verify at least one slug is present
+        let slugs: Vec<&str> = output.value.iter().map(|s| s.slug.as_str()).collect();
+        assert!(slugs.contains(&"foo") || slugs.contains(&"bar"));
+        // Read path — emit no events.
+        assert!(
+            output.events.is_empty(),
+            "list read path must emit no events"
+        );
+    }
+
+    // ── list_resources_respects_limit ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_resources_respects_limit() {
+        let tmp = tempfile::tempdir().unwrap();
+
+        let base = tmp.path().join("@me/temper/task");
+        write_md(&base.join("alpha.md"), "alpha", "Alpha", "task", "temper");
+        write_md(&base.join("beta.md"), "beta", "Beta", "task", "temper");
+        write_md(&base.join("gamma.md"), "gamma", "Gamma", "task", "temper");
+
+        let backend = make_backend(tmp.path());
+        let cmd = ListResources {
+            filter: ListFilter {
+                doctype: Some("task".to_string()),
+                context: Some("temper".to_string()),
+                stage: None,
+                goal: None,
+                limit: Some(2),
+            },
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.list_resources(cmd).await.expect("list ok");
+        assert_eq!(output.value.len(), 2, "limit should truncate to 2");
+    }
+
+    // ── list_resources_empty_dir_returns_empty_vec ────────────────────────────
+
+    #[tokio::test]
+    async fn list_resources_empty_dir_returns_empty_vec() {
+        let tmp = tempfile::tempdir().unwrap();
+        // No .md files created — just the vault root.
+
+        let backend = make_backend(tmp.path());
+        let cmd = ListResources {
+            filter: ListFilter {
+                doctype: Some("task".to_string()),
+                context: Some("temper".to_string()),
+                stage: None,
+                goal: None,
+                limit: None,
+            },
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.list_resources(cmd).await.expect("list ok");
+        assert!(
+            output.value.is_empty(),
+            "expected empty vec when no files exist"
+        );
+    }
+
+    // ── list_resources_requires_doctype ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn list_resources_requires_doctype() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = ListResources {
+            filter: ListFilter {
+                doctype: None,
+                context: None,
+                stage: None,
+                goal: None,
+                limit: None,
+            },
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend
+            .list_resources(cmd)
+            .await
+            .expect_err("should fail without doctype");
+        assert!(
+            matches!(err, temper_core::error::TemperError::BadRequest(_)),
+            "expected BadRequest, got: {err:?}"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// search_resources tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "test-db"))]
+mod search_resources_tests {
+    use std::sync::Arc;
+
+    use tokio::sync::Mutex;
+
+    use temper_core::operations::{Backend, SearchQuery, SearchResources, Surface};
+    use temper_core::types::manifest::Manifest;
+
+    use crate::config::Config;
+    use crate::vault_backend::{VaultBackend, VaultBackendCtx};
+
+    fn make_backend_no_client(vault_root: &std::path::Path) -> VaultBackend {
+        let config = Arc::new(Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: vault_root.join(".temper"),
+            contexts: vec![],
+            subscriptions: vec![],
+            skill_output: vault_root.join("skills"),
+            profile_slug: None,
+        });
+        let manifest = Arc::new(Mutex::new(Manifest::new("test-device".to_string())));
+        VaultBackend::new(VaultBackendCtx {
+            vault_root: vault_root.to_path_buf(),
+            manifest,
+            client: None,
+            owner: "@me".to_string(),
+            config,
+            surface: Surface::CliLocalVault,
+        })
+    }
+
+    // ── search_resources_no_client_returns_bad_request ────────────────────────
+
+    #[tokio::test]
+    async fn search_resources_no_client_returns_bad_request() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend_no_client(tmp.path());
+        let cmd = SearchResources {
+            query: SearchQuery {
+                query: "rust backend".to_string(),
+                doctype: None,
+                context: None,
+                limit: Some(5),
+            },
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend
+            .search_resources(cmd)
+            .await
+            .expect_err("should fail without client");
+        assert!(
+            matches!(err, temper_core::error::TemperError::BadRequest(_)),
+            "expected BadRequest, got: {err:?}"
+        );
+    }
+
+    // ── search_resources_with_mock_client_passes_query_through ────────────────
+
+    /// Client path not exercised — no mock/sandbox `TemperClient` available.
+    /// Tracked as a follow-up integration test.
+    #[tokio::test]
+    #[ignore = "no TemperClient test fixture available; tracked as backlog task"]
+    async fn search_resources_with_mock_client_passes_query_through() {
+        todo!("implement when a mock TemperClient fixture is available")
+    }
+}

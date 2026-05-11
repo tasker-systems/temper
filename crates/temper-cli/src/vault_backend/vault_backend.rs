@@ -265,16 +265,92 @@ impl Backend for VaultBackend {
 
     async fn list_resources(
         &self,
-        _cmd: ListResources,
+        cmd: ListResources,
     ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-        unimplemented!("wave1-4a Task 6 lands this")
+        use crate::commands::resource::{filter_rows, scan_rows, sort_rows, ListFilters};
+
+        let filter = cmd.filter;
+        let doctype = filter.doctype.as_deref().ok_or_else(|| {
+            TemperError::BadRequest("list_resources requires a doctype filter".to_owned())
+        })?;
+        let context_str = filter.context.as_deref();
+
+        let rows = scan_rows(&self.config, doctype, context_str)?;
+
+        let filters = ListFilters {
+            stage: filter.stage.as_deref(),
+            goal: filter.goal.as_deref(),
+            status: None, // ListFilter does not carry a status field
+        };
+        let mut rows = filter_rows(rows, filters);
+        sort_rows(&mut rows);
+
+        if let Some(limit) = filter.limit {
+            rows.truncate(limit as usize);
+        }
+
+        let summaries: Vec<ResourceSummary> = rows
+            .into_iter()
+            .map(|row| {
+                let get_str = |key: &str| -> String {
+                    row.frontmatter
+                        .get(key)
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                };
+                ResourceSummary {
+                    slug: get_str("temper-slug"),
+                    doctype: get_str("temper-type"),
+                    context: get_str("temper-context"),
+                    title: get_str("temper-title"),
+                }
+            })
+            .collect();
+
+        // Read path — emit no events (per Phase 3 / Task 5 precedent).
+        Ok(CommandOutput::new(summaries))
     }
 
     async fn search_resources(
         &self,
-        _cmd: SearchResources,
+        cmd: SearchResources,
     ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
-        unimplemented!("wave1-4a Task 6 lands this")
+        use crate::actions::runtime::client_err_to_temper;
+
+        let client = self.client.as_ref().ok_or_else(|| {
+            TemperError::BadRequest(
+                "search requires an authenticated client (local search is unavailable)".to_owned(),
+            )
+        })?;
+
+        let q = &cmd.query;
+        let rows = client
+            .search()
+            .text_query(
+                &q.query,
+                q.context.clone(),
+                q.doctype.clone(),
+                q.limit.map(|n| n as i64),
+            )
+            .await
+            .map_err(client_err_to_temper)?;
+
+        let hits: Vec<SearchHit> = rows
+            .into_iter()
+            .map(|row| SearchHit {
+                summary: ResourceSummary {
+                    slug: row.slug,
+                    doctype: row.doc_type,
+                    context: row.context.unwrap_or_default(),
+                    title: row.title,
+                },
+                score: row.combined_score,
+            })
+            .collect();
+
+        // Read path — emit no events.
+        Ok(CommandOutput::new(hits))
     }
 }
 
