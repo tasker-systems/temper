@@ -203,21 +203,22 @@ pub struct SyncResult {
 // Owner sigil resolution
 // ---------------------------------------------------------------------------
 
-/// Resolve the API's `owner_handle` shorthand to the canonical owner sigil
-/// used in vault paths and `kb_resource_uri()`.
+/// Resolve the API's `owner_handle` to the canonical local-vault owner
+/// sigil. Design intent (clarified 2026-05-10): `@me` is canonical for
+/// the user's own private work. Both the API's `@me` shorthand and an
+/// explicit `@<profile.slug>` for the same user normalize to `@me`.
+/// Other users' personal handles (`@<other-slug>`) and team handles
+/// (`+<team-slug>`) pass through unchanged.
 ///
-/// The API returns the literal string `"@me"` for the requester's own
-/// resources (see `OWNER_HANDLE_EXPR` in `resource_service.rs`). The vault
-/// layout and the server's `kb_resource_uri()` SQL function use
-/// `@<profile.slug>` as the canonical owner segment. This helper closes the
-/// gap: callers pass `resource.owner_handle` plus the requester's own
-/// `profile.slug` (without leading `@`) and get back the canonical sigil.
-///
-/// Team handles (`+<team-slug>`) are already canonical and pass through
-/// unchanged; so do other users' personal handles.
+/// This reverses the direction PR #72 introduced. The
+/// `owners_equivalent` helper in this module remains in place to
+/// tolerate frontmatter and manifest paths that still carry the
+/// old `@<profile.slug>` form (legacy files from the PR #70/72
+/// window).
 pub fn resolve_owner_for_frontmatter(handle: &str, profile_slug: &str) -> String {
-    if handle == "@me" {
-        format!("@{profile_slug}")
+    let own_slug_handle = format!("@{profile_slug}");
+    if handle == "@me" || handle == own_slug_handle {
+        "@me".to_string()
     } else {
         handle.to_string()
     }
@@ -246,6 +247,9 @@ pub fn resolve_owner_for_frontmatter(handle: &str, profile_slug: &str) -> String
 /// setup. Rely on the e2e layer for full coverage.
 pub struct OwnerResolver<'c> {
     client: &'c temper_client::TemperClient,
+    /// Cached `profile.slug` (without leading `@`). Used to recognize
+    /// own-user explicit handles like `@<profile.slug>` and normalize
+    /// them to `@me`.
     canonical: Option<String>,
 }
 
@@ -262,9 +266,12 @@ impl<'c> OwnerResolver<'c> {
     /// `@me` lookups return the cached value. Non-`@me` handles pass through
     /// without touching the client.
     pub async fn resolve(&mut self, handle: &str) -> crate::error::Result<String> {
-        if handle != "@me" {
-            return Ok(handle.to_string());
+        // Quick path: anything that's already not own-user passes through.
+        if handle == "@me" {
+            return Ok("@me".to_string());
         }
+        // For anything else, fetch the profile so we can compare against
+        // the user's explicit slug.
         if self.canonical.is_none() {
             let profile = self
                 .client
@@ -272,9 +279,14 @@ impl<'c> OwnerResolver<'c> {
                 .get()
                 .await
                 .map_err(crate::commands::client_err)?;
-            self.canonical = Some(format!("@{}", profile.slug));
+            self.canonical = Some(profile.slug);
         }
-        Ok(self.canonical.as_deref().unwrap().to_string())
+        let own_slug = self.canonical.as_deref().unwrap();
+        if handle.strip_prefix('@') == Some(own_slug) {
+            Ok("@me".to_string())
+        } else {
+            Ok(handle.to_string())
+        }
     }
 }
 
@@ -3431,27 +3443,34 @@ mod tests {
     // --- resolve_owner_for_frontmatter ---
 
     #[test]
-    fn resolve_owner_for_frontmatter_resolves_at_me() {
-        assert_eq!(
-            resolve_owner_for_frontmatter("@me", "j-cole-taylor"),
-            "@j-cole-taylor"
-        );
+    fn resolve_owner_for_frontmatter_keeps_at_me_canonical() {
+        // Design intent: @me is the canonical local-vault owner for the
+        // user's own private work. Both the API's @me shorthand and an
+        // explicit @<profile.slug> for the same user normalize to @me.
+        // PR #72's reverse direction (@me → @<slug>) is reverted by
+        // this change.
+        let result = resolve_owner_for_frontmatter("@me", "j-cole-taylor");
+        assert_eq!(result, "@me");
+    }
+
+    #[test]
+    fn resolve_owner_for_frontmatter_normalizes_explicit_own_slug_to_at_me() {
+        // If the API ever returns the user's explicit slug instead of
+        // @me, normalize it back to @me to keep frontmatter consistent.
+        let result = resolve_owner_for_frontmatter("@j-cole-taylor", "j-cole-taylor");
+        assert_eq!(result, "@me");
     }
 
     #[test]
     fn resolve_owner_for_frontmatter_passes_through_team_handle() {
-        assert_eq!(
-            resolve_owner_for_frontmatter("+platform-eng", "j-cole-taylor"),
-            "+platform-eng"
-        );
+        let result = resolve_owner_for_frontmatter("+temper-team", "j-cole-taylor");
+        assert_eq!(result, "+temper-team");
     }
 
     #[test]
     fn resolve_owner_for_frontmatter_passes_through_other_user() {
-        assert_eq!(
-            resolve_owner_for_frontmatter("@some-other-user", "j-cole-taylor"),
-            "@some-other-user"
-        );
+        let result = resolve_owner_for_frontmatter("@someone-else", "j-cole-taylor");
+        assert_eq!(result, "@someone-else");
     }
 
     // --- preflight_ownership_check ---
