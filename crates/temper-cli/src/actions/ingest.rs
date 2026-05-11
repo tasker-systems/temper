@@ -1263,6 +1263,7 @@ created: 2026-03-23
 
         let vault_path = write_vault_file_and_register(
             tmp.path(),
+            "@me",
             "temper",
             "research",
             "my-doc",
