@@ -13,3 +13,5 @@ mod vault_backend;
 
 #[cfg(all(test, feature = "test-db"))]
 mod tests;
+
+pub use vault_backend::{VaultBackend, VaultBackendCtx};
