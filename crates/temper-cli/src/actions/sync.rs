@@ -467,9 +467,12 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
     for (_id, entry) in manifest.entries.iter_mut() {
         let file_path = vault_root.join(&entry.path);
         if !file_path.exists() {
-            if entry.state != ManifestEntryState::LocalModified {
-                entry.state = ManifestEntryState::LocalModified;
-                entry.body_hash = String::new();
+            if entry.state != ManifestEntryState::LocallyMissing {
+                entry.state = ManifestEntryState::LocallyMissing;
+                // Body / managed / open hashes are PRESERVED here — the
+                // server-side diff path uses them to confirm we're not
+                // sending stale partial state. mtime is cleared because
+                // the file no longer exists.
                 entry.mtime_secs = None;
                 changed += 1;
             }
@@ -2596,8 +2599,11 @@ mod tests {
 
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get(&id).unwrap();
-        assert_eq!(entry.state, ManifestEntryState::LocalModified);
-        assert!(entry.body_hash.is_empty());
+        assert_eq!(entry.state, ManifestEntryState::LocallyMissing);
+        assert_eq!(
+            entry.body_hash, "oldhash",
+            "body_hash preserved so server-diff can compare"
+        );
     }
 
     #[test]
@@ -2677,6 +2683,49 @@ mod tests {
         assert!(!entry.open_hash.is_empty(), "open_hash should be populated");
         assert!(entry.managed_hash.starts_with("sha256:"));
         assert!(entry.open_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn rehash_marks_missing_file_as_locally_missing() {
+        let tmp = TempDir::new().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+
+        let mut manifest = Manifest::new("test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/missing.md".to_string(),
+                body_hash: "sha256:knownbody".to_string(),
+                remote_body_hash: "sha256:knownremote".to_string(),
+                managed_hash: "sha256:knownmanaged".to_string(),
+                open_hash: "sha256:knownopen".to_string(),
+                remote_managed_hash: "sha256:knownremmanaged".to_string(),
+                remote_open_hash: "sha256:knownremopen".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: Some(1_700_000_000),
+                provisional: false,
+                last_audit_id: None,
+            },
+        );
+
+        // The file does NOT exist under tmp.path() — that's the test.
+        let _ = rehash_manifest(&mut manifest, tmp.path()).unwrap();
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(
+            entry.state,
+            ManifestEntryState::LocallyMissing,
+            "missing file should reclassify as LocallyMissing"
+        );
+        assert_eq!(
+            entry.body_hash, "sha256:knownbody",
+            "body_hash should be preserved (not cleared) so server-diff has hash to compare"
+        );
+        assert_eq!(
+            entry.managed_hash, "sha256:knownmanaged",
+            "managed_hash should also be preserved"
+        );
     }
 
     #[test]
