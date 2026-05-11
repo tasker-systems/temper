@@ -777,6 +777,95 @@ pub fn scan_vault_for_untracked(
 // Orchestration (async, uses client + manifest)
 // ---------------------------------------------------------------------------
 
+/// Patch a freshly-returned sync diff so `LocallyMissing` manifest entries
+/// are routed through the pull set rather than the push set.
+///
+/// Why this exists: the server's diff sees only the wire-shaped manifest
+/// (hashes + URIs). It has no notion of "the local file vanished" —
+/// rehash/normalize mark that as `ManifestEntryState::LocallyMissing` and
+/// preserve the prior hashes intentionally (so we don't corrupt server
+/// state with stale partials). Without this step the orchestrator would
+/// either push-and-fail (if the entry happened to be in `to_push` because
+/// of meta drift) or silently drop the entry (if hashes match), leaving
+/// the user's vault permanently short a file.
+///
+/// Two actions, both bounded by the set of `LocallyMissing` entry IDs:
+///   - drop any `to_push` items for those IDs (push would error out
+///     reading the missing file),
+///   - synthesize a `SyncPullItem` for any that aren't already in
+///     `to_pull`, using the manifest path to build the canonical URI.
+///
+/// The pull primitive (`pull_one_resource`) handles the body fetch +
+/// file-write + manifest update; we only enqueue the work here.
+fn route_locally_missing_to_pull(diff: &mut SyncStatusResponse, manifest: &Manifest) {
+    let locally_missing_ids: std::collections::HashSet<ResourceId> = manifest
+        .entries
+        .iter()
+        .filter_map(|(id, entry)| {
+            if entry.state == ManifestEntryState::LocallyMissing {
+                Some(*id)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if locally_missing_ids.is_empty() {
+        return;
+    }
+
+    // (a) Strip LocallyMissing entries out of the push set.
+    diff.to_push.retain(|item| {
+        item.resource_id
+            .map(|id| !locally_missing_ids.contains(&id))
+            .unwrap_or(true)
+    });
+
+    // (b) Synthesize pull items for any LocallyMissing entry not already
+    //     in to_pull. Skip entries whose manifest path can't be parsed —
+    //     a malformed path is a sync data-integrity issue separate from
+    //     missing-file recovery.
+    let already_in_pull: std::collections::HashSet<ResourceId> =
+        diff.to_pull.iter().map(|p| p.resource_id).collect();
+
+    for id in &locally_missing_ids {
+        if already_in_pull.contains(id) {
+            continue;
+        }
+        let Some(entry) = manifest.entries.get(id) else {
+            continue;
+        };
+        let Some(parsed) = Vault::parse_rel(&entry.path) else {
+            tracing::warn!(
+                path = %entry.path,
+                resource_id = %Uuid::from(*id),
+                "LocallyMissing entry has unparseable manifest path; skipping pull recovery"
+            );
+            continue;
+        };
+        let uri = Vault::canonical_uri(
+            parsed.owner,
+            parsed.context,
+            parsed.doc_type,
+            &Uuid::from(*id).to_string(),
+        );
+        diff.to_pull.push(SyncPullItem {
+            resource_id: *id,
+            uri,
+            // `pull_one_resource` writes the server's body_hash back into
+            // the manifest regardless of what we send here; the field is
+            // load-bearing for the wire type, not the recovery logic.
+            content_hash: entry.remote_body_hash.clone(),
+            kind: SyncItemKind::Body,
+        });
+        tracing::info!(
+            path = %entry.path,
+            resource_id = %Uuid::from(*id),
+            "LocallyMissing entry routed to pull recovery"
+        );
+    }
+}
+
 /// Run the full sync orchestration.
 ///
 /// Called from `sync_cmd.rs` with a single tokio runtime. The command handles
@@ -803,6 +892,20 @@ pub async fn sync_orchestration(
         .status(&request)
         .await
         .map_err(crate::commands::client_err)?;
+
+    // Step 3b: Route LocallyMissing entries to the pull set.
+    //
+    // The server-side diff doesn't know about client-side
+    // `ManifestEntryState::LocallyMissing` — it sees the preserved hashes
+    // and reports no drift. So we patch the diff after it returns:
+    //   (a) drop any to_push items whose manifest entry is LocallyMissing
+    //       (the file isn't on disk; pushing would fail with
+    //       `vault_file_missing_err`),
+    //   (b) ensure each LocallyMissing entry appears in to_pull as a
+    //       synthesized SyncPullItem so the existing pull primitive
+    //       refetches the body and restores the file.
+    let mut diff = diff;
+    route_locally_missing_to_pull(&mut diff, manifest);
 
     let push_count = diff.to_push.len();
     let pull_count = diff.to_pull.len();
