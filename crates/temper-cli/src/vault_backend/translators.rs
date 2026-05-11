@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use temper_core::error::TemperError;
 #[cfg(feature = "embed")]
 use temper_core::hash::compute_body_hash;
-use temper_core::operations::ResourceRef;
+use temper_core::operations::{CreateResource, ResourceRef, UpdateResource};
 use temper_core::types::ids::ResourceId;
+use temper_core::types::ingest::IngestPayload;
 use temper_core::types::manifest::Manifest;
+use temper_core::types::resource::ResourceUpdateRequest;
 
 use crate::config::Config;
 
@@ -105,13 +107,8 @@ pub(crate) fn resolve_resource_ref(
 /// update is present, all three of (content, content_hash, chunks_packed)
 /// must be supplied together.
 ///
-/// Callers land in Task 4 (`cmd_to_update_request`) and Tasks 7-8 (create/update).
-/// Remove the `dead_code` suppressions when those tasks land.
-#[expect(
-    dead_code,
-    reason = "callers land in Tasks 4/7/8 (Phase 4a); scaffolded now \
-              so the type is in place for Task 4's cmd_to_update_request"
-)]
+/// Consumed by `cmd_to_ingest_payload`, `cmd_to_update_request`, and the
+/// Task 7-8 create/update body paths in `vault_backend.rs`.
 #[derive(Debug, Clone)]
 pub(crate) struct BodyTrio {
     pub content_hash: String,
@@ -152,6 +149,118 @@ pub(crate) fn prepare_body_trio(_body: &str) -> Result<BodyTrio, TemperError> {
     Err(TemperError::BadRequest(
         "chunks_packed required when embed pipeline is not available".to_owned(),
     ))
+}
+
+/// Translate `CreateResource` → `IngestPayload` for the push-as-tail-action path.
+///
+/// Mirrors `temper-api/src/backend/translators.rs::create_resource_to_ingest_payload`
+/// but takes `body` as a separate `&str` (the vault caller has already written
+/// the file to disk and has the body in hand) and accepts a pre-computed
+/// `body_trio` so the caller decides when to run the embed pipeline.
+///
+/// When `body_trio` is `Some`, its `content_hash` and `chunks_packed` take
+/// priority over any fields on `cmd` (caller-supplied trio is authoritative).
+/// Callers land in Task 7 (`create_resource`); remove `dead_code` suppression
+/// when that task lands.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "caller lands in Task 7 (VaultBackend::create_resource); \
+                  scaffolded now for Task 4"
+    )
+)]
+pub(crate) fn cmd_to_ingest_payload(
+    cmd: &CreateResource,
+    body: &str,
+    body_trio: Option<&BodyTrio>,
+) -> IngestPayload {
+    IngestPayload {
+        title: cmd.title.clone(),
+        origin_uri: cmd.origin_uri.clone().unwrap_or_default(),
+        context_name: cmd.context.clone(),
+        doc_type_name: cmd.doctype.clone(),
+        content_hash: body_trio
+            .map(|t| t.content_hash.clone())
+            .or_else(|| cmd.content_hash.clone()),
+        slug: cmd.slug.clone(),
+        content: body.to_string(),
+        metadata: None,
+        managed_meta: Some(serde_json::to_value(&cmd.managed_meta).unwrap_or_default()),
+        open_meta: cmd.open_meta.clone(),
+        chunks_packed: body_trio
+            .map(|t| t.chunks_packed.clone())
+            .or_else(|| cmd.chunks_packed.clone()),
+    }
+}
+
+/// Translate `UpdateResource` → `ResourceUpdateRequest` for the push-as-tail-action path.
+///
+/// Mirrors `temper-api/src/backend/translators.rs::update_resource_to_request`
+/// but the body pipeline is the **caller's responsibility**: when `cmd.body` is
+/// `Some`, the caller must supply a pre-computed `body_trio`; the translator
+/// errors with `BadRequest` if the trio is absent. This differs from the
+/// DbBackend translator, which runs `prepare_body_trio` inline when no
+/// pre-computed trio is present.
+///
+/// Open_meta keys are validated via
+/// `temper_core::operations::validate_open_meta_keys`; an unknown key surfaces
+/// as `TemperError::BadRequest`.
+///
+/// Callers land in Task 8 (`update_resource`); remove `dead_code` suppression
+/// when that task lands.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "caller lands in Task 8 (VaultBackend::update_resource); \
+                  scaffolded now for Task 4"
+    )
+)]
+pub(crate) fn cmd_to_update_request(
+    cmd: &UpdateResource,
+    body_trio: Option<&BodyTrio>,
+) -> Result<ResourceUpdateRequest, TemperError> {
+    let (title, slug) = cmd
+        .managed_meta
+        .as_ref()
+        .map(|m| (m.title.clone(), m.slug.clone()))
+        .unwrap_or((None, None));
+
+    // Validate open_meta keys upfront — fires for both body-bearing and meta-only updates.
+    if let Some(open_meta) = cmd.open_meta.as_ref() {
+        if let Err(bad_key) = temper_core::operations::validate_open_meta_keys(open_meta) {
+            return Err(TemperError::BadRequest(format!(
+                "unknown open_meta key '{bad_key}'"
+            )));
+        }
+    }
+
+    let (content, content_hash, chunks_packed) = if let Some(body) = cmd.body.as_ref() {
+        let trio = body_trio.ok_or_else(|| {
+            TemperError::BadRequest(
+                "body update requires precomputed body_trio (vault caller responsibility)"
+                    .to_owned(),
+            )
+        })?;
+        (
+            Some(body.content.clone()),
+            Some(trio.content_hash.clone()),
+            Some(trio.chunks_packed.clone()),
+        )
+    } else {
+        (None, None, None)
+    };
+
+    Ok(ResourceUpdateRequest {
+        title,
+        slug,
+        managed_meta: cmd.managed_meta.clone(),
+        open_meta: cmd.open_meta.clone(),
+        content,
+        content_hash,
+        chunks_packed,
+    })
 }
 
 // Tests for resolve_resource_ref. These are unconditional (no embed dependency).
@@ -300,5 +409,170 @@ mod tests {
             err,
             temper_core::error::TemperError::BadRequest(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod translator_tests {
+    use temper_core::operations::{
+        BodyUpdate, CreateResource, ResourceRef, Surface, UpdateResource,
+    };
+    use temper_core::types::ids::ResourceId;
+    use temper_core::types::managed_meta::ManagedMeta;
+    use uuid::Uuid;
+
+    use super::{cmd_to_ingest_payload, cmd_to_update_request, BodyTrio};
+
+    fn make_create_cmd() -> CreateResource {
+        CreateResource {
+            slug: "my-task".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "My Task".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: Some("kb://temper/task/my-task".to_string()),
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    fn make_update_cmd() -> UpdateResource {
+        UpdateResource {
+            resource: ResourceRef::Uuid {
+                id: ResourceId(Uuid::now_v7()),
+            },
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    // ── cmd_to_ingest_payload tests ───────────────────────────────────────────
+
+    #[test]
+    fn cmd_to_ingest_payload_carries_managed_meta_and_body() {
+        let mut cmd = make_create_cmd();
+        cmd.managed_meta = ManagedMeta {
+            stage: Some("backlog".to_string()),
+            ..Default::default()
+        };
+        let body = "# My Task\n\nsome content";
+        let payload = cmd_to_ingest_payload(&cmd, body, None);
+
+        assert_eq!(payload.title, "My Task");
+        assert_eq!(payload.context_name, "temper");
+        assert_eq!(payload.doc_type_name, "task");
+        assert_eq!(payload.slug, "my-task");
+        assert_eq!(payload.content, body);
+        assert_eq!(payload.origin_uri, "kb://temper/task/my-task");
+        // managed_meta serializes with serde renames (e.g. "temper-stage")
+        let mm = payload.managed_meta.expect("managed_meta present");
+        assert_eq!(
+            mm.get("temper-stage").and_then(|v| v.as_str()),
+            Some("backlog")
+        );
+        // No body_trio supplied → hash + chunks stay None
+        assert!(payload.content_hash.is_none());
+        assert!(payload.chunks_packed.is_none());
+        assert!(payload.metadata.is_none());
+    }
+
+    #[test]
+    fn cmd_to_ingest_payload_empty_body_when_no_body_supplied() {
+        let cmd = make_create_cmd();
+        let payload = cmd_to_ingest_payload(&cmd, "", None);
+        assert_eq!(payload.content, "");
+        assert!(payload.content_hash.is_none());
+        assert!(payload.chunks_packed.is_none());
+    }
+
+    #[test]
+    fn cmd_to_ingest_payload_uses_supplied_body_trio_over_cmd_fields() {
+        let mut cmd = make_create_cmd();
+        // Populate cmd-level hash/chunks that the trio should shadow
+        cmd.content_hash = Some("sha256:cmd-level-hash".to_string());
+        cmd.chunks_packed = Some("cmd-level-chunks".to_string());
+
+        let trio = BodyTrio {
+            content_hash: "sha256:trio-hash".to_string(),
+            chunks_packed: "trio-chunks".to_string(),
+        };
+        let payload = cmd_to_ingest_payload(&cmd, "body text", Some(&trio));
+
+        assert_eq!(payload.content_hash.as_deref(), Some("sha256:trio-hash"));
+        assert_eq!(payload.chunks_packed.as_deref(), Some("trio-chunks"));
+    }
+
+    // ── cmd_to_update_request tests ──────────────────────────────────────────
+
+    #[test]
+    fn cmd_to_update_request_meta_only_branch_leaves_body_fields_none() {
+        let mut cmd = make_update_cmd();
+        cmd.managed_meta = Some(ManagedMeta {
+            stage: Some("done".to_string()),
+            ..Default::default()
+        });
+        cmd.open_meta = Some(serde_json::json!({"tags": ["x"]}));
+
+        let req = cmd_to_update_request(&cmd, None).expect("meta-only ok");
+        assert!(req.content.is_none());
+        assert!(req.content_hash.is_none());
+        assert!(req.chunks_packed.is_none());
+        assert!(req.managed_meta.is_some());
+        assert!(req.open_meta.is_some());
+    }
+
+    #[test]
+    fn cmd_to_update_request_rejects_unknown_open_meta_key() {
+        let mut cmd = make_update_cmd();
+        cmd.open_meta = Some(serde_json::json!({"totally_made_up": 1}));
+
+        let err = cmd_to_update_request(&cmd, None).expect_err("unknown key");
+        match err {
+            temper_core::error::TemperError::BadRequest(msg) => {
+                assert!(msg.contains("totally_made_up"), "msg = {msg}");
+                assert!(msg.contains("unknown open_meta key"), "msg = {msg}");
+            }
+            other => panic!("expected BadRequest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cmd_to_update_request_body_branch_requires_trio() {
+        let mut cmd = make_update_cmd();
+        cmd.body = Some(BodyUpdate::new("hello world"));
+
+        let err = cmd_to_update_request(&cmd, None).expect_err("body without trio");
+        assert!(
+            matches!(err, temper_core::error::TemperError::BadRequest(_)),
+            "expected BadRequest, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn cmd_to_update_request_body_branch_populates_trio_fields() {
+        let mut cmd = make_update_cmd();
+        cmd.body = Some(BodyUpdate::new("hello world"));
+        cmd.managed_meta = Some(ManagedMeta {
+            title: Some("Updated Title".to_string()),
+            slug: Some("updated-slug".to_string()),
+            ..Default::default()
+        });
+
+        let trio = BodyTrio {
+            content_hash: "sha256:abc123".to_string(),
+            chunks_packed: "packed-data".to_string(),
+        };
+        let req = cmd_to_update_request(&cmd, Some(&trio)).expect("with trio ok");
+
+        assert_eq!(req.content.as_deref(), Some("hello world"));
+        assert_eq!(req.content_hash.as_deref(), Some("sha256:abc123"));
+        assert_eq!(req.chunks_packed.as_deref(), Some("packed-data"));
+        assert_eq!(req.title.as_deref(), Some("Updated Title"));
+        assert_eq!(req.slug.as_deref(), Some("updated-slug"));
     }
 }
