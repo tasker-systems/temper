@@ -5028,6 +5028,7 @@ dependencies = [
  "anstream 0.6.21",
  "anstyle",
  "askama",
+ "async-trait",
  "chrono",
  "clap",
  "dialoguer",

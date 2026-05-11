@@ -18,17 +18,6 @@ use crate::config::Config;
 /// Returned by [`resolve_resource_ref`] so callers have both the identity key
 /// (for manifest lookups and API calls) and the filesystem path (for reads /
 /// writes / deletes) without a second parse.
-///
-/// First consumed by Task 5 (`show_resource`) and Tasks 7-9 (write/delete paths).
-/// Remove `dead_code` suppression when Task 5 lands.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "lib callers land in Tasks 5+ (show/create/update/delete); \
-                  scaffolded now alongside resolve_resource_ref"
-    )
-)]
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedResource {
     pub resource_id: ResourceId,
@@ -46,18 +35,6 @@ pub(crate) struct ResolvedResource {
 ///
 /// The function performs no network I/O. `find_resource` is synchronous
 /// filesystem walking, which is acceptable in CLI context.
-///
-/// First called by Task 5 (`Backend::show_resource`); subsequent tasks consume
-/// it for every write and delete path. Remove `dead_code` suppression when
-/// Task 5 lands.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "lib callers land in Tasks 5+ (show/create/update/delete); \
-                  scaffolded now so the fn is in place for Task 5"
-    )
-)]
 pub(crate) fn resolve_resource_ref(
     vault_root: &Path,
     manifest: &Manifest,

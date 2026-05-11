@@ -15,6 +15,7 @@ path = "src/main.rs"
 anstream = "0.6"
 anstyle = "1"
 askama = "0.12"
+async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive", "env"] }
 dialoguer = "0.12"
