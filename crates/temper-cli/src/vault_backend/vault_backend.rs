@@ -12,11 +12,12 @@ use temper_client::TemperClient;
 use temper_core::error::TemperError;
 use temper_core::frontmatter::Frontmatter;
 use temper_core::operations::{
-    Backend, CommandOutput, CreateResource, DeleteResource, ListResources, ResourceRef,
-    ResourceSummary, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
+    Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent, ListResources,
+    PushDeferReason, ResourceRef, ResourceSummary, SearchHit, SearchResources, ShowResource,
+    Surface, UpdateResource,
 };
 use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
-use temper_core::types::manifest::Manifest;
+use temper_core::types::manifest::{Manifest, ManifestEntry, ManifestEntryState};
 use temper_core::types::resource::ResourceRow;
 
 use crate::config::Config;
@@ -80,10 +81,14 @@ impl VaultBackend {
         &self.vault_root
     }
 
-    #[expect(
-        dead_code,
-        reason = "getter used by Tasks 6+ (list_resources); \
-                  direct field access used inside this file"
+    /// Access the manifest; used by tests and the Task 8+ update/delete paths.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "lib callers land in Tasks 8-9 (update_resource/delete_resource); \
+                      tests call this for manifest entry assertions"
+        )
     )]
     pub(crate) fn manifest(&self) -> &Arc<Mutex<Manifest>> {
         &self.manifest
@@ -195,15 +200,189 @@ impl VaultBackend {
             open_hash: None,
         })
     }
+
+    /// Push a freshly-created vault file to the API as a tail action.
+    ///
+    /// Returns the `DomainEvent` to append: `RemoteSynced` on success,
+    /// `PushDeferred` otherwise. Never fails — push errors are classified
+    /// and returned as events rather than propagated.
+    async fn push_create(
+        &self,
+        cmd: &CreateResource,
+        body: &str,
+        written: &crate::vault_backend::per_doctype::WriteResult,
+    ) -> DomainEvent {
+        let Some(client) = self.client.as_ref() else {
+            return DomainEvent::PushDeferred {
+                reason: PushDeferReason::Offline,
+            };
+        };
+
+        // Compute body trio when body is non-empty and the embed feature is present.
+        let body_trio = if !body.is_empty() {
+            match crate::vault_backend::translators::prepare_body_trio(body) {
+                Ok(t) => Some(t),
+                Err(_) => {
+                    // prepare_body_trio errors without the embed feature — treat as
+                    // deferred rather than a hard failure.
+                    return DomainEvent::PushDeferred {
+                        reason: PushDeferReason::Other,
+                    };
+                }
+            }
+        } else {
+            None
+        };
+
+        let payload =
+            crate::vault_backend::translators::cmd_to_ingest_payload(cmd, body, body_trio.as_ref());
+
+        match client.ingest().create(&payload).await {
+            Ok(row) => {
+                // Promote manifest entry to Clean / non-provisional with the server's id.
+                let _ = self
+                    .promote_manifest_after_push(row.id, &written.rel_path)
+                    .await;
+                DomainEvent::RemoteSynced {
+                    resource_id: row.id,
+                }
+            }
+            Err(e) => self.classify_push_error(&e),
+        }
+    }
+
+    /// Promote a manifest entry from Provisional→Clean after a successful push.
+    ///
+    /// Locates the provisional entry by `rel_path` (stable across id changes if
+    /// the server deduplicated onto an existing resource), removes the provisional
+    /// keyed entry, and re-inserts under the server-returned `server_id`.
+    /// Silently ignores errors — promotion is best-effort; `sync run` reconciles.
+    async fn promote_manifest_after_push(
+        &self,
+        server_id: ResourceId,
+        rel_path: &str,
+    ) -> Result<(), TemperError> {
+        let mut manifest = self.manifest.lock().await;
+
+        let provisional_id = manifest
+            .entries
+            .iter()
+            .find(|(_, e)| e.path == rel_path)
+            .map(|(id, _)| *id);
+
+        if let Some(prov_id) = provisional_id {
+            if let Some(entry) = manifest.entries.remove(&prov_id) {
+                let promoted = ManifestEntry {
+                    state: ManifestEntryState::Clean,
+                    provisional: false,
+                    ..entry
+                };
+                manifest.entries.insert(server_id, promoted);
+                let _ = crate::manifest_io::save_manifest(&self.config.state_dir, &manifest);
+            }
+        }
+        Ok(())
+    }
+
+    /// Classify a `ClientError` into a `DomainEvent::PushDeferred` with the
+    /// appropriate reason.
+    fn classify_push_error(&self, e: &temper_client::error::ClientError) -> DomainEvent {
+        use temper_client::error::ClientError;
+        let reason = match e {
+            ClientError::NotAuthenticated | ClientError::TokenExpired | ClientError::Forbidden => {
+                PushDeferReason::NotAuthed
+            }
+            ClientError::Network(_) => PushDeferReason::Offline,
+            _ => PushDeferReason::Other,
+        };
+        DomainEvent::PushDeferred { reason }
+    }
 }
 
 #[async_trait]
 impl Backend for VaultBackend {
     async fn create_resource(
         &self,
-        _cmd: CreateResource,
+        cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        unimplemented!("wave1-4a Task 7 lands this")
+        use temper_core::operations::{
+            apply_defaults_value, ensure_managed_identity_keys, validate_create,
+        };
+
+        // 1. Validate (shared) — slug, doctype, context, title all checked.
+        validate_create(&cmd).map_err(|e| TemperError::BadRequest(e.to_string()))?;
+
+        // 2. Apply doctype defaults + identity keys onto the Value form of managed_meta.
+        let mut managed_value = serde_json::to_value(&cmd.managed_meta)
+            .map_err(|e| TemperError::BadRequest(format!("managed_meta serialize: {e}")))?;
+        apply_defaults_value(&cmd.doctype, &mut managed_value);
+        ensure_managed_identity_keys(&mut managed_value, &cmd.title, Some(&cmd.slug));
+
+        // 3. Per-doctype file write dispatch.
+        let body_str = cmd.body.as_ref().map(|b| b.content.as_str()).unwrap_or("");
+        let written = crate::vault_backend::per_doctype::write_for(
+            crate::vault_backend::per_doctype::WriteArgs {
+                doctype: &cmd.doctype,
+                title: &cmd.title,
+                slug: &cmd.slug,
+                context: &cmd.context,
+                body: body_str,
+                open_meta: cmd.open_meta.as_ref(),
+                vault_root: &self.vault_root,
+                owner: &self.owner,
+                config: &self.config,
+            },
+        )?;
+
+        let mut events = vec![DomainEvent::VaultFileWritten {
+            path: written.rel_path.clone(),
+        }];
+
+        // 4. Manifest entry insert (Provisional until push confirms).
+        {
+            let mut manifest = self.manifest.lock().await;
+            let now = chrono::Utc::now();
+            let body_hash = if body_str.is_empty() {
+                String::new()
+            } else {
+                temper_core::hash::compute_body_hash(body_str)
+            };
+            let entry = ManifestEntry {
+                path: written.rel_path.clone(),
+                body_hash,
+                remote_body_hash: String::new(),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+                remote_managed_hash: String::new(),
+                remote_open_hash: String::new(),
+                synced_at: now,
+                state: ManifestEntryState::Pending,
+                mtime_secs: None,
+                provisional: true,
+                last_audit_id: None,
+            };
+            manifest.entries.insert(written.resource_id, entry);
+            crate::manifest_io::save_manifest(&self.config.state_dir, &manifest)?;
+        }
+        events.push(DomainEvent::VaultManifestUpdated {
+            path: written.rel_path.clone(),
+        });
+
+        // 5. Push as tail action (if client present).
+        let push_event = self.push_create(&cmd, body_str, &written).await;
+        events.push(push_event);
+
+        // 6. Project written file → ResourceRow (read-back confirms disk write).
+        let fm = Frontmatter::parse_file(&written.abs_path)?;
+        let row = vault_file_to_resource_row(
+            &written.abs_path,
+            &fm,
+            written.resource_id,
+            &self.vault_root,
+            &self.owner,
+        );
+
+        Ok(CommandOutput::with_events(row, events))
     }
 
     async fn show_resource(

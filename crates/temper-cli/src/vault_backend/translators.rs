@@ -104,11 +104,6 @@ pub(crate) struct BodyTrio {
 /// `ingest-pipeline` in `temper-api`): the `embed` feature wires
 /// `temper-ingest/embed-download` which provides `pipeline::prepare_markdown`.
 #[cfg(feature = "embed")]
-#[expect(
-    dead_code,
-    reason = "callers land in Tasks 7-8 (Phase 4a create/update body path); \
-              remove suppression when Task 7 lands"
-)]
 pub(crate) fn prepare_body_trio(body: &str) -> Result<BodyTrio, TemperError> {
     let content_hash = compute_body_hash(body);
     let packed_chunks = temper_ingest::pipeline::prepare_markdown(body)
@@ -137,16 +132,6 @@ pub(crate) fn prepare_body_trio(_body: &str) -> Result<BodyTrio, TemperError> {
 ///
 /// When `body_trio` is `Some`, its `content_hash` and `chunks_packed` take
 /// priority over any fields on `cmd` (caller-supplied trio is authoritative).
-/// Callers land in Task 7 (`create_resource`); remove `dead_code` suppression
-/// when that task lands.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "caller lands in Task 7 (VaultBackend::create_resource); \
-                  scaffolded now for Task 4"
-    )
-)]
 pub(crate) fn cmd_to_ingest_payload(
     cmd: &CreateResource,
     body: &str,

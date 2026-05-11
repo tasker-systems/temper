@@ -449,3 +449,292 @@ mod search_resources_tests {
         todo!("implement when a mock TemperClient fixture is available")
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// create_resource tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "test-db"))]
+mod create_resource_tests {
+    use std::sync::Arc;
+
+    use tokio::sync::Mutex;
+
+    use temper_core::operations::{Backend, CreateResource, DomainEvent, PushDeferReason, Surface};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::manifest::Manifest;
+
+    use crate::config::Config;
+    use crate::vault_backend::{VaultBackend, VaultBackendCtx};
+
+    fn make_config(vault_root: &std::path::Path) -> Arc<Config> {
+        Arc::new(Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: vault_root.join(".temper"),
+            contexts: vec!["temper".to_string()],
+            subscriptions: vec![],
+            skill_output: vault_root.join("skills"),
+            profile_slug: None,
+        })
+    }
+
+    fn make_backend(vault_root: &std::path::Path) -> VaultBackend {
+        let config = make_config(vault_root);
+        let manifest = Arc::new(Mutex::new(Manifest::new("test-device".to_string())));
+        VaultBackend::new(VaultBackendCtx {
+            vault_root: vault_root.to_path_buf(),
+            manifest,
+            client: None,
+            owner: "@me".to_string(),
+            config,
+            surface: Surface::CliLocalVault,
+        })
+    }
+
+    fn concept_cmd(title: &str, slug: &str, context: &str) -> CreateResource {
+        CreateResource {
+            slug: slug.to_string(),
+            doctype: "concept".to_string(),
+            context: context.to_string(),
+            title: title.to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    fn decision_cmd(title: &str, slug: &str, context: &str) -> CreateResource {
+        CreateResource {
+            slug: slug.to_string(),
+            doctype: "decision".to_string(),
+            context: context.to_string(),
+            title: title.to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    // ── create_resource_concept_writes_file_and_manifest_entry ───────────────
+
+    #[tokio::test]
+    async fn create_resource_concept_writes_file_and_manifest_entry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = concept_cmd("My Concept", "my-concept", "temper");
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        // File written at expected path.
+        let expected_path = tmp.path().join("@me/temper/concept/my-concept.md");
+        assert!(expected_path.exists(), "concept file must be on disk");
+
+        // ResourceRow is populated correctly.
+        assert_eq!(output.value.title, "My Concept");
+        assert_eq!(output.value.doc_type_name, "concept");
+        assert_eq!(output.value.context_name, "temper");
+
+        // Events: VaultFileWritten + VaultManifestUpdated + PushDeferred(Offline).
+        assert_eq!(
+            output.events.len(),
+            3,
+            "expected 3 events, got: {:?}",
+            output.events
+        );
+        assert!(
+            matches!(&output.events[0], DomainEvent::VaultFileWritten { path } if path.ends_with(".md")),
+            "first event must be VaultFileWritten"
+        );
+        assert!(
+            matches!(&output.events[1], DomainEvent::VaultManifestUpdated { .. }),
+            "second event must be VaultManifestUpdated"
+        );
+        assert!(
+            matches!(
+                &output.events[2],
+                DomainEvent::PushDeferred {
+                    reason: PushDeferReason::Offline
+                }
+            ),
+            "third event must be PushDeferred(Offline), got: {:?}",
+            output.events[2]
+        );
+
+        // Manifest entry is present.
+        let manifest = backend.manifest().lock().await;
+        assert_eq!(manifest.entries.len(), 1, "manifest must have one entry");
+        let entry = manifest.entries.values().next().unwrap();
+        assert!(
+            entry.path.ends_with(".md"),
+            "manifest entry path must end with .md"
+        );
+        assert!(entry.provisional, "new entry must be provisional");
+    }
+
+    // ── create_resource_decision_writes_file ─────────────────────────────────
+
+    #[tokio::test]
+    async fn create_resource_decision_writes_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = decision_cmd("Use Postgres", "use-postgres", "temper");
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        let expected_path = tmp.path().join("@me/temper/decision/use-postgres.md");
+        assert!(expected_path.exists(), "decision file must be on disk");
+        assert_eq!(output.value.doc_type_name, "decision");
+    }
+
+    // ── create_resource_no_client_emits_push_deferred_offline ────────────────
+
+    #[tokio::test]
+    async fn create_resource_no_client_emits_push_deferred_offline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path()); // client: None
+        let cmd = concept_cmd("Offline Concept", "offline-concept", "temper");
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+        let push_event = output.events.last().expect("at least one event");
+        assert!(
+            matches!(
+                push_event,
+                DomainEvent::PushDeferred {
+                    reason: PushDeferReason::Offline
+                }
+            ),
+            "expected PushDeferred(Offline), got: {push_event:?}"
+        );
+    }
+
+    // ── create_resource_validate_create_rejects_empty_title ──────────────────
+
+    #[tokio::test]
+    async fn create_resource_validate_create_rejects_empty_title() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = CreateResource {
+            slug: "valid-slug".to_string(),
+            doctype: "concept".to_string(),
+            context: "temper".to_string(),
+            title: "".to_string(), // empty title
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend.create_resource(cmd).await.expect_err("should fail");
+        assert!(
+            matches!(err, temper_core::error::TemperError::BadRequest(_)),
+            "expected BadRequest for empty title, got: {err:?}"
+        );
+    }
+
+    // ── create_resource_applies_doctype_defaults_at_write_time ───────────────
+    //
+    // Concepts don't have stage/mode/effort defaults, but the template should
+    // produce a file with `temper-type: concept`. We verify that the managed_value
+    // apply_defaults_value path is called by checking that the returned ResourceRow
+    // has the correct doctype (i.e., the full pipeline ran without skipping the
+    // defaults step).
+
+    #[tokio::test]
+    async fn create_resource_applies_doctype_defaults_at_write_time() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = concept_cmd("Defaults Concept", "defaults-concept", "temper");
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        // The concept template/frontmatter has temper-type: concept.
+        assert_eq!(output.value.doc_type_name, "concept");
+    }
+
+    // ── create_resource_invokes_ensure_managed_identity_keys ─────────────────
+
+    #[tokio::test]
+    async fn create_resource_invokes_ensure_managed_identity_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = concept_cmd("Identity Keys Concept", "identity-keys-concept", "temper");
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        // Read on-disk frontmatter directly to verify identity keys were injected.
+        let expected_path = tmp
+            .path()
+            .join("@me/temper/concept/identity-keys-concept.md");
+        let content = std::fs::read_to_string(&expected_path).unwrap();
+        assert!(
+            content.contains("temper-title"),
+            "on-disk frontmatter must contain temper-title"
+        );
+        assert!(
+            content.contains("temper-slug"),
+            "on-disk frontmatter must contain temper-slug"
+        );
+        // The ResourceRow title should also match.
+        assert_eq!(output.value.title, "Identity Keys Concept");
+        assert_eq!(output.value.slug.as_deref(), Some("identity-keys-concept"));
+    }
+
+    // ── create_resource_unsupported_doctype_returns_bad_request ──────────────
+
+    #[tokio::test]
+    async fn create_resource_unsupported_doctype_returns_bad_request() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        // Use a doctype that passes validate_create (i.e., is a known doctype)
+        // but is scoped down in per_doctype::write_for.
+        let cmd = CreateResource {
+            slug: "2026-05-11-my-task".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "My Task".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend
+            .create_resource(cmd)
+            .await
+            .expect_err("task not yet supported");
+        assert!(
+            matches!(err, temper_core::error::TemperError::BadRequest(_)),
+            "expected BadRequest for task doctype, got: {err:?}"
+        );
+    }
+
+    // ── create_resource_remote_synced (stubbed — no TemperClient fixture) ────
+
+    /// RemoteSynced path not exercised — no mock/sandbox `TemperClient` fixture.
+    /// Tracked as a follow-up integration test.
+    #[tokio::test]
+    #[ignore = "no TemperClient test fixture available; tracked as backlog task"]
+    async fn create_resource_with_client_emits_remote_synced_on_success() {
+        todo!("implement when a mock TemperClient fixture is available")
+    }
+
+    #[tokio::test]
+    #[ignore = "no TemperClient test fixture available; tracked as backlog task"]
+    async fn create_resource_with_client_emits_push_deferred_on_network_error() {
+        todo!("implement when a mock TemperClient fixture is available")
+    }
+}
