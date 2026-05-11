@@ -11,6 +11,7 @@ fn test_check_valid_vault() {
         contexts: vec!["default".to_string()],
         subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
+        profile_slug: None,
     };
 
     let result = temper_cli::commands::check::run(&config, false);

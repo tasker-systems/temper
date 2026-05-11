@@ -20,20 +20,18 @@ use temper_core::types::{
 };
 use temper_core::vault::Vault;
 
-/// Build the standard "vault file missing for tracked entry" error, with
-/// two-pronged recovery guidance (explicit delete vs. resync from server).
+/// Build the "vault file vanished during sync" error.
 ///
-/// `rel_path` is the manifest entry's relative path
-/// (e.g. `task/2026-04-29-some-slug.md`). The slug is derived from the
-/// filename stem so the user can paste it directly into
-/// `temper resource delete`.
+/// After the `LocallyMissing` classifier change (Tasks 9-11), the
+/// rehash-time-missing case is reclassified as `LocallyMissing` and
+/// routed to the pull set. This helper now covers only the residual
+/// race case: the file was present at scan-time but vanished before
+/// push could read it. Recovery is `temper sync run` either way —
+/// the next sync cycle reclassifies the missing entry and pulls it
+/// back from the server.
 fn vault_file_missing_err(rel_path: &str) -> TemperError {
-    let slug = std::path::Path::new(rel_path)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(rel_path);
     TemperError::NotFound(format!(
-        "vault file missing for {slug} at {rel_path}\n\nEither:\n  • To delete the resource, run: temper resource delete {slug}\n  • To recover the file from the server, run: temper sync refresh"
+        "vault file vanished during sync at {rel_path}; run `temper sync run` to recover"
     ))
 }
 
@@ -203,21 +201,22 @@ pub struct SyncResult {
 // Owner sigil resolution
 // ---------------------------------------------------------------------------
 
-/// Resolve the API's `owner_handle` shorthand to the canonical owner sigil
-/// used in vault paths and `kb_resource_uri()`.
+/// Resolve the API's `owner_handle` to the canonical local-vault owner
+/// sigil. Design intent (clarified 2026-05-10): `@me` is canonical for
+/// the user's own private work. Both the API's `@me` shorthand and an
+/// explicit `@<profile.slug>` for the same user normalize to `@me`.
+/// Other users' personal handles (`@<other-slug>`) and team handles
+/// (`+<team-slug>`) pass through unchanged.
 ///
-/// The API returns the literal string `"@me"` for the requester's own
-/// resources (see `OWNER_HANDLE_EXPR` in `resource_service.rs`). The vault
-/// layout and the server's `kb_resource_uri()` SQL function use
-/// `@<profile.slug>` as the canonical owner segment. This helper closes the
-/// gap: callers pass `resource.owner_handle` plus the requester's own
-/// `profile.slug` (without leading `@`) and get back the canonical sigil.
-///
-/// Team handles (`+<team-slug>`) are already canonical and pass through
-/// unchanged; so do other users' personal handles.
+/// This reverses the direction PR #72 introduced. The
+/// `owners_equivalent` helper in this module remains in place to
+/// tolerate frontmatter and manifest paths that still carry the
+/// old `@<profile.slug>` form (legacy files from the PR #70/72
+/// window).
 pub fn resolve_owner_for_frontmatter(handle: &str, profile_slug: &str) -> String {
-    if handle == "@me" {
-        format!("@{profile_slug}")
+    let own_slug_handle = format!("@{profile_slug}");
+    if handle == "@me" || handle == own_slug_handle {
+        "@me".to_string()
     } else {
         handle.to_string()
     }
@@ -246,6 +245,9 @@ pub fn resolve_owner_for_frontmatter(handle: &str, profile_slug: &str) -> String
 /// setup. Rely on the e2e layer for full coverage.
 pub struct OwnerResolver<'c> {
     client: &'c temper_client::TemperClient,
+    /// Cached `profile.slug` (without leading `@`). Used to recognize
+    /// own-user explicit handles like `@<profile.slug>` and normalize
+    /// them to `@me`.
     canonical: Option<String>,
 }
 
@@ -262,9 +264,12 @@ impl<'c> OwnerResolver<'c> {
     /// `@me` lookups return the cached value. Non-`@me` handles pass through
     /// without touching the client.
     pub async fn resolve(&mut self, handle: &str) -> crate::error::Result<String> {
-        if handle != "@me" {
-            return Ok(handle.to_string());
+        // Quick path: anything that's already not own-user passes through.
+        if handle == "@me" {
+            return Ok("@me".to_string());
         }
+        // For anything else, fetch the profile so we can compare against
+        // the user's explicit slug.
         if self.canonical.is_none() {
             let profile = self
                 .client
@@ -272,9 +277,14 @@ impl<'c> OwnerResolver<'c> {
                 .get()
                 .await
                 .map_err(crate::commands::client_err)?;
-            self.canonical = Some(format!("@{}", profile.slug));
+            self.canonical = Some(profile.slug);
         }
-        Ok(self.canonical.as_deref().unwrap().to_string())
+        let own_slug = self.canonical.as_deref().unwrap();
+        if handle.strip_prefix('@') == Some(own_slug) {
+            Ok("@me".to_string())
+        } else {
+            Ok(handle.to_string())
+        }
     }
 }
 
@@ -361,14 +371,15 @@ pub fn normalize_all_entries(
 
         let abs_path = vault_root.join(&rel_path);
 
-        // Missing file: mirror rehash_manifest's prior behavior.
+        // Missing file: mark as LocallyMissing so the orchestration
+        // pull set picks it up. Preserve hashes — the server-diff path
+        // uses them to confirm we're not sending stale partial state.
         if !abs_path.exists() {
             report.missing += 1;
             if let Some(entry) = manifest.entries.get_mut(id) {
-                if entry.state != ManifestEntryState::LocalModified {
-                    entry.state = ManifestEntryState::LocalModified;
+                if entry.state != ManifestEntryState::LocallyMissing {
+                    entry.state = ManifestEntryState::LocallyMissing;
                 }
-                entry.body_hash = String::new();
                 entry.mtime_secs = None;
             }
             crate::manifest_io::save_manifest(temper_dir, manifest)?;
@@ -467,9 +478,12 @@ pub fn rehash_manifest(manifest: &mut Manifest, vault_root: &Path) -> Result<usi
     for (_id, entry) in manifest.entries.iter_mut() {
         let file_path = vault_root.join(&entry.path);
         if !file_path.exists() {
-            if entry.state != ManifestEntryState::LocalModified {
-                entry.state = ManifestEntryState::LocalModified;
-                entry.body_hash = String::new();
+            if entry.state != ManifestEntryState::LocallyMissing {
+                entry.state = ManifestEntryState::LocallyMissing;
+                // Body / managed / open hashes are PRESERVED here — the
+                // server-side diff path uses them to confirm we're not
+                // sending stale partial state. mtime is cleared because
+                // the file no longer exists.
                 entry.mtime_secs = None;
                 changed += 1;
             }
@@ -773,6 +787,95 @@ pub fn scan_vault_for_untracked(
 // Orchestration (async, uses client + manifest)
 // ---------------------------------------------------------------------------
 
+/// Patch a freshly-returned sync diff so `LocallyMissing` manifest entries
+/// are routed through the pull set rather than the push set.
+///
+/// Why this exists: the server's diff sees only the wire-shaped manifest
+/// (hashes + URIs). It has no notion of "the local file vanished" —
+/// rehash/normalize mark that as `ManifestEntryState::LocallyMissing` and
+/// preserve the prior hashes intentionally (so we don't corrupt server
+/// state with stale partials). Without this step the orchestrator would
+/// either push-and-fail (if the entry happened to be in `to_push` because
+/// of meta drift) or silently drop the entry (if hashes match), leaving
+/// the user's vault permanently short a file.
+///
+/// Two actions, both bounded by the set of `LocallyMissing` entry IDs:
+///   - drop any `to_push` items for those IDs (push would error out
+///     reading the missing file),
+///   - synthesize a `SyncPullItem` for any that aren't already in
+///     `to_pull`, using the manifest path to build the canonical URI.
+///
+/// The pull primitive (`pull_one_resource`) handles the body fetch +
+/// file-write + manifest update; we only enqueue the work here.
+fn route_locally_missing_to_pull(diff: &mut SyncStatusResponse, manifest: &Manifest) {
+    let locally_missing_ids: std::collections::HashSet<ResourceId> = manifest
+        .entries
+        .iter()
+        .filter_map(|(id, entry)| {
+            if entry.state == ManifestEntryState::LocallyMissing {
+                Some(*id)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if locally_missing_ids.is_empty() {
+        return;
+    }
+
+    // (a) Strip LocallyMissing entries out of the push set.
+    diff.to_push.retain(|item| {
+        item.resource_id
+            .map(|id| !locally_missing_ids.contains(&id))
+            .unwrap_or(true)
+    });
+
+    // (b) Synthesize pull items for any LocallyMissing entry not already
+    //     in to_pull. Skip entries whose manifest path can't be parsed —
+    //     a malformed path is a sync data-integrity issue separate from
+    //     missing-file recovery.
+    let already_in_pull: std::collections::HashSet<ResourceId> =
+        diff.to_pull.iter().map(|p| p.resource_id).collect();
+
+    for id in &locally_missing_ids {
+        if already_in_pull.contains(id) {
+            continue;
+        }
+        let Some(entry) = manifest.entries.get(id) else {
+            continue;
+        };
+        let Some(parsed) = Vault::parse_rel(&entry.path) else {
+            tracing::warn!(
+                path = %entry.path,
+                resource_id = %Uuid::from(*id),
+                "LocallyMissing entry has unparseable manifest path; skipping pull recovery"
+            );
+            continue;
+        };
+        let uri = Vault::canonical_uri(
+            parsed.owner,
+            parsed.context,
+            parsed.doc_type,
+            &Uuid::from(*id).to_string(),
+        );
+        diff.to_pull.push(SyncPullItem {
+            resource_id: *id,
+            uri,
+            // `pull_one_resource` writes the server's body_hash back into
+            // the manifest regardless of what we send here; the field is
+            // load-bearing for the wire type, not the recovery logic.
+            content_hash: entry.remote_body_hash.clone(),
+            kind: SyncItemKind::Body,
+        });
+        tracing::info!(
+            path = %entry.path,
+            resource_id = %Uuid::from(*id),
+            "LocallyMissing entry routed to pull recovery"
+        );
+    }
+}
+
 /// Run the full sync orchestration.
 ///
 /// Called from `sync_cmd.rs` with a single tokio runtime. The command handles
@@ -799,6 +902,20 @@ pub async fn sync_orchestration(
         .status(&request)
         .await
         .map_err(crate::commands::client_err)?;
+
+    // Step 3b: Route LocallyMissing entries to the pull set.
+    //
+    // The server-side diff doesn't know about client-side
+    // `ManifestEntryState::LocallyMissing` — it sees the preserved hashes
+    // and reports no drift. So we patch the diff after it returns:
+    //   (a) drop any to_push items whose manifest entry is LocallyMissing
+    //       (the file isn't on disk; pushing would fail with
+    //       `vault_file_missing_err`),
+    //   (b) ensure each LocallyMissing entry appears in to_pull as a
+    //       synthesized SyncPullItem so the existing pull primitive
+    //       refetches the body and restores the file.
+    let mut diff = diff;
+    route_locally_missing_to_pull(&mut diff, manifest);
 
     let push_count = diff.to_push.len();
     let pull_count = diff.to_pull.len();
@@ -2596,8 +2713,11 @@ mod tests {
 
         let id = ResourceId::from(Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap());
         let entry = manifest.entries.get(&id).unwrap();
-        assert_eq!(entry.state, ManifestEntryState::LocalModified);
-        assert!(entry.body_hash.is_empty());
+        assert_eq!(entry.state, ManifestEntryState::LocallyMissing);
+        assert_eq!(
+            entry.body_hash, "oldhash",
+            "body_hash preserved so server-diff can compare"
+        );
     }
 
     #[test]
@@ -2677,6 +2797,49 @@ mod tests {
         assert!(!entry.open_hash.is_empty(), "open_hash should be populated");
         assert!(entry.managed_hash.starts_with("sha256:"));
         assert!(entry.open_hash.starts_with("sha256:"));
+    }
+
+    #[test]
+    fn rehash_marks_missing_file_as_locally_missing() {
+        let tmp = TempDir::new().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+
+        let mut manifest = Manifest::new("test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/missing.md".to_string(),
+                body_hash: "sha256:knownbody".to_string(),
+                remote_body_hash: "sha256:knownremote".to_string(),
+                managed_hash: "sha256:knownmanaged".to_string(),
+                open_hash: "sha256:knownopen".to_string(),
+                remote_managed_hash: "sha256:knownremmanaged".to_string(),
+                remote_open_hash: "sha256:knownremopen".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: Some(1_700_000_000),
+                provisional: false,
+                last_audit_id: None,
+            },
+        );
+
+        // The file does NOT exist under tmp.path() — that's the test.
+        let _ = rehash_manifest(&mut manifest, tmp.path()).unwrap();
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(
+            entry.state,
+            ManifestEntryState::LocallyMissing,
+            "missing file should reclassify as LocallyMissing"
+        );
+        assert_eq!(
+            entry.body_hash, "sha256:knownbody",
+            "body_hash should be preserved (not cleared) so server-diff has hash to compare"
+        );
+        assert_eq!(
+            entry.managed_hash, "sha256:knownmanaged",
+            "managed_hash should also be preserved"
+        );
     }
 
     #[test]
@@ -3278,27 +3441,34 @@ mod tests {
     // --- resolve_owner_for_frontmatter ---
 
     #[test]
-    fn resolve_owner_for_frontmatter_resolves_at_me() {
-        assert_eq!(
-            resolve_owner_for_frontmatter("@me", "j-cole-taylor"),
-            "@j-cole-taylor"
-        );
+    fn resolve_owner_for_frontmatter_keeps_at_me_canonical() {
+        // Design intent: @me is the canonical local-vault owner for the
+        // user's own private work. Both the API's @me shorthand and an
+        // explicit @<profile.slug> for the same user normalize to @me.
+        // PR #72's reverse direction (@me → @<slug>) is reverted by
+        // this change.
+        let result = resolve_owner_for_frontmatter("@me", "j-cole-taylor");
+        assert_eq!(result, "@me");
+    }
+
+    #[test]
+    fn resolve_owner_for_frontmatter_normalizes_explicit_own_slug_to_at_me() {
+        // If the API ever returns the user's explicit slug instead of
+        // @me, normalize it back to @me to keep frontmatter consistent.
+        let result = resolve_owner_for_frontmatter("@j-cole-taylor", "j-cole-taylor");
+        assert_eq!(result, "@me");
     }
 
     #[test]
     fn resolve_owner_for_frontmatter_passes_through_team_handle() {
-        assert_eq!(
-            resolve_owner_for_frontmatter("+platform-eng", "j-cole-taylor"),
-            "+platform-eng"
-        );
+        let result = resolve_owner_for_frontmatter("+temper-team", "j-cole-taylor");
+        assert_eq!(result, "+temper-team");
     }
 
     #[test]
     fn resolve_owner_for_frontmatter_passes_through_other_user() {
-        assert_eq!(
-            resolve_owner_for_frontmatter("@some-other-user", "j-cole-taylor"),
-            "@some-other-user"
-        );
+        let result = resolve_owner_for_frontmatter("@someone-else", "j-cole-taylor");
+        assert_eq!(result, "@someone-else");
     }
 
     // --- preflight_ownership_check ---
@@ -3791,8 +3961,40 @@ mod tests {
         assert_eq!(report.blocked, 0);
 
         let entry = manifest.entries.get(&id).unwrap();
-        assert_eq!(entry.state, ManifestEntryState::LocalModified);
-        assert!(entry.body_hash.is_empty());
+        assert_eq!(entry.state, ManifestEntryState::LocallyMissing);
+    }
+
+    #[test]
+    fn normalize_marks_missing_file_as_locally_missing() {
+        let tmp = TempDir::new().unwrap();
+        let temper_dir = tmp.path().join(".temper");
+        fs::create_dir_all(&temper_dir).unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+
+        let mut manifest = Manifest::new("test".to_string());
+        manifest.entries.insert(
+            id,
+            ManifestEntry {
+                path: "@me/temper/task/missing.md".to_string(),
+                body_hash: "sha256:keepme".to_string(),
+                remote_body_hash: "sha256:remote".to_string(),
+                managed_hash: "sha256:keepmanaged".to_string(),
+                open_hash: "sha256:keepopen".to_string(),
+                remote_managed_hash: "sha256:rmanaged".to_string(),
+                remote_open_hash: "sha256:ropen".to_string(),
+                synced_at: Utc::now(),
+                state: ManifestEntryState::Clean,
+                mtime_secs: Some(1_700_000_000),
+                provisional: false,
+                last_audit_id: None,
+            },
+        );
+
+        let _report = normalize_all_entries(&mut manifest, tmp.path(), &temper_dir, None).unwrap();
+
+        let entry = manifest.entries.get(&id).unwrap();
+        assert_eq!(entry.state, ManifestEntryState::LocallyMissing);
+        assert_eq!(entry.body_hash, "sha256:keepme", "body_hash preserved");
     }
 
     #[test]
@@ -4144,24 +4346,24 @@ mod tests {
     }
 
     #[test]
-    fn vault_file_missing_err_includes_both_recovery_hints() {
-        let err = super::vault_file_missing_err("task/2026-04-29-some-slug.md");
-        let msg = format!("{err}");
+    fn vault_file_missing_err_points_to_sync_run() {
+        let err = super::vault_file_missing_err("@me/temper/task/foo.md");
+        let msg = err.to_string();
         assert!(
-            msg.contains("2026-04-29-some-slug"),
-            "expected derived slug in message, got: {msg}"
+            msg.contains("vault file vanished during sync"),
+            "expected new wording, got: {msg}"
         );
         assert!(
-            msg.contains("temper resource delete"),
-            "expected delete hint, got: {msg}"
+            msg.contains("temper sync run"),
+            "expected recovery to point at sync run, got: {msg}"
         );
         assert!(
-            msg.contains("temper sync refresh"),
-            "expected refresh hint, got: {msg}"
+            !msg.contains("temper sync refresh"),
+            "old wording referenced refresh which doesn't pull; should be removed"
         );
         assert!(
-            msg.contains("task/2026-04-29-some-slug.md"),
-            "expected original path in message, got: {msg}"
+            !msg.contains("temper resource delete"),
+            "old wording suggested delete; ambiguous and removed"
         );
     }
 }

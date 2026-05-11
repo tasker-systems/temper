@@ -572,11 +572,11 @@ pub async fn update(
     }
 
     // 2. Merge managed_meta + open_meta into kb_resource_manifests.
-    //    `resource_service::create` does not create a manifest row (only
-    //    `ingest_service::create_resource_with_manifest` does), so resources
-    //    born via POST /api/resources have no manifest until their first
-    //    PATCH or ingest. The ON CONFLICT upsert below is load-bearing for
-    //    that create-then-patch flow; do not simplify to a plain UPDATE.
+    //    Some legacy resources predate Phase 3b's unification of create paths
+    //    through `ingest_service::create_resource_with_manifest` and may have
+    //    no manifest row. The ON CONFLICT upsert below is load-bearing for
+    //    those rows; do not simplify to a plain UPDATE without first
+    //    confirming every active resource has a manifest.
     // Enter the manifest-rewrite block whenever ANY field that affects the
     // canonical managed_meta JSONB is present. A title/slug-only PATCH still
     // needs to refresh the JSONB so its temper-title / temper-slug keys (and

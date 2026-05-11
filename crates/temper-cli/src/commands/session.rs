@@ -321,9 +321,16 @@ pub fn show(
             }
 
             if matches.is_empty() {
-                return Err(crate::error::TemperError::Vault(format!(
-                    "session not found: {slug_or_suffix}"
-                )));
+                // Local lookup miss in local mode: fall back to the API.
+                // The vault stays untouched — recovery to disk happens via
+                // `temper sync run`.
+                return super::resource::show_via_api_fallback(
+                    config,
+                    "session",
+                    slug_or_suffix,
+                    context,
+                    format,
+                );
             }
 
             matches.sort_by(|a, b| b.0.date.cmp(&a.0.date));
@@ -499,6 +506,7 @@ mod tests {
             contexts: vec!["temper".to_string(), "default".to_string()],
             subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/test-skill"),
+            profile_slug: None,
         };
         (tmp, config)
     }
@@ -544,13 +552,22 @@ mod tests {
     }
 
     #[test]
-    fn show_not_found_returns_error() {
+    fn show_not_found_falls_back_to_api() {
+        // Post-Task-7: a local lookup miss in local mode triggers the API
+        // fallback rather than failing with "session not found". In the
+        // unit-test env (no reachable server, no TEMPER_TOKEN), the
+        // fallback errors with an API/network error — not the old
+        // local-only message. The test asserts the new contract: an
+        // error is still returned, but it's *not* the legacy text.
         let (_tmp, config) = test_vault();
         write_session(&config, "temper", "2026-04-04", "some-session", "body");
         let result = show(&config, "nonexistent", Some("temper"), "text");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("session not found"), "got: {err}");
+        assert!(
+            !err.contains("session not found: nonexistent"),
+            "fallback should replace the legacy local-only message; got: {err}"
+        );
     }
 
     #[test]

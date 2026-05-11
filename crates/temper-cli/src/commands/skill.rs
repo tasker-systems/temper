@@ -483,6 +483,7 @@ mod tests {
             contexts: vec!["alpha".to_string(), "beta".to_string()],
             subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/test-skill-output"),
+            profile_slug: None,
         }
     }
 

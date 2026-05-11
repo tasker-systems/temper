@@ -297,7 +297,10 @@ async fn pull_one_resource_with_manifest_but_untracked_id_writes_canonical_layou
 ) {
     let app = common::setup(pool).await;
 
-    let profile = app
+    // Profile fetched (and dropped) to keep the pre-flight error path in the
+    // test footprint — own resources canonicalize to @me/, so we no longer
+    // need profile.slug to build the expected path.
+    let _profile = app
         .client
         .profile()
         .get()
@@ -360,12 +363,15 @@ async fn pull_one_resource_with_manifest_but_untracked_id_writes_canonical_layou
         "manifest-Some + untracked id must take the NewlyTracked branch, not Snapshot"
     );
 
-    // Canonical path: @{owner}/{context}/{doc_type}/{slug}.md
-    let expected_rel = format!("@{}/first-sync/research/first-sync-test.md", profile.slug);
+    // Canonical path for own resources: @me/{context}/{doc_type}/{slug}.md.
+    // The 2026-05-10 reversal (plan task 12) makes @me canonical for own
+    // private work; explicit @<profile.slug>/ is reserved for legacy files
+    // from the PR #70/72 window and for cross-user/team paths.
+    let expected_rel = "@me/first-sync/research/first-sync-test.md".to_string();
     let expected_abs = app.vault_dir.path().join(&expected_rel);
     assert_eq!(
         result.path, expected_abs,
-        "untracked-id pull must land at canonical layout, not <vault_root>/<uuid>.md"
+        "untracked-id own-resource pull must land at @me/..., not <vault_root>/<uuid>.md"
     );
 
     // The orphan UUID file must NOT have been written.
@@ -431,11 +437,13 @@ async fn pull_one_resource_with_manifest_but_untracked_id_writes_canonical_layou
 /// (docs/superpowers/specs/2026-05-08-ownership-bug-warning-design.md).
 ///
 /// After a NewlyTracked pull, the file's frontmatter must record the
-/// canonical `@<profile.slug>` owner sigil (not the API's `@me` shorthand)
-/// AND `preflight_ownership_check` must report no mismatches when called
-/// with the requester's profile slug. Together these prove the write side
-/// (build_frontmatter_from_resource) and the read side (preflight) agree
-/// on the canonical owner.
+/// canonical `@me` owner sigil for the user's own private work (NOT an
+/// explicit `@<profile.slug>` — that direction was reverted on
+/// 2026-05-10; see plan task 12). `preflight_ownership_check` must
+/// report no mismatches when called with the requester's profile slug.
+/// Together these prove the write side (build_frontmatter_from_resource)
+/// and the read side (preflight) agree that own resources canonicalize
+/// to `@me`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn pull_one_resource_newly_tracked_writes_canonical_owner_and_passes_preflight(
     pool: sqlx::PgPool,
@@ -496,21 +504,33 @@ async fn pull_one_resource_newly_tracked_writes_canonical_owner_and_passes_prefl
 
     assert_eq!(result.branch, PullBranch::NewlyTracked);
 
-    // Frontmatter must record the canonical @<profile.slug>, not @me.
-    let on_disk = std::fs::read_to_string(&result.path).expect("file written");
-    let canonical_owner_sq = format!("temper-owner: '@{}'", profile.slug);
-    let canonical_owner_dq = format!("temper-owner: \"@{}\"", profile.slug);
-    let canonical_owner_bare = format!("temper-owner: @{}", profile.slug);
-    assert!(
-        on_disk.contains(&canonical_owner_sq)
-            || on_disk.contains(&canonical_owner_dq)
-            || on_disk.contains(&canonical_owner_bare),
-        "frontmatter must record canonical owner @{}; got:\n{on_disk}",
-        profile.slug
+    // The pulled file must land under @me/, not @<profile.slug>/. Own
+    // resources are canonical at @me/; @<other-slug>/ is reserved for
+    // other users / team-shared contexts.
+    let expected_rel = "@me/ownership-test/research/ownership-roundtrip.md";
+    let expected_abs = app.vault_dir.path().join(expected_rel);
+    assert_eq!(
+        result.path,
+        expected_abs,
+        "newly-tracked own-resource pull must land at @me/...; got {}",
+        result.path.display()
     );
+
+    // Frontmatter must record @me (the canonical local-vault owner for
+    // own private work), not the explicit @<profile.slug>.
+    let on_disk = std::fs::read_to_string(&result.path).expect("file written");
     assert!(
-        !on_disk.contains("temper-owner: '@me'") && !on_disk.contains("temper-owner: \"@me\""),
-        "frontmatter must NOT contain literal @me shorthand; got:\n{on_disk}"
+        on_disk.contains("temper-owner: '@me'")
+            || on_disk.contains("temper-owner: \"@me\"")
+            || on_disk.contains("temper-owner: @me"),
+        "frontmatter must record canonical owner @me; got:\n{on_disk}"
+    );
+    let explicit_sq = format!("temper-owner: '@{}'", profile.slug);
+    let explicit_dq = format!("temper-owner: \"@{}\"", profile.slug);
+    assert!(
+        !on_disk.contains(&explicit_sq) && !on_disk.contains(&explicit_dq),
+        "frontmatter must NOT record explicit @{} for own resource; got:\n{on_disk}",
+        profile.slug
     );
 
     // Preflight must accept the round-trip cleanly.

@@ -1239,6 +1239,63 @@ created: 2026-03-23
     }
 
     #[test]
+    fn local_mode_create_writes_own_resource_under_at_me() {
+        // Regression pin: a `temper resource create` (or any equivalent
+        // local-mode create primitive) must write own-resource files under
+        // `@me/<ctx>/<doctype>/...`, regardless of whether the user's
+        // profile.slug is configured.
+        //
+        // PR #70 / PR #72 broke this by canonicalizing own-resource pulls to
+        // `@<profile.slug>/...`. Task 12 reversed the pull path; Task 13's
+        // B.2 sibling threaded `owner` through the vault-path helpers so
+        // callers can pass an explicit handle. The invariant this test pins
+        // is the **path shape**: today `build_vault_path` hardcodes `@me`
+        // for the unscoped helper, and `Config::owner_for_context` falls back
+        // to `@me` when no subscription is configured for the context. Either
+        // way, the file must land under `@me/`.
+        //
+        // The assert below is on the resulting `PathBuf`, not on the
+        // implementation strategy — so a future refactor that switches from
+        // the hardcoded stub to a `Config::owner_for_context(ctx)` lookup
+        // for own contexts stays green.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let resource = test_resource_row();
+
+        let vault_path = write_vault_file_and_register(
+            tmp.path(),
+            "@me",
+            "temper",
+            "research",
+            "my-doc",
+            &resource,
+            "# Body\n",
+            None,
+            None,
+        )
+        .expect("write_vault_file_and_register should succeed");
+
+        let expected_prefix = tmp.path().join("@me");
+        assert!(
+            vault_path.starts_with(&expected_prefix),
+            "own-resource create must land under {}/, got {}",
+            expected_prefix.display(),
+            vault_path.display(),
+        );
+        // Belt-and-braces: ensure we never accidentally regressed back to
+        // emitting an `@<some-slug>/` directory for own resources.
+        let rel = vault_path.strip_prefix(tmp.path()).unwrap();
+        let first_segment = rel
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .expect("vault path must have an owner segment");
+        assert_eq!(
+            first_segment, "@me",
+            "first vault path segment must be `@me` for own resources, got `{first_segment}`",
+        );
+    }
+
+    #[test]
     fn build_frontmatter_from_resource_passes_team_handle_through() {
         let resource = test_resource_row();
 

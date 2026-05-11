@@ -22,6 +22,7 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
         contexts: vec!["myapp".to_string()],
         subscriptions: Vec::new(),
         skill_output: dir.path().join("temper.md"),
+        profile_slug: None,
     }
 }
 
@@ -39,8 +40,8 @@ fn rejects_invalid_doctype() {
     let err = result.expect_err("invalid doctype must error before the API call");
     let msg = format!("{err}");
     assert!(
-        msg.contains("invalid resource type"),
-        "expected validate_doc_type error, got: {msg}"
+        msg.contains("unknown doctype") && msg.contains("widget"),
+        "expected DocType::from_str rejection, got: {msg}"
     );
 }
 

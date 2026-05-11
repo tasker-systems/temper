@@ -169,11 +169,16 @@ pub fn build_runtime_and_client() -> Result<(tokio::runtime::Runtime, temper_cli
 pub async fn ensure_profile(
     client: &temper_client::TemperClient,
 ) -> Result<temper_core::types::Profile> {
-    client
+    let profile = client
         .profile()
         .get()
         .await
-        .map_err(|e| TemperError::Api(format!("profile pre-flight: {e}")))
+        .map_err(|e| TemperError::Api(format!("profile pre-flight: {e}")))?;
+    // Populate the process-wide profile-slug cache so `lookup::find_resource`
+    // can scan the legacy `@<profile.slug>/` directory without an explicit
+    // Config field set. Idempotent — subsequent calls are no-ops.
+    crate::lookup::set_cached_profile_slug(profile.slug.clone());
+    Ok(profile)
 }
 
 /// Require a device_id or return a clear auth error.
