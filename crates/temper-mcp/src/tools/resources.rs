@@ -489,6 +489,7 @@ pub async fn update_resource(
         body: input.content.map(BodyUpdate::new),
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
+        move_to: None,
         origin: Surface::Mcp,
     };
 
@@ -540,6 +541,7 @@ pub async fn update_resource_meta(
         body: None,
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
+        move_to: None,
         origin: Surface::Mcp,
     };
 

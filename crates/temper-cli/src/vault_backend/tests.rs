@@ -738,3 +738,477 @@ mod create_resource_tests {
         todo!("implement when a mock TemperClient fixture is available")
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// update_resource tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(all(test, feature = "test-db"))]
+mod update_resource_tests {
+    use std::fs;
+    use std::sync::Arc;
+
+    use chrono::Utc;
+    use tokio::sync::Mutex;
+    use uuid::Uuid;
+
+    use temper_core::operations::{
+        Backend, BodyUpdate, DomainEvent, MoveSpec, PushDeferReason, ResourceRef, Surface,
+        UpdateResource,
+    };
+    use temper_core::types::ids::ResourceId;
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::manifest::{Manifest, ManifestEntry, ManifestEntryState};
+
+    use crate::config::Config;
+    use crate::vault_backend::{VaultBackend, VaultBackendCtx};
+
+    fn make_config(vault_root: &std::path::Path) -> Arc<Config> {
+        Arc::new(Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: vault_root.join(".temper"),
+            contexts: vec!["temper".to_string(), "writing".to_string()],
+            subscriptions: vec![],
+            skill_output: vault_root.join("skills"),
+            profile_slug: None,
+        })
+    }
+
+    fn make_backend(vault_root: &std::path::Path, manifest: Manifest) -> VaultBackend {
+        let config = make_config(vault_root);
+        VaultBackend::new(VaultBackendCtx {
+            vault_root: vault_root.to_path_buf(),
+            manifest: Arc::new(Mutex::new(manifest)),
+            client: None,
+            owner: "@me".to_string(),
+            config,
+            surface: Surface::CliLocalVault,
+        })
+    }
+
+    fn make_manifest_entry(rel_path: &str) -> ManifestEntry {
+        ManifestEntry {
+            path: rel_path.to_string(),
+            body_hash: "sha256:abc".to_string(),
+            remote_body_hash: "sha256:abc".to_string(),
+            managed_hash: String::new(),
+            open_hash: String::new(),
+            remote_managed_hash: String::new(),
+            remote_open_hash: String::new(),
+            synced_at: Utc::now(),
+            state: ManifestEntryState::Clean,
+            mtime_secs: None,
+            provisional: false,
+            last_audit_id: None,
+        }
+    }
+
+    /// Write a minimal task `.md` file. Returns the resource id.
+    fn write_task_file(
+        path: &std::path::Path,
+        id: &ResourceId,
+        title: &str,
+        slug: &str,
+        stage: &str,
+        context: &str,
+        body: &str,
+    ) {
+        let content = format!(
+            "---\ntemper-id: \"{}\"\ntemper-type: task\ntemper-context: {}\ntemper-title: '{}'\ntemper-slug: {}\ntemper-stage: {}\n---\n\n{}\n",
+            **id, context, title, slug, stage, body
+        );
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(path, content).unwrap();
+    }
+
+    // ── update_resource_scalar_field_via_managed_meta ─────────────────────────
+
+    #[tokio::test]
+    async fn update_resource_scalar_field_via_managed_meta() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/foo.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(
+            &abs,
+            &id,
+            "Foo Task",
+            "foo",
+            "backlog",
+            "temper",
+            "Original body.",
+        );
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: None,
+            managed_meta: Some(ManagedMeta {
+                stage: Some("done".to_string()),
+                ..ManagedMeta::default()
+            }),
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.update_resource(cmd).await.expect("update ok");
+
+        // On-disk frontmatter must reflect the new stage.
+        let disk_content = fs::read_to_string(tmp.path().join(rel)).unwrap();
+        assert!(
+            disk_content.contains("temper-stage: done"),
+            "expected temper-stage: done in disk file, got:\n{disk_content}"
+        );
+        // Row reflects update.
+        assert_eq!(output.value.stage.as_deref(), Some("done"));
+        // Events: VaultFileWritten + VaultManifestUpdated + PushDeferred(Offline).
+        assert_eq!(
+            output.events.len(),
+            3,
+            "expected 3 events, got: {:?}",
+            output.events
+        );
+        assert!(
+            matches!(&output.events[0], DomainEvent::VaultFileWritten { .. }),
+            "first event must be VaultFileWritten"
+        );
+        assert!(
+            matches!(&output.events[1], DomainEvent::VaultManifestUpdated { .. }),
+            "second event must be VaultManifestUpdated"
+        );
+        assert!(
+            matches!(
+                &output.events[2],
+                DomainEvent::PushDeferred {
+                    reason: PushDeferReason::Offline
+                }
+            ),
+            "third event must be PushDeferred(Offline)"
+        );
+    }
+
+    // ── update_resource_open_meta_array_appends ───────────────────────────────
+
+    #[tokio::test]
+    async fn update_resource_open_meta_array_appends() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/array-task.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(
+            &abs,
+            &id,
+            "Array Task",
+            "array-task",
+            "backlog",
+            "temper",
+            "Body.",
+        );
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: None,
+            managed_meta: None,
+            open_meta: Some(serde_json::json!({"tags": ["new-tag"]})),
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        backend.update_resource(cmd).await.expect("update ok");
+
+        let disk_content = fs::read_to_string(tmp.path().join(rel)).unwrap();
+        assert!(
+            disk_content.contains("new-tag"),
+            "expected new-tag in disk file tags, got:\n{disk_content}"
+        );
+    }
+
+    // ── update_resource_body_only ─────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn update_resource_body_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/body-task.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(
+            &abs,
+            &id,
+            "Body Task",
+            "body-task",
+            "backlog",
+            "temper",
+            "Original body content.",
+        );
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: Some(BodyUpdate::new("Replaced body content.")),
+            managed_meta: None,
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        backend.update_resource(cmd).await.expect("update ok");
+
+        let disk_content = fs::read_to_string(tmp.path().join(rel)).unwrap();
+        assert!(
+            disk_content.contains("Replaced body content."),
+            "expected new body in disk file, got:\n{disk_content}"
+        );
+        assert!(
+            !disk_content.contains("Original body content."),
+            "old body must not remain, got:\n{disk_content}"
+        );
+    }
+
+    // ── update_resource_context_to_moves_file ─────────────────────────────────
+
+    #[tokio::test]
+    async fn update_resource_context_to_moves_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/foo.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(&abs, &id, "Foo Task", "foo", "backlog", "temper", "Body.");
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            move_to: Some(MoveSpec {
+                context_to: Some("writing".to_string()),
+                type_to: None,
+            }),
+            origin: Surface::CliLocalVault,
+        };
+
+        backend.update_resource(cmd).await.expect("update ok");
+
+        // File must be at new context path.
+        let new_path = tmp.path().join("@me/writing/task/foo.md");
+        assert!(new_path.exists(), "file must be at new context path");
+
+        // Old path must be gone.
+        assert!(
+            !tmp.path().join(rel).exists(),
+            "old file must be removed after context move"
+        );
+
+        // New file must contain updated temper-context.
+        let disk_content = fs::read_to_string(&new_path).unwrap();
+        assert!(
+            disk_content.contains("temper-context: writing"),
+            "temper-context must be updated in moved file, got:\n{disk_content}"
+        );
+    }
+
+    // ── update_resource_type_to_moves_file ───────────────────────────────────
+
+    #[tokio::test]
+    async fn update_resource_type_to_moves_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/bar.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(&abs, &id, "Bar Task", "bar", "backlog", "temper", "Body.");
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            move_to: Some(MoveSpec {
+                context_to: None,
+                type_to: Some("research".to_string()),
+            }),
+            origin: Surface::CliLocalVault,
+        };
+
+        backend.update_resource(cmd).await.expect("update ok");
+
+        // File must be at new type path.
+        let new_path = tmp.path().join("@me/temper/research/bar.md");
+        assert!(new_path.exists(), "file must be at new type path");
+
+        // Old path must be gone.
+        assert!(
+            !tmp.path().join(rel).exists(),
+            "old file must be removed after type move"
+        );
+
+        // New file must contain updated temper-type.
+        let disk_content = fs::read_to_string(&new_path).unwrap();
+        assert!(
+            disk_content.contains("temper-type: research"),
+            "temper-type must be updated in moved file, got:\n{disk_content}"
+        );
+    }
+
+    // ── update_resource_no_client_emits_push_deferred ─────────────────────────
+
+    #[tokio::test]
+    async fn update_resource_no_client_emits_push_deferred() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/deferred.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(
+            &abs,
+            &id,
+            "Deferred Task",
+            "deferred",
+            "backlog",
+            "temper",
+            "Body.",
+        );
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest); // client: None
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: None,
+            managed_meta: Some(ManagedMeta {
+                stage: Some("in-progress".to_string()),
+                ..ManagedMeta::default()
+            }),
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        let output = backend.update_resource(cmd).await.expect("update ok");
+        let push_event = output.events.last().expect("at least one event");
+        assert!(
+            matches!(
+                push_event,
+                DomainEvent::PushDeferred {
+                    reason: PushDeferReason::Offline
+                }
+            ),
+            "expected PushDeferred(Offline), got: {push_event:?}"
+        );
+    }
+
+    // ── update_resource_validate_update_rejects_invalid ──────────────────────
+
+    #[tokio::test]
+    async fn update_resource_validate_update_rejects_invalid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = Manifest::new("test-device".to_string());
+        let backend = make_backend(tmp.path(), manifest);
+
+        // Scoped ref with invalid slug (uppercase) must be caught by validate_update.
+        let cmd = UpdateResource {
+            resource: ResourceRef::Scoped {
+                owner: "@me".to_string(),
+                context: "temper".to_string(),
+                doctype: "task".to_string(),
+                slug: "INVALID_SLUG".to_string(),
+            },
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend.update_resource(cmd).await.expect_err("should fail");
+        assert!(
+            matches!(err, temper_core::error::TemperError::BadRequest(_)),
+            "expected BadRequest for invalid slug, got: {err:?}"
+        );
+    }
+
+    // ── update_resource_manifest_entry_updated_after_write ───────────────────
+
+    #[tokio::test]
+    async fn update_resource_manifest_entry_updated_after_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/manifest-check.md";
+        let abs = tmp.path().join(rel);
+
+        write_task_file(
+            &abs,
+            &id,
+            "Manifest Check",
+            "manifest-check",
+            "backlog",
+            "temper",
+            "Old body.",
+        );
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: Some(BodyUpdate::new("New body text.")),
+            managed_meta: None,
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        backend.update_resource(cmd).await.expect("update ok");
+
+        // Manifest entry state must advance to LocalModified.
+        let manifest = backend.manifest().lock().await;
+        let entry = manifest.entries.get(&id).expect("entry must remain");
+        assert!(
+            matches!(
+                entry.state,
+                temper_core::types::manifest::ManifestEntryState::LocalModified
+            ),
+            "manifest state must be LocalModified after write, got: {:?}",
+            entry.state
+        );
+        // Body hash must have been updated.
+        assert_ne!(
+            entry.body_hash, "sha256:abc",
+            "manifest body_hash must be updated from the initial placeholder"
+        );
+    }
+
+    // ── update_resource_with_client_emits_remote_synced (stubbed) ────────────
+
+    #[tokio::test]
+    #[ignore = "no TemperClient test fixture available; tracked as backlog task"]
+    async fn update_resource_with_client_emits_remote_synced_on_success() {
+        todo!("implement when a mock TemperClient fixture is available")
+    }
+}

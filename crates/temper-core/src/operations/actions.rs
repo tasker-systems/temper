@@ -592,6 +592,7 @@ mod tests {
             body: None,
             managed_meta: None,
             open_meta: None,
+            move_to: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_update(&cmd).is_ok());
@@ -604,6 +605,7 @@ mod tests {
             body: None,
             managed_meta: None,
             open_meta: None,
+            move_to: None,
             origin: super::super::Surface::CliCloud,
         };
         assert!(matches!(

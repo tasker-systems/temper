@@ -169,16 +169,6 @@ pub(crate) fn cmd_to_ingest_payload(
 /// `temper_core::operations::validate_open_meta_keys`; an unknown key surfaces
 /// as `TemperError::BadRequest`.
 ///
-/// Callers land in Task 8 (`update_resource`); remove `dead_code` suppression
-/// when that task lands.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "caller lands in Task 8 (VaultBackend::update_resource); \
-                  scaffolded now for Task 4"
-    )
-)]
 pub(crate) fn cmd_to_update_request(
     cmd: &UpdateResource,
     body_trio: Option<&BodyTrio>,
@@ -223,6 +213,164 @@ pub(crate) fn cmd_to_update_request(
         content_hash,
         chunks_packed,
     })
+}
+
+/// Apply scalar managed_meta updates and open_meta array appends from
+/// `UpdateResource` onto an in-memory `Frontmatter`, then compute the final
+/// filesystem path after any context/type move.
+///
+/// **Pure on the `Frontmatter` mutation** — does not perform any I/O.
+/// The move computation requires `vault_root` + `owner` to derive the new path.
+///
+/// Returns the **final** path the file should be written to (may equal
+/// `current_path` if no move was requested).
+///
+/// # Array semantics
+/// `open_meta` keys are resolved to their canonical underscore form via the
+/// `KNOWN_OPEN_FIELDS` registry. Each value in the supplied JSON array is
+/// **appended** to the existing frontmatter sequence (or creates a new one-element
+/// sequence when the key was previously absent). This matches the local-mode
+/// `commands/resource.rs` behavior lifted here.
+///
+/// # Move semantics
+/// When `cmd.move_to` carries `context_to` and/or `type_to`:
+/// - `temper-context` / `temper-type` are updated in frontmatter via
+///   `set_managed_field`.
+/// - The returned path is recomputed via `Vault::doc_type_dir` using the
+///   filename stem of `current_path` (slug) and the effective context/doctype
+///   after applying any move.
+pub(crate) fn apply_updates(
+    fm: &mut temper_core::frontmatter::Frontmatter,
+    cmd: &UpdateResource,
+    current_path: &Path,
+    vault_root: &Path,
+    owner: &str,
+    config: &crate::config::Config,
+    current_doctype: &str,
+    current_context: &str,
+) -> Result<PathBuf, temper_core::error::TemperError> {
+    use temper_core::vault::Vault;
+
+    // ── 1. Managed_meta scalar updates ──────────────────────────────────────
+    // Lift each Some-valued typed field onto the Frontmatter via set_managed_field.
+    // Title goes through as "temper-title"; all others follow the same pattern.
+    if let Some(mm) = cmd.managed_meta.as_ref() {
+        // typed scalar fields
+        macro_rules! set_if_some {
+            ($key:expr, $val:expr) => {
+                if let Some(v) = $val {
+                    fm.set_managed_field($key, serde_json::Value::String(v.clone()));
+                }
+            };
+        }
+        set_if_some!("temper-title", mm.title.as_ref());
+        set_if_some!("temper-stage", mm.stage.as_ref());
+        set_if_some!("temper-mode", mm.mode.as_ref());
+        set_if_some!("temper-effort", mm.effort.as_ref());
+        set_if_some!("temper-goal", mm.goal.as_ref());
+        set_if_some!("temper-branch", mm.branch.as_ref());
+        set_if_some!("temper-pr", mm.pr.as_ref());
+        set_if_some!("temper-status", mm.status.as_ref());
+        if let Some(seq) = mm.seq {
+            fm.set_managed_field("temper-seq", serde_json::Value::String(seq.to_string()));
+        }
+        // extras bucket: e.g. `date` on sessions
+        for (key, val) in &mm.extra {
+            if let Some(s) = val.as_str() {
+                fm.set_managed_field(key, serde_json::Value::String(s.to_string()));
+            }
+        }
+    }
+
+    // ── 2. Open_meta array appends ──────────────────────────────────────────
+    // The partial Value::Object carries hyphen-form keys (e.g. "relates-to").
+    // Normalize to canonical underscore form via the registry, then append.
+    if let Some(serde_json::Value::Object(open_obj)) = cmd.open_meta.as_ref() {
+        for (key, val) in open_obj {
+            // Normalize: lookup accepts both canonical and alias forms.
+            let canonical = temper_core::frontmatter::registry::lookup(key.as_str())
+                .map(|f| f.canonical)
+                .unwrap_or(key.as_str());
+
+            // Collect values: accept either a JSON string or a JSON array of strings.
+            let entries: Vec<String> = match val {
+                serde_json::Value::String(s) => vec![s.clone()],
+                serde_json::Value::Array(arr) => arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect(),
+                _ => continue,
+            };
+
+            let yaml_mapping = fm
+                .value_mut()
+                .as_mapping_mut()
+                .expect("Frontmatter invariant: value is a mapping");
+            let yaml_key = serde_yaml::Value::String(canonical.to_string());
+            for entry in entries {
+                let new_item = serde_yaml::Value::String(entry);
+                match yaml_mapping.get_mut(&yaml_key) {
+                    Some(serde_yaml::Value::Sequence(seq)) => seq.push(new_item),
+                    _ => {
+                        yaml_mapping.insert(
+                            yaml_key.clone(),
+                            serde_yaml::Value::Sequence(vec![new_item]),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 3. Compute final path after any context_to / type_to move ───────────
+    let vault_layout = Vault::new(vault_root);
+
+    // Determine effective context and doctype after any move.
+    let filename = current_path.file_name().ok_or_else(|| {
+        temper_core::error::TemperError::Vault("cannot determine filename".to_string())
+    })?;
+
+    // Apply context_to move first.
+    let effective_context;
+    let mut final_path = current_path.to_path_buf();
+    if let Some(new_ctx) = cmd.move_to.as_ref().and_then(|m| m.context_to.as_ref()) {
+        let new_owner = config.owner_for_context(new_ctx);
+        let effective_doctype = cmd
+            .move_to
+            .as_ref()
+            .and_then(|m| m.type_to.as_ref())
+            .map(String::as_str)
+            .unwrap_or(current_doctype);
+        let new_dir = vault_layout.doc_type_dir(&new_owner, new_ctx, effective_doctype);
+        final_path = new_dir.join(filename);
+        fm.set_managed_field("temper-context", serde_json::Value::String(new_ctx.clone()));
+        effective_context = new_ctx.clone();
+    } else {
+        effective_context = current_context.to_string();
+    }
+
+    // Apply type_to move (independently of context_to).
+    if let Some(new_type) = cmd.move_to.as_ref().and_then(|m| m.type_to.as_ref()) {
+        // Use the context that was just determined (after context_to, if any).
+        let target_owner = config.owner_for_context(&effective_context);
+        let new_dir = vault_layout.doc_type_dir(&target_owner, &effective_context, new_type);
+        // Filename from previous step (either original or context-moved path).
+        let fname = final_path.file_name().ok_or_else(|| {
+            temper_core::error::TemperError::Vault(
+                "cannot determine filename after context move".to_string(),
+            )
+        })?;
+        final_path = new_dir.join(fname);
+        fm.set_managed_field("temper-type", serde_json::Value::String(new_type.clone()));
+    }
+
+    // Use the owner that was stored on the backend (passed in) for the path
+    // when no context_to was requested. If context_to was requested, we already
+    // built the path with the new owner. For the owner parameter itself,
+    // just pass it through — it's only used in non-move path (already handled above).
+    let _ = owner; // used implicitly via config.owner_for_context above
+
+    Ok(final_path)
 }
 
 // Tests for resolve_resource_ref. These are unconditional (no embed dependency).
@@ -409,6 +557,7 @@ mod translator_tests {
             body: None,
             managed_meta: None,
             open_meta: None,
+            move_to: None,
             origin: Surface::CliLocalVault,
         }
     }

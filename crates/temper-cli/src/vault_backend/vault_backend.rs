@@ -297,6 +297,53 @@ impl VaultBackend {
         };
         DomainEvent::PushDeferred { reason }
     }
+
+    /// Push an updated vault file to the API as a tail action.
+    ///
+    /// Returns the `DomainEvent` to append: `RemoteSynced` on success,
+    /// `PushDeferred` otherwise. Never fails — push errors are classified
+    /// and returned as events rather than propagated.
+    async fn push_update(&self, cmd: &UpdateResource, resource_id: ResourceId) -> DomainEvent {
+        let Some(client) = self.client.as_ref() else {
+            return DomainEvent::PushDeferred {
+                reason: PushDeferReason::Offline,
+            };
+        };
+
+        // Compute body trio when body is present and embed feature is active.
+        let body_trio = if let Some(body_update) = cmd.body.as_ref() {
+            if body_update.content.is_empty() {
+                None
+            } else {
+                match crate::vault_backend::translators::prepare_body_trio(&body_update.content) {
+                    Ok(t) => Some(t),
+                    Err(_) => {
+                        return DomainEvent::PushDeferred {
+                            reason: PushDeferReason::Other,
+                        };
+                    }
+                }
+            }
+        } else {
+            None
+        };
+
+        let req =
+            match crate::vault_backend::translators::cmd_to_update_request(cmd, body_trio.as_ref())
+            {
+                Ok(r) => r,
+                Err(_) => {
+                    return DomainEvent::PushDeferred {
+                        reason: PushDeferReason::Other,
+                    };
+                }
+            };
+
+        match client.resources().update(*resource_id, &req).await {
+            Ok(_row) => DomainEvent::RemoteSynced { resource_id },
+            Err(e) => self.classify_push_error(&e),
+        }
+    }
 }
 
 #[async_trait]
@@ -430,9 +477,112 @@ impl Backend for VaultBackend {
 
     async fn update_resource(
         &self,
-        _cmd: UpdateResource,
+        cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        unimplemented!("wave1-4a Task 8 lands this")
+        use temper_core::operations::{validate_update, DomainEvent};
+
+        // 1. Pre-flight validation (shared).
+        validate_update(&cmd).map_err(|e| TemperError::BadRequest(e.to_string()))?;
+
+        // 2. Resolve target file under lock; release before I/O.
+        let resolved = {
+            let manifest = self.manifest.lock().await;
+            crate::vault_backend::translators::resolve_resource_ref(
+                &self.vault_root,
+                &manifest,
+                &self.config,
+                &cmd.resource,
+            )?
+        };
+
+        // 3. Parse on-disk frontmatter.
+        let mut fm = Frontmatter::parse_file(&resolved.path)?;
+
+        // 4. Determine current doctype/context from on-disk frontmatter.
+        let get_str = |fm: &Frontmatter, key: &str| -> String {
+            fm.value()
+                .get(serde_yaml::Value::String(key.to_string()))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string()
+        };
+        let current_doctype = get_str(&fm, "temper-type");
+        let current_context = get_str(&fm, "temper-context");
+
+        // 5. Apply scalar + array updates and compute final path.
+        let final_path = crate::vault_backend::translators::apply_updates(
+            &mut fm,
+            &cmd,
+            &resolved.path,
+            &self.vault_root,
+            &self.owner,
+            &self.config,
+            &current_doctype,
+            &current_context,
+        )?;
+
+        // 6. Refresh temper-updated timestamp.
+        let now = chrono::Local::now().to_rfc3339();
+        fm.set_managed_field("temper-updated", serde_json::Value::String(now));
+
+        // 7. Optional body update.
+        if let Some(body_update) = cmd.body.as_ref() {
+            fm.set_body(body_update.content.clone());
+        }
+
+        // 8. Create parent dir if needed (for moves), then write.
+        if let Some(parent) = final_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| TemperError::Vault(e.to_string()))?;
+        }
+        fm.write_to(&final_path)?;
+
+        // 9. If moved, remove old file.
+        if final_path != resolved.path && resolved.path.exists() {
+            std::fs::remove_file(&resolved.path).map_err(|e| TemperError::Vault(e.to_string()))?;
+        }
+
+        // 10. Compute rel_path for events and manifest.
+        let rel_path = final_path
+            .strip_prefix(&self.vault_root)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| final_path.to_string_lossy().to_string());
+
+        let body_str = fm.body();
+
+        // 11. Manifest rehash.
+        {
+            let mut manifest = self.manifest.lock().await;
+            if let Some(entry) = manifest.entries.get_mut(&resolved.resource_id) {
+                entry.path = rel_path.clone();
+                entry.body_hash = temper_core::hash::compute_body_hash(body_str);
+                entry.synced_at = chrono::Utc::now();
+                entry.state = temper_core::types::manifest::ManifestEntryState::LocalModified;
+            }
+            crate::manifest_io::save_manifest(&self.config.state_dir, &manifest)?;
+        }
+
+        let mut events = vec![
+            DomainEvent::VaultFileWritten {
+                path: rel_path.clone(),
+            },
+            DomainEvent::VaultManifestUpdated {
+                path: rel_path.clone(),
+            },
+        ];
+
+        // 12. Push as tail action.
+        let push_event = self.push_update(&cmd, resolved.resource_id).await;
+        events.push(push_event);
+
+        // 13. Project to ResourceRow.
+        let row = vault_file_to_resource_row(
+            &final_path,
+            &fm,
+            resolved.resource_id,
+            &self.vault_root,
+            &self.owner,
+        );
+        Ok(CommandOutput::with_events(row, events))
     }
 
     async fn delete_resource(

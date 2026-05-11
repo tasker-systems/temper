@@ -59,6 +59,20 @@ pub struct ShowResource {
     pub origin: Surface,
 }
 
+/// File-move spec for `UpdateResource`. Both fields are optional and
+/// independent; supplying either (or both) triggers a filesystem move.
+///
+/// - `context_to`: move the file to a new context directory and update
+///   `temper-context` in frontmatter. The DB backend ignores this field —
+///   the new context is communicated via `managed_meta.context`.
+/// - `type_to`: move the file to a new doc-type directory and update
+///   `temper-type` in frontmatter. Likewise ignored by DbBackend.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MoveSpec {
+    pub context_to: Option<String>,
+    pub type_to: Option<String>,
+}
+
 /// Update a resource — partial; any combination of body, managed_meta,
 /// open_meta may be supplied.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -67,6 +81,11 @@ pub struct UpdateResource {
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
+    /// File-move spec (VaultBackend only). `DbBackend` ignores `move_to` —
+    /// the new context/type is conveyed via `managed_meta` which DbBackend
+    /// already handles. This field carries no SQL and does not affect the
+    /// `.sqlx/` query cache.
+    pub move_to: Option<MoveSpec>,
     pub origin: Surface,
 }
 
@@ -116,11 +135,13 @@ mod tests {
             body: None,
             managed_meta: None,
             open_meta: None,
+            move_to: None,
             origin: Surface::ApiHttp,
         };
         assert!(cmd.body.is_none());
         assert!(cmd.managed_meta.is_none());
         assert!(cmd.open_meta.is_none());
+        assert!(cmd.move_to.is_none());
     }
 
     #[test]

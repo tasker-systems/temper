@@ -22,7 +22,8 @@ pub use actions::{
 };
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{
-    CreateResource, DeleteResource, ListResources, SearchResources, ShowResource, UpdateResource,
+    CreateResource, DeleteResource, ListResources, MoveSpec, SearchResources, ShowResource,
+    UpdateResource,
 };
 pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};
