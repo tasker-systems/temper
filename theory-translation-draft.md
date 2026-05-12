@@ -30,17 +30,11 @@ What the system can do — and what attention-economy demands it do — is **mak
 
 ## Translation events, bridges, and translation-scars
 
-When two perspectives bring their information shapes into dialogue and arrive at shared understanding — or fail to — that is an event with the same status as a decision or a research note. The trace of translation work over time accumulates into a **bridging structure** over the base topology, distinct from but related to it.
-
-Successful translations leave bridges. Failed translations leave scars *at the translation point* rather than at the underlying data. Both belong in the substrate.
-
-A bridge is not a merger. A bridge is a recorded *relationship between* two information shapes that lets a perspective on either side make use of work done by the other without having to re-derive it. The underlying perspective-laden shapes remain distinct; the bridge is the record of where, when, and how they were brought into productive contact.
+When two perspectives bring their information shapes into dialogue and arrive at shared understanding — or fail to — that is an event with the same status as a decision or a research note. The trace of translation work over time accumulates into a **bridging structure** over the base topology, distinct from but related to it. Successful translations leave bridges; failed translations leave scars *at the translation point* rather than at the underlying data. Both belong in the substrate.
 
 ## Knowledge as relationship
 
-Knowledge is the experiential outcome when a perspective engages a projection of the represented state. It is a relationship, not a thing. The system stores conditions for knowledge production, not knowledge itself.
-
-[The data / information / knowledge stratification](/theory/ontology) is the right vocabulary for naming the layers of the phenomenon, but the system's representational scope ends at projection. Knowledge is what happens when a perspective engages with a projection. The substrate, the manifold, the fields, the perspectives, the bridges — all of it serves the production of knowledge by perspectives capable of producing it. None of it *is* knowledge.
+Knowledge is the experiential outcome when a perspective engages a projection of the represented state. It is a relationship, not a thing. The system stores conditions for knowledge production, not knowledge itself. [The data / information / knowledge stratification](/theory/ontology) is the right vocabulary for naming the layers of the phenomenon, but the system's representational scope ends at projection — knowledge is what happens when a perspective engages with a projection.
 
 This is the closing commitment of the model, and the place where the model's discipline is most visible: it refuses to claim that any of what it represents is the thing that matters. What matters is what perspectives do with it.
 
@@ -48,6 +42,8 @@ This is the closing commitment of the model, and the place where the model's dis
 
 ## Editorial notes
 
-- This page closes the theory tier. The *knowledge as relationship* commitment lands here in its full form even though it was previewed in the overview and ontology pages — the repetition is deliberate; this is the place the reader has the most context for it.
+- This page closes the theory tier. The *knowledge as relationship* commitment lands here in its full form even though it was previewed in the entry and ontology pages — the repetition is deliberate; this is the place the reader has the most context for it.
 - The translation-scar discussion is short by design. The mechanics of how translation events are emitted and how bridges accumulate are downstream of the model; the model only commits to their being substrate-level objects.
-- The closing paragraph deliberately echoes the manifesto's frame ("what matters is what perspectives do with it"). Closing the tier where it started keeps the reader's reading-arc coherent.
+- An earlier draft included a "A bridge is not a merger" elaboration after the bridges-and-scars section; trimmed. The source treats bridges briefly; my elaboration was clarifying an implicit but going beyond what the source argues. Cross-link to `/theory/schema` covers the bridging structure as a derived structure.
+- An earlier draft had additional rhetorical buildup in the "Knowledge as relationship" section ("The substrate, the manifold, the fields, the perspectives, the bridges — all of it serves..."); trimmed in favor of the source's tighter version.
+- The closing paragraph (one page-level reflection retained) deliberately echoes the manifesto's frame ("what matters is what perspectives do with it"). Closing the tier where it started keeps the reader's reading-arc coherent.

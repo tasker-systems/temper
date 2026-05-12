@@ -12,25 +12,19 @@ First-pass draft for the ontology page. Introduces the four-layer stratification
 
 # Ontology: data, intention, information, knowledge
 
-Four layers, each derivable from the layers below given the appropriate inputs. The stratification names what kind of thing each layer *is*, which is the prerequisite to handling them differently.
+The model has four ontological layers, each derivable from the layers below given the appropriate inputs.
 
 ## Data
 
 Data is the substrate — events, recorded, immutable. Pure existence-of-occurrence. It is objective in the sense that any observer can in principle compute the same data set from the same event log.
 
-Data does not interpret itself. A sequence of events is what happened, in the order it happened, recorded faithfully. The question of what the events *mean* — what is interesting in them, what is relevant, what is true — does not arise at this layer.
-
 ## Intention
 
-Intention is a vector originating at a perspective-point. It has direction (what it is about), magnitude (how strongly it points), and origin (whose perspective).
-
-Crucially: there is no view from nowhere. Every intention-vector starts at a located perspective. This is the model's commitment that nothing in the substrate can be asked, queried, or engaged with without that act being grounded in a particular perspective making the ask. The perspective-point may be human, agent, or deterministic system, but it has to be *somewhere*.
+Intention is a vector originating at a perspective-point. It has direction (what it is about), magnitude (how strongly it points), and origin (whose perspective). It has no view from nowhere; every intention-vector starts at a located perspective.
 
 ## Information
 
 Information is what happens when intention-vectors interact with the data substrate. The same data engaged by different intentions produces different information. This is the layer where *what something means* lives.
-
-A consequence of this stratification: there is no neutral information shape that exists prior to engagement. Information shapes are perspective-laden by construction. Two perspectives asking different questions of the same data are not seeing the same information badly — they are seeing genuinely different information. [The translation page](/theory/translation) returns to this.
 
 ## Knowledge
 
@@ -38,24 +32,24 @@ Knowledge is the relationship between a perspective and the information it has p
 
 Stated formally:
 
-> K = experience(P, I) where I = project(Q, F | P)
+> **K = experience(P, I)** where **I = project(Q, F | P)**
 
 A perspective P (itself a function of trajectory through time) formulates an intention-query Q which projects the data field F into an information shape I, and knowledge is the experiential engagement of that perspective with that information shape.
 
-## The misnomer
+## Knowledge bases are misnomers
 
-The phrase "knowledge base" implies that knowledge is what gets stored. This stratification rejects that. What gets stored is data, plus traces of past intentional acts — recorded questions, notes, decisions, which themselves become further data. The system enables knowledge to be *produced* when engaged from a particular perspective; it does not contain it.
+A consequence worth stating up front: **knowledge bases are misnomers.** The system stores data and traces of past intentional acts (recorded questions, notes, decisions, which themselves become further data). It does not store knowledge. It enables knowledge to be *produced* when engaged from a particular perspective. The "knowledge" of a knowledge base is always potential, never actual, until activated by a perspective.
 
 The system's job is never to *be right about what something means* — meaning is not in the system. Its job is to faithfully represent data, faithfully record intentions, and faithfully compute projections such that perspectives engaging with those projections are well-equipped to produce knowledge.
 
-This commitment runs through the rest of the model. [The manifold page](/theory/manifold) describes what positions and fields *are*. [The perspectives page](/theory/perspectives) describes how a perspective is itself a substrate object with trajectory and characterizable shape. [The translation page](/theory/translation) describes what happens when two perspectives, engaging the same substrate, produce different information shapes and have to bridge them.
-
-None of those pages can claim the system *knows*. They describe the conditions under which knowledge is produced.
+None of the pages that follow can claim the system *knows*. They describe the conditions under which knowledge is produced.
 
 ---
 
 ## Editorial notes
 
-- The formula `K = experience(P, I) where I = project(Q, F | P)` is kept verbatim from the source. The target audience can read it; oversimplifying around it would lose substance.
-- The "misnomer" section is named directly. The overview previews this claim; the ontology page is where it has to land in its full form.
-- Cross-links forward to manifold / perspectives / translation are intentional but light — the page does not require the reader to follow them to make sense.
+- The page mirrors the source's terse stratified treatment. Each layer section is intentionally short — the source treats the four ontological layers as a compact list, not as standalone elaborations. Manifold and perspectives elaboration lives on the corresponding `/theory` pages.
+- The formula `K = experience(P, I) where I = project(Q, F | P)` is kept verbatim from the source, including bold emphasis on the variables.
+- The "Knowledge bases are misnomers" section uses the source's heading construction directly: "A consequence worth stating up front: **knowledge bases are misnomers.**" The source places this claim immediately after the formal definition; this page does the same.
+- Earlier draft included page-level elaborations under Data ("Data does not interpret itself..."), Intention ("This is the model's commitment that nothing in the substrate..."), Information ("A consequence of this stratification..."), and a closing cross-link paragraph. Those were trimmed in the source-faithfulness sweep — the source's compactness is part of its texture, and rebuilding it on this page was over-elaborating.
+- The closing line ("None of the pages that follow can claim the system *knows*. They describe the conditions under which knowledge is produced.") is the one page-level addition retained. It signals to the reader that the misnomer commitment carries through the rest of the tier.

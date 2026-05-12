@@ -34,8 +34,6 @@ Forgetting is not deletion or annotation; it is geometric. There are three disti
 
 **Folding.** Some resources must be preserved for audit, reversibility, or historical understanding, but should not surface in default projection. These are folded onto a different *sheet* of the manifold: accessible by deliberate time-travel queries, invisible to default projection. Folding answers *preserved but not present*.
 
-The three mechanics are distinct. A resource that is no longer relevant is not the same as one that is no longer true; either is different from one that must be preserved but stay out of default retrieval. Conflating them — letting *deprecation* stand in for all three — leaves the manifold accumulating an unreadable noise floor that the model is specifically built to avoid.
-
 ## Scarification
 
 When a deformation is performed because something was *wrong* — whether through human error, agent hallucination, latent ambiguity hardening into false certainty, or any other source — it carries an additional property called a **scar**. The scar is not the corrected information; it is the *audit of the correction*: a structured memory of what was wrong, what was assumed because of it, what had to be reworked.
@@ -64,4 +62,5 @@ How scars themselves decay — whether catastrophic past errors resist decay dif
 
 - The page uses *deformation* in two senses (the class of geometry-changing events, and the specific forgetting mechanic). The source document does this; readers handle it; renaming one of them would lose connective tissue with the schema.
 - The scar discussion stays source-agnostic, as the source does. Policy variation (agent vs. human; catastrophic vs. incidental) belongs downstream.
+- An earlier draft had an editorializing paragraph after the three forgetting mechanics ("Conflating them — letting *deprecation* stand in for all three..."). The source distinguishes the three mechanics clearly without that editorial reinforcement, and the spirit of the critique lives in the manifesto already; trimmed.
 - Forward link to open-questions on the scar-decay point is honest — that's a real unresolved item.

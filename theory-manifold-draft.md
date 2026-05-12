@@ -12,7 +12,7 @@ First-pass draft for the manifold page. Introduces positions, fields, streams, b
 
 # The manifold
 
-The model's geometric vocabulary for *aboutness*. Positions are not membership in containers; concerns are not labels; what an observer sees as "current context" is not a state but a projection.
+The model's geometric vocabulary for *aboutness*.
 
 ## The manifold
 
@@ -43,7 +43,7 @@ Fields interact. Where multiple high-weight fields constructively interfere, the
 
 The relationship between streams and the manifold is bidirectional. Streams flow through the manifold, shaped by its fields. Streams also *deform the manifold they flow through*, including the fields that shaped them. The manifold is not a thing the streams encounter from outside — the manifold is *constituted by* the history of streams that have flowed through it.
 
-This is the model's most consequential commitment about the geometry. Asking a question, choosing what to attend to, deciding what to investigate — these shape the field before any artifact is created or any code changes. Attention is not neutral observation; attention is force, and force deforms.
+This is the model's most consequential commitment. Asking a question, choosing what to attend to, deciding what to investigate — these shape the field before any artifact is created or any code changes. Attention is not neutral observation; attention is force, and force deforms.
 
 The mechanics of how that deformation operates — what counts as a strong deformation, what counts as weak, when sub-recording attention crystallizes into something the system tracks — live on [the deformation page](/theory/deformation).
 
@@ -65,6 +65,7 @@ Any addressing scheme that treats context as a noun is taking a single low-dimen
 
 ## Editorial notes
 
-- The bidirectional-coupling commitment is named as "the most consequential commitment about the geometry" — borrowing the source document's own emphasis. Worth keeping the load-bearing phrasing.
+- The bidirectional-coupling claim is named with the source's unqualified phrasing — "the model's most consequential commitment." An earlier draft had "most consequential commitment about the geometry," which weakened the source's claim; restored.
 - The "context as verb-state" section from the source document lives here rather than in its own page. It is short and depends on field/projection, so combining is more attention-economic than fragmenting.
+- The page intro is intentionally a single line ("The model's geometric vocabulary for *aboutness*."). An earlier draft previewed the page's contents in the intro; trimmed to let the section headers do that work.
 - Forward link to deformation is the only outbound dependency.
