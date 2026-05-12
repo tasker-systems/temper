@@ -1,6 +1,6 @@
 # Docs IA Proposal — temperkb.io
 
-A first-pass information architecture for replacing the current "get started" framing of temperkb.io with the conceptual-first frame established by the three source documents (manifesto, semantic model, framing schema).
+A first-pass information architecture for **adding** a conceptual `/theory` tier to temperkb.io, alongside the existing site. The existing landing, `/agents`, `/builders`, and `/how-it-works` pages are not touched. The only change to the existing surface is `/docs` → `/using-temper` (rename only; content unchanged).
 
 This is a proposal, not a decision. Section trees are annotated with rationale and with the questions they're waiting on.
 
@@ -18,44 +18,65 @@ Pulled directly from the three source documents so the rationale below is checka
 
 ---
 
+## What this proposal touches and what it leaves alone
+
+The existing temperkb.io site is **not being replaced or rewritten** by this work. The current `/`, `/agents`, `/builders`, `/how-it-works` pages stay exactly as they are. They frame Temper-as-product for visitors who arrive expecting that frame.
+
+Two surface changes are in scope:
+
+1. **`/docs` → `/using-temper`.** A rename of the existing CLI/sync/MCP reference to a semantically meaningful URL. Content unchanged; route renamed; every current "getting started" link resolves to the new path.
+2. **A new `/theory` tier is added alongside the existing site.** Everything else this proposal describes lives under `/theory`. The tier frames the direction Temper is building toward — what working context is, what the model commits to, what the substrate properties have to honor. It does not displace the product framing on `/`; it sits alongside it.
+
+A visitor lands on `/theory` by following an explicit link from somewhere — the existing site, a README, an external publication of the manifesto, a direct share. The tier does not compete with `/` for general traffic; it serves a reader who has opted into "tell me what this is for, at the level the work is actually thinking about."
+
 ## Proposed tree
 
+**Unchanged:**
+
 ```
-/                           What Temper is for                    (manifesto layer)
-/theory                     Working context: a model              (model overview + anchor)
+/                           (existing landing — Hero/Section/CliBlock/etc.)
+/agents                     (existing)
+/builders                   (existing)
+/how-it-works               (existing)
+```
+
+**Changed:**
+
+```
+/docs                       → renamed to /using-temper
+/using-temper               How to use Temper (existing /docs content, rehomed)
+```
+
+**New (`/theory` tier):**
+
+```
+/theory                       Entry to the theory tier
 /theory/ontology              Data, intention, information, knowledge
 /theory/manifold              Positions, fields, streams
 /theory/time                  Time, events, derivation
 /theory/deformation           Forming, forgetting, scarification
 /theory/perspectives          Who is asking
 /theory/translation           Irreducibility, bridges, observer-relativity
-/theory/schema                Schema reference (work in progress) (framing layer)
+/theory/schema                Schema reference (work in progress)
 /theory/open-questions        What is not settled
-/using-temper               How to use Temper                     (existing /docs content, rehomed)
 ```
-
-Three tiers (manifesto, theory, operational) under one root. Everything new lives under `/theory`; the operational layer keeps the existing CLI/sync/MCP reference at a semantically meaningful URL.
-
-Existing top-level pages — `/agents`, `/builders`, `/how-it-works` — are retained as is. The only change to the existing surface in this pass is `/docs` → `/using-temper`. The existing `/docs` route — semantically nondescript — retires; its content rehomes at `/using-temper` and every current "getting started" link resolves there.
 
 ---
 
-## Tier 1 — `/` What Temper is for (manifesto layer)
+## Tier 1 — `/theory` Entry to the theory tier (manifesto + model overview)
 
-**Source:** *An Attention Manifesto*
+**Source:** *An Attention Manifesto*, plus the opening of *A Semantic Model of Working Context*.
 
-**Replaces:** the current `(public)/+page.svelte`, which leads with "knowledge work deserves structure" and walks through CLI verbs.
-
-**What it is:** a single page that establishes attention as the teleological anchor and names the four commitments that follow from taking that seriously.
+**What it is:** the entry page for the `/theory` tier. Establishes attention as the teleological anchor, names the four commitments that follow from taking that seriously, names the one most-consequential claim about what is stored (knowledge as relationship, not stored thing), and previews the model that the rest of the tier introduces.
 
 **What it deliberately is not:**
 - A feature tour. The manifesto explicitly rejects framing the commitments as "features I want to ship."
-- A landing page in the conventional sense. It does not ask the reader to install or sign up.
-- A summary of the model. The model lives at `/theory`; this page points to it without summarizing it.
+- A replacement for `/`. The existing landing keeps its current Hero/Section product framing; this page sits alongside it for readers who want the why-and-what at the level the work is thinking about.
+- A summary of the full model. The model is introduced page-by-page in the sub-pages; this entry only previews them.
 
-**Rationale:** The manifesto is the only one of the three documents that names *why the rest exists*. A visitor who reads only this page should leave knowing what Temper takes a stand on, without having absorbed any of the model's machinery. A visitor who wants the machinery follows the link to `/theory`.
+**Rationale:** The manifesto is the only one of the three source documents that names *why the rest exists*. A visitor who reaches `/theory` has opted into "tell me what this is for"; the page meets them with the values frame first, then catalogs the model.
 
-The first-draft copy for this page is in `landing-draft.md`.
+The merged first-draft copy is in `theory-entry-draft.md`. (Earlier session iterations had this split between `landing-draft.md` and `theory-overview-draft.md`; those files are superseded.)
 
 ---
 
