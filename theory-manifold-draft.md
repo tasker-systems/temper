@@ -26,6 +26,8 @@ Intention in motion is a *stream* flowing through the manifold. Each stream carr
 
 Stream and particle are two ways of seeing the same phenomenon. Stream foregrounds continuity, flow, accumulation. Particle foregrounds discreteness, event, witness. The substrate is one thing; both vocabulary registers are useful depending on what is being described. A session is best described as a stream; a single query is best described as a particle within that stream.
 
+At the level of the model, a stream is intention in motion. At the level of the schema, that motion resolves into events with topics. Emissions add new positions to the manifold; observations reinforce existing ones; corrections deform and scar. The model's "stream" and the schema's topic-classes describe the same phenomenon at different resolutions. The [schema](/theory/schema) is where the resolution lives in full.
+
 ## Fields
 
 Concerns and intentions — active goals, decisions in force, ongoing sessions, standing constraints, ambient tolerances, open investigations — are *fields* over the manifold. A field is not a position; a field is a force that makes positions matter.
@@ -68,4 +70,5 @@ Any addressing scheme that treats context as a noun is taking a single low-dimen
 - The bidirectional-coupling claim is named with the source's unqualified phrasing — "the model's most consequential commitment." An earlier draft had "most consequential commitment about the geometry," which weakened the source's claim; restored.
 - The "context as verb-state" section from the source document lives here rather than in its own page. It is short and depends on field/projection, so combining is more attention-economic than fragmenting.
 - The page intro is intentionally a single line ("The model's geometric vocabulary for *aboutness*."). An earlier draft previewed the page's contents in the intro; trimmed to let the section headers do that work.
-- Forward link to deformation is the only outbound dependency.
+- **The closing paragraph of "Streams and particles" bridges to the schema's topic-classes.** The model-level "stream" and the schema-level "emissions / observations / corrections" describe the same phenomenon at different resolutions. Naming the bridge here keeps the model and schema vocabularies legible against each other without requiring the reader to detour through `/theory/schema` to make the connection.
+- Forward links: `/theory/deformation` for the mechanics of how streams deform the manifold; `/theory/schema` for the topic-class resolution.

@@ -14,7 +14,7 @@ First-pass draft for the consolidated open-questions page. Two anchored sections
 
 This page gathers the questions the model and its schema have deliberately not resolved. Items move off this page as they resolve, with the resolution landing in the appropriate `/theory` or `/theory/schema` section.
 
-The two sections below correspond to the two source documents. The boundary between them is real but soft — a question about field sub-typing in the model corresponds to a question about field-class typing in the schema; resolving one tends to resolve the other.
+The two sections below correspond to the two source documents. The boundary between them is real but soft — a question about field sub-typing in the model corresponds to a question about field-class typing in the schema; resolving one tends to resolve the other. Some items appear in both sections deliberately; resolving the schema-level version typically resolves the model-level version (and vice versa). Mirrored items are marked inline.
 
 ## #model — open questions about the model itself {#model}
 
@@ -74,7 +74,7 @@ The list will be wrong in different ways over time. That is the point.
 ## Editorial notes
 
 - Anchors (`{#model}` and `{#schema}`) are explicit so cross-links from the schema page resolve correctly. Implementation detail at SvelteKit time — the syntax may need to change depending on the markdown renderer.
-- Items that appear under both #model and #schema are marked `(mirrors #model.)` rather than duplicated in full. Resolving the schema-level version typically resolves the model-level version and vice versa.
+- The page intro names the mirrored-items convention directly; the editorial note that previously did so has been folded into the body copy.
 - The closing note is honest about the page's own provisionality. Symmetric with the schema's WIP framing.
 - **Recently moved off this page** (resolved by schema commitments):
   - On-behalf-of cardinality: the Roles Within Events table commits to "Zero, one, or many" — multi-valued. The schema page's table is the resolution.

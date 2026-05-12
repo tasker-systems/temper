@@ -12,7 +12,7 @@ First-pass draft for the schema reference. Structural tables + resolved stances 
 
 # Schema
 
-**This page is a working reference.** The structural codification of the model is a snapshot, not a final specification. The substrate-level commitments below — events-as-primary, append-only ledger, cross-cutting point-in-time truth, observation-as-scoped-event-topic, derivable-not-denormalized perspective — feel stable enough to build against. Other areas are still moving. Unsettled material lives at [/theory/open-questions#schema](/theory/open-questions#schema).
+**This page is a working reference.** The structural codification of the model is a snapshot, not a final specification. It emerged from successive refinements of the underlying model and is at the resolution where it can be built against — not where it is finished. The substrate-level commitments below — events-as-primary, append-only ledger, cross-cutting point-in-time truth, observation-as-scoped-event-topic, derivable-not-denormalized perspective — feel stable enough to build against. Other areas are still moving. Unsettled material lives at [/theory/open-questions#schema](/theory/open-questions#schema).
 
 The schema is what the system *answers to*. It is not the system itself.
 
@@ -164,7 +164,7 @@ The schema's load-bearing commitments. Stable enough to build against.
 Two classes of unsettled material live at [/theory/open-questions#schema](/theory/open-questions#schema):
 
 - **Intentionally open** — questions the model deliberately does not specify. Downstream system designs answer these; the schema does not. Examples: storage substrate, query language, authority model, persona/role library.
-- **Pending opinionated stance** — gaps the schema needs to close before it is fully coherent. Each wants pressure before stabilizing. Examples: minimum-viable state-change event schema, whether on-behalf-of is single- or multi-valued, scar decay mechanics, manifold composition.
+- **Pending opinionated stance** — gaps the schema needs to close before it is fully coherent. Each wants pressure before stabilizing. Examples: minimum-viable state-change event schema, whether on-behalf-of chains nest on the emission or as a separate graph, scar decay mechanics, manifold composition.
 
 The boundary between *intentionally open* and *pending opinionated stance* will shift as the work continues.
 
@@ -173,5 +173,7 @@ The boundary between *intentionally open* and *pending opinionated stance* will 
 ## Editorial notes
 
 - The WIP framing is the opening paragraph, not a banner. A banner would treat WIP as a deficiency; the paragraph treats it as a property the reader needs to know about. The framing schema source document treats its own provisionality this way.
+- The opener names the schema as having *"emerged from successive refinements of the underlying model and is at the resolution where it can be built against — not where it is finished."* That phrasing is page-level rather than directly from the source; it makes the schema's relationship to the underlying model explicit and sets reader expectations for what the WIP framing means in this context.
 - The unsettled lists are *not* duplicated here. Schema page → single canonical reference; open-questions page → single canonical location for what's moving. Two pointers in one direction; nothing repeated.
+- The "What's still moving" examples are kept in sync with what's actually open on the open-questions page. The on-behalf-of cardinality example was replaced after that item was closed (the Roles Within Events table commits to "Zero, one, or many").
 - The page is heavy on tables. That is appropriate: it is a reference surface and the source document is already tabular.

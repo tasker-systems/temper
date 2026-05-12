@@ -24,6 +24,8 @@ Resources and perspectives are both on the manifold: both have positions, trajec
 
 A given individual's perspective changes as they engage with the manifold. The perspective on a region today is the integral of past engagement with it; it is not a fixed identity but a moving locus. Perspective has the same temporal substrate as everything else — derived from event history, computed at projection time. Two queries from "the same person" at different times come from slightly different perspective-points.
 
+Because perspective is derived from trajectory rather than stored, the schema commits to a corresponding property of the substrate: any event's emitter-perspective at the time of emission is projectable from the emitter's accumulated trajectory at that time. The substrate does not denormalize perspective onto events; it preserves the trajectory and computes perspective when asked.
+
 ## Perspective characterization
 
 A perspective-point has at least:
@@ -48,6 +50,14 @@ The two relate the way priors and likelihoods relate in Bayesian inference. The 
 Role-changes are *strong deformations* of the perspective-point's position — discrete, intentional, performed with awareness, substantially shifting the perspective's characteristic intention-vectors. Individual evolution within a role is *trajectory accumulation* — continuous, integrated against decay rates. The two operate at different temporal scales but with the same primitives that govern the rest of the manifold ([deformation](/theory/deformation)).
 
 Accumulated individual trajectory may itself become signal for role-change: drift toward a different role's prior, persistent atypicality of the codified role, sophistication accumulation suggesting expertise rather than role transition. The model does not resolve these signals automatically — that would presume a univocal frame. But it can *surface* them. Role-evolution is itself a translation problem.
+
+## Aggregate-perspectives
+
+There is a third kind of perspective the model represents. A team, a squad, an affinity group, a leadership committee — these are aggregate-perspectives, with their own class-priors and their own trajectories. An EPD squad's characteristic intentions are not the sum of its members'; a leadership team's position in perspective-space is not reducible to the individuals in it.
+
+The model commits to a specific asymmetry. Aggregate-perspectives have positions and accumulate trajectories, but they do not *emit*. Emission is always discrete-non-aggregate — a particular individual sends the document, even when the document is from the team. What the aggregate provides is *scope*: the context within which the discrete emission happens. The schema names this scope as **on-behalf-of** — the relation between an emitting individual and the aggregates whose context their emission occupies.
+
+The aggregate's trajectory is computed from the events emitted on-behalf-of it — never from emissions the aggregate itself performed, because it never performs any. This keeps events-as-primary intact while letting aggregate-perspectives have positions and histories.
 
 ## Personas as field-sets
 
@@ -83,4 +93,6 @@ The mechanics of how perspectives bring their information shapes into productive
 - The "Accumulated individual trajectory" passage and the "Personas as field-sets" section are restored. Earlier draft omitted both; they are substantive source content (one ties role-evolution to translation, the other ties personas to the manifesto's attention-economy commitment).
 - The bold on "**Shared understanding is therefore an emergent property of convergent projection histories, not something guaranteed by shared substrate.**" is restored to match the source's emphasis.
 - The "structural symmetry" framing line on `/theory/perspectives` (a paraphrase) is replaced with the source's own phrasing ("Resources and perspectives are both on the manifold..."). The source has a larger "Symmetries the Model Suggests" section; that meta-claim now lives as a one-paragraph note on the `/theory` entry, between the sub-page index and the closing.
+- **The closing paragraph of "Perspectives are trajectories, not points" folds in the schema's resolved stance** *"Every event has an emitter and a perspective; perspective is derivable from emitter-trajectory at event-time, not denormalized."* The model says perspective is a trajectory; the schema commits the substrate to never denormalizing perspective onto events. Naming both here keeps the model and schema legible against each other.
+- **The "Aggregate-perspectives" section folds in the schema's third entity type.** The semantic model's perspectives section treats role-perspective and individual-perspective as the two kinds; the schema adds aggregate-perspective with a specific asymmetry — has positions and trajectories, does not emit. The section explains the asymmetry and introduces *on-behalf-of* as the relation that lets the substrate route discrete emissions through aggregate scope while keeping events-as-primary intact. Placed after role/individual because it depends on the role-class machinery and sets up *on-behalf-of* for the schema page.
 - Granularity of perspective (individual vs. team vs. organization) is deliberately not resolved here — that's an item on [open-questions#model](/theory/open-questions#model).

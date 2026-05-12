@@ -16,7 +16,7 @@ The model has four ontological layers, each derivable from the layers below give
 
 ## Data
 
-Data is the substrate — events, recorded, immutable. Pure existence-of-occurrence. It is objective in the sense that any observer can in principle compute the same data set from the same event log.
+Data is the substrate — events, recorded, immutable, append-only. Not objective in the view-from-nowhere sense: every event has an emitter, and the substrate is the perspective-laden record of past emission acts. The objectivity that's available is weaker and more honest — any qualified observer can in principle re-engage the same recorded events, but they're never engaging neutral data.
 
 ## Intention
 
@@ -51,5 +51,6 @@ None of the pages that follow can claim the system *knows*. They describe the co
 - The page mirrors the source's terse stratified treatment. Each layer section is intentionally short — the source treats the four ontological layers as a compact list, not as standalone elaborations. Manifold and perspectives elaboration lives on the corresponding `/theory` pages.
 - The formula `K = experience(P, I) where I = project(Q, F | P)` is kept verbatim from the source, including bold emphasis on the variables.
 - The "Knowledge bases are misnomers" section uses the source's heading construction directly: "A consequence worth stating up front: **knowledge bases are misnomers.**" The source places this claim immediately after the formal definition; this page does the same.
-- Earlier draft included page-level elaborations under Data ("Data does not interpret itself..."), Intention ("This is the model's commitment that nothing in the substrate..."), Information ("A consequence of this stratification..."), and a closing cross-link paragraph. Those were trimmed in the source-faithfulness sweep — the source's compactness is part of its texture, and rebuilding it on this page was over-elaborating.
+- **The Data section reflects the schema's framing, not the semantic model's earlier formulation.** The semantic model originally said data is "objective in the sense that any observer can in principle compute the same data set from the same event log." The schema's Stratification table refines that to *"Not 'objective data'; the perspective-laden record of past emission acts."* The page is aligned with the schema's more careful articulation — every event has an emitter, and the substrate is what those emissions leave behind. The available objectivity is weaker and more honest: any qualified observer can in principle re-engage the same recorded events, but they're never engaging neutral data.
+- Earlier draft included page-level elaborations under Data, Intention, Information, and a closing cross-link paragraph. Those were trimmed in the source-faithfulness sweep — the source's compactness is part of its texture.
 - The closing line ("None of the pages that follow can claim the system *knows*. They describe the conditions under which knowledge is produced.") is the one page-level addition retained. It signals to the reader that the misnomer commitment carries through the rest of the tier.

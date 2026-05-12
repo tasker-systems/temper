@@ -24,6 +24,18 @@ A deformation that adds to or alters the manifold's geometry is a forming deform
 
 The boundary between weak and strong is the **recording threshold**: the point at which sub-recording attention crystallizes into a tracked artifact. The act of recording — writing down the question, capturing the note, opening the ticket — is itself a strong-enough deformation to track. Below the threshold, weak deformations exist and have effects, but for design purposes their effects are *integrated into* the recorded artifacts that subsequently emerge from sustained attention. The model does not pretend sub-recording attention is invisible; it accepts that the recording threshold is the natural and principled design boundary.
 
+## Deformation by topic-class
+
+Different kinds of events deform the manifold in different modes. Three are worth naming.
+
+**Emission-adds-geometry.** Resource-lifecycle events (publications, contributions) and declaration events (decisions, role-grants) introduce new positions to the manifold. Each emission adds structure that wasn't there before.
+
+**Observation-reinforces-geometry.** Observation-topic events do not add new positions; they reinforce the position-strength of the events they engage. Sustained observation of a region strengthens that region's findability; absence of observation lets the region decay.
+
+**Correction-scars-geometry.** Supersession and correction events do both: they deform the topology (the superseded region routes through less easily) and they carry the scar-property, marking the region as having been wrong before.
+
+Bidirectional coupling resolves differently depending on the topic the event carries: emissions, observations, and corrections all flow through the manifold and shape it, but in distinct ways. The [schema's topic taxonomy](/theory/schema) names which topics fall into which mode.
+
 ## Forgetting mechanics
 
 Forgetting is not deletion or annotation; it is geometric. There are three distinct mechanics, plus a property that can attach to certain deformations.
@@ -62,5 +74,6 @@ How scars themselves decay — whether catastrophic past errors resist decay dif
 
 - The page uses *deformation* in two senses (the class of geometry-changing events, and the specific forgetting mechanic). The source document does this; readers handle it; renaming one of them would lose connective tissue with the schema.
 - The scar discussion stays source-agnostic, as the source does. Policy variation (agent vs. human; catastrophic vs. incidental) belongs downstream.
+- **The "Deformation by topic-class" section folds in the schema's resolved stance** *"Emissions add geometry; observations reinforce geometry; corrective deformations scar geometry — bidirectional coupling differentiated by topic-class."* The semantic model's deformation section treats forming/forgetting and strength as the primary axes; the schema adds a third axis — *mode of deformation by topic-class* — that the theory page should reflect. Placed between forming and forgetting because it builds on the strong/weak distinction and sets up the forgetting mechanics that follow.
 - An earlier draft had an editorializing paragraph after the three forgetting mechanics ("Conflating them — letting *deprecation* stand in for all three..."). The source distinguishes the three mechanics clearly without that editorial reinforcement, and the spirit of the critique lives in the manifesto already; trimmed.
-- Forward link to open-questions on the scar-decay point is honest — that's a real unresolved item.
+- Forward links: `/theory/schema` for the topic taxonomy; `/theory/open-questions` for scar decay (a genuinely unresolved item).
