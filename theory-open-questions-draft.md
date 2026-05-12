@@ -21,7 +21,6 @@ The two sections below correspond to the two source documents. The boundary betw
 These are not engineering questions. They concern whether the model itself is complete and coherent.
 
 - **Is *field* too undifferentiated?** Goals, decisions-in-force, constraints, and tolerances all behave somewhat differently as fields. They may be subspecies sharing mechanics, or they may genuinely be a single primitive at this level.
-- **Is retroactive correction its own primitive, or fully captured by deformation-with-scar?** Currently treated as the latter. The answer may depend on whether retroactive corrections need different relaxation behavior than forward corrections.
 - **What is the relationship between projection and resource?** A document is in some sense a projection of past stream activity, written down. A search result is a projection of current field configuration. The asymmetry is suggestive but not yet pinned down.
 - **Are manifolds composable?** Cross-project, cross-team, cross-owner reference is an open question. The model as stated allows for it but does not prescribe the composition mechanic.
 - **How do scars themselves decay?** A scar near a region that hasn't been engaged in a long time should presumably fade with the region. But heavy scars (catastrophic past errors) may resist decay. The mechanic is not specified.
@@ -54,16 +53,13 @@ These are deliberately not specified by the model; they are answered by particul
 Gaps the schema needs to close before it is fully coherent. Each wants pressure before stabilizing.
 
 - Minimum-viable core schema for state-change events (what is the irreducible structure of a role-change, position-update, or membership-change event?).
-- Whether on-behalf-of is single-valued or multi-valued (instinct: multi-valued).
 - Whether on-behalf-of chains nest as a property on the emission or as a separate graph between aggregates (instinct: separate graph).
-- Whether authority always grounds out at a discrete human/organizational entity (instinct: yes).
 - How scars themselves decay; do heavy historical scars resist decay differently? *(mirrors #model.)*
 - Whether manifolds compose hierarchically, federatively, or both. *(mirrors #model.)*
 - How role-personas at the class level originate and update. *(mirrors #model.)*
 - Caching tradeoffs — when, if ever, derived structure must be maintained rather than computed, and what reconciliation looks like.
 - Whether the field primitive needs sub-typing (goals vs. decisions-in-force vs. constraints vs. tolerances). *(mirrors #model.)*
-- Retroactive correction as its own primitive vs. fully captured by deformation-with-scar. *(mirrors #model.)*
-- The right granularity for attribution-judgment payload.
+- The right granularity for attribution-judgment payload — the schema commits to attribution-by-contribution as a vector, but payload granularity remains open.
 - The mechanic for practice-emergent aggregate-perspectives (those without a discrete forming-event).
 - Aggregates-of-aggregates: different in kind from first-order aggregates, or only in degree?
 
@@ -80,3 +76,8 @@ The list will be wrong in different ways over time. That is the point.
 - Anchors (`{#model}` and `{#schema}`) are explicit so cross-links from the schema page resolve correctly. Implementation detail at SvelteKit time — the syntax may need to change depending on the markdown renderer.
 - Items that appear under both #model and #schema are marked `(mirrors #model.)` rather than duplicated in full. Resolving the schema-level version typically resolves the model-level version and vice versa.
 - The closing note is honest about the page's own provisionality. Symmetric with the schema's WIP framing.
+- **Recently moved off this page** (resolved by schema commitments):
+  - On-behalf-of cardinality: the Roles Within Events table commits to "Zero, one, or many" — multi-valued. The schema page's table is the resolution.
+  - Authority grounding at a discrete entity: the resolved stances "Emitter is discrete-non-aggregate" + "On-behalf-of is the bridge primitive between discrete accountability and aggregate scope" together commit to authority routing through discrete entities.
+  - Retroactive correction as its own primitive vs. fully captured by deformation-with-scar: the resolved stance "Emissions add geometry; observations reinforce geometry; corrective deformations scar geometry — bidirectional coupling differentiated by topic-class" commits to the latter. (Removed from both `#model` and `#schema`.)
+- Attribution-judgment payload granularity is kept open but with a one-line note that the schema commits to *attribution-by-contribution as a vector* (per the Accountability Vectors table) without specifying payload granularity.

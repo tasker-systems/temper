@@ -146,7 +146,7 @@ The schema's load-bearing commitments. Stable enough to build against.
 - On-behalf-of is the bridge primitive between discrete accountability and aggregate scope.
 - Observation is an event-topic (observing-entity-scoped, terminal, no implied commitment); audit happens at projection, not as further observation-emissions.
 - Operational commitments (ack/rej/act) are secondary emissions referencing observation-events; receipt does not imply commitment.
-- Emissions add geometry; observations reinforce geometry; corrective deformations scar geometry.
+- Emissions add geometry; observations reinforce geometry; corrective deformations scar geometry — bidirectional coupling differentiated by topic-class.
 - Entity state is derived from state-change events, not stored as denormalized state.
 - Capture richly, project plurally: substrate carries consistent metadata; weighting/scoring lives in projections.
 - System surfaces, does not resolve: translation, attribution, accountability, disagreement.
