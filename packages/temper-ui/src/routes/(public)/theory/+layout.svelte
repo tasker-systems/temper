@@ -113,10 +113,11 @@
 
   /* Tighter section rhythm for essay-form pages.
      Section.svelte's default 5rem vertical is sized for marketing flow;
-     theory pages read as continuous prose broken by signposts, not as
-     separate marketing beats. Halving the vertical pulls them together. */
+     theory pages read as structured docs broken by signposts. The
+     hairline divider does the visual section-break work, so vertical
+     space can be minimal — the prose carries the rhythm. */
   :global(.theory-page .section) {
-    padding: 2.5rem 2.5rem;
+    padding: 1rem 2.5rem;
   }
 
   :global(.theory-page table.theory-table) {
