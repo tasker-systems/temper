@@ -24,7 +24,6 @@
 <div class="theory-page">
 
 <Section label="On the manifold">
-  <h2>Perspectives on the <em>manifold</em></h2>
   <p>
     A perspective-point is not external to the topology — it has a
     position. It is a point capable of emitting intention-vectors, but
@@ -62,7 +61,6 @@
 </Section>
 
 <Section label="Characterization">
-  <h2>Perspective <em>characterization</em></h2>
   <p>A perspective-point has at least:</p>
   <ul>
     <li><strong>Identity</strong> — who or what this perspective is.</li>
@@ -147,7 +145,6 @@
 </Section>
 
 <Section label="Aggregates">
-  <h2>Aggregate-<em>perspectives</em></h2>
   <p>
     There is a third kind of perspective the model represents. A team,
     a squad, an affinity group, a leadership committee — these are

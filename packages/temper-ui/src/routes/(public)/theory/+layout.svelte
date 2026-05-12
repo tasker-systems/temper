@@ -111,6 +111,14 @@
     margin: 1.5rem 0 0.75rem;
   }
 
+  /* Tighter section rhythm for essay-form pages.
+     Section.svelte's default 5rem vertical is sized for marketing flow;
+     theory pages read as continuous prose broken by signposts, not as
+     separate marketing beats. Halving the vertical pulls them together. */
+  :global(.theory-page .section) {
+    padding: 2.5rem 2.5rem;
+  }
+
   :global(.theory-page table.theory-table) {
     width: 100%;
     border-collapse: collapse;

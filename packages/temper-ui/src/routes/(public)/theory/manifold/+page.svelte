@@ -21,7 +21,6 @@
 <div class="theory-page">
 
 <Section label="Positions">
-  <h2>Positions on the manifold</h2>
   <p>
     All resources — documents, decisions, concepts, sessions,
     observations, anything that can be referred to — occupy positions in
@@ -71,7 +70,6 @@
 </Section>
 
 <Section label="Fields">
-  <h2>Fields</h2>
   <p>
     Concerns and intentions — active goals, decisions in force, ongoing
     sessions, standing constraints, ambient tolerances, open
@@ -105,7 +103,6 @@
 </Section>
 
 <Section label="Coupling">
-  <h2>Bidirectional <em>coupling</em></h2>
   <p>
     The relationship between streams and the manifold is bidirectional.
     Streams flow through the manifold, shaped by its fields. Streams
@@ -130,7 +127,6 @@
 </Section>
 
 <Section label="Projection">
-  <h2>Projection</h2>
   <p>
     What an observer experiences as "the current context" is a
     <em>projection</em> of the stream activity against the

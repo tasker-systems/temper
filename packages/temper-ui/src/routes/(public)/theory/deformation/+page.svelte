@@ -21,7 +21,6 @@
 <div class="theory-page">
 
 <Section label="Forming">
-  <h2>Forming deformations</h2>
   <p>
     Deformations are the events that shape the manifold's geometry. They
     come in two broad classes — <em>forming</em> and <em>forgetting</em> —
@@ -64,7 +63,6 @@
 </Section>
 
 <Section label="By topic-class">
-  <h2>Deformation by <em>topic-class</em></h2>
   <p>
     Different kinds of events deform the manifold in different modes.
     Three are worth naming.
@@ -98,7 +96,6 @@
 </Section>
 
 <Section label="Forgetting">
-  <h2>Forgetting <em>mechanics</em></h2>
   <p>
     Forgetting is not deletion or annotation; it is geometric. There are
     three distinct mechanics, plus a property that can attach to certain
@@ -132,7 +129,6 @@
 </Section>
 
 <Section label="Scarification">
-  <h2>Scarification</h2>
   <p>
     When a deformation is performed because something was <em>wrong</em>
     — whether through human error, agent hallucination, latent ambiguity

@@ -41,7 +41,6 @@
 </Section>
 
 <Section label="Entity types">
-  <h2>Entity types</h2>
   <table class="theory-table">
     <thead>
       <tr>
@@ -106,7 +105,6 @@
 </Section>
 
 <Section label="Topic taxonomy">
-  <h2>Topic taxonomy</h2>
   <p>Categories below are illustrative, not closed.</p>
   <table class="theory-table">
     <thead>
@@ -162,7 +160,6 @@
 </Section>
 
 <Section label="Roles within events">
-  <h2>Roles within events</h2>
   <table class="theory-table">
     <thead>
       <tr>
@@ -197,7 +194,6 @@
 </Section>
 
 <Section label="Derived structures">
-  <h2>Derived structures</h2>
   <p>Computed from event history at projection time, not maintained as separate state.</p>
   <table class="theory-table">
     <thead>
@@ -248,7 +244,6 @@
 </Section>
 
 <Section label="Mechanics">
-  <h2>Mechanics</h2>
   <table class="theory-table">
     <thead>
       <tr>
@@ -333,7 +328,6 @@
 </Section>
 
 <Section label="Stratification">
-  <h2>Stratification</h2>
   <table class="theory-table">
     <thead>
       <tr>
@@ -344,7 +338,7 @@
     <tbody>
       <tr>
         <td>Substrate</td>
-        <td>Totality of recorded events (all topics), append-only. Not "objective data"; the perspective-laden record of past emission acts.</td>
+        <td>Totality of recorded events (all topics), append-only. Not "objective data"; the perspective-laden record of past emissions.</td>
       </tr>
       <tr>
         <td>Information</td>
@@ -423,7 +417,6 @@
 </Section>
 
 <Section label="Resolved stances">
-  <h2>Resolved <em>stances</em></h2>
   <p>The schema's load-bearing commitments. Stable enough to build against.</p>
   <ul>
     <li>Attention is the teleological anchor; design constraints derive from it.</li>
@@ -452,7 +445,6 @@
 </Section>
 
 <Section label="What is moving">
-  <h2>What's still <em>moving</em></h2>
   <p>
     Two classes of unsettled material live at
     <a href="/theory/open-questions#schema">/theory/open-questions#schema</a>:

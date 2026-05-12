@@ -35,7 +35,6 @@
 </Section>
 
 <Section label="The problem">
-  <h2>The translation <em>problem</em></h2>
   <p>
     Multiple perspectives engaging the same data field with aligned
     good-faith intentions still produce different information shapes —
@@ -98,7 +97,6 @@
 </Section>
 
 <Section label="Knowledge as relationship">
-  <h2>Knowledge as <em>relationship</em></h2>
   <p>
     Knowledge is the experiential outcome when a perspective engages a
     projection of the represented state. It is a relationship, not a

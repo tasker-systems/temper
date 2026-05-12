@@ -185,7 +185,6 @@
 </section>
 
 <Section label="A note">
-  <h2>A note on this <em>page</em></h2>
   <p>
     This page exists for two reasons. First, the manifesto's commitment to
     making perspective-differences visible applies recursively to the docs

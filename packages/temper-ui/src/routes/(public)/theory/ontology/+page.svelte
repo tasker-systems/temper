@@ -22,19 +22,17 @@
 <div class="theory-page">
 
 <Section label="Data">
-  <h2>Data</h2>
   <p>
     Data is the substrate — events, recorded, immutable, append-only.
     Not objective in the view-from-nowhere sense: every event has an
     emitter, and the substrate is the perspective-laden record of past
-    emission acts. The objectivity that's available is weaker and more
+    emissions. The objectivity that's available is weaker and more
     honest — any qualified observer can in principle re-engage the same
     recorded events, but they're never engaging neutral data.
   </p>
 </Section>
 
 <Section label="Intention">
-  <h2>Intention</h2>
   <p>
     Intention is a vector originating at a perspective-point. It has
     direction (what it is about), magnitude (how strongly it points),
@@ -44,7 +42,6 @@
 </Section>
 
 <Section label="Information">
-  <h2>Information</h2>
   <p>
     Information is what happens when intention-vectors interact with
     the data substrate. The same data engaged by different intentions
@@ -54,7 +51,6 @@
 </Section>
 
 <Section label="Knowledge">
-  <h2>Knowledge</h2>
   <p>
     Knowledge is the relationship between a perspective and the
     information it has produced through intentional engagement with
