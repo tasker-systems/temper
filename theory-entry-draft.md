@@ -66,6 +66,8 @@ Two reference surfaces sit alongside:
 
 The model is provisional. It captures a mental picture clearly enough to be argued with.
 
+One symmetry is worth flagging before the model proper. The perspective-side has roughly the same shape as the data-side: discrete deformations, continuous trajectories, characteristic decay rates, prior-and-likelihood structure. Resources and perspectives are both on the manifold; both have positions, trajectories, and decay; both can be deformed strongly or weakly; both have spatial profiles for their effects. This is some evidence the primitives are well-chosen rather than ad-hoc — a model that requires fewer primitives to describe more phenomena is more likely to be sound.
+
 ---
 
 I am not trying to win an academic argument or start a movement. I am writing this so that when I am six months into implementation and tempted to take a shortcut that costs the user some attention they will not get back, I have something to read that reminds me why I started. I am publishing it because the commitment is more honest if it is shared, and because anyone considering this tool deserves to know what its author thinks the tool is *for* before they decide whether to spend their attention on it.
@@ -79,6 +81,7 @@ I am not trying to win an academic argument or start a movement. I am writing th
 - **Transition into the model:** "These are not features I want to ship. They are commitments I want to keep" is the manifesto's own pivot. The manifesto continues with "This document is not that. This document is what the model is *for*." The page adapts that to "The pages under `/theory` introduce that model" — inverting the framing because the page *is* the model's introduction.
 - **The misnomer paragraphs are from the semantic-model doc** (third person). Drawn from the *K = experience(P, I)* discussion's consequence: "knowledge bases are misnomers."
 - **Closing: manifesto verbatim** with one adjustment — "anyone considering this tool deserves to know what its author thinks the tool is *for*" stays, even though the reader has already navigated to `/theory`. The phrase still applies; nothing about reaching this page commits the reader to staying with it.
+- **The "one symmetry is worth flagging" paragraph** sits between the sub-page index and the closing. It is the *Semantic Model* document's "Symmetries the Model Suggests" section, compressed to a single paragraph. The source's claim — that data and perspectives sit under the same primitives, which is evidence the primitives are well-chosen — has no obvious home elsewhere in the IA (it is meta to the model rather than part of any one layer of it), so it lands here.
 - **Title:** "What Temper is building toward" is the page's own title, not from any source. It frames the tier as forward-looking, which is the framing Pete has confirmed: `/theory` describes the direction, not the current state. Open to redirect.
 
 ## Things considered and rejected
