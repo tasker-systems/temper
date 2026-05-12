@@ -43,9 +43,7 @@
 
 {@render children()}
 
-{#if !isEntry}
-  <TheoryNav {prev} {next} />
-{/if}
+<TheoryNav {prev} {next} />
 
 <Footer />
 
