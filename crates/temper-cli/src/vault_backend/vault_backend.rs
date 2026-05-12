@@ -479,7 +479,9 @@ impl Backend for VaultBackend {
         &self,
         cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        use temper_core::operations::{validate_update, DomainEvent};
+        use temper_core::operations::{
+            apply_defaults_value, ensure_managed_identity_keys, validate_update, DomainEvent,
+        };
 
         // 1. Pre-flight validation (shared).
         validate_update(&cmd).map_err(|e| TemperError::BadRequest(e.to_string()))?;
@@ -497,6 +499,78 @@ impl Backend for VaultBackend {
 
         // 3. Parse on-disk frontmatter.
         let mut fm = Frontmatter::parse_file(&resolved.path)?;
+
+        // 3a. Symmetric-defense receive-side healing (spec §"Schema-required defaults").
+        //
+        // Pre-Phase-4 files may be missing canonical keys that every new write
+        // guarantees. Heal them now — at the next round-trip — before applying
+        // the caller's update. Both `apply_defaults_value` and
+        // `ensure_managed_identity_keys` are no-ops for fields already present.
+        //
+        // Approach (a): build a serde_json::Value of the managed-meta tier,
+        // run both shared actions, write any newly-injected keys back via
+        // `set_managed_field`. The tier round-trip is lossless for managed keys.
+        {
+            let mut managed = fm.managed_json();
+
+            // Heal doc-type defaults (e.g., temper-stage: backlog for tasks).
+            apply_defaults_value(fm.doc_type().as_str(), &mut managed);
+
+            // Heal canonical identity keys from on-disk title/slug. Use the
+            // same fallback logic as `vault_file_to_resource_row` so the
+            // healed value always matches what the row projection would return.
+            let title = fm
+                .value()
+                .get(serde_yaml::Value::String("temper-title".to_string()))
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| {
+                    resolved
+                        .path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("Untitled")
+                })
+                .to_string();
+            // Slug fallback: use the on-disk value when present; otherwise
+            // derive from the filename stem. `ensure_managed_identity_keys`
+            // removes temper-slug from managed when passed None — always pass
+            // Some so the healed managed Value carries the key.
+            let slug = fm
+                .value()
+                .get(serde_yaml::Value::String("temper-slug".to_string()))
+                .and_then(|v| v.as_str())
+                .map(str::to_string)
+                .or_else(|| {
+                    resolved
+                        .path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(str::to_string)
+                });
+            ensure_managed_identity_keys(&mut managed, &title, slug.as_deref());
+
+            // Write back only keys that managed_json did not previously contain
+            // (i.e., keys the healing injected). Existing fields are untouched.
+            // Collect first to release the immutable borrow on `fm.value()`
+            // before calling the mutable `fm.set_managed_field`.
+            let to_inject: Vec<(String, serde_json::Value)> = if let Some(obj) = managed.as_object()
+            {
+                let existing = fm.value();
+                obj.iter()
+                    .filter(|(key, _)| {
+                        existing
+                            .get(&serde_yaml::Value::String((*key).clone()))
+                            .is_none()
+                    })
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            } else {
+                vec![]
+            };
+            for (key, val) in to_inject {
+                fm.set_managed_field(&key, val);
+            }
+        }
 
         // 4. Determine current doctype/context from on-disk frontmatter.
         let get_str = |fm: &Frontmatter, key: &str| -> String {
@@ -617,12 +691,7 @@ impl Backend for VaultBackend {
         // Local-tail: file removal.
         // Backend assumes cmd.force is authoritative — the TTY guard and
         // [y/N] prompt are surface concerns handled by the clap layer in 4b.
-        // cmd.force is consumed below in an assertion to satisfy the
-        // "fields must be used" principle.
-        debug_assert!(
-            cmd.force || !cmd.force,
-            "force field acknowledged; prompt handled at surface"
-        );
+        let _ = cmd.force; // acknowledged; prompt handled at surface
 
         if resolved.path.exists() {
             std::fs::remove_file(&resolved.path)

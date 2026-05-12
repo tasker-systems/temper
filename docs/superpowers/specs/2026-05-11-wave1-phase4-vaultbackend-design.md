@@ -177,7 +177,7 @@ let output = backend.create_resource(cmd).await?;
 | Trait method | Vault-side flow | Notes |
 |---|---|---|
 | `create_resource` | `validate_create(&cmd)` → `apply_defaults_value(doctype, &mut managed)` → `ensure_managed_identity_keys(&mut managed, title, Some(slug))` → per-doctype file-write dispatch (`per_doctype::write_for(&cmd)`) → manifest entry insert (`Provisional`) → `RemoteSynced` / `PushDeferred` via `client.ingest().create(&payload)` → manifest entry promote-to-Clean on success | Per-doctype dispatch table covers task / goal / session / research / concept / decision. Each entry calls the existing creator (`actions::task::create`, `commands::goal::create`, etc.) for now — full pull-in is a follow-up. Body present? Run `prepare_body_trio` (already in `temper-api/src/backend/translators.rs`; lift the function-shape into a shared `temper-core` helper if both backends need it, or duplicate with a TODO; default: duplicate into vault_backend/translators.rs and capture as cleanup). |
-| `update_resource` | resolve `ResourceRef` → load file via `lookup::find_resource` → load `Frontmatter::parse_file` → apply scalar+array updates (existing logic, lifted into `translators::apply_updates`) → optional `--context-to` / `--type-to` move → `Frontmatter::set_body` if `cmd.body.is_some()` → `Frontmatter::write_to(final_path)` → if file moved, remove old → manifest entry rehash → push via `client.resources().update(uuid, &req)` (or `client.ingest().update(uuid, &payload)` for body-bearing) → emit `VaultFileWritten` + `VaultManifestUpdated` + `RemoteSynced`/`PushDeferred` | Reuses `temper_core::operations::actions::merge_managed_meta` and `merge_open_meta` for the in-memory merge before write. The 4b call site stops calling `actions::body_source::resolve_body_source` directly — that becomes a surface-side translation (clap → `BodyUpdate`), and the backend assumes the cmd already has the resolved body. |
+| `update_resource` | resolve `ResourceRef` → load file via `lookup::find_resource` → load `Frontmatter::parse_file` → **symmetric-defense healing** (`apply_defaults_value` + `ensure_managed_identity_keys` on managed tier; write back newly-injected keys via `set_managed_field`) → apply scalar+array updates (existing logic, lifted into `translators::apply_updates`) → optional `cmd.move_to: Option<MoveSpec { context_to, type_to }>` triggers the file move → `Frontmatter::set_body` if `cmd.body.is_some()` → `Frontmatter::write_to(final_path)` → if file moved, remove old → manifest entry rehash → push via `client.resources().update(uuid, &req)` (or `client.ingest().update(uuid, &payload)` for body-bearing) → emit `VaultFileWritten` + `VaultManifestUpdated` + `RemoteSynced`/`PushDeferred` | Reuses `temper_core::operations::actions::merge_managed_meta` and `merge_open_meta` for the in-memory merge before write. The 4b call site stops calling `actions::body_source::resolve_body_source` directly — that becomes a surface-side translation (clap → `BodyUpdate`), and the backend assumes the cmd already has the resolved body. |
 | `delete_resource` | resolve `ResourceRef` → cloud-first: `client.resources().delete(uuid)` → on success: load manifest, find file via entry-or-fallback (existing logic), prompt or `--force`, `std::fs::remove_file`, manifest entry remove → emit `RemoteSynced` (cloud delete) + `VaultFileRemoved` + `VaultManifestUpdated` | Cloud-first ordering preserved (parent spec hard rule). The non-TTY guard moves to the surface (clap layer); backend assumes `cmd.force` is correct. |
 | `show_resource` | resolve `ResourceRef` → load file via `lookup::find_resource` → `Frontmatter::parse_file(&path)` → return `ResourceRow` projection. On `LocallyMissing` (manifest entry exists but file missing): fall back to `client.resources().content(uuid)` (the existing `show_via_api_fallback`). | Read-path; reuses `lookup::find_resource` from PR #76. No events emitted (Phase 3 read-path precedent). |
 | `list_resources` | scan `vault_root/<owner>/<context>/<doctype>/` → parse each file → filter → sort → project to `Vec<ResourceSummary>` | Read-path. Reuses existing `scan_rows`/`filter_rows`/`sort_rows` helpers, lifted from `commands/resource.rs` into `vault_backend/list.rs` (or kept inline in `vault_backend.rs` if the helpers are short). |
@@ -274,6 +274,14 @@ architectural foundation; no behavior change visible from any surface.
 - `cargo make check`, `cargo make test`, `cargo make test-db` clean.
 - No `commands/*.rs` callers rewired; the trait is dark-launched,
   verified by trait-impl tests.
+- **Per-doctype audit gate fired in 4a Task 7.** All four delegated doctypes
+  (task/goal/session/research) call `publish_local_write_best_effort`,
+  which transitively reads `VaultState::from_env()`. Dispatching from
+  `VaultBackend` into them would re-enter the VaultState branching that
+  Phase 4b removes. 4a ships with `concept`/`decision` dispatch only;
+  task/goal/session/research return `BadRequest` from `VaultBackend.create_resource`
+  until the follow-up task `complete-per-doctype-write-dispatch-for-task-goal-session-research`
+  reworks the existing creators to be VaultState-free.
 
 **4b — Resource extraction (subsequent session).** Migrate `commands/
 resource.rs`'s Local-mode write paths to dispatch through `VaultBackend`.
@@ -449,7 +457,8 @@ The 4a/4b plan documents must embed these rules in implementer prompts
   Phase 5 (or a follow-up cleanup) may pull those into `vault_backend/
   per_doctype.rs` for full uniformity. Default: delegation in 4a/4b;
   full pull-in deferred.
-- **`OwnerHandle` for vault path construction.** PR #75 threaded owner
-  through vault-path helpers; confirm `Vault::doc_file` already takes
-  an owner string and `OwnerHandle::as_str()` produces the right form.
-  If not, a small helper goes into 4a Task 2.
+- **`OwnerHandle` for vault path construction.** RESOLVED-AS-DEFERRED in 4a:
+  `OwnerHandle` does not yet exist in `temper-core`; the `VaultBackend.owner`
+  field is a `String` (sigil-prefixed, e.g., `"@me"`). Future refactor: when
+  `OwnerHandle` lands as a typed wrapper, swap the field type and remove
+  `as_str()` calls at the use sites.

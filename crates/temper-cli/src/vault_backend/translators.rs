@@ -364,11 +364,10 @@ pub(crate) fn apply_updates(
         fm.set_managed_field("temper-type", serde_json::Value::String(new_type.clone()));
     }
 
-    // Use the owner that was stored on the backend (passed in) for the path
-    // when no context_to was requested. If context_to was requested, we already
-    // built the path with the new owner. For the owner parameter itself,
-    // just pass it through — it's only used in non-move path (already handled above).
-    let _ = owner; // used implicitly via config.owner_for_context above
+    // owner consumed for future move semantics; today moves derive owner from
+    // config.owner_for_context (called above for context_to moves), so the
+    // raw owner param is unreferenced in the non-move branch.
+    let _ = owner;
 
     Ok(final_path)
 }

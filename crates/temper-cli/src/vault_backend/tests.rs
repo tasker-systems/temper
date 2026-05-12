@@ -1204,6 +1204,100 @@ mod update_resource_tests {
         );
     }
 
+    // ── update_resource_heals_missing_temper_title ───────────────────────────
+    //
+    // Symmetric-defense receive-side: a pre-Phase-4 file that lacks
+    // `temper-title` in frontmatter should have it injected during update_resource
+    // (the key falls back to the filename stem). Verifies the on-disk file
+    // contains `temper-title` after the round-trip.
+
+    #[tokio::test]
+    async fn update_resource_heals_missing_temper_title() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/heal-title.md";
+        let abs = tmp.path().join(rel);
+
+        // Write a file that deliberately omits temper-title (pre-Phase-4 style).
+        let content = format!(
+            "---\ntemper-id: \"{}\"\ntemper-type: task\ntemper-context: temper\ntemper-slug: heal-title\ntemper-stage: backlog\n---\n\nBody.\n",
+            *id
+        );
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(&abs, content).unwrap();
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: None,
+            managed_meta: Some(ManagedMeta {
+                stage: Some("in-progress".to_string()),
+                ..ManagedMeta::default()
+            }),
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        backend.update_resource(cmd).await.expect("update ok");
+
+        // On-disk frontmatter must now contain temper-title.
+        let disk_content = fs::read_to_string(tmp.path().join(rel)).unwrap();
+        assert!(
+            disk_content.contains("temper-title"),
+            "update_resource must heal missing temper-title; got:\n{disk_content}"
+        );
+    }
+
+    // ── update_resource_heals_missing_temper_slug ─────────────────────────────
+    //
+    // Symmetric-defense receive-side: a pre-Phase-4 file that lacks
+    // `temper-slug` should have it injected during update_resource.
+
+    #[tokio::test]
+    async fn update_resource_heals_missing_temper_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let id = ResourceId::from(Uuid::now_v7());
+        let rel = "@me/temper/task/heal-slug.md";
+        let abs = tmp.path().join(rel);
+
+        // Write a file that deliberately omits temper-slug (pre-Phase-4 style).
+        let content = format!(
+            "---\ntemper-id: \"{}\"\ntemper-type: task\ntemper-context: temper\ntemper-title: 'Heal Slug Task'\ntemper-stage: backlog\n---\n\nBody.\n",
+            *id
+        );
+        fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        fs::write(&abs, content).unwrap();
+
+        let mut manifest = Manifest::new("test-device".to_string());
+        manifest.entries.insert(id, make_manifest_entry(rel));
+
+        let backend = make_backend(tmp.path(), manifest);
+        let cmd = UpdateResource {
+            resource: ResourceRef::Uuid { id },
+            body: None,
+            managed_meta: Some(ManagedMeta {
+                stage: Some("in-progress".to_string()),
+                ..ManagedMeta::default()
+            }),
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        backend.update_resource(cmd).await.expect("update ok");
+
+        // On-disk frontmatter must now contain temper-slug.
+        let disk_content = fs::read_to_string(tmp.path().join(rel)).unwrap();
+        assert!(
+            disk_content.contains("temper-slug"),
+            "update_resource must heal missing temper-slug; got:\n{disk_content}"
+        );
+    }
+
     // ── update_resource_with_client_emits_remote_synced (stubbed) ────────────
 
     #[tokio::test]
