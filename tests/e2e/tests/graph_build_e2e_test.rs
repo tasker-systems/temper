@@ -50,6 +50,7 @@ fn graph_build_config(vault: &Path, owner: &str) -> temper_cli::config::Config {
             repos: Vec::new(),
         }],
         skill_output: vault.join(".skill"),
+        profile_slug: None,
     }
 }
 

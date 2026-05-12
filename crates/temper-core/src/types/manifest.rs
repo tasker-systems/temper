@@ -19,6 +19,18 @@ pub enum ManifestEntryState {
     Conflict,
     /// Subscribed but not yet materialized (new resource from server)
     Pending,
+    /// Manifest entry exists but the local vault file is missing on
+    /// disk. Set by rehash/normalize when the file has been removed
+    /// (deliberately or accidentally — there is no implicit-delete
+    /// path; deletes go through `temper resource delete`). The next
+    /// sync run reclassifies this as a pull-recovery target.
+    ///
+    /// Phase 6 hand-off: when the per-resource state machine lands,
+    /// this variant either folds into `Synced` with a transient
+    /// recovery flag, or stays as a discrete state with documented
+    /// transitions out of it (after-pull → `Synced`; force-delete →
+    /// removed from manifest entirely).
+    LocallyMissing,
 }
 
 /// A single resource entry in the local manifest.
@@ -102,6 +114,7 @@ mod tests {
             (ManifestEntryState::RemoteModified, "\"remote_modified\""),
             (ManifestEntryState::Conflict, "\"conflict\""),
             (ManifestEntryState::Pending, "\"pending\""),
+            (ManifestEntryState::LocallyMissing, "\"locally_missing\""),
         ];
         for (state, expected_json) in &states {
             let json = serde_json::to_string(state).unwrap();

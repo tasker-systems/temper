@@ -31,6 +31,7 @@ fn fixture_config(tmp: &TempDir) -> Config {
         contexts: vec!["temper".to_string()],
         subscriptions: Vec::new(),
         skill_output: tmp.path().join(".skill"),
+        profile_slug: None,
     }
 }
 
@@ -524,6 +525,7 @@ fn multi_context_config(tmp: &TempDir) -> Config {
         contexts: vec!["temper".to_string(), "tasker".to_string()],
         subscriptions: Vec::new(),
         skill_output: tmp.path().join(".skill"),
+        profile_slug: None,
     }
 }
 

@@ -390,26 +390,38 @@ pub async fn ingest_url(
 
 /// Canonical vault path for a managed resource.
 ///
-/// `{vault_root}/{context}/{doc_type}/{slug}.md`
+/// `{vault_root}/{owner}/{context}/{doc_type}/{slug}.md`
 ///
-/// The slug is a human-readable identifier derived from the resource title.
-/// Falls back to the UUID string when no slug is available.
-pub fn build_vault_path(vault_root: &Path, context: &str, doc_type: &str, slug: &str) -> PathBuf {
-    // TODO(owner-scoped): thread owner through when subscriptions sync lands.
-    // Until then the stub matches Config::owner_for_context's @me fallback.
-    Vault::new(vault_root).doc_file("@me", context, doc_type, slug)
+/// `owner` is the profile-handle component (e.g. `"@me"` or `"@alice"`).
+/// Callers should resolve via `Config::owner_for_context(context)` when
+/// they have a `Config` in scope; the literal `"@me"` is appropriate for
+/// tests and contexts without a configured subscription.
+pub fn build_vault_path(
+    vault_root: &Path,
+    owner: &str,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+) -> PathBuf {
+    Vault::new(vault_root).doc_file(owner, context, doc_type, slug)
 }
 
 /// De-duplicate a vault slug by appending `-2`, `-3`, etc. when the target
 /// path already exists.
-pub fn dedup_vault_slug(vault_root: &Path, context: &str, doc_type: &str, slug: &str) -> String {
-    let base_path = build_vault_path(vault_root, context, doc_type, slug);
+pub fn dedup_vault_slug(
+    vault_root: &Path,
+    owner: &str,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+) -> String {
+    let base_path = build_vault_path(vault_root, owner, context, doc_type, slug);
     if !base_path.exists() {
         return slug.to_string();
     }
     for i in 2..1000 {
         let candidate = format!("{slug}-{i}");
-        let path = build_vault_path(vault_root, context, doc_type, &candidate);
+        let path = build_vault_path(vault_root, owner, context, doc_type, &candidate);
         if !path.exists() {
             return candidate;
         }
@@ -572,16 +584,20 @@ pub fn normalize_body_for_vault(content: &str) -> String {
 
 /// Write a vault file and register the resource in the manifest.
 ///
-/// `slug` determines the vault filename (`{slug}.md`).  Pass
+/// `slug` determines the vault filename (`{slug}.md`). Pass
 /// `slug_from_title(&resource.title)` when no better slug is available.
+/// `owner` is the profile-handle directory component — resolve via
+/// `Config::owner_for_context(context)`.
 ///
 /// Returns the absolute vault path.
 #[expect(
     clippy::too_many_arguments,
-    reason = "vault write needs context, slug, resource, content, source, and extra fields"
+    reason = "vault write needs owner, context, slug, resource, content, source, and extra fields; \
+              collapse into a VaultWritePlan struct once the surface stabilizes."
 )]
 pub fn write_vault_file_and_register(
     vault_root: &Path,
+    owner: &str,
     context: &str,
     doc_type: &str,
     slug: &str,
@@ -590,7 +606,7 @@ pub fn write_vault_file_and_register(
     ingestion_source: Option<&str>,
     extra_fields: Option<&[(&str, &str)]>,
 ) -> Result<PathBuf> {
-    let vault_path = build_vault_path(vault_root, context, doc_type, slug);
+    let vault_path = build_vault_path(vault_root, owner, context, doc_type, slug);
 
     if let Some(parent) = vault_path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -791,17 +807,27 @@ mod tests {
     #[test]
     fn build_vault_path_produces_correct_path() {
         let root = Path::new("/vault");
-        let path = build_vault_path(root, "work", "note", "my-document");
+        let path = build_vault_path(root, "@me", "work", "note", "my-document");
         assert_eq!(path, PathBuf::from("/vault/@me/work/note/my-document.md"));
     }
 
     #[test]
     fn build_vault_path_nested_context() {
         let root = Path::new("/home/user/kb");
-        let path = build_vault_path(root, "personal", "resource", "research-paper");
+        let path = build_vault_path(root, "@me", "personal", "resource", "research-paper");
         assert_eq!(
             path,
             PathBuf::from("/home/user/kb/@me/personal/resource/research-paper.md")
+        );
+    }
+
+    #[test]
+    fn build_vault_path_threads_non_me_owner() {
+        let root = std::path::Path::new("/vault");
+        let path = build_vault_path(root, "@petetaylor", "work", "note", "my-document");
+        assert_eq!(
+            path,
+            std::path::PathBuf::from("/vault/@petetaylor/work/note/my-document.md")
         );
     }
 
@@ -1209,6 +1235,63 @@ created: 2026-03-23
             owner, "@j-cole-taylor",
             "frontmatter must record the canonical owner the caller passed in, \
              not the API's @me shorthand"
+        );
+    }
+
+    #[test]
+    fn local_mode_create_writes_own_resource_under_at_me() {
+        // Regression pin: a `temper resource create` (or any equivalent
+        // local-mode create primitive) must write own-resource files under
+        // `@me/<ctx>/<doctype>/...`, regardless of whether the user's
+        // profile.slug is configured.
+        //
+        // PR #70 / PR #72 broke this by canonicalizing own-resource pulls to
+        // `@<profile.slug>/...`. Task 12 reversed the pull path; Task 13's
+        // B.2 sibling threaded `owner` through the vault-path helpers so
+        // callers can pass an explicit handle. The invariant this test pins
+        // is the **path shape**: today `build_vault_path` hardcodes `@me`
+        // for the unscoped helper, and `Config::owner_for_context` falls back
+        // to `@me` when no subscription is configured for the context. Either
+        // way, the file must land under `@me/`.
+        //
+        // The assert below is on the resulting `PathBuf`, not on the
+        // implementation strategy — so a future refactor that switches from
+        // the hardcoded stub to a `Config::owner_for_context(ctx)` lookup
+        // for own contexts stays green.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let resource = test_resource_row();
+
+        let vault_path = write_vault_file_and_register(
+            tmp.path(),
+            "@me",
+            "temper",
+            "research",
+            "my-doc",
+            &resource,
+            "# Body\n",
+            None,
+            None,
+        )
+        .expect("write_vault_file_and_register should succeed");
+
+        let expected_prefix = tmp.path().join("@me");
+        assert!(
+            vault_path.starts_with(&expected_prefix),
+            "own-resource create must land under {}/, got {}",
+            expected_prefix.display(),
+            vault_path.display(),
+        );
+        // Belt-and-braces: ensure we never accidentally regressed back to
+        // emitting an `@<some-slug>/` directory for own resources.
+        let rel = vault_path.strip_prefix(tmp.path()).unwrap();
+        let first_segment = rel
+            .components()
+            .next()
+            .and_then(|c| c.as_os_str().to_str())
+            .expect("vault path must have an owner segment");
+        assert_eq!(
+            first_segment, "@me",
+            "first vault path segment must be `@me` for own resources, got `{first_segment}`",
         );
     }
 

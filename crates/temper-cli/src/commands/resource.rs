@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use askama::Template;
 use chrono::Local;
 use serde::Serialize;
@@ -15,18 +13,6 @@ use crate::output::columns as col_registry;
 use crate::output::table::TableRenderer;
 use crate::templates::{ConceptTemplate, DecisionTemplate};
 use crate::vault;
-
-const VALID_DOC_TYPES: &[&str] = &["task", "goal", "session", "research", "concept", "decision"];
-
-fn validate_doc_type(doc_type: &str) -> Result<()> {
-    if !VALID_DOC_TYPES.contains(&doc_type) {
-        return Err(TemperError::Vault(format!(
-            "invalid resource type: {doc_type}. Must be one of: {}",
-            VALID_DOC_TYPES.join(", ")
-        )));
-    }
-    Ok(())
-}
 
 /// Require a context, returning an error if none specified.
 ///
@@ -70,7 +56,7 @@ pub fn create(
 
     use temper_core::types::config::VaultState;
 
-    validate_doc_type(doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     let ctx = require_context(config, context)?;
 
@@ -614,7 +600,7 @@ fn render_server_rows(
 /// Pretty/NoTty return an empty string so the caller (`list()`) can surface
 /// a user-friendly "No X resources found" hint instead of a bare header row.
 pub fn render_list(params: &RenderListParams<'_>) -> Result<String> {
-    validate_doc_type(params.doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(params.doc_type)?;
     // Filter first, then sort — sorting unfiltered rows wastes work on rows
     // we're about to discard.
     let rows = scan_rows(params.config, params.doc_type, params.context)?;
@@ -770,7 +756,7 @@ pub fn delete(
     use temper_core::types::config::VaultState;
     use temper_core::types::ResourceId;
 
-    validate_doc_type(doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     let vault_state = VaultState::from_env();
 
@@ -837,13 +823,15 @@ pub fn delete(
 
             let vault_path = match manifest_entry_path {
                 Some(p) => p,
-                None => match find_resource_file(
-                    &config_clone,
-                    &doc_type_owned,
-                    &slug_owned,
-                    context_owned.as_deref(),
-                ) {
-                    Ok((p, _ctx)) => p,
+                None => match crate::lookup::find_resource(crate::lookup::FindableResource {
+                    config: &config_clone,
+                    manifest: Some(&manifest),
+                    owner: None,
+                    context: context_owned.clone(),
+                    doc_type: temper_core::frontmatter::DocType::from_str(&doc_type_owned)?,
+                    slug_or_suffix: slug_owned.clone(),
+                }) {
+                    Ok(resolved) => resolved.path,
                     // No manifest entry and no on-disk file — server
                     // delete already ran; nothing more to clean up.
                     Err(_) => return Ok(()),
@@ -888,7 +876,7 @@ pub fn show(
     format: &str,
     edges: bool,
 ) -> Result<()> {
-    validate_doc_type(doc_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     match doc_type {
         "task" => crate::commands::task::show(config, slug, context, format),
@@ -919,18 +907,20 @@ pub(crate) async fn resolve_resource_id(
     context: Option<&str>,
     vault_state: temper_core::types::VaultState,
 ) -> Result<temper_core::types::ids::ResourceId> {
-    use temper_core::types::ids::ResourceId;
-
     if matches!(vault_state, temper_core::types::VaultState::Local) {
-        if let Ok((path, _)) = find_resource_file(config, doc_type, slug, context) {
-            let body =
-                std::fs::read_to_string(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
-            if let Ok(fm) = temper_core::frontmatter::Frontmatter::try_from(body.as_str()) {
-                if let Some(id_str) = fm.value().get("temper-id").and_then(|v| v.as_str()) {
-                    if let Ok(uuid) = uuid::Uuid::parse_str(id_str) {
-                        return Ok(ResourceId::from(uuid));
-                    }
+        if let Ok(dt) = temper_core::frontmatter::DocType::from_str(doc_type) {
+            if let Ok(resolved) = crate::lookup::find_resource(crate::lookup::FindableResource {
+                config,
+                manifest: None,
+                owner: None,
+                context: context.map(str::to_string),
+                doc_type: dt,
+                slug_or_suffix: slug.to_string(),
+            }) {
+                if let Some(id) = resolved.resource_id {
+                    return Ok(id);
                 }
+                // No id in frontmatter or manifest — fall through to API.
             }
         }
     }
@@ -945,6 +935,74 @@ pub(crate) async fn resolve_resource_id(
     Ok(row.id)
 }
 
+/// API fallback for `temper resource show` when the local vault file is
+/// missing in local mode. Resolves the resource id via
+/// `GET /api/resources/by-uri`, fetches body via
+/// `GET /api/resources/{id}/content`, and prints it. Does not write to the
+/// vault — recovery to disk is `temper sync run`'s job.
+///
+/// Distinguishes `TemperError::Network(_)` (couldn't reach server) from
+/// `TemperError::Api(_)` (server confirms not-found) so the caller sees
+/// a clearer error than the prior local-only `"<doctype> not found"`.
+pub(crate) fn show_via_api_fallback(
+    config: &Config,
+    doc_type: &str,
+    slug_or_suffix: &str,
+    context: Option<&str>,
+    format: &str,
+) -> Result<()> {
+    use crate::actions::runtime;
+    use temper_core::types::VaultState;
+
+    let ctx = context.map(str::to_string);
+    let slug = slug_or_suffix.to_string();
+    let dt = doc_type.to_string();
+    let config_clone = config.clone();
+    let format_owned = format.to_string();
+
+    let body = runtime::with_client(|client| {
+        Box::pin(async move {
+            let id = resolve_resource_id(
+                &config_clone,
+                client,
+                &dt,
+                &slug,
+                ctx.as_deref(),
+                VaultState::Local,
+            )
+            .await
+            .map_err(|e| match e {
+                TemperError::Network(msg) => TemperError::Vault(format!(
+                    "couldn't reach server to verify resource exists; \
+                     offline lookup failed for {slug}: {msg}"
+                )),
+                _ => TemperError::Vault(format!("{dt} not found locally or on server: {slug}")),
+            })?;
+            let content = client
+                .resources()
+                .content(*id.as_uuid())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+                .map_err(|e| match e {
+                    TemperError::Network(msg) => TemperError::Vault(format!(
+                        "couldn't reach server to fetch body for {slug}: {msg}"
+                    )),
+                    _ => TemperError::Vault(format!("{dt} not found locally or on server: {slug}")),
+                })?;
+
+            if format_owned == "json" {
+                Ok(serde_json::to_string_pretty(&content)
+                    .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?)
+            } else {
+                Ok(content.markdown)
+            }
+        })
+    })?;
+
+    print!("{body}");
+    Ok(())
+}
+
 /// Return the existing local path for a resource if found, or compute where
 /// it would live based on `Vault::doc_file`.
 fn find_or_compute_local_path(
@@ -953,8 +1011,17 @@ fn find_or_compute_local_path(
     slug: &str,
     context: Option<&str>,
 ) -> Result<(std::path::PathBuf, String)> {
-    if let Ok((path, ctx)) = find_resource_file(config, doc_type, slug, context) {
-        return Ok((path, ctx));
+    if let Ok(dt) = temper_core::frontmatter::DocType::from_str(doc_type) {
+        if let Ok(resolved) = crate::lookup::find_resource(crate::lookup::FindableResource {
+            config,
+            manifest: None,
+            owner: None,
+            context: context.map(str::to_string),
+            doc_type: dt,
+            slug_or_suffix: slug.to_string(),
+        }) {
+            return Ok((resolved.path, resolved.context));
+        }
     }
     let ctx = require_context(config, context)?;
     let owner = config.owner_for_context(&ctx);
@@ -1070,6 +1137,26 @@ fn show_generic(
             let doc_type_inner = doc_type_s.clone();
             let slug_inner = slug_s.clone();
             let ctx_inner = context_owned.clone();
+
+            // If the local file isn't resolvable on disk at all, route to
+            // the API fallback so the vault stays untouched. The
+            // show_cache path below would write the rebuilt file as
+            // tier-3 — that's correct when the file *was* present but
+            // stale, but cloud-only resources should not be materialized
+            // implicitly. Recovery to disk is `temper sync run`'s job.
+            if temper_core::frontmatter::DocType::from_str(&doc_type_s).is_ok()
+                && crate::lookup::find_resource(crate::lookup::FindableResource {
+                    config,
+                    manifest: None,
+                    owner: None,
+                    context: context.map(str::to_string),
+                    doc_type: temper_core::frontmatter::DocType::from_str(&doc_type_s)?,
+                    slug_or_suffix: slug_s.clone(),
+                })
+                .is_err()
+            {
+                return show_via_api_fallback(config, &doc_type_s, &slug_s, context, &format_s);
+            }
 
             let (path, ctx) = find_or_compute_local_path(config, &doc_type_s, &slug_s, context)?;
 
@@ -1200,71 +1287,9 @@ fn show_edges(slug: &str, format: &str) -> Result<()> {
     Ok(())
 }
 
-/// Find a resource file by slug, searching across contexts if none specified.
-///
-/// Matches by exact stem, slug portion after date prefix (e.g.
-/// `2026-04-06-my-slug` matches `my-slug`), or contains needle.
-fn find_resource_file(
-    config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
-) -> Result<(PathBuf, String)> {
-    let contexts_to_scan: Vec<String> = if let Some(ctx) = context {
-        vec![ctx.to_string()]
-    } else {
-        config.contexts.clone()
-    };
-
-    let needle = vault::slugify(slug);
-    let mut matches: Vec<(PathBuf, String)> = Vec::new();
-    let vault_layout = Vault::new(&config.vault_root);
-
-    for ctx in &contexts_to_scan {
-        let owner = config.owner_for_context(ctx);
-        let dir = vault_layout.doc_type_dir(&owner, ctx, doc_type);
-        if !dir.is_dir() {
-            continue;
-        }
-        for file_entry in std::fs::read_dir(&dir)? {
-            let file_entry = file_entry?;
-            let path = file_entry.path();
-            if path.extension().is_none_or(|e| e != "md") {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-
-            // Extract slug portion after date prefix (YYYY-MM-DD-)
-            let slug_portion = if stem.len() > 11
-                && stem.as_bytes()[4] == b'-'
-                && stem.as_bytes()[7] == b'-'
-                && stem.as_bytes()[10] == b'-'
-            {
-                &stem[11..]
-            } else {
-                &stem
-            };
-
-            // Match: exact stem, exact slug portion, or contains needle
-            if stem == needle || slug_portion == needle || stem.contains(&needle) {
-                matches.push((path, ctx.clone()));
-            }
-        }
-    }
-
-    if matches.is_empty() {
-        return Err(TemperError::Vault(format!("{doc_type} not found: {slug}")));
-    }
-
-    // Sort by path descending (most recent date-prefixed file first)
-    matches.sort_by(|a, b| b.0.cmp(&a.0));
-    let (path, ctx) = matches.into_iter().next().unwrap();
-    Ok((path, ctx))
-}
+// `find_resource_file` retired in favor of `crate::lookup::find_resource`
+// (typed DocType, owner-aware, manifest-aware id resolution, and no
+// slugify-collapse on input — closes C.1 from the 2026-05-09 audit sweep).
 
 /// Parameters for resource update.
 pub struct UpdateParams<'a> {
@@ -1483,10 +1508,10 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         .doc_type
         .or(params.type_from)
         .ok_or_else(|| TemperError::Project("--type or --type-from is required".into()))?;
-    validate_doc_type(current_type)?;
+    let _ = temper_core::frontmatter::DocType::from_str(current_type)?;
 
     if let Some(tt) = params.type_to {
-        validate_doc_type(tt)?;
+        let _ = temper_core::frontmatter::DocType::from_str(tt)?;
     }
 
     let vault_state = VaultState::from_env();
@@ -1500,7 +1525,18 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     let _ = vault_state;
 
     // Find the resource file
-    let (path, ctx) = find_resource_file(config, current_type, params.slug, params.context)?;
+    let (path, ctx) = {
+        let dt = temper_core::frontmatter::DocType::from_str(current_type)?;
+        let resolved = crate::lookup::find_resource(crate::lookup::FindableResource {
+            config,
+            manifest: None,
+            owner: None,
+            context: params.context.map(str::to_string),
+            doc_type: dt,
+            slug_or_suffix: params.slug.to_string(),
+        })?;
+        (resolved.path, resolved.context)
+    };
 
     // Load updatable fields from schema for validation
     let schema_fields = schema::updatable_fields(current_type)?;
@@ -1684,45 +1720,6 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    // -------------------------------------------------------------------------
-    // validate_doc_type tests
-    // -------------------------------------------------------------------------
-
-    #[test]
-    fn validate_doc_type_valid_types() {
-        for doc_type in &["task", "goal", "session", "research", "concept", "decision"] {
-            assert!(
-                validate_doc_type(doc_type).is_ok(),
-                "expected '{doc_type}' to be valid"
-            );
-        }
-    }
-
-    #[test]
-    fn validate_doc_type_invalid_returns_error() {
-        let result = validate_doc_type("foo");
-        assert!(result.is_err(), "expected 'foo' to be invalid");
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("invalid resource type"),
-            "error should mention invalid resource type: {err_msg}"
-        );
-        assert!(
-            err_msg.contains("foo"),
-            "error should include the invalid value: {err_msg}"
-        );
-    }
-
-    #[test]
-    fn validate_doc_type_empty_string_returns_error() {
-        assert!(validate_doc_type("").is_err());
-    }
-}
-
-#[cfg(test)]
 mod list_pipeline_tests {
     use super::*;
     use std::fs;
@@ -1738,6 +1735,7 @@ mod list_pipeline_tests {
             contexts: vec!["temper".into(), "default".into()],
             subscriptions: Vec::new(),
             skill_output: PathBuf::from("/tmp/skill"),
+            profile_slug: None,
         }
     }
 
