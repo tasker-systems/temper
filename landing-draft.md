@@ -49,7 +49,7 @@ These commitments are what the rest of the work answers to. They sit above the d
 
 There is a model underneath the commitments — a description of what working context actually is, prior to any system that handles it. That model is where the commitments become precise enough to build against: how *fading* works geometrically, what *perspective* means as a substrate property, why *events* are the primary substrate and the rest is derived.
 
-**Read the model →** `/foundations`
+**Read the model →** `/theory`
 
 ---
 
@@ -67,7 +67,7 @@ A few decisions in the draft that are worth flagging explicitly rather than leav
 
 - **The closing paragraph is adapted from the manifesto's own closing paragraph.** It is the only place the page is in a first-person register, and it is borrowed wholesale from the source. If the public landing should not be in first person at all, this paragraph either rewrites in third person or comes out.
 
-- **No mention of CLI, vault, markdown, frontmatter, agents, or doc types.** This is deliberate. The conceptual frame must be established before the product vocabulary is introduced. Those terms belong on foundations pages and on `/using-temper` if it exists.
+- **No mention of CLI, vault, markdown, frontmatter, agents, or doc types.** This is deliberate. The conceptual frame must be established before the product vocabulary is introduced. Those terms belong on `/theory` pages and on `/using-temper`.
 
 - **No mention of the model's primitives (manifold, fields, deformations, perspectives, scars).** Also deliberate. The landing page's job is to establish the *why*. The model's job is to establish the *what*. Conflating them on the landing is what the current site does and is what the new frame is trying to undo.
 

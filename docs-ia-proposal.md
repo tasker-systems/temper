@@ -22,18 +22,18 @@ Pulled directly from the three source documents so the rationale below is checka
 
 ```
 /                           What Temper is for             (manifesto layer)
-/foundations                Working context: a model       (model overview + anchor)
-/foundations/ontology         Data, intention, information, knowledge
-/foundations/manifold         Positions, fields, streams
-/foundations/time             Time, events, derivation
-/foundations/deformation      Forming, forgetting, scarification
-/foundations/perspectives     Who is asking
-/foundations/translation      Irreducibility, bridges, observer-relativity
-/primitives                 [pending] Schema reference     (framing layer)
-/using-temper               [pending] How to use it        (existing content, scoped)
+/theory                     Working context: a model       (model overview + anchor)
+/theory/ontology              Data, intention, information, knowledge
+/theory/manifold              Positions, fields, streams
+/theory/time                  Time, events, derivation
+/theory/deformation           Forming, forgetting, scarification
+/theory/perspectives          Who is asking
+/theory/translation           Irreducibility, bridges, observer-relativity
+/schema                     Schema reference (work in progress)   (framing layer)
+/using-temper               How to use Temper                     (existing /docs content, rehomed)
 ```
 
-Three tiers, each operating at a different layer of the source documents. No tier pretends to be a simpler version of the tier above it.
+Four tiers, each operating at a different layer of the source documents. No tier pretends to be a simpler version of the tier above it. The existing `/docs` route — semantically nondescript — is retired; its content rehomes at `/using-temper` and every current "getting started" link resolves there.
 
 ---
 
@@ -48,15 +48,15 @@ Three tiers, each operating at a different layer of the source documents. No tie
 **What it deliberately is not:**
 - A feature tour. The manifesto explicitly rejects framing the commitments as "features I want to ship."
 - A landing page in the conventional sense. It does not ask the reader to install or sign up.
-- A summary of the model. The model lives at `/foundations`; this page points to it without summarizing it.
+- A summary of the model. The model lives at `/theory`; this page points to it without summarizing it.
 
-**Rationale:** The manifesto is the only one of the three documents that names *why the rest exists*. A visitor who reads only this page should leave knowing what Temper takes a stand on, without having absorbed any of the model's machinery. A visitor who wants the machinery follows the link to `/foundations`.
+**Rationale:** The manifesto is the only one of the three documents that names *why the rest exists*. A visitor who reads only this page should leave knowing what Temper takes a stand on, without having absorbed any of the model's machinery. A visitor who wants the machinery follows the link to `/theory`.
 
 The first-draft copy for this page is in `landing-draft.md`.
 
 ---
 
-## Tier 2 — `/foundations` Working context: a model (semantic-model layer)
+## Tier 2 — `/theory` Working context: a model (semantic-model layer)
 
 **Source:** *A Semantic Model of Working Context*
 
@@ -64,81 +64,91 @@ The first-draft copy for this page is in `landing-draft.md`.
 
 **Section index:**
 
-- `/foundations` — Overview and the teleological anchor. Restates what the model is and what it is for. Single short page. Approximately the first 300 words of the source document, edited for a reader who has not read the manifesto separately.
+- `/theory` — Overview and the teleological anchor. Restates what the model is and what it is for. Single short page. Approximately the first 300 words of the source document, edited for a reader who has not read the manifesto separately.
 
-- `/foundations/ontology` — Data, intention, information, knowledge. The stratified ontology. Names the *knowledge-bases-are-misnomers* commitment explicitly — this is one of the model's load-bearing claims and deserves a page.
+- `/theory/ontology` — Data, intention, information, knowledge. The stratified ontology. Names the *knowledge-bases-are-misnomers* commitment explicitly — this is one of the model's load-bearing claims and deserves a page.
 
-- `/foundations/manifold` — Positions, fields, streams. The geometry. Includes the bidirectional coupling claim ("attention is force, force deforms"), which is the model's most consequential commitment and is easy to mishandle if buried.
+- `/theory/manifold` — Positions, fields, streams. The geometry. Includes the bidirectional coupling claim ("attention is force, force deforms"), which is the model's most consequential commitment and is easy to mishandle if buried.
 
-- `/foundations/time` — Time as primary axis. Events-as-primary. Why this is a substrate commitment, not an implementation detail. This page is where the model justifies append-only ledger semantics without yet naming any system that implements them.
+- `/theory/time` — Time as primary axis. Events-as-primary. Why this is a substrate commitment, not an implementation detail. This page is where the model justifies append-only ledger semantics without yet naming any system that implements them.
 
-- `/foundations/deformation` — Forming and forgetting. Strong vs. weak deformations, the recording threshold, decay/deformation/folding as three distinct forgetting mechanics, scarification as a property certain deformations carry, self-cohesion and background relaxation as the two primitives beneath everything else.
+- `/theory/deformation` — Forming and forgetting. Strong vs. weak deformations, the recording threshold, decay/deformation/folding as three distinct forgetting mechanics, scarification as a property certain deformations carry, self-cohesion and background relaxation as the two primitives beneath everything else.
 
-- `/foundations/perspectives` — Who is asking. Perspectives as trajectories not points; role-perspective vs. individual-perspective; access vs. expertise; weak observer-relativity.
+- `/theory/perspectives` — Who is asking. Perspectives as trajectories not points; role-perspective vs. individual-perspective; access vs. expertise; weak observer-relativity.
 
-- `/foundations/translation` — Translation is irreducible. Bridges, scars at translation points, knowledge as relationship. This page is the natural close of the model tier because it is where the model commits to *what the system will not do* — produce a canonical, neutral view.
+- `/theory/translation` — Translation is irreducible. Bridges, scars at translation points, knowledge as relationship. This page is the natural close of the model tier because it is where the model commits to *what the system will not do* — produce a canonical, neutral view.
 
 **Rationale for splitting into six pages rather than one:** The source document is ~3000 words and rewards re-reading. Six pages let a reader stop at the level they need (someone interested in the forgetting mechanics doesn't need to scroll past perspectives), and let later pages link in at the right level of detail. The split follows the source document's own section breaks, so no editorial reshaping is needed at this stage.
 
 **Open question deferred to Pete:**
-> Q: Should `/foundations` include the source document's "Open Questions about the Model Itself" section, or is that internal-facing? See *Editorial questions surfaced* below.
+> Q: Should `/theory` include the source document's "Open Questions about the Model Itself" section, or is that internal-facing? See *Editorial questions surfaced* below.
 
 ---
 
-## Tier 3 — `/primitives` Schema reference (framing-schema layer)
+## Tier 3 — `/schema` Schema reference (framing-schema layer)
 
 **Source:** *A Framing Schema for the Working Context Model*
 
-**Status:** pending decision. This tier may not belong in the public docs in this first pass.
+**Naming:** `/schema` rather than `/primitives`. "Primitives" is the right internal word but is easy to misread — readers reach for it expecting a programming-language primitive or a low-level type. "Schema" matches the source document's own title and keeps the register honest: what lives here is the *structural codification* of the model, not the model itself and not the system that instantiates it.
 
-**If included:** a short reference surface — entity types, event structure, topic taxonomy, resolved stances. The reference is in tabular form in the source, and that form is appropriate as it is. The "Intentionally Open" and "Pending Opinionated Stance" lists are the editorial decision; see questions below.
+**Status:** included in this first pass, with a load-bearing **work-in-progress** marker on the page itself. The source document is explicit that it is "a snapshot, not a final specification," and that the boundary between *intentionally open* and *pending opinionated stance* will continue to shift. Public exposure has to inherit that honesty rather than paper over it.
 
-**Rationale for the deferral:** The framing schema is the most internal-facing of the three documents. It is written for a reader who has internalized the model and wants to see its structural codification. A public-docs reader who has not done that work will read the schema's tabular form as a system spec — which it is not. The schema is closer to a working reference than a piece of public documentation.
+**What it is:** a single reference surface that contains, in roughly this order:
+- An opening note: what this page is for, what it is not, and how stable each section is. The note is the page's WIP framing — not a banner-style "🚧 under construction" disclaimer, but a paragraph that names exactly what the schema is and where it sits relative to the manifesto and theory tiers.
+- The entity types, event structure, topic taxonomy, roles-within-events, derived structures, mechanics, stratification, accountability vectors, and chain-link-kinds tables. The source document's tabular form is appropriate as is.
+- The resolved stances. These are the load-bearing commitments and are stable enough to publish.
+- The "Intentionally Open" and "Pending Opinionated Stance" lists. Both belong on this page — they are part of what the schema *is* as a document. Cutting them would misrepresent the source. See Q3 below for the alternative if that decision is reversed.
 
-**Cleanest first-pass disposition:** keep it as `docs/research/` or `/internals/` (or simply not on the public site yet) until the foundations tier has stabilized and we have a clearer sense of who reaches for the schema.
+**Rationale for including the unsettled material:** The source document is honest about its own provisional shape, and the manifesto's commitment to making perspective-differences visible applies recursively to the docs themselves. A schema page that publishes only the stable parts and hides the unstable ones would be the "single canonical view" failure mode the model rules out. Better to publish the schema as it is — work-in-progress and all — than to pretend a partial view is the whole.
 
----
-
-## Tier 4 — `/using-temper` How to use it (operational layer)
-
-**Status:** pending decision.
-
-**Current state:** the existing `/docs` page is a comprehensive CLI reference (install, commands, sync, MCP, etc.). It is operationally complete and useful. It is also conceptually orthogonal to the new framing — it describes a tool, not a model.
-
-**Three options for Pete's call:**
-
-1. **Total redirect.** The conceptual frame is sufficient on its own for this pass. CLI reference moves to a `README` or to `docs/guides/` in the repo, not on the public site.
-
-2. **Deep-link retention.** The existing `/docs` content is retained at `/using-temper` (or similar) and linked from the foundations tier only at the points where it makes sense (e.g., the deformation page might link to `temper resource delete` as the system's instantiation of folding-vs-deformation; the perspectives page might link to contexts and profiles).
-
-3. **Scoped subset.** Only the install + first-vault content survives publicly. The full CLI reference moves to the repo. This is the minimum that lets a reader who has decided to try Temper actually do so.
-
-**Recommendation, weakly held:** Option 2 (deep-link retention) preserves the most existing work while keeping the conceptual frame primary. Option 3 is the most attention-economic but loses operational value.
+**Tone for the page:** reference rather than tutorial. The page assumes the reader has read `/theory` (or, more likely, will use this page as a lookup surface alongside `/theory`). It does not re-introduce the model. It also does not pretend to be a system spec — readers reaching this page from the API or the source code should immediately see the WIP framing and understand that the schema is what the system *answers to*, not what the system *is*.
 
 ---
 
-## Editorial questions surfaced (not resolved)
+## Tier 4 — `/using-temper` How to use Temper (operational layer)
 
-These are the open questions the prompt instructed me to surface rather than answer. Each is a decision that affects the IA above.
+**Source:** the existing `/docs` page (install, commands, sync, MCP, etc.).
 
-1. **Operational content in this first pass.** Should the docs site have any "how to use Temper" content at all in this pass, or should it be purely conceptual until the conceptual frame is established? This determines whether Tier 4 exists.
+**Status:** the operational tier lives at `/using-temper`. The current `/docs` route — semantically nondescript — retires. Every current "getting started" link in the site, in the README, in agent-facing surfaces, resolves to `/using-temper`.
 
-2. **Naming what is not settled.** The source documents are honest about what they have not pinned down — "Open Questions about the Model Itself" in the semantic model, "Pending Opinionated Stance" in the framing schema. How explicitly should public docs name this? Options range from "not at all in this first pass" through "footnote on the relevant pages" through "a dedicated `/foundations/open-questions` page that lists them in the source documents' own words."
+**What it is:** the existing CLI / sync / MCP reference, rehomed at a semantically meaningful URL. No restructure in this first pass — that is a separate piece of work. The page keeps its current scope (install, vault, resources, search, knowledge graph, cloud sync, teams, agents, config).
 
-3. **Schema material as public docs.** Should the framing schema's "Intentionally Open" and "Pending Opinionated Stance" lists be exposed publicly, or held as internal-design references only? Related to Q2 but distinct — the framing schema is structurally more advanced material than the model's open questions, and public exposure invites different scrutiny.
+**What changes in this pass:**
+- Route renamed `/docs` → `/using-temper`. Redirects from `/docs` and `/docs/*` to the new path (single canonical URL; no duplicate-content split).
+- Internal links on the existing site that point to `/docs` get updated.
+- The `<title>` and lede update minimally to match the new framing ("Using Temper" rather than "Docs — temper").
+- A short header sentence acknowledges the conceptual frame lives at `/theory` and points there for readers who want it. The page itself does *not* re-introduce the model — operational content stays operational.
 
-4. **Audience and tone.** What is the right tone for the primary audience? Three plausible primaries:
-   - Someone who has just heard about Temper (newcomer, no model)
-   - A technical reader (engineer or researcher considering the model on its own merits)
-   - Someone considering self-hosting (operationally minded; cares about substrate commitments)
+**What deliberately does not change in this pass:**
+- The CLI reference content itself. It is operationally complete and changes to it are out of scope for the translation work.
+- Cross-links from `/theory` into `/using-temper`. The conceptual pages can deep-link operational examples later (e.g., the deformation page linking to `temper resource delete` as the system's instantiation of folding-vs-deformation), but that work belongs to the per-page drafts, not the IA.
 
-   These are not the same reader and a single tone will privilege one. The current landing privileges (1) implicitly. The new framing tilts toward (2) but does not have to.
+---
 
-5. **Framing-schema material in this first pass.** Is there a place in the IA for the framing-schema material at all in this first pass, or is it too internal-facing? This is the Tier 3 disposition. My instinct is "not in this first pass" but it is not my call.
+## Editorial questions
 
-6. **Existing get-started content.** Should any of the existing "get started" content be retained as a deep-link from a later page, or is the redirect total? This is the Tier 4 disposition.
+### Resolved by Pete's guidance
 
-7. **Layout shell, navigation, breadcrumbs.** The current site has top-level pages (`/agents`, `/builders`, `/how-it-works`, `/docs`). I have not proposed touching those in this pass. If the new framing replaces the landing, those pages still exist and will pull against the new frame. Whether to leave them, redirect them, or rewrite them is downstream of the landing.
+- **Q1 — Operational content in this first pass.** Resolved: included. Existing operational content rehomes at `/using-temper`; current getting-started links route there. Tier 4 above reflects this.
+- **Q5 — Framing-schema material in this first pass.** Resolved: included. Lives at `/schema` (not `/primitives`) with an explicit work-in-progress framing on the page. Tier 3 above reflects this.
+- **Q6 — Existing get-started content.** Resolved: retained, rehomed at `/using-temper`. The retire of the semantically-nondescript `/docs` is total but the content survives.
+
+### Still open
+
+The schema decision (Q5) partially informs Q2 and Q3 but does not fully resolve them. The page-level treatment of unsettled material is still a real call.
+
+- **Q2 — Naming what is not settled within `/theory`.** The schema page will include its "Intentionally Open" and "Pending Opinionated Stance" lists as part of the published schema. Separately, the semantic-model document has its own "Open Questions about the Model Itself" section. Should the `/theory` tier surface those — as a dedicated `/theory/open-questions` page, as footnotes on the relevant theory pages, or not at all in this first pass? My instinct: a dedicated page. Symmetric with the schema's transparency about its own state.
+
+- **Q3 — Scope of unsettled material on `/schema`.** Pete's guidance includes the schema with WIP framing, which I'm reading as: include the Intentionally-Open and Pending-Opinionated-Stance lists. Confirming. If the intent was "include the resolved stances and the structural tables but hold the unsettled lists internal," the Tier 3 description above needs a corresponding trim.
+
+- **Q4 — Audience and tone.** Still open. The three plausible primaries:
+   - Newcomer (just heard about Temper)
+   - Technical reader (engineer / researcher engaging the model on its own merits)
+   - Self-hoster (operational; cares about substrate commitments)
+
+   The current landing privileges (1). The new framing tilts toward (2) but does not have to. Tone decision is most visible at `/` and `/theory`; less load-bearing on `/schema` (reference register is appropriate regardless) and `/using-temper` (existing register is fine).
+
+- **Q7 — Layout shell, navigation, other public pages.** The current site has `/agents`, `/builders`, `/how-it-works`. None of those are touched in this proposal. Whether they survive the landing rewrite, get rewritten, or redirect into the new structure is a decision the new `/` makes downstream pressure on.
 
 ---
 
@@ -156,11 +166,8 @@ These are the open questions the prompt instructed me to surface rather than ans
 
 In rough order of impact:
 
-1. Q1 (operational content in this pass).
-2. Q4 (primary audience).
-3. Q5 (Tier 3 disposition).
-4. Q2 + Q3 (handling of unsettled material).
-5. Q6 (existing get-started fate).
-6. Q7 (other public pages).
+1. Q4 (primary audience). The largest remaining unknown; affects voice on `/` and the entire `/theory` tier.
+2. Q2 + Q3 (handling of unsettled material on `/theory` and `/schema`).
+3. Q7 (other public pages — `/agents`, `/builders`, `/how-it-works`).
 
-Resolving 1–3 unblocks roughly the whole tree. The rest are local decisions.
+Resolving Q4 unblocks the per-page drafting in `/theory`. Q2/Q3 can be resolved alongside, but slightly downstream — they affect at most one additional page.
