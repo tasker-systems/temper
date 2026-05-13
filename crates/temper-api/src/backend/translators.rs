@@ -266,6 +266,7 @@ mod tests {
             body: None,
             managed_meta: Some(ManagedMeta::default()),
             open_meta: Some(serde_json::json!({"tags": ["x"]})),
+            move_to: None,
             origin: Surface::ApiHttp,
         };
         let req = update_resource_to_request(cmd).expect("ok");
@@ -288,6 +289,7 @@ mod tests {
             body: None,
             managed_meta: None,
             open_meta: Some(serde_json::json!({"totally_made_up": 1})),
+            move_to: None,
             origin: Surface::ApiHttp,
         };
         let err = update_resource_to_request(cmd).expect_err("unknown key");
@@ -313,6 +315,7 @@ mod tests {
             body: Some(BodyUpdate::new(String::new())),
             managed_meta: None,
             open_meta: None,
+            move_to: None,
             origin: Surface::ApiHttp,
         };
         let req = update_resource_to_request(cmd).expect("empty-body trio");

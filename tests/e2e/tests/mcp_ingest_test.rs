@@ -401,6 +401,7 @@ async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
                 .expect("managed_meta"),
         ),
         open_meta: None,
+        move_to: None,
         origin: Surface::Mcp,
     };
     DbBackend::new(
@@ -717,6 +718,7 @@ async fn update_resource_rejects_tier2_fields_in_managed_meta(pool: sqlx::PgPool
                 .expect("managed_meta"),
         ),
         open_meta: None,
+        move_to: None,
         origin: Surface::Mcp,
     };
     let result = DbBackend::new(
