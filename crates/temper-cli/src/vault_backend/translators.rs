@@ -3,8 +3,6 @@
 use std::path::{Path, PathBuf};
 
 use temper_core::error::TemperError;
-#[cfg(feature = "embed")]
-use temper_core::hash::compute_body_hash;
 use temper_core::operations::{CreateResource, MoveSpec, ResourceRef, UpdateResource};
 use temper_core::types::ids::ResourceId;
 use temper_core::types::ingest::IngestPayload;
@@ -95,22 +93,13 @@ pub(crate) struct BodyTrio {
 
 /// Compute (content_hash, chunks_packed) for a body update.
 ///
-/// **Duplicated from `temper-api/src/backend/translators.rs::prepare_body_trio`.**
-/// Lift to `temper-core::operations::body` deferred to a focused cleanup
-/// (vault task `lift-prepare-body-trio-to-temper-core-shared-helper`) because
-/// it requires adding `temper-ingest` as an optional dep of `temper-core`,
-/// which is a structural feature-graph change outside Phase 4a's scope.
-///
-/// In `temper-cli`, the relevant feature gate is `embed` (mirrors
-/// `ingest-pipeline` in `temper-api`): the `embed` feature wires
-/// `temper-ingest/embed-download` which provides `pipeline::prepare_markdown`.
+/// Delegates to `temper_ingest::body::compute_body_trio` so the success path
+/// lives in one place across `temper-api` and `temper-cli`. In `temper-cli`,
+/// the relevant feature gate is `embed`, which wires `temper-ingest/embed-download`
+/// providing `pipeline::prepare_markdown`.
 #[cfg(feature = "embed")]
 pub(crate) fn prepare_body_trio(body: &str) -> Result<BodyTrio, TemperError> {
-    let content_hash = compute_body_hash(body);
-    let packed_chunks = temper_ingest::pipeline::prepare_markdown(body)
-        .map_err(|e| TemperError::Api(format!("embed: {e}")))?;
-    let chunks_packed = temper_core::types::ingest::pack_chunks(&packed_chunks)
-        .map_err(|e| TemperError::Api(format!("pack: {e}")))?;
+    let (content_hash, chunks_packed) = temper_ingest::body::compute_body_trio(body)?;
     Ok(BodyTrio {
         content_hash,
         chunks_packed,
