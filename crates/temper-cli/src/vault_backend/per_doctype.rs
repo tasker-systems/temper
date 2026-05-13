@@ -24,7 +24,9 @@ use temper_core::vault::Vault;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::templates::{ConceptTemplate, DecisionTemplate, GoalTemplate, TaskTemplate};
+use crate::templates::{
+    ConceptTemplate, DecisionTemplate, GoalTemplate, SessionTemplate, TaskTemplate,
+};
 
 /// Doctype-specific frontmatter fields not covered by the doctype-agnostic
 /// `WriteArgs` fields. Each variant carries the values required to render
@@ -50,6 +52,14 @@ pub(crate) enum DoctypeFields<'a> {
     /// shape — they are not caller inputs. `title`, `slug`, and `context` ride
     /// on the doctype-agnostic `WriteArgs` fields.
     Goal { seq: u32 },
+    /// Session-specific fields: none beyond the doctype-agnostic `WriteArgs`.
+    ///
+    /// The session template's frontmatter is populated from `title`, `slug`,
+    /// `context` (already on `WriteArgs`), plus an `id` and `date` generated
+    /// inside `write_session`. The empty variant exists so the dispatch is
+    /// explicit and unambiguous — passing `None` (or a wrong variant) hard-errors
+    /// with `BadRequest`, preventing silent fall-through from a misrouted call.
+    Session,
 }
 
 /// Arguments for the per-doctype write dispatch.
@@ -65,12 +75,9 @@ pub(crate) struct WriteArgs<'a> {
     pub vault_root: &'a Path,
     pub owner: &'a str,
     /// Held for state-dir / context-aware path construction in writers that
-    /// need it (currently unused by task/concept/decision/goal writers; session
-    /// dispatch in A3 may need it).
-    #[expect(
-        dead_code,
-        reason = "needed by session/research dispatch in follow-up tasks A3-A4"
-    )]
+    /// need it (currently unused by task/concept/decision/goal/session writers;
+    /// research dispatch in A4 may need it).
+    #[expect(dead_code, reason = "needed by research dispatch in follow-up task A4")]
     pub config: &'a Config,
     /// Doctype-specific frontmatter fields. `None` for doctypes whose template
     /// only consumes the doctype-agnostic fields (concept, decision).
@@ -101,9 +108,10 @@ pub(crate) fn write_for(args: WriteArgs<'_>) -> Result<WriteResult, TemperError>
         "concept" | "decision" => write_concept_or_decision(args),
         "task" => write_task(args),
         "goal" => write_goal(args),
-        "session" | "research" => Err(TemperError::BadRequest(format!(
+        "session" => write_session(args),
+        "research" => Err(TemperError::BadRequest(format!(
             "doctype '{}' not yet supported by VaultBackend; use commands/{}.rs directly \
-             until follow-up tasks A3-A4 land the per-doctype writer.",
+             until follow-up task A4 lands the per-doctype writer.",
             args.doctype, args.doctype,
         ))),
         other => Err(TemperError::BadRequest(format!(
@@ -432,6 +440,138 @@ fn write_goal(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
     // The goal template injects `temper-provisional-id: "<id_str>"` — we parse
     // from the locally generated string rather than re-reading from disk,
     // matching `write_concept_or_decision` and `write_task`.
+    let resource_id = Uuid::parse_str(&id_str)
+        .map(ResourceId::from)
+        .map_err(|e| {
+            TemperError::Vault(format!("generated id is not a valid UUID: {id_str}: {e}"))
+        })?;
+
+    Ok(WriteResult {
+        resource_id,
+        abs_path,
+        rel_path,
+    })
+}
+
+/// Write a session resource using the Askama `SessionTemplate`.
+///
+/// Mirrors the new-file-create branch (lines 84-120) of
+/// `commands::session::save`, minus the tail actions (publish, discovery event,
+/// output) which remain at the wrapper. The wrapper resolves context/title/slug
+/// and decides whether to delegate here or take the save-or-update overload path
+/// (which stays inline at the surface — see `commands::session::save`).
+///
+/// Hard-errors when the target slug already exists on disk. The pre-pull
+/// `commands::session::save` reached this branch only after checking
+/// `note_path.exists()` was false, so this error path is only hit if the file
+/// appears between the wrapper's check and the writer's write (race) or if a
+/// future caller (e.g. `VaultBackend.create_resource` via B5) routes here
+/// without a prior exists-check.
+///
+/// # Managed-meta handling
+///
+/// The session template renders `temper-context: ""` and only the provisional
+/// id + type + date. The original creator overlaid managed-meta via
+/// `build_managed_meta_for_create` + `set_managed_meta` to populate
+/// `temper-context` (and `temper-type`/`temper-title` for symmetry). Phase A3
+/// migrates that call here as a small early Phase C migration — the helper's
+/// other callers (research, cloud-mode resource.rs) stay until A4/Phase C.
+///
+/// # Byte-preservation
+///
+/// Unlike task/goal, session always serializes through `Frontmatter::write_to`
+/// because the managed-meta overlay step requires it. The existing creator did
+/// the same, so this preserves the wire format.
+fn write_session(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
+    let WriteArgs {
+        doctype: _,
+        title,
+        slug,
+        context,
+        body,
+        open_meta,
+        vault_root,
+        owner,
+        config: _,
+        doctype_fields,
+    } = args;
+
+    match doctype_fields {
+        Some(DoctypeFields::Session) => {}
+        _ => {
+            return Err(TemperError::BadRequest(
+                "session write requires DoctypeFields::Session".to_string(),
+            ));
+        }
+    }
+
+    let id_str = crate::ids::generate_id();
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    let tmpl = SessionTemplate {
+        id: &id_str,
+        title,
+        date: &date,
+    };
+    let rendered = tmpl
+        .render()
+        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
+
+    let vault_layout = Vault::new(vault_root);
+    let abs_path = vault_layout.doc_file(owner, context, "session", slug);
+    let rel_path = vault_layout.rel_path(owner, context, "session", slug);
+
+    if abs_path.exists() {
+        return Err(TemperError::Vault(format!(
+            "session already exists: {slug}"
+        )));
+    }
+
+    // Parse rendered template, then overlay managed-meta (replaces the
+    // pre-pull `build_managed_meta_for_create` + `set_managed_meta` calls at
+    // commands::session::save:96-110). This fixes the template's empty
+    // `temper-context: ""` and ensures `temper-type`/`temper-title` are present
+    // for downstream consumers.
+    let mut fm = Frontmatter::try_from(rendered.as_str())?;
+    let meta = crate::actions::frontmatter::build_managed_meta_for_create(
+        crate::actions::frontmatter::NewResourceArgs {
+            doc_type: "session",
+            context,
+            title,
+            mode: None,
+            effort: None,
+            goal: None,
+            stage: None,
+            seq: None,
+            status: None,
+            provenance: None,
+            llm_model: None,
+            llm_run: None,
+        },
+    );
+    fm.set_managed_meta(&meta);
+
+    // Apply open-tier metadata if provided (no callers do this today for
+    // session, but retained for symmetry with task/goal/concept/decision).
+    if let Some(open) = open_meta {
+        if let Some(obj) = open.as_object() {
+            for (key, value) in obj {
+                fm.set_open_field(key, value.clone());
+            }
+        }
+    }
+
+    if !body.is_empty() {
+        fm.set_body(body.to_string());
+    }
+
+    if let Some(parent) = abs_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| TemperError::Vault(e.to_string()))?;
+    }
+    fm.write_to(&abs_path)?;
+
+    // The session template injects `temper-provisional-id: "<id_str>"` — we
+    // parse from the locally generated string rather than re-reading from disk,
+    // matching `write_concept_or_decision` / `write_task` / `write_goal`.
     let resource_id = Uuid::parse_str(&id_str)
         .map(ResourceId::from)
         .map_err(|e| {
@@ -783,6 +923,132 @@ mod tests {
         assert!(
             matches!(err, TemperError::BadRequest(ref m) if m.contains("DoctypeFields::Goal")),
             "expected BadRequest mentioning DoctypeFields::Goal; got: {err:?}"
+        );
+    }
+
+    fn session_args<'a>(
+        config: &'a Config,
+        vault_root: &'a Path,
+        title: &'a str,
+        slug: &'a str,
+        body: &'a str,
+    ) -> WriteArgs<'a> {
+        WriteArgs {
+            doctype: "session",
+            title,
+            slug,
+            context: "temper",
+            body,
+            open_meta: None,
+            vault_root,
+            owner: "@me",
+            config,
+            doctype_fields: Some(DoctypeFields::Session),
+        }
+    }
+
+    #[test]
+    fn write_for_session_creates_file_with_correct_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args = session_args(
+            &config,
+            tmp.path(),
+            "My Session",
+            "2026-05-13-my-session",
+            "",
+        );
+        let result = write_for(args).expect("write ok");
+        assert!(result.abs_path.exists(), "file must exist at abs_path");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        let fm = Frontmatter::try_from(content.as_str()).expect("frontmatter must parse");
+        let mapping = fm
+            .value()
+            .as_mapping()
+            .expect("frontmatter must be mapping");
+        let get = |key: &str| {
+            mapping
+                .get(serde_yaml::Value::String(key.to_string()))
+                .cloned()
+        };
+        assert!(
+            get("temper-provisional-id").is_some(),
+            "temper-provisional-id must be present; got: {content}"
+        );
+        assert_eq!(
+            get("temper-type"),
+            Some(serde_yaml::Value::String("session".to_string())),
+            "temper-type must equal 'session'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-title"),
+            Some(serde_yaml::Value::String("My Session".to_string())),
+            "temper-title must equal 'My Session'; got: {content}"
+        );
+        // Session template renders `temper-context: ""`; managed-meta overlay
+        // must replace it with the real context value.
+        assert_eq!(
+            get("temper-context"),
+            Some(serde_yaml::Value::String("temper".to_string())),
+            "temper-context must equal 'temper' after managed-meta overlay; got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_for_session_errors_on_existing_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args1 = session_args(&config, tmp.path(), "First", "2026-05-13-dup-session", "");
+        write_for(args1).expect("first write ok");
+
+        let args2 = session_args(&config, tmp.path(), "Second", "2026-05-13-dup-session", "");
+        let err = write_for(args2).expect_err("second write must error");
+        assert!(
+            matches!(err, TemperError::Vault(ref m) if m.contains("already exists")),
+            "expected Vault(already exists) error; got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn write_for_session_writes_body_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let body = "## Goal\n\nDo the work.\n";
+        let args = session_args(
+            &config,
+            tmp.path(),
+            "Bodied",
+            "2026-05-13-bodied-session",
+            body,
+        );
+        let result = write_for(args).expect("write ok");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        assert!(
+            content.contains("Do the work."),
+            "body must be present in written file; got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_for_session_returns_bad_request_when_doctype_fields_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args = WriteArgs {
+            doctype: "session",
+            title: "Missing Fields",
+            slug: "2026-05-13-missing-fields-session",
+            context: "temper",
+            body: "",
+            open_meta: None,
+            vault_root: tmp.path(),
+            owner: "@me",
+            config: &config,
+            doctype_fields: None,
+        };
+        let err = write_for(args).expect_err("missing DoctypeFields::Session must error");
+        assert!(
+            matches!(err, TemperError::BadRequest(ref m) if m.contains("DoctypeFields::Session")),
+            "expected BadRequest mentioning DoctypeFields::Session; got: {err:?}"
         );
     }
 
