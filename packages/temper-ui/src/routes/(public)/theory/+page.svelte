@@ -62,49 +62,92 @@
 </Section>
 
 <Section label="Commitment 1">
-  <h2>Common queries should not require <em>fresh attention</em> each time</h2>
+  <h2>Forgetting is what makes memory <em>meaningful</em></h2>
   <p>
-    Most people in a given role ask roughly the same kinds of questions,
-    with the same kinds of intent behind them. Pre-paying those queries —
-    making them cheap by default — is not paternalism. It is the system
-    doing the work that does not need to be done freshly each time, so
-    attention can land on what is actually new.
+    Memory in an information system is only as effective as its
+    mechanics for forgetting. Without decay (time-and-distance
+    fading), active deformation (the revision and topological change
+    that follows from new decisions or new data), and scarification
+    (the trace of past mistakes carried into future engagement),
+    signal washes out in noise — and attention can no longer land on
+    what matters now.
+  </p>
+  <p>
+    A system that lets everything stay equally findable, equally
+    true-sounding, equally clean has not committed to attention; it
+    has only committed to retention.
   </p>
 </Section>
 
 <Section label="Commitment 2">
-  <h2>Perspective-differences are real and should be made <em>visible</em></h2>
+  <h2>The system must be capable of <em>deforming itself</em></h2>
   <p>
-    Different people working on the same thing produce genuinely
-    different information from the same data, because they engage it
-    from different positions with different concerns. A system that
-    pretends otherwise — that produces a single canonical view —
-    forces attention to be spent re-discovering those differences in
-    every conversation. Surfacing them is how a system spends attention
-    once and saves it forever.
+    An information system must be able to change its own shape —
+    actively, when decisions are codified into the substrate, and in
+    aggregate, when thresholds are crossed or patterns arrived at in
+    practice. The information landscape is not static. Decisions
+    supersede earlier ones; concepts merge or split; tolerances
+    shift; what was once peripheral becomes central.
+  </p>
+  <p>
+    A system that requires every change to come from an explicit
+    author act has externalized work the system itself should do.
   </p>
 </Section>
 
 <Section label="Commitment 3">
-  <h2>Information past its time should <em>fade</em>, not crowd the present</h2>
+  <h2>Data is only information when it has a <em>frame of reference</em></h2>
   <p>
-    Information that is no longer relevant should grow harder to find;
-    information that is no longer true should not surface as if it
-    were; information that needs to be preserved for audit should not
-    pollute default retrieval. None of this is unusual to want. What
-    is unusual is taking it seriously enough to design for, rather
-    than letting deprecation tags pile up while everything stays
-    equally findable.
+    Data is not information. Data becomes information when it is
+    engaged from a particular perspective, at a particular time, at
+    a particular resolution, for a particular purpose. What matters,
+    to whom, at what level of granularity, on what time horizon —
+    these are not secondary concerns to be layered on top of "the
+    data." They are what makes data legible as anything at all.
   </p>
 </Section>
 
 <Section label="Commitment 4">
-  <h2>Where the system has been wrong, future engagement should <em>know</em></h2>
+  <h2>Projections and summaries are <em>different acts</em></h2>
   <p>
-    Confidence and accuracy are not the same thing. Without a trace of
-    where errors have lived before, attention cannot land on what
-    needs scrutiny — and a system that hides its own past errors is
-    asking attention to do work the system should have done.
+    A projection is what happens when a perspective's intention
+    queries the substrate and renders what is relevant from a
+    position in perspective-space. It is lossy by necessity,
+    perspective-laden by construction, but it does not claim to be
+    a new resource.
+  </p>
+  <p>
+    A summary is something else: a deliberately crafted artifact
+    that selects what to include, weights what to emphasize, and
+    manages the boundary of what gets disclosed to inform a
+    decision. Summaries carry intention and implicit analysis; they
+    are not value-neutral views of the substrate.
+  </p>
+  <p>
+    Both projections and summaries are necessary. But if the system
+    cannot distinguish them, every summary becomes an unmarked
+    reweighting of how the underlying information will be read — and
+    decision-making compounds on top of views that look neutral but
+    are not.
+  </p>
+</Section>
+
+<Section label="Commitment 5">
+  <h2>Events and observers weave through <em>every kind of work</em></h2>
+  <p>
+    Customer discovery, research, requests, analytical insights,
+    recommendations, prototypes, tickets, pull requests — every kind
+    of work artifact carries topics, scopes, and relationships that
+    make it more or less useful to different consumers at different
+    times. The operational pattern connecting them is not a separate
+    workflow layer bolted on top; it is the events-and-observers
+    structure of the substrate itself.
+  </p>
+  <p>
+    Resources are not free-floating. They are situated, scoped,
+    related — and only when those properties are first-class can the
+    system route attention to what matters now, for whom, and at
+    what resolution.
   </p>
 </Section>
 
@@ -119,13 +162,13 @@
     model.
   </p>
   <p>
-    One commitment in the model runs through everything that follows,
-    and deserves naming up front: the system stores data and traces of
-    past intentional acts — recorded questions, notes, decisions,
-    which themselves become further data. It does not store
-    <em>knowledge</em>. Knowledge is the relationship between a
-    perspective and the information that perspective produces through
-    engagement with data.
+    One commitment in the model runs through everything that follows:
+    the system stores data and traces of past intentional acts —
+    recorded questions, notes, decisions, which themselves become further data.
+    It does not store <em>knowledge</em>. Knowledge is produced in the generative
+    space defined by a perspective-as-intention and the information-from-data that
+    this perspective describes, transformed into a cognitive or operational
+    artifact - a tool, in effect, that can be used.
   </p>
   <p>
     The label "knowledge base" is a misnomer in light of this.
@@ -189,7 +232,7 @@
   </ul>
   <p>The model is provisional. It captures a mental picture clearly enough to be argued with.</p>
   <p>
-    One symmetry is worth flagging before the model proper. The
+    There is an interesting symmetry that emerges - the
     perspective-side has roughly the same shape as the data-side:
     discrete deformations, continuous trajectories, characteristic
     decay rates, prior-and-likelihood structure. Resources and
@@ -204,14 +247,14 @@
 
 <Section label="Closing">
   <p>
-    I am not trying to win an academic argument or start a movement. I
-    am writing this so that when I am six months into implementation
-    and tempted to take a shortcut that costs the user some attention
-    they will not get back, I have something to read that reminds me
-    why I started. I am publishing it because the commitment is more
-    honest if it is shared, and because anyone considering this tool
-    deserves to know what its author thinks the tool is <em>for</em>
-    before they decide whether to spend their attention on it.
+    This document is not an academic argument or some kind of declaration of
+    principles that are meant to cast aspersions on existing systems. I
+    am writing this so that when I am six months into implementation,
+    I remember what *matters* - this document itself is a form of respecting
+    my own limited attention. I am publishing it because the commitment is more
+    honest if it is shared, and because whether this project is successful or not,
+    the principles and commitments are, I believe, worth engaging with for others
+    who are likewise working in an information management space.
   </p>
 </Section>
 
