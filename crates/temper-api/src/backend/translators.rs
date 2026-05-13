@@ -8,8 +8,6 @@
 
 use sqlx::PgPool;
 use temper_core::error::TemperError;
-#[cfg(feature = "ingest-pipeline")]
-use temper_core::hash::compute_body_hash;
 use temper_core::operations::{
     CreateResource, ListFilter, ResourceRef, ResourceSummary, SearchHit, SearchQuery,
     UpdateResource,
@@ -201,14 +199,12 @@ pub(crate) async fn resolve_resource_ref(
 /// computation) so DbBackend's `update_resource` can populate the trio when
 /// `cmd.body.is_some()`. Gated on the `ingest-pipeline` feature; without it,
 /// returns `BadRequest` preserving the contract from `ingest_service.rs:678-683`.
+///
+/// Delegates to `temper_ingest::body::compute_body_trio` so the success path
+/// lives in one place across `temper-api` and `temper-cli`.
 #[cfg(feature = "ingest-pipeline")]
 pub(crate) fn prepare_body_trio(body: &str) -> Result<(String, String), TemperError> {
-    let hash = compute_body_hash(body);
-    let packed_chunks = temper_ingest::pipeline::prepare_markdown(body)
-        .map_err(|e| TemperError::Api(format!("embed: {e}")))?;
-    let packed = temper_core::types::ingest::pack_chunks(&packed_chunks)
-        .map_err(|e| TemperError::Api(format!("pack: {e}")))?;
-    Ok((hash, packed))
+    temper_ingest::body::compute_body_trio(body)
 }
 
 #[cfg(not(feature = "ingest-pipeline"))]

@@ -193,3 +193,171 @@ async fn local_mode_delete_removes_file_and_soft_deletes_on_server(pool: sqlx::P
         "server row must be soft-deleted (is_active = false) after delete"
     );
 }
+
+/// After soft-delete, the same `(slug, context)` should be free for reuse.
+///
+/// Regression guard for vault task
+/// `2026-05-03-soft-deleted-resources-should-not-block-slug-reuse`. Before the
+/// `kb_resources_slug_kb_context_id_active_unique` partial-index migration,
+/// soft-deleted rows kept their slug reserved, so recreate-with-same-slug
+/// returned 409 Conflict ("Resource already exists").
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn slug_freed_for_reuse_after_soft_delete(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight failed");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let auth_path = app.vault_dir.path().join(".temper/auth.json");
+    write_auth_json(&auth_path, &app.token);
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+
+    let cli_config = app.cli_config.clone();
+    let api_url = format!("http://{}", app.addr);
+    let auth_path_string = auth_path.to_str().unwrap().to_string();
+    let global_config_string = global_config.to_str().unwrap().to_string();
+
+    // ── Step 1: create a goal and publish to the server. ─────────────────
+    let cli_config_create = cli_config.clone();
+    let api_url_1 = api_url.clone();
+    let auth_path_1 = auth_path_string.clone();
+    let global_config_1 = global_config_string.clone();
+    let first_slug: String = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(
+            [
+                ("TEMPER_API_URL", Some(api_url_1.as_str())),
+                ("TEMPER_AUTH_PATH", Some(auth_path_1.as_str())),
+                ("TEMPER_GLOBAL_CONFIG", Some(global_config_1.as_str())),
+                ("TEMPER_VAULT_STATE", Some("local")),
+                ("TEMPER_TOKEN", None),
+            ],
+            || {
+                temper_cli::actions::goal::create(&cli_config_create, "myapp", "reuse-target", None)
+                    .expect("first goal create + publish")
+            },
+        )
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    // Capture the first row's UUID for later soft-delete verification.
+    let owner = cli_config.owner_for_context("myapp");
+    let first_path = app
+        .vault_dir
+        .path()
+        .join(&owner)
+        .join("myapp")
+        .join("goal")
+        .join(format!("{first_slug}.md"));
+    let raw = std::fs::read_to_string(&first_path).expect("read first goal file");
+    let fm =
+        temper_core::frontmatter::Frontmatter::try_from(raw.as_str()).expect("parse frontmatter");
+    let first_temper_id = fm
+        .value()
+        .get("temper-id")
+        .and_then(|v| v.as_str())
+        .expect("first temper-id must be in frontmatter")
+        .to_string();
+    let first_uuid = uuid::Uuid::parse_str(&first_temper_id).expect("first temper-id parses");
+
+    // ── Step 2: delete via the CLI subcommand. ────────────────────────────
+    let cli_config_delete = cli_config.clone();
+    let slug_for_delete = first_slug.clone();
+    let api_url_2 = api_url.clone();
+    let auth_path_2 = auth_path_string.clone();
+    let global_config_2 = global_config_string.clone();
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(
+            [
+                ("TEMPER_API_URL", Some(api_url_2.as_str())),
+                ("TEMPER_AUTH_PATH", Some(auth_path_2.as_str())),
+                ("TEMPER_GLOBAL_CONFIG", Some(global_config_2.as_str())),
+                ("TEMPER_VAULT_STATE", Some("local")),
+                ("TEMPER_TOKEN", None),
+            ],
+            || {
+                temper_cli::commands::resource::delete(
+                    &cli_config_delete,
+                    "goal",
+                    &slug_for_delete,
+                    Some("myapp"),
+                    /* force */ true,
+                )
+                .expect("delete should succeed")
+            },
+        )
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    // Sanity: first row is soft-deleted.
+    let first_active: bool = sqlx::query_scalar("SELECT is_active FROM kb_resources WHERE id = $1")
+        .bind(first_uuid)
+        .fetch_one(&pool)
+        .await
+        .expect("first row must still exist after soft-delete");
+    assert!(!first_active, "first row should be soft-deleted");
+
+    // ── Step 3: recreate a goal with the same title → same slug. ─────────
+    let cli_config_recreate = cli_config.clone();
+    let api_url_3 = api_url.clone();
+    let auth_path_3 = auth_path_string.clone();
+    let global_config_3 = global_config_string.clone();
+    let second_slug: String = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(
+            [
+                ("TEMPER_API_URL", Some(api_url_3.as_str())),
+                ("TEMPER_AUTH_PATH", Some(auth_path_3.as_str())),
+                ("TEMPER_GLOBAL_CONFIG", Some(global_config_3.as_str())),
+                ("TEMPER_VAULT_STATE", Some("local")),
+                ("TEMPER_TOKEN", None),
+            ],
+            || {
+                temper_cli::actions::goal::create(
+                    &cli_config_recreate,
+                    "myapp",
+                    "reuse-target",
+                    None,
+                )
+                .expect("recreate with same slug must succeed after soft-delete")
+            },
+        )
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    assert_eq!(
+        second_slug, first_slug,
+        "recreated goal should use the same slug"
+    );
+
+    // ── Step 4: verify two server rows now exist for (slug, context):
+    //   - the first one with is_active = false
+    //   - the new one with is_active = true and a different UUID
+    let rows: Vec<(uuid::Uuid, bool)> = sqlx::query_as(
+        "SELECT r.id, r.is_active \
+         FROM kb_resources r \
+         JOIN kb_contexts c ON c.id = r.kb_context_id \
+         WHERE r.slug = $1 AND c.name = $2 \
+         ORDER BY r.created",
+    )
+    .bind(&first_slug)
+    .bind("myapp")
+    .fetch_all(&pool)
+    .await
+    .expect("query rows");
+
+    assert_eq!(rows.len(), 2, "expected two rows for slug after recreate");
+    assert_eq!(rows[0].0, first_uuid, "first row preserved by soft-delete");
+    assert!(!rows[0].1, "first row stays soft-deleted");
+    assert_ne!(rows[1].0, first_uuid, "second row has a new UUID");
+    assert!(rows[1].1, "second row is active");
+}

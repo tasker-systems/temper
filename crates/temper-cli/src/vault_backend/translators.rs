@@ -3,11 +3,10 @@
 use std::path::{Path, PathBuf};
 
 use temper_core::error::TemperError;
-#[cfg(feature = "embed")]
-use temper_core::hash::compute_body_hash;
-use temper_core::operations::{CreateResource, ResourceRef, UpdateResource};
+use temper_core::operations::{CreateResource, MoveSpec, ResourceRef, UpdateResource};
 use temper_core::types::ids::ResourceId;
 use temper_core::types::ingest::IngestPayload;
+use temper_core::types::managed_meta::ManagedMeta;
 use temper_core::types::manifest::Manifest;
 use temper_core::types::resource::ResourceUpdateRequest;
 
@@ -94,22 +93,13 @@ pub(crate) struct BodyTrio {
 
 /// Compute (content_hash, chunks_packed) for a body update.
 ///
-/// **Duplicated from `temper-api/src/backend/translators.rs::prepare_body_trio`.**
-/// Lift to `temper-core::operations::body` deferred to a focused cleanup
-/// (vault task `lift-prepare-body-trio-to-temper-core-shared-helper`) because
-/// it requires adding `temper-ingest` as an optional dep of `temper-core`,
-/// which is a structural feature-graph change outside Phase 4a's scope.
-///
-/// In `temper-cli`, the relevant feature gate is `embed` (mirrors
-/// `ingest-pipeline` in `temper-api`): the `embed` feature wires
-/// `temper-ingest/embed-download` which provides `pipeline::prepare_markdown`.
+/// Delegates to `temper_ingest::body::compute_body_trio` so the success path
+/// lives in one place across `temper-api` and `temper-cli`. In `temper-cli`,
+/// the relevant feature gate is `embed`, which wires `temper-ingest/embed-download`
+/// providing `pipeline::prepare_markdown`.
 #[cfg(feature = "embed")]
 pub(crate) fn prepare_body_trio(body: &str) -> Result<BodyTrio, TemperError> {
-    let content_hash = compute_body_hash(body);
-    let packed_chunks = temper_ingest::pipeline::prepare_markdown(body)
-        .map_err(|e| TemperError::Api(format!("embed: {e}")))?;
-    let chunks_packed = temper_core::types::ingest::pack_chunks(&packed_chunks)
-        .map_err(|e| TemperError::Api(format!("pack: {e}")))?;
+    let (content_hash, chunks_packed) = temper_ingest::body::compute_body_trio(body)?;
     Ok(BodyTrio {
         content_hash,
         chunks_packed,
@@ -207,12 +197,45 @@ pub(crate) fn cmd_to_update_request(
     Ok(ResourceUpdateRequest {
         title,
         slug,
-        managed_meta: cmd.managed_meta.clone(),
+        managed_meta: synthesize_managed_meta_for_move(
+            cmd.managed_meta.clone(),
+            cmd.move_to.as_ref(),
+        ),
         open_meta: cmd.open_meta.clone(),
         content,
         content_hash,
         chunks_packed,
     })
+}
+
+/// Ensure a `move_to` directive is reflected on the wire when the caller did
+/// not also pass `managed_meta.context` / `managed_meta.doc_type`.
+///
+/// `MoveSpec` is a VaultBackend-only signal (it's ignored by `DbBackend`),
+/// so without this synthesis a pure-move update reaches the server with no
+/// indication that the resource's context or type has changed.
+fn synthesize_managed_meta_for_move(
+    existing: Option<ManagedMeta>,
+    move_to: Option<&MoveSpec>,
+) -> Option<ManagedMeta> {
+    let Some(move_to) = move_to else {
+        return existing;
+    };
+    if move_to.context_to.is_none() && move_to.type_to.is_none() {
+        return existing;
+    }
+    let mut mm = existing.unwrap_or_default();
+    if mm.context.is_none() {
+        if let Some(ctx) = &move_to.context_to {
+            mm.context = Some(ctx.clone());
+        }
+    }
+    if mm.doc_type.is_none() {
+        if let Some(dt) = &move_to.type_to {
+            mm.doc_type = Some(dt.clone());
+        }
+    }
+    Some(mm)
 }
 
 /// Apply scalar managed_meta updates and open_meta array appends from
@@ -524,7 +547,7 @@ mod tests {
 #[cfg(test)]
 mod translator_tests {
     use temper_core::operations::{
-        BodyUpdate, CreateResource, ResourceRef, Surface, UpdateResource,
+        BodyUpdate, CreateResource, MoveSpec, ResourceRef, Surface, UpdateResource,
     };
     use temper_core::types::ids::ResourceId;
     use temper_core::types::managed_meta::ManagedMeta;
@@ -661,6 +684,51 @@ mod translator_tests {
             matches!(err, temper_core::error::TemperError::BadRequest(_)),
             "expected BadRequest, got {err:?}"
         );
+    }
+
+    #[test]
+    fn cmd_to_update_request_propagates_move_to_when_managed_meta_absent() {
+        let mut cmd = make_update_cmd();
+        cmd.move_to = Some(MoveSpec {
+            context_to: Some("storyteller".to_string()),
+            type_to: Some("research".to_string()),
+        });
+        // managed_meta stays None — pure move.
+
+        let req = cmd_to_update_request(&cmd, None).expect("pure move ok");
+        let mm = req
+            .managed_meta
+            .expect("managed_meta synthesized from move_to");
+        assert_eq!(mm.context.as_deref(), Some("storyteller"));
+        assert_eq!(mm.doc_type.as_deref(), Some("research"));
+    }
+
+    #[test]
+    fn cmd_to_update_request_move_to_does_not_overwrite_explicit_managed_meta() {
+        let mut cmd = make_update_cmd();
+        cmd.managed_meta = Some(ManagedMeta {
+            context: Some("explicit-context".to_string()),
+            doc_type: Some("explicit-type".to_string()),
+            ..Default::default()
+        });
+        cmd.move_to = Some(MoveSpec {
+            context_to: Some("move-context".to_string()),
+            type_to: Some("move-type".to_string()),
+        });
+
+        let req = cmd_to_update_request(&cmd, None).expect("merge ok");
+        let mm = req.managed_meta.expect("managed_meta preserved");
+        // Caller's explicit fields win.
+        assert_eq!(mm.context.as_deref(), Some("explicit-context"));
+        assert_eq!(mm.doc_type.as_deref(), Some("explicit-type"));
+    }
+
+    #[test]
+    fn cmd_to_update_request_no_move_to_no_synthesis() {
+        let cmd = make_update_cmd();
+        // No move_to, no managed_meta — purely a no-op meta update.
+        let req = cmd_to_update_request(&cmd, None).expect("no-op ok");
+        assert!(req.managed_meta.is_none());
     }
 
     #[test]
