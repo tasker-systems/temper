@@ -107,7 +107,11 @@ fn resolve_token_store(config: &TemperConfig) -> Result<Arc<dyn TokenStore>> {
 /// Load config + resolve store + build client, sharing the loaded config so
 /// `TEMPER_API_URL` / `TEMPER_AUTH_PATH` resolution and provider selection all
 /// see the same `TemperConfig` snapshot.
-fn build_config_store_and_client() -> Result<(
+///
+/// `pub(crate)` so the `vault_backend::assemble_vault_backend` helper can
+/// inspect the resolved `TokenStore` to decide whether to wrap the client as
+/// `Some` (token present) or `None` (offline) without rebuilding everything.
+pub(crate) fn build_config_store_and_client() -> Result<(
     TemperConfig,
     Arc<dyn TokenStore>,
     temper_client::TemperClient,
