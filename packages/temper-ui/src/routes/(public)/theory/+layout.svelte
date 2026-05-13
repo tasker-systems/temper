@@ -28,18 +28,11 @@
   });
 
   const currentIndex = $derived(ORDER.findIndex((link) => link.href === currentHref));
-  const isEntry = $derived(currentHref === '/theory');
   const prev = $derived(currentIndex > 0 ? ORDER[currentIndex - 1] : undefined);
   const next = $derived(
     currentIndex >= 0 && currentIndex < ORDER.length - 1 ? ORDER[currentIndex + 1] : undefined
   );
 </script>
-
-{#if !isEntry}
-  <div class="theory-backlink">
-    <a href="/theory">← Theory</a>
-  </div>
-{/if}
 
 {@render children()}
 
@@ -48,22 +41,6 @@
 <Footer />
 
 <style>
-  .theory-backlink {
-    max-width: 800px;
-    margin: 0 auto;
-    padding: 2.5rem 2.5rem 0;
-  }
-  .theory-backlink a {
-    font-family: var(--font-mono);
-    font-size: 0.7rem;
-    letter-spacing: 0.12em;
-    color: var(--graphite);
-    text-decoration: none;
-    text-transform: uppercase;
-    transition: color 0.2s;
-  }
-  .theory-backlink a:hover { color: var(--temper-blue); }
-
   /* Shared prose styles for theory pages.
      Pages wrap their main prose region in `<div class="theory-page">` so
      these globals don't bleed onto unrelated routes. */
