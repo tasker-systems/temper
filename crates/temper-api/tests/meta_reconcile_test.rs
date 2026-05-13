@@ -33,6 +33,7 @@ async fn meta_only_update(
         body: None,
         managed_meta: Some(ManagedMeta::default()),
         open_meta: Some(open_meta),
+        move_to: None,
         origin: Surface::Mcp,
     };
     DbBackend::new(

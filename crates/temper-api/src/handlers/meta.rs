@@ -72,6 +72,7 @@ pub async fn update_meta(
         body: None,
         managed_meta: Some(payload.managed_meta),
         open_meta: Some(payload.open_meta),
+        move_to: None,
         origin: Surface::ApiHttp,
     };
     let backend = DbBackend::new(

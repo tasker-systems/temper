@@ -434,6 +434,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
                 .expect("managed_meta"),
         ),
         open_meta: None,
+        move_to: None,
         origin: Surface::Mcp,
     };
     DbBackend::new(
@@ -580,6 +581,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         body: None,
         managed_meta: Some(new_managed),
         open_meta: Some(new_open),
+        move_to: None,
         origin: Surface::Mcp,
     };
     DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp)

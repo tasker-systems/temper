@@ -245,6 +245,7 @@ async fn update_resource_changes_title_and_emits_event(pool: PgPool) {
             ..ManagedMeta::default()
         }),
         open_meta: None,
+        move_to: None,
         origin: Surface::ApiHttp,
     };
     let out = backend.update_resource(cmd).await.expect("update succeeds");
@@ -269,6 +270,7 @@ async fn update_resource_unknown_uuid_returns_not_found(pool: PgPool) {
         body: None,
         managed_meta: None,
         open_meta: None,
+        move_to: None,
         origin: Surface::ApiHttp,
     };
     let err = backend.update_resource(cmd).await.unwrap_err();
