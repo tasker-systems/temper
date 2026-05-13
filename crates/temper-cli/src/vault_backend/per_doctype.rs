@@ -24,7 +24,7 @@ use temper_core::vault::Vault;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::templates::{ConceptTemplate, DecisionTemplate, TaskTemplate};
+use crate::templates::{ConceptTemplate, DecisionTemplate, GoalTemplate, TaskTemplate};
 
 /// Doctype-specific frontmatter fields not covered by the doctype-agnostic
 /// `WriteArgs` fields. Each variant carries the values required to render
@@ -32,7 +32,7 @@ use crate::templates::{ConceptTemplate, DecisionTemplate, TaskTemplate};
 /// and pass `None`.
 ///
 /// Extended across Phase A as task/goal/session/research dispatch lands:
-/// A1 introduces `Task`; A2-A4 add `Goal`/`Session`/`Research`.
+/// A1 introduces `Task`, A2 adds `Goal`; A3-A4 add `Session`/`Research`.
 pub(crate) enum DoctypeFields<'a> {
     /// Task-specific fields: goal slug, mode, effort, and sequence number.
     /// `mode`/`effort` are pre-validated by the caller; `seq` is pre-computed
@@ -43,6 +43,13 @@ pub(crate) enum DoctypeFields<'a> {
         effort: &'a str,
         seq: u32,
     },
+    /// Goal-specific fields: sequence number.
+    ///
+    /// `seq` is pre-computed by the wrapper via `actions::goal::next_seq`. `id`
+    /// and `date` are generated inside `write_goal` to match the `write_task`
+    /// shape — they are not caller inputs. `title`, `slug`, and `context` ride
+    /// on the doctype-agnostic `WriteArgs` fields.
+    Goal { seq: u32 },
 }
 
 /// Arguments for the per-doctype write dispatch.
@@ -58,11 +65,11 @@ pub(crate) struct WriteArgs<'a> {
     pub vault_root: &'a Path,
     pub owner: &'a str,
     /// Held for state-dir / context-aware path construction in writers that
-    /// need it (currently unused by task/concept/decision writers; goal/session
-    /// dispatch in A2-A3 may need it).
+    /// need it (currently unused by task/concept/decision/goal writers; session
+    /// dispatch in A3 may need it).
     #[expect(
         dead_code,
-        reason = "needed by goal/session/research dispatch in follow-up tasks A2-A4"
+        reason = "needed by session/research dispatch in follow-up tasks A3-A4"
     )]
     pub config: &'a Config,
     /// Doctype-specific frontmatter fields. `None` for doctypes whose template
@@ -86,16 +93,17 @@ pub(crate) struct WriteResult {
 /// # Scoping note (Phase 4a → Phase 4 completion)
 ///
 /// Concept and decision were implemented in Phase 4a. Task is wired in
-/// A1; goal/session/research land in A2-A4. The audit-gate fallback for
+/// A1, goal in A2; session/research land in A3-A4. The audit-gate fallback for
 /// the still-pending doctypes is removed wholesale in A5 once all four
 /// per-doctype writers are in place.
 pub(crate) fn write_for(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
     match args.doctype {
         "concept" | "decision" => write_concept_or_decision(args),
         "task" => write_task(args),
-        "goal" | "session" | "research" => Err(TemperError::BadRequest(format!(
+        "goal" => write_goal(args),
+        "session" | "research" => Err(TemperError::BadRequest(format!(
             "doctype '{}' not yet supported by VaultBackend; use commands/{}.rs directly \
-             until follow-up tasks A2-A4 land the per-doctype writer.",
+             until follow-up tasks A3-A4 land the per-doctype writer.",
             args.doctype, args.doctype,
         ))),
         other => Err(TemperError::BadRequest(format!(
@@ -242,7 +250,7 @@ fn write_task(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
             effort,
             seq,
         }) => (goal, mode, effort, seq),
-        None => {
+        _ => {
             return Err(TemperError::BadRequest(
                 "task write requires DoctypeFields::Task".to_string(),
             ));
@@ -310,6 +318,120 @@ fn write_task(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
     // The task template injects `temper-provisional-id: "<id_str>"` — we parse
     // from the locally generated string rather than re-reading from disk,
     // matching `write_concept_or_decision`.
+    let resource_id = Uuid::parse_str(&id_str)
+        .map(ResourceId::from)
+        .map_err(|e| {
+            TemperError::Vault(format!("generated id is not a valid UUID: {id_str}: {e}"))
+        })?;
+
+    Ok(WriteResult {
+        resource_id,
+        abs_path,
+        rel_path,
+    })
+}
+
+/// Write a goal resource using the Askama `GoalTemplate`.
+///
+/// Mirrors the template + frontmatter + write half of `actions::goal::create`,
+/// minus the tail actions (publish, discovery event, output) which remain at
+/// the wrapper. The wrapper computes `seq` via `actions::goal::next_seq` and
+/// passes it through `DoctypeFields::Goal`.
+///
+/// Hard-errors when the target slug already exists on disk. The pre-pull
+/// `actions::goal::create` already had this check (matches concept/decision/task).
+///
+/// Note: `ensure_maintenance` does NOT route through `write_goal` — it has an
+/// idempotent get-or-create semantic that doesn't fit the hard-error-on-exists
+/// contract. Its write path stays inline at `actions::goal::ensure_maintenance`.
+///
+/// # Byte-preservation
+///
+/// Goals are written via raw `vault::write_note` (matching pre-pull behavior).
+/// Goals have no `open_meta` write path today, but the overlay branch is
+/// retained for symmetry with `write_task` should a backend caller pass open
+/// fields in the future.
+fn write_goal(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
+    let WriteArgs {
+        doctype: _,
+        title,
+        slug,
+        context,
+        body,
+        open_meta,
+        vault_root,
+        owner,
+        config: _,
+        doctype_fields,
+    } = args;
+
+    let seq = match doctype_fields {
+        Some(DoctypeFields::Goal { seq }) => seq,
+        _ => {
+            return Err(TemperError::BadRequest(
+                "goal write requires DoctypeFields::Goal".to_string(),
+            ));
+        }
+    };
+
+    let id_str = crate::ids::generate_id();
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    let seq_str = seq.to_string();
+    let tmpl = GoalTemplate {
+        id: &id_str,
+        title,
+        slug,
+        context,
+        seq: &seq_str,
+        date: &date,
+    };
+    let rendered = tmpl
+        .render()
+        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
+
+    let vault_layout = Vault::new(vault_root);
+    let dir = vault_layout.doc_type_dir(owner, context, "goal");
+    let abs_path = vault_layout.doc_file(owner, context, "goal", slug);
+    let rel_path = vault_layout.rel_path(owner, context, "goal", slug);
+
+    if abs_path.exists() {
+        return Err(TemperError::Vault(format!("goal already exists: {slug}")));
+    }
+
+    std::fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
+
+    if open_meta.is_some() {
+        // Open-meta overlay path: parse rendered template, apply open-tier
+        // fields, optionally set body, write via Frontmatter::write_to.
+        let mut fm = Frontmatter::try_from(rendered.as_str())?;
+        if let Some(open) = open_meta {
+            if let Some(obj) = open.as_object() {
+                for (key, value) in obj {
+                    fm.set_open_field(key, value.clone());
+                }
+            }
+        }
+        if !body.is_empty() {
+            fm.set_body(body.to_string());
+        }
+        fm.write_to(&abs_path)?;
+    } else {
+        // No open-meta overlay: byte-preserve the rendered template via
+        // `vault::write_note`. This matches the pre-pull
+        // `actions::goal::create` write path. Body is empty in today's call
+        // sites (goal templates have no body input), but we string-append for
+        // future-proofing should a caller pass one.
+        let mut content = rendered;
+        if !body.is_empty() {
+            content.push_str(body);
+            content.push('\n');
+        }
+        crate::vault::write_note(&abs_path, &content)?;
+    }
+
+    // The goal template injects `temper-provisional-id: "<id_str>"` — we parse
+    // from the locally generated string rather than re-reading from disk,
+    // matching `write_concept_or_decision` and `write_task`.
     let resource_id = Uuid::parse_str(&id_str)
         .map(ResourceId::from)
         .map_err(|e| {
@@ -548,6 +670,119 @@ mod tests {
                 .and_then(|m| m.get(serde_yaml::Value::String("temper-type".to_string())))
                 .is_some(),
             "temper-type must be a top-level key after empty-body write"
+        );
+    }
+
+    fn goal_args<'a>(
+        config: &'a Config,
+        vault_root: &'a Path,
+        title: &'a str,
+        slug: &'a str,
+        seq: u32,
+    ) -> WriteArgs<'a> {
+        WriteArgs {
+            doctype: "goal",
+            title,
+            slug,
+            context: "temper",
+            body: "",
+            open_meta: None,
+            vault_root,
+            owner: "@me",
+            config,
+            doctype_fields: Some(DoctypeFields::Goal { seq }),
+        }
+    }
+
+    #[test]
+    fn write_for_goal_creates_file_with_correct_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args = goal_args(&config, tmp.path(), "Ship It", "ship-it", 10);
+        let result = write_for(args).expect("write ok");
+        assert!(result.abs_path.exists(), "file must exist at abs_path");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        let fm = Frontmatter::try_from(content.as_str()).expect("frontmatter must parse");
+        let mapping = fm
+            .value()
+            .as_mapping()
+            .expect("frontmatter must be mapping");
+        let get = |key: &str| {
+            mapping
+                .get(serde_yaml::Value::String(key.to_string()))
+                .cloned()
+        };
+        assert!(
+            get("temper-provisional-id").is_some(),
+            "temper-provisional-id must be present; got: {content}"
+        );
+        assert_eq!(
+            get("temper-title"),
+            Some(serde_yaml::Value::String("Ship It".to_string())),
+            "temper-title must equal 'Ship It'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-type"),
+            Some(serde_yaml::Value::String("goal".to_string())),
+            "temper-type must equal 'goal'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-slug"),
+            Some(serde_yaml::Value::String("ship-it".to_string())),
+            "temper-slug must equal 'ship-it'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-context"),
+            Some(serde_yaml::Value::String("temper".to_string())),
+            "temper-context must equal 'temper'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-seq"),
+            Some(serde_yaml::Value::Number(10.into())),
+            "temper-seq must equal 10; got: {content}"
+        );
+        assert_eq!(
+            get("temper-status"),
+            Some(serde_yaml::Value::String("active".to_string())),
+            "temper-status must equal 'active'; got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_for_goal_errors_on_existing_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args1 = goal_args(&config, tmp.path(), "First", "dup-goal", 10);
+        write_for(args1).expect("first write ok");
+
+        let args2 = goal_args(&config, tmp.path(), "Second", "dup-goal", 20);
+        let err = write_for(args2).expect_err("second write must error");
+        assert!(
+            matches!(err, TemperError::Vault(ref m) if m.contains("already exists")),
+            "expected Vault(already exists) error; got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn write_for_goal_returns_bad_request_when_doctype_fields_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args = WriteArgs {
+            doctype: "goal",
+            title: "Missing Fields",
+            slug: "missing-fields",
+            context: "temper",
+            body: "",
+            open_meta: None,
+            vault_root: tmp.path(),
+            owner: "@me",
+            config: &config,
+            doctype_fields: None,
+        };
+        let err = write_for(args).expect_err("missing DoctypeFields::Goal must error");
+        assert!(
+            matches!(err, TemperError::BadRequest(ref m) if m.contains("DoctypeFields::Goal")),
+            "expected BadRequest mentioning DoctypeFields::Goal; got: {err:?}"
         );
     }
 
