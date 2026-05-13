@@ -25,7 +25,8 @@ use uuid::Uuid;
 
 use crate::config::Config;
 use crate::templates::{
-    ConceptTemplate, DecisionTemplate, GoalTemplate, SessionTemplate, TaskTemplate,
+    ConceptTemplate, DecisionTemplate, GoalTemplate, ResearchTemplate, SessionTemplate,
+    TaskTemplate,
 };
 
 /// Doctype-specific frontmatter fields not covered by the doctype-agnostic
@@ -60,6 +61,14 @@ pub(crate) enum DoctypeFields<'a> {
     /// explicit and unambiguous — passing `None` (or a wrong variant) hard-errors
     /// with `BadRequest`, preventing silent fall-through from a misrouted call.
     Session,
+    /// Research-specific fields: none beyond the doctype-agnostic `WriteArgs`.
+    ///
+    /// The research template's frontmatter is populated from `title`, `slug`,
+    /// `context` (already on `WriteArgs`), plus an `id` and `date` generated
+    /// inside `write_research`. The empty variant exists so the dispatch is
+    /// explicit and unambiguous — passing `None` (or a wrong variant) hard-errors
+    /// with `BadRequest`, preventing silent fall-through from a misrouted call.
+    Research,
 }
 
 /// Arguments for the per-doctype write dispatch.
@@ -74,10 +83,13 @@ pub(crate) struct WriteArgs<'a> {
     pub open_meta: Option<&'a serde_json::Value>,
     pub vault_root: &'a Path,
     pub owner: &'a str,
-    /// Held for state-dir / context-aware path construction in writers that
-    /// need it (currently unused by task/concept/decision/goal/session writers;
-    /// research dispatch in A4 may need it).
-    #[expect(dead_code, reason = "needed by research dispatch in follow-up task A4")]
+    /// Held for state-dir / context-aware path construction in future writers
+    /// that may need it. No current writer (concept/decision/task/goal/session/
+    /// research) reads from `config` — all paths are derived from `vault_root` +
+    /// `owner` + `context` directly. Kept on the params struct so future doctype
+    /// writers that need state-dir-aware behavior (e.g. cross-resource lookups
+    /// against the manifest) don't require a signature change at every call site.
+    #[expect(dead_code, reason = "reserved for future writers needing state-dir")]
     pub config: &'a Config,
     /// Doctype-specific frontmatter fields. `None` for doctypes whose template
     /// only consumes the doctype-agnostic fields (concept, decision).
@@ -109,11 +121,7 @@ pub(crate) fn write_for(args: WriteArgs<'_>) -> Result<WriteResult, TemperError>
         "task" => write_task(args),
         "goal" => write_goal(args),
         "session" => write_session(args),
-        "research" => Err(TemperError::BadRequest(format!(
-            "doctype '{}' not yet supported by VaultBackend; use commands/{}.rs directly \
-             until follow-up task A4 lands the per-doctype writer.",
-            args.doctype, args.doctype,
-        ))),
+        "research" => write_research(args),
         other => Err(TemperError::BadRequest(format!(
             "unsupported doctype for create: '{other}'"
         ))),
@@ -572,6 +580,144 @@ fn write_session(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
     // The session template injects `temper-provisional-id: "<id_str>"` — we
     // parse from the locally generated string rather than re-reading from disk,
     // matching `write_concept_or_decision` / `write_task` / `write_goal`.
+    let resource_id = Uuid::parse_str(&id_str)
+        .map(ResourceId::from)
+        .map_err(|e| {
+            TemperError::Vault(format!("generated id is not a valid UUID: {id_str}: {e}"))
+        })?;
+
+    Ok(WriteResult {
+        resource_id,
+        abs_path,
+        rel_path,
+    })
+}
+
+/// Write a research resource using the Askama `ResearchTemplate`.
+///
+/// Mirrors the new-file-create branch (lines 48-85) of
+/// `commands::research::save`, minus the tail actions (publish, discovery event,
+/// output) which remain at the wrapper. The wrapper resolves context/title/slug
+/// and decides whether to delegate here or take the save-or-update overload path
+/// (which stays inline at the surface — see `commands::research::save`).
+///
+/// Hard-errors when the target slug already exists on disk. The pre-pull
+/// `commands::research::save` reached this branch only after checking
+/// `note_path.exists()` was false, so this error path is only hit if the file
+/// appears between the wrapper's check and the writer's write (race) or if a
+/// future caller (e.g. `VaultBackend.create_resource` via B5) routes here
+/// without a prior exists-check.
+///
+/// # Managed-meta handling
+///
+/// The research template already populates `temper-context`, `temper-title`,
+/// `temper-type`, `temper-slug` directly from its template fields (unlike the
+/// session template, which renders `temper-context: ""`). The original creator
+/// still overlaid managed-meta via `build_managed_meta_for_create` +
+/// `set_managed_meta` for parity with other doctypes — A4 migrates that call
+/// inline here as part of Phase C's `build_managed_meta_for_create` deletion
+/// sweep. The overlay is idempotent against the template's values for the
+/// research case (same context/title) so the resulting file content is unchanged.
+///
+/// # Byte-preservation
+///
+/// Like session, research always serializes through `Frontmatter::write_to`
+/// because the managed-meta overlay step requires it. The existing creator did
+/// the same, so this preserves the wire format.
+fn write_research(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
+    let WriteArgs {
+        doctype: _,
+        title,
+        slug,
+        context,
+        body,
+        open_meta,
+        vault_root,
+        owner,
+        config: _,
+        doctype_fields,
+    } = args;
+
+    match doctype_fields {
+        Some(DoctypeFields::Research) => {}
+        _ => {
+            return Err(TemperError::BadRequest(
+                "research write requires DoctypeFields::Research".to_string(),
+            ));
+        }
+    }
+
+    let id_str = crate::ids::generate_id();
+    let date = Local::now().format("%Y-%m-%d").to_string();
+    let tmpl = ResearchTemplate {
+        id: &id_str,
+        title,
+        date: &date,
+        project: context,
+        slug,
+    };
+    let rendered = tmpl
+        .render()
+        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
+
+    let vault_layout = Vault::new(vault_root);
+    let abs_path = vault_layout.doc_file(owner, context, "research", slug);
+    let rel_path = vault_layout.rel_path(owner, context, "research", slug);
+
+    if abs_path.exists() {
+        return Err(TemperError::Vault(format!(
+            "research already exists: {slug}"
+        )));
+    }
+
+    // Parse rendered template, then overlay managed-meta (replaces the
+    // pre-pull `build_managed_meta_for_create` + `set_managed_meta` calls at
+    // commands::research::save:60-75). For research, the template already
+    // populates `temper-context`/`temper-title`/`temper-type`/`temper-slug`,
+    // so the overlay is idempotent — kept for parity with `write_session` and
+    // so Phase C's helper deletion is a single sweep across all callers.
+    let mut fm = Frontmatter::try_from(rendered.as_str())?;
+    let meta = crate::actions::frontmatter::build_managed_meta_for_create(
+        crate::actions::frontmatter::NewResourceArgs {
+            doc_type: "research",
+            context,
+            title,
+            mode: None,
+            effort: None,
+            goal: None,
+            stage: None,
+            seq: None,
+            status: None,
+            provenance: None,
+            llm_model: None,
+            llm_run: None,
+        },
+    );
+    fm.set_managed_meta(&meta);
+
+    // Apply open-tier metadata if provided (no callers do this today for
+    // research, but retained for symmetry with task/goal/concept/decision/session).
+    if let Some(open) = open_meta {
+        if let Some(obj) = open.as_object() {
+            for (key, value) in obj {
+                fm.set_open_field(key, value.clone());
+            }
+        }
+    }
+
+    if !body.is_empty() {
+        fm.set_body(body.to_string());
+    }
+
+    if let Some(parent) = abs_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| TemperError::Vault(e.to_string()))?;
+    }
+    fm.write_to(&abs_path)?;
+
+    // The research template injects `temper-provisional-id: "<id_str>"` — we
+    // parse from the locally generated string rather than re-reading from disk,
+    // matching `write_concept_or_decision` / `write_task` / `write_goal` /
+    // `write_session`.
     let resource_id = Uuid::parse_str(&id_str)
         .map(ResourceId::from)
         .map_err(|e| {
@@ -1049,6 +1195,140 @@ mod tests {
         assert!(
             matches!(err, TemperError::BadRequest(ref m) if m.contains("DoctypeFields::Session")),
             "expected BadRequest mentioning DoctypeFields::Session; got: {err:?}"
+        );
+    }
+
+    fn research_args<'a>(
+        config: &'a Config,
+        vault_root: &'a Path,
+        title: &'a str,
+        slug: &'a str,
+        body: &'a str,
+    ) -> WriteArgs<'a> {
+        WriteArgs {
+            doctype: "research",
+            title,
+            slug,
+            context: "temper",
+            body,
+            open_meta: None,
+            vault_root,
+            owner: "@me",
+            config,
+            doctype_fields: Some(DoctypeFields::Research),
+        }
+    }
+
+    #[test]
+    fn write_for_research_creates_file_with_correct_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args = research_args(
+            &config,
+            tmp.path(),
+            "LLM Context Windows",
+            "2026-05-13-llm-context-windows",
+            "",
+        );
+        let result = write_for(args).expect("write ok");
+        assert!(result.abs_path.exists(), "file must exist at abs_path");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        let fm = Frontmatter::try_from(content.as_str()).expect("frontmatter must parse");
+        let mapping = fm
+            .value()
+            .as_mapping()
+            .expect("frontmatter must be mapping");
+        let get = |key: &str| {
+            mapping
+                .get(serde_yaml::Value::String(key.to_string()))
+                .cloned()
+        };
+        assert!(
+            get("temper-provisional-id").is_some(),
+            "temper-provisional-id must be present; got: {content}"
+        );
+        assert_eq!(
+            get("temper-type"),
+            Some(serde_yaml::Value::String("research".to_string())),
+            "temper-type must equal 'research'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-title"),
+            Some(serde_yaml::Value::String("LLM Context Windows".to_string())),
+            "temper-title must equal 'LLM Context Windows'; got: {content}"
+        );
+        // Research template populates `temper-context` directly from the
+        // `project` template field; managed-meta overlay must produce the same
+        // value (idempotent overlay).
+        assert_eq!(
+            get("temper-context"),
+            Some(serde_yaml::Value::String("temper".to_string())),
+            "temper-context must equal 'temper'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-slug"),
+            Some(serde_yaml::Value::String(
+                "2026-05-13-llm-context-windows".to_string()
+            )),
+            "temper-slug must equal '2026-05-13-llm-context-windows'; got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_for_research_errors_on_existing_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args1 = research_args(&config, tmp.path(), "First", "2026-05-13-dup-research", "");
+        write_for(args1).expect("first write ok");
+
+        let args2 = research_args(&config, tmp.path(), "Second", "2026-05-13-dup-research", "");
+        let err = write_for(args2).expect_err("second write must error");
+        assert!(
+            matches!(err, TemperError::Vault(ref m) if m.contains("already exists")),
+            "expected Vault(already exists) error; got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn write_for_research_writes_body_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let body = "## Findings\n\nThe context window matters.\n";
+        let args = research_args(
+            &config,
+            tmp.path(),
+            "Bodied",
+            "2026-05-13-bodied-research",
+            body,
+        );
+        let result = write_for(args).expect("write ok");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        assert!(
+            content.contains("The context window matters."),
+            "body must be present in written file; got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_for_research_returns_bad_request_when_doctype_fields_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args = WriteArgs {
+            doctype: "research",
+            title: "Missing Fields",
+            slug: "2026-05-13-missing-fields-research",
+            context: "temper",
+            body: "",
+            open_meta: None,
+            vault_root: tmp.path(),
+            owner: "@me",
+            config: &config,
+            doctype_fields: None,
+        };
+        let err = write_for(args).expect_err("missing DoctypeFields::Research must error");
+        assert!(
+            matches!(err, TemperError::BadRequest(ref m) if m.contains("DoctypeFields::Research")),
+            "expected BadRequest mentioning DoctypeFields::Research; got: {err:?}"
         );
     }
 

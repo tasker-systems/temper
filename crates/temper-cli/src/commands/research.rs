@@ -1,15 +1,25 @@
-use askama::Template;
 use chrono::Local;
 use temper_core::vault::Vault;
 
-use crate::actions::frontmatter::{build_managed_meta_for_create, NewResourceArgs};
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::Result;
 use crate::output;
-use crate::templates::ResearchTemplate;
 use crate::vault;
+use crate::vault_backend::per_doctype::{self, DoctypeFields, WriteArgs};
 
+/// Create or update today's research note.
+///
+/// Two paths:
+/// - If a research file with this slug already exists on disk, this is the
+///   save-or-update overload: when `stdin_content` is `Some(_)`, the body is
+///   replaced in place; otherwise the call is a no-op. This branch stays at
+///   the surface because `per_doctype::write_research` hard-errors on existing
+///   slugs.
+/// - If the file does not exist, delegate the bare file-write (template render,
+///   managed-meta overlay, body application, write) to
+///   `per_doctype::write_research`. The wrapper retains publish-as-tail-action,
+///   discovery emission, and output.
 pub fn save(
     config: &Config,
     title: &str,
@@ -27,6 +37,9 @@ pub fn save(
     let note_path = vault_layout.doc_file(&owner, context_name, "research", &slug);
 
     if note_path.exists() {
+        // File exists: replace body if stdin provided, otherwise no-op.
+        // This is the save-or-update overload — preserved at the surface layer
+        // because `per_doctype::write_research` hard-errors on existing slugs.
         if let Some(body) = stdin_content {
             let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
             fm.set_body(body.to_string());
@@ -45,49 +58,27 @@ pub fn save(
         return Ok(());
     }
 
-    let id = crate::ids::generate_id();
-    let tmpl = ResearchTemplate {
-        id: &id,
+    // File doesn't exist: delegate the bare file-write (template render,
+    // managed-meta overlay, body application, write) to per_doctype::write_research.
+    // The wrapper retains publish-as-tail-action, discovery emission, and output.
+    let body = stdin_content.unwrap_or("");
+    let result = per_doctype::write_for(WriteArgs {
+        doctype: "research",
         title,
-        date: &today,
-        project: context_name,
         slug: &slug,
-    };
-    let rendered = tmpl
-        .render()
-        .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
-
-    let mut fm = temper_core::frontmatter::Frontmatter::try_from(rendered.as_str())?;
-    let meta = build_managed_meta_for_create(NewResourceArgs {
-        doc_type: "research",
         context: context_name,
-        title,
-        mode: None,
-        effort: None,
-        goal: None,
-        stage: None,
-        seq: None,
-        status: None,
-        provenance: None,
-        llm_model: None,
-        llm_run: None,
-    });
-    fm.set_managed_meta(&meta);
-    if let Some(body) = stdin_content {
-        fm.set_body(body.to_string());
-    }
+        body,
+        open_meta: None,
+        vault_root: &config.vault_root,
+        owner: &owner,
+        config,
+        doctype_fields: Some(DoctypeFields::Research),
+    })?;
 
-    if let Some(parent) = note_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    fm.write_to(&note_path)?;
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &result.abs_path)?;
 
-    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &note_path)?;
-
-    let relative = note_path
-        .strip_prefix(&config.vault_root)
-        .unwrap_or(&note_path);
-    let relative_str = relative.to_string_lossy();
+    let relative_str = result.rel_path.clone();
+    let id = result.resource_id.to_string();
 
     if format == "json" {
         let json = serde_json::json!({
