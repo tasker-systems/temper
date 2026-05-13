@@ -1328,7 +1328,6 @@ pub struct UpdateParams<'a> {
 
 /// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
 /// managed-meta-mutating flags were passed.
-#[cfg(feature = "embed")]
 fn build_partial_managed_meta_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_core::types::ManagedMeta> {
@@ -1358,7 +1357,6 @@ fn build_partial_managed_meta_from_args(
 
 /// Build a partial `open_meta` JSON object from update CLI list flags. Returns
 /// `None` if no open-meta list flags were passed.
-#[cfg(feature = "embed")]
 fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_json::Value> {
     let mut obj = serde_json::Map::new();
     if !params.tags.is_empty() {
@@ -1405,6 +1403,29 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
     } else {
         Some(serde_json::Value::Object(obj))
     }
+}
+
+/// Build a `MoveSpec` from `--type-to` / `--context-to` CLI flags. Returns
+/// `None` when neither is set; otherwise returns `Some` with whichever fields
+/// were provided. Used by Phase B's local-arm migration to translate CLI move
+/// flags into the `UpdateResource.move_to` operations field.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired by Phase B4 caller; tests exercise it under cfg(test)"
+    )
+)]
+fn build_move_spec_from_args(
+    params: &UpdateParams<'_>,
+) -> Option<temper_core::operations::MoveSpec> {
+    if params.context_to.is_none() && params.type_to.is_none() {
+        return None;
+    }
+    Some(temper_core::operations::MoveSpec {
+        context_to: params.context_to.map(String::from),
+        type_to: params.type_to.map(String::from),
+    })
 }
 
 /// Cloud-mode `temper resource update` — no vault file is touched. Resolves
@@ -2131,5 +2152,66 @@ mod list_pipeline_tests {
         .unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
         assert_eq!(parsed.as_array().unwrap().len(), 2);
+    }
+}
+
+#[cfg(test)]
+mod build_helpers_tests {
+    use super::*;
+
+    /// Construct an `UpdateParams` with all optional/list fields defaulted.
+    /// Tests override only the fields they exercise.
+    fn empty_update_params<'a>(slug: &'a str) -> UpdateParams<'a> {
+        UpdateParams {
+            slug,
+            doc_type: None,
+            type_from: None,
+            type_to: None,
+            context: None,
+            context_to: None,
+            title: None,
+            tags: &[],
+            aliases: &[],
+            relates_to: &[],
+            references: &[],
+            depends_on: &[],
+            extends: &[],
+            preceded_by: &[],
+            derived_from: &[],
+            stage: None,
+            mode: None,
+            effort: None,
+            goal: None,
+            seq: None,
+            branch: None,
+            pr: None,
+            status: None,
+            body: None,
+        }
+    }
+
+    #[test]
+    fn build_move_spec_returns_none_when_both_flags_unset() {
+        let params = empty_update_params("foo");
+        assert!(build_move_spec_from_args(&params).is_none());
+    }
+
+    #[test]
+    fn build_move_spec_returns_some_with_only_context_to_when_only_context_to_set() {
+        let mut params = empty_update_params("foo");
+        params.context_to = Some("temper");
+        let spec = build_move_spec_from_args(&params).expect("expected Some");
+        assert_eq!(spec.context_to, Some("temper".to_string()));
+        assert_eq!(spec.type_to, None);
+    }
+
+    #[test]
+    fn build_move_spec_returns_some_with_both_when_both_set() {
+        let mut params = empty_update_params("foo");
+        params.context_to = Some("temper");
+        params.type_to = Some("concept");
+        let spec = build_move_spec_from_args(&params).expect("expected Some");
+        assert_eq!(spec.context_to, Some("temper".to_string()));
+        assert_eq!(spec.type_to, Some("concept".to_string()));
     }
 }
