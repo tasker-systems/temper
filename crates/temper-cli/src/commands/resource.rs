@@ -752,23 +752,21 @@ pub fn delete(
     context: Option<&str>,
     force: bool,
 ) -> Result<()> {
-    use std::io::IsTerminal;
     use temper_core::types::config::VaultState;
-    use temper_core::types::ResourceId;
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
-    let vault_state = VaultState::from_env();
-
-    // Non-TTY guard: in Local mode the local-tail prompt would hang on a
-    // disconnected stdin. Require --force explicitly for non-TTY callers.
-    // (Cloud mode skips the local tail entirely, so the prompt isn't reached.)
-    if matches!(vault_state, VaultState::Local) && !force && !std::io::stdin().is_terminal() {
-        return Err(TemperError::Vault(
-            "non-interactive stdin detected; pass --force to skip the local-file confirmation"
-                .to_string(),
-        ));
+    match VaultState::from_env() {
+        VaultState::Cloud => delete_cloud(config, doc_type, slug, context),
+        VaultState::Local => delete_local(config, doc_type, slug, context, force),
     }
+}
+
+/// Cloud-mode delete: resolve slug → UUID, call the API, print success.
+/// No manifest, no vault-file removal — there's no local artifact in cloud mode.
+fn delete_cloud(config: &Config, doc_type: &str, slug: &str, context: Option<&str>) -> Result<()> {
+    use temper_core::types::config::VaultState;
+    use temper_core::types::ResourceId;
 
     let config_clone = config.clone();
     let doc_type_owned = doc_type.to_string();
@@ -777,94 +775,104 @@ pub fn delete(
 
     crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
-            // Resolve slug → UUID. In Local mode this prefers reading the
-            // local file's `temper-id` frontmatter; in Cloud mode (or when
-            // the local file lacks a canonical id) it falls back to
-            // GET /api/resources/by-uri.
             let rid: ResourceId = resolve_resource_id(
                 &config_clone,
                 client,
                 &doc_type_owned,
                 &slug_owned,
                 context_owned.as_deref(),
-                vault_state,
+                VaultState::Cloud,
             )
             .await?;
             let uuid: uuid::Uuid = *rid;
 
-            // Cloud-first ordering: API delete (server soft-delete) lands
-            // first. On API failure we never mutate local state.
             client
                 .resources()
                 .delete(uuid)
                 .await
                 .map_err(crate::commands::client_err)?;
             output::success(format!("Deleted {doc_type_owned}/{slug_owned} (cloud)"));
-
-            // Cloud mode stops here — no manifest to walk.
-            if matches!(vault_state, VaultState::Cloud) {
-                return Ok(());
-            }
-
-            // Local-mode tail: remove the file from disk and clear the
-            // manifest entry. Resolve the file path from the manifest
-            // entry when one exists; fall back to scanning the vault
-            // for slug-matched files (covers the not-yet-synced case
-            // where no manifest entry exists yet).
-            let vault_root = config_clone.vault_root.clone();
-            let temper_dir = config_clone.state_dir.clone();
-            let device_id =
-                crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
-            let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
-            let manifest_entry_path: Option<std::path::PathBuf> = manifest
-                .entries
-                .get(&rid)
-                .map(|entry| vault_root.join(&entry.path));
-
-            let vault_path = match manifest_entry_path {
-                Some(p) => p,
-                None => match crate::lookup::find_resource(crate::lookup::FindableResource {
-                    config: &config_clone,
-                    manifest: Some(&manifest),
-                    owner: None,
-                    context: context_owned.clone(),
-                    doc_type: temper_core::frontmatter::DocType::from_str(&doc_type_owned)?,
-                    slug_or_suffix: slug_owned.clone(),
-                }) {
-                    Ok(resolved) => resolved.path,
-                    // No manifest entry and no on-disk file — server
-                    // delete already ran; nothing more to clean up.
-                    Err(_) => return Ok(()),
-                },
-            };
-
-            let should_remove = if force {
-                true
-            } else {
-                output::progress(format!(
-                    "Also remove vault file at {}? [y/N] ",
-                    vault_path.display()
-                ));
-                use std::io::Write as _;
-                std::io::stderr().flush().ok();
-                let mut input = String::new();
-                std::io::stdin().read_line(&mut input).ok();
-                input.trim().eq_ignore_ascii_case("y")
-            };
-
-            if should_remove {
-                if vault_path.exists() {
-                    std::fs::remove_file(&vault_path)?;
-                    output::dim(format!("Removed vault file: {}", vault_path.display()));
-                }
-                if manifest.entries.remove(&rid).is_some() {
-                    crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
-                }
-            }
-
             Ok(())
         })
     })
+}
+
+/// Local-mode delete: dispatch through [`crate::vault_backend::VaultBackend`].
+///
+/// Surface responsibilities (per the backend/surface split documented in
+/// `vault_backend/vault_backend.rs::delete_resource`):
+///
+/// 1. Non-TTY guard — abort early if stdin isn't a terminal and `--force` is off.
+/// 2. `[y/N]` prompt — runs **before** dispatch (cloud-first ordering means
+///    the API delete lands inside `delete_resource`, so prompting after would
+///    require splitting the operation and break atomicity).
+/// 3. Build a `DeleteResource` command and dispatch through `VaultBackend`.
+/// 4. Translate emitted `DomainEvent`s into user-facing log lines.
+fn delete_local(
+    config: &Config,
+    doc_type: &str,
+    slug: &str,
+    context: Option<&str>,
+    force: bool,
+) -> Result<()> {
+    use std::io::IsTerminal;
+
+    use temper_core::operations::{Backend, DeleteResource, DomainEvent, ResourceRef};
+
+    // Non-TTY guard: a disconnected stdin would hang the [y/N] prompt below.
+    if !force && !std::io::stdin().is_terminal() {
+        return Err(TemperError::Vault(
+            "non-interactive stdin detected; pass --force to skip the local-file confirmation"
+                .to_string(),
+        ));
+    }
+
+    // [y/N] prompt before dispatch. Bail (Ok) if the user declines — the
+    // backend never runs, so neither cloud nor local state is touched.
+    if !force {
+        output::progress(format!("Delete {doc_type}/{slug}? [y/N] "));
+        use std::io::Write as _;
+        std::io::stderr().flush().ok();
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input).ok();
+        if !input.trim().eq_ignore_ascii_case("y") {
+            return Ok(());
+        }
+    }
+
+    let ctx = require_context(config, context)?;
+    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
+    let owner = backend_ctx.owner.clone();
+    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
+
+    let cmd = DeleteResource {
+        resource: ResourceRef::scoped(owner, ctx, doc_type, slug),
+        force,
+        origin: temper_core::operations::Surface::CliLocalVault,
+    };
+
+    let output = runtime.block_on(backend.delete_resource(cmd))?;
+
+    // Translate events into surface output. Cloud-first ordering inside the
+    // backend guarantees `RemoteSynced` precedes any vault events when both
+    // happen, so a single linear scan is order-correct.
+    for event in &output.events {
+        match event {
+            DomainEvent::RemoteSynced { .. } => {
+                self::output::success(format!("Deleted {doc_type}/{slug} (cloud)"));
+            }
+            DomainEvent::VaultFileRemoved { path } => {
+                self::output::dim(format!("Removed vault file: {path}"));
+            }
+            DomainEvent::VaultManifestUpdated { .. } => {
+                // Manifest update is an internal bookkeeping detail — no
+                // need to surface it to the user.
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
 }
 
 /// Show a resource's content.
