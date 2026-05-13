@@ -7,7 +7,7 @@
 //!
 //! See `docs/superpowers/specs/2026-05-11-wave1-phase4-vaultbackend-design.md`.
 
-mod per_doctype;
+pub(crate) mod per_doctype;
 mod translators;
 mod vault_backend;
 

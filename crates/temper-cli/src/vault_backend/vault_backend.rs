@@ -378,6 +378,10 @@ impl Backend for VaultBackend {
                 vault_root: &self.vault_root,
                 owner: &self.owner,
                 config: &self.config,
+                // Phase B (B5) wires task/goal/session/research-specific fields
+                // here from `cmd.managed_meta`. Concept and decision dispatch
+                // (the only doctypes the backend currently serves) ignore this.
+                doctype_fields: None,
             },
         )?;
 

@@ -24,7 +24,26 @@ use temper_core::vault::Vault;
 use uuid::Uuid;
 
 use crate::config::Config;
-use crate::templates::{ConceptTemplate, DecisionTemplate};
+use crate::templates::{ConceptTemplate, DecisionTemplate, TaskTemplate};
+
+/// Doctype-specific frontmatter fields not covered by the doctype-agnostic
+/// `WriteArgs` fields. Each variant carries the values required to render
+/// that doctype's template. Concept and decision do not need extra fields
+/// and pass `None`.
+///
+/// Extended across Phase A as task/goal/session/research dispatch lands:
+/// A1 introduces `Task`; A2-A4 add `Goal`/`Session`/`Research`.
+pub(crate) enum DoctypeFields<'a> {
+    /// Task-specific fields: goal slug, mode, effort, and sequence number.
+    /// `mode`/`effort` are pre-validated by the caller; `seq` is pre-computed
+    /// via `actions::task::next_seq`.
+    Task {
+        goal: &'a str,
+        mode: &'a str,
+        effort: &'a str,
+        seq: u32,
+    },
+}
 
 /// Arguments for the per-doctype write dispatch.
 ///
@@ -38,14 +57,17 @@ pub(crate) struct WriteArgs<'a> {
     pub open_meta: Option<&'a serde_json::Value>,
     pub vault_root: &'a Path,
     pub owner: &'a str,
-    /// Held for Phase 4b when task/goal/session/research dispatch is added;
-    /// those existing creators need `&Config` for path construction.
+    /// Held for state-dir / context-aware path construction in writers that
+    /// need it (currently unused by task/concept/decision writers; goal/session
+    /// dispatch in A2-A3 may need it).
     #[expect(
         dead_code,
-        reason = "needed by task/goal/session/research dispatch in follow-up task \
-                  complete-per-doctype-write-dispatch-for-task-goal-session-research"
+        reason = "needed by goal/session/research dispatch in follow-up tasks A2-A4"
     )]
     pub config: &'a Config,
+    /// Doctype-specific frontmatter fields. `None` for doctypes whose template
+    /// only consumes the doctype-agnostic fields (concept, decision).
+    pub doctype_fields: Option<DoctypeFields<'a>>,
 }
 
 /// Outcome of a per-doctype file write.
@@ -61,21 +83,19 @@ pub(crate) struct WriteResult {
 
 /// Dispatch a file write to the correct per-doctype implementation.
 ///
-/// # Scoping note (Phase 4a)
+/// # Scoping note (Phase 4a → Phase 4 completion)
 ///
-/// Only `concept` and `decision` are implemented inline. Calls for
-/// `task`, `goal`, `session`, or `research` return `BadRequest` until
-/// the follow-up task `complete-per-doctype-write-dispatch-for-task-goal-session-research`
-/// rewires those creators to avoid `VaultState::from_env()` re-entry.
+/// Concept and decision were implemented in Phase 4a. Task is wired in
+/// A1; goal/session/research land in A2-A4. The audit-gate fallback for
+/// the still-pending doctypes is removed wholesale in A5 once all four
+/// per-doctype writers are in place.
 pub(crate) fn write_for(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
     match args.doctype {
         "concept" | "decision" => write_concept_or_decision(args),
-        "task" | "goal" | "session" | "research" => Err(TemperError::BadRequest(format!(
+        "task" => write_task(args),
+        "goal" | "session" | "research" => Err(TemperError::BadRequest(format!(
             "doctype '{}' not yet supported by VaultBackend; use commands/{}.rs directly \
-             until the follow-up task \
-             `complete-per-doctype-write-dispatch-for-task-goal-session-research` lands the \
-             rewire (Phase 4b). Audit gate reason: existing creator calls \
-             `publish_local_write_best_effort` → `VaultState::from_env()` internally.",
+             until follow-up tasks A2-A4 land the per-doctype writer.",
             args.doctype, args.doctype,
         ))),
         other => Err(TemperError::BadRequest(format!(
@@ -103,6 +123,7 @@ fn write_concept_or_decision(args: WriteArgs<'_>) -> Result<WriteResult, TemperE
         vault_root,
         owner,
         config: _,
+        doctype_fields: _,
     } = args;
 
     let today = Local::now().format("%Y-%m-%d").to_string();
@@ -181,6 +202,127 @@ fn write_concept_or_decision(args: WriteArgs<'_>) -> Result<WriteResult, TemperE
     })
 }
 
+/// Write a task resource using the Askama `TaskTemplate`.
+///
+/// Mirrors the template + frontmatter + write half of `actions::task::create`,
+/// minus the validation (goal-exists, mode/effort) and tail actions (publish,
+/// discovery event, output) which remain at the wrapper. The wrapper computes
+/// `seq` via `actions::task::next_seq` and passes it through `DoctypeFields::Task`.
+///
+/// Hard-errors when the target slug already exists on disk. The pre-pull
+/// `actions::task::create` would silently overwrite an existing slug — A1
+/// tightens that to error-on-exists (matches concept/decision behavior).
+///
+/// # Byte-preservation
+///
+/// When no `open_meta` is supplied, the rendered template is written raw with
+/// `body` string-appended (matching the pre-pull `vault::write_note` path). This
+/// preserves YAML serialization details (e.g. quoted string values) that the
+/// canonical `Frontmatter::serialize` path drops. When `open_meta` is supplied,
+/// we parse + overlay + serialize via `Frontmatter` — caller opts into the
+/// canonical form.
+fn write_task(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
+    let WriteArgs {
+        doctype: _,
+        title,
+        slug,
+        context,
+        body,
+        open_meta,
+        vault_root,
+        owner,
+        config: _,
+        doctype_fields,
+    } = args;
+
+    let (goal, mode, effort, seq) = match doctype_fields {
+        Some(DoctypeFields::Task {
+            goal,
+            mode,
+            effort,
+            seq,
+        }) => (goal, mode, effort, seq),
+        None => {
+            return Err(TemperError::BadRequest(
+                "task write requires DoctypeFields::Task".to_string(),
+            ));
+        }
+    };
+
+    let id_str = crate::ids::generate_id();
+    let datetime = Local::now().to_rfc3339();
+    let seq_str = seq.to_string();
+    let tmpl = TaskTemplate {
+        id: &id_str,
+        title,
+        slug,
+        context,
+        goal,
+        mode,
+        effort,
+        seq: &seq_str,
+        datetime: &datetime,
+    };
+    let rendered = tmpl
+        .render()
+        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
+
+    let vault_layout = Vault::new(vault_root);
+    let dir = vault_layout.doc_type_dir(owner, context, "task");
+    let abs_path = vault_layout.doc_file(owner, context, "task", slug);
+    let rel_path = vault_layout.rel_path(owner, context, "task", slug);
+
+    if abs_path.exists() {
+        return Err(TemperError::Vault(format!("task already exists: {slug}")));
+    }
+
+    std::fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
+
+    if open_meta.is_some() {
+        // Open-meta overlay path: parse rendered template, apply open-tier
+        // fields, optionally set body, write via Frontmatter::write_to.
+        let mut fm = Frontmatter::try_from(rendered.as_str())?;
+        if let Some(open) = open_meta {
+            if let Some(obj) = open.as_object() {
+                for (key, value) in obj {
+                    fm.set_open_field(key, value.clone());
+                }
+            }
+        }
+        if !body.is_empty() {
+            fm.set_body(body.to_string());
+        }
+        fm.write_to(&abs_path)?;
+    } else {
+        // No open-meta overlay: byte-preserve the rendered template and
+        // string-append the body (mirrors the pre-pull
+        // `vault::write_note(&content)` path with `content.push_str(body)`
+        // semantics). Avoids re-serializing through Frontmatter, which would
+        // canonicalize away quoting that callers rely on.
+        let mut content = rendered;
+        if !body.is_empty() {
+            content.push_str(body);
+            content.push('\n');
+        }
+        crate::vault::write_note(&abs_path, &content)?;
+    }
+
+    // The task template injects `temper-provisional-id: "<id_str>"` — we parse
+    // from the locally generated string rather than re-reading from disk,
+    // matching `write_concept_or_decision`.
+    let resource_id = Uuid::parse_str(&id_str)
+        .map(ResourceId::from)
+        .map_err(|e| {
+            TemperError::Vault(format!("generated id is not a valid UUID: {id_str}: {e}"))
+        })?;
+
+    Ok(WriteResult {
+        resource_id,
+        abs_path,
+        rel_path,
+    })
+}
+
 /// Derive the vault-relative path from the written result for doctypes that
 /// delegate to an existing creator (for use once the audit-gate follow-up lands).
 ///
@@ -237,6 +379,7 @@ mod tests {
             vault_root: tmp.path(),
             owner: "@me",
             config: &config,
+            doctype_fields: None,
         };
         let result = write_for(args).expect("write ok");
         assert!(result.abs_path.exists(), "file must exist at abs_path");
@@ -268,6 +411,7 @@ mod tests {
             vault_root: tmp.path(),
             owner: "@me",
             config: &config,
+            doctype_fields: None,
         };
         let result = write_for(args).expect("write ok");
         assert!(result.abs_path.exists());
@@ -275,25 +419,135 @@ mod tests {
         assert!(content.contains("Choose Postgres"));
     }
 
+    fn task_args<'a>(
+        config: &'a Config,
+        vault_root: &'a Path,
+        title: &'a str,
+        slug: &'a str,
+        body: &'a str,
+    ) -> WriteArgs<'a> {
+        WriteArgs {
+            doctype: "task",
+            title,
+            slug,
+            context: "temper",
+            body,
+            open_meta: None,
+            vault_root,
+            owner: "@me",
+            config,
+            doctype_fields: Some(DoctypeFields::Task {
+                goal: "my-goal",
+                mode: "build",
+                effort: "small",
+                seq: 10,
+            }),
+        }
+    }
+
     #[test]
-    fn write_for_task_returns_bad_request() {
+    fn write_for_task_creates_file_with_correct_frontmatter() {
         let tmp = tempfile::tempdir().unwrap();
         let config = make_config(tmp.path());
-        let args = WriteArgs {
-            doctype: "task",
-            title: "My Task",
-            slug: "my-task",
-            context: "temper",
-            body: "",
-            open_meta: None,
-            vault_root: tmp.path(),
-            owner: "@me",
-            config: &config,
+        let args = task_args(&config, tmp.path(), "My Task", "2026-05-13-my-task", "");
+        let result = write_for(args).expect("write ok");
+        assert!(result.abs_path.exists(), "file must exist at abs_path");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        // Identity + classification fields populated by the template.
+        // serde_yaml may re-serialize string values without surrounding quotes,
+        // so we assert key presence + value content rather than exact rendering.
+        let fm = Frontmatter::try_from(content.as_str()).expect("frontmatter must parse");
+        let mapping = fm
+            .value()
+            .as_mapping()
+            .expect("frontmatter must be mapping");
+        let get = |key: &str| {
+            mapping
+                .get(serde_yaml::Value::String(key.to_string()))
+                .cloned()
         };
-        let err = write_for(args).expect_err("task not supported");
         assert!(
-            matches!(err, TemperError::BadRequest(_)),
-            "expected BadRequest for task, got: {err:?}"
+            get("temper-provisional-id").is_some(),
+            "temper-provisional-id must be present; got: {content}"
+        );
+        assert_eq!(
+            get("temper-title"),
+            Some(serde_yaml::Value::String("My Task".to_string())),
+            "temper-title must equal 'My Task'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-type"),
+            Some(serde_yaml::Value::String("task".to_string())),
+            "temper-type must equal 'task'; got: {content}"
+        );
+        // Task-specific fields populated from DoctypeFields::Task.
+        assert_eq!(
+            get("temper-goal"),
+            Some(serde_yaml::Value::String("my-goal".to_string())),
+            "temper-goal must equal 'my-goal'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-mode"),
+            Some(serde_yaml::Value::String("build".to_string())),
+            "temper-mode must equal 'build'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-effort"),
+            Some(serde_yaml::Value::String("small".to_string())),
+            "temper-effort must equal 'small'; got: {content}"
+        );
+        assert_eq!(
+            get("temper-seq"),
+            Some(serde_yaml::Value::Number(10.into())),
+            "temper-seq must equal 10; got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_for_task_errors_on_existing_slug() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args1 = task_args(&config, tmp.path(), "First", "2026-05-13-dup", "");
+        write_for(args1).expect("first write ok");
+
+        let args2 = task_args(&config, tmp.path(), "Second", "2026-05-13-dup", "");
+        let err = write_for(args2).expect_err("second write must error");
+        assert!(
+            matches!(err, TemperError::Vault(ref m) if m.contains("already exists")),
+            "expected Vault(already exists) error; got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn write_for_task_writes_body_when_present() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let body = "## Plan\n\nDo the thing.\n";
+        let args = task_args(&config, tmp.path(), "Bodied", "2026-05-13-bodied", body);
+        let result = write_for(args).expect("write ok");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        assert!(
+            content.contains("Do the thing."),
+            "body must be present in written file; got: {content}"
+        );
+    }
+
+    #[test]
+    fn write_for_task_empty_body_does_not_corrupt_frontmatter() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let args = task_args(&config, tmp.path(), "Empty", "2026-05-13-empty", "");
+        let result = write_for(args).expect("write ok");
+        let content = fs::read_to_string(&result.abs_path).unwrap();
+        // Frontmatter still parseable.
+        let fm = Frontmatter::try_from(content.as_str())
+            .expect("frontmatter must parse after empty-body write");
+        assert!(
+            fm.value()
+                .as_mapping()
+                .and_then(|m| m.get(serde_yaml::Value::String("temper-type".to_string())))
+                .is_some(),
+            "temper-type must be a top-level key after empty-body write"
         );
     }
 
@@ -311,6 +565,7 @@ mod tests {
             vault_root: tmp.path(),
             owner: "@me",
             config: &config,
+            doctype_fields: None,
         };
         let err = write_for(args).expect_err("widget not supported");
         assert!(matches!(err, TemperError::BadRequest(_)));
