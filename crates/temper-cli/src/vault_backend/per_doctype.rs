@@ -1,17 +1,15 @@
-//! Per-doctype dispatch table for `create_resource`.
+//! Per-doctype dispatch table for `VaultBackend::create_resource`.
 //!
-//! # Audit gate (Task 7, Wave 1 Phase 4a)
+//! Each supported doctype has a `write_<doctype>` function that owns the
+//! template render, frontmatter setup, and file write. The dispatch entry
+//! point is `write_for`. Writers do not publish, emit discovery events, or
+//! print output — those are the caller's responsibility (either the
+//! surface-side wrapper in `actions/{task,goal}.rs` / `commands/{session,
+//! research}.rs`, or `VaultBackend.push_create` for the backend-driven path).
 //!
-//! The four delegated doctypes — task, goal, session, research — **all fail the
-//! audit gate**. Their existing creators each call
-//! `crate::actions::runtime::publish_local_write_best_effort`, which internally
-//! calls `resolve_token_store` → `VaultState::from_env()`. Dispatching from
-//! `VaultBackend::create_resource` into those creators would re-enter the
-//! `VaultState` branching that Phase 4b is tasked with removing.
-//!
-//! Task 7 therefore implements concept/decision inline and returns
-//! `BadRequest` for task/goal/session/research. Follow-up task:
-//! `complete-per-doctype-write-dispatch-for-task-goal-session-research`.
+//! All writers hard-error on existing slug. Surface-side save-or-update
+//! overloads (e.g. `commands::session::save` replacing the body of an
+//! existing file) check existence before calling into `write_for`.
 
 use std::path::{Path, PathBuf};
 
@@ -108,13 +106,6 @@ pub(crate) struct WriteResult {
 }
 
 /// Dispatch a file write to the correct per-doctype implementation.
-///
-/// # Scoping note (Phase 4a → Phase 4 completion)
-///
-/// Concept and decision were implemented in Phase 4a. Task is wired in
-/// A1, goal in A2; session/research land in A3-A4. The audit-gate fallback for
-/// the still-pending doctypes is removed wholesale in A5 once all four
-/// per-doctype writers are in place.
 pub(crate) fn write_for(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
     match args.doctype {
         "concept" | "decision" => write_concept_or_decision(args),
@@ -729,29 +720,6 @@ fn write_research(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
         abs_path,
         rel_path,
     })
-}
-
-/// Derive the vault-relative path from the written result for doctypes that
-/// delegate to an existing creator (for use once the audit-gate follow-up lands).
-///
-/// Not used in Phase 4a (task/goal/session/research are scoped down), but
-/// placed here so Phase 4b can build on it without duplication.
-#[expect(
-    dead_code,
-    reason = "used when task/goal/session/research dispatch is added in the \
-              follow-up task complete-per-doctype-write-dispatch-for-task-goal-session-research"
-)]
-pub(crate) fn derive_rel_path(vault_root: &Path, abs_path: &Path) -> Result<String, TemperError> {
-    abs_path
-        .strip_prefix(vault_root)
-        .map(|rel| rel.to_string_lossy().into_owned())
-        .map_err(|_| {
-            TemperError::Vault(format!(
-                "written path {} is not inside vault root {}",
-                abs_path.display(),
-                vault_root.display()
-            ))
-        })
 }
 
 #[cfg(all(test, feature = "test-db"))]
