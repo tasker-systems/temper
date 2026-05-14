@@ -811,15 +811,24 @@ mod create_resource_tests {
     #[tokio::test]
     async fn create_resource_task_writes_file_with_managed_meta_threaded() {
         let tmp = tempfile::tempdir().unwrap();
+        // Pre-create the goal file so find_goal succeeds and compute_task_defaults
+        // can walk the vault for next_seq (no tasks yet → 0 + 10 = 10).
+        let goal_dir = tmp.path().join("@me/temper/goal");
+        std::fs::create_dir_all(&goal_dir).unwrap();
+        std::fs::write(
+            goal_dir.join("wave1-completion.md"),
+            "---\ntemper-type: goal\ntemper-context: temper\ntemper-slug: wave1-completion\ntemper-title: Wave1 Completion\ntemper-status: active\ntemper-seq: 10\n---\n\nGoal body.\n",
+        )
+        .unwrap();
         let backend = make_backend(tmp.path());
         let cmd = task_cmd(
             "My Task",
             "2026-05-11-my-task",
             "temper",
             "wave1-completion",
-            "code",
-            "M",
-            Some(7),
+            "build",
+            "medium",
+            None, // seq computed by compute_task_defaults: no existing tasks → 10
         );
 
         let output = backend.create_resource(cmd).await.expect("create ok");
@@ -834,16 +843,20 @@ mod create_resource_tests {
         assert_eq!(output.value.context_name, "temper");
 
         // On-disk frontmatter carries the doctype-specific fields threaded
-        // through `extract_doctype_fields_for_create` from `cmd.managed_meta`.
+        // through extract_doctype_fields_for_create from cmd.managed_meta.
+        // seq is computed by compute_task_defaults (no prior tasks → 10).
         let content = std::fs::read_to_string(&expected_path).unwrap();
         assert!(content.contains("temper-type: task"), "type field");
         assert!(
             content.contains("temper-goal: \"wave1-completion\""),
             "goal field"
         );
-        assert!(content.contains("temper-mode: code"), "mode field");
-        assert!(content.contains("temper-effort: M"), "effort field");
-        assert!(content.contains("temper-seq: 7"), "seq field");
+        assert!(content.contains("temper-mode: build"), "mode field");
+        assert!(content.contains("temper-effort: medium"), "effort field");
+        assert!(
+            content.contains("temper-seq: 10"),
+            "seq field: computed by next_seq (0+10=10)"
+        );
 
         // Manifest entry is present.
         let manifest = backend.manifest().lock().await;
@@ -952,9 +965,12 @@ mod create_resource_tests {
             .expect_err("task without required managed_meta should fail");
         match err {
             temper_core::error::TemperError::BadRequest(msg) => {
+                // compute_task_defaults runs before write_task and surfaces the
+                // missing-goal error directly — the message mentions goal, not
+                // the internal DoctypeFields::Task shape.
                 assert!(
-                    msg.contains("DoctypeFields::Task"),
-                    "BadRequest message must mention DoctypeFields::Task, got: {msg}"
+                    msg.contains("goal"),
+                    "BadRequest message must mention goal requirement, got: {msg}"
                 );
             }
             other => panic!("expected BadRequest, got: {other:?}"),

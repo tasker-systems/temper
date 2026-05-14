@@ -64,10 +64,6 @@ pub struct VaultBackendCtx {
 /// Holds per-doctype default values that require filesystem access
 /// (next_seq for tasks). Populated by `compute_task_defaults` before
 /// dispatching to `per_doctype::write_for`.
-#[expect(
-    dead_code,
-    reason = "wired into create_resource in next commit (B5b-3)"
-)]
 #[derive(Debug, Default)]
 pub(crate) struct TaskDefaults {
     pub(crate) seq: Option<u32>,
@@ -79,10 +75,6 @@ pub(crate) struct TaskDefaults {
 /// referenced goal exists. For non-task doctypes, returns an empty
 /// `TaskDefaults`. Returns an error variant if the referenced goal is
 /// missing or the doctype is malformed.
-#[expect(
-    dead_code,
-    reason = "wired into create_resource in next commit (B5b-3)"
-)]
 pub(crate) fn compute_task_defaults(
     config: &Config,
     cmd: &temper_core::operations::CreateResource,
@@ -404,7 +396,7 @@ impl VaultBackend {
 impl Backend for VaultBackend {
     async fn create_resource(
         &self,
-        cmd: CreateResource,
+        mut cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         use temper_core::operations::{
             apply_defaults_value, ensure_managed_identity_keys, validate_create,
@@ -412,6 +404,16 @@ impl Backend for VaultBackend {
 
         // 1. Validate (shared) — slug, doctype, context, title all checked.
         validate_create(&cmd).map_err(|e| TemperError::BadRequest(e.to_string()))?;
+
+        // 1b. Compute backend-specific defaults (filesystem access):
+        //     - For tasks: walks vault for next_seq and verifies goal exists.
+        //     - For non-tasks: no-op (returns empty TaskDefaults).
+        //   Runs before managed_meta defaults so seq is in place when
+        //   extract_doctype_fields_for_create reads managed_meta.seq.
+        let task_defaults = compute_task_defaults(&self.config, &cmd)?;
+        if let Some(seq) = task_defaults.seq {
+            cmd.managed_meta.seq = Some(seq as i64);
+        }
 
         // 2. Apply doctype defaults + identity keys onto the Value form of managed_meta.
         let mut managed_value = serde_json::to_value(&cmd.managed_meta)
