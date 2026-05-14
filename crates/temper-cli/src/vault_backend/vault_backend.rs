@@ -412,7 +412,9 @@ impl Backend for VaultBackend {
         //   extract_doctype_fields_for_create reads managed_meta.seq.
         let task_defaults = compute_task_defaults(&self.config, &cmd)?;
         if let Some(seq) = task_defaults.seq {
-            cmd.managed_meta.seq = Some(seq as i64);
+            if cmd.managed_meta.seq.is_none() {
+                cmd.managed_meta.seq = Some(seq as i64);
+            }
         }
 
         // 2. Apply doctype defaults + identity keys onto the Value form of managed_meta.

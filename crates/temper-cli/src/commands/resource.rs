@@ -112,7 +112,7 @@ fn render_create_output_to_string(
                 "temper-title": row.title,
                 "temper-slug": row.slug,
                 "temper-context": row.context_name,
-                "temper-seq": row.seq.map(|s| s as u32),
+                "temper-seq": row.seq.and_then(|s| u32::try_from(s).ok()),
                 "temper-status": "active",
             })
         }

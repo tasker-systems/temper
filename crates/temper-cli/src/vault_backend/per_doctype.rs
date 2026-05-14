@@ -168,7 +168,7 @@ pub(crate) fn extract_doctype_fields_for_create(
 
 /// Write a concept or decision resource using Askama templates.
 ///
-/// Mirrors the body of `commands/resource.rs::create_simple_resource` but:
+/// This function:
 /// - Takes the pre-resolved `owner` string (no `config.owner_for_context` call here;
 ///   the caller has already resolved this).
 /// - Returns a `WriteResult` instead of printing output.
