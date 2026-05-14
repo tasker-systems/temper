@@ -28,9 +28,18 @@ pub(crate) struct ResolvedResource {
 /// - `Uuid { id }`: looks up `id` in the manifest reverse-index. Returns
 ///   `NotFound` when the id is absent.
 /// - `Scoped { owner, context, doctype, slug }`: delegates to
-///   [`crate::lookup::find_resource`], which walks the vault filesystem.
-///   Returns `NotFound` when the file exists but carries no `temper-id` in
-///   frontmatter or manifest (a provisional-only file).
+///   [`crate::lookup::find_resource`], which walks the vault filesystem and
+///   parses both `temper-id` and `temper-provisional-id` from the matched
+///   file. The resolved id, in order of preference, is:
+///     1. `temper-id` from the file's frontmatter (post-ingest canonical id),
+///     2. the manifest entry keyed by the file's vault-relative path,
+///     3. `temper-provisional-id` from frontmatter (the locally-generated
+///        UUIDv7 the per-doctype writers inject at create time).
+///
+///   Returns `NotFound` only when the file is missing all three. Provisional-
+///   id fallback is what makes local-only updates work (the file was created
+///   via `goal::create` / `task::create` / `session::save` and never
+///   round-tripped to the API; only `temper-provisional-id` is set).
 ///
 /// The function performs no network I/O. `find_resource` is synchronous
 /// filesystem walking, which is acceptable in CLI context.
@@ -65,11 +74,23 @@ pub(crate) fn resolve_resource_ref(
                 doc_type: dt,
                 slug_or_suffix: slug.clone(),
             })?;
-            let resource_id = resolved.resource_id.ok_or_else(|| {
-                TemperError::NotFound(format!(
-                    "resource has no temper-id in frontmatter or manifest: {slug}"
-                ))
-            })?;
+            // Prefer the canonical resource_id (temper-id or manifest entry).
+            // Fall back to the provisional id (locally-generated UUIDv7) so
+            // local-only updates work for files that were never pushed.
+            let resource_id = resolved
+                .resource_id
+                .or_else(|| {
+                    resolved
+                        .provisional_id
+                        .as_deref()
+                        .and_then(|s| uuid::Uuid::parse_str(s).ok())
+                        .map(ResourceId::from)
+                })
+                .ok_or_else(|| {
+                    TemperError::NotFound(format!(
+                        "resource has no temper-id, temper-provisional-id, or manifest entry: {slug}"
+                    ))
+                })?;
             Ok(ResolvedResource {
                 resource_id,
                 path: resolved.path,

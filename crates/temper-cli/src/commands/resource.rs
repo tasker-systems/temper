@@ -1336,10 +1336,16 @@ pub struct UpdateParams<'a> {
 
 /// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
 /// managed-meta-mutating flags were passed.
+///
+/// `title` is a managed-meta scalar (it lands as `temper-title` in
+/// frontmatter); B4 added it here so the surface-side dispatch can hand a
+/// partial `ManagedMeta` to the backend's `apply_updates` translator without
+/// dropping bare `--title` updates on the floor.
 fn build_partial_managed_meta_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_core::types::ManagedMeta> {
-    let any_set = params.stage.is_some()
+    let any_set = params.title.is_some()
+        || params.stage.is_some()
         || params.mode.is_some()
         || params.effort.is_some()
         || params.goal.is_some()
@@ -1351,6 +1357,7 @@ fn build_partial_managed_meta_from_args(
         return None;
     }
     Some(temper_core::types::ManagedMeta {
+        title: params.title.map(String::from),
         stage: params.stage.map(String::from),
         mode: params.mode.map(String::from),
         effort: params.effort.map(String::from),
@@ -1415,15 +1422,8 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
 
 /// Build a `MoveSpec` from `--type-to` / `--context-to` CLI flags. Returns
 /// `None` when neither is set; otherwise returns `Some` with whichever fields
-/// were provided. Used by Phase B's local-arm migration to translate CLI move
-/// flags into the `UpdateResource.move_to` operations field.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired by Phase B4 caller; tests exercise it under cfg(test)"
-    )
-)]
+/// were provided. Wired by `update_local` (B4) to translate CLI move flags
+/// into the `UpdateResource.move_to` operations field.
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_core::operations::MoveSpec> {
@@ -1529,10 +1529,31 @@ fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &
 }
 
 /// Update a resource's frontmatter fields.
+///
+/// Surface responsibilities (per the backend/surface split documented in
+/// `vault_backend/vault_backend.rs::update_resource`):
+///
+/// 1. Doctype + type-to validation (clap-side polish; produces a friendlier
+///    error than letting `validate_update` surface a `BadRequest`).
+/// 2. Cloud-mode early-return — when `TEMPER_VAULT_STATE=cloud`, the vault
+///    file is never touched; the cloud arm builds a `ResourceUpdateRequest`
+///    and PATCHes the API directly.
+/// 3. Per-flag schema validation against `schema::updatable_fields` —
+///    rejects bad enum values (e.g. `--stage frobnicate`) with a
+///    user-targeted message before the operations layer ever sees them.
+/// 4. `--body` flag resolution (stdin/file → `Option<String>`) — resolved
+///    pre-dispatch so a malformed flag errors before any side effects.
+/// 5. Build an `UpdateResource` command from the partial managed_meta /
+///    open_meta / move_to helpers and dispatch through `VaultBackend`.
+/// 6. Emit a `ResourceUpdate` discovery event from the surface (the backend
+///    emits operational `VaultFileWritten` / `VaultManifestUpdated` events;
+///    the surface emits the agent-facing `ResourceUpdate` telemetry).
+/// 7. Print `Updated: <rel_path>` derived from the backend's
+///    `VaultFileWritten` event.
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use temper_core::types::config::VaultState;
 
-    // Resolve current type from --type or --type-from (one is required)
+    // 1. Resolve current type from --type or --type-from (one is required).
     let current_type = params
         .doc_type
         .or(params.type_from)
@@ -1545,7 +1566,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 
     let vault_state = VaultState::from_env();
 
-    // Cloud-mode: skip vault file edits; build ResourceUpdateRequest and PATCH /api/resources/{id}.
+    // 2. Cloud-mode: skip vault file edits; build ResourceUpdateRequest and PATCH /api/resources/{id}.
     #[cfg(feature = "embed")]
     if matches!(vault_state, VaultState::Cloud) {
         return cloud_mode_update(config, params, current_type);
@@ -1553,24 +1574,113 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     #[cfg(not(feature = "embed"))]
     let _ = vault_state;
 
-    // Find the resource file
-    let (path, ctx) = {
-        let dt = temper_core::frontmatter::DocType::from_str(current_type)?;
-        let resolved = crate::lookup::find_resource(crate::lookup::FindableResource {
-            config,
-            manifest: None,
-            owner: None,
-            context: params.context.map(str::to_string),
-            doc_type: dt,
-            slug_or_suffix: params.slug.to_string(),
-        })?;
-        (resolved.path, resolved.context)
+    update_local(config, params, current_type)
+}
+
+/// Local-mode `temper resource update` — dispatches through
+/// [`crate::vault_backend::VaultBackend`].
+///
+/// Kept ungated so non-embed builds (`cargo build -p temper-cli` with no
+/// features) compile. The cloud-mode branch is the only `#[cfg(feature =
+/// "embed")]` arm; the local arm is always present.
+fn update_local(config: &Config, params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
+    use std::io::IsTerminal;
+
+    use temper_core::operations::{
+        Backend, BodyUpdate, DomainEvent, ResourceRef, Surface, UpdateResource,
     };
 
-    // Load updatable fields from schema for validation
-    let schema_fields = schema::updatable_fields(current_type)?;
+    // 3. Per-flag schema validation. This guards against bad enum values
+    //    (`--stage frobnicate`) with a user-targeted message; the
+    //    operations-layer `validate_update` is about command-shape invariants
+    //    (body+content_hash trio), a different concern.
+    validate_update_args(params, current_type)?;
 
-    // Build list of scalar field updates: (frontmatter_key, value)
+    // 4. Resolve --body before any dispatch so a malformed flag fails fast,
+    //    before any side effects. None means "no body update requested" —
+    //    leave the existing on-disk body untouched.
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    let resolved_body = crate::actions::body_source::resolve_body_source(
+        params.body.as_deref(),
+        stdin_is_tty,
+        std::io::stdin(),
+    )?;
+
+    // Resolve context (required for assemble_vault_backend and ResourceRef::scoped).
+    let ctx = require_context(config, params.context)?;
+
+    // 5. Build the UpdateResource command and dispatch through the backend.
+    let cmd = UpdateResource {
+        resource: ResourceRef::scoped(
+            config.owner_for_context(&ctx),
+            &ctx,
+            current_type,
+            params.slug,
+        ),
+        body: resolved_body.map(BodyUpdate::new),
+        managed_meta: build_partial_managed_meta_from_args(params),
+        open_meta: build_partial_open_meta_from_args(params),
+        move_to: build_move_spec_from_args(params),
+        origin: Surface::CliLocalVault,
+    };
+
+    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
+    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
+    let output = runtime.block_on(backend.update_resource(cmd))?;
+
+    // 6/7. Surface-side telemetry + user-facing print. Source the rel_path
+    //      from the backend's `VaultFileWritten` event; derive the slug,
+    //      final context, and final type from the projected `ResourceRow`
+    //      (which `vault_file_to_resource_row` populates from frontmatter
+    //      after any move). Falling back to the request-side context/type
+    //      keeps the event well-formed even when the row projection is
+    //      missing a frontmatter key.
+    let rel_path = output
+        .events
+        .iter()
+        .find_map(|e| match e {
+            DomainEvent::VaultFileWritten { path } => Some(path.clone()),
+            _ => None,
+        })
+        .unwrap_or_default();
+
+    let final_slug = std::path::Path::new(&rel_path)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let final_ctx = if output.value.context_name.is_empty() {
+        ctx.clone()
+    } else {
+        output.value.context_name.clone()
+    };
+    let final_type = if output.value.doc_type_name.is_empty() {
+        current_type.to_string()
+    } else {
+        output.value.doc_type_name.clone()
+    };
+
+    let event = Event::ResourceUpdate {
+        ts: Local::now().to_rfc3339(),
+        doc_type: final_type,
+        slug: final_slug,
+        context: final_ctx,
+    };
+    if let Err(e) = discovery::append_event(&config.state_dir, &event) {
+        tracing::warn!("Failed to append discovery event: {e}");
+    }
+
+    output::success(format!("Updated: {rel_path}"));
+    Ok(())
+}
+
+/// Per-flag schema validation for `update`. Lifted from the pre-B4 surface
+/// code so the friendlier per-flag error messages survive the migration.
+/// Only validates scalar managed-meta flags; array fields and `title` (a
+/// base-schema field valid on all doctypes) are skipped.
+fn validate_update_args(params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
+    // Build list of scalar field updates: (frontmatter_key, value) — a
+    // direct lift of the pre-B4 inline assembly so the validation loop
+    // semantics are unchanged.
     let scalar_updates: Vec<(&str, String)> = [
         ("temper-title", params.title.map(String::from)),
         ("temper-stage", params.stage.map(String::from)),
@@ -1586,13 +1696,18 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     .filter_map(|(k, v)| v.map(|val| (k, val)))
     .collect();
 
-    // Base fields valid on all types (from base.schema.json)
+    if scalar_updates.is_empty() {
+        return Ok(());
+    }
+
+    let schema_fields = schema::updatable_fields(current_type)?;
+
+    // Base fields valid on all types (from base.schema.json).
     const BASE_FIELDS: &[&str] = &["temper-title"];
 
-    // Validate scalar fields against schema
     for (field_name, value) in &scalar_updates {
         if BASE_FIELDS.contains(field_name) {
-            continue; // Always valid
+            continue;
         }
         match schema_fields.iter().find(|(n, _)| n == field_name) {
             Some((_name, schema_prop)) => {
@@ -1609,142 +1724,6 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         }
     }
 
-    // Resolve --body before reading the file so a malformed flag fails fast,
-    // before any side effects. None means "no body update requested" — leave
-    // the existing on-disk body untouched.
-    let resolved_body = {
-        use std::io::IsTerminal;
-        let stdin_is_tty = std::io::stdin().is_terminal();
-        crate::actions::body_source::resolve_body_source(
-            params.body.as_deref(),
-            stdin_is_tty,
-            std::io::stdin(),
-        )?
-    };
-
-    // Parse the file once, apply all mutations to the aggregate, then write
-    // exactly once to the (potentially moved) final path.
-    let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&path)?;
-
-    // Apply scalar field updates
-    for (field_name, value) in &scalar_updates {
-        fm.set_managed_field(field_name, serde_json::Value::String(value.clone()));
-    }
-
-    // Apply array field appends. Uses canonical (underscore) open-field
-    // names — Frontmatter::try_from has already normalized hyphen aliases
-    // at the parse boundary, so looking up by canonical form finds the
-    // existing sequence.
-    let array_updates: Vec<(&str, &[String])> = vec![
-        ("tags", params.tags),
-        ("aliases", params.aliases),
-        ("relates_to", params.relates_to),
-        ("references", params.references),
-        ("depends_on", params.depends_on),
-        ("extends", params.extends),
-        ("preceded_by", params.preceded_by),
-        ("derived_from", params.derived_from),
-    ];
-    for (field_name, values) in &array_updates {
-        for value in *values {
-            let mapping = fm
-                .value_mut()
-                .as_mapping_mut()
-                .expect("Frontmatter invariant: value is a mapping");
-            let key = serde_yaml::Value::String((*field_name).to_string());
-            let new_entry = serde_yaml::Value::String(value.clone());
-            match mapping.get_mut(&key) {
-                Some(serde_yaml::Value::Sequence(seq)) => seq.push(new_entry),
-                _ => {
-                    mapping.insert(key, serde_yaml::Value::Sequence(vec![new_entry]));
-                }
-            }
-        }
-    }
-
-    // Handle --context-to (move file to new context dir, update temper-context)
-    let vault_layout = Vault::new(&config.vault_root);
-    let final_ctx;
-    let mut final_path = path.clone();
-    if let Some(new_ctx) = params.context_to {
-        let new_owner = config.owner_for_context(new_ctx);
-        let new_dir =
-            vault_layout.doc_type_dir(&new_owner, new_ctx, params.type_to.unwrap_or(current_type));
-        std::fs::create_dir_all(&new_dir)?;
-        let filename = path
-            .file_name()
-            .ok_or_else(|| TemperError::Vault("cannot determine filename".into()))?;
-        let new_path = new_dir.join(filename);
-        fm.set_managed_field(
-            "temper-context",
-            serde_json::Value::String(new_ctx.to_string()),
-        );
-        final_path = new_path;
-        final_ctx = new_ctx.to_string();
-    } else {
-        final_ctx = ctx.clone();
-    }
-
-    // Handle --type-to (move file to new type dir, update temper-type)
-    if let Some(new_type) = params.type_to {
-        let target_ctx = params.context_to.unwrap_or(&final_ctx);
-        let target_owner = config.owner_for_context(target_ctx);
-        let new_dir = vault_layout.doc_type_dir(&target_owner, target_ctx, new_type);
-        std::fs::create_dir_all(&new_dir)?;
-        let filename = final_path
-            .file_name()
-            .ok_or_else(|| TemperError::Vault("cannot determine filename".into()))?;
-        let new_path = new_dir.join(filename);
-        fm.set_managed_field(
-            "temper-type",
-            serde_json::Value::String(new_type.to_string()),
-        );
-        final_path = new_path;
-    }
-
-    // Update temper-updated timestamp
-    let datetime = Local::now().to_rfc3339();
-    fm.set_managed_field(
-        "temper-updated",
-        serde_json::Value::String(datetime.clone()),
-    );
-
-    if let Some(new_body) = resolved_body {
-        fm.set_body(new_body);
-    }
-
-    // Write the mutated frontmatter to the (possibly moved) final path.
-    fm.write_to(&final_path)?;
-
-    // If file was moved, remove old file
-    if final_path != path && path.exists() {
-        std::fs::remove_file(&path).map_err(|e| TemperError::Vault(e.to_string()))?;
-    }
-
-    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &final_path)?;
-
-    // Determine slug for output
-    let final_slug = final_path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-
-    // Emit ResourceUpdate discovery event
-    let event = Event::ResourceUpdate {
-        ts: datetime,
-        doc_type: params.type_to.unwrap_or(current_type).to_string(),
-        slug: final_slug.clone(),
-        context: final_ctx.clone(),
-    };
-    if let Err(e) = discovery::append_event(&config.state_dir, &event) {
-        tracing::warn!("Failed to append discovery event: {e}");
-    }
-
-    let relative = final_path
-        .strip_prefix(&config.vault_root)
-        .unwrap_or(&final_path);
-    output::success(format!("Updated: {}", relative.display()));
     Ok(())
 }
 
@@ -2221,5 +2200,32 @@ mod build_helpers_tests {
         let spec = build_move_spec_from_args(&params).expect("expected Some");
         assert_eq!(spec.context_to, Some("temper".to_string()));
         assert_eq!(spec.type_to, Some("concept".to_string()));
+    }
+
+    /// `title` is a managed-meta field (`temper-title`) and must propagate
+    /// through `build_partial_managed_meta_from_args` so the B4 surface-side
+    /// dispatch can hand a partial `ManagedMeta` (carrying `title`) to the
+    /// backend's `apply_updates` translator. Pre-B4 the helper omitted
+    /// `title`; this test guards against re-introducing that gap.
+    #[test]
+    fn build_partial_managed_meta_from_args_includes_title_when_set() {
+        let mut params = empty_update_params("foo");
+        params.title = Some("Renamed Resource");
+        let mm = build_partial_managed_meta_from_args(&params).expect("expected Some");
+        assert_eq!(mm.title.as_deref(), Some("Renamed Resource"));
+    }
+
+    /// Regression guard: a bare `--title` (no other managed flags) must still
+    /// trip the `any_set` short-circuit so the helper returns `Some(..)`. If
+    /// `any_set` were to omit `title`, callers passing only `--title` would
+    /// see `None` and the title update would silently no-op.
+    #[test]
+    fn build_partial_managed_meta_from_args_returns_some_when_only_title_set() {
+        let mut params = empty_update_params("foo");
+        params.title = Some("Solo title");
+        assert!(
+            build_partial_managed_meta_from_args(&params).is_some(),
+            "title-only must trip any_set"
+        );
     }
 }
