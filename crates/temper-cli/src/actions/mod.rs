@@ -2,7 +2,6 @@ pub mod body_source;
 pub mod config;
 pub mod doctor;
 pub mod doctor_fix;
-pub mod frontmatter;
 pub mod goal;
 pub mod graph_build;
 pub mod graph_index;

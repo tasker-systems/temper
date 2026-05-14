@@ -213,22 +213,15 @@ pub fn create(
         )?;
         let body = body_opt.unwrap_or_else(|| format!("# {title}\n"));
 
-        let managed_meta = crate::actions::frontmatter::build_managed_meta_for_create(
-            crate::actions::frontmatter::NewResourceArgs {
-                doc_type,
-                context: &ctx,
-                title,
-                mode,
-                effort,
-                goal,
-                stage: None,
-                seq: None,
-                status: None,
-                provenance: None,
-                llm_model: None,
-                llm_run: None,
-            },
-        );
+        let managed_meta = temper_core::types::ManagedMeta {
+            doc_type: Some(doc_type.to_string()),
+            context: Some(ctx.clone()),
+            title: Some(title.to_string()),
+            mode: mode.map(str::to_string),
+            effort: effort.map(str::to_string),
+            goal: goal.map(str::to_string),
+            ..Default::default()
+        };
 
         let payload = crate::actions::ingest::build_ingest_payload(
             &body,

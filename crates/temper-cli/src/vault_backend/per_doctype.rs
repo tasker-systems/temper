@@ -517,11 +517,10 @@ fn write_goal(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
 /// # Managed-meta handling
 ///
 /// The session template renders `temper-context: ""` and only the provisional
-/// id + type + date. The original creator overlaid managed-meta via
-/// `build_managed_meta_for_create` + `set_managed_meta` to populate
-/// `temper-context` (and `temper-type`/`temper-title` for symmetry). Phase A3
-/// migrates that call here as a small early Phase C migration — the helper's
-/// other callers (research, cloud-mode resource.rs) stay until A4/Phase C.
+/// id + type + date. An inline `ManagedMeta` literal overlays managed-meta via
+/// `set_managed_meta` to populate `temper-context` (and `temper-type`/`temper-title`
+/// for symmetry). Phase C1 deleted the `build_managed_meta_for_create` helper that
+/// previously mediated this construction.
 ///
 /// # Byte-preservation
 ///
@@ -572,28 +571,16 @@ fn write_session(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
         )));
     }
 
-    // Parse rendered template, then overlay managed-meta (replaces the
-    // pre-pull `build_managed_meta_for_create` + `set_managed_meta` calls at
-    // commands::session::save:96-110). This fixes the template's empty
-    // `temper-context: ""` and ensures `temper-type`/`temper-title` are present
-    // for downstream consumers.
+    // Parse rendered template, then overlay managed-meta. This fixes the
+    // template's empty `temper-context: ""` and ensures `temper-type`/`temper-title`
+    // are present for downstream consumers.
     let mut fm = Frontmatter::try_from(rendered.as_str())?;
-    let meta = crate::actions::frontmatter::build_managed_meta_for_create(
-        crate::actions::frontmatter::NewResourceArgs {
-            doc_type: "session",
-            context,
-            title,
-            mode: None,
-            effort: None,
-            goal: None,
-            stage: None,
-            seq: None,
-            status: None,
-            provenance: None,
-            llm_model: None,
-            llm_run: None,
-        },
-    );
+    let meta = temper_core::types::ManagedMeta {
+        doc_type: Some("session".to_string()),
+        context: Some(context.to_string()),
+        title: Some(title.to_string()),
+        ..Default::default()
+    };
     fm.set_managed_meta(&meta);
 
     // Apply open-tier metadata if provided (no callers do this today for
@@ -650,12 +637,12 @@ fn write_session(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
 ///
 /// The research template already populates `temper-context`, `temper-title`,
 /// `temper-type`, `temper-slug` directly from its template fields (unlike the
-/// session template, which renders `temper-context: ""`). The original creator
-/// still overlaid managed-meta via `build_managed_meta_for_create` +
-/// `set_managed_meta` for parity with other doctypes — A4 migrates that call
-/// inline here as part of Phase C's `build_managed_meta_for_create` deletion
-/// sweep. The overlay is idempotent against the template's values for the
-/// research case (same context/title) so the resulting file content is unchanged.
+/// session template, which renders `temper-context: ""`). An inline `ManagedMeta`
+/// literal still overlays managed-meta via `set_managed_meta` for parity with
+/// `write_session`. The overlay is idempotent against the template's values for
+/// the research case (same context/title) so the resulting file content is unchanged.
+/// Phase C1 deleted the `build_managed_meta_for_create` helper that previously
+/// mediated this construction.
 ///
 /// # Byte-preservation
 ///
@@ -708,29 +695,17 @@ fn write_research(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
         )));
     }
 
-    // Parse rendered template, then overlay managed-meta (replaces the
-    // pre-pull `build_managed_meta_for_create` + `set_managed_meta` calls at
-    // commands::research::save:60-75). For research, the template already
-    // populates `temper-context`/`temper-title`/`temper-type`/`temper-slug`,
-    // so the overlay is idempotent — kept for parity with `write_session` and
-    // so Phase C's helper deletion is a single sweep across all callers.
+    // Parse rendered template, then overlay managed-meta. For research, the
+    // template already populates `temper-context`/`temper-title`/`temper-type`/
+    // `temper-slug`, so the overlay is idempotent — kept for parity with
+    // `write_session`.
     let mut fm = Frontmatter::try_from(rendered.as_str())?;
-    let meta = crate::actions::frontmatter::build_managed_meta_for_create(
-        crate::actions::frontmatter::NewResourceArgs {
-            doc_type: "research",
-            context,
-            title,
-            mode: None,
-            effort: None,
-            goal: None,
-            stage: None,
-            seq: None,
-            status: None,
-            provenance: None,
-            llm_model: None,
-            llm_run: None,
-        },
-    );
+    let meta = temper_core::types::ManagedMeta {
+        doc_type: Some("research".to_string()),
+        context: Some(context.to_string()),
+        title: Some(title.to_string()),
+        ..Default::default()
+    };
     fm.set_managed_meta(&meta);
 
     // Apply open-tier metadata if provided (no callers do this today for
