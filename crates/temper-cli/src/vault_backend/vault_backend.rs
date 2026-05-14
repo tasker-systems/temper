@@ -378,10 +378,14 @@ impl Backend for VaultBackend {
                 vault_root: &self.vault_root,
                 owner: &self.owner,
                 config: &self.config,
-                // Phase B (B5) wires task/goal/session/research-specific fields
-                // here from `cmd.managed_meta`. Concept and decision dispatch
-                // (the only doctypes the backend currently serves) ignore this.
-                doctype_fields: None,
+                // B5a wires task/goal/session/research-specific fields here from
+                // `cmd.managed_meta` via `extract_doctype_fields_for_create`.
+                // Concept/decision return `None`; task/goal/session/research
+                // return the appropriate `DoctypeFields` variant. Task with
+                // missing required fields returns `None` and `write_task`
+                // hard-errors with `BadRequest` (preserves error visibility).
+                doctype_fields:
+                    crate::vault_backend::per_doctype::extract_doctype_fields_for_create(&cmd),
             },
         )?;
 

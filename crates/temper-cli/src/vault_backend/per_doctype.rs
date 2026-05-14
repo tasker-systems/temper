@@ -32,8 +32,10 @@ use crate::templates::{
 /// that doctype's template. Concept and decision do not need extra fields
 /// and pass `None`.
 ///
-/// Extended across Phase A as task/goal/session/research dispatch lands:
-/// A1 introduces `Task`, A2 adds `Goal`; A3-A4 add `Session`/`Research`.
+/// Backend callers populate this via `extract_doctype_fields_for_create`,
+/// which translates `CreateResource.managed_meta` into the right variant.
+/// Surface callers (`actions::task::create`, `actions::goal::create`, etc.)
+/// build the variant inline since they already have the typed inputs.
 pub(crate) enum DoctypeFields<'a> {
     /// Task-specific fields: goal slug, mode, effort, and sequence number.
     /// `mode`/`effort` are pre-validated by the caller; `seq` is pre-computed
@@ -116,6 +118,51 @@ pub(crate) fn write_for(args: WriteArgs<'_>) -> Result<WriteResult, TemperError>
         other => Err(TemperError::BadRequest(format!(
             "unsupported doctype for create: '{other}'"
         ))),
+    }
+}
+
+/// Build the per-doctype fields enum from a `CreateResource` command's
+/// `managed_meta`. Returns `None` for doctypes that don't need extra fields
+/// (concept, decision) and for unknown doctypes (`write_for` will reject).
+///
+/// For `task`: requires `managed_meta.goal`, `managed_meta.mode`, and
+/// `managed_meta.effort` to be `Some`. If any is missing, returns `None`,
+/// which causes `write_task` to hard-error with a clear
+/// `"task write requires DoctypeFields::Task"` `BadRequest` rather than
+/// fabricating empty strings that would silently propagate into the
+/// rendered template. `managed_meta.seq` may be absent and defaults to 0.
+///
+/// For `goal`: `managed_meta.seq` may be absent and defaults to 0.
+///
+/// `seq` is `Option<i64>` on `ManagedMeta`; we saturate negatives to 0
+/// before casting to `u32` (defensive — surfaces should never send
+/// negative sequence numbers).
+pub(crate) fn extract_doctype_fields_for_create(
+    cmd: &temper_core::operations::CreateResource,
+) -> Option<DoctypeFields<'_>> {
+    match cmd.doctype.as_str() {
+        "task" => {
+            let goal = cmd.managed_meta.goal.as_deref()?;
+            let mode = cmd.managed_meta.mode.as_deref()?;
+            let effort = cmd.managed_meta.effort.as_deref()?;
+            let seq = cmd.managed_meta.seq.unwrap_or(0).max(0) as u32;
+            Some(DoctypeFields::Task {
+                goal,
+                mode,
+                effort,
+                seq,
+            })
+        }
+        "goal" => {
+            let seq = cmd.managed_meta.seq.unwrap_or(0).max(0) as u32;
+            Some(DoctypeFields::Goal { seq })
+        }
+        "session" => Some(DoctypeFields::Session),
+        "research" => Some(DoctypeFields::Research),
+        // concept/decision (no extra fields) and unknown doctypes both
+        // pass through as `None`. Unknown doctypes are rejected downstream
+        // by `write_for`.
+        _ => None,
     }
 }
 

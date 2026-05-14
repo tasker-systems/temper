@@ -722,6 +722,245 @@ mod create_resource_tests {
         );
     }
 
+    // ── B5a: round-trip tests for task / goal / session / research ───────────
+    //
+    // Each asserts: VaultBackend::create_resource succeeds, the file is
+    // written at the expected vault path with correct doctype-specific
+    // frontmatter, and a manifest entry is recorded. Mirrors the
+    // concept/decision pattern at the top of this module.
+
+    fn task_cmd(
+        title: &str,
+        slug: &str,
+        context: &str,
+        goal: &str,
+        mode: &str,
+        effort: &str,
+        seq: Option<i64>,
+    ) -> CreateResource {
+        let mut meta = ManagedMeta::default();
+        meta.goal = Some(goal.to_string());
+        meta.mode = Some(mode.to_string());
+        meta.effort = Some(effort.to_string());
+        meta.seq = seq;
+        CreateResource {
+            slug: slug.to_string(),
+            doctype: "task".to_string(),
+            context: context.to_string(),
+            title: title.to_string(),
+            body: None,
+            managed_meta: meta,
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    fn goal_cmd(title: &str, slug: &str, context: &str, seq: Option<i64>) -> CreateResource {
+        let mut meta = ManagedMeta::default();
+        meta.seq = seq;
+        CreateResource {
+            slug: slug.to_string(),
+            doctype: "goal".to_string(),
+            context: context.to_string(),
+            title: title.to_string(),
+            body: None,
+            managed_meta: meta,
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    fn session_cmd(title: &str, slug: &str, context: &str) -> CreateResource {
+        CreateResource {
+            slug: slug.to_string(),
+            doctype: "session".to_string(),
+            context: context.to_string(),
+            title: title.to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    fn research_cmd(title: &str, slug: &str, context: &str) -> CreateResource {
+        CreateResource {
+            slug: slug.to_string(),
+            doctype: "research".to_string(),
+            context: context.to_string(),
+            title: title.to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    #[tokio::test]
+    async fn create_resource_task_writes_file_with_managed_meta_threaded() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = task_cmd(
+            "My Task",
+            "2026-05-11-my-task",
+            "temper",
+            "wave1-completion",
+            "code",
+            "M",
+            Some(7),
+        );
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        // File written at expected path.
+        let expected_path = tmp.path().join("@me/temper/task/2026-05-11-my-task.md");
+        assert!(expected_path.exists(), "task file must be on disk");
+
+        // ResourceRow projection.
+        assert_eq!(output.value.title, "My Task");
+        assert_eq!(output.value.doc_type_name, "task");
+        assert_eq!(output.value.context_name, "temper");
+
+        // On-disk frontmatter carries the doctype-specific fields threaded
+        // through `extract_doctype_fields_for_create` from `cmd.managed_meta`.
+        let content = std::fs::read_to_string(&expected_path).unwrap();
+        assert!(content.contains("temper-type: task"), "type field");
+        assert!(
+            content.contains("temper-goal: \"wave1-completion\""),
+            "goal field"
+        );
+        assert!(content.contains("temper-mode: code"), "mode field");
+        assert!(content.contains("temper-effort: M"), "effort field");
+        assert!(content.contains("temper-seq: 7"), "seq field");
+
+        // Manifest entry is present.
+        let manifest = backend.manifest().lock().await;
+        assert_eq!(manifest.entries.len(), 1, "manifest must have one entry");
+        let entry = manifest.entries.values().next().unwrap();
+        assert!(
+            entry.path.ends_with("2026-05-11-my-task.md"),
+            "manifest entry path must reference the task file"
+        );
+        assert!(entry.provisional, "new entry must be provisional");
+    }
+
+    #[tokio::test]
+    async fn create_resource_goal_writes_file_with_seq() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = goal_cmd("My Goal", "my-goal", "temper", Some(5));
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        let expected_path = tmp.path().join("@me/temper/goal/my-goal.md");
+        assert!(expected_path.exists(), "goal file must be on disk");
+        assert_eq!(output.value.doc_type_name, "goal");
+        assert_eq!(output.value.title, "My Goal");
+
+        let content = std::fs::read_to_string(&expected_path).unwrap();
+        assert!(content.contains("temper-type: goal"), "type field");
+        assert!(content.contains("temper-seq: 5"), "seq field threaded");
+
+        let manifest = backend.manifest().lock().await;
+        assert_eq!(manifest.entries.len(), 1, "manifest must have one entry");
+    }
+
+    #[tokio::test]
+    async fn create_resource_session_writes_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = session_cmd("My Session", "2026-05-11-my-session", "temper");
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        let expected_path = tmp
+            .path()
+            .join("@me/temper/session/2026-05-11-my-session.md");
+        assert!(expected_path.exists(), "session file must be on disk");
+        assert_eq!(output.value.doc_type_name, "session");
+        assert_eq!(output.value.title, "My Session");
+
+        // Session writer overlays managed-meta to fix the template's empty
+        // `temper-context: ""` — verify it ends up populated on disk.
+        let content = std::fs::read_to_string(&expected_path).unwrap();
+        assert!(content.contains("temper-type: session"), "type field");
+        assert!(
+            content.contains("temper-context: temper")
+                || content.contains("temper-context: \"temper\""),
+            "context field populated by managed-meta overlay, got:\n{content}"
+        );
+
+        let manifest = backend.manifest().lock().await;
+        assert_eq!(manifest.entries.len(), 1, "manifest must have one entry");
+    }
+
+    #[tokio::test]
+    async fn create_resource_research_writes_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        let cmd = research_cmd("My Research", "my-research", "temper");
+
+        let output = backend.create_resource(cmd).await.expect("create ok");
+
+        let expected_path = tmp.path().join("@me/temper/research/my-research.md");
+        assert!(expected_path.exists(), "research file must be on disk");
+        assert_eq!(output.value.doc_type_name, "research");
+        assert_eq!(output.value.title, "My Research");
+
+        let content = std::fs::read_to_string(&expected_path).unwrap();
+        assert!(content.contains("temper-type: research"), "type field");
+
+        let manifest = backend.manifest().lock().await;
+        assert_eq!(manifest.entries.len(), 1, "manifest must have one entry");
+    }
+
+    #[tokio::test]
+    async fn create_resource_task_without_required_managed_meta_returns_bad_request() {
+        let tmp = tempfile::tempdir().unwrap();
+        let backend = make_backend(tmp.path());
+        // task cmd missing `managed_meta.goal` (and mode/effort) — translator
+        // returns None, write_task returns BadRequest with the canonical message.
+        let cmd = CreateResource {
+            slug: "2026-05-11-no-meta-task".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "No Meta Task".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        let err = backend
+            .create_resource(cmd)
+            .await
+            .expect_err("task without required managed_meta should fail");
+        match err {
+            temper_core::error::TemperError::BadRequest(msg) => {
+                assert!(
+                    msg.contains("DoctypeFields::Task"),
+                    "BadRequest message must mention DoctypeFields::Task, got: {msg}"
+                );
+            }
+            other => panic!("expected BadRequest, got: {other:?}"),
+        }
+    }
+
     // ── create_resource_remote_synced (stubbed — no TemperClient fixture) ────
 
     /// RemoteSynced path not exercised — no mock/sandbox `TemperClient` fixture.
