@@ -1,4 +1,3 @@
-use askama::Template;
 use chrono::Local;
 use serde::Serialize;
 use temper_core::schema;
@@ -11,7 +10,6 @@ use crate::format::OutputFormat;
 use crate::output;
 use crate::output::columns as col_registry;
 use crate::output::table::TableRenderer;
-use crate::templates::{ConceptTemplate, DecisionTemplate};
 use crate::vault;
 
 /// Require a context, returning an error if none specified.
@@ -40,10 +38,6 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
 ///
 /// Doctype-aware switch preserves backward-compatible JSON output. The
 /// dispatch itself is now uniform; only output shape varies by doctype.
-#[expect(
-    dead_code,
-    reason = "wired into commands::resource::create in next commit (B5b-5)"
-)]
 fn render_create_output(
     output: &temper_core::operations::CommandOutput<temper_core::types::resource::ResourceRow>,
     doc_type: &str,
@@ -199,6 +193,7 @@ pub fn create(
 ) -> Result<()> {
     use std::io::IsTerminal;
 
+    use temper_core::operations::Backend;
     use temper_core::types::config::VaultState;
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
@@ -281,188 +276,61 @@ pub fn create(
         return Ok(());
     }
 
-    // Local-mode: existing vault-file create flow.
+    // Local-mode: uniform VaultBackend::create_resource dispatch for all 6 doctypes.
     // body_flag is intentionally unused in local mode (stdin piping handles body).
     let _ = body_flag;
     let _ = vault_state;
 
     let stdin_content = vault::read_stdin_if_piped();
 
-    match doc_type {
-        "task" => {
-            let created_slug = crate::actions::task::create(
-                config,
-                &ctx,
-                title,
-                goal,
-                mode,
-                effort,
-                stdin_content.as_deref(),
-            )?;
-            if format == "json" {
-                let json = serde_json::json!({
-                    "type": "task",
-                    "temper-slug": created_slug,
-                    "temper-title": title,
-                    "temper-context": &*ctx,
-                });
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&json).unwrap_or_default()
-                );
-            }
-            Ok(())
-        }
-        "goal" => {
-            crate::commands::goal::create(config, &ctx, title, slug, format)?;
-            Ok(())
-        }
-        "session" => {
-            crate::commands::session::save(
-                config,
-                Some(title),
-                Some(ctx.as_str()),
-                stdin_content.as_deref(),
-                None, // task
-                None, // state
-                format,
-            )
-        }
-        "research" => crate::commands::research::save(
-            config,
-            title,
-            Some(ctx.as_str()),
-            stdin_content.as_deref(),
-            format,
-        ),
-        "concept" | "decision" => create_simple_resource(
-            config,
-            doc_type,
-            title,
-            &ctx,
-            slug,
-            stdin_content.as_deref(),
-            format,
-        ),
-        _ => Err(TemperError::Vault(format!(
-            "unsupported resource type for create: {doc_type}"
-        ))),
-    }
-}
+    let doctype_enum = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
-/// Create a concept or decision resource using Askama templates.
-fn create_simple_resource(
-    config: &Config,
-    doc_type: &str,
-    title: &str,
-    context: &str,
-    slug_override: Option<&str>,
-    stdin_content: Option<&str>,
-    format: &str,
-) -> Result<()> {
-    let today = Local::now().format("%Y-%m-%d").to_string();
-    let id = crate::ids::generate_id();
-    let base_slug = vault::slugify(title);
-    let slug = match slug_override {
-        Some(s) => s.to_string(),
-        // Concepts are identified by name (no date prefix); decisions get date prefix
-        None => match doc_type {
-            "concept" => base_slug,
+    let slug_resolved = slug.map(String::from).unwrap_or_else(|| {
+        let today = Local::now().format("%Y-%m-%d").to_string();
+        let base_slug = vault::slugify(title);
+        match doctype_enum {
+            // Concept and Goal are identified by name — no date prefix.
+            temper_core::frontmatter::DocType::Concept
+            | temper_core::frontmatter::DocType::Goal => base_slug,
+            // All other doctypes get a date prefix.
             _ => format!("{today}-{base_slug}"),
-        },
-    };
-
-    let content = match doc_type {
-        "concept" => {
-            let tmpl = ConceptTemplate {
-                id: &id,
-                title,
-                date: &today,
-                project: context,
-                slug: &slug,
-            };
-            tmpl.render()
-                .map_err(|e| TemperError::Vault(format!("template error: {e}")))?
         }
-        "decision" => {
-            let tmpl = DecisionTemplate {
-                id: &id,
-                title,
-                date: &today,
-                project: context,
-                slug: &slug,
-            };
-            tmpl.render()
-                .map_err(|e| TemperError::Vault(format!("template error: {e}")))?
-        }
-        _ => unreachable!(),
-    };
+    });
 
-    // Parse the rendered template once, optionally replace body, then write.
-    let mut fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str())?;
-    if let Some(body) = stdin_content {
-        fm.set_body(body.to_string());
-    }
+    let body = stdin_content.unwrap_or_default();
 
-    let vault_layout = Vault::new(&config.vault_root);
-    let owner = config.owner_for_context(context);
-    let dir = vault_layout.doc_type_dir(&owner, context, doc_type);
-    let path = vault_layout.doc_file(&owner, context, doc_type, &slug);
-
-    if path.exists() {
-        return Err(TemperError::Vault(format!(
-            "{doc_type} already exists: {slug}"
-        )));
-    }
-
-    std::fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
-    fm.write_to(&path)?;
-
-    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
-
-    let relative = path.strip_prefix(&config.vault_root).unwrap_or(&path);
-    let relative_str = relative.to_string_lossy();
-
-    if format == "json" {
-        #[derive(Serialize)]
-        struct ResourceCreated<'a> {
-            doc_type: &'a str,
-            title: &'a str,
-            slug: &'a str,
-            context: &'a str,
-            path: &'a str,
-            date: &'a str,
-            id: &'a str,
-        }
-        let info = ResourceCreated {
-            doc_type,
-            title,
-            slug: &slug,
-            context,
-            path: &relative_str,
-            date: &today,
-            id: &id,
-        };
-        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
-        println!("{json}");
-    } else {
-        output::success(format!("Created: {relative_str}"));
-    }
-
-    // Emit discovery event
-    let ts = Local::now().to_rfc3339();
-    let event = Event::ResourceCreate {
-        ts,
-        doc_type: doc_type.to_string(),
+    let cmd = temper_core::operations::CreateResource {
+        slug: slug_resolved,
+        doctype: doc_type.to_string(),
+        context: ctx.to_string(),
         title: title.to_string(),
-        path: relative_str.to_string(),
-        context: context.to_string(),
+        body: if body.is_empty() {
+            None
+        } else {
+            Some(temper_core::operations::BodyUpdate {
+                content: body,
+                content_hash: None,
+                chunks_packed: None,
+            })
+        },
+        managed_meta: temper_core::types::ManagedMeta {
+            mode: mode.map(String::from),
+            effort: effort.map(String::from),
+            goal: goal.map(String::from),
+            ..temper_core::types::ManagedMeta::default()
+        },
+        open_meta: None,
+        origin_uri: None,
+        chunks_packed: None,
+        content_hash: None,
+        origin: temper_core::operations::Surface::CliLocalVault,
     };
-    if let Err(e) = discovery::append_event(&config.state_dir, &event) {
-        tracing::warn!("Failed to append discovery event: {e}");
-    }
 
-    Ok(())
+    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
+    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
+    let output = runtime.block_on(backend.create_resource(cmd))?;
+
+    render_create_output(&output, doc_type, format)
 }
 
 // ---------------------------------------------------------------------------
