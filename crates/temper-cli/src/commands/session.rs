@@ -343,15 +343,36 @@ pub fn show(
 
             let (content, resolved_path) = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = super::resource::resolve_resource_id(
-                        &config_clone,
-                        client,
-                        "session",
-                        &entry_title,
-                        Some(&entry_ctx),
-                        VaultState::Local,
-                    )
-                    .await?;
+                    // Local-mode: try fast-path via local file frontmatter / manifest first,
+                    // then fall back to API resolution.
+                    let id = {
+                        let local_id = temper_core::frontmatter::DocType::from_str("session")
+                            .ok()
+                            .and_then(|doc_type_parsed| {
+                                crate::lookup::find_resource(crate::lookup::FindableResource {
+                                    config: &config_clone,
+                                    manifest: None,
+                                    owner: None,
+                                    context: Some(entry_ctx.clone()),
+                                    doc_type: doc_type_parsed,
+                                    slug_or_suffix: entry_title.clone(),
+                                })
+                                .ok()
+                                .and_then(|r| r.resource_id)
+                            });
+                        match local_id {
+                            Some(id) => id,
+                            None => {
+                                let owner = config_clone.owner_for_context(&entry_ctx);
+                                client
+                                    .resources()
+                                    .resolve_by_uri(&owner, &entry_ctx, "session", &entry_title)
+                                    .await
+                                    .map_err(crate::actions::runtime::client_err_to_temper)?
+                                    .id
+                            }
+                        }
+                    };
                     let result = show_cache::fetch(show_cache::ShowCacheParams {
                         client,
                         resource_id: id,
@@ -389,18 +410,20 @@ pub fn show(
 
             let body = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = super::resource::resolve_resource_id(
-                        &config_clone,
-                        client,
-                        "session",
-                        &slug_s,
-                        ctx_s.as_deref(),
-                        VaultState::Cloud,
-                    )
-                    .await?;
+                    let ctx = ctx_s.as_deref().ok_or_else(|| {
+                        crate::error::TemperError::Project(
+                            "no context specified — use --context <name>".into(),
+                        )
+                    })?;
+                    let owner = config_clone.owner_for_context(ctx);
+                    let row = client
+                        .resources()
+                        .resolve_by_uri(&owner, ctx, "session", &slug_s)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     let resp = client
                         .resources()
-                        .content(*id.as_uuid())
+                        .content(*row.id.as_uuid())
                         .await
                         .map_err(crate::actions::runtime::client_err_to_temper)?;
                     Ok(resp.markdown)

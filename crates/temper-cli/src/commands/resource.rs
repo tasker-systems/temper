@@ -771,9 +771,6 @@ pub fn delete(
 /// Cloud-mode delete: resolve slug → UUID, call the API, print success.
 /// No manifest, no vault-file removal — there's no local artifact in cloud mode.
 fn delete_cloud(config: &Config, doc_type: &str, slug: &str, context: Option<&str>) -> Result<()> {
-    use temper_core::types::config::VaultState;
-    use temper_core::types::ResourceId;
-
     let config_clone = config.clone();
     let doc_type_owned = doc_type.to_string();
     let slug_owned = slug.to_string();
@@ -781,16 +778,19 @@ fn delete_cloud(config: &Config, doc_type: &str, slug: &str, context: Option<&st
 
     crate::actions::runtime::with_client(|client| {
         Box::pin(async move {
-            let rid: ResourceId = resolve_resource_id(
-                &config_clone,
-                client,
-                &doc_type_owned,
-                &slug_owned,
-                context_owned.as_deref(),
-                VaultState::Cloud,
-            )
-            .await?;
-            let uuid: uuid::Uuid = *rid;
+            let ctx = context_owned
+                .as_deref()
+                .ok_or_else(|| {
+                    TemperError::Project("no context specified — use --context <name>".into())
+                })?
+                .to_string();
+            let owner = config_clone.owner_for_context(&ctx);
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner, &ctx, &doc_type_owned, &slug_owned)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let uuid: uuid::Uuid = *row.id;
 
             client
                 .resources()
@@ -905,50 +905,6 @@ pub fn show(
     Ok(())
 }
 
-/// Resolve `(doc_type, slug, context)` to a `ResourceId`.
-///
-/// In Local mode, fast-paths through the local file's `temper-id` frontmatter
-/// field when the file exists. Falls back to `GET /api/resources/by-uri` (the
-/// slow path) in Cloud mode or when the local file has no canonical id yet.
-///
-/// `pub(crate)` so that `task::show` and `session::show` share this logic
-/// without duplication.
-pub(crate) async fn resolve_resource_id(
-    config: &Config,
-    client: &temper_client::TemperClient,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
-    vault_state: temper_core::types::VaultState,
-) -> Result<temper_core::types::ids::ResourceId> {
-    if matches!(vault_state, temper_core::types::VaultState::Local) {
-        if let Ok(dt) = temper_core::frontmatter::DocType::from_str(doc_type) {
-            if let Ok(resolved) = crate::lookup::find_resource(crate::lookup::FindableResource {
-                config,
-                manifest: None,
-                owner: None,
-                context: context.map(str::to_string),
-                doc_type: dt,
-                slug_or_suffix: slug.to_string(),
-            }) {
-                if let Some(id) = resolved.resource_id {
-                    return Ok(id);
-                }
-                // No id in frontmatter or manifest — fall through to API.
-            }
-        }
-    }
-
-    let ctx = require_context(config, context)?;
-    let owner = config.owner_for_context(&ctx);
-    let row = client
-        .resources()
-        .resolve_by_uri(&owner, &ctx, doc_type, slug)
-        .await
-        .map_err(crate::actions::runtime::client_err_to_temper)?;
-    Ok(row.id)
-}
-
 /// API fallback for `temper resource show` when the local vault file is
 /// missing in local mode. Resolves the resource id via
 /// `GET /api/resources/by-uri`, fetches body via
@@ -966,7 +922,6 @@ pub(crate) fn show_via_api_fallback(
     format: &str,
 ) -> Result<()> {
     use crate::actions::runtime;
-    use temper_core::types::VaultState;
 
     let ctx = context.map(str::to_string);
     let slug = slug_or_suffix.to_string();
@@ -976,22 +931,53 @@ pub(crate) fn show_via_api_fallback(
 
     let body = runtime::with_client(|client| {
         Box::pin(async move {
-            let id = resolve_resource_id(
-                &config_clone,
-                client,
-                &dt,
-                &slug,
-                ctx.as_deref(),
-                VaultState::Local,
-            )
-            .await
-            .map_err(|e| match e {
-                TemperError::Network(msg) => TemperError::Vault(format!(
-                    "couldn't reach server to verify resource exists; \
-                     offline lookup failed for {slug}: {msg}"
-                )),
-                _ => TemperError::Vault(format!("{dt} not found locally or on server: {slug}")),
-            })?;
+            // Local-mode: try fast-path via local file frontmatter / manifest first,
+            // then fall back to API resolution.
+            let id = {
+                let local_id = temper_core::frontmatter::DocType::from_str(&dt)
+                    .ok()
+                    .and_then(|doc_type_parsed| {
+                        crate::lookup::find_resource(crate::lookup::FindableResource {
+                            config: &config_clone,
+                            manifest: None,
+                            owner: None,
+                            context: ctx.clone(),
+                            doc_type: doc_type_parsed,
+                            slug_or_suffix: slug.clone(),
+                        })
+                        .ok()
+                        .and_then(|r| r.resource_id)
+                    });
+                match local_id {
+                    Some(id) => id,
+                    None => {
+                        let resolved_ctx = ctx
+                            .as_deref()
+                            .ok_or_else(|| {
+                                TemperError::Project(
+                                    "no context specified — use --context <name>".into(),
+                                )
+                            })?
+                            .to_string();
+                        let owner = config_clone.owner_for_context(&resolved_ctx);
+                        client
+                            .resources()
+                            .resolve_by_uri(&owner, &resolved_ctx, &dt, &slug)
+                            .await
+                            .map_err(crate::actions::runtime::client_err_to_temper)
+                            .map_err(|e| match e {
+                                TemperError::Network(msg) => TemperError::Vault(format!(
+                                    "couldn't reach server to verify resource exists; \
+                                     offline lookup failed for {slug}: {msg}"
+                                )),
+                                _ => TemperError::Vault(format!(
+                                    "{dt} not found locally or on server: {slug}"
+                                )),
+                            })?
+                            .id
+                    }
+                }
+            };
             let content = client
                 .resources()
                 .content(*id.as_uuid())
@@ -1125,18 +1111,23 @@ fn show_generic(
 
             let body = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = resolve_resource_id(
-                        &config_clone,
-                        client,
-                        &doc_type_inner,
-                        &slug_inner,
-                        ctx_inner.as_deref(),
-                        VaultState::Cloud,
-                    )
-                    .await?;
+                    let ctx = ctx_inner
+                        .as_deref()
+                        .ok_or_else(|| {
+                            TemperError::Project(
+                                "no context specified — use --context <name>".into(),
+                            )
+                        })?
+                        .to_string();
+                    let owner = config_clone.owner_for_context(&ctx);
+                    let row = client
+                        .resources()
+                        .resolve_by_uri(&owner, &ctx, &doc_type_inner, &slug_inner)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     let resp = client
                         .resources()
-                        .content(*id.as_uuid())
+                        .content(*row.id.as_uuid())
                         .await
                         .map_err(crate::actions::runtime::client_err_to_temper)?;
                     Ok(resp.markdown)
@@ -1194,15 +1185,49 @@ fn show_generic(
 
             let (body, local_path_for_render) = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = resolve_resource_id(
-                        &config_clone,
-                        client,
-                        &doc_type_inner,
-                        &slug_inner,
-                        ctx_inner.as_deref(),
-                        VaultState::Local,
-                    )
-                    .await?;
+                    // Local-mode: try fast-path via local file frontmatter / manifest first,
+                    // then fall back to API resolution.
+                    let id = {
+                        let local_id = temper_core::frontmatter::DocType::from_str(&doc_type_inner)
+                            .ok()
+                            .and_then(|doc_type_parsed| {
+                                crate::lookup::find_resource(crate::lookup::FindableResource {
+                                    config: &config_clone,
+                                    manifest: None,
+                                    owner: None,
+                                    context: ctx_inner.clone(),
+                                    doc_type: doc_type_parsed,
+                                    slug_or_suffix: slug_inner.clone(),
+                                })
+                                .ok()
+                                .and_then(|r| r.resource_id)
+                            });
+                        match local_id {
+                            Some(id) => id,
+                            None => {
+                                let resolved_ctx = ctx_inner
+                                    .as_deref()
+                                    .ok_or_else(|| {
+                                        TemperError::Project(
+                                            "no context specified — use --context <name>".into(),
+                                        )
+                                    })?
+                                    .to_string();
+                                let owner = config_clone.owner_for_context(&resolved_ctx);
+                                client
+                                    .resources()
+                                    .resolve_by_uri(
+                                        &owner,
+                                        &resolved_ctx,
+                                        &doc_type_inner,
+                                        &slug_inner,
+                                    )
+                                    .await
+                                    .map_err(crate::actions::runtime::client_err_to_temper)?
+                                    .id
+                            }
+                        }
+                    };
                     let result = show_cache::fetch(show_cache::ShowCacheParams {
                         client,
                         resource_id: id,
