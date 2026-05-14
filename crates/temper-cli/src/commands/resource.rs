@@ -962,51 +962,15 @@ pub(crate) fn show_via_api_fallback(
         Box::pin(async move {
             // Local-mode: try fast-path via local file frontmatter / manifest first,
             // then fall back to API resolution.
-            let id = {
-                let local_id = temper_core::frontmatter::DocType::from_str(&dt)
-                    .ok()
-                    .and_then(|doc_type_parsed| {
-                        crate::lookup::find_resource(crate::lookup::FindableResource {
-                            config: &config_clone,
-                            manifest: None,
-                            owner: None,
-                            context: ctx.clone(),
-                            doc_type: doc_type_parsed,
-                            slug_or_suffix: slug.clone(),
-                        })
-                        .ok()
-                        .and_then(|r| r.resource_id)
-                    });
-                match local_id {
-                    Some(id) => id,
-                    None => {
-                        let resolved_ctx = ctx
-                            .as_deref()
-                            .ok_or_else(|| {
-                                TemperError::Project(
-                                    "no context specified — use --context <name>".into(),
-                                )
-                            })?
-                            .to_string();
-                        let owner = config_clone.owner_for_context(&resolved_ctx);
-                        client
-                            .resources()
-                            .resolve_by_uri(&owner, &resolved_ctx, &dt, &slug)
-                            .await
-                            .map_err(crate::actions::runtime::client_err_to_temper)
-                            .map_err(|e| match e {
-                                TemperError::Network(msg) => TemperError::Vault(format!(
-                                    "couldn't reach server to verify resource exists; \
-                                     offline lookup failed for {slug}: {msg}"
-                                )),
-                                _ => TemperError::Vault(format!(
-                                    "{dt} not found locally or on server: {slug}"
-                                )),
-                            })?
-                            .id
-                    }
-                }
-            };
+            let id = resolve_id_local_first(&config_clone, client, ctx.as_deref(), &dt, &slug)
+                .await
+                .map_err(|e| match e {
+                    TemperError::Network(msg) => TemperError::Vault(format!(
+                        "couldn't reach server to verify resource exists; \
+                         offline lookup failed for {slug}: {msg}"
+                    )),
+                    _ => TemperError::Vault(format!("{dt} not found locally or on server: {slug}")),
+                })?;
             let content = client
                 .resources()
                 .content(*id.as_uuid())
@@ -1030,6 +994,61 @@ pub(crate) fn show_via_api_fallback(
 
     print!("{body}");
     Ok(())
+}
+
+/// Resolve a resource to its [`temper_core::types::ids::ResourceId`] by trying the local manifest/
+/// frontmatter first, then falling back to a cloud `GET /api/resources/by-uri`
+/// call.
+///
+/// The local fast-path is best-effort: if `doc_type` fails to parse, or if
+/// `find_resource` finds no match, the call falls through to the API without
+/// returning an error. An error is only returned when both paths fail.
+///
+/// `context` must be `Some` for the API fallback; the call returns
+/// `TemperError::Project("no context specified …")` when it is `None` and the
+/// local path also found nothing.
+///
+/// Error mapping uses [`crate::actions::runtime::client_err_to_temper`] so
+/// network failures surface as `TemperError::Network` and server-side
+/// not-found responses surface as `TemperError::Api`. Call sites that need a
+/// different error shape (e.g. `TemperError::Vault`) should `map_err` on the
+/// returned `Result`.
+pub(crate) async fn resolve_id_local_first(
+    config: &Config,
+    client: &temper_client::TemperClient,
+    context: Option<&str>,
+    doc_type: &str,
+    slug: &str,
+) -> crate::error::Result<temper_core::types::ids::ResourceId> {
+    let local_id = temper_core::frontmatter::DocType::from_str(doc_type)
+        .ok()
+        .and_then(|dt| {
+            crate::lookup::find_resource(crate::lookup::FindableResource {
+                config,
+                manifest: None,
+                owner: None,
+                context: context.map(str::to_string),
+                doc_type: dt,
+                slug_or_suffix: slug.to_string(),
+            })
+            .ok()
+            .and_then(|r| r.resource_id)
+        });
+
+    if let Some(id) = local_id {
+        return Ok(id);
+    }
+
+    let ctx = context.ok_or_else(|| {
+        TemperError::Project("no context specified — use --context <name>".into())
+    })?;
+    let owner = config.owner_for_context(ctx);
+    client
+        .resources()
+        .resolve_by_uri(&owner, ctx, doc_type, slug)
+        .await
+        .map(|row| row.id)
+        .map_err(crate::actions::runtime::client_err_to_temper)
 }
 
 /// Return the existing local path for a resource if found, or compute where
@@ -1216,47 +1235,14 @@ fn show_generic(
                 Box::pin(async move {
                     // Local-mode: try fast-path via local file frontmatter / manifest first,
                     // then fall back to API resolution.
-                    let id = {
-                        let local_id = temper_core::frontmatter::DocType::from_str(&doc_type_inner)
-                            .ok()
-                            .and_then(|doc_type_parsed| {
-                                crate::lookup::find_resource(crate::lookup::FindableResource {
-                                    config: &config_clone,
-                                    manifest: None,
-                                    owner: None,
-                                    context: ctx_inner.clone(),
-                                    doc_type: doc_type_parsed,
-                                    slug_or_suffix: slug_inner.clone(),
-                                })
-                                .ok()
-                                .and_then(|r| r.resource_id)
-                            });
-                        match local_id {
-                            Some(id) => id,
-                            None => {
-                                let resolved_ctx = ctx_inner
-                                    .as_deref()
-                                    .ok_or_else(|| {
-                                        TemperError::Project(
-                                            "no context specified — use --context <name>".into(),
-                                        )
-                                    })?
-                                    .to_string();
-                                let owner = config_clone.owner_for_context(&resolved_ctx);
-                                client
-                                    .resources()
-                                    .resolve_by_uri(
-                                        &owner,
-                                        &resolved_ctx,
-                                        &doc_type_inner,
-                                        &slug_inner,
-                                    )
-                                    .await
-                                    .map_err(crate::actions::runtime::client_err_to_temper)?
-                                    .id
-                            }
-                        }
-                    };
+                    let id = resolve_id_local_first(
+                        &config_clone,
+                        client,
+                        ctx_inner.as_deref(),
+                        &doc_type_inner,
+                        &slug_inner,
+                    )
+                    .await?;
                     let result = show_cache::fetch(show_cache::ShowCacheParams {
                         client,
                         resource_id: id,

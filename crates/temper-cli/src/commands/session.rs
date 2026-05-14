@@ -345,34 +345,14 @@ pub fn show(
                 Box::pin(async move {
                     // Local-mode: try fast-path via local file frontmatter / manifest first,
                     // then fall back to API resolution.
-                    let id = {
-                        let local_id = temper_core::frontmatter::DocType::from_str("session")
-                            .ok()
-                            .and_then(|doc_type_parsed| {
-                                crate::lookup::find_resource(crate::lookup::FindableResource {
-                                    config: &config_clone,
-                                    manifest: None,
-                                    owner: None,
-                                    context: Some(entry_ctx.clone()),
-                                    doc_type: doc_type_parsed,
-                                    slug_or_suffix: entry_title.clone(),
-                                })
-                                .ok()
-                                .and_then(|r| r.resource_id)
-                            });
-                        match local_id {
-                            Some(id) => id,
-                            None => {
-                                let owner = config_clone.owner_for_context(&entry_ctx);
-                                client
-                                    .resources()
-                                    .resolve_by_uri(&owner, &entry_ctx, "session", &entry_title)
-                                    .await
-                                    .map_err(crate::actions::runtime::client_err_to_temper)?
-                                    .id
-                            }
-                        }
-                    };
+                    let id = super::resource::resolve_id_local_first(
+                        &config_clone,
+                        client,
+                        Some(&entry_ctx),
+                        "session",
+                        &entry_title,
+                    )
+                    .await?;
                     let result = show_cache::fetch(show_cache::ShowCacheParams {
                         client,
                         resource_id: id,
