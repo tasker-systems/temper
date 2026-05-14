@@ -59,6 +59,60 @@ pub struct VaultBackendCtx {
     pub surface: Surface,
 }
 
+/// Backend-specific compute results for a `CreateResource` command.
+///
+/// Holds per-doctype default values that require filesystem access
+/// (next_seq for tasks). Populated by `compute_task_defaults` before
+/// dispatching to `per_doctype::write_for`.
+#[expect(
+    dead_code,
+    reason = "wired into create_resource in next commit (B5b-3)"
+)]
+#[derive(Debug, Default)]
+pub(crate) struct TaskDefaults {
+    pub(crate) seq: Option<u32>,
+}
+
+/// Compute backend-specific defaults for a Create cmd.
+///
+/// For tasks, walks the vault to find `next_seq` and verifies that the
+/// referenced goal exists. For non-task doctypes, returns an empty
+/// `TaskDefaults`. Returns an error variant if the referenced goal is
+/// missing or the doctype is malformed.
+#[expect(
+    dead_code,
+    reason = "wired into create_resource in next commit (B5b-3)"
+)]
+pub(crate) fn compute_task_defaults(
+    config: &Config,
+    cmd: &temper_core::operations::CreateResource,
+) -> Result<TaskDefaults, TemperError> {
+    let doctype = temper_core::frontmatter::DocType::from_str(&cmd.doctype)
+        .map_err(|e| TemperError::BadRequest(format!("invalid doctype '{}': {e}", cmd.doctype)))?;
+
+    match doctype {
+        temper_core::frontmatter::DocType::Task => {
+            let goal_slug = cmd.managed_meta.goal.as_deref().ok_or_else(|| {
+                TemperError::BadRequest(
+                    "task create requires managed_meta.goal (the parent goal slug)".to_string(),
+                )
+            })?;
+
+            // Goal-exists check.
+            if crate::actions::goal::find_goal(config, goal_slug, Some(&cmd.context))?.is_none() {
+                return Err(TemperError::NotFound(format!(
+                    "goal '{goal_slug}' not found in context '{}'",
+                    cmd.context
+                )));
+            }
+
+            let seq = crate::actions::task::next_seq(config, &cmd.context, goal_slug)?;
+            Ok(TaskDefaults { seq: Some(seq) })
+        }
+        _ => Ok(TaskDefaults::default()),
+    }
+}
+
 impl VaultBackend {
     /// Construct from a fully-populated `VaultBackendCtx`.
     pub fn new(ctx: VaultBackendCtx) -> Self {
@@ -893,6 +947,110 @@ fn vault_file_to_resource_row(
         body_hash: None,
         managed_hash: None,
         open_hash: None,
+    }
+}
+
+#[cfg(test)]
+mod compute_task_defaults_tests {
+    use std::fs;
+
+    use temper_core::operations::{CreateResource, Surface};
+    use temper_core::types::managed_meta::ManagedMeta;
+
+    use crate::config::Config;
+
+    /// Build a minimal `Config` pointing at `vault_root` with one context ("temper").
+    fn make_config(vault_root: &std::path::Path) -> Config {
+        Config {
+            vault_root: vault_root.to_path_buf(),
+            state_dir: vault_root.join(".temper"),
+            contexts: vec!["temper".to_string()],
+            subscriptions: vec![],
+            skill_output: vault_root.join("skills"),
+            profile_slug: None,
+        }
+    }
+
+    /// Write a minimal goal `.md` file at `<vault_root>/@me/<context>/goal/<slug>.md`.
+    fn write_goal_file(vault_root: &std::path::Path, context: &str, slug: &str) {
+        let dir = vault_root.join("@me").join(context).join("goal");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{slug}.md"));
+        // GoalInfo requires: temper-title, temper-slug, temper-context,
+        // temper-status (non-optional). temper-seq has a default.
+        let content = format!(
+            "---\ntemper-type: goal\ntemper-context: {context}\ntemper-slug: {slug}\ntemper-title: Test Goal\ntemper-status: active\ntemper-seq: 10\n---\n\nGoal body.\n"
+        );
+        fs::write(path, content).unwrap();
+    }
+
+    /// Build a minimal `CreateResource` cmd for a task referencing the given goal.
+    fn make_task_cmd(context: &str, goal_slug: &str) -> CreateResource {
+        CreateResource {
+            slug: "my-task".to_string(),
+            doctype: "task".to_string(),
+            context: context.to_string(),
+            title: "My Task".to_string(),
+            body: None,
+            managed_meta: ManagedMeta {
+                goal: Some(goal_slug.to_string()),
+                ..Default::default()
+            },
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        }
+    }
+
+    #[test]
+    fn compute_task_defaults_returns_seq_for_task_with_existing_goal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        write_goal_file(tmp.path(), "temper", "temper-maintenance");
+        let cmd = make_task_cmd("temper", "temper-maintenance");
+
+        let defaults = super::compute_task_defaults(&config, &cmd).unwrap();
+        // No existing tasks for this goal → next_seq = 0 + 10 = 10.
+        assert_eq!(defaults.seq, Some(10));
+    }
+
+    #[test]
+    fn compute_task_defaults_errors_when_goal_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        // No goal file written — goal is absent.
+        let cmd = make_task_cmd("temper", "nonexistent-goal");
+
+        let err = super::compute_task_defaults(&config, &cmd).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("nonexistent-goal"),
+            "error message should mention the missing goal slug; got: {msg}"
+        );
+    }
+
+    #[test]
+    fn compute_task_defaults_is_noop_for_non_task() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = make_config(tmp.path());
+        let cmd = CreateResource {
+            slug: "my-research".to_string(),
+            doctype: "research".to_string(),
+            context: "temper".to_string(),
+            title: "My Research".to_string(),
+            body: None,
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: Surface::CliLocalVault,
+        };
+
+        let defaults = super::compute_task_defaults(&config, &cmd).unwrap();
+        assert_eq!(defaults.seq, None);
     }
 }
 
