@@ -323,6 +323,35 @@ pub fn create(
     let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
     let output = runtime.block_on(backend.create_resource(cmd))?;
 
+    // Restore discovery event parity with the legacy per-doctype dispatch paths
+    // (actions::task::create, actions::goal::create, etc.) that each emitted
+    // ResourceCreate. Concept and Decision never emitted pre-B5b — exclude them
+    // to restore parity without introducing new behavior.
+    if !matches!(
+        doctype_enum,
+        temper_core::frontmatter::DocType::Concept | temper_core::frontmatter::DocType::Decision
+    ) {
+        use temper_core::operations::DomainEvent;
+        let rel_path = output
+            .events
+            .iter()
+            .find_map(|e| match e {
+                DomainEvent::VaultFileWritten { path } => Some(path.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        let event = Event::ResourceCreate {
+            ts: Local::now().to_rfc3339(),
+            doc_type: doc_type.to_string(),
+            title: title.to_string(),
+            path: rel_path,
+            context: ctx.to_string(),
+        };
+        if let Err(e) = discovery::append_event(&config.state_dir, &event) {
+            tracing::warn!("Failed to append discovery event: {e}");
+        }
+    }
+
     render_create_output(&output, doc_type, format)
 }
 
