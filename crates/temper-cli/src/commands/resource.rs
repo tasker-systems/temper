@@ -35,6 +35,151 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
     }
 }
 
+/// Render the result of `VaultBackend::create_resource` to stdout in the
+/// shape that each doctype's pre-B5b dispatch path emitted.
+///
+/// Doctype-aware switch preserves backward-compatible JSON output. The
+/// dispatch itself is now uniform; only output shape varies by doctype.
+#[expect(
+    dead_code,
+    reason = "wired into commands::resource::create in next commit (B5b-5)"
+)]
+fn render_create_output(
+    output: &temper_core::operations::CommandOutput<temper_core::types::resource::ResourceRow>,
+    doc_type: &str,
+    format: &str,
+) -> Result<()> {
+    let rendered = render_create_output_to_string(output, doc_type, format)?;
+    if !rendered.is_empty() {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+/// Test-friendly core of `render_create_output` — returns the string that
+/// would be printed (empty string for the non-JSON success path).
+///
+/// Audited per-doctype JSON shapes (preserved verbatim from pre-B5b dispatch,
+/// confirmed 2026-05-14):
+///
+/// - Task: `{ "type": "task", "temper-slug", "temper-title", "temper-context" }`
+///   Source: `commands::resource::create` match arm "task" lines 158–167.
+///
+/// - Goal: serialized `GoalInfo` → `{ "temper-title", "temper-slug",
+///   "temper-context", "temper-seq" (Option<u32>), "temper-status" }`
+///   Source: `commands::goal::create`, via `crate::actions::types::GoalInfo`.
+///
+/// - Session: `{ "title", "context", "path", "date" }` where `path` is the
+///   vault-relative file path (`{owner}/{context}/session/{slug}.md`) and
+///   `date` is today's date (`%Y-%m-%d`).
+///   Source: `commands::session::save`, inline `SessionCreated` struct.
+///
+/// - Research: `{ "title", "project", "path", "date", "id", "slug" }` where
+///   `project` is the context name, `path` is vault-relative, `id` is the
+///   resource UUID (string), `slug` is the date-prefixed slug.
+///   Source: `commands::research::save`, `serde_json::json!` at line 84.
+///
+/// - Concept / Decision: serialized `ResourceCreated` →
+///   `{ "doc_type", "title", "slug", "context", "path", "date", "id" }`
+///   where `path` is vault-relative and `id` is the UUID (string).
+///   Source: `create_simple_resource`, inline `ResourceCreated` struct.
+fn render_create_output_to_string(
+    output: &temper_core::operations::CommandOutput<temper_core::types::resource::ResourceRow>,
+    doc_type: &str,
+    format: &str,
+) -> Result<String> {
+    use temper_core::frontmatter::DocType;
+
+    let row = &output.value;
+    let doctype = DocType::from_str(doc_type)
+        .map_err(|e| TemperError::Vault(format!("invalid doctype: {e}")))?;
+
+    if format != "json" {
+        // Non-JSON path: emit a "Created: <slug>" success line.
+        let slug_display = row.slug.as_deref().unwrap_or("(no slug)");
+        output::success(format!("Created: {slug_display}"));
+        return Ok(String::new());
+    }
+
+    let today = Local::now().format("%Y-%m-%d").to_string();
+
+    let json = match doctype {
+        DocType::Task => serde_json::json!({
+            "type": "task",
+            "temper-slug": row.slug,
+            "temper-title": row.title,
+            "temper-context": row.context_name,
+        }),
+        DocType::Goal => {
+            // Goal JSON is the GoalInfo serialization shape. `status` is always
+            // "active" at create time. `seq` comes from ResourceRow.seq (i64 →
+            // u32 lossy-cast; matches the i64 stored in managed_meta.seq).
+            serde_json::json!({
+                "temper-title": row.title,
+                "temper-slug": row.slug,
+                "temper-context": row.context_name,
+                "temper-seq": row.seq.map(|s| s as u32),
+                "temper-status": "active",
+            })
+        }
+        DocType::Session => {
+            // Session JSON: title, context, vault-relative path, today's date.
+            // Path reconstructed from ResourceRow fields — same format as
+            // `Vault::rel_path(owner, context, doc_type, slug)`.
+            let slug = row.slug.as_deref().unwrap_or("");
+            let path = format!(
+                "{}/{}/{}/{}.md",
+                row.owner_handle, row.context_name, "session", slug
+            );
+            serde_json::json!({
+                "title": row.title,
+                "context": row.context_name,
+                "path": path,
+                "date": today,
+            })
+        }
+        DocType::Research => {
+            // Research JSON: title, project (=context), vault-relative path,
+            // today's date, id (UUID string), slug.
+            let slug = row.slug.as_deref().unwrap_or("");
+            let path = format!(
+                "{}/{}/{}/{}.md",
+                row.owner_handle, row.context_name, "research", slug
+            );
+            serde_json::json!({
+                "title": row.title,
+                "project": row.context_name,
+                "path": path,
+                "date": today,
+                "id": row.id.to_string(),
+                "slug": slug,
+            })
+        }
+        DocType::Concept | DocType::Decision => {
+            // Concept/Decision JSON: doc_type, title, slug, context, vault-relative
+            // path, today's date, id (UUID string).
+            let slug = row.slug.as_deref().unwrap_or("");
+            let path = format!(
+                "{}/{}/{}/{}.md",
+                row.owner_handle, row.context_name, row.doc_type_name, slug
+            );
+            serde_json::json!({
+                "doc_type": row.doc_type_name,
+                "title": row.title,
+                "slug": slug,
+                "context": row.context_name,
+                "path": path,
+                "date": today,
+                "id": row.id.to_string(),
+            })
+        }
+    };
+
+    let s = serde_json::to_string_pretty(&json)
+        .map_err(|e| TemperError::Vault(format!("json render failed: {e}")))?;
+    Ok(s)
+}
+
 /// Create a new resource.
 #[expect(
     clippy::too_many_arguments,
@@ -2227,5 +2372,248 @@ mod build_helpers_tests {
             build_partial_managed_meta_from_args(&params).is_some(),
             "title-only must trip any_set"
         );
+    }
+}
+
+#[cfg(test)]
+mod render_create_output_tests {
+    use temper_core::operations::CommandOutput;
+    use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+    use temper_core::types::resource::ResourceRow;
+
+    use super::render_create_output_to_string;
+
+    fn make_resource_row(slug: &str, doc_type: &str, title: &str, context: &str) -> ResourceRow {
+        ResourceRow {
+            id: ResourceId(uuid::Uuid::nil()),
+            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            title: title.to_string(),
+            slug: Some(slug.to_string()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            context_name: context.to_string(),
+            doc_type_name: doc_type.to_string(),
+            owner_handle: "@me".to_string(),
+            stage: None,
+            seq: None,
+            mode: None,
+            effort: None,
+            body_hash: None,
+            managed_hash: None,
+            open_hash: None,
+        }
+    }
+
+    #[test]
+    fn render_create_output_task_json_matches_legacy_shape() {
+        let row = make_resource_row("2026-05-14-test", "task", "Test", "temper");
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "task", "json")
+            .expect("rendering task JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["type"], "task");
+        assert_eq!(parsed["temper-slug"], "2026-05-14-test");
+        assert_eq!(parsed["temper-title"], "Test");
+        assert_eq!(parsed["temper-context"], "temper");
+        // Exactly 4 fields — no extras leaking in.
+        assert_eq!(
+            parsed.as_object().unwrap().len(),
+            4,
+            "task JSON must have exactly 4 fields"
+        );
+    }
+
+    #[test]
+    fn render_create_output_goal_json_matches_legacy_shape() {
+        let row = make_resource_row("test-goal", "goal", "Test Goal", "temper");
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "goal", "json")
+            .expect("rendering goal JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["temper-title"], "Test Goal");
+        assert_eq!(parsed["temper-slug"], "test-goal");
+        assert_eq!(parsed["temper-context"], "temper");
+        assert_eq!(parsed["temper-status"], "active");
+        // seq is None → JSON null
+        assert!(parsed["temper-seq"].is_null());
+        // Exactly 5 fields.
+        assert_eq!(
+            parsed.as_object().unwrap().len(),
+            5,
+            "goal JSON must have exactly 5 fields"
+        );
+    }
+
+    #[test]
+    fn render_create_output_goal_json_includes_seq_when_set() {
+        let mut row = make_resource_row("test-goal-seq", "goal", "Goal With Seq", "temper");
+        row.seq = Some(3);
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "goal", "json")
+            .expect("rendering goal JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["temper-seq"], 3);
+    }
+
+    #[test]
+    fn render_create_output_session_json_matches_legacy_shape() {
+        let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "session", "json")
+            .expect("rendering session JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["title"], "My Session");
+        assert_eq!(parsed["context"], "temper");
+        // Path must be the vault-relative path in the correct format.
+        let path = parsed["path"].as_str().expect("path must be a string");
+        assert!(
+            path.ends_with("/session/2026-05-14-my-session.md"),
+            "path must end with doctype/slug.md, got: {path}"
+        );
+        assert!(
+            path.starts_with("@me/"),
+            "path must start with owner, got: {path}"
+        );
+        // date field is today's date — just verify it parses and is non-empty.
+        let date = parsed["date"].as_str().expect("date must be a string");
+        assert!(!date.is_empty(), "date must be non-empty");
+        assert_eq!(date.len(), 10, "date must be %Y-%m-%d (10 chars)");
+        // Exactly 4 fields.
+        assert_eq!(
+            parsed.as_object().unwrap().len(),
+            4,
+            "session JSON must have exactly 4 fields"
+        );
+    }
+
+    #[test]
+    fn render_create_output_research_json_matches_legacy_shape() {
+        let row = make_resource_row(
+            "2026-05-14-my-research",
+            "research",
+            "My Research",
+            "temper",
+        );
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "research", "json")
+            .expect("rendering research JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["title"], "My Research");
+        // Legacy research uses "project" (not "context").
+        assert_eq!(parsed["project"], "temper");
+        let path = parsed["path"].as_str().expect("path must be a string");
+        assert!(
+            path.ends_with("/research/2026-05-14-my-research.md"),
+            "path must end with doctype/slug.md, got: {path}"
+        );
+        // id is the UUID string of the ResourceId.
+        let id = parsed["id"].as_str().expect("id must be a string");
+        assert!(!id.is_empty(), "id must be non-empty");
+        // slug field present.
+        assert_eq!(parsed["slug"], "2026-05-14-my-research");
+        let date = parsed["date"].as_str().expect("date must be a string");
+        assert_eq!(date.len(), 10, "date must be %Y-%m-%d");
+        // Exactly 6 fields: title, project, path, date, id, slug.
+        assert_eq!(
+            parsed.as_object().unwrap().len(),
+            6,
+            "research JSON must have exactly 6 fields"
+        );
+    }
+
+    #[test]
+    fn render_create_output_concept_json_matches_legacy_shape() {
+        let row = make_resource_row("my-concept", "concept", "My Concept", "temper");
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "concept", "json")
+            .expect("rendering concept JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["doc_type"], "concept");
+        assert_eq!(parsed["title"], "My Concept");
+        assert_eq!(parsed["slug"], "my-concept");
+        assert_eq!(parsed["context"], "temper");
+        let path = parsed["path"].as_str().expect("path must be a string");
+        assert!(
+            path.ends_with("/concept/my-concept.md"),
+            "path must end with doctype/slug.md, got: {path}"
+        );
+        let id = parsed["id"].as_str().expect("id must be a string");
+        assert!(!id.is_empty(), "id must be non-empty");
+        let date = parsed["date"].as_str().expect("date must be a string");
+        assert_eq!(date.len(), 10, "date must be %Y-%m-%d");
+        // Exactly 7 fields: doc_type, title, slug, context, path, date, id.
+        assert_eq!(
+            parsed.as_object().unwrap().len(),
+            7,
+            "concept JSON must have exactly 7 fields"
+        );
+    }
+
+    #[test]
+    fn render_create_output_decision_json_matches_legacy_shape() {
+        let row = make_resource_row(
+            "2026-05-14-my-decision",
+            "decision",
+            "My Decision",
+            "temper",
+        );
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "decision", "json")
+            .expect("rendering decision JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["doc_type"], "decision");
+        assert_eq!(parsed["title"], "My Decision");
+        assert_eq!(parsed["slug"], "2026-05-14-my-decision");
+        assert_eq!(parsed["context"], "temper");
+        let path = parsed["path"].as_str().expect("path must be a string");
+        assert!(
+            path.ends_with("/decision/2026-05-14-my-decision.md"),
+            "path must end with doctype/slug.md, got: {path}"
+        );
+        let id = parsed["id"].as_str().expect("id must be a string");
+        assert!(!id.is_empty(), "id must be non-empty");
+        let date = parsed["date"].as_str().expect("date must be a string");
+        assert_eq!(date.len(), 10, "date must be %Y-%m-%d");
+        // Exactly 7 fields: doc_type, title, slug, context, path, date, id.
+        assert_eq!(
+            parsed.as_object().unwrap().len(),
+            7,
+            "decision JSON must have exactly 7 fields"
+        );
+    }
+
+    #[test]
+    fn render_create_output_non_json_format_returns_empty_string() {
+        let row = make_resource_row("2026-05-14-test", "task", "Test", "temper");
+        let output = CommandOutput::new(row);
+        // Non-JSON format: function prints a success line and returns "".
+        // We can't easily capture stdout in unit tests, but we can confirm
+        // the return value is empty and no error is returned.
+        let result = render_create_output_to_string(&output, "task", "text")
+            .expect("non-JSON format should not error");
+        assert!(
+            result.is_empty(),
+            "non-JSON format must return empty string"
+        );
+    }
+
+    #[test]
+    fn render_create_output_invalid_doctype_returns_error() {
+        let row = make_resource_row("test", "task", "Test", "temper");
+        let output = CommandOutput::new(row);
+        let result = render_create_output_to_string(&output, "bogus", "json");
+        assert!(result.is_err(), "invalid doctype must return an error");
     }
 }
