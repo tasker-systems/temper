@@ -13,6 +13,12 @@ use crate::types::managed_meta::ManagedMeta;
 use super::commands::{CreateResource, UpdateResource};
 use super::resource_ref::ResourceRef;
 
+/// Whitelist of recognized mode values for `DocType::Task`.
+const VALID_TASK_MODES: &[&str] = &["plan", "build"];
+
+/// Whitelist of recognized effort values for `DocType::Task`.
+const VALID_TASK_EFFORTS: &[&str] = &["small", "medium", "large"];
+
 /// Errors that can arise during pure-action execution.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ActionError {
@@ -24,6 +30,8 @@ pub enum ActionError {
     MissingRequiredField(String),
     #[error("invalid managed_meta: {0}")]
     InvalidManagedMeta(String),
+    #[error("invalid value: {0}")]
+    InvalidValue(String),
 }
 
 /// Inject canonical identity keys (`temper-title`, `temper-slug`) into a
@@ -231,8 +239,9 @@ pub fn merge_open_meta(existing: &mut Value, patch: Value) {
 
 /// Pre-flight validation for a `CreateResource` command.
 ///
-/// Checks slug, doctype, and context shape. Does not check uniqueness or
-/// authorization — those are backend concerns.
+/// Checks slug, doctype, context, and title shape, then applies per-doctype
+/// pure invariants (mode/effort whitelists for `DocType::Task`). Does not
+/// check uniqueness or authorization — those are backend concerns.
 pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
     validate_slug(&cmd.slug)?;
     validate_doctype(&cmd.doctype)?;
@@ -242,6 +251,36 @@ pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
     if cmd.title.is_empty() {
         return Err(ActionError::MissingRequiredField("title".to_string()));
     }
+
+    let doctype = crate::frontmatter::DocType::from_str(&cmd.doctype)
+        .map_err(|e| ActionError::InvalidValue(format!("doctype: {e}")))?;
+
+    match doctype {
+        crate::frontmatter::DocType::Task => {
+            if let Some(mode) = cmd.managed_meta.mode.as_deref() {
+                if !VALID_TASK_MODES.contains(&mode) {
+                    return Err(ActionError::InvalidValue(format!(
+                        "mode '{mode}' not in {VALID_TASK_MODES:?}"
+                    )));
+                }
+            }
+            if let Some(effort) = cmd.managed_meta.effort.as_deref() {
+                if !VALID_TASK_EFFORTS.contains(&effort) {
+                    return Err(ActionError::InvalidValue(format!(
+                        "effort '{effort}' not in {VALID_TASK_EFFORTS:?}"
+                    )));
+                }
+            }
+        }
+        crate::frontmatter::DocType::Goal
+        | crate::frontmatter::DocType::Session
+        | crate::frontmatter::DocType::Research
+        | crate::frontmatter::DocType::Concept
+        | crate::frontmatter::DocType::Decision => {
+            // No additional per-doctype pure invariants beyond the generic checks above.
+        }
+    }
+
     Ok(())
 }
 
@@ -780,5 +819,107 @@ mod tests {
             err == "bogus_one" || err == "bogus_two",
             "expected first-bad-key to be one of the two unknowns, got: {err}"
         );
+    }
+
+    #[test]
+    fn validate_create_rejects_task_with_unknown_mode() {
+        let cmd = CreateResource {
+            slug: "2026-05-14-test-task".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "Test task".to_string(),
+            body: None,
+            managed_meta: ManagedMeta {
+                mode: Some("nonsense".to_string()),
+                effort: Some("small".to_string()),
+                goal: Some("temper-maintenance".to_string()),
+                ..ManagedMeta::default()
+            },
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: super::super::Surface::CliLocalVault,
+        };
+
+        let err = validate_create(&cmd).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("mode") || format!("{err:?}").contains("nonsense"),
+            "expected error mentioning mode/nonsense, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_create_rejects_task_with_unknown_effort() {
+        let cmd = CreateResource {
+            slug: "2026-05-14-test-task".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "Test task".to_string(),
+            body: None,
+            managed_meta: ManagedMeta {
+                mode: Some("plan".to_string()),
+                effort: Some("gigantic".to_string()),
+                goal: Some("temper-maintenance".to_string()),
+                ..ManagedMeta::default()
+            },
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: super::super::Surface::CliLocalVault,
+        };
+
+        let err = validate_create(&cmd).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("effort") || format!("{err:?}").contains("gigantic"),
+            "expected error mentioning effort/gigantic, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_create_accepts_valid_task() {
+        let cmd = CreateResource {
+            slug: "2026-05-14-test-task".to_string(),
+            doctype: "task".to_string(),
+            context: "temper".to_string(),
+            title: "Test task".to_string(),
+            body: None,
+            managed_meta: ManagedMeta {
+                mode: Some("plan".to_string()),
+                effort: Some("medium".to_string()),
+                goal: Some("temper-maintenance".to_string()),
+                ..ManagedMeta::default()
+            },
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: super::super::Surface::CliLocalVault,
+        };
+
+        validate_create(&cmd).expect("valid task should pass validation");
+    }
+
+    #[test]
+    fn validate_create_accepts_research_with_arbitrary_managed_meta() {
+        let cmd = CreateResource {
+            slug: "2026-05-14-test-research".to_string(),
+            doctype: "research".to_string(),
+            context: "temper".to_string(),
+            title: "Test research".to_string(),
+            body: None,
+            managed_meta: ManagedMeta {
+                mode: Some("anything".to_string()),
+                ..ManagedMeta::default()
+            },
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: super::super::Surface::CliLocalVault,
+        };
+
+        validate_create(&cmd).expect("non-task doctype should not be subject to task whitelist");
     }
 }
