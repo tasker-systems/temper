@@ -10,6 +10,7 @@ use crate::discovery;
 use crate::error::{Result, TemperError};
 use crate::templates::GoalTemplate;
 use crate::vault;
+use crate::vault_backend::per_doctype::{self, DoctypeFields, WriteArgs};
 
 /// Load all goals, optionally filtered by context, sorted by seq.
 pub fn load_goals(config: &Config, context: Option<&str>) -> Result<Vec<GoalInfo>> {
@@ -117,43 +118,43 @@ pub fn ensure_maintenance(config: &Config, context: &str) -> Result<String> {
 }
 
 /// Create a new goal. Returns the slug of the created goal.
+///
+/// The bare file-write half (template render, frontmatter assembly, path
+/// computation, hard-error-on-exists, `vault::write_note`) lives in
+/// `vault_backend::per_doctype::write_goal` so it can be reused by the
+/// `VaultBackend` dispatch surface. This wrapper keeps the goal-specific
+/// concerns:
+///   - slug resolution (`vault::slugify` when none supplied)
+///   - sequence number computation
+///   - publish-as-tail-action (`publish_local_write_best_effort`)
+///   - discovery event emission
 pub fn create(config: &Config, context: &str, title: &str, slug: Option<&str>) -> Result<String> {
     let slug = match slug {
         Some(s) => s.to_string(),
         None => vault::slugify(title),
     };
-    let vault_layout = Vault::new(&config.vault_root);
-    let owner = config.owner_for_context(context);
-    let dir = vault_layout.doc_type_dir(&owner, context, "goal");
-    let path = vault_layout.doc_file(&owner, context, "goal", &slug);
-    if path.exists() {
-        return Err(TemperError::Vault(format!("goal already exists: {slug}")));
-    }
     let seq = next_seq(config, context)?;
-    let seq_str = seq.to_string();
-    let id = crate::ids::generate_id();
-    let date = Local::now().format("%Y-%m-%d").to_string();
-    let tmpl = GoalTemplate {
-        id: &id,
+    let owner = config.owner_for_context(context);
+    let result = per_doctype::write_for(WriteArgs {
+        doctype: "goal",
         title,
         slug: &slug,
         context,
-        seq: &seq_str,
-        date: &date,
-    };
-    let content = tmpl
-        .render()
-        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
-    fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
-    vault::write_note(&path, &content)?;
+        body: "",
+        open_meta: None,
+        vault_root: &config.vault_root,
+        owner: &owner,
+        config,
+        doctype_fields: Some(DoctypeFields::Goal { seq }),
+    })?;
 
-    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &result.abs_path)?;
 
     let event = discovery::Event::ResourceCreate {
         ts: Local::now().to_rfc3339(),
         doc_type: "goal".to_string(),
         title: title.to_string(),
-        path: vault_layout.rel_path(&owner, context, "goal", &slug),
+        path: result.rel_path,
         context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {

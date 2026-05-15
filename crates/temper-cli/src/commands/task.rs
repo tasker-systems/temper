@@ -67,13 +67,14 @@ pub fn show(
 
             let body = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = super::resource::resolve_resource_id(
+                    // Local-mode: try fast-path via local file frontmatter / manifest first,
+                    // then fall back to API resolution.
+                    let id = super::resource::resolve_id_local_first(
                         &config_clone,
                         client,
+                        Some(&task_ctx),
                         "task",
                         &task_slug,
-                        Some(&task_ctx),
-                        VaultState::Local,
                     )
                     .await?;
                     let result = show_cache::fetch(show_cache::ShowCacheParams {
@@ -97,18 +98,18 @@ pub fn show(
 
             let body = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = super::resource::resolve_resource_id(
-                        &config_clone,
-                        client,
-                        "task",
-                        &slug_s,
-                        context_s.as_deref(),
-                        VaultState::Cloud,
-                    )
-                    .await?;
+                    let ctx = context_s.as_deref().ok_or_else(|| {
+                        TemperError::Project("no context specified — use --context <name>".into())
+                    })?;
+                    let owner = config_clone.owner_for_context(ctx);
+                    let row = client
+                        .resources()
+                        .resolve_by_uri(&owner, ctx, "task", &slug_s)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     let resp = client
                         .resources()
-                        .content(*id.as_uuid())
+                        .content(*row.id.as_uuid())
                         .await
                         .map_err(crate::actions::runtime::client_err_to_temper)?;
                     Ok(resp.markdown)

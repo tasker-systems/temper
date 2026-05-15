@@ -1,17 +1,15 @@
 use std::path::PathBuf;
 
-use askama::Template;
 use chrono::Local;
 use serde::Serialize;
 use temper_core::vault::Vault;
 
-use crate::actions::frontmatter::{build_managed_meta_for_create, NewResourceArgs};
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::Result;
 use crate::output;
-use crate::templates::SessionTemplate;
 use crate::vault;
+use crate::vault_backend::per_doctype::{self, DoctypeFields, WriteArgs};
 
 /// Create or update today's session note.
 ///
@@ -62,7 +60,9 @@ pub fn save(
     let note_path = vault_layout.doc_file(&owner, &context_name, "session", &slug);
 
     if note_path.exists() {
-        // File exists: replace body if stdin provided, otherwise no-op
+        // File exists: replace body if stdin provided, otherwise no-op.
+        // This is the save-or-update overload — preserved at the surface layer
+        // because `per_doctype::write_session` hard-errors on existing slugs.
         if let Some(body) = stdin_content {
             let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
             fm.set_body(body.to_string());
@@ -81,48 +81,27 @@ pub fn save(
         return Ok(());
     }
 
-    // File doesn't exist: create from session template
-    let id = crate::ids::generate_id();
-    let tmpl = SessionTemplate {
-        id: &id,
+    // File doesn't exist: delegate the bare file-write (template render,
+    // managed-meta overlay, body application, write) to per_doctype::write_session.
+    // The wrapper retains publish-as-tail-action, discovery emission, output,
+    // and the session→task link side-effect.
+    let body = stdin_content.unwrap_or("");
+    let result = per_doctype::write_for(WriteArgs {
+        doctype: "session",
         title: note_title,
-        date: &today,
-    };
-    let rendered = tmpl
-        .render()
-        .map_err(|e| crate::error::TemperError::Vault(format!("template error: {e}")))?;
-
-    let mut fm = temper_core::frontmatter::Frontmatter::try_from(rendered.as_str())?;
-    let meta = build_managed_meta_for_create(NewResourceArgs {
-        doc_type: "session",
+        slug: &slug,
         context: &context_name,
-        title: note_title,
-        mode: None,
-        effort: None,
-        goal: None,
-        stage: None,
-        seq: None,
-        status: None,
-        provenance: None,
-        llm_model: None,
-        llm_run: None,
-    });
-    fm.set_managed_meta(&meta);
-    if let Some(body) = stdin_content {
-        fm.set_body(body.to_string());
-    }
+        body,
+        open_meta: None,
+        vault_root: &config.vault_root,
+        owner: &owner,
+        config,
+        doctype_fields: Some(DoctypeFields::Session),
+    })?;
 
-    if let Some(parent) = note_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    fm.write_to(&note_path)?;
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &result.abs_path)?;
 
-    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &note_path)?;
-
-    let relative = note_path
-        .strip_prefix(&config.vault_root)
-        .unwrap_or(&note_path);
-    let relative_str = relative.to_string_lossy();
+    let relative_str = result.rel_path.clone();
 
     let ts = Local::now().to_rfc3339();
 
@@ -364,13 +343,14 @@ pub fn show(
 
             let (content, resolved_path) = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = super::resource::resolve_resource_id(
+                    // Local-mode: try fast-path via local file frontmatter / manifest first,
+                    // then fall back to API resolution.
+                    let id = super::resource::resolve_id_local_first(
                         &config_clone,
                         client,
+                        Some(&entry_ctx),
                         "session",
                         &entry_title,
-                        Some(&entry_ctx),
-                        VaultState::Local,
                     )
                     .await?;
                     let result = show_cache::fetch(show_cache::ShowCacheParams {
@@ -410,18 +390,20 @@ pub fn show(
 
             let body = runtime::with_client(|client| {
                 Box::pin(async move {
-                    let id = super::resource::resolve_resource_id(
-                        &config_clone,
-                        client,
-                        "session",
-                        &slug_s,
-                        ctx_s.as_deref(),
-                        VaultState::Cloud,
-                    )
-                    .await?;
+                    let ctx = ctx_s.as_deref().ok_or_else(|| {
+                        crate::error::TemperError::Project(
+                            "no context specified — use --context <name>".into(),
+                        )
+                    })?;
+                    let owner = config_clone.owner_for_context(ctx);
+                    let row = client
+                        .resources()
+                        .resolve_by_uri(&owner, ctx, "session", &slug_s)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
                     let resp = client
                         .resources()
-                        .content(*id.as_uuid())
+                        .content(*row.id.as_uuid())
                         .await
                         .map_err(crate::actions::runtime::client_err_to_temper)?;
                     Ok(resp.markdown)
