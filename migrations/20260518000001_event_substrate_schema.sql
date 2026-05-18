@@ -6,13 +6,13 @@ CREATE SCHEMA event_substrate;
 CREATE TYPE event_substrate.porosity AS ENUM ('access', 'attention');
 
 CREATE TABLE event_substrate.profiles (
-    id          uuid PRIMARY KEY,
+    id          uuid PRIMARY KEY DEFAULT public.uuid_generate_v7(),
     name        text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE event_substrate.entities (
-    id          uuid PRIMARY KEY,
+    id          uuid PRIMARY KEY DEFAULT public.uuid_generate_v7(),
     profile_id  uuid NOT NULL REFERENCES event_substrate.profiles(id),
     name        text NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
@@ -22,21 +22,21 @@ CREATE INDEX entities_profile_id_idx
     ON event_substrate.entities(profile_id);
 
 CREATE TABLE event_substrate.topics (
-    id          uuid PRIMARY KEY,
+    id          uuid PRIMARY KEY DEFAULT public.uuid_generate_v7(),
     fqdn        text NOT NULL UNIQUE,
     parent_id   uuid REFERENCES event_substrate.topics(id),
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE event_substrate.scopes (
-    id          uuid PRIMARY KEY,
+    id          uuid PRIMARY KEY DEFAULT public.uuid_generate_v7(),
     name        text NOT NULL UNIQUE,
     porosity    event_substrate.porosity NOT NULL,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE event_substrate.event_types (
-    id              uuid PRIMARY KEY,
+    id              uuid PRIMARY KEY DEFAULT public.uuid_generate_v7(),
     name            varchar(128) NOT NULL UNIQUE,
     description     text,
     is_deprecated   boolean NOT NULL DEFAULT false,
@@ -44,7 +44,7 @@ CREATE TABLE event_substrate.event_types (
 );
 
 CREATE TABLE event_substrate.events (
-    id                   uuid PRIMARY KEY,
+    id                   uuid PRIMARY KEY DEFAULT public.uuid_generate_v7(),
     event_type_id        uuid NOT NULL REFERENCES event_substrate.event_types(id),
     emitter_entity_id    uuid NOT NULL REFERENCES event_substrate.entities(id),
     topic_id             uuid NOT NULL REFERENCES event_substrate.topics(id),
@@ -81,7 +81,7 @@ CREATE TRIGGER events_no_update_or_delete
     FOR EACH ROW EXECUTE FUNCTION event_substrate.events_append_only();
 
 CREATE TABLE event_substrate.concepts (
-    id                        uuid PRIMARY KEY,
+    id                        uuid PRIMARY KEY DEFAULT public.uuid_generate_v7(),
     current_definition        text NOT NULL,
     current_elaboration       text,
     scope_id                  uuid NOT NULL REFERENCES event_substrate.scopes(id),
