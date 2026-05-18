@@ -40,3 +40,26 @@ pub async fn create_entity(pool: &PgPool, name: &str) -> Result<(Entity, Profile
     tx.commit().await?;
     Ok((entity, profile))
 }
+
+pub async fn move_entity(
+    pool: &PgPool,
+    entity_id: Uuid,
+    target_profile_id: Uuid,
+) -> Result<Entity, LedgerError> {
+    let entity = sqlx::query_as!(
+        Entity,
+        r#"
+        UPDATE event_substrate.entities
+           SET profile_id = $2
+         WHERE id = $1
+        RETURNING id, profile_id, name, created_at
+        "#,
+        entity_id,
+        target_profile_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(LedgerError::UnknownEntity(entity_id))?;
+
+    Ok(entity)
+}

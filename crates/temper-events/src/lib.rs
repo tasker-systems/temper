@@ -6,7 +6,7 @@ pub mod entities;
 pub mod errors;
 pub mod types;
 
-pub use entities::create_entity;
+pub use entities::{create_entity, move_entity};
 pub use errors::LedgerError;
 pub use types::{Entity, Profile};
 
