@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2021"
 description = "Event-sourced substrate foundations: append-only ledger, scoped events, concept projection"
 
+[package.metadata.cargo-machete]
+ignored = ["chrono", "serde", "serde_json", "thiserror", "tokio", "uuid"]
+
 [features]
 default = []
 test-db = []
