@@ -505,3 +505,47 @@ async fn rebuild_concept_equals_projection_of_record(pool: PgPool) {
 
     assert_eq!(rebuilt, projection_of_record);
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn correlation_id_groups_fan_out(pool: PgPool) {
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "fan-out root"}),
+        Utc::now(),
+    );
+    let created = append_event(&pool, root.clone()).await.unwrap();
+
+    // Two mutations sharing the root's correlation_id (fan-out under one intention).
+    for label in ["m1", "m2"] {
+        let id = Uuid::now_v7();
+        let mutation = EventToWrite {
+            id,
+            event_type: EventType::ConceptMutated,
+            emitter_entity_id: SYSTEM_ENTITY_ID,
+            topic_id: BOOTSTRAP_TOPIC_ID,
+            scope_id: PUBLIC_SCOPE_ID,
+            payload: json!({"definition": label}),
+            metadata: json!({}),
+            references: vec![EventReference {
+                kind: ReferenceKind::Supersedes,
+                event_id: created.id,
+            }],
+            correlation_id: created.correlation_id,
+            occurred_at: Utc::now(),
+        };
+        append_event(&pool, mutation).await.unwrap();
+    }
+
+    let count: i64 = sqlx::query_scalar!(
+        "SELECT count(*) FROM event_substrate.events WHERE correlation_id = $1",
+        created.correlation_id,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .unwrap_or(0);
+    assert_eq!(count, 3, "root + 2 mutations all share one correlation_id");
+}
