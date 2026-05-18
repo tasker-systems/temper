@@ -15,3 +15,6 @@ pub mod embed;
 
 #[cfg(any(feature = "embed", feature = "embed-download"))]
 pub mod pipeline;
+
+#[cfg(any(feature = "embed", feature = "embed-download"))]
+pub mod body;

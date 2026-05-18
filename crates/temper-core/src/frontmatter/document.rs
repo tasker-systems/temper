@@ -183,9 +183,9 @@ impl Frontmatter {
     /// left untouched (existing values survive). Fields in `meta.extra` are
     /// applied last, keyed by their original string names.
     ///
-    /// This is the bridge between the typed `build_managed_meta_for_create`
-    /// builder and the `Frontmatter` mutation API — callers do not need to
-    /// know which `temper-*` key corresponds to each struct field.
+    /// This is the bridge between a typed `ManagedMeta` value and the
+    /// `Frontmatter` mutation API — callers do not need to know which
+    /// `temper-*` key corresponds to each struct field.
     pub fn set_managed_meta(&mut self, meta: &crate::types::ManagedMeta) {
         if let Some(ref v) = meta.doc_type {
             self.set_raw_field("temper-type", serde_json::Value::String(v.clone()));

@@ -1,6 +1,5 @@
 use std::fs;
 
-use askama::Template;
 use chrono::Local;
 use temper_core::vault::Vault;
 
@@ -10,8 +9,8 @@ use crate::config::Config;
 use crate::discovery;
 use crate::error::{Result, TemperError};
 use crate::output;
-use crate::templates::TaskTemplate;
 use crate::vault;
+use crate::vault_backend::per_doctype::{self, DoctypeFields, WriteArgs};
 
 /// Load all tasks, optionally filtered by context and/or goal.
 pub fn load_tasks(
@@ -135,6 +134,18 @@ pub fn find_task(
 }
 
 /// Create a new task.
+///
+/// The bare file-write half (template render, frontmatter + body assembly,
+/// path computation, hard-error-on-exists, `vault::write_note`) lives in
+/// `vault_backend::per_doctype::write_task` so it can be reused by the
+/// `VaultBackend` dispatch surface. This wrapper keeps the task-specific
+/// concerns:
+///   - goal slug resolution + cross-context validation
+///   - mode / effort validation
+///   - sequence number computation
+///   - publish-as-tail-action (`publish_local_write_best_effort`)
+///   - discovery event emission
+///   - human-readable `output::success`
 pub fn create(
     config: &Config,
     context: &str,
@@ -174,47 +185,38 @@ pub fn create(
     let date = Local::now().format("%Y-%m-%d").to_string();
     let slug_title = vault::slugify(title);
     let slug = format!("{date}-{slug_title}");
-    let datetime = Local::now().to_rfc3339();
     let seq = next_seq(config, context, &gs)?;
-    let seq_str = seq.to_string();
-    let id = crate::ids::generate_id();
 
     let mode_str = mode.unwrap_or("null");
     let effort_str = effort.unwrap_or("null");
-    let tmpl = TaskTemplate {
-        id: &id,
+
+    let owner = config.owner_for_context(context);
+    let body = stdin_content.unwrap_or("");
+    let result = per_doctype::write_for(WriteArgs {
+        doctype: "task",
         title,
         slug: &slug,
         context,
-        goal: &gs,
-        mode: mode_str,
-        effort: effort_str,
-        seq: &seq_str,
-        datetime: &datetime,
-    };
-    let mut content = tmpl
-        .render()
-        .map_err(|e| TemperError::Vault(format!("template error: {e}")))?;
+        body,
+        open_meta: None,
+        vault_root: &config.vault_root,
+        owner: &owner,
+        config,
+        doctype_fields: Some(DoctypeFields::Task {
+            goal: &gs,
+            mode: mode_str,
+            effort: effort_str,
+            seq,
+        }),
+    })?;
 
-    if let Some(body) = stdin_content {
-        content.push_str(body);
-        content.push('\n');
-    }
-
-    let vault_layout = Vault::new(&config.vault_root);
-    let owner = config.owner_for_context(context);
-    let dir = vault_layout.doc_type_dir(&owner, context, "task");
-    fs::create_dir_all(&dir).map_err(|e| TemperError::Vault(e.to_string()))?;
-    let path = vault_layout.doc_file(&owner, context, "task", &slug);
-    vault::write_note(&path, &content)?;
-
-    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &path)?;
+    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &result.abs_path)?;
 
     let event = discovery::Event::ResourceCreate {
-        ts: datetime,
+        ts: Local::now().to_rfc3339(),
         doc_type: "task".to_string(),
         title: title.to_string(),
-        path: vault_layout.rel_path(&owner, context, "task", &slug),
+        path: result.rel_path,
         context: context.to_string(),
     };
     if let Err(e) = discovery::append_event(&config.state_dir, &event) {
