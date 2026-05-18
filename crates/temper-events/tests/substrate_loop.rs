@@ -161,3 +161,122 @@ async fn unknown_scope_errors(pool: PgPool) {
     let err = append_event(&pool, write).await.unwrap_err();
     assert!(matches!(err, LedgerError::UnknownScope(id) if id == bogus));
 }
+
+use temper_events::{EventReference, ReferenceKind};
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn dangling_reference_errors(pool: PgPool) {
+    let bogus_event = Uuid::now_v7();
+    let id = Uuid::now_v7();
+    let write = EventToWrite {
+        id,
+        event_type: EventType::ConceptMutated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"definition": "x"}),
+        metadata: json!({}),
+        references: vec![EventReference {
+            kind: ReferenceKind::Supersedes,
+            event_id: bogus_event,
+        }],
+        correlation_id: id,
+        occurred_at: Utc::now(),
+    };
+    let err = append_event(&pool, write).await.unwrap_err();
+    assert!(matches!(
+        err,
+        LedgerError::DanglingReference { event_id, kind: ReferenceKind::Supersedes }
+            if event_id == bogus_event
+    ));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn append_concept_created_with_supersedes_errors(pool: PgPool) {
+    // First, write a real ConceptCreated so the Supersedes target exists.
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "root"}),
+        Utc::now(),
+    );
+    append_event(&pool, root.clone()).await.unwrap();
+
+    let id = Uuid::now_v7();
+    let bad = EventToWrite {
+        id,
+        event_type: EventType::ConceptCreated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"definition": "x"}),
+        metadata: json!({}),
+        references: vec![EventReference {
+            kind: ReferenceKind::Supersedes,
+            event_id: root.id,
+        }],
+        correlation_id: id,
+        occurred_at: Utc::now(),
+    };
+    let err = append_event(&pool, bad).await.unwrap_err();
+    assert!(matches!(err, LedgerError::SupersedesOnGenesis));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn append_concept_mutated_without_supersedes_errors(pool: PgPool) {
+    let id = Uuid::now_v7();
+    let bad = EventToWrite {
+        id,
+        event_type: EventType::ConceptMutated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"definition": "x"}),
+        metadata: json!({}),
+        references: vec![],
+        correlation_id: id,
+        occurred_at: Utc::now(),
+    };
+    let err = append_event(&pool, bad).await.unwrap_err();
+    assert!(matches!(err, LedgerError::MissingSupersedes));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn append_concept_mutated_with_multiple_supersedes_errors(pool: PgPool) {
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "root"}),
+        Utc::now(),
+    );
+    append_event(&pool, root.clone()).await.unwrap();
+
+    let id = Uuid::now_v7();
+    let bad = EventToWrite {
+        id,
+        event_type: EventType::ConceptMutated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"definition": "x"}),
+        metadata: json!({}),
+        references: vec![
+            EventReference {
+                kind: ReferenceKind::Supersedes,
+                event_id: root.id,
+            },
+            EventReference {
+                kind: ReferenceKind::Supersedes,
+                event_id: root.id,
+            },
+        ],
+        correlation_id: id,
+        occurred_at: Utc::now(),
+    };
+    let err = append_event(&pool, bad).await.unwrap_err();
+    assert!(matches!(err, LedgerError::MultipleSupersedes));
+}
