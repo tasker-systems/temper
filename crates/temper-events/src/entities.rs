@@ -63,3 +63,33 @@ pub async fn move_entity(
 
     Ok(entity)
 }
+
+pub async fn discard_profile(pool: &PgPool, profile_id: Uuid) -> Result<(), LedgerError> {
+    let mut tx = pool.begin().await?;
+
+    let referencing_count: i64 = sqlx::query_scalar!(
+        "SELECT count(*) FROM event_substrate.entities WHERE profile_id = $1",
+        profile_id,
+    )
+    .fetch_one(&mut *tx)
+    .await?
+    .unwrap_or(0);
+
+    if referencing_count > 0 {
+        return Err(LedgerError::ProfileNotEmpty(profile_id));
+    }
+
+    let result = sqlx::query!(
+        "DELETE FROM event_substrate.profiles WHERE id = $1",
+        profile_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(LedgerError::ProfileNotEmpty(profile_id));
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
