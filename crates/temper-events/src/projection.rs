@@ -10,6 +10,27 @@ pub async fn project_concept(pool: &PgPool, event_id: Uuid) -> Result<Concept, L
     let event = load_event(pool, event_id).await?;
     let event_type = resolve_event_type(pool, event.event_type_id).await?;
 
+    // Idempotency short-circuit: if a concept already has this event as
+    // its last_event_id, return it unchanged. Makes the projection function
+    // safe to call multiple times.
+    let already_projected = sqlx::query_as!(
+        Concept,
+        r#"
+        SELECT
+            id, current_definition, current_elaboration,
+            scope_id, topic_id,
+            created_by_event_id, last_event_id, latest_event_recorded_at
+        FROM event_substrate.concepts
+        WHERE last_event_id = $1
+        "#,
+        event_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+    if let Some(concept) = already_projected {
+        return Ok(concept);
+    }
+
     match event_type {
         EventType::ConceptCreated => project_created(pool, &event).await,
         EventType::ConceptMutated => project_mutated(pool, &event).await,

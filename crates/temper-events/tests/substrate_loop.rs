@@ -415,3 +415,32 @@ async fn mutation_chain_projects_correctly(pool: PgPool) {
     assert_eq!(after_m2.current_definition, "second");
     assert_eq!(after_m2.current_elaboration.as_deref(), Some("elab2"));
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn project_concept_is_idempotent(pool: PgPool) {
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "idempotency-test"}),
+        Utc::now(),
+    );
+    let event = append_event(&pool, root.clone()).await.unwrap();
+
+    let first = project_concept(&pool, event.id).await.unwrap();
+    let second = project_concept(&pool, event.id).await.unwrap();
+
+    assert_eq!(first, second);
+
+    // The concepts table should hold exactly one row for this genesis event.
+    let count: i64 = sqlx::query_scalar!(
+        "SELECT count(*) FROM event_substrate.concepts WHERE created_by_event_id = $1",
+        event.id,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .unwrap_or(0);
+    assert_eq!(count, 1);
+}
