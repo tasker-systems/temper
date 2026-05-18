@@ -141,6 +141,31 @@ Visibility/precedence label with porosity declared at create-time.
 The Postgres enum type `event_substrate.porosity` is created by the
 schema migration.
 
+### `event_types`
+
+The closed-per-migration set of event type names. FK target for
+`events.event_type_id`. Adding a new event type is a migration that
+inserts a row (paired with adding the variant to the Rust `EventType`
+enum); deprecating one is a flag-flip rather than a delete, since
+historical events must remain resolvable.
+
+| column | type | notes |
+|---|---|---|
+| `id` | `uuid` | PK, UUIDv7 |
+| `name` | `varchar(128)` | NOT NULL, UNIQUE. PascalCase canonical name (e.g. `ConceptCreated`). |
+| `description` | `text` | nullable. Free-form prose for the registry. |
+| `is_deprecated` | `boolean` | NOT NULL DEFAULT `false`. Lets us retire a type without breaking history. |
+| `created_at` | `timestamptz` | default `now()` |
+
+The choice of an `event_types` table over a Postgres enum or a free
+`varchar` column: the table gives us referential integrity (no typo
+events), a registry queryable from SQL, and a place to hang
+type-level metadata (description today, current `schema_uri` /
+`schema_version` defaults when the schema-registry primitive lands).
+The extra join on read is cheap and the FK is indexed.
+
+v1 seed rows: `ConceptCreated`, `ConceptMutated`.
+
 ### `events`
 
 Append-only ledger. The substrate's authoritative store.
@@ -148,7 +173,7 @@ Append-only ledger. The substrate's authoritative store.
 | column | type | notes |
 |---|---|---|
 | `id` | `uuid` | PK, UUIDv7. Caller-supplied via `Uuid::now_v7()` so the id is known before INSERT (correlation roots reference themselves). |
-| `event_type` | `text` | NOT NULL. v1 values: `'ConceptCreated'`, `'ConceptMutated'`. Text rather than enum to avoid future migration churn while the type set is exploratory; enforced via Rust enum at the write path. |
+| `event_type_id` | `uuid` | FK → `event_types.id`, NOT NULL. Resolved from the Rust `EventType` enum at the write path (small per-write lookup in v1; future optimization caches at startup). |
 | `emitter_entity_id` | `uuid` | FK → `entities.id`, NOT NULL |
 | `topic_id` | `uuid` | FK → `topics.id`, NOT NULL |
 | `scope_id` | `uuid` | FK → `scopes.id`, NOT NULL. Every event carries its scope — the 2026-05-18 emitter-attached scope label. |
@@ -186,6 +211,7 @@ whose root is `created_by_event_id`.
 ### Indexes
 
 - `events`: btree on `(topic_id, recorded_at DESC)` — topic-ordered reads.
+- `events`: btree on `(event_type_id, recorded_at DESC)` — type-filtered reads.
 - `events`: btree on `(emitter_entity_id, recorded_at DESC)` — per-emitter reads.
 - `events`: btree on `correlation_id` — causal-tree assembly.
 - `events`: GIN on `references` with `jsonb_path_ops` — reverse-reference
@@ -200,6 +226,7 @@ whose root is `created_by_event_id`.
 The schema migration is followed by a seed migration that bootstraps the
 substrate so subsequent migrations and tests have valid FKs to reference:
 
+- Two `event_types` rows: `ConceptCreated`, `ConceptMutated`.
 - One `public` scope with `porosity = 'access'`.
 - One `system` profile.
 - One `system-bootstrap` entity in the `system` profile.
@@ -288,12 +315,18 @@ interface so causal-tree construction is visible at the call site.
 
 In one transaction:
 
-1. **Validate FKs** — entity, topic, scope all exist in their respective
+1. **Resolve `event_type_id`** — look up the `event_types` row whose
+   `name` matches the Rust `EventType` discriminant. The Rust enum and
+   the seeded `event_types` rows are kept in sync by convention (every
+   new variant ships with a migration that inserts the matching row).
+   Missing row is `LedgerError::UnknownEventType` and indicates a
+   migration/code drift bug.
+2. **Validate FKs** — entity, topic, scope all exist in their respective
    tables. Fail closed with the specific `LedgerError` variant.
-2. **Validate references resolve** — every `event_id` in `references`
+3. **Validate references resolve** — every `event_id` in `references`
    must already exist in `events`. Fail with `DanglingReference { kind,
    event_id }`.
-3. **Type-specific reference invariants** (Rust-side, not SQL):
+4. **Type-specific reference invariants** (Rust-side, not SQL):
    - `ConceptCreated` — references may include any number of
      `DerivedFrom` entries, MUST NOT include `Supersedes`. Returns
      `SupersedesOnGenesis`.
@@ -301,9 +334,9 @@ In one transaction:
      `Supersedes` pointing to a prior `ConceptCreated` or `ConceptMutated`
      event whose `id` resolves to a row in `events`. Returns
      `MissingSupersedes` or `MultipleSupersedes`.
-4. **INSERT** into `events` using `sqlx::query!()` for compile-time
+5. **INSERT** into `events` using `sqlx::query!()` for compile-time
    verification. The append-only trigger guards subsequent UPDATE/DELETE.
-5. Return the persisted `Event`.
+6. Return the persisted `Event`.
 
 `append_event` is the *only* write entry point for events. Direct SQL
 inserts from tests or other crates are explicitly disallowed by
@@ -404,6 +437,8 @@ pub enum LedgerError {
     UnknownTopic(Uuid),
     #[error("unknown scope: {0}")]
     UnknownScope(Uuid),
+    #[error("unknown event type: {0}")]
+    UnknownEventType(String),
     #[error("dangling reference: event {event_id} ({kind:?}) does not exist")]
     DanglingReference { event_id: Uuid, kind: ReferenceKind },
     #[error("ConceptMutated must include exactly one Supersedes reference; found none")]
@@ -538,3 +573,92 @@ Mitigation: the test suite stands in for workload pressure by encoding
 the model's invariants as assertions. If the assertions feel forced or
 the projection function feels arbitrary, the model has a hole worth
 finding before the surface is built on top of it.
+
+## Deferred phase — external-system-event typology
+
+Distinct from the cognition-event work in v1, the substrate's full
+design includes a separate typology of events whose origin is an
+external system of record (GitHub PR, Linear ticket, Notion doc, Slack
+message). These are not just additional event types — they carry their
+own write-path semantics that are absent from v1 and worth naming
+explicitly so the v1 schema does not assume them away:
+
+- **Raw-deterministic-event-with-external-reference shape.** The
+  faithful record of an external change. Payload is a reference-payload
+  (pointer + hash, no embedded content) per the 2026-05-17 design:
+  "record raw external boundary events faithfully — cheap as
+  reference-payloads — and debounce at the projection, never at
+  ingestion." The external system stays the source of truth for its own
+  state; the substrate stays record-faithful.
+- **Two distinct trust layers on attribution.** The integration signs
+  for the observation ("this is what GitHub told me at time T"); the
+  identity-source is trusted for the attribution within that
+  observation ("GitHub says it was user X"). v1's entity/profile model
+  flattens this — there's no identity-source FK, no integration entity
+  distinct from a human entity. The deferred typology will need both.
+- **Sets, thresholds, and priority weighting.** Cognition events are
+  not emitted one-per-boundary-event; they're emitted across a
+  saturation threshold (the 2026-05-18 morning "process a topic region
+  once it has accumulated enough coherent pressure"), modulated by a
+  per-event-type priority multiplier (`effective_threshold ≈
+  saturation_threshold / priority_multiplier`). Routine boundary events
+  batch; an ADR or product-decision boundary forces immediate cognition
+  passes. The batch decision is itself an emitted event so the
+  batching judgment is auditable.
+- **Dirty-state cascade events.** When a high-priority cognition event
+  propagates into dependent scopes, downstream maps are not rebuilt
+  instantaneously. A dirty-state event makes the propagation window
+  visible to consumers, carrying source decision, affected scopes,
+  affected topic areas, and severity class. Consumers route themselves
+  without a central arbiter.
+
+None of this is in v1. The `event_types` table and the `metadata` jsonb
+column on `events` are the seams where this typology will attach: new
+rows in `event_types` (`BoundaryEventObserved`, `CognitivePassInitiated`,
+`DirtyStateAnnounced`, etc.), payload schemas in `metadata.schema_uri`,
+and a separate write path (the routing-decision-as-event from 2026-05-17)
+that does not bypass `append_event` but layers atop it.
+
+## Deferred phase — concept-projection consumption pattern
+
+v1 produces `concepts` rows; it does not yet define how Temper-the-product
+(or any other knowledge-graph consumer) reads them. That consumption
+pattern is itself a design problem and a follow-on phase. The shape of
+the question, sketched here so it isn't lost:
+
+- **Read-side abstraction.** Does Temper consume `concepts` directly via
+  SQL views, through a `temper-events` client crate, or via a thin
+  HTTP/MCP surface in front of the substrate? The 2026-05-18 PM session
+  resolved that pgvector / tsvector / graph queries are what make a
+  digital cognitive map more than an LLM-wiki — so the read-side likely
+  needs to project richer artifacts than `concepts` rows alone (facets,
+  embeddings, relationship traversal).
+- **Subscription vs. snapshot semantics.** A consumer can subscribe to
+  new events (the transactional outbox + per-consumer cursor pattern
+  from the 2026-05-17 infrastructure tier) or query current state
+  (`concepts` table). Both have a place; the snapshot use case is what
+  v1 enables, the subscription use case is what an active consumer
+  (e.g. an agent watching for translation candidates) will want.
+- **Scope-filtered projection.** A consumer's view of the cognitive map
+  is scope-bounded by the consumer's perspective (the 2026-05-18 morning
+  agent-inherent scoping). The consumption surface needs a way to
+  declare the perspective doing the reading — likely a session-scoped
+  filter analogous to the existing Temper `resources_visible_to` /
+  `can_modify_resource` pattern.
+- **Embedding generation placement.** Currently `temper-ingest` owns
+  embedding generation for Temper resources. For substrate concepts,
+  whether the embeddings are computed at projection time, at first-read
+  time, or in a separate background pass is open — and it interacts
+  with the rebuildability primitive (replay must remain deterministic;
+  embedding model versions are not).
+- **Materialization staleness.** v1's `concepts.latest_event_recorded_at`
+  lets a consumer detect a stale row, but does not yet define the
+  consumer's recourse — re-read, request re-projection, request rebuild
+  from event chain. The recourse design connects to the dirty-state
+  cascade primitive above.
+
+Whatever the consumption surface looks like, the substrate's contract
+to it is the property v1 verifies in the test suite: every `concepts`
+row is rebuildable from the event chain whose root is
+`created_by_event_id`. That is the load-bearing invariant the consumer
+can rely on.
