@@ -113,3 +113,51 @@ async fn append_concept_created_writes_to_ledger(pool: PgPool) {
     .unwrap_or(0);
     assert_eq!(row_count, 1);
 }
+
+use temper_events::LedgerError;
+use uuid::Uuid;
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn unknown_entity_errors(pool: PgPool) {
+    let bogus = Uuid::now_v7();
+    let write = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        bogus,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "x"}),
+        Utc::now(),
+    );
+    let err = append_event(&pool, write).await.unwrap_err();
+    assert!(matches!(err, LedgerError::UnknownEntity(id) if id == bogus));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn unknown_topic_errors(pool: PgPool) {
+    let bogus = Uuid::now_v7();
+    let write = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        bogus,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "x"}),
+        Utc::now(),
+    );
+    let err = append_event(&pool, write).await.unwrap_err();
+    assert!(matches!(err, LedgerError::UnknownTopic(id) if id == bogus));
+}
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn unknown_scope_errors(pool: PgPool) {
+    let bogus = Uuid::now_v7();
+    let write = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        bogus,
+        json!({"definition": "x"}),
+        Utc::now(),
+    );
+    let err = append_event(&pool, write).await.unwrap_err();
+    assert!(matches!(err, LedgerError::UnknownScope(id) if id == bogus));
+}
