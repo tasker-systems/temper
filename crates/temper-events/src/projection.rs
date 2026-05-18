@@ -12,7 +12,7 @@ pub async fn project_concept(pool: &PgPool, event_id: Uuid) -> Result<Concept, L
 
     match event_type {
         EventType::ConceptCreated => project_created(pool, &event).await,
-        EventType::ConceptMutated => unimplemented!("ConceptMutated projection lands in Task 14"),
+        EventType::ConceptMutated => project_mutated(pool, &event).await,
     }
 }
 
@@ -84,5 +84,77 @@ async fn resolve_event_type(pool: &PgPool, event_type_id: Uuid) -> Result<EventT
         "ConceptCreated" => Ok(EventType::ConceptCreated),
         "ConceptMutated" => Ok(EventType::ConceptMutated),
         other => Err(LedgerError::UnknownEventType(other.to_string())),
+    }
+}
+
+async fn project_mutated(pool: &PgPool, event: &Event) -> Result<Concept, LedgerError> {
+    let payload: crate::payloads::ConceptMutatedPayload =
+        serde_json::from_value(event.payload.clone())
+            .map_err(|e| LedgerError::Database(sqlx::Error::Decode(Box::new(e))))?;
+
+    let root_event_id = walk_to_root(pool, event.id).await?;
+
+    // Locate the concept row by its genesis event.
+    let concept = sqlx::query_as!(
+        Concept,
+        r#"
+        SELECT
+            id, current_definition, current_elaboration,
+            scope_id, topic_id,
+            created_by_event_id, last_event_id, latest_event_recorded_at
+        FROM event_substrate.concepts
+        WHERE created_by_event_id = $1
+        "#,
+        root_event_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(LedgerError::ConceptNotFound(root_event_id))?;
+
+    let updated = sqlx::query_as!(
+        Concept,
+        r#"
+        UPDATE event_substrate.concepts
+           SET current_definition       = COALESCE($2, current_definition),
+               current_elaboration      = CASE WHEN $3::boolean THEN $4 ELSE current_elaboration END,
+               last_event_id            = $5,
+               latest_event_recorded_at = $6
+         WHERE id = $1
+        RETURNING
+            id, current_definition, current_elaboration,
+            scope_id, topic_id,
+            created_by_event_id, last_event_id, latest_event_recorded_at
+        "#,
+        concept.id,
+        payload.definition,
+        payload.elaboration.is_some(),
+        payload.elaboration,
+        event.id,
+        event.recorded_at,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(updated)
+}
+
+/// Walks `Supersedes` references back from the given event until we reach
+/// a `ConceptCreated` event. Returns that genesis event's id.
+async fn walk_to_root(pool: &PgPool, event_id: Uuid) -> Result<Uuid, LedgerError> {
+    let mut current = event_id;
+    loop {
+        let event = load_event(pool, current).await?;
+        let event_type = resolve_event_type(pool, event.event_type_id).await?;
+        if matches!(event_type, EventType::ConceptCreated) {
+            return Ok(current);
+        }
+        let refs: Vec<crate::types::event::EventReference> =
+            serde_json::from_value(event.references.clone())
+                .map_err(|e| LedgerError::Database(sqlx::Error::Decode(Box::new(e))))?;
+        let supersedes = refs
+            .into_iter()
+            .find(|r| matches!(r.kind, crate::types::event::ReferenceKind::Supersedes))
+            .ok_or(LedgerError::MissingSupersedes)?;
+        current = supersedes.event_id;
     }
 }

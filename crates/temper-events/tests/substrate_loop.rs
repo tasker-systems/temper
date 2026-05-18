@@ -356,3 +356,62 @@ async fn append_concept_created_projects_to_concept(pool: PgPool) {
     assert_eq!(concept.created_by_event_id, event.id);
     assert_eq!(concept.last_event_id, event.id);
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn mutation_chain_projects_correctly(pool: PgPool) {
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "first", "elaboration": "elab1"}),
+        Utc::now(),
+    );
+    let created = append_event(&pool, root.clone()).await.unwrap();
+    let concept = project_concept(&pool, created.id).await.unwrap();
+
+    // First mutation: change definition only.
+    let m1_id = Uuid::now_v7();
+    let m1 = EventToWrite {
+        id: m1_id,
+        event_type: EventType::ConceptMutated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"definition": "second"}),
+        metadata: json!({}),
+        references: vec![EventReference {
+            kind: ReferenceKind::Supersedes,
+            event_id: created.id,
+        }],
+        correlation_id: created.id,
+        occurred_at: Utc::now(),
+    };
+    let m1_event = append_event(&pool, m1).await.unwrap();
+    let after_m1 = project_concept(&pool, m1_event.id).await.unwrap();
+    assert_eq!(after_m1.id, concept.id);
+    assert_eq!(after_m1.current_definition, "second");
+    assert_eq!(after_m1.current_elaboration.as_deref(), Some("elab1"));
+
+    // Second mutation: change elaboration only.
+    let m2_id = Uuid::now_v7();
+    let m2 = EventToWrite {
+        id: m2_id,
+        event_type: EventType::ConceptMutated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"elaboration": "elab2"}),
+        metadata: json!({}),
+        references: vec![EventReference {
+            kind: ReferenceKind::Supersedes,
+            event_id: m1_event.id,
+        }],
+        correlation_id: created.id,
+        occurred_at: Utc::now(),
+    };
+    let m2_event = append_event(&pool, m2).await.unwrap();
+    let after_m2 = project_concept(&pool, m2_event.id).await.unwrap();
+    assert_eq!(after_m2.current_definition, "second");
+    assert_eq!(after_m2.current_elaboration.as_deref(), Some("elab2"));
+}
