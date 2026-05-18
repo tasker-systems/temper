@@ -6,6 +6,10 @@ use crate::payloads::ConceptCreatedPayload;
 use crate::types::concept::Concept;
 use crate::types::event::{Event, EventType};
 
+// Concept identity is derived from the genesis event id so that rebuild_concept
+// (replay) always produces the same concept id without any extra plumbing.
+// Using Uuid::now_v7() here would make replay non-deterministic.
+
 pub async fn project_concept(pool: &PgPool, event_id: Uuid) -> Result<Concept, LedgerError> {
     let event = load_event(pool, event_id).await?;
     let event_type = resolve_event_type(pool, event.event_type_id).await?;
@@ -41,7 +45,8 @@ async fn project_created(pool: &PgPool, event: &Event) -> Result<Concept, Ledger
     let payload: ConceptCreatedPayload = serde_json::from_value(event.payload.clone())
         .map_err(|e| LedgerError::Database(sqlx::Error::Decode(Box::new(e))))?;
 
-    let concept_id = Uuid::now_v7();
+    // Use the genesis event's id as the concept id — deterministic from event history.
+    let concept_id = event.id;
     let concept = sqlx::query_as!(
         Concept,
         r#"

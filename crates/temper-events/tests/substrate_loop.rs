@@ -444,3 +444,64 @@ async fn project_concept_is_idempotent(pool: PgPool) {
     .unwrap_or(0);
     assert_eq!(count, 1);
 }
+
+use temper_events::rebuild_concept;
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn rebuild_concept_equals_projection_of_record(pool: PgPool) {
+    // Build a Create -> Mutate -> Mutate chain.
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "v0", "elaboration": "e0"}),
+        Utc::now(),
+    );
+    let created = append_event(&pool, root.clone()).await.unwrap();
+    project_concept(&pool, created.id).await.unwrap();
+
+    let m1_id = Uuid::now_v7();
+    let m1 = EventToWrite {
+        id: m1_id,
+        event_type: EventType::ConceptMutated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"definition": "v1"}),
+        metadata: json!({}),
+        references: vec![EventReference {
+            kind: ReferenceKind::Supersedes,
+            event_id: created.id,
+        }],
+        correlation_id: created.id,
+        occurred_at: Utc::now(),
+    };
+    let m1_event = append_event(&pool, m1).await.unwrap();
+    project_concept(&pool, m1_event.id).await.unwrap();
+
+    let m2_id = Uuid::now_v7();
+    let m2 = EventToWrite {
+        id: m2_id,
+        event_type: EventType::ConceptMutated,
+        emitter_entity_id: SYSTEM_ENTITY_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({"elaboration": "e2"}),
+        metadata: json!({}),
+        references: vec![EventReference {
+            kind: ReferenceKind::Supersedes,
+            event_id: m1_event.id,
+        }],
+        correlation_id: created.id,
+        occurred_at: Utc::now(),
+    };
+    let m2_event = append_event(&pool, m2).await.unwrap();
+    let projection_of_record = project_concept(&pool, m2_event.id).await.unwrap();
+
+    let rebuilt = rebuild_concept(&pool, projection_of_record.id)
+        .await
+        .unwrap();
+
+    assert_eq!(rebuilt, projection_of_record);
+}
