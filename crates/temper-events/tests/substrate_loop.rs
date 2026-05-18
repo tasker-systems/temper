@@ -70,3 +70,46 @@ async fn discard_profile_with_entities_errors(pool: PgPool) {
     let err = discard_profile(&pool, profile.id).await.unwrap_err();
     assert!(matches!(err, LedgerError::ProfileNotEmpty(id) if id == profile.id));
 }
+
+use chrono::Utc;
+use serde_json::json;
+use temper_events::{append_event, EventToWrite, EventType};
+
+const PUBLIC_SCOPE_ID: uuid::Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000010");
+const SYSTEM_ENTITY_ID: uuid::Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000030");
+const BOOTSTRAP_TOPIC_ID: uuid::Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000040");
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn append_concept_created_writes_to_ledger(pool: PgPool) {
+    let payload = json!({
+        "definition": "the digital cognitive map artifact model",
+        "elaboration": "events + richly-related resources; markdown is one projection",
+    });
+    let write = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        payload.clone(),
+        Utc::now(),
+    );
+    let event = append_event(&pool, write.clone())
+        .await
+        .expect("append_event");
+
+    assert_eq!(event.id, write.id);
+    assert_eq!(event.correlation_id, write.id);
+    assert_eq!(event.emitter_entity_id, SYSTEM_ENTITY_ID);
+    assert_eq!(event.payload, payload);
+
+    // The row is in the ledger.
+    let row_count: i64 = sqlx::query_scalar!(
+        "SELECT count(*) FROM event_substrate.events WHERE id = $1",
+        write.id,
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap()
+    .unwrap_or(0);
+    assert_eq!(row_count, 1);
+}

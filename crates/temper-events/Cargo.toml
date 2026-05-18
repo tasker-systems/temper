@@ -29,3 +29,4 @@ uuid = { version = "1", features = ["serde", "v7"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["serde", "v7"] }
