@@ -321,3 +321,38 @@ async fn events_table_is_append_only(pool: PgPool) {
         delete_err
     );
 }
+
+use temper_events::project_concept;
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn append_concept_created_projects_to_concept(pool: PgPool) {
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({
+            "definition": "the LLM-wiki is the wrong artifact model",
+            "elaboration": "markdown is one lossy projection of a richer substrate",
+        }),
+        Utc::now(),
+    );
+    let event = append_event(&pool, root.clone()).await.unwrap();
+
+    let concept = project_concept(&pool, event.id)
+        .await
+        .expect("project_concept");
+
+    assert_eq!(
+        concept.current_definition,
+        "the LLM-wiki is the wrong artifact model"
+    );
+    assert_eq!(
+        concept.current_elaboration.as_deref(),
+        Some("markdown is one lossy projection of a richer substrate")
+    );
+    assert_eq!(concept.scope_id, PUBLIC_SCOPE_ID);
+    assert_eq!(concept.topic_id, BOOTSTRAP_TOPIC_ID);
+    assert_eq!(concept.created_by_event_id, event.id);
+    assert_eq!(concept.last_event_id, event.id);
+}
