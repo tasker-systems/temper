@@ -280,3 +280,44 @@ async fn append_concept_mutated_with_multiple_supersedes_errors(pool: PgPool) {
     let err = append_event(&pool, bad).await.unwrap_err();
     assert!(matches!(err, LedgerError::MultipleSupersedes));
 }
+
+#[sqlx::test(migrator = "MIGRATOR")]
+async fn events_table_is_append_only(pool: PgPool) {
+    let root = EventToWrite::new_root(
+        EventType::ConceptCreated,
+        SYSTEM_ENTITY_ID,
+        BOOTSTRAP_TOPIC_ID,
+        PUBLIC_SCOPE_ID,
+        json!({"definition": "trigger-test"}),
+        Utc::now(),
+    );
+    append_event(&pool, root.clone()).await.unwrap();
+
+    let update_err = sqlx::query!(
+        "UPDATE event_substrate.events SET metadata = $1 WHERE id = $2",
+        json!({"tampered": true}),
+        root.id,
+    )
+    .execute(&pool)
+    .await
+    .unwrap_err();
+    assert!(
+        update_err
+            .to_string()
+            .contains("event ledger is append-only"),
+        "expected append-only trigger to raise; got: {}",
+        update_err
+    );
+
+    let delete_err = sqlx::query!("DELETE FROM event_substrate.events WHERE id = $1", root.id,)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert!(
+        delete_err
+            .to_string()
+            .contains("event ledger is append-only"),
+        "expected append-only trigger to raise on DELETE; got: {}",
+        delete_err
+    );
+}
