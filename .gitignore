@@ -12,3 +12,4 @@ target/
 .vercel
 node_modules
 .neon
+.logs
