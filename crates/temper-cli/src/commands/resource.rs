@@ -33,6 +33,33 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
     }
 }
 
+/// Map current `VaultState` to the appropriate `Surface` origin for cmd construction.
+fn surface_for_state() -> temper_core::operations::Surface {
+    use temper_core::types::config::VaultState;
+    match VaultState::from_env() {
+        VaultState::Local => temper_core::operations::Surface::CliLocalVault,
+        VaultState::Cloud => temper_core::operations::Surface::CliCloud,
+    }
+}
+
+/// True iff `events` contains a `VaultFileWritten` event (local-mode indicator).
+fn has_vault_file_event(events: &[temper_core::operations::DomainEvent]) -> bool {
+    use temper_core::operations::DomainEvent;
+    events
+        .iter()
+        .any(|e| matches!(e, DomainEvent::VaultFileWritten { .. }))
+}
+
+/// Extract the rel_path string from a `VaultFileWritten` event in the slice,
+/// if any. Used by surfaces that emit discovery events with the vault path.
+fn vault_file_path_from_events(events: &[temper_core::operations::DomainEvent]) -> Option<String> {
+    use temper_core::operations::DomainEvent;
+    events.iter().find_map(|e| match e {
+        DomainEvent::VaultFileWritten { path } => Some(path.clone()),
+        _ => None,
+    })
+}
+
 /// Render the result of `VaultBackend::create_resource` to stdout in the
 /// shape that each doctype's pre-B5b dispatch path emitted.
 ///
@@ -253,91 +280,22 @@ pub fn create(
 ) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_core::operations::Backend;
-    use temper_core::types::config::VaultState;
+    use temper_core::types::ManagedMeta;
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     let ctx = require_context(config, context)?;
 
-    let vault_state = VaultState::from_env();
+    // Body resolution — both modes use --body flag + stdin pipe.
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    let body_opt = crate::actions::body_source::resolve_body_source(
+        body_flag.as_deref(),
+        stdin_is_tty,
+        std::io::stdin(),
+    )?;
 
-    // Cloud-mode: skip vault writes; build IngestPayload and POST /api/ingest.
-    #[cfg(feature = "embed")]
-    if matches!(vault_state, VaultState::Cloud) {
-        let stdin_is_tty = std::io::stdin().is_terminal();
-        let body_opt = crate::actions::body_source::resolve_body_source(
-            body_flag.as_deref(),
-            stdin_is_tty,
-            std::io::stdin(),
-        )?;
-        let body = body_opt.unwrap_or_else(|| format!("# {title}\n"));
-
-        let managed_meta = temper_core::types::ManagedMeta {
-            doc_type: Some(doc_type.to_string()),
-            context: Some(ctx.clone()),
-            title: Some(title.to_string()),
-            mode: mode.map(str::to_string),
-            effort: effort.map(str::to_string),
-            goal: goal.map(str::to_string),
-            ..Default::default()
-        };
-
-        let payload = crate::actions::ingest::build_ingest_payload(
-            &body,
-            title,
-            &ctx,
-            doc_type,
-            None,
-            Some(managed_meta),
-            None,
-        )?;
-
-        let resource = crate::actions::runtime::with_client(|client| {
-            Box::pin(async move {
-                client
-                    .ingest()
-                    .create(&payload)
-                    .await
-                    .map_err(crate::actions::runtime::client_err_to_temper)
-            })
-        })?;
-
-        if format == "json" {
-            #[derive(serde::Serialize)]
-            struct CloudCreated {
-                id: String,
-                slug: Option<String>,
-                doc_type: String,
-                context: String,
-                title: String,
-            }
-            let info = CloudCreated {
-                id: resource.id.to_string(),
-                slug: resource.slug.clone(),
-                doc_type: doc_type.to_string(),
-                context: ctx.to_string(),
-                title: resource.title.clone(),
-            };
-            let json = serde_json::to_string_pretty(&info).unwrap_or_default();
-            println!("{json}");
-        } else {
-            let id_str = resource.id.to_string();
-            let slug_display = resource.slug.as_deref().unwrap_or(&id_str);
-            output::success(format!("Created: {slug_display}"));
-        }
-        return Ok(());
-    }
-
-    // Local-mode: uniform VaultBackend::create_resource dispatch for all 6 doctypes.
-    // body_flag is intentionally unused in local mode (stdin piping handles body).
-    let _ = body_flag;
-    let _ = vault_state;
-
-    let stdin_content = vault::read_stdin_if_piped();
-
+    // Slug derivation (mode-independent — Concept and Goal skip date prefix).
     let doctype_enum = temper_core::frontmatter::DocType::from_str(doc_type)?;
-
     let slug_resolved = slug.map(String::from).unwrap_or_else(|| {
         let today = Local::now().format("%Y-%m-%d").to_string();
         let base_slug = vault::slugify(title);
@@ -350,56 +308,46 @@ pub fn create(
         }
     });
 
-    let body = stdin_content.unwrap_or_default();
-
+    // Build the CreateResource cmd. Body-None when no body input; both backends
+    // know how to handle the empty case (VaultBackend writes the doctype template,
+    // CloudBackend synthesizes `# {title}\n` in its translator).
     let cmd = temper_core::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
         context: ctx.to_string(),
         title: title.to_string(),
-        body: if body.is_empty() {
-            None
-        } else {
-            Some(temper_core::operations::BodyUpdate {
-                content: body,
+        body: body_opt.filter(|b| !b.is_empty()).map(|content| {
+            temper_core::operations::BodyUpdate {
+                content,
                 content_hash: None,
                 chunks_packed: None,
-            })
-        },
-        managed_meta: temper_core::types::ManagedMeta {
+            }
+        }),
+        managed_meta: ManagedMeta {
             mode: mode.map(String::from),
             effort: effort.map(String::from),
             goal: goal.map(String::from),
-            ..temper_core::types::ManagedMeta::default()
+            ..ManagedMeta::default()
         },
         open_meta: None,
         origin_uri: None,
         chunks_packed: None,
         content_hash: None,
-        origin: temper_core::operations::Surface::CliLocalVault,
+        origin: surface_for_state(),
     };
 
-    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
-    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
+    // Acquire backend (mode picked via VaultState::from_env) and dispatch.
+    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.create_resource(cmd))?;
 
-    // Restore discovery event parity with the legacy per-doctype dispatch paths
-    // (actions::task::create, actions::goal::create, etc.) that each emitted
-    // ResourceCreate. Concept and Decision never emitted pre-B5b — exclude them
-    // to restore parity without introducing new behavior.
+    // Discovery event (local mode only — gated on VaultFileWritten presence).
+    // Concept and Decision were never emitted pre-Phase 5; preserve that parity.
     if !matches!(
         doctype_enum,
         temper_core::frontmatter::DocType::Concept | temper_core::frontmatter::DocType::Decision
-    ) {
-        use temper_core::operations::DomainEvent;
-        let rel_path = output
-            .events
-            .iter()
-            .find_map(|e| match e {
-                DomainEvent::VaultFileWritten { path } => Some(path.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
+    ) && has_vault_file_event(&output.events)
+    {
+        let rel_path = vault_file_path_from_events(&output.events).unwrap_or_default();
         let event = Event::ResourceCreate {
             ts: Local::now().to_rfc3339(),
             doc_type: doc_type.to_string(),
