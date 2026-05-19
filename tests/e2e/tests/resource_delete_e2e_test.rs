@@ -75,6 +75,11 @@ async fn local_mode_delete_removes_file_and_soft_deletes_on_server(pool: sqlx::P
     let auth_path_string = auth_path.to_str().unwrap().to_string();
     let global_config_string = global_config.to_str().unwrap().to_string();
 
+    // Pre-create the local context dir so `resolve_context_with_fallback`
+    // doesn't redirect to "default" (matches `tests/common/mod.rs::create_goal`).
+    std::fs::create_dir_all(app.vault_dir.path().join("@me").join("myapp"))
+        .expect("pre-create context dir");
+
     // Step 1: create a goal locally and publish to the server. This gives
     // us a vault file with `temper-id`, a manifest entry, and a real
     // server row.
@@ -82,7 +87,9 @@ async fn local_mode_delete_removes_file_and_soft_deletes_on_server(pool: sqlx::P
     let api_url_create = api_url.clone();
     let auth_path_create = auth_path_string.clone();
     let global_config_create = global_config_string.clone();
-    let slug: String = tokio::task::spawn_blocking(move || {
+    let goal_title = "delete-target";
+    let slug = temper_cli::vault::slugify(goal_title);
+    tokio::task::spawn_blocking(move || {
         temp_env::with_vars(
             [
                 ("TEMPER_API_URL", Some(api_url_create.as_str())),
@@ -92,11 +99,17 @@ async fn local_mode_delete_removes_file_and_soft_deletes_on_server(pool: sqlx::P
                 ("TEMPER_TOKEN", None),
             ],
             || {
-                temper_cli::actions::goal::create(
+                temper_cli::commands::resource::create(
                     &cli_config_create,
-                    "myapp",
-                    "delete-target",
+                    "goal",
+                    goal_title,
+                    Some("myapp"),
                     None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "text",
                 )
                 .expect("goal create + publish")
             },
@@ -225,12 +238,19 @@ async fn slug_freed_for_reuse_after_soft_delete(pool: sqlx::PgPool) {
     let auth_path_string = auth_path.to_str().unwrap().to_string();
     let global_config_string = global_config.to_str().unwrap().to_string();
 
+    // Pre-create the local context dir so `resolve_context_with_fallback`
+    // doesn't redirect to "default" (matches `tests/common/mod.rs::create_goal`).
+    std::fs::create_dir_all(app.vault_dir.path().join("@me").join("myapp"))
+        .expect("pre-create context dir");
+
     // ── Step 1: create a goal and publish to the server. ─────────────────
     let cli_config_create = cli_config.clone();
     let api_url_1 = api_url.clone();
     let auth_path_1 = auth_path_string.clone();
     let global_config_1 = global_config_string.clone();
-    let first_slug: String = tokio::task::spawn_blocking(move || {
+    let first_title = "reuse-target";
+    let first_slug = temper_cli::vault::slugify(first_title);
+    tokio::task::spawn_blocking(move || {
         temp_env::with_vars(
             [
                 ("TEMPER_API_URL", Some(api_url_1.as_str())),
@@ -240,8 +260,19 @@ async fn slug_freed_for_reuse_after_soft_delete(pool: sqlx::PgPool) {
                 ("TEMPER_TOKEN", None),
             ],
             || {
-                temper_cli::actions::goal::create(&cli_config_create, "myapp", "reuse-target", None)
-                    .expect("first goal create + publish")
+                temper_cli::commands::resource::create(
+                    &cli_config_create,
+                    "goal",
+                    first_title,
+                    Some("myapp"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "text",
+                )
+                .expect("first goal create + publish")
             },
         )
     })
@@ -311,7 +342,9 @@ async fn slug_freed_for_reuse_after_soft_delete(pool: sqlx::PgPool) {
     let api_url_3 = api_url.clone();
     let auth_path_3 = auth_path_string.clone();
     let global_config_3 = global_config_string.clone();
-    let second_slug: String = tokio::task::spawn_blocking(move || {
+    let second_title = "reuse-target";
+    let second_slug = temper_cli::vault::slugify(second_title);
+    tokio::task::spawn_blocking(move || {
         temp_env::with_vars(
             [
                 ("TEMPER_API_URL", Some(api_url_3.as_str())),
@@ -321,11 +354,17 @@ async fn slug_freed_for_reuse_after_soft_delete(pool: sqlx::PgPool) {
                 ("TEMPER_TOKEN", None),
             ],
             || {
-                temper_cli::actions::goal::create(
+                temper_cli::commands::resource::create(
                     &cli_config_recreate,
-                    "myapp",
-                    "reuse-target",
+                    "goal",
+                    second_title,
+                    Some("myapp"),
                     None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "text",
                 )
                 .expect("recreate with same slug must succeed after soft-delete")
             },

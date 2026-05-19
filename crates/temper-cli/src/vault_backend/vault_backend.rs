@@ -302,6 +302,13 @@ impl VaultBackend {
                 let _ = self
                     .promote_manifest_after_push(row.id, &written.rel_path)
                     .await;
+                // Rewrite the on-disk frontmatter so `temper-provisional-id` becomes
+                // the server-canonical `temper-id`. Mirrors `actions::sync::publish_local_write`'s
+                // post-push file rewrite (lines 1460-1486) — the gap that the
+                // pre-Phase-5 `publish_local_write_best_effort` tail-call closed.
+                let _ = self
+                    .update_file_id_after_push(&written.abs_path, row.id)
+                    .await;
                 DomainEvent::RemoteSynced {
                     resource_id: row.id,
                 }
@@ -341,6 +348,64 @@ impl VaultBackend {
             }
         }
         Ok(())
+    }
+
+    /// Rewrite the on-disk frontmatter after a successful push: replace
+    /// `temper-provisional-id` with the server-canonical `temper-id`.
+    ///
+    /// Mirrors `actions::sync::publish_local_write`'s file-rewrite step
+    /// (sync.rs lines 1460-1486). Silently ignores read/write/parse errors —
+    /// `sync run` reconciles any drift, same policy as
+    /// `promote_manifest_after_push`.
+    async fn update_file_id_after_push(
+        &self,
+        abs_path: &std::path::Path,
+        server_id: ResourceId,
+    ) -> Result<(), TemperError> {
+        let Ok(content) = std::fs::read_to_string(abs_path) else {
+            return Ok(());
+        };
+        let server_uuid = uuid::Uuid::from(server_id);
+        // Use a regex-free string replace mirroring sync.rs's pattern: try
+        // quoted form first (the template renders `temper-provisional-id: "{uuid}"`),
+        // then unquoted as a fallback.
+        let updated = match Self::rewrite_provisional_to_canonical(&content, server_uuid) {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+        if updated != content {
+            let _ = std::fs::write(abs_path, &updated);
+        }
+        Ok(())
+    }
+
+    /// Pure string-replace half of `update_file_id_after_push`. Returns
+    /// `Some(updated)` when a replacement occurred, `None` when no
+    /// `temper-provisional-id` line was found.
+    fn rewrite_provisional_to_canonical(content: &str, server_uuid: uuid::Uuid) -> Option<String> {
+        // Search the YAML frontmatter for `temper-provisional-id:` and capture
+        // the UUID value (quoted or unquoted), then replace the whole line
+        // with `temper-id: "{server_uuid}"` (template uses the quoted form).
+        for line in content.lines() {
+            let trimmed = line.trim_start();
+            let Some(rest) = trimmed.strip_prefix("temper-provisional-id:") else {
+                continue;
+            };
+            let value = rest.trim().trim_matches('"');
+            if uuid::Uuid::parse_str(value).is_err() {
+                continue;
+            }
+            // Found it — replace the line.
+            let needle = line;
+            let replacement = {
+                // Preserve original indentation.
+                let indent_len = line.len() - trimmed.len();
+                let indent = &line[..indent_len];
+                format!("{indent}temper-id: \"{server_uuid}\"")
+            };
+            return Some(content.replacen(needle, &replacement, 1));
+        }
+        None
     }
 
     /// Classify a `ClientError` into a `DomainEvent::PushDeferred` with the
