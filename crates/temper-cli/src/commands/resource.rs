@@ -776,82 +776,17 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Delete a resource: cloud-first soft-delete via the API, then local
-/// cleanup as a tail action when running in `Local` mode.
-///
-/// In `Local` mode, the local-tail step removes the vault file from disk
-/// and clears the manifest entry. In `Cloud` mode the API call is the
-/// entire operation; there is no manifest to clean up.
+/// Delete a resource.
 ///
 /// `--force` skips the interactive confirmation prompt for the local-file
-/// removal. In non-TTY contexts (agents, CI), `--force` is required because
-/// we won't read confirmation from a non-terminal stdin.
+/// removal. In non-TTY contexts (agents, CI), `--force` is required in
+/// local mode because we won't read confirmation from a non-terminal stdin.
+/// Cloud mode is non-interactive — no prompt regardless of `--force`.
 ///
-/// Cloud-first ordering: API failure means no local mutation in either mode.
+/// Cloud-first ordering: API failure means no local mutation in either mode
+/// (enforced inside `VaultBackend::delete_resource`; CloudBackend has only the
+/// API step).
 pub fn delete(
-    config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
-    force: bool,
-) -> Result<()> {
-    use temper_core::types::config::VaultState;
-
-    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
-
-    match VaultState::from_env() {
-        VaultState::Cloud => delete_cloud(config, doc_type, slug, context),
-        VaultState::Local => delete_local(config, doc_type, slug, context, force),
-    }
-}
-
-/// Cloud-mode delete: resolve slug → UUID, call the API, print success.
-/// No manifest, no vault-file removal — there's no local artifact in cloud mode.
-fn delete_cloud(config: &Config, doc_type: &str, slug: &str, context: Option<&str>) -> Result<()> {
-    let config_clone = config.clone();
-    let doc_type_owned = doc_type.to_string();
-    let slug_owned = slug.to_string();
-    let context_owned = context.map(str::to_string);
-
-    crate::actions::runtime::with_client(|client| {
-        Box::pin(async move {
-            let ctx = context_owned
-                .as_deref()
-                .ok_or_else(|| {
-                    TemperError::Project("no context specified — use --context <name>".into())
-                })?
-                .to_string();
-            let owner = config_clone.owner_for_context(&ctx);
-            let row = client
-                .resources()
-                .resolve_by_uri(&owner, &ctx, &doc_type_owned, &slug_owned)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            let uuid: uuid::Uuid = *row.id;
-
-            client
-                .resources()
-                .delete(uuid)
-                .await
-                .map_err(crate::commands::client_err)?;
-            output::success(format!("Deleted {doc_type_owned}/{slug_owned} (cloud)"));
-            Ok(())
-        })
-    })
-}
-
-/// Local-mode delete: dispatch through [`crate::vault_backend::VaultBackend`].
-///
-/// Surface responsibilities (per the backend/surface split documented in
-/// `vault_backend/vault_backend.rs::delete_resource`):
-///
-/// 1. Non-TTY guard — abort early if stdin isn't a terminal and `--force` is off.
-/// 2. `[y/N]` prompt — runs **before** dispatch (cloud-first ordering means
-///    the API delete lands inside `delete_resource`, so prompting after would
-///    require splitting the operation and break atomicity).
-/// 3. Build a `DeleteResource` command and dispatch through `VaultBackend`.
-/// 4. Translate emitted `DomainEvent`s into user-facing log lines.
-fn delete_local(
     config: &Config,
     doc_type: &str,
     slug: &str,
@@ -860,45 +795,52 @@ fn delete_local(
 ) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_core::operations::{Backend, DeleteResource, DomainEvent, ResourceRef};
+    use temper_core::operations::{DeleteResource, DomainEvent, ResourceRef};
+    use temper_core::types::config::VaultState;
 
-    // Non-TTY guard: a disconnected stdin would hang the [y/N] prompt below.
-    if !force && !std::io::stdin().is_terminal() {
-        return Err(TemperError::Vault(
-            "non-interactive stdin detected; pass --force to skip the local-file confirmation"
-                .to_string(),
-        ));
-    }
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
-    // [y/N] prompt before dispatch. Bail (Ok) if the user declines — the
-    // backend never runs, so neither cloud nor local state is touched.
-    if !force {
-        output::progress(format!("Delete {doc_type}/{slug}? [y/N] "));
-        use std::io::Write as _;
-        std::io::stderr().flush().ok();
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        if !input.trim().eq_ignore_ascii_case("y") {
-            return Ok(());
+    let ctx = require_context(config, context)?;
+
+    // Local-mode UX gate: non-TTY guard + [y/N] prompt. Cloud mode skips
+    // this — non-interactive by design (no local file to remove).
+    let in_local_mode = matches!(VaultState::from_env(), VaultState::Local);
+    if in_local_mode {
+        if !force && !std::io::stdin().is_terminal() {
+            return Err(TemperError::Vault(
+                "non-interactive stdin detected; pass --force to skip the local-file confirmation"
+                    .to_string(),
+            ));
+        }
+
+        if !force {
+            output::progress(format!("Delete {doc_type}/{slug}? [y/N] "));
+            use std::io::Write as _;
+            std::io::stderr().flush().ok();
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).ok();
+            if !input.trim().eq_ignore_ascii_case("y") {
+                return Ok(());
+            }
         }
     }
 
-    let ctx = require_context(config, context)?;
-    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
-    let owner = backend_ctx.owner.clone();
-    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
-
+    let owner = config.owner_for_context(&ctx);
     let cmd = DeleteResource {
-        resource: ResourceRef::scoped(owner, ctx, doc_type, slug),
+        resource: ResourceRef::scoped(owner, &ctx, doc_type, slug),
         force,
-        origin: temper_core::operations::Surface::CliLocalVault,
+        origin: surface_for_state(),
     };
 
+    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.delete_resource(cmd))?;
 
     // Translate events into surface output. Cloud-first ordering inside the
     // backend guarantees `RemoteSynced` precedes any vault events when both
-    // happen, so a single linear scan is order-correct.
+    // are emitted, so a single linear scan is order-correct.
+    //
+    // Local mode emits RemoteSynced + VaultFileRemoved + VaultManifestUpdated;
+    // cloud mode emits RemoteSynced only. Same loop, both shapes.
     for event in &output.events {
         match event {
             DomainEvent::RemoteSynced { .. } => {
@@ -908,8 +850,7 @@ fn delete_local(
                 self::output::dim(format!("Removed vault file: {path}"));
             }
             DomainEvent::VaultManifestUpdated { .. } => {
-                // Manifest update is an internal bookkeeping detail — no
-                // need to surface it to the user.
+                // Internal bookkeeping — not surfaced.
             }
             _ => {}
         }
