@@ -23,18 +23,8 @@ fn test_session_save_with_task_links_entities() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let task_slug = temper_cli::commands::task::create(
-        &config,
-        "myapp",
-        "Linked task",
-        Some(&g_slug),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
+    let task_slug = common::create_task(&config, "myapp", "Linked task", Some(&g_slug), None, None);
 
     temper_cli::commands::session::save(
         &config,
@@ -65,18 +55,8 @@ fn test_session_save_with_task_and_state_moves_task() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let task_slug = temper_cli::commands::task::create(
-        &config,
-        "myapp",
-        "Done task",
-        Some(&g_slug),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
+    let task_slug = common::create_task(&config, "myapp", "Done task", Some(&g_slug), None, None);
 
     temper_cli::commands::session::save(
         &config,

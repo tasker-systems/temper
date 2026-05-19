@@ -119,7 +119,13 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
     .expect("spawn_blocking joined");
 
     // ---- Assertion 1: resource row exists ----
-    let slug = "cloud-round-trip-session";
+    // Phase 5 unified the slug derivation across modes: sessions get a
+    // `{date}-{slugify(title)}` prefix in both local and cloud modes
+    // (matches local-mode session behavior; the previous cloud-only
+    // bare-slug derivation was a mode-asymmetric quirk eliminated by the
+    // surface-dispatch unification).
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-cloud-round-trip-session");
     let (doc_type_name, context_name): (String, String) = sqlx::query_as(
         "SELECT dt.name, c.name
          FROM kb_resources r
@@ -127,7 +133,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
          JOIN kb_contexts c ON c.id = r.kb_context_id
          WHERE r.slug = $1 AND r.is_active",
     )
-    .bind(slug)
+    .bind(&slug)
     .fetch_one(&pool)
     .await
     .expect("resource row must exist after cloud create");
@@ -142,7 +148,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
          JOIN kb_resources r ON r.id = m.resource_id
          WHERE r.slug = $1",
     )
-    .bind(slug)
+    .bind(&slug)
     .fetch_one(&pool)
     .await
     .expect("manifest row must exist after cloud create");
@@ -164,12 +170,13 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
     let global_config_str2 = global_config.to_str().unwrap().to_string();
     let cli_config2 = app.cli_config.clone();
 
+    let slug_for_show = slug.clone();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::show(
                 &cli_config2,
                 "session",
-                slug,
+                &slug_for_show,
                 Some("myapp"),
                 "text",
                 false, // edges
@@ -255,6 +262,11 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
     let token2 = token.clone();
     let global_config_str2 = global_config_str.clone();
 
+    // Update --title (a base field valid for all doctypes); --stage was the
+    // pre-Phase-5 choice but stage is task-only per the schema, and the
+    // pre-Phase-5 cloud path bypassed validate_update_args. Phase 5
+    // unification surfaces that constraint correctly. Test intent is
+    // partial-merge semantics — any single field swap works.
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
@@ -266,7 +278,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                     type_to: None,
                     context: Some("myapp"),
                     context_to: None,
-                    title: None,
+                    title: Some("Updated Title"),
                     tags: &[],
                     aliases: &[],
                     relates_to: &[],
@@ -275,7 +287,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                     extends: &[],
                     preceded_by: &[],
                     derived_from: &[],
-                    stage: Some("done"),
+                    stage: None,
                     mode: None,
                     effort: None,
                     goal: None,
@@ -292,7 +304,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
     .await
     .expect("spawn_blocking joined");
 
-    // ---- Assertion 1: stage is "done" ----
+    // ---- Assertion 1: title is updated ----
     let managed_meta: serde_json::Value = sqlx::query_scalar(
         "SELECT m.managed_meta
          FROM kb_resource_manifests m
@@ -308,16 +320,16 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         .expect("managed_meta must be a JSON object");
 
     assert_eq!(
-        obj.get("temper-stage").and_then(|v| v.as_str()),
-        Some("done"),
-        "temper-stage must be 'done' after meta-only update; got: {managed_meta}"
+        obj.get("temper-title").and_then(|v| v.as_str()),
+        Some("Updated Title"),
+        "temper-title must be 'Updated Title' after meta-only update; got: {managed_meta}"
     );
 
-    // ---- Assertion 2: title preserved ----
+    // ---- Assertion 2: seed-side stage preserved ----
     assert_eq!(
-        obj.get("temper-title").and_then(|v| v.as_str()),
-        Some("Meta-Only Update Test"),
-        "title must be preserved after meta-only update; got: {managed_meta}"
+        obj.get("temper-stage").and_then(|v| v.as_str()),
+        Some("backlog"),
+        "temper-stage must be preserved from seed after meta-only update; got: {managed_meta}"
     );
 
     // ---- Assertion 3: body_hash unchanged ----
@@ -403,6 +415,9 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
     let token2 = token.clone();
     let global_config_str2 = global_config_str.clone();
 
+    // Update --title (a base field valid for all doctypes); --stage was the
+    // pre-Phase-5 choice but stage is task-only per the schema. Phase 5
+    // unification correctly enforces this.
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
@@ -414,7 +429,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                     type_to: None,
                     context: Some("myapp"),
                     context_to: None,
-                    title: None,
+                    title: Some("Updated Title"),
                     tags: &[],
                     aliases: &[],
                     relates_to: &[],
@@ -423,7 +438,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                     extends: &[],
                     preceded_by: &[],
                     derived_from: &[],
-                    stage: Some("done"),
+                    stage: None,
                     mode: None,
                     effort: None,
                     goal: None,
@@ -477,9 +492,15 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         .as_object()
         .expect("managed_meta must be a JSON object");
     assert_eq!(
+        obj.get("temper-title").and_then(|v| v.as_str()),
+        Some("Updated Title"),
+        "temper-title must be 'Updated Title' after body+meta update; got: {managed_meta}"
+    );
+    // Seed-side stage preserved through partial merge.
+    assert_eq!(
         obj.get("temper-stage").and_then(|v| v.as_str()),
-        Some("done"),
-        "temper-stage must be 'done' after body+meta update; got: {managed_meta}"
+        Some("backlog"),
+        "temper-stage must be preserved from seed after body+meta update; got: {managed_meta}"
     );
 }
 
@@ -820,14 +841,16 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
     .await
     .expect("spawn_blocking joined");
 
-    // Count kb_chunks after first create.
-    let slug = "chunk-dedup-test";
+    // Count kb_chunks after first create. Phase 5 unified slug derivation
+    // means sessions get a `{date}-{slugify(title)}` prefix in both modes.
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-chunk-dedup-test");
     let chunk_count_before: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM kb_chunks c
          JOIN kb_resources r ON r.id = c.resource_id
          WHERE r.slug = $1 AND c.is_current",
     )
-    .bind(slug)
+    .bind(&slug)
     .fetch_one(&pool)
     .await
     .expect("chunk count before second write");
@@ -837,13 +860,14 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
     let api_url3 = api_url.clone();
     let token3 = token.clone();
     let global_config_str3 = global_config_str.clone();
+    let slug_for_update = slug.clone();
 
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config_str3), || {
             temper_cli::commands::resource::update(
                 &cli_config2,
                 &temper_cli::commands::resource::UpdateParams {
-                    slug,
+                    slug: &slug_for_update,
                     doc_type: Some("session"),
                     type_from: None,
                     type_to: None,
@@ -881,7 +905,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
          JOIN kb_resources r ON r.id = c.resource_id
          WHERE r.slug = $1 AND c.is_current",
     )
-    .bind(slug)
+    .bind(&slug)
     .fetch_one(&pool)
     .await
     .expect("chunk count after second write");

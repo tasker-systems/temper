@@ -9,7 +9,6 @@ use crate::discovery::{self, Event};
 use crate::error::Result;
 use crate::output;
 use crate::vault;
-use crate::vault_backend::per_doctype::{self, DoctypeFields, WriteArgs};
 
 /// Create or update today's session note.
 ///
@@ -19,9 +18,9 @@ use crate::vault_backend::per_doctype::{self, DoctypeFields, WriteArgs};
 /// - If `context` is None and no task, falls back to "general"
 /// - `title` defaults to today's date if omitted
 /// - The filename uses a slugified version of the title
-/// - If the file already exists and `stdin_content` is None: no-op (idempotent)
-/// - If the file already exists and `stdin_content` is Some: replace body, preserve frontmatter
-/// - If `task` is provided, links the session to the task (updates sessions list in task frontmatter)
+/// - If the session already exists and `stdin_content` is None: no-op (idempotent)
+/// - If the session already exists and `stdin_content` is Some: replace body, preserve frontmatter
+/// - If `task` is provided, links the session to the task (local mode only — reads frontmatter)
 /// - If `state` is also provided, updates the task's stage field
 pub fn save(
     config: &Config,
@@ -32,6 +31,9 @@ pub fn save(
     state: Option<&str>,
     format: &str,
 ) -> Result<()> {
+    use temper_core::operations::{BodyUpdate, CreateResource, ResourceRef, UpdateResource};
+    use temper_core::types::ManagedMeta;
+
     let today = Local::now().format("%Y-%m-%d").to_string();
 
     // Infer context from task if not explicitly provided
@@ -51,96 +53,155 @@ pub fn save(
         .unwrap_or_else(|| "general".to_string());
 
     let note_title = title.unwrap_or(&today);
-
-    // Build path: <vault_root>/<owner>/<context>/session/<date>-<slug>.md
     let title_slug = vault::slugify(note_title);
     let slug = format!("{today}-{title_slug}");
-    let vault_layout = Vault::new(&config.vault_root);
     let owner = config.owner_for_context(&context_name);
-    let note_path = vault_layout.doc_file(&owner, &context_name, "session", &slug);
 
-    if note_path.exists() {
-        // File exists: replace body if stdin provided, otherwise no-op.
-        // This is the save-or-update overload — preserved at the surface layer
-        // because `per_doctype::write_session` hard-errors on existing slugs.
-        if let Some(body) = stdin_content {
-            let mut fm = temper_core::frontmatter::Frontmatter::parse_file(&note_path)?;
-            fm.set_body(body.to_string());
-            fm.write_to(&note_path)?;
+    // Surface-level exists-check: mode-aware per spec D5.
+    // Local mode: stat the vault file. Cloud mode: try resolve_by_uri.
+    let exists = session_exists(config, &context_name, &owner, &slug)?;
 
-            crate::actions::runtime::publish_local_write_best_effort(
-                &config.vault_root,
-                &note_path,
-            )?;
+    let (runtime, backend) = crate::backend_select::build_backend(config, &context_name)?;
 
-            let relative = note_path
-                .strip_prefix(&config.vault_root)
-                .unwrap_or(&note_path);
-            output::success(format!("Updated: {}", relative.display()));
-        }
-        return Ok(());
-    }
-
-    // File doesn't exist: delegate the bare file-write (template render,
-    // managed-meta overlay, body application, write) to per_doctype::write_session.
-    // The wrapper retains publish-as-tail-action, discovery emission, output,
-    // and the session→task link side-effect.
-    let body = stdin_content.unwrap_or("");
-    let result = per_doctype::write_for(WriteArgs {
-        doctype: "session",
-        title: note_title,
-        slug: &slug,
-        context: &context_name,
-        body,
-        open_meta: None,
-        vault_root: &config.vault_root,
-        owner: &owner,
-        config,
-        doctype_fields: Some(DoctypeFields::Session),
-    })?;
-
-    crate::actions::runtime::publish_local_write_best_effort(&config.vault_root, &result.abs_path)?;
-
-    let relative_str = result.rel_path.clone();
-
-    let ts = Local::now().to_rfc3339();
-
-    if format == "json" {
-        #[derive(Serialize)]
-        struct SessionCreated<'a> {
-            title: &'a str,
-            context: &'a str,
-            path: &'a str,
-            date: &'a str,
-        }
-        let info = SessionCreated {
-            title: note_title,
-            context: &context_name,
-            path: &relative_str,
-            date: &today,
+    let output = if exists {
+        // Update path: only if stdin_content is provided, otherwise no-op.
+        let Some(body) = stdin_content else {
+            return Ok(());
         };
-        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
-        println!("{json}");
+        let cmd = UpdateResource {
+            resource: ResourceRef::scoped(owner.clone(), &context_name, "session", &slug),
+            body: Some(BodyUpdate::new(body)),
+            managed_meta: None,
+            open_meta: None,
+            move_to: None,
+            origin: crate::commands::resource::surface_for_state(),
+        };
+        runtime.block_on(backend.update_resource(cmd))?
     } else {
-        output::success(format!("Created: {relative_str}"));
-    }
-    let event = Event::ResourceCreate {
-        ts,
-        doc_type: "session".to_string(),
-        title: note_title.to_string(),
-        path: relative_str.to_string(),
-        context: context_name.clone(),
+        // Create path.
+        let body_str = stdin_content.unwrap_or("");
+        let cmd = CreateResource {
+            slug: slug.clone(),
+            doctype: "session".to_string(),
+            context: context_name.clone(),
+            title: note_title.to_string(),
+            body: if body_str.is_empty() {
+                None
+            } else {
+                Some(BodyUpdate::new(body_str))
+            },
+            managed_meta: ManagedMeta::default(),
+            open_meta: None,
+            origin_uri: None,
+            chunks_packed: None,
+            content_hash: None,
+            origin: crate::commands::resource::surface_for_state(),
+        };
+        runtime.block_on(backend.create_resource(cmd))?
     };
-    if let Err(e) = discovery::append_event(&config.state_dir, &event) {
-        tracing::warn!("Failed to append discovery event: {e}");
-    }
 
-    // Link session to task if provided
-    if let Some(task_slug) = task {
-        link_session_to_task(config, &note_path, task_slug, state)?;
+    // Determine local path from events (present in local mode, absent in cloud mode).
+    let rel_path =
+        crate::commands::resource::vault_file_path_from_events(&output.events).unwrap_or_default();
+
+    if exists {
+        // Update was performed.
+        if !rel_path.is_empty() {
+            output::success(format!("Updated: {rel_path}"));
+        } else {
+            output::success(format!("Updated: {slug}"));
+        }
+    } else {
+        // Create was performed.
+        let ts = Local::now().to_rfc3339();
+
+        if format == "json" {
+            #[derive(Serialize)]
+            struct SessionCreated<'a> {
+                title: &'a str,
+                context: &'a str,
+                path: &'a str,
+                date: &'a str,
+            }
+            let info = SessionCreated {
+                title: note_title,
+                context: &context_name,
+                path: &rel_path,
+                date: &today,
+            };
+            let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+            println!("{json}");
+        } else if !rel_path.is_empty() {
+            output::success(format!("Created: {rel_path}"));
+        } else {
+            output::success(format!("Created: {slug}"));
+        }
+
+        // Discovery event — local only (gated on VaultFileWritten event presence).
+        if crate::commands::resource::has_vault_file_event(&output.events) {
+            let event = Event::ResourceCreate {
+                ts,
+                doc_type: "session".to_string(),
+                title: note_title.to_string(),
+                path: rel_path.clone(),
+                context: context_name.clone(),
+            };
+            if let Err(e) = discovery::append_event(&config.state_dir, &event) {
+                tracing::warn!("Failed to append discovery event: {e}");
+            }
+        }
+
+        // Task-linking — only viable in local mode (reads the session file's
+        // frontmatter for temper-id). Cloud mode has no local file.
+        if let Some(task_slug) = task {
+            if !rel_path.is_empty() {
+                let vault_layout = Vault::new(&config.vault_root);
+                let note_path = vault_layout.doc_file(&owner, &context_name, "session", &slug);
+                link_session_to_task(config, &note_path, task_slug, state)?;
+            } else {
+                tracing::warn!(
+                    "skipping task-linking for cloud-mode session save (no local file to read); \
+                     task={task_slug}"
+                );
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Check whether a session for the current day already exists.
+///
+/// - `VaultState::Local`: stats the expected vault file path.
+/// - `VaultState::Cloud`: queries the API via `resolve_by_uri`. Any error
+///   (including 404) is treated as "doesn't exist".
+fn session_exists(config: &Config, context: &str, owner: &str, slug: &str) -> Result<bool> {
+    use temper_core::types::config::VaultState;
+    match VaultState::from_env() {
+        VaultState::Local => {
+            let vault_layout = Vault::new(&config.vault_root);
+            let path = vault_layout.doc_file(owner, context, "session", slug);
+            Ok(path.exists())
+        }
+        VaultState::Cloud => {
+            let owner = owner.to_string();
+            let context = context.to_string();
+            let slug = slug.to_string();
+            match crate::actions::runtime::with_client(|client| {
+                Box::pin(async move {
+                    client
+                        .resources()
+                        .resolve_by_uri(&owner, &context, "session", &slug)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)
+                })
+            }) {
+                Ok(_) => Ok(true),
+                // Treat any error (404 or network) as "doesn't exist".
+                Err(_) => Ok(false),
+            }
+        }
+    }
 }
 
 /// Link a session note to a task: update the task's sessions list and optionally its stage.

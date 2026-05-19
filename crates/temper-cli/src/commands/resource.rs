@@ -33,6 +33,35 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
     }
 }
 
+/// Map current `VaultState` to the appropriate `Surface` origin for cmd construction.
+pub(crate) fn surface_for_state() -> temper_core::operations::Surface {
+    use temper_core::types::config::VaultState;
+    match VaultState::from_env() {
+        VaultState::Local => temper_core::operations::Surface::CliLocalVault,
+        VaultState::Cloud => temper_core::operations::Surface::CliCloud,
+    }
+}
+
+/// True iff `events` contains a `VaultFileWritten` event (local-mode indicator).
+pub(crate) fn has_vault_file_event(events: &[temper_core::operations::DomainEvent]) -> bool {
+    use temper_core::operations::DomainEvent;
+    events
+        .iter()
+        .any(|e| matches!(e, DomainEvent::VaultFileWritten { .. }))
+}
+
+/// Extract the rel_path string from a `VaultFileWritten` event in the slice,
+/// if any. Used by surfaces that emit discovery events with the vault path.
+pub(crate) fn vault_file_path_from_events(
+    events: &[temper_core::operations::DomainEvent],
+) -> Option<String> {
+    use temper_core::operations::DomainEvent;
+    events.iter().find_map(|e| match e {
+        DomainEvent::VaultFileWritten { path } => Some(path.clone()),
+        _ => None,
+    })
+}
+
 /// Render the result of `VaultBackend::create_resource` to stdout in the
 /// shape that each doctype's pre-B5b dispatch path emitted.
 ///
@@ -61,7 +90,7 @@ fn render_create_output(
 ///
 /// - Goal: serialized `GoalInfo` → `{ "temper-title", "temper-slug",
 ///   "temper-context", "temper-seq" (Option<u32>), "temper-status" }`
-///   Source: `commands::goal::create`, via `crate::actions::types::GoalInfo`.
+///   Shape: `crate::actions::types::GoalInfo` (seq from ResourceRow.seq).
 ///
 /// - Session: `{ "title", "context", "path", "date" }` where `path` is the
 ///   vault-relative file path (`{owner}/{context}/session/{slug}.md`) and
@@ -97,6 +126,14 @@ fn render_create_output_to_string(
 
     let today = Local::now().format("%Y-%m-%d").to_string();
 
+    // Mode-implicit `path` field: emit only when a VaultFileWritten event is
+    // present (local mode, real on-disk file). In cloud mode the synthesized
+    // path would point at a nonexistent file — agents chaining
+    // `temper resource create ... --format json | jq -r .path` and cat-ing
+    // the result would hit ENOENT. Mirrors the surface-rendering pattern
+    // used by update (commands::resource::update) and session::save.
+    let vault_path = vault_file_path_from_events(&output.events);
+
     let json = match doctype {
         DocType::Task => serde_json::json!({
             "type": "task",
@@ -117,33 +154,23 @@ fn render_create_output_to_string(
             })
         }
         DocType::Session => {
-            // Session JSON: title, context, vault-relative path, today's date.
-            // Path reconstructed from ResourceRow fields — same format as
-            // `Vault::rel_path(owner, context, doc_type, slug)`.
-            let slug = row.slug.as_deref().unwrap_or("");
-            let path = format!(
-                "{}/{}/{}/{}.md",
-                row.owner_handle, row.context_name, "session", slug
-            );
+            // Session JSON: title, context, vault-relative path (local only),
+            // today's date.
             serde_json::json!({
                 "title": row.title,
                 "context": row.context_name,
-                "path": path,
+                "path": vault_path.as_deref().unwrap_or(""),
                 "date": today,
             })
         }
         DocType::Research => {
-            // Research JSON: title, project (=context), vault-relative path,
-            // today's date, id (UUID string), slug.
+            // Research JSON: title, project (=context), vault-relative path
+            // (local only), today's date, id (UUID string), slug.
             let slug = row.slug.as_deref().unwrap_or("");
-            let path = format!(
-                "{}/{}/{}/{}.md",
-                row.owner_handle, row.context_name, "research", slug
-            );
             serde_json::json!({
                 "title": row.title,
                 "project": row.context_name,
-                "path": path,
+                "path": vault_path.as_deref().unwrap_or(""),
                 "date": today,
                 "id": row.id.to_string(),
                 "slug": slug,
@@ -151,18 +178,14 @@ fn render_create_output_to_string(
         }
         DocType::Concept | DocType::Decision => {
             // Concept/Decision JSON: doc_type, title, slug, context, vault-relative
-            // path, today's date, id (UUID string).
+            // path (local only), today's date, id (UUID string).
             let slug = row.slug.as_deref().unwrap_or("");
-            let path = format!(
-                "{}/{}/{}/{}.md",
-                row.owner_handle, row.context_name, row.doc_type_name, slug
-            );
             serde_json::json!({
                 "doc_type": row.doc_type_name,
                 "title": row.title,
                 "slug": slug,
                 "context": row.context_name,
-                "path": path,
+                "path": vault_path.as_deref().unwrap_or(""),
                 "date": today,
                 "id": row.id.to_string(),
             })
@@ -193,91 +216,22 @@ pub fn create(
 ) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_core::operations::Backend;
-    use temper_core::types::config::VaultState;
+    use temper_core::types::ManagedMeta;
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     let ctx = require_context(config, context)?;
 
-    let vault_state = VaultState::from_env();
+    // Body resolution — both modes use --body flag + stdin pipe.
+    let stdin_is_tty = std::io::stdin().is_terminal();
+    let body_opt = crate::actions::body_source::resolve_body_source(
+        body_flag.as_deref(),
+        stdin_is_tty,
+        std::io::stdin(),
+    )?;
 
-    // Cloud-mode: skip vault writes; build IngestPayload and POST /api/ingest.
-    #[cfg(feature = "embed")]
-    if matches!(vault_state, VaultState::Cloud) {
-        let stdin_is_tty = std::io::stdin().is_terminal();
-        let body_opt = crate::actions::body_source::resolve_body_source(
-            body_flag.as_deref(),
-            stdin_is_tty,
-            std::io::stdin(),
-        )?;
-        let body = body_opt.unwrap_or_else(|| format!("# {title}\n"));
-
-        let managed_meta = temper_core::types::ManagedMeta {
-            doc_type: Some(doc_type.to_string()),
-            context: Some(ctx.clone()),
-            title: Some(title.to_string()),
-            mode: mode.map(str::to_string),
-            effort: effort.map(str::to_string),
-            goal: goal.map(str::to_string),
-            ..Default::default()
-        };
-
-        let payload = crate::actions::ingest::build_ingest_payload(
-            &body,
-            title,
-            &ctx,
-            doc_type,
-            None,
-            Some(managed_meta),
-            None,
-        )?;
-
-        let resource = crate::actions::runtime::with_client(|client| {
-            Box::pin(async move {
-                client
-                    .ingest()
-                    .create(&payload)
-                    .await
-                    .map_err(crate::actions::runtime::client_err_to_temper)
-            })
-        })?;
-
-        if format == "json" {
-            #[derive(serde::Serialize)]
-            struct CloudCreated {
-                id: String,
-                slug: Option<String>,
-                doc_type: String,
-                context: String,
-                title: String,
-            }
-            let info = CloudCreated {
-                id: resource.id.to_string(),
-                slug: resource.slug.clone(),
-                doc_type: doc_type.to_string(),
-                context: ctx.to_string(),
-                title: resource.title.clone(),
-            };
-            let json = serde_json::to_string_pretty(&info).unwrap_or_default();
-            println!("{json}");
-        } else {
-            let id_str = resource.id.to_string();
-            let slug_display = resource.slug.as_deref().unwrap_or(&id_str);
-            output::success(format!("Created: {slug_display}"));
-        }
-        return Ok(());
-    }
-
-    // Local-mode: uniform VaultBackend::create_resource dispatch for all 6 doctypes.
-    // body_flag is intentionally unused in local mode (stdin piping handles body).
-    let _ = body_flag;
-    let _ = vault_state;
-
-    let stdin_content = vault::read_stdin_if_piped();
-
+    // Slug derivation (mode-independent — Concept and Goal skip date prefix).
     let doctype_enum = temper_core::frontmatter::DocType::from_str(doc_type)?;
-
     let slug_resolved = slug.map(String::from).unwrap_or_else(|| {
         let today = Local::now().format("%Y-%m-%d").to_string();
         let base_slug = vault::slugify(title);
@@ -290,56 +244,56 @@ pub fn create(
         }
     });
 
-    let body = stdin_content.unwrap_or_default();
-
+    // Build the CreateResource cmd. Body-None when no body input; both backends
+    // know how to handle the empty case (VaultBackend writes the doctype template,
+    // CloudBackend synthesizes `# {title}\n` in its translator).
     let cmd = temper_core::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
         context: ctx.to_string(),
         title: title.to_string(),
-        body: if body.is_empty() {
-            None
-        } else {
-            Some(temper_core::operations::BodyUpdate {
-                content: body,
+        body: body_opt.filter(|b| !b.is_empty()).map(|content| {
+            temper_core::operations::BodyUpdate {
+                content,
                 content_hash: None,
                 chunks_packed: None,
-            })
-        },
-        managed_meta: temper_core::types::ManagedMeta {
+            }
+        }),
+        managed_meta: ManagedMeta {
             mode: mode.map(String::from),
             effort: effort.map(String::from),
             goal: goal.map(String::from),
-            ..temper_core::types::ManagedMeta::default()
+            ..ManagedMeta::default()
         },
         open_meta: None,
         origin_uri: None,
         chunks_packed: None,
         content_hash: None,
-        origin: temper_core::operations::Surface::CliLocalVault,
+        origin: surface_for_state(),
     };
 
-    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
-    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
+    // Surface-side pre-flight validation — mirrors the hoist of
+    // `validate_update_args` for update. Without this, cloud-mode create would
+    // skip `validate_create` entirely (CloudBackend has no equivalent), and
+    // bad inputs (e.g., --mode plan-or-build whitelist violations) would ship
+    // a doomed request to the server. VaultBackend runs `validate_create` as
+    // its first step (vault_backend.rs:484) — hoisting here makes both modes
+    // symmetric and lets local-mode fail-fast benefit cloud-mode too.
+    temper_core::operations::validate_create(&cmd)
+        .map_err(|e| TemperError::BadRequest(e.to_string()))?;
+
+    // Acquire backend (mode picked via VaultState::from_env) and dispatch.
+    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.create_resource(cmd))?;
 
-    // Restore discovery event parity with the legacy per-doctype dispatch paths
-    // (actions::task::create, actions::goal::create, etc.) that each emitted
-    // ResourceCreate. Concept and Decision never emitted pre-B5b — exclude them
-    // to restore parity without introducing new behavior.
+    // Discovery event (local mode only — gated on VaultFileWritten presence).
+    // Concept and Decision were never emitted pre-Phase 5; preserve that parity.
     if !matches!(
         doctype_enum,
         temper_core::frontmatter::DocType::Concept | temper_core::frontmatter::DocType::Decision
-    ) {
-        use temper_core::operations::DomainEvent;
-        let rel_path = output
-            .events
-            .iter()
-            .find_map(|e| match e {
-                DomainEvent::VaultFileWritten { path } => Some(path.clone()),
-                _ => None,
-            })
-            .unwrap_or_default();
+    ) && has_vault_file_event(&output.events)
+    {
+        let rel_path = vault_file_path_from_events(&output.events).unwrap_or_default();
         let event = Event::ResourceCreate {
             ts: Local::now().to_rfc3339(),
             doc_type: doc_type.to_string(),
@@ -768,82 +722,17 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     Ok(())
 }
 
-/// Delete a resource: cloud-first soft-delete via the API, then local
-/// cleanup as a tail action when running in `Local` mode.
-///
-/// In `Local` mode, the local-tail step removes the vault file from disk
-/// and clears the manifest entry. In `Cloud` mode the API call is the
-/// entire operation; there is no manifest to clean up.
+/// Delete a resource.
 ///
 /// `--force` skips the interactive confirmation prompt for the local-file
-/// removal. In non-TTY contexts (agents, CI), `--force` is required because
-/// we won't read confirmation from a non-terminal stdin.
+/// removal. In non-TTY contexts (agents, CI), `--force` is required in
+/// local mode because we won't read confirmation from a non-terminal stdin.
+/// Cloud mode is non-interactive — no prompt regardless of `--force`.
 ///
-/// Cloud-first ordering: API failure means no local mutation in either mode.
+/// Cloud-first ordering: API failure means no local mutation in either mode
+/// (enforced inside `VaultBackend::delete_resource`; CloudBackend has only the
+/// API step).
 pub fn delete(
-    config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
-    force: bool,
-) -> Result<()> {
-    use temper_core::types::config::VaultState;
-
-    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
-
-    match VaultState::from_env() {
-        VaultState::Cloud => delete_cloud(config, doc_type, slug, context),
-        VaultState::Local => delete_local(config, doc_type, slug, context, force),
-    }
-}
-
-/// Cloud-mode delete: resolve slug → UUID, call the API, print success.
-/// No manifest, no vault-file removal — there's no local artifact in cloud mode.
-fn delete_cloud(config: &Config, doc_type: &str, slug: &str, context: Option<&str>) -> Result<()> {
-    let config_clone = config.clone();
-    let doc_type_owned = doc_type.to_string();
-    let slug_owned = slug.to_string();
-    let context_owned = context.map(str::to_string);
-
-    crate::actions::runtime::with_client(|client| {
-        Box::pin(async move {
-            let ctx = context_owned
-                .as_deref()
-                .ok_or_else(|| {
-                    TemperError::Project("no context specified — use --context <name>".into())
-                })?
-                .to_string();
-            let owner = config_clone.owner_for_context(&ctx);
-            let row = client
-                .resources()
-                .resolve_by_uri(&owner, &ctx, &doc_type_owned, &slug_owned)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            let uuid: uuid::Uuid = *row.id;
-
-            client
-                .resources()
-                .delete(uuid)
-                .await
-                .map_err(crate::commands::client_err)?;
-            output::success(format!("Deleted {doc_type_owned}/{slug_owned} (cloud)"));
-            Ok(())
-        })
-    })
-}
-
-/// Local-mode delete: dispatch through [`crate::vault_backend::VaultBackend`].
-///
-/// Surface responsibilities (per the backend/surface split documented in
-/// `vault_backend/vault_backend.rs::delete_resource`):
-///
-/// 1. Non-TTY guard — abort early if stdin isn't a terminal and `--force` is off.
-/// 2. `[y/N]` prompt — runs **before** dispatch (cloud-first ordering means
-///    the API delete lands inside `delete_resource`, so prompting after would
-///    require splitting the operation and break atomicity).
-/// 3. Build a `DeleteResource` command and dispatch through `VaultBackend`.
-/// 4. Translate emitted `DomainEvent`s into user-facing log lines.
-fn delete_local(
     config: &Config,
     doc_type: &str,
     slug: &str,
@@ -852,56 +741,72 @@ fn delete_local(
 ) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_core::operations::{Backend, DeleteResource, DomainEvent, ResourceRef};
+    use temper_core::operations::{DeleteResource, DomainEvent, ResourceRef};
+    use temper_core::types::config::VaultState;
 
-    // Non-TTY guard: a disconnected stdin would hang the [y/N] prompt below.
-    if !force && !std::io::stdin().is_terminal() {
-        return Err(TemperError::Vault(
-            "non-interactive stdin detected; pass --force to skip the local-file confirmation"
-                .to_string(),
-        ));
-    }
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
-    // [y/N] prompt before dispatch. Bail (Ok) if the user declines — the
-    // backend never runs, so neither cloud nor local state is touched.
-    if !force {
-        output::progress(format!("Delete {doc_type}/{slug}? [y/N] "));
-        use std::io::Write as _;
-        std::io::stderr().flush().ok();
-        let mut input = String::new();
-        std::io::stdin().read_line(&mut input).ok();
-        if !input.trim().eq_ignore_ascii_case("y") {
-            return Ok(());
+    let ctx = require_context(config, context)?;
+
+    // Local-mode UX gate: non-TTY guard + [y/N] prompt. Cloud mode skips
+    // this — non-interactive by design (no local file to remove).
+    let in_local_mode = matches!(VaultState::from_env(), VaultState::Local);
+    if in_local_mode {
+        if !force && !std::io::stdin().is_terminal() {
+            return Err(TemperError::Vault(
+                "non-interactive stdin detected; pass --force to skip the local-file confirmation"
+                    .to_string(),
+            ));
+        }
+
+        if !force {
+            output::progress(format!("Delete {doc_type}/{slug}? [y/N] "));
+            use std::io::Write as _;
+            std::io::stderr().flush().ok();
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input).ok();
+            if !input.trim().eq_ignore_ascii_case("y") {
+                return Ok(());
+            }
         }
     }
 
-    let ctx = require_context(config, context)?;
-    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
-    let owner = backend_ctx.owner.clone();
-    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
-
+    let owner = config.owner_for_context(&ctx);
     let cmd = DeleteResource {
-        resource: ResourceRef::scoped(owner, ctx, doc_type, slug),
+        resource: ResourceRef::scoped(owner, &ctx, doc_type, slug),
         force,
-        origin: temper_core::operations::Surface::CliLocalVault,
+        origin: surface_for_state(),
     };
 
+    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.delete_resource(cmd))?;
 
     // Translate events into surface output. Cloud-first ordering inside the
     // backend guarantees `RemoteSynced` precedes any vault events when both
-    // happen, so a single linear scan is order-correct.
+    // are emitted, so a single linear scan is order-correct.
+    //
+    // Local mode emits RemoteSynced + VaultFileRemoved + VaultManifestUpdated;
+    // cloud mode emits RemoteSynced only. Same loop, both shapes.
+    //
+    // The "(cloud)" suffix is mode-implicit via event presence: append only
+    // when no VaultFileRemoved is also emitted, otherwise the local-mode
+    // output ("Deleted X (cloud)\nRemoved vault file: ...") would
+    // contradict itself.
+    let has_vault_removed = output
+        .events
+        .iter()
+        .any(|e| matches!(e, DomainEvent::VaultFileRemoved { .. }));
     for event in &output.events {
         match event {
             DomainEvent::RemoteSynced { .. } => {
-                self::output::success(format!("Deleted {doc_type}/{slug} (cloud)"));
+                let suffix = if has_vault_removed { "" } else { " (cloud)" };
+                self::output::success(format!("Deleted {doc_type}/{slug}{suffix}"));
             }
             DomainEvent::VaultFileRemoved { path } => {
                 self::output::dim(format!("Removed vault file: {path}"));
             }
             DomainEvent::VaultManifestUpdated { .. } => {
-                // Manifest update is an internal bookkeeping detail — no
-                // need to surface it to the user.
+                // Internal bookkeeping — not surfaced.
             }
             _ => {}
         }
@@ -1468,8 +1373,8 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
 
 /// Build a `MoveSpec` from `--type-to` / `--context-to` CLI flags. Returns
 /// `None` when neither is set; otherwise returns `Some` with whichever fields
-/// were provided. Wired by `update_local` (B4) to translate CLI move flags
-/// into the `UpdateResource.move_to` operations field.
+/// were provided. Translates CLI move flags into the `UpdateResource.move_to`
+/// operations field.
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_core::operations::MoveSpec> {
@@ -1482,122 +1387,26 @@ fn build_move_spec_from_args(
     })
 }
 
-/// Cloud-mode `temper resource update` — no vault file is touched. Resolves
-/// the resource id via the API, builds a partial `ResourceUpdateRequest`
-/// (managed_meta + open_meta + optional body trio), and posts
-/// `PATCH /api/resources/{id}`. Prints `{slug, content_hash}` for the
-/// agent's next show-edit-cat cycle.
-#[cfg(feature = "embed")]
-fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
-    use std::io::IsTerminal;
-
-    // Resolve body source first (sync, doesn't need the runtime).
-    let stdin_is_tty = std::io::stdin().is_terminal();
-    let body_opt = crate::actions::body_source::resolve_body_source(
-        params.body.as_deref(),
-        stdin_is_tty,
-        std::io::stdin(),
-    )?;
-
-    let (content, content_hash, chunks_packed) = match body_opt {
-        Some(b) => {
-            let chunks = crate::actions::ingest::compute_body_chunks(&b)?;
-            (
-                Some(b),
-                Some(chunks.content_hash),
-                Some(chunks.chunks_packed),
-            )
-        }
-        None => (None, None, None),
-    };
-
-    let managed_meta = build_partial_managed_meta_from_args(params);
-    let open_meta = build_partial_open_meta_from_args(params);
-
-    // temper-title/temper-slug injection into managed_meta JSONB happens on the
-    // receive side via ensure_managed_identity_keys in resource_service::update
-    // (see Phase 5 plan, Task 5). Doing it here would require fetching the
-    // current resource for fallback title/slug values, then round-tripping the
-    // typed ManagedMeta partial through serde_json::Value and back — the
-    // server-side defense closes the gap with a single in-process call.
-    let req = temper_core::types::ResourceUpdateRequest {
-        title: params.title.map(String::from),
-        slug: None,
-        managed_meta,
-        open_meta,
-        content,
-        content_hash,
-        chunks_packed,
-    };
-
-    // Compute owned values before the async block so the closure is 'static.
-    // In cloud mode, slug→id resolution goes through the API's by-uri lookup;
-    // we only need owner + context strings to form the URI.
-    let ctx = require_context(config, params.context)?.to_string();
-    let owner = config.owner_for_context(&ctx).to_string();
-    let doc_type = current_type.to_string();
-    let slug = params.slug.to_string();
-
-    let updated = crate::actions::runtime::with_client(move |client| {
-        let req = req.clone();
-        let owner = owner.clone();
-        let ctx = ctx.clone();
-        let doc_type = doc_type.clone();
-        let slug = slug.clone();
-        Box::pin(async move {
-            let row = client
-                .resources()
-                .resolve_by_uri(&owner, &ctx, &doc_type, &slug)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            client
-                .resources()
-                .update(*row.id, &req)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
-
-    let slug_display = updated
-        .slug
-        .as_deref()
-        .unwrap_or(&updated.id.to_string())
-        .to_string();
-    let hash_display = updated.body_hash.as_deref().unwrap_or("").to_string();
-    println!(
-        "{}",
-        serde_json::json!({
-            "temper-slug": slug_display,
-            "content_hash": hash_display,
-        })
-    );
-    Ok(())
-}
-
 /// Update a resource's frontmatter fields.
 ///
-/// Surface responsibilities (per the backend/surface split documented in
-/// `vault_backend/vault_backend.rs::update_resource`):
+/// Surface responsibilities:
 ///
 /// 1. Doctype + type-to validation (clap-side polish; produces a friendlier
 ///    error than letting `validate_update` surface a `BadRequest`).
-/// 2. Cloud-mode early-return — when `TEMPER_VAULT_STATE=cloud`, the vault
-///    file is never touched; the cloud arm builds a `ResourceUpdateRequest`
-///    and PATCHes the API directly.
-/// 3. Per-flag schema validation against `schema::updatable_fields` —
+/// 2. Per-flag schema validation against `schema::updatable_fields` —
 ///    rejects bad enum values (e.g. `--stage frobnicate`) with a
 ///    user-targeted message before the operations layer ever sees them.
-/// 4. `--body` flag resolution (stdin/file → `Option<String>`) — resolved
-///    pre-dispatch so a malformed flag errors before any side effects.
-/// 5. Build an `UpdateResource` command from the partial managed_meta /
-///    open_meta / move_to helpers and dispatch through `VaultBackend`.
-/// 6. Emit a `ResourceUpdate` discovery event from the surface (the backend
-///    emits operational `VaultFileWritten` / `VaultManifestUpdated` events;
-///    the surface emits the agent-facing `ResourceUpdate` telemetry).
-/// 7. Print `Updated: <rel_path>` derived from the backend's
-///    `VaultFileWritten` event.
+/// 3. `--body` flag resolution (stdin/file → `Option<String>`).
+/// 4. Build an `UpdateResource` command and dispatch through `build_backend`.
+/// 5. Render output — mode-implicit via event presence:
+///    - Local (VaultFileWritten present): `"Updated: {rel_path}"` to stderr +
+///      `ResourceUpdate` discovery event.
+///    - Cloud (no VaultFileWritten): JSON `{"temper-slug": ..., "content_hash": ...}`
+///      to stdout. Agent-workflow contract per CLAUDE.md (show-edit-cat cycle).
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
-    use temper_core::types::config::VaultState;
+    use std::io::IsTerminal;
+
+    use temper_core::operations::{BodyUpdate, ResourceRef, UpdateResource};
 
     // 1. Resolve current type from --type or --type-from (one is required).
     let current_type = params
@@ -1605,46 +1414,14 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         .or(params.type_from)
         .ok_or_else(|| TemperError::Project("--type or --type-from is required".into()))?;
     let _ = temper_core::frontmatter::DocType::from_str(current_type)?;
-
     if let Some(tt) = params.type_to {
         let _ = temper_core::frontmatter::DocType::from_str(tt)?;
     }
 
-    let vault_state = VaultState::from_env();
-
-    // 2. Cloud-mode: skip vault file edits; build ResourceUpdateRequest and PATCH /api/resources/{id}.
-    #[cfg(feature = "embed")]
-    if matches!(vault_state, VaultState::Cloud) {
-        return cloud_mode_update(config, params, current_type);
-    }
-    #[cfg(not(feature = "embed"))]
-    let _ = vault_state;
-
-    update_local(config, params, current_type)
-}
-
-/// Local-mode `temper resource update` — dispatches through
-/// [`crate::vault_backend::VaultBackend`].
-///
-/// Kept ungated so non-embed builds (`cargo build -p temper-cli` with no
-/// features) compile. The cloud-mode branch is the only `#[cfg(feature =
-/// "embed")]` arm; the local arm is always present.
-fn update_local(config: &Config, params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
-    use std::io::IsTerminal;
-
-    use temper_core::operations::{
-        Backend, BodyUpdate, DomainEvent, ResourceRef, Surface, UpdateResource,
-    };
-
-    // 3. Per-flag schema validation. This guards against bad enum values
-    //    (`--stage frobnicate`) with a user-targeted message; the
-    //    operations-layer `validate_update` is about command-shape invariants
-    //    (body+content_hash trio), a different concern.
+    // 2. Per-flag schema validation.
     validate_update_args(params, current_type)?;
 
-    // 4. Resolve --body before any dispatch so a malformed flag fails fast,
-    //    before any side effects. None means "no body update requested" —
-    //    leave the existing on-disk body untouched.
+    // 3. --body resolution.
     let stdin_is_tty = std::io::stdin().is_terminal();
     let resolved_body = crate::actions::body_source::resolve_body_source(
         params.body.as_deref(),
@@ -1652,10 +1429,9 @@ fn update_local(config: &Config, params: &UpdateParams<'_>, current_type: &str) 
         std::io::stdin(),
     )?;
 
-    // Resolve context (required for assemble_vault_backend and ResourceRef::scoped).
     let ctx = require_context(config, params.context)?;
 
-    // 5. Build the UpdateResource command and dispatch through the backend.
+    // 4. Build the UpdateResource cmd.
     let cmd = UpdateResource {
         resource: ResourceRef::scoped(
             config.owner_for_context(&ctx),
@@ -1667,55 +1443,63 @@ fn update_local(config: &Config, params: &UpdateParams<'_>, current_type: &str) 
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
-        origin: Surface::CliLocalVault,
+        origin: surface_for_state(),
     };
 
-    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
-    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
+    // 5. Acquire backend + dispatch.
+    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
 
-    // 6/7. Surface-side telemetry + user-facing print. Source the rel_path
-    //      from the backend's `VaultFileWritten` event; derive the slug,
-    //      final context, and final type from the projected `ResourceRow`
-    //      (which `vault_file_to_resource_row` populates from frontmatter
-    //      after any move). Falling back to the request-side context/type
-    //      keeps the event well-formed even when the row projection is
-    //      missing a frontmatter key.
-    let rel_path = output
-        .events
-        .iter()
-        .find_map(|e| match e {
-            DomainEvent::VaultFileWritten { path } => Some(path.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
+    // 6. Mode-implicit rendering. If a VaultFileWritten event is present
+    //    (local mode), render rel_path + emit discovery event. Otherwise
+    //    (cloud mode), print the agent-facing JSON with content_hash.
+    if has_vault_file_event(&output.events) {
+        let rel_path = vault_file_path_from_events(&output.events).unwrap_or_default();
 
-    let final_slug = std::path::Path::new(&rel_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let final_ctx = if output.value.context_name.is_empty() {
-        ctx.clone()
-    } else {
-        output.value.context_name.clone()
-    };
-    let final_type = if output.value.doc_type_name.is_empty() {
-        current_type.to_string()
-    } else {
-        output.value.doc_type_name.clone()
-    };
+        // Discovery event: emit agent-facing ResourceUpdate telemetry.
+        let final_slug = std::path::Path::new(&rel_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let final_ctx = if output.value.context_name.is_empty() {
+            ctx.clone()
+        } else {
+            output.value.context_name.clone()
+        };
+        let final_type = if output.value.doc_type_name.is_empty() {
+            current_type.to_string()
+        } else {
+            output.value.doc_type_name.clone()
+        };
+        let event = Event::ResourceUpdate {
+            ts: Local::now().to_rfc3339(),
+            doc_type: final_type,
+            slug: final_slug,
+            context: final_ctx,
+        };
+        if let Err(e) = discovery::append_event(&config.state_dir, &event) {
+            tracing::warn!("Failed to append discovery event: {e}");
+        }
 
-    let event = Event::ResourceUpdate {
-        ts: Local::now().to_rfc3339(),
-        doc_type: final_type,
-        slug: final_slug,
-        context: final_ctx,
-    };
-    if let Err(e) = discovery::append_event(&config.state_dir, &event) {
-        tracing::warn!("Failed to append discovery event: {e}");
+        output::success(format!("Updated: {rel_path}"));
+    } else {
+        // Cloud mode: print {temper-slug, content_hash} JSON to stdout for
+        // the show-edit-cat agent workflow contract (per CLAUDE.md).
+        let slug_display = output
+            .value
+            .slug
+            .clone()
+            .unwrap_or_else(|| output.value.id.to_string());
+        let hash_display = output.value.body_hash.as_deref().unwrap_or("").to_string();
+        println!(
+            "{}",
+            serde_json::json!({
+                "temper-slug": slug_display,
+                "content_hash": hash_display,
+            })
+        );
     }
 
-    output::success(format!("Updated: {rel_path}"));
     Ok(())
 }
 
@@ -2284,7 +2068,12 @@ mod render_create_output_tests {
 
     use super::render_create_output_to_string;
 
-    fn make_resource_row(slug: &str, doc_type: &str, title: &str, context: &str) -> ResourceRow {
+    pub(super) fn make_resource_row(
+        slug: &str,
+        doc_type: &str,
+        title: &str,
+        context: &str,
+    ) -> ResourceRow {
         ResourceRow {
             id: ResourceId(uuid::Uuid::nil()),
             kb_context_id: ContextId(uuid::Uuid::nil()),
@@ -2364,25 +2153,35 @@ mod render_create_output_tests {
         assert_eq!(parsed["temper-seq"], 3);
     }
 
+    /// Build a `CommandOutput<ResourceRow>` that carries a `VaultFileWritten`
+    /// event with the canonical rel_path the on-disk write would have used.
+    /// Used by tests that assert the local-mode legacy JSON shape
+    /// (`path` field populated). Cloud-mode tests use `CommandOutput::new(row)`
+    /// directly — no event, empty `path` field.
+    fn output_with_vault_file(row: ResourceRow, rel_path: &str) -> CommandOutput<ResourceRow> {
+        use temper_core::operations::DomainEvent;
+        CommandOutput {
+            value: row,
+            events: vec![DomainEvent::VaultFileWritten {
+                path: rel_path.to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn render_create_output_session_json_matches_legacy_shape() {
         let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/session/2026-05-14-my-session.md");
         let json = render_create_output_to_string(&output, "session", "json")
             .expect("rendering session JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["title"], "My Session");
         assert_eq!(parsed["context"], "temper");
-        // Path must be the vault-relative path in the correct format.
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/session/2026-05-14-my-session.md"),
-            "path must end with doctype/slug.md, got: {path}"
-        );
-        assert!(
-            path.starts_with("@me/"),
-            "path must start with owner, got: {path}"
+        // Path is populated from the VaultFileWritten event (local-mode).
+        assert_eq!(
+            parsed["path"],
+            "@me/temper/session/2026-05-14-my-session.md"
         );
         // date field is today's date — just verify it parses and is non-empty.
         let date = parsed["date"].as_str().expect("date must be a string");
@@ -2397,6 +2196,20 @@ mod render_create_output_tests {
     }
 
     #[test]
+    fn render_create_output_session_cloud_mode_emits_empty_path() {
+        // Cloud-mode: no VaultFileWritten event → `path` field empty. Agents
+        // can detect cloud mode by checking for an empty path; no fictional
+        // file path is emitted.
+        let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "session", "json")
+            .expect("rendering session JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["path"], "", "cloud mode must emit empty path");
+    }
+
+    #[test]
     fn render_create_output_research_json_matches_legacy_shape() {
         let row = make_resource_row(
             "2026-05-14-my-research",
@@ -2404,7 +2217,7 @@ mod render_create_output_tests {
             "My Research",
             "temper",
         );
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/research/2026-05-14-my-research.md");
         let json = render_create_output_to_string(&output, "research", "json")
             .expect("rendering research JSON should succeed");
 
@@ -2412,10 +2225,9 @@ mod render_create_output_tests {
         assert_eq!(parsed["title"], "My Research");
         // Legacy research uses "project" (not "context").
         assert_eq!(parsed["project"], "temper");
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/research/2026-05-14-my-research.md"),
-            "path must end with doctype/slug.md, got: {path}"
+        assert_eq!(
+            parsed["path"],
+            "@me/temper/research/2026-05-14-my-research.md"
         );
         // id is the UUID string of the ResourceId.
         let id = parsed["id"].as_str().expect("id must be a string");
@@ -2435,7 +2247,7 @@ mod render_create_output_tests {
     #[test]
     fn render_create_output_concept_json_matches_legacy_shape() {
         let row = make_resource_row("my-concept", "concept", "My Concept", "temper");
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/concept/my-concept.md");
         let json = render_create_output_to_string(&output, "concept", "json")
             .expect("rendering concept JSON should succeed");
 
@@ -2444,11 +2256,7 @@ mod render_create_output_tests {
         assert_eq!(parsed["title"], "My Concept");
         assert_eq!(parsed["slug"], "my-concept");
         assert_eq!(parsed["context"], "temper");
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/concept/my-concept.md"),
-            "path must end with doctype/slug.md, got: {path}"
-        );
+        assert_eq!(parsed["path"], "@me/temper/concept/my-concept.md");
         let id = parsed["id"].as_str().expect("id must be a string");
         assert!(!id.is_empty(), "id must be non-empty");
         let date = parsed["date"].as_str().expect("date must be a string");
@@ -2469,7 +2277,7 @@ mod render_create_output_tests {
             "My Decision",
             "temper",
         );
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/decision/2026-05-14-my-decision.md");
         let json = render_create_output_to_string(&output, "decision", "json")
             .expect("rendering decision JSON should succeed");
 
@@ -2478,10 +2286,9 @@ mod render_create_output_tests {
         assert_eq!(parsed["title"], "My Decision");
         assert_eq!(parsed["slug"], "2026-05-14-my-decision");
         assert_eq!(parsed["context"], "temper");
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/decision/2026-05-14-my-decision.md"),
-            "path must end with doctype/slug.md, got: {path}"
+        assert_eq!(
+            parsed["path"],
+            "@me/temper/decision/2026-05-14-my-decision.md"
         );
         let id = parsed["id"].as_str().expect("id must be a string");
         assert!(!id.is_empty(), "id must be non-empty");

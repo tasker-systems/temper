@@ -4,7 +4,7 @@ use crate::config::Config;
 use crate::error::{Result, TemperError};
 
 // Re-export data types and functions from the actions layer
-pub use crate::actions::task::{create, done, find_task, load_tasks, move_task, next_seq};
+pub use crate::actions::task::{find_task, load_tasks, next_seq};
 pub use crate::actions::types::TaskInfo;
 
 /// Show a single task's content.

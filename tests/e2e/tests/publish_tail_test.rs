@@ -4,9 +4,9 @@
 //! (`temper_cli::actions::runtime::publish_local_write_best_effort`).
 //!
 //! This is the right testing layer for publish-tail behavior:
-//! `actions::task::create` (and the other seven Local-mode creator/update
-//! sites) calls into `runtime::with_client` which builds a real client
-//! from disk auth + global config and posts to the API. Unit tests in
+//! `commands::resource::create` (and other Local-mode creator/update surfaces)
+//! dispatches through `VaultBackend` which calls `push_one_resource` with a
+//! real client from disk auth + global config to post to the API. Unit tests in
 //! `temper-cli/tests/` deliberately skip publishing (no token configured
 //! via `TEMPER_AUTH_PATH` isolation); the real publish path is verified
 //! here against an in-process Axum server backed by a real Postgres test
@@ -50,12 +50,11 @@ fn write_auth_json(path: &std::path::Path, jwt: &str) {
     std::fs::write(path, bytes).expect("write auth.json");
 }
 
-/// CLI publish-tail end-to-end: `actions::goal::create` writes a goal
-/// locally, then the publish tail (`publish_local_write_best_effort`)
-/// pushes it through `with_client` → `push_one_resource` to the test
-/// server. Verify the file on disk now carries the canonical `temper-id`
-/// the server assigned (proves the publish round-tripped, not just that
-/// the local write succeeded).
+/// CLI publish-tail end-to-end: `commands::resource::create` writes a goal
+/// locally via `VaultBackend`, then the publish tail (`push_one_resource`)
+/// pushes it to the test server. Verify the file on disk now carries the
+/// canonical `temper-id` the server assigned (proves the publish
+/// round-tripped, not just that the local write succeeded).
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn local_mode_create_publishes_to_server(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
@@ -92,7 +91,15 @@ async fn local_mode_create_publishes_to_server(pool: sqlx::PgPool) {
     let api_url = format!("http://{}", app.addr);
     let auth_path_string = auth_path.to_str().unwrap().to_string();
     let global_config_string = global_config.to_str().unwrap().to_string();
-    let slug: String = tokio::task::spawn_blocking(move || {
+    // Pre-create the local context dir so `resolve_context_with_fallback`
+    // doesn't redirect to "default" (matches `tests/common/mod.rs::create_goal`).
+    std::fs::create_dir_all(app.vault_dir.path().join("@me").join("myapp"))
+        .expect("pre-create context dir");
+    // Goals use a plain slugified title — no date prefix. The slug is determined
+    // by `commands::resource::create`'s slug-derivation branch for DocType::Goal.
+    let goal_title = "publish-tail-goal";
+    let slug = temper_cli::vault::slugify(goal_title);
+    tokio::task::spawn_blocking(move || {
         temp_env::with_vars(
             [
                 ("TEMPER_API_URL", Some(api_url.as_str())),
@@ -102,8 +109,19 @@ async fn local_mode_create_publishes_to_server(pool: sqlx::PgPool) {
                 ("TEMPER_TOKEN", None),
             ],
             || {
-                temper_cli::actions::goal::create(&cli_config, "myapp", "publish-tail-goal", None)
-                    .expect("goal create + publish")
+                temper_cli::commands::resource::create(
+                    &cli_config,
+                    "goal",
+                    goal_title,
+                    Some("myapp"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "text",
+                )
+                .expect("goal create + publish")
             },
         )
     })
@@ -197,6 +215,11 @@ async fn local_mode_session_create_wire_shape_regression(pool: sqlx::PgPool) {
     let api_url = format!("http://{}", app.addr);
     let auth_path_string = auth_path.to_str().unwrap().to_string();
     let global_config_string = global_config.to_str().unwrap().to_string();
+
+    // Pre-create the local context dir so `resolve_context_with_fallback`
+    // doesn't redirect to "default" (matches `tests/common/mod.rs::create_goal`).
+    std::fs::create_dir_all(app.vault_dir.path().join("@me").join("myapp"))
+        .expect("pre-create context dir");
 
     // Drive session::save on a blocking thread (it creates its own tokio runtime
     // internally via runtime::with_client — nesting would panic).
@@ -380,7 +403,13 @@ async fn local_mode_create_with_no_token_creates_file_and_skips_publish(pool: sq
 
     let auth_path_string = auth_path.to_str().unwrap().to_string();
     let global_config_string = global_config.to_str().unwrap().to_string();
-    let slug: String = tokio::task::spawn_blocking(move || {
+    // Pre-create the local context dir so `resolve_context_with_fallback`
+    // doesn't redirect to "default" (matches `tests/common/mod.rs::create_goal`).
+    std::fs::create_dir_all(app.vault_dir.path().join("@me").join("myapp"))
+        .expect("pre-create context dir");
+    let goal_title = "no-token-goal";
+    let slug = temper_cli::vault::slugify(goal_title);
+    tokio::task::spawn_blocking(move || {
         temp_env::with_vars(
             [
                 ("TEMPER_API_URL", Some(api_url.as_str())),
@@ -390,8 +419,19 @@ async fn local_mode_create_with_no_token_creates_file_and_skips_publish(pool: sq
                 ("TEMPER_TOKEN", None),
             ],
             || {
-                temper_cli::actions::goal::create(&cli_config, "myapp", "no-token-goal", None)
-                    .expect("goal create succeeds even without auth")
+                temper_cli::commands::resource::create(
+                    &cli_config,
+                    "goal",
+                    goal_title,
+                    Some("myapp"),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    "text",
+                )
+                .expect("goal create succeeds even without auth")
             },
         )
     })

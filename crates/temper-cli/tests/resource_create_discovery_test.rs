@@ -44,7 +44,7 @@ fn events_with_doc_type(
 
 /// Create a goal (needed as prerequisite for task creation) and return its slug.
 fn create_prereq_goal(config: &temper_cli::config::Config, context: &str) -> String {
-    temper_cli::commands::goal::create(config, context, "Prereq Goal", None, "text").unwrap()
+    common::create_goal(config, context, "Prereq Goal")
 }
 
 // ---------------------------------------------------------------------------

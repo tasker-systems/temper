@@ -40,8 +40,7 @@ fn local_mode_update_rewrites_goal_body_via_body_at_path() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let slug =
-        temper_cli::commands::goal::create(&config, "myapp", "Sample goal", None, "text").unwrap();
+    let slug = common::create_goal(&config, "myapp", "Sample goal");
     let goal_file = dir
         .path()
         .join("@me")
@@ -97,18 +96,15 @@ fn local_mode_update_rewrites_task_body_via_body_at_path() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let goal_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "Parent goal", None, "text").unwrap();
-    let task_slug = temper_cli::actions::task::create(
+    let goal_slug = common::create_goal(&config, "myapp", "Parent goal");
+    let task_slug = common::create_task(
         &config,
         "myapp",
         "Sample task",
         Some(&goal_slug),
         None,
         None,
-        None,
-    )
-    .unwrap();
+    );
     let task_file = dir
         .path()
         .join("@me")
@@ -237,8 +233,7 @@ fn local_mode_update_no_body_flag_preserves_existing_body() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let slug = temper_cli::commands::goal::create(&config, "myapp", "Preserved goal", None, "text")
-        .unwrap();
+    let slug = common::create_goal(&config, "myapp", "Preserved goal");
     let goal_file = dir
         .path()
         .join("@me")
@@ -288,8 +283,7 @@ fn local_mode_update_invalid_body_flag_errors_before_mutation() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let slug = temper_cli::commands::goal::create(&config, "myapp", "Untouched goal", None, "text")
-        .unwrap();
+    let slug = common::create_goal(&config, "myapp", "Untouched goal");
     let goal_file = dir
         .path()
         .join("@me")
