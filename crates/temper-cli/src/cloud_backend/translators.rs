@@ -271,6 +271,10 @@ mod tests {
         }
     }
 
+    // cmd_to_ingest_payload calls compute_body_chunks which requires the
+    // ONNX runtime. Gate tests that exercise it behind `test-embed` so
+    // they only run in the Embed CI job (where ONNX is installed).
+    #[cfg(feature = "test-embed")]
     #[test]
     fn cmd_to_ingest_payload_round_trips_basic_fields() {
         let cmd = sample_cmd();
@@ -284,6 +288,7 @@ mod tests {
         assert!(payload.content_hash.is_some());
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn cmd_to_ingest_payload_serializes_managed_meta_to_json() {
         let cmd = sample_cmd();
@@ -297,6 +302,7 @@ mod tests {
         assert_eq!(mm["temper-goal"], "temper-maintenance");
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn cmd_to_ingest_payload_synthesizes_body_when_absent() {
         let mut cmd = sample_cmd();
@@ -308,6 +314,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn cmd_to_ingest_payload_always_injects_identity_keys() {
         // Symmetric defense (CLAUDE.md): even when caller-supplied managed_meta
@@ -324,6 +331,7 @@ mod tests {
         assert_eq!(mm["temper-slug"], "2026-05-18-test");
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn cmd_to_ingest_payload_identity_keys_from_typed_source_not_caller_managed_meta() {
         // If a future refactor passes a managed_meta with title/slug that differs
@@ -422,6 +430,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "test-embed")]
     #[test]
     fn cmd_to_resource_update_request_computes_body_trio_when_body_present() {
         let mut cmd = sample_update();
