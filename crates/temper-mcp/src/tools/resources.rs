@@ -6,7 +6,9 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
-use temper_api::services::{context_service, doc_type_service, ingest_service, resource_service};
+use temper_api::services::{
+    context_service, doc_type_service, ingest_service, meta_service, resource_service,
+};
 use temper_core::error::TemperError;
 use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -152,6 +154,12 @@ pub struct UpdateResourceMetaResponse {
 // ── Response enrichment ────────────────────────────────────────────
 
 /// Enriched resource response with human-readable names.
+///
+/// `managed_meta` and `open_meta` are populated by single-resource read
+/// paths (`get_resource`) via [`enrich_resource_with_meta`]. List paths
+/// leave both `None` to avoid one DB round-trip per row; the
+/// `skip_serializing_if` keeps the wire shape backward-compatible for
+/// callers that don't request meta.
 #[derive(Debug, serde::Serialize)]
 pub struct EnrichedResource {
     pub id: Uuid,
@@ -164,6 +172,10 @@ pub struct EnrichedResource {
     pub is_active: bool,
     pub created: chrono::DateTime<chrono::Utc>,
     pub updated: chrono::DateTime<chrono::Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub managed_meta: Option<ManagedMeta>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub open_meta: Option<serde_json::Value>,
 }
 
 async fn enrich_resource(
@@ -194,7 +206,35 @@ async fn enrich_resource(
         is_active: row.is_active,
         created: row.created,
         updated: row.updated,
+        managed_meta: None,
+        open_meta: None,
     })
+}
+
+/// Enrich a single resource row with its `managed_meta` and `open_meta`
+/// blocks from `kb_resource_manifests`, via [`meta_service::get_meta`].
+///
+/// Used by the `get_resource` MCP tool to make frontmatter readable —
+/// without this the tool returned only core fields plus an optional
+/// body, and anything written via `update_resource_meta` was
+/// write-blind. Visibility is enforced inside `meta_service::get_meta`
+/// (delegates to `resource_service::get_visible`).
+///
+/// List paths intentionally do not call this — adding a per-row meta
+/// fetch would N+1 the list query. List rows leave both fields `None`
+/// and serialize-skip them.
+pub async fn enrich_resource_with_meta(
+    pool: &sqlx::PgPool,
+    profile_id: ProfileId,
+    row: &temper_core::types::resource::ResourceRow,
+) -> Result<EnrichedResource, rmcp::ErrorData> {
+    let mut enriched = enrich_resource(pool, profile_id, row).await?;
+    let meta = meta_service::get_meta(pool, profile_id, row.id)
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
+    enriched.managed_meta = meta.managed_meta;
+    enriched.open_meta = meta.open_meta;
+    Ok(enriched)
 }
 
 async fn enrich_resources(
@@ -363,20 +403,25 @@ pub async fn get_resource(
         }
     };
 
-    let enriched = enrich_resource(pool, profile_id, &row).await?;
-
     if input.include_content.unwrap_or(false) {
+        // get_content already returns managed_meta + open_meta alongside the
+        // body, so reuse those values rather than firing a second meta query.
         let content = resource_service::get_content(pool, profile.id, row.id.into())
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
             })?;
 
+        let mut enriched = enrich_resource(pool, profile_id, &row).await?;
+        enriched.managed_meta = content.managed_meta;
+        enriched.open_meta = content.open_meta;
+
         Ok(CallToolResult::success(vec![
             rmcp::model::Content::text(to_text(&enriched)),
             rmcp::model::Content::text(content.markdown),
         ]))
     } else {
+        let enriched = enrich_resource_with_meta(pool, profile_id, &row).await?;
         Ok(CallToolResult::success(vec![rmcp::model::Content::text(
             to_text(&enriched),
         )]))
