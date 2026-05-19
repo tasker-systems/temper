@@ -4,7 +4,8 @@
 >
 > **Project-specific execution variant (Variant B — see `project_hybrid_execution_skill_idea` in user memory):**
 > - Implementer subagents run ONLY the tests they wrote in their task + `cargo make check`. Not the full crate suite. Not workspace nextest.
-> - Implementer subagents do NOT invoke a reviewer subagent. Pete reviews each task's diff after the implementer reports complete; next task dispatches only after Pete's signoff.
+> - Implementer subagents do NOT invoke a chained reviewer subagent. The **orchestrator** (Claude, holding plan + task context) reviews each commit before dispatching the next task. For high-stakes diffs, the orchestrator may dispatch a *targeted* reviewer subagent with explicit framing.
+> - Pete reviews at the PR level, NOT per-task. The orchestrator signals Pete only when a new decision arises that wasn't covered by the spec/plan.
 > - Full crate suite, workspace tests, and e2e tests run once at end-of-branch (PR-prep, Task 19). Not per-task.
 > - Final opus code review at end-of-branch as usual.
 
@@ -62,7 +63,7 @@
 - **No "for now" workarounds.** Capture as a task; don't ship a TODO comment.
 - **No premature backward-compat.** Surface dispatchers replace the cloud-mode helpers; clippy-driven deletion is mandatory, not optional.
 - **Existing CLI integration tests + e2e tests pass unmodified** at Task 19. A test re-write to accommodate the migration is a smell — STOP and report.
-- **Subagent task hand-off:** when the implementer reports the task complete, Pete reviews the commit before the next task dispatches. No spec reviewer subagent. No code reviewer subagent.
+- **Subagent task hand-off:** when the implementer reports the task complete, the orchestrator (Claude) reviews the commit before dispatching the next task. No chained spec-reviewer subagent. No chained code-reviewer subagent. For high-stakes diffs, dispatch a *targeted* reviewer subagent with explicit framing — never open-ended "review this." Signal Pete only when an unplanned-for decision arises.
 
 ---
 

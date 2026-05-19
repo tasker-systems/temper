@@ -269,12 +269,12 @@ Reads stay service-direct (parent spec rule). The backend trait stays write-focu
 
 ## Execution Pattern
 
-This spec's implementation plan will use **subagent-driven-development** with two project-specific deviations from the default flow:
+This spec's implementation plan will use **subagent-driven-development** with two project-specific deviations from the default flow (captured as Variant B in `project_hybrid_execution_skill_idea` in user memory):
 
 1. **Per-task tests run only what the task wrote.** Implementer subagents run the tests they wrote in the task + `cargo make check`, not the full crate suite. Full crate + workspace + e2e suites run once at end-of-branch (PR-prep time), not per task. Matches `feedback_workspace_tests_at_pr_only` in user memory.
-2. **Code review happens on subagent task resolution, not inline.** Implementer subagents do not invoke a reviewer subagent. Pete reviews each task's diff after the implementer reports complete; the next task dispatches only after Pete's signoff. Final opus code review at end-of-branch as usual.
+2. **Orchestrator reviews each commit; no chained reviewer-subagent handoff.** Implementer subagents do NOT invoke an open-ended reviewer subagent — handoff-level clarity loses too much context, and a context-light reviewer ends up debating things that don't matter. Instead, the **orchestrator** (Claude, holding the spec + plan + task purpose) reviews each commit before dispatching the next task. For high-stakes diffs, the orchestrator may dispatch a *targeted* reviewer subagent with explicit framing ("look specifically for X, Y, Z"). Pete reviews at the PR level, not per-task — the orchestrator signals Pete only when a new decision arises that the spec/plan didn't cover. Final opus code review at end-of-branch as usual.
 
-This pattern keeps subagent budget focused on writing code, defers integration validation to where it's authoritative (CI + end-of-branch), and keeps the human in the loop where judgment matters most (task-boundary review).
+This pattern keeps subagent budget focused on writing code, defers integration validation to where it's authoritative (CI + end-of-branch), and concentrates judgment in the role with the highest context (orchestrator for per-task; Pete for PR-level architectural calls).
 
 ## Plan-Writer Checklist
 
