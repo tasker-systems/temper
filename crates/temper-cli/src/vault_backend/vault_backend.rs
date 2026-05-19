@@ -72,7 +72,9 @@ pub(crate) struct TaskDefaults {
 /// Compute backend-specific defaults for a Create cmd.
 ///
 /// For tasks, walks the vault to find `next_seq` and verifies that the
-/// referenced goal exists. For non-task doctypes, returns an empty
+/// referenced goal exists. For goals, computes the next sequential seq so
+/// goals sort predictably (matches the behavior `actions::goal::create` had
+/// before it was removed in Phase 5c). For other doctypes, returns an empty
 /// `TaskDefaults`. Returns an error variant if the referenced goal is
 /// missing or the doctype is malformed.
 pub(crate) fn compute_task_defaults(
@@ -100,6 +102,17 @@ pub(crate) fn compute_task_defaults(
 
             let seq = crate::actions::task::next_seq(config, &cmd.context, goal_slug)?;
             Ok(TaskDefaults { seq: Some(seq) })
+        }
+        temper_core::frontmatter::DocType::Goal => {
+            // Auto-assign seq when the caller doesn't supply one. This matches
+            // what the deleted `actions::goal::create` did before Phase 5c.
+            // Without this, all goals get seq=0 and sort non-deterministically.
+            if cmd.managed_meta.seq.is_none() {
+                let seq = crate::actions::goal::next_seq(config, &cmd.context)?;
+                Ok(TaskDefaults { seq: Some(seq) })
+            } else {
+                Ok(TaskDefaults::default())
+            }
         }
         _ => Ok(TaskDefaults::default()),
     }

@@ -23,10 +23,8 @@ fn test_warmup_produces_output() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::task::create(&config, "myapp", "Test", Some(&g_slug), None, None, None)
-        .unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
+    common::create_task(&config, "myapp", "Test", Some(&g_slug), None, None);
 
     let result = temper_cli::commands::warmup::run(&config, Some("myapp"), "text");
     assert!(result.is_ok());
@@ -37,28 +35,16 @@ fn test_warmup_shows_in_progress_tasks_with_mode() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug = temper_cli::commands::task::create(
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
+    let slug = common::create_task(
         &config,
         "myapp",
         "Active Work",
         Some(&g_slug),
         Some("build"),
         Some("medium"),
-        None,
-    )
-    .unwrap();
-    temper_cli::commands::task::move_task(
-        &config,
-        &slug,
-        Some("in-progress"),
-        None,
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    );
+    common::move_task_to_stage(&config, &slug, "myapp", "in-progress");
 
     let result = temper_cli::commands::warmup::run(&config, Some("myapp"), "text");
     assert!(result.is_ok());

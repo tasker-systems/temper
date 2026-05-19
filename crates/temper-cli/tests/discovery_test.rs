@@ -48,18 +48,8 @@ fn test_events_list_returns_recent_events() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir, vec!["myapp"]);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    temper_cli::commands::task::create(
-        &config,
-        "myapp",
-        "Test task",
-        Some(&g_slug),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
+    common::create_task(&config, "myapp", "Test task", Some(&g_slug), None, None);
 
     let events = temper_cli::commands::events::load_events(&config, None, 20).unwrap();
     assert!(
@@ -73,12 +63,10 @@ fn test_events_filter_by_context() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir, vec!["myapp", "other"]);
 
-    let g1 = temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let g2 = temper_cli::commands::goal::create(&config, "other", "v0.2", None, "text").unwrap();
-    temper_cli::commands::task::create(&config, "myapp", "Task A", Some(&g1), None, None, None)
-        .unwrap();
-    temper_cli::commands::task::create(&config, "other", "Task B", Some(&g2), None, None, None)
-        .unwrap();
+    let g1 = common::create_goal(&config, "myapp", "v0.1");
+    let g2 = common::create_goal(&config, "other", "v0.2");
+    common::create_task(&config, "myapp", "Task A", Some(&g1), None, None);
+    common::create_task(&config, "other", "Task B", Some(&g2), None, None);
 
     let myapp_events =
         temper_cli::commands::events::load_events(&config, Some("myapp"), 20).unwrap();

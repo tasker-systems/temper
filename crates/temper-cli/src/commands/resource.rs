@@ -90,7 +90,7 @@ fn render_create_output(
 ///
 /// - Goal: serialized `GoalInfo` → `{ "temper-title", "temper-slug",
 ///   "temper-context", "temper-seq" (Option<u32>), "temper-status" }`
-///   Source: `commands::goal::create`, via `crate::actions::types::GoalInfo`.
+///   Shape: `crate::actions::types::GoalInfo` (seq from ResourceRow.seq).
 ///
 /// - Session: `{ "title", "context", "path", "date" }` where `path` is the
 ///   vault-relative file path (`{owner}/{context}/session/{slug}.md`) and

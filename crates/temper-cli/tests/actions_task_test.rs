@@ -23,30 +23,9 @@ fn test_actions_load_tasks_returns_correct_results() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-
-    // Create two tasks
-    temper_cli::actions::task::create(
-        &config,
-        "myapp",
-        "First task",
-        Some(&g_slug),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
-    temper_cli::actions::task::create(
-        &config,
-        "myapp",
-        "Second task",
-        Some(&g_slug),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
+    common::create_task(&config, "myapp", "First task", Some(&g_slug), None, None);
+    common::create_task(&config, "myapp", "Second task", Some(&g_slug), None, None);
 
     let tasks =
         temper_cli::actions::task::load_tasks(&config, Some("myapp"), Some(&g_slug)).unwrap();
@@ -71,18 +50,8 @@ fn test_actions_find_task_by_slug() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
-    let slug = temper_cli::actions::task::create(
-        &config,
-        "myapp",
-        "Find Me",
-        Some(&g_slug),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
+    let slug = common::create_task(&config, "myapp", "Find Me", Some(&g_slug), None, None);
 
     let found = temper_cli::actions::task::find_task(&config, &slug, None)
         .unwrap()
@@ -96,12 +65,10 @@ fn test_actions_next_seq_increments() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
 
     // First task gets seq 10
-    temper_cli::actions::task::create(&config, "myapp", "T1", Some(&g_slug), None, None, None)
-        .unwrap();
+    common::create_task(&config, "myapp", "T1", Some(&g_slug), None, None);
 
     // Next seq should be 20
     let seq = temper_cli::actions::task::next_seq(&config, "myapp", &g_slug).unwrap();
@@ -114,20 +81,10 @@ fn test_actions_reexports_match_commands() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    let g_slug =
-        temper_cli::commands::goal::create(&config, "myapp", "v0.1", None, "text").unwrap();
+    let g_slug = common::create_goal(&config, "myapp", "v0.1");
 
-    // Create via actions layer
-    let slug = temper_cli::actions::task::create(
-        &config,
-        "myapp",
-        "Via Actions",
-        Some(&g_slug),
-        None,
-        None,
-        None,
-    )
-    .unwrap();
+    // Create via resource API
+    let slug = common::create_task(&config, "myapp", "Via Actions", Some(&g_slug), None, None);
 
     // Find via commands layer (re-export)
     let found = temper_cli::commands::task::find_task(&config, &slug, None)

@@ -34,8 +34,8 @@ use crate::templates::{
 ///
 /// Backend callers populate this via `extract_doctype_fields_for_create`,
 /// which translates `CreateResource.managed_meta` into the right variant.
-/// Surface callers (`actions::task::create`, `actions::goal::create`, etc.)
-/// build the variant inline since they already have the typed inputs.
+/// Backend callers (e.g. `VaultBackend::create_resource`) build the variant
+/// via `extract_doctype_fields_for_create` from the typed `CreateResource` cmd.
 pub(crate) enum DoctypeFields<'a> {
     /// Task-specific fields: goal slug, mode, effort, and sequence number.
     /// `mode`/`effort` are pre-validated by the caller; `seq` is pre-computed
@@ -125,12 +125,11 @@ pub(crate) fn write_for(args: WriteArgs<'_>) -> Result<WriteResult, TemperError>
 /// `managed_meta`. Returns `None` for doctypes that don't need extra fields
 /// (concept, decision) and for unknown doctypes (`write_for` will reject).
 ///
-/// For `task`: requires `managed_meta.goal`, `managed_meta.mode`, and
-/// `managed_meta.effort` to be `Some`. If any is missing, returns `None`,
-/// which causes `write_task` to hard-error with a clear
-/// `"task write requires DoctypeFields::Task"` `BadRequest` rather than
-/// fabricating empty strings that would silently propagate into the
-/// rendered template. `managed_meta.seq` may be absent and defaults to 0.
+/// For `task`: requires `managed_meta.goal` to be `Some` (returns `None` if
+/// absent, causing `write_task` to hard-error with `BadRequest`). `mode` and
+/// `effort` default to `"null"` when absent — `"null"` is the canonical
+/// sentinel matching the task template's initial values. `managed_meta.seq`
+/// defaults to 0 when absent.
 ///
 /// For `goal`: `managed_meta.seq` may be absent and defaults to 0.
 ///
@@ -143,8 +142,11 @@ pub(crate) fn extract_doctype_fields_for_create(
     match cmd.doctype.as_str() {
         "task" => {
             let goal = cmd.managed_meta.goal.as_deref()?;
-            let mode = cmd.managed_meta.mode.as_deref()?;
-            let effort = cmd.managed_meta.effort.as_deref()?;
+            // mode/effort default to "null" — the canonical template sentinel —
+            // when the caller omits them (e.g. `temper resource create --type task`
+            // without --mode / --effort).
+            let mode = cmd.managed_meta.mode.as_deref().unwrap_or("null");
+            let effort = cmd.managed_meta.effort.as_deref().unwrap_or("null");
             let seq = cmd.managed_meta.seq.unwrap_or(0).max(0) as u32;
             Some(DoctypeFields::Task {
                 goal,
@@ -266,14 +268,14 @@ fn write_concept_or_decision(args: WriteArgs<'_>) -> Result<WriteResult, TemperE
 
 /// Write a task resource using the Askama `TaskTemplate`.
 ///
-/// Mirrors the template + frontmatter + write half of `actions::task::create`,
-/// minus the validation (goal-exists, mode/effort) and tail actions (publish,
-/// discovery event, output) which remain at the wrapper. The wrapper computes
-/// `seq` via `actions::task::next_seq` and passes it through `DoctypeFields::Task`.
+/// Handles the template + frontmatter + disk-write half of task creation.
+/// Validation (goal-exists, mode/effort) and tail actions (publish, discovery
+/// event, output) are handled by `VaultBackend::create_resource`. The backend
+/// computes `seq` via `actions::task::next_seq` and passes it through
+/// `DoctypeFields::Task`.
 ///
-/// Hard-errors when the target slug already exists on disk. The pre-pull
-/// `actions::task::create` would silently overwrite an existing slug — A1
-/// tightens that to error-on-exists (matches concept/decision behavior).
+/// Hard-errors when the target slug already exists on disk (error-on-exists
+/// matches concept/decision/goal behavior).
 ///
 /// # Byte-preservation
 ///
@@ -387,13 +389,13 @@ fn write_task(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
 
 /// Write a goal resource using the Askama `GoalTemplate`.
 ///
-/// Mirrors the template + frontmatter + write half of `actions::goal::create`,
-/// minus the tail actions (publish, discovery event, output) which remain at
-/// the wrapper. The wrapper computes `seq` via `actions::goal::next_seq` and
-/// passes it through `DoctypeFields::Goal`.
+/// Handles the template + frontmatter + disk-write half of goal creation.
+/// Tail actions (publish, discovery event, output) are handled by
+/// `VaultBackend::create_resource`. The backend computes `seq` via
+/// `actions::goal::next_seq` and passes it through `DoctypeFields::Goal`.
 ///
-/// Hard-errors when the target slug already exists on disk. The pre-pull
-/// `actions::goal::create` already had this check (matches concept/decision/task).
+/// Hard-errors when the target slug already exists on disk (matches
+/// concept/decision/task behavior).
 ///
 /// Note: `ensure_maintenance` does NOT route through `write_goal` — it has an
 /// idempotent get-or-create semantic that doesn't fit the hard-error-on-exists
@@ -471,9 +473,8 @@ fn write_goal(args: WriteArgs<'_>) -> Result<WriteResult, TemperError> {
         fm.write_to(&abs_path)?;
     } else {
         // No open-meta overlay: byte-preserve the rendered template via
-        // `vault::write_note`. This matches the pre-pull
-        // `actions::goal::create` write path. Body is empty in today's call
-        // sites (goal templates have no body input), but we string-append for
+        // `vault::write_note`. Body is empty in today's call sites (goal
+        // templates have no body input), but we string-append for
         // future-proofing should a caller pass one.
         let mut content = rendered;
         if !body.is_empty() {
