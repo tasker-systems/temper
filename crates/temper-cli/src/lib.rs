@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod backend_select;
 pub mod cli;
 pub mod cloud_backend;
 pub mod commands;
