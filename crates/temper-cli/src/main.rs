@@ -338,7 +338,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             ignore,
         } => {
             let format = temper_cli::format::resolve_format_str(format.as_deref());
+            let config = temper_cli::config::load(cli.vault.as_deref())?;
             commands::add::run(
+                &config,
                 &path,
                 dir,
                 context.as_deref(),

@@ -26,6 +26,7 @@ use crate::output;
     reason = "thin CLI entry point — arguments map 1:1 to clap flags"
 )]
 pub fn run(
+    config: &crate::config::Config,
     path: &str,
     dir: bool,
     context: Option<&str>,
@@ -51,7 +52,7 @@ pub fn run(
             output::plain(format!("dry-run: would add {path}"));
             return Ok(());
         }
-        return run_url(path, context, doc_type, format);
+        return run_url(config, path, context, doc_type, format);
     }
 
     // UUID -> promotion flow
@@ -60,7 +61,7 @@ pub fn run(
             output::plain(format!("dry-run: would promote resource {resource_id}"));
             return Ok(());
         }
-        return promote_resource(resource_id, context, doc_type, format);
+        return promote_resource(config, resource_id, context, doc_type, format);
     }
 
     // File/directory: --context required unless --doc-type auto
@@ -73,6 +74,7 @@ pub fn run(
 
     if dir {
         return run_directory(
+            config,
             path,
             context,
             doc_type,
@@ -83,7 +85,7 @@ pub fn run(
         );
     }
 
-    run_single_file(path, context, doc_type, format, dry_run)
+    run_single_file(config, path, context, doc_type, format, dry_run)
 }
 
 // ---------------------------------------------------------------------------
@@ -91,6 +93,7 @@ pub fn run(
 // ---------------------------------------------------------------------------
 
 fn run_single_file(
+    config: &crate::config::Config,
     path: &str,
     context: Option<&str>,
     doc_type: &str,
@@ -110,7 +113,7 @@ fn run_single_file(
     let is_auto = doc_type == "auto";
 
     if is_auto {
-        return run_single_auto_file(&file_path, context, fmt, dry_run);
+        return run_single_auto_file(config, &file_path, context, fmt, dry_run);
     }
 
     // Non-auto: context is guaranteed present by caller.
@@ -143,18 +146,14 @@ fn run_single_file(
         ));
     }
 
-    let config = crate::config::load(None)?;
-    let owner = config.owner_for_context(context);
-    let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, context, doc_type, &slug);
     let canonical_path = std::fs::canonicalize(&file_path)
         .unwrap_or_else(|_| file_path.clone())
         .to_string_lossy()
         .to_string();
+    let slug = ingest::slug_from_title(&resource.title);
 
-    let vault_path = ingest::write_vault_file_and_register(
-        &config.vault_root,
-        &owner,
+    let vault_path = register_vault_resource(
+        config,
         context,
         doc_type,
         &slug,
@@ -173,6 +172,7 @@ fn run_single_file(
 // ---------------------------------------------------------------------------
 
 fn run_single_auto_file(
+    config: &crate::config::Config,
     file_path: &PathBuf,
     context_override: Option<&str>,
     fmt: OutputFormat,
@@ -257,10 +257,6 @@ fn run_single_auto_file(
         output::plain(format!("done ({} KB markdown)", body.len() / 1024));
     }
 
-    let config = crate::config::load(None)?;
-    let owner = config.owner_for_context(&context);
-    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, &context, &doc_type, &slug);
-
     // Build extra frontmatter fields from legacy metadata.
     let extra_fields = build_extra_fields(parsed.as_ref());
     let extra_refs: Vec<(&str, &str)> = extra_fields
@@ -268,9 +264,8 @@ fn run_single_auto_file(
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let vault_path = ingest::write_vault_file_and_register(
-        &config.vault_root,
-        &owner,
+    let vault_path = register_vault_resource(
+        config,
         &context,
         &doc_type,
         &slug,
@@ -319,6 +314,7 @@ fn build_extra_fields(parsed: Option<&ingest::ParsedFrontmatter>) -> Vec<(String
 // ---------------------------------------------------------------------------
 
 fn promote_resource(
+    config: &crate::config::Config,
     resource_id: Uuid,
     context: Option<&str>,
     doc_type: &str,
@@ -355,20 +351,10 @@ fn promote_resource(
             )
         })?;
 
-    let config = crate::config::load(None)?;
-    let owner = config.owner_for_context(&resolved_context);
     let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(
-        &config.vault_root,
-        &owner,
-        &resolved_context,
-        doc_type,
-        &slug,
-    );
 
-    let vault_path = ingest::write_vault_file_and_register(
-        &config.vault_root,
-        &owner,
+    let vault_path = register_vault_resource(
+        config,
         &resolved_context,
         doc_type,
         &slug,
@@ -405,7 +391,13 @@ fn promote_resource(
 // URL add
 // ---------------------------------------------------------------------------
 
-fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::error::Result<()> {
+fn run_url(
+    config: &crate::config::Config,
+    url: &str,
+    context: &str,
+    doc_type: &str,
+    format: &str,
+) -> crate::error::Result<()> {
     let fmt = OutputFormat::parse(format);
 
     if matches!(fmt, OutputFormat::Pretty | OutputFormat::NoTty) {
@@ -428,14 +420,10 @@ fn run_url(url: &str, context: &str, doc_type: &str, format: &str) -> crate::err
         ));
     }
 
-    let config = crate::config::load(None)?;
-    let owner = config.owner_for_context(context);
     let slug = ingest::slug_from_title(&resource.title);
-    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, context, doc_type, &slug);
 
-    let vault_path = ingest::write_vault_file_and_register(
-        &config.vault_root,
-        &owner,
+    let vault_path = register_vault_resource(
+        config,
         context,
         doc_type,
         &slug,
@@ -553,6 +541,7 @@ pub fn preflight_check(
 /// Run directory-mode add: walk, optionally pre-flight-check, then upload
 /// all matching files with bounded concurrency.
 fn run_directory(
+    config: &crate::config::Config,
     path: &str,
     context: Option<&str>,
     doc_type: &str,
@@ -568,11 +557,11 @@ fn run_directory(
         return Err(TemperError::Config(format!("not a directory: {path}")));
     }
 
-    let config = DirectoryConfig::default();
+    let dir_config = DirectoryConfig::default();
     let all_files = if force {
-        collect_files(dir, &config)?
+        collect_files(dir, &dir_config)?
     } else {
-        preflight_check(dir, &config)?
+        preflight_check(dir, &dir_config)?
     };
 
     // Apply --ignore filter against filenames.
@@ -657,8 +646,6 @@ fn run_directory(
     let mut skipped = 0u64;
     let mut type_counts: HashMap<String, u64> = HashMap::new();
 
-    let temper_cfg = crate::config::load(None)?;
-
     if is_auto {
         let (rt, client) = runtime::build_runtime_and_client()?;
         rt.block_on(runtime::ensure_profile(&client))?;
@@ -671,7 +658,7 @@ fn run_directory(
                     .unwrap_or("unknown")
                     .to_string();
 
-                match add_single_auto_file(&client, file, context, &temper_cfg).await {
+                match add_single_auto_file(&client, file, context, config).await {
                     Ok(Some((doc_type_resolved, _vault_path))) => {
                         *type_counts.entry(doc_type_resolved).or_default() += 1;
                         if !json_mode {
@@ -715,7 +702,6 @@ fn run_directory(
     } else {
         let context =
             context.ok_or_else(|| TemperError::Config("--context is required".to_string()))?;
-        let owner = temper_cfg.owner_for_context(context);
 
         let (rt, client) = runtime::build_runtime_and_client()?;
         rt.block_on(runtime::ensure_profile(&client))?;
@@ -730,22 +716,14 @@ fn run_directory(
 
                 match ingest::ingest_file(&client, file, context, doc_type).await {
                     Ok((resource, extracted_content)) => {
-                        let slug = ingest::slug_from_title(&resource.title);
-                        let slug = ingest::dedup_vault_slug(
-                            &temper_cfg.vault_root,
-                            &owner,
-                            context,
-                            doc_type,
-                            &slug,
-                        );
                         let canonical_path = std::fs::canonicalize(file)
                             .unwrap_or_else(|_| file.clone())
                             .to_string_lossy()
                             .to_string();
+                        let slug = ingest::slug_from_title(&resource.title);
 
-                        if let Err(e) = ingest::write_vault_file_and_register(
-                            &temper_cfg.vault_root,
-                            &owner,
+                        if let Err(e) = register_vault_resource(
+                            config,
                             context,
                             doc_type,
                             &slug,
@@ -929,18 +907,14 @@ async fn add_single_auto_file(
         .await
         .map_err(crate::commands::client_err)?;
 
-    let owner = config.owner_for_context(&context);
-    let slug = ingest::dedup_vault_slug(&config.vault_root, &owner, &context, &doc_type, &slug);
-
     let extra_fields = build_extra_fields(parsed.as_ref());
     let extra_refs: Vec<(&str, &str)> = extra_fields
         .iter()
         .map(|(k, v)| (k.as_str(), v.as_str()))
         .collect();
 
-    let vault_path = ingest::write_vault_file_and_register(
-        &config.vault_root,
-        &owner,
+    let vault_path = register_vault_resource(
+        config,
         &context,
         &doc_type,
         &slug,
@@ -960,6 +934,34 @@ async fn add_single_auto_file(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/// Resolve owner, dedup the slug, and register the resource in the vault.
+/// Wraps the recurring `owner_for_context` + `dedup_vault_slug` +
+/// `write_vault_file_and_register` triplet used by every `add` sub-flow.
+fn register_vault_resource(
+    config: &crate::config::Config,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+    resource: &temper_core::types::ResourceRow,
+    content: &str,
+    source: Option<&str>,
+    extra_fields: Option<&[(&str, &str)]>,
+) -> crate::error::Result<PathBuf> {
+    let owner = config.owner_for_context(context);
+    let dedup_slug = ingest::dedup_vault_slug(&config.vault_root, &owner, context, doc_type, slug);
+    ingest::write_vault_file_and_register(
+        &config.vault_root,
+        &owner,
+        context,
+        doc_type,
+        &dedup_slug,
+        resource,
+        content,
+        source,
+        extra_fields,
+    )
+}
 
 fn emit_event(
     fmt: OutputFormat,
@@ -997,11 +999,27 @@ fn emit_event(
 mod tests {
     use super::*;
 
+    /// Minimal Config fixture: pre-config error paths fire before any of
+    /// these fields are consumed, so we just need a valid value to hand
+    /// in. Don't rely on these paths existing on disk.
+    fn fixture_config() -> crate::config::Config {
+        crate::config::Config {
+            vault_root: PathBuf::from("/tmp/temper-test-vault"),
+            state_dir: PathBuf::from("/tmp/temper-test-vault/.temper"),
+            contexts: vec![],
+            subscriptions: vec![],
+            skill_output: PathBuf::from("/tmp/temper-test-skill"),
+            profile_slug: None,
+        }
+    }
+
     // --- URL detection ---
 
     #[test]
     fn url_http_routes_to_url_handler() {
+        let config = fixture_config();
         let err = run(
+            &config,
             "http://example.com/doc.pdf",
             false,
             Some("work"),
@@ -1020,7 +1038,9 @@ mod tests {
 
     #[test]
     fn url_https_routes_to_url_handler() {
+        let config = fixture_config();
         let err = run(
+            &config,
             "https://example.com/paper.md",
             false,
             Some("work"),
@@ -1070,7 +1090,9 @@ mod tests {
 
     #[test]
     fn run_with_uuid_path_without_vault_fails_gracefully() {
+        let config = fixture_config();
         let result = run(
+            &config,
             "12345678-1234-1234-1234-123456789abc",
             false,
             None,
@@ -1085,7 +1107,9 @@ mod tests {
 
     #[test]
     fn run_file_without_context_returns_error() {
+        let config = fixture_config();
         let result = run(
+            &config,
             "/tmp/some-file.md",
             false,
             None,
@@ -1104,7 +1128,9 @@ mod tests {
 
     #[test]
     fn run_auto_without_context_does_not_require_context_upfront() {
+        let config = fixture_config();
         let result = run(
+            &config,
             "/tmp/nonexistent.md",
             false,
             None,
@@ -1124,7 +1150,9 @@ mod tests {
 
     #[test]
     fn url_without_context_returns_error() {
+        let config = fixture_config();
         let result = run(
+            &config,
             "https://example.com/doc.pdf",
             false,
             None,
@@ -1145,7 +1173,9 @@ mod tests {
 
     #[test]
     fn nonexistent_file_returns_error() {
+        let config = fixture_config();
         let result = run(
+            &config,
             "/tmp/does-not-exist-xyz-12345.md",
             false,
             Some("work"),
@@ -1279,7 +1309,9 @@ mod tests {
 
     #[test]
     fn run_directory_errors_on_non_directory() {
+        let config = fixture_config();
         let err = run(
+            &config,
             "/tmp/not-a-real-directory-xyz-12345",
             true,
             Some("work"),
@@ -1302,7 +1334,9 @@ mod tests {
 
     #[test]
     fn dry_run_url_does_not_upload() {
+        let config = fixture_config();
         let result = run(
+            &config,
             "https://example.com/doc.pdf",
             false,
             Some("work"),
@@ -1317,7 +1351,9 @@ mod tests {
 
     #[test]
     fn dry_run_uuid_does_not_promote() {
+        let config = fixture_config();
         let result = run(
+            &config,
             "12345678-1234-1234-1234-123456789abc",
             false,
             None,
