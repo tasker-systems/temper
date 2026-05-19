@@ -82,11 +82,92 @@ pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayloa
     })
 }
 
+/// Translate an `UpdateResource` command into a `ResourceUpdateRequest`
+/// wire payload suitable for `PATCH /api/resources/{id}`.
+///
+/// **Partial-merge semantics:** only fields present in the cmd are
+/// serialized on the wire.
+///
+/// **Move-to → managed_meta synthesis:** when the cmd carries
+/// `move_to: Some(MoveSpec { context_to, type_to })` but no
+/// `managed_meta.context` / `managed_meta.doc_type`, synthesizes
+/// minimal managed_meta entries so the server-side row reflects the
+/// move. Mirror of `vault_backend/translators.rs`'s synthesize_move_to
+/// pattern (PR #79). Explicit caller-supplied values always win.
+///
+/// **Body-trio:** computed only when `cmd.body` is `Some`. Short-circuits
+/// when `BodyUpdate` already carries pre-computed `content_hash` and
+/// `chunks_packed`; otherwise computes via `compute_body_chunks`.
+#[cfg(feature = "embed")]
+pub(crate) fn cmd_to_resource_update_request(
+    cmd: &temper_core::operations::UpdateResource,
+) -> Result<temper_core::types::ResourceUpdateRequest> {
+    use temper_core::types::ManagedMeta;
+
+    // Body-trio computation (only when body present).
+    let (content, content_hash, chunks_packed) = match &cmd.body {
+        Some(b) => {
+            let (hash, packed) = if b.content_hash.is_some() && b.chunks_packed.is_some() {
+                (b.content_hash.clone(), b.chunks_packed.clone())
+            } else {
+                let chunks = crate::actions::ingest::compute_body_chunks(&b.content)?;
+                (Some(chunks.content_hash), Some(chunks.chunks_packed))
+            };
+            (Some(b.content.clone()), hash, packed)
+        }
+        None => (None, None, None),
+    };
+
+    // Move_to → managed_meta synthesis: explicit caller fields always win.
+    let mut managed_meta = cmd.managed_meta.clone().unwrap_or_default();
+    if let Some(move_to) = &cmd.move_to {
+        if managed_meta.context.is_none() {
+            if let Some(ctx_to) = &move_to.context_to {
+                managed_meta.context = Some(ctx_to.clone());
+            }
+        }
+        if managed_meta.doc_type.is_none() {
+            if let Some(type_to) = &move_to.type_to {
+                managed_meta.doc_type = Some(type_to.clone());
+            }
+        }
+    }
+
+    let managed_meta_opt = if managed_meta == ManagedMeta::default() {
+        None
+    } else {
+        Some(managed_meta)
+    };
+
+    let open_meta = cmd
+        .open_meta
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| TemperError::Project(format!("serialize open_meta: {e}")))?;
+
+    // title field: lift managed_meta.title to the request's title field for
+    // symmetry with today's cloud_mode_update path (commands/resource.rs:1524).
+    let title = managed_meta_opt.as_ref().and_then(|mm| mm.title.clone());
+
+    Ok(temper_core::types::ResourceUpdateRequest {
+        title,
+        slug: None,
+        managed_meta: managed_meta_opt,
+        open_meta,
+        content,
+        content_hash,
+        chunks_packed,
+    })
+}
+
 #[cfg(feature = "embed")]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_core::operations::{BodyUpdate, CreateResource, Surface};
+    use temper_core::operations::{
+        BodyUpdate, CreateResource, MoveSpec, ResourceRef, Surface, UpdateResource,
+    };
     use temper_core::types::ManagedMeta;
 
     fn sample_cmd() -> CreateResource {
@@ -160,5 +241,75 @@ mod tests {
             payload.managed_meta.is_none(),
             "default managed_meta omitted from wire"
         );
+    }
+
+    fn sample_update() -> UpdateResource {
+        UpdateResource {
+            resource: ResourceRef::scoped("@me", "temper", "task", "test-slug"),
+            body: None,
+            managed_meta: None,
+            open_meta: None,
+            move_to: None,
+            origin: Surface::CliCloud,
+        }
+    }
+
+    #[test]
+    fn cmd_to_resource_update_request_omits_absent_fields() {
+        let cmd = sample_update();
+        let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
+        assert!(req.title.is_none());
+        assert!(req.managed_meta.is_none());
+        assert!(req.open_meta.is_none());
+        assert!(req.content.is_none());
+        assert!(req.content_hash.is_none());
+        assert!(req.chunks_packed.is_none());
+    }
+
+    #[test]
+    fn cmd_to_resource_update_request_synthesizes_managed_meta_from_move_to() {
+        let mut cmd = sample_update();
+        cmd.move_to = Some(MoveSpec {
+            context_to: Some("knowledge".to_string()),
+            type_to: Some("concept".to_string()),
+        });
+        let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
+        let mm = req.managed_meta.expect("synthesized from move_to");
+        assert_eq!(mm.context.as_deref(), Some("knowledge"));
+        assert_eq!(mm.doc_type.as_deref(), Some("concept"));
+    }
+
+    #[test]
+    fn cmd_to_resource_update_request_does_not_overwrite_explicit_managed_meta() {
+        let mut cmd = sample_update();
+        cmd.managed_meta = Some(ManagedMeta {
+            context: Some("explicit-context".to_string()),
+            ..ManagedMeta::default()
+        });
+        cmd.move_to = Some(MoveSpec {
+            context_to: Some("from-move-to".to_string()),
+            type_to: None,
+        });
+        let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
+        let mm = req.managed_meta.expect("present");
+        assert_eq!(
+            mm.context.as_deref(),
+            Some("explicit-context"),
+            "explicit value wins over move_to synthesis"
+        );
+    }
+
+    #[test]
+    fn cmd_to_resource_update_request_computes_body_trio_when_body_present() {
+        let mut cmd = sample_update();
+        cmd.body = Some(BodyUpdate {
+            content: "# Updated\n".to_string(),
+            content_hash: None,
+            chunks_packed: None,
+        });
+        let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
+        assert_eq!(req.content.as_deref(), Some("# Updated\n"));
+        assert!(req.content_hash.is_some());
+        assert!(req.chunks_packed.is_some());
     }
 }
