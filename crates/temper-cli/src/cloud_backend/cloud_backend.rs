@@ -306,3 +306,135 @@ mod embed_impl {
         }
     }
 }
+
+#[cfg(not(feature = "embed"))]
+mod non_embed_impl {
+    use async_trait::async_trait;
+    use temper_core::operations::{
+        Backend, CommandOutput, CreateResource, DeleteResource, ListResources, ResourceSummary,
+        SearchHit, SearchResources, ShowResource, UpdateResource,
+    };
+    use temper_core::types::resource::ResourceRow;
+
+    use super::CloudBackend;
+    use crate::error::TemperError;
+
+    /// Non-embed build: every Backend method errors with a clear message.
+    /// Surfaces calling `build_backend()` in cloud mode under a no-embed
+    /// build will hit this stub and surface the "needs embed feature" error
+    /// to the user.
+    #[async_trait]
+    impl Backend for CloudBackend {
+        async fn create_resource(
+            &self,
+            _cmd: CreateResource,
+        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn update_resource(
+            &self,
+            _cmd: UpdateResource,
+        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn delete_resource(
+            &self,
+            _cmd: DeleteResource,
+        ) -> Result<CommandOutput<()>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn show_resource(
+            &self,
+            _cmd: ShowResource,
+        ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn list_resources(
+            &self,
+            _cmd: ListResources,
+        ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn search_resources(
+            &self,
+            _cmd: SearchResources,
+        ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::Arc;
+        use temper_client::auth::MemoryTokenStore;
+        use temper_client::TemperClient;
+        use temper_core::operations::Surface;
+
+        use super::super::super::ctx::CloudBackendCtx;
+        use super::super::CloudBackend;
+        use crate::config::Config;
+
+        fn make_config(vault_root: &std::path::Path) -> Config {
+            Config {
+                vault_root: vault_root.to_path_buf(),
+                state_dir: vault_root.join(".temper"),
+                contexts: vec!["temper".to_string()],
+                subscriptions: vec![],
+                skill_output: vault_root.join("skills"),
+                profile_slug: None,
+            }
+        }
+
+        #[tokio::test]
+        async fn cloud_backend_create_errors_with_embed_message_in_no_embed_build() {
+            let temp = tempfile::tempdir().unwrap();
+            let store = Arc::new(MemoryTokenStore::empty());
+            let client = Arc::new(TemperClient::new("http://localhost:0", None, store));
+            let ctx = CloudBackendCtx {
+                client,
+                owner: "@me".to_string(),
+                config: Arc::new(make_config(temp.path())),
+                surface: Surface::CliCloud,
+            };
+            let backend = CloudBackend::new(ctx);
+            use temper_core::operations::CreateResource;
+            use temper_core::types::ManagedMeta;
+            let cmd = CreateResource {
+                slug: "test".to_string(),
+                doctype: "task".to_string(),
+                context: "temper".to_string(),
+                title: "Test".to_string(),
+                body: None,
+                managed_meta: ManagedMeta::default(),
+                open_meta: None,
+                origin_uri: None,
+                chunks_packed: None,
+                content_hash: None,
+                origin: Surface::CliCloud,
+            };
+            let err = backend.create_resource(cmd).await.unwrap_err();
+            assert!(
+                format!("{err:?}").contains("--features embed"),
+                "expected embed-required error, got: {err:?}"
+            );
+        }
+    }
+}
