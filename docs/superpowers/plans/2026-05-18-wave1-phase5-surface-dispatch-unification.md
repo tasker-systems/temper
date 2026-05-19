@@ -1358,9 +1358,7 @@ pub fn build_backend(
             Ok((runtime, backend))
         }
         VaultState::Cloud => {
-            let runtime = tokio::runtime::Runtime::new()
-                .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-            let backend_ctx = crate::cloud_backend::assemble_cloud_backend(config, ctx)?;
+            let (runtime, backend_ctx) = crate::cloud_backend::assemble_cloud_backend(config, ctx)?;
             let backend: Box<dyn Backend> = Box::new(crate::cloud_backend::CloudBackend::new(backend_ctx));
             Ok((runtime, backend))
         }
