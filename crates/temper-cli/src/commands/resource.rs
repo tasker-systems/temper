@@ -34,7 +34,7 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
 }
 
 /// Map current `VaultState` to the appropriate `Surface` origin for cmd construction.
-fn surface_for_state() -> temper_core::operations::Surface {
+pub(crate) fn surface_for_state() -> temper_core::operations::Surface {
     use temper_core::types::config::VaultState;
     match VaultState::from_env() {
         VaultState::Local => temper_core::operations::Surface::CliLocalVault,
@@ -43,7 +43,7 @@ fn surface_for_state() -> temper_core::operations::Surface {
 }
 
 /// True iff `events` contains a `VaultFileWritten` event (local-mode indicator).
-fn has_vault_file_event(events: &[temper_core::operations::DomainEvent]) -> bool {
+pub(crate) fn has_vault_file_event(events: &[temper_core::operations::DomainEvent]) -> bool {
     use temper_core::operations::DomainEvent;
     events
         .iter()
@@ -52,7 +52,9 @@ fn has_vault_file_event(events: &[temper_core::operations::DomainEvent]) -> bool
 
 /// Extract the rel_path string from a `VaultFileWritten` event in the slice,
 /// if any. Used by surfaces that emit discovery events with the vault path.
-fn vault_file_path_from_events(events: &[temper_core::operations::DomainEvent]) -> Option<String> {
+pub(crate) fn vault_file_path_from_events(
+    events: &[temper_core::operations::DomainEvent],
+) -> Option<String> {
     use temper_core::operations::DomainEvent;
     events.iter().find_map(|e| match e {
         DomainEvent::VaultFileWritten { path } => Some(path.clone()),
