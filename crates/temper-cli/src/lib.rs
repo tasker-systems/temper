@@ -1,5 +1,6 @@
 pub mod actions;
 pub mod cli;
+pub mod cloud_backend;
 pub mod commands;
 pub mod config;
 pub mod discovery;
