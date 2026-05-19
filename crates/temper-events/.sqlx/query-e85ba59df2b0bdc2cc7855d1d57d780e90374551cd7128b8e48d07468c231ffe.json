@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            id, event_type_id, emitter_entity_id, topic_id, scope_id,\n            payload, metadata, \"references\", correlation_id,\n            occurred_at, recorded_at\n        FROM event_substrate.events\n        WHERE id = $1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "event_type_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "emitter_entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "topic_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "scope_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "payload",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 6,
+        "name": "metadata",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 7,
+        "name": "references",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 8,
+        "name": "correlation_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "occurred_at",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 10,
+        "name": "recorded_at",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "e85ba59df2b0bdc2cc7855d1d57d780e90374551cd7128b8e48d07468c231ffe"
+}
