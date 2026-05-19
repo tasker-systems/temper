@@ -1476,8 +1476,8 @@ fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_
 
 /// Build a `MoveSpec` from `--type-to` / `--context-to` CLI flags. Returns
 /// `None` when neither is set; otherwise returns `Some` with whichever fields
-/// were provided. Wired by `update_local` (B4) to translate CLI move flags
-/// into the `UpdateResource.move_to` operations field.
+/// were provided. Translates CLI move flags into the `UpdateResource.move_to`
+/// operations field.
 fn build_move_spec_from_args(
     params: &UpdateParams<'_>,
 ) -> Option<temper_core::operations::MoveSpec> {
@@ -1490,122 +1490,26 @@ fn build_move_spec_from_args(
     })
 }
 
-/// Cloud-mode `temper resource update` — no vault file is touched. Resolves
-/// the resource id via the API, builds a partial `ResourceUpdateRequest`
-/// (managed_meta + open_meta + optional body trio), and posts
-/// `PATCH /api/resources/{id}`. Prints `{slug, content_hash}` for the
-/// agent's next show-edit-cat cycle.
-#[cfg(feature = "embed")]
-fn cloud_mode_update(config: &Config, params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
-    use std::io::IsTerminal;
-
-    // Resolve body source first (sync, doesn't need the runtime).
-    let stdin_is_tty = std::io::stdin().is_terminal();
-    let body_opt = crate::actions::body_source::resolve_body_source(
-        params.body.as_deref(),
-        stdin_is_tty,
-        std::io::stdin(),
-    )?;
-
-    let (content, content_hash, chunks_packed) = match body_opt {
-        Some(b) => {
-            let chunks = crate::actions::ingest::compute_body_chunks(&b)?;
-            (
-                Some(b),
-                Some(chunks.content_hash),
-                Some(chunks.chunks_packed),
-            )
-        }
-        None => (None, None, None),
-    };
-
-    let managed_meta = build_partial_managed_meta_from_args(params);
-    let open_meta = build_partial_open_meta_from_args(params);
-
-    // temper-title/temper-slug injection into managed_meta JSONB happens on the
-    // receive side via ensure_managed_identity_keys in resource_service::update
-    // (see Phase 5 plan, Task 5). Doing it here would require fetching the
-    // current resource for fallback title/slug values, then round-tripping the
-    // typed ManagedMeta partial through serde_json::Value and back — the
-    // server-side defense closes the gap with a single in-process call.
-    let req = temper_core::types::ResourceUpdateRequest {
-        title: params.title.map(String::from),
-        slug: None,
-        managed_meta,
-        open_meta,
-        content,
-        content_hash,
-        chunks_packed,
-    };
-
-    // Compute owned values before the async block so the closure is 'static.
-    // In cloud mode, slug→id resolution goes through the API's by-uri lookup;
-    // we only need owner + context strings to form the URI.
-    let ctx = require_context(config, params.context)?.to_string();
-    let owner = config.owner_for_context(&ctx).to_string();
-    let doc_type = current_type.to_string();
-    let slug = params.slug.to_string();
-
-    let updated = crate::actions::runtime::with_client(move |client| {
-        let req = req.clone();
-        let owner = owner.clone();
-        let ctx = ctx.clone();
-        let doc_type = doc_type.clone();
-        let slug = slug.clone();
-        Box::pin(async move {
-            let row = client
-                .resources()
-                .resolve_by_uri(&owner, &ctx, &doc_type, &slug)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            client
-                .resources()
-                .update(*row.id, &req)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)
-        })
-    })?;
-
-    let slug_display = updated
-        .slug
-        .as_deref()
-        .unwrap_or(&updated.id.to_string())
-        .to_string();
-    let hash_display = updated.body_hash.as_deref().unwrap_or("").to_string();
-    println!(
-        "{}",
-        serde_json::json!({
-            "temper-slug": slug_display,
-            "content_hash": hash_display,
-        })
-    );
-    Ok(())
-}
-
 /// Update a resource's frontmatter fields.
 ///
-/// Surface responsibilities (per the backend/surface split documented in
-/// `vault_backend/vault_backend.rs::update_resource`):
+/// Surface responsibilities:
 ///
 /// 1. Doctype + type-to validation (clap-side polish; produces a friendlier
 ///    error than letting `validate_update` surface a `BadRequest`).
-/// 2. Cloud-mode early-return — when `TEMPER_VAULT_STATE=cloud`, the vault
-///    file is never touched; the cloud arm builds a `ResourceUpdateRequest`
-///    and PATCHes the API directly.
-/// 3. Per-flag schema validation against `schema::updatable_fields` —
+/// 2. Per-flag schema validation against `schema::updatable_fields` —
 ///    rejects bad enum values (e.g. `--stage frobnicate`) with a
 ///    user-targeted message before the operations layer ever sees them.
-/// 4. `--body` flag resolution (stdin/file → `Option<String>`) — resolved
-///    pre-dispatch so a malformed flag errors before any side effects.
-/// 5. Build an `UpdateResource` command from the partial managed_meta /
-///    open_meta / move_to helpers and dispatch through `VaultBackend`.
-/// 6. Emit a `ResourceUpdate` discovery event from the surface (the backend
-///    emits operational `VaultFileWritten` / `VaultManifestUpdated` events;
-///    the surface emits the agent-facing `ResourceUpdate` telemetry).
-/// 7. Print `Updated: <rel_path>` derived from the backend's
-///    `VaultFileWritten` event.
+/// 3. `--body` flag resolution (stdin/file → `Option<String>`).
+/// 4. Build an `UpdateResource` command and dispatch through `build_backend`.
+/// 5. Render output — mode-implicit via event presence:
+///    - Local (VaultFileWritten present): `"Updated: {rel_path}"` to stderr +
+///      `ResourceUpdate` discovery event.
+///    - Cloud (no VaultFileWritten): JSON `{"temper-slug": ..., "content_hash": ...}`
+///      to stdout. Agent-workflow contract per CLAUDE.md (show-edit-cat cycle).
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
-    use temper_core::types::config::VaultState;
+    use std::io::IsTerminal;
+
+    use temper_core::operations::{BodyUpdate, ResourceRef, UpdateResource};
 
     // 1. Resolve current type from --type or --type-from (one is required).
     let current_type = params
@@ -1613,46 +1517,14 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         .or(params.type_from)
         .ok_or_else(|| TemperError::Project("--type or --type-from is required".into()))?;
     let _ = temper_core::frontmatter::DocType::from_str(current_type)?;
-
     if let Some(tt) = params.type_to {
         let _ = temper_core::frontmatter::DocType::from_str(tt)?;
     }
 
-    let vault_state = VaultState::from_env();
-
-    // 2. Cloud-mode: skip vault file edits; build ResourceUpdateRequest and PATCH /api/resources/{id}.
-    #[cfg(feature = "embed")]
-    if matches!(vault_state, VaultState::Cloud) {
-        return cloud_mode_update(config, params, current_type);
-    }
-    #[cfg(not(feature = "embed"))]
-    let _ = vault_state;
-
-    update_local(config, params, current_type)
-}
-
-/// Local-mode `temper resource update` — dispatches through
-/// [`crate::vault_backend::VaultBackend`].
-///
-/// Kept ungated so non-embed builds (`cargo build -p temper-cli` with no
-/// features) compile. The cloud-mode branch is the only `#[cfg(feature =
-/// "embed")]` arm; the local arm is always present.
-fn update_local(config: &Config, params: &UpdateParams<'_>, current_type: &str) -> Result<()> {
-    use std::io::IsTerminal;
-
-    use temper_core::operations::{
-        Backend, BodyUpdate, DomainEvent, ResourceRef, Surface, UpdateResource,
-    };
-
-    // 3. Per-flag schema validation. This guards against bad enum values
-    //    (`--stage frobnicate`) with a user-targeted message; the
-    //    operations-layer `validate_update` is about command-shape invariants
-    //    (body+content_hash trio), a different concern.
+    // 2. Per-flag schema validation.
     validate_update_args(params, current_type)?;
 
-    // 4. Resolve --body before any dispatch so a malformed flag fails fast,
-    //    before any side effects. None means "no body update requested" —
-    //    leave the existing on-disk body untouched.
+    // 3. --body resolution.
     let stdin_is_tty = std::io::stdin().is_terminal();
     let resolved_body = crate::actions::body_source::resolve_body_source(
         params.body.as_deref(),
@@ -1660,10 +1532,9 @@ fn update_local(config: &Config, params: &UpdateParams<'_>, current_type: &str) 
         std::io::stdin(),
     )?;
 
-    // Resolve context (required for assemble_vault_backend and ResourceRef::scoped).
     let ctx = require_context(config, params.context)?;
 
-    // 5. Build the UpdateResource command and dispatch through the backend.
+    // 4. Build the UpdateResource cmd.
     let cmd = UpdateResource {
         resource: ResourceRef::scoped(
             config.owner_for_context(&ctx),
@@ -1675,55 +1546,63 @@ fn update_local(config: &Config, params: &UpdateParams<'_>, current_type: &str) 
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
-        origin: Surface::CliLocalVault,
+        origin: surface_for_state(),
     };
 
-    let (runtime, backend_ctx) = crate::vault_backend::assemble_vault_backend(config, &ctx)?;
-    let backend = crate::vault_backend::VaultBackend::new(backend_ctx);
+    // 5. Acquire backend + dispatch.
+    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
 
-    // 6/7. Surface-side telemetry + user-facing print. Source the rel_path
-    //      from the backend's `VaultFileWritten` event; derive the slug,
-    //      final context, and final type from the projected `ResourceRow`
-    //      (which `vault_file_to_resource_row` populates from frontmatter
-    //      after any move). Falling back to the request-side context/type
-    //      keeps the event well-formed even when the row projection is
-    //      missing a frontmatter key.
-    let rel_path = output
-        .events
-        .iter()
-        .find_map(|e| match e {
-            DomainEvent::VaultFileWritten { path } => Some(path.clone()),
-            _ => None,
-        })
-        .unwrap_or_default();
+    // 6. Mode-implicit rendering. If a VaultFileWritten event is present
+    //    (local mode), render rel_path + emit discovery event. Otherwise
+    //    (cloud mode), print the agent-facing JSON with content_hash.
+    if has_vault_file_event(&output.events) {
+        let rel_path = vault_file_path_from_events(&output.events).unwrap_or_default();
 
-    let final_slug = std::path::Path::new(&rel_path)
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let final_ctx = if output.value.context_name.is_empty() {
-        ctx.clone()
-    } else {
-        output.value.context_name.clone()
-    };
-    let final_type = if output.value.doc_type_name.is_empty() {
-        current_type.to_string()
-    } else {
-        output.value.doc_type_name.clone()
-    };
+        // Discovery event: emit agent-facing ResourceUpdate telemetry.
+        let final_slug = std::path::Path::new(&rel_path)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let final_ctx = if output.value.context_name.is_empty() {
+            ctx.clone()
+        } else {
+            output.value.context_name.clone()
+        };
+        let final_type = if output.value.doc_type_name.is_empty() {
+            current_type.to_string()
+        } else {
+            output.value.doc_type_name.clone()
+        };
+        let event = Event::ResourceUpdate {
+            ts: Local::now().to_rfc3339(),
+            doc_type: final_type,
+            slug: final_slug,
+            context: final_ctx,
+        };
+        if let Err(e) = discovery::append_event(&config.state_dir, &event) {
+            tracing::warn!("Failed to append discovery event: {e}");
+        }
 
-    let event = Event::ResourceUpdate {
-        ts: Local::now().to_rfc3339(),
-        doc_type: final_type,
-        slug: final_slug,
-        context: final_ctx,
-    };
-    if let Err(e) = discovery::append_event(&config.state_dir, &event) {
-        tracing::warn!("Failed to append discovery event: {e}");
+        output::success(format!("Updated: {rel_path}"));
+    } else {
+        // Cloud mode: print {temper-slug, content_hash} JSON to stdout for
+        // the show-edit-cat agent workflow contract (per CLAUDE.md).
+        let slug_display = output
+            .value
+            .slug
+            .clone()
+            .unwrap_or_else(|| output.value.id.to_string());
+        let hash_display = output.value.body_hash.as_deref().unwrap_or("").to_string();
+        println!(
+            "{}",
+            serde_json::json!({
+                "temper-slug": slug_display,
+                "content_hash": hash_display,
+            })
+        );
     }
 
-    output::success(format!("Updated: {rel_path}"));
     Ok(())
 }
 
