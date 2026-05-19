@@ -126,6 +126,14 @@ fn render_create_output_to_string(
 
     let today = Local::now().format("%Y-%m-%d").to_string();
 
+    // Mode-implicit `path` field: emit only when a VaultFileWritten event is
+    // present (local mode, real on-disk file). In cloud mode the synthesized
+    // path would point at a nonexistent file — agents chaining
+    // `temper resource create ... --format json | jq -r .path` and cat-ing
+    // the result would hit ENOENT. Mirrors the surface-rendering pattern
+    // used by update (commands::resource::update) and session::save.
+    let vault_path = vault_file_path_from_events(&output.events);
+
     let json = match doctype {
         DocType::Task => serde_json::json!({
             "type": "task",
@@ -146,33 +154,23 @@ fn render_create_output_to_string(
             })
         }
         DocType::Session => {
-            // Session JSON: title, context, vault-relative path, today's date.
-            // Path reconstructed from ResourceRow fields — same format as
-            // `Vault::rel_path(owner, context, doc_type, slug)`.
-            let slug = row.slug.as_deref().unwrap_or("");
-            let path = format!(
-                "{}/{}/{}/{}.md",
-                row.owner_handle, row.context_name, "session", slug
-            );
+            // Session JSON: title, context, vault-relative path (local only),
+            // today's date.
             serde_json::json!({
                 "title": row.title,
                 "context": row.context_name,
-                "path": path,
+                "path": vault_path.as_deref().unwrap_or(""),
                 "date": today,
             })
         }
         DocType::Research => {
-            // Research JSON: title, project (=context), vault-relative path,
-            // today's date, id (UUID string), slug.
+            // Research JSON: title, project (=context), vault-relative path
+            // (local only), today's date, id (UUID string), slug.
             let slug = row.slug.as_deref().unwrap_or("");
-            let path = format!(
-                "{}/{}/{}/{}.md",
-                row.owner_handle, row.context_name, "research", slug
-            );
             serde_json::json!({
                 "title": row.title,
                 "project": row.context_name,
-                "path": path,
+                "path": vault_path.as_deref().unwrap_or(""),
                 "date": today,
                 "id": row.id.to_string(),
                 "slug": slug,
@@ -180,18 +178,14 @@ fn render_create_output_to_string(
         }
         DocType::Concept | DocType::Decision => {
             // Concept/Decision JSON: doc_type, title, slug, context, vault-relative
-            // path, today's date, id (UUID string).
+            // path (local only), today's date, id (UUID string).
             let slug = row.slug.as_deref().unwrap_or("");
-            let path = format!(
-                "{}/{}/{}/{}.md",
-                row.owner_handle, row.context_name, row.doc_type_name, slug
-            );
             serde_json::json!({
                 "doc_type": row.doc_type_name,
                 "title": row.title,
                 "slug": slug,
                 "context": row.context_name,
-                "path": path,
+                "path": vault_path.as_deref().unwrap_or(""),
                 "date": today,
                 "id": row.id.to_string(),
             })
@@ -277,6 +271,16 @@ pub fn create(
         content_hash: None,
         origin: surface_for_state(),
     };
+
+    // Surface-side pre-flight validation — mirrors the hoist of
+    // `validate_update_args` for update. Without this, cloud-mode create would
+    // skip `validate_create` entirely (CloudBackend has no equivalent), and
+    // bad inputs (e.g., --mode plan-or-build whitelist violations) would ship
+    // a doomed request to the server. VaultBackend runs `validate_create` as
+    // its first step (vault_backend.rs:484) — hoisting here makes both modes
+    // symmetric and lets local-mode fail-fast benefit cloud-mode too.
+    temper_core::operations::validate_create(&cmd)
+        .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
     // Acquire backend (mode picked via VaultState::from_env) and dispatch.
     let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
@@ -783,10 +787,20 @@ pub fn delete(
     //
     // Local mode emits RemoteSynced + VaultFileRemoved + VaultManifestUpdated;
     // cloud mode emits RemoteSynced only. Same loop, both shapes.
+    //
+    // The "(cloud)" suffix is mode-implicit via event presence: append only
+    // when no VaultFileRemoved is also emitted, otherwise the local-mode
+    // output ("Deleted X (cloud)\nRemoved vault file: ...") would
+    // contradict itself.
+    let has_vault_removed = output
+        .events
+        .iter()
+        .any(|e| matches!(e, DomainEvent::VaultFileRemoved { .. }));
     for event in &output.events {
         match event {
             DomainEvent::RemoteSynced { .. } => {
-                self::output::success(format!("Deleted {doc_type}/{slug} (cloud)"));
+                let suffix = if has_vault_removed { "" } else { " (cloud)" };
+                self::output::success(format!("Deleted {doc_type}/{slug}{suffix}"));
             }
             DomainEvent::VaultFileRemoved { path } => {
                 self::output::dim(format!("Removed vault file: {path}"));
@@ -2139,25 +2153,35 @@ mod render_create_output_tests {
         assert_eq!(parsed["temper-seq"], 3);
     }
 
+    /// Build a `CommandOutput<ResourceRow>` that carries a `VaultFileWritten`
+    /// event with the canonical rel_path the on-disk write would have used.
+    /// Used by tests that assert the local-mode legacy JSON shape
+    /// (`path` field populated). Cloud-mode tests use `CommandOutput::new(row)`
+    /// directly — no event, empty `path` field.
+    fn output_with_vault_file(row: ResourceRow, rel_path: &str) -> CommandOutput<ResourceRow> {
+        use temper_core::operations::DomainEvent;
+        CommandOutput {
+            value: row,
+            events: vec![DomainEvent::VaultFileWritten {
+                path: rel_path.to_string(),
+            }],
+        }
+    }
+
     #[test]
     fn render_create_output_session_json_matches_legacy_shape() {
         let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/session/2026-05-14-my-session.md");
         let json = render_create_output_to_string(&output, "session", "json")
             .expect("rendering session JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["title"], "My Session");
         assert_eq!(parsed["context"], "temper");
-        // Path must be the vault-relative path in the correct format.
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/session/2026-05-14-my-session.md"),
-            "path must end with doctype/slug.md, got: {path}"
-        );
-        assert!(
-            path.starts_with("@me/"),
-            "path must start with owner, got: {path}"
+        // Path is populated from the VaultFileWritten event (local-mode).
+        assert_eq!(
+            parsed["path"],
+            "@me/temper/session/2026-05-14-my-session.md"
         );
         // date field is today's date — just verify it parses and is non-empty.
         let date = parsed["date"].as_str().expect("date must be a string");
@@ -2172,6 +2196,20 @@ mod render_create_output_tests {
     }
 
     #[test]
+    fn render_create_output_session_cloud_mode_emits_empty_path() {
+        // Cloud-mode: no VaultFileWritten event → `path` field empty. Agents
+        // can detect cloud mode by checking for an empty path; no fictional
+        // file path is emitted.
+        let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
+        let output = CommandOutput::new(row);
+        let json = render_create_output_to_string(&output, "session", "json")
+            .expect("rendering session JSON should succeed");
+
+        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed["path"], "", "cloud mode must emit empty path");
+    }
+
+    #[test]
     fn render_create_output_research_json_matches_legacy_shape() {
         let row = make_resource_row(
             "2026-05-14-my-research",
@@ -2179,7 +2217,7 @@ mod render_create_output_tests {
             "My Research",
             "temper",
         );
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/research/2026-05-14-my-research.md");
         let json = render_create_output_to_string(&output, "research", "json")
             .expect("rendering research JSON should succeed");
 
@@ -2187,10 +2225,9 @@ mod render_create_output_tests {
         assert_eq!(parsed["title"], "My Research");
         // Legacy research uses "project" (not "context").
         assert_eq!(parsed["project"], "temper");
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/research/2026-05-14-my-research.md"),
-            "path must end with doctype/slug.md, got: {path}"
+        assert_eq!(
+            parsed["path"],
+            "@me/temper/research/2026-05-14-my-research.md"
         );
         // id is the UUID string of the ResourceId.
         let id = parsed["id"].as_str().expect("id must be a string");
@@ -2210,7 +2247,7 @@ mod render_create_output_tests {
     #[test]
     fn render_create_output_concept_json_matches_legacy_shape() {
         let row = make_resource_row("my-concept", "concept", "My Concept", "temper");
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/concept/my-concept.md");
         let json = render_create_output_to_string(&output, "concept", "json")
             .expect("rendering concept JSON should succeed");
 
@@ -2219,11 +2256,7 @@ mod render_create_output_tests {
         assert_eq!(parsed["title"], "My Concept");
         assert_eq!(parsed["slug"], "my-concept");
         assert_eq!(parsed["context"], "temper");
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/concept/my-concept.md"),
-            "path must end with doctype/slug.md, got: {path}"
-        );
+        assert_eq!(parsed["path"], "@me/temper/concept/my-concept.md");
         let id = parsed["id"].as_str().expect("id must be a string");
         assert!(!id.is_empty(), "id must be non-empty");
         let date = parsed["date"].as_str().expect("date must be a string");
@@ -2244,7 +2277,7 @@ mod render_create_output_tests {
             "My Decision",
             "temper",
         );
-        let output = CommandOutput::new(row);
+        let output = output_with_vault_file(row, "@me/temper/decision/2026-05-14-my-decision.md");
         let json = render_create_output_to_string(&output, "decision", "json")
             .expect("rendering decision JSON should succeed");
 
@@ -2253,10 +2286,9 @@ mod render_create_output_tests {
         assert_eq!(parsed["title"], "My Decision");
         assert_eq!(parsed["slug"], "2026-05-14-my-decision");
         assert_eq!(parsed["context"], "temper");
-        let path = parsed["path"].as_str().expect("path must be a string");
-        assert!(
-            path.ends_with("/decision/2026-05-14-my-decision.md"),
-            "path must end with doctype/slug.md, got: {path}"
+        assert_eq!(
+            parsed["path"],
+            "@me/temper/decision/2026-05-14-my-decision.md"
         );
         let id = parsed["id"].as_str().expect("id must be a string");
         assert!(!id.is_empty(), "id must be non-empty");

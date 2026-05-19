@@ -23,16 +23,21 @@ use temper_core::types::ingest::IngestPayload;
 ///
 /// **Body-trio computation:** If `cmd.body` already carries pre-computed
 /// `content_hash` and `chunks_packed`, they are forwarded directly. Otherwise
-/// runs `compute_body_chunks` to fill them. Mirror of existing cloud_mode_create
-/// at `commands/resource.rs:226-234`.
+/// runs `compute_body_chunks` to fill them.
 ///
-/// **managed_meta/open_meta:** serialized via `serde_json::to_value`. When
-/// `managed_meta == ManagedMeta::default()`, omitted from the wire.
+/// **Symmetric defense (CLAUDE.md "Phase 5's symmetric defense pattern"):**
+/// always serializes managed_meta to JSON and runs
+/// `ensure_managed_identity_keys` with `cmd.title` + `Some(cmd.slug)` from the
+/// typed cmd, so the wire payload's `temper-title` and `temper-slug` always
+/// derive from the same typed source as the server-side receive-side fill.
+/// Mirrors `VaultBackend::create_resource` (vault_backend.rs:502).
 ///
 /// **`origin_uri`:** empty string today — server constructs the canonical
 /// URI from `(owner, context, doctype, slug)`.
 #[cfg(feature = "embed")]
 pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayload> {
+    use temper_core::operations::ensure_managed_identity_keys;
+
     // Resolve body content.
     let content = match &cmd.body {
         Some(b) if !b.content.is_empty() => b.content.clone(),
@@ -50,15 +55,13 @@ pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayloa
         }
     };
 
-    // Serialize managed_meta (omit when default).
-    let managed_meta = if cmd.managed_meta == temper_core::types::ManagedMeta::default() {
-        None
-    } else {
-        Some(
-            serde_json::to_value(&cmd.managed_meta)
-                .map_err(|e| TemperError::Project(format!("serialize managed_meta: {e}")))?,
-        )
-    };
+    // Serialize managed_meta to JSON and inject canonical identity keys from
+    // the typed cmd — symmetric defense per CLAUDE.md. Always emit Some(...);
+    // the identity keys make it non-default by construction.
+    let mut managed_value = serde_json::to_value(&cmd.managed_meta)
+        .map_err(|e| TemperError::Project(format!("serialize managed_meta: {e}")))?;
+    ensure_managed_identity_keys(&mut managed_value, &cmd.title, Some(&cmd.slug));
+    let managed_meta = Some(managed_value);
 
     let open_meta = cmd
         .open_meta
@@ -136,6 +139,15 @@ pub(crate) fn cmd_to_resource_update_request(
     let managed_meta_opt = if managed_meta == ManagedMeta::default() {
         None
     } else {
+        // Symmetric defense (CLAUDE.md "Phase 5's symmetric defense pattern"):
+        // when emitting managed_meta, sync its `temper-slug` from the URI's
+        // typed source (`ResourceRef::Scoped.slug`) so the embedded slug
+        // can never drift from the URI's slug. Title is its own typed source
+        // when present; no defense is possible for partial updates that
+        // don't touch title (no canonical title to derive).
+        if let temper_core::operations::ResourceRef::Scoped { slug, .. } = &cmd.resource {
+            managed_meta.slug = Some(slug.clone());
+        }
         Some(managed_meta)
     };
 
@@ -297,13 +309,37 @@ mod tests {
     }
 
     #[test]
-    fn cmd_to_ingest_payload_skips_managed_meta_when_default() {
+    fn cmd_to_ingest_payload_always_injects_identity_keys() {
+        // Symmetric defense (CLAUDE.md): even when caller-supplied managed_meta
+        // is default, the wire payload must carry `temper-title` and `temper-slug`
+        // injected from the typed cmd. This is the test that guards the
+        // VaultBackend-equivalent invariant from vault_backend/tests.rs:668.
         let mut cmd = sample_cmd();
         cmd.managed_meta = ManagedMeta::default();
         let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
-        assert!(
-            payload.managed_meta.is_none(),
-            "default managed_meta omitted from wire"
+        let mm = payload
+            .managed_meta
+            .expect("identity keys make managed_meta non-default by construction");
+        assert_eq!(mm["temper-title"], "Test task");
+        assert_eq!(mm["temper-slug"], "2026-05-18-test");
+    }
+
+    #[test]
+    fn cmd_to_ingest_payload_identity_keys_from_typed_source_not_caller_managed_meta() {
+        // If a future refactor passes a managed_meta with title/slug that differs
+        // from the cmd's typed title/slug, the typed cmd wins — preventing drift.
+        let mut cmd = sample_cmd();
+        cmd.managed_meta.title = Some("Drift!".to_string());
+        cmd.managed_meta.slug = Some("drift-slug".to_string());
+        let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");
+        let mm = payload.managed_meta.expect("present");
+        assert_eq!(
+            mm["temper-title"], "Test task",
+            "typed cmd.title wins over managed_meta.title"
+        );
+        assert_eq!(
+            mm["temper-slug"], "2026-05-18-test",
+            "typed cmd.slug wins over managed_meta.slug"
         );
     }
 
@@ -341,6 +377,29 @@ mod tests {
         let mm = req.managed_meta.expect("synthesized from move_to");
         assert_eq!(mm.context.as_deref(), Some("knowledge"));
         assert_eq!(mm.doc_type.as_deref(), Some("concept"));
+        // Symmetric defense: slug injected from URI when managed_meta is sent.
+        assert_eq!(mm.slug.as_deref(), Some("test-slug"));
+    }
+
+    #[test]
+    fn cmd_to_resource_update_request_injects_slug_from_uri_into_managed_meta() {
+        // When managed_meta is being sent and caller's managed_meta.slug differs
+        // from the URI's slug, the URI's slug wins (defense against drift).
+        let mut cmd = sample_update();
+        cmd.managed_meta = Some(ManagedMeta {
+            slug: Some("drift-slug".to_string()),
+            title: Some("New Title".to_string()),
+            ..ManagedMeta::default()
+        });
+        let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
+        let mm = req.managed_meta.expect("present");
+        assert_eq!(
+            mm.slug.as_deref(),
+            Some("test-slug"),
+            "URI slug wins over caller-supplied managed_meta.slug"
+        );
+        // Title from managed_meta is preserved (the typed field is the source).
+        assert_eq!(mm.title.as_deref(), Some("New Title"));
     }
 
     #[test]

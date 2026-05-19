@@ -119,11 +119,18 @@ mod embed_impl {
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = resolved.id;
+            // Use the structured `commands::client_err` mapper (not the lossy
+            // `client_err_to_temper` collapser) so a server-returned
+            // `SystemAccessRequired` is preserved as
+            // `TemperError::SystemAccessRequired { details }` and main.rs
+            // renders the rich CLI UI (email, join-request status, request URL,
+            // CLI hint). The pre-Phase-5 `delete_cloud` used `client_err` here
+            // for this reason; CloudBackend now mirrors that on the delete step.
             self.client
                 .resources()
                 .delete(*resource_id)
                 .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
+                .map_err(crate::commands::client_err)?;
             Ok(CommandOutput {
                 value: (),
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
