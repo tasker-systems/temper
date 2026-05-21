@@ -73,7 +73,10 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
     let mut removed = 0usize;
     let owner_iter = match std::fs::read_dir(vault_root) {
         Ok(iter) => iter,
-        Err(_) => return Ok(0), // vault root absent → nothing to prune
+        // An absent vault root means there is nothing to prune. Any other IO
+        // failure (permissions, etc.) is a real error and must surface.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(e) => return Err(e.into()),
     };
     for owner_entry in owner_iter.flatten() {
         if !owner_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
@@ -325,5 +328,13 @@ mod tests {
         assert!(!stale.exists(), "unlisted .md removed");
         assert!(notes.exists(), "non-.md file untouched");
         assert!(other.exists(), "other context untouched");
+    }
+
+    #[test]
+    fn prune_returns_zero_when_vault_root_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let missing = dir.path().join("does-not-exist");
+        let pruned = prune_context(&missing, "anyctx", &HashSet::new()).unwrap();
+        assert_eq!(pruned, 0, "absent vault root prunes nothing, no error");
     }
 }
