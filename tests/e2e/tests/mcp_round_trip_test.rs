@@ -649,3 +649,193 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
         "title must cascade from managed_meta on the MCP path",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Write-side gap 6: partial managed_meta updates merge per-key
+// ---------------------------------------------------------------------------
+
+/// Regression guard for the PATCH-not-PUT semantics confirmed during the
+/// 2026-05-21 write-side gap spike. A partial `managed_meta` update through
+/// the MCP path (`DbBackend` -> `resource_service::update`) merges per-key:
+/// fields the caller omits keep their stored value rather than being wiped.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let profile_id = resolve_test_profile(&pool).await;
+
+    context_service::create(&pool, profile_id, "gap6-merge")
+        .await
+        .expect("context create");
+    let context = context_service::resolve_by_name(&pool, profile_id, "gap6-merge")
+        .await
+        .expect("context resolve");
+    let doc_type_id = ingest_service::resolve_doc_type(&pool, "task")
+        .await
+        .expect("doc_type");
+
+    // Seed a task with several managed fields set.
+    let seeded_managed = serde_json::json!({
+        "temper-type": "task",
+        "temper-stage": "in-progress",
+        "temper-mode": "build",
+        "temper-effort": "large",
+    });
+    let resource = ingest_service::create_resource_with_manifest(
+        &pool,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "mcp-test",
+            context_id: context.id,
+            doc_type_id,
+            doc_type_name: "task",
+            title: "Gap6 Merge Task",
+            slug: Some("gap6-merge-task"),
+            origin_uri: "mcp://test/gap6",
+            content_hash: "",
+            managed_meta: &seeded_managed,
+            open_meta: &serde_json::json!({}),
+            chunks_packed: None,
+        },
+    )
+    .await
+    .expect("create resource");
+
+    // Partial update: change ONLY the stage.
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(*resource.id),
+        },
+        body: None,
+        managed_meta: Some(ManagedMeta {
+            stage: Some("done".to_string()),
+            ..Default::default()
+        }),
+        open_meta: None,
+        move_to: None,
+        origin: Surface::Mcp,
+    };
+    DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp)
+        .update_resource(cmd)
+        .await
+        .expect("partial update via DbBackend");
+
+    let managed: serde_json::Value =
+        sqlx::query_scalar("SELECT managed_meta FROM kb_resource_manifests WHERE resource_id = $1")
+            .bind(*resource.id)
+            .fetch_one(&pool)
+            .await
+            .expect("managed_meta after");
+
+    assert_eq!(
+        managed["temper-stage"], "done",
+        "the explicitly-updated key must apply",
+    );
+    assert_eq!(
+        managed["temper-mode"], "build",
+        "temper-mode omitted from the call must be preserved",
+    );
+    assert_eq!(
+        managed["temper-effort"], "large",
+        "temper-effort omitted from the call must be preserved",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Write-side gap 5: meta updates validate against the doc-type schema
+// ---------------------------------------------------------------------------
+
+/// A managed_meta update whose merged shape violates the doc-type schema
+/// (here: an out-of-enum `temper-stage`) is rejected before any write, and
+/// the stored frontmatter is left untouched. Closes the gap where
+/// `resource_service::update` applied doc-type defaults but never ran the
+/// schema validation the create/ingest path enforces.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let profile_id = resolve_test_profile(&pool).await;
+
+    context_service::create(&pool, profile_id, "gap5-validate")
+        .await
+        .expect("context create");
+    let context = context_service::resolve_by_name(&pool, profile_id, "gap5-validate")
+        .await
+        .expect("context resolve");
+    let doc_type_id = ingest_service::resolve_doc_type(&pool, "task")
+        .await
+        .expect("doc_type");
+
+    let seeded_managed = serde_json::json!({
+        "temper-type": "task",
+        "temper-stage": "backlog",
+        "temper-mode": "build",
+    });
+    let resource = ingest_service::create_resource_with_manifest(
+        &pool,
+        &ingest_service::CreateResourceParams {
+            profile_id,
+            device_id: "mcp-test",
+            context_id: context.id,
+            doc_type_id,
+            doc_type_name: "task",
+            title: "Gap5 Validate Task",
+            slug: Some("gap5-validate-task"),
+            origin_uri: "mcp://test/gap5",
+            content_hash: "",
+            managed_meta: &seeded_managed,
+            open_meta: &serde_json::json!({}),
+            chunks_packed: None,
+        },
+    )
+    .await
+    .expect("create resource");
+
+    // Update with a temper-stage value outside the task schema's enum.
+    let cmd = UpdateResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(*resource.id),
+        },
+        body: None,
+        managed_meta: Some(ManagedMeta {
+            stage: Some("not-a-real-stage".to_string()),
+            ..Default::default()
+        }),
+        open_meta: None,
+        move_to: None,
+        origin: Surface::Mcp,
+    };
+    let result = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp)
+        .update_resource(cmd)
+        .await;
+
+    assert!(
+        result.is_err(),
+        "an out-of-enum temper-stage must be rejected by schema validation",
+    );
+    let err = format!("{:?}", result.unwrap_err());
+    assert!(
+        err.contains("temper-stage") || err.to_lowercase().contains("validation"),
+        "error should surface the schema validation failure: {err}",
+    );
+
+    // The rejected update must not have mutated the stored frontmatter.
+    let managed: serde_json::Value =
+        sqlx::query_scalar("SELECT managed_meta FROM kb_resource_manifests WHERE resource_id = $1")
+            .bind(*resource.id)
+            .fetch_one(&pool)
+            .await
+            .expect("managed_meta after");
+    assert_eq!(
+        managed["temper-stage"], "backlog",
+        "a rejected update must leave stored managed_meta untouched",
+    );
+}
