@@ -3,8 +3,12 @@ use std::collections::HashMap;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use serde::Serialize;
+
 use crate::error::{ApiError, ApiResult};
-use crate::services::ingest_service::{insert_event_and_audit, replace_chunks};
+use crate::services::ingest_service::{
+    insert_event_and_audit, replace_chunks, InsertEventAndAuditParams,
+};
 use temper_core::hash::{compute_managed_hash, compute_open_hash};
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::ingest::unpack_chunks;
@@ -481,6 +485,45 @@ pub async fn check_can_modify(pool: &PgPool, profile_id: Uuid, resource_id: Uuid
     Ok(())
 }
 
+/// Changed-key delta merged into a `managed_meta_updated` event's payload.
+///
+/// Lists which keys differ between the pre-update and post-update persisted
+/// metadata — added, removed, or modified — so `list_events` consumers can see
+/// *what* changed without diffing snapshots themselves. Body changes are not
+/// represented here: a blob has no key set, so body deltas stay hash-only
+/// (see the `body_updated` event's `body_hash`).
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MetaUpdateDelta {
+    /// Managed-tier keys whose persisted value changed.
+    managed_keys_changed: Vec<String>,
+    /// Open-tier keys whose persisted value changed.
+    open_keys_changed: Vec<String>,
+}
+
+/// Keys whose value differs between two JSON objects — present in one and not
+/// the other, or present in both with a different value. Returned sorted for
+/// deterministic event payloads. Non-object inputs are treated as empty.
+fn changed_keys(old: &serde_json::Value, new: &serde_json::Value) -> Vec<String> {
+    use std::collections::BTreeSet;
+
+    let empty = serde_json::Map::new();
+    let old_obj = old.as_object().unwrap_or(&empty);
+    let new_obj = new.as_object().unwrap_or(&empty);
+
+    let mut keys: BTreeSet<&String> = BTreeSet::new();
+    for (key, value) in new_obj {
+        if old_obj.get(key) != Some(value) {
+            keys.insert(key);
+        }
+    }
+    for key in old_obj.keys() {
+        if !new_obj.contains_key(key) {
+            keys.insert(key);
+        }
+    }
+    keys.into_iter().cloned().collect()
+}
+
 /// Update mutable fields on a resource. Requires `can_modify_resource()` to return true.
 ///
 /// Performs a partial merge for `managed_meta` and `open_meta`:
@@ -590,6 +633,9 @@ pub async fn update(
     let mut post_merge_open: Option<serde_json::Value> = None;
     let mut post_merge_managed_hash: Option<String> = None;
     let mut post_merge_open_hash: Option<String> = None;
+    // Changed-key delta for the managed_meta_updated event payload. Populated
+    // by the manifest-rewrite block below, consumed at the meta-audit emit.
+    let mut post_merge_delta: Option<MetaUpdateDelta> = None;
 
     if req.managed_meta.is_some()
         || req.open_meta.is_some()
@@ -628,13 +674,14 @@ pub async fn update(
         let incoming_doc_type = req.managed_meta.as_ref().and_then(|m| m.doc_type.clone());
         let incoming_context = req.managed_meta.as_ref().and_then(|m| m.context.clone());
 
-        let mut merged_managed: ManagedMeta = serde_json::from_value(stored_managed_json)
-            .map_err(|e| ApiError::Internal(format!("malformed managed_meta JSONB: {e}")))?;
+        let mut merged_managed: ManagedMeta =
+            serde_json::from_value(stored_managed_json.clone())
+                .map_err(|e| ApiError::Internal(format!("malformed managed_meta JSONB: {e}")))?;
         if let Some(incoming) = req.managed_meta {
             apply_managed_meta_partial(&mut merged_managed, incoming);
         }
 
-        let mut merged_open = stored_open_json;
+        let mut merged_open = stored_open_json.clone();
         if let Some(incoming_open) = req.open_meta {
             apply_open_meta_partial(&mut merged_open, incoming_open);
         }
@@ -778,6 +825,16 @@ pub async fn update(
             .await?;
         }
 
+        // Compute the changed-key delta against the pre-update stored JSONB,
+        // before `managed_value` / `merged_open` are moved into the post-merge
+        // slots. This is the diff of *persisted* metadata — a newly-defaulted
+        // or identity-injected key counts as changed because the stored value
+        // changed.
+        post_merge_delta = Some(MetaUpdateDelta {
+            managed_keys_changed: changed_keys(&stored_managed_json, &managed_value),
+            open_keys_changed: changed_keys(&stored_open_json, &merged_open),
+        });
+
         // Capture post-merge values for edge reconciliation after tx.commit()
         // and for the meta-only audit emission below.
         post_merge_managed = Some(managed_value);
@@ -831,15 +888,19 @@ pub async fn update(
 
             let (_event_id, audit_id) = insert_event_and_audit(
                 &mut tx,
-                ProfileId::from(profile_id),
-                device_id,
-                ContextId::from(context_id),
-                ResourceId::from(resource_id),
-                "body_updated",
-                "update_body",
-                &incoming_hash,
-                &managed_hash,
-                &open_hash,
+                InsertEventAndAuditParams {
+                    profile_id: ProfileId::from(profile_id),
+                    device_id,
+                    context_id: ContextId::from(context_id),
+                    resource_id: ResourceId::from(resource_id),
+                    event_type: "body_updated",
+                    action: "update_body",
+                    body_hash: &incoming_hash,
+                    managed_hash: &managed_hash,
+                    open_hash: &open_hash,
+                    // Body changes stay hash-only — no key set to enumerate.
+                    payload_extra: None,
+                },
             )
             .await?;
             body_audit_emitted = true;
@@ -892,17 +953,28 @@ pub async fn update(
             .as_deref()
             .expect("populated by manifest-rewrite block when meta_touched");
 
+        // Surface which managed/open keys changed so `list_events` can answer
+        // *what* changed, not just that something did. `post_merge_delta` is
+        // populated by the manifest-rewrite block above whenever meta was
+        // touched.
+        let payload_extra = post_merge_delta.as_ref().map(|delta| {
+            serde_json::to_value(delta).expect("MetaUpdateDelta is always serializable")
+        });
+
         insert_event_and_audit(
             &mut tx,
-            ProfileId::from(profile_id),
-            device_id,
-            current.kb_context_id,
-            ResourceId::from(resource_id),
-            "managed_meta_updated",
-            "update_meta",
-            &body_hash,
-            managed_hash,
-            open_hash,
+            InsertEventAndAuditParams {
+                profile_id: ProfileId::from(profile_id),
+                device_id,
+                context_id: current.kb_context_id,
+                resource_id: ResourceId::from(resource_id),
+                event_type: "managed_meta_updated",
+                action: "update_meta",
+                body_hash: &body_hash,
+                managed_hash,
+                open_hash,
+                payload_extra,
+            },
         )
         .await?;
     }
@@ -1077,19 +1149,64 @@ pub async fn delete(
     // Record event and audit atomically
     insert_event_and_audit(
         &mut tx,
-        profile_id,
-        device_id,
-        ContextId::from(context_id),
-        resource_id,
-        "resource_deleted",
-        "delete",
-        &body_hash,
-        &managed_hash,
-        &open_hash,
+        InsertEventAndAuditParams {
+            profile_id,
+            device_id,
+            context_id: ContextId::from(context_id),
+            resource_id,
+            event_type: "resource_deleted",
+            action: "delete",
+            body_hash: &body_hash,
+            managed_hash: &managed_hash,
+            open_hash: &open_hash,
+            payload_extra: None,
+        },
     )
     .await?;
 
     tx.commit().await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn changed_keys_detects_modified_added_and_removed() {
+        let old = json!({"temper-stage": "backlog", "temper-mode": "build", "gone": 1});
+        let new = json!({"temper-stage": "done", "temper-mode": "build", "added": 2});
+        // modified: temper-stage; added: added; removed: gone; unchanged: temper-mode
+        assert_eq!(
+            changed_keys(&old, &new),
+            vec!["added", "gone", "temper-stage"]
+        );
+    }
+
+    #[test]
+    fn changed_keys_empty_when_identical() {
+        let v = json!({"a": 1, "b": [1, 2], "c": {"nested": true}});
+        assert!(changed_keys(&v, &v).is_empty());
+    }
+
+    #[test]
+    fn changed_keys_treats_non_object_as_empty() {
+        let obj = json!({"a": 1});
+        assert_eq!(changed_keys(&serde_json::Value::Null, &obj), vec!["a"]);
+        assert_eq!(changed_keys(&obj, &serde_json::Value::Null), vec!["a"]);
+    }
+
+    #[test]
+    fn meta_update_delta_serializes_to_changed_key_arrays() {
+        let delta = MetaUpdateDelta {
+            managed_keys_changed: vec!["temper-stage".to_owned()],
+            open_keys_changed: vec![],
+        };
+        assert_eq!(
+            serde_json::to_value(&delta).unwrap(),
+            json!({"managed_keys_changed": ["temper-stage"], "open_keys_changed": []})
+        );
+    }
 }

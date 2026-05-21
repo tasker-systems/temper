@@ -133,38 +133,53 @@ struct ResourceRowBase {
     kb_context_id: ContextId,
 }
 
+/// Inputs for [`insert_event_and_audit`].
+///
+/// The `kb_events.payload` JSONB always carries a base hash rollup
+/// (`body_hash` / `managed_hash` / `open_hash`). `payload_extra` is merged on
+/// top for event-type-specific enrichment — e.g. `managed_meta_updated`
+/// events carry the set of changed keys. Body-only events leave it `None`:
+/// there is no key set to enumerate for a blob, so body changes stay
+/// hash-only by design.
+pub struct InsertEventAndAuditParams<'a> {
+    pub profile_id: ProfileId,
+    pub device_id: &'a str,
+    pub context_id: ContextId,
+    pub resource_id: ResourceId,
+    pub event_type: &'a str,
+    pub action: &'a str,
+    pub body_hash: &'a str,
+    pub managed_hash: &'a str,
+    pub open_hash: &'a str,
+    /// Event-type-specific payload merged into the base hash rollup. `None`
+    /// for events with no enrichment.
+    pub payload_extra: Option<serde_json::Value>,
+}
+
 /// Insert an event and audit trail row atomically via the SQL function.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "event+audit require all hash fields plus identifiers"
-)]
 pub async fn insert_event_and_audit(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    profile_id: ProfileId,
-    device_id: &str,
-    context_id: ContextId,
-    resource_id: ResourceId,
-    event_type: &str,
-    action: &str,
-    body_hash: &str,
-    managed_hash: &str,
-    open_hash: &str,
+    params: InsertEventAndAuditParams<'_>,
 ) -> ApiResult<(EventId, ResourceAuditId)> {
     let event_id = EventId::new();
+    let payload_extra = params
+        .payload_extra
+        .unwrap_or_else(|| serde_json::json!({}));
 
     let row: (Uuid, Uuid) = sqlx::query_as(
-        "SELECT event_id, audit_id FROM insert_event_and_audit($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "SELECT event_id, audit_id FROM insert_event_and_audit($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(event_id)
-    .bind(profile_id)
-    .bind(device_id)
-    .bind(context_id)
-    .bind(resource_id)
-    .bind(event_type)
-    .bind(action)
-    .bind(body_hash)
-    .bind(managed_hash)
-    .bind(open_hash)
+    .bind(params.profile_id)
+    .bind(params.device_id)
+    .bind(params.context_id)
+    .bind(params.resource_id)
+    .bind(params.event_type)
+    .bind(params.action)
+    .bind(params.body_hash)
+    .bind(params.managed_hash)
+    .bind(params.open_hash)
+    .bind(payload_extra)
     .fetch_one(&mut **tx)
     .await?;
 
@@ -370,15 +385,18 @@ pub async fn create_resource_with_manifest(
     // Insert event + audit atomically
     let (_event_id, audit_id) = insert_event_and_audit(
         &mut tx,
-        params.profile_id,
-        params.device_id,
-        params.context_id,
-        resource_id,
-        "resource_created",
-        "create",
-        params.content_hash,
-        &managed_hash,
-        &open_hash,
+        InsertEventAndAuditParams {
+            profile_id: params.profile_id,
+            device_id: params.device_id,
+            context_id: params.context_id,
+            resource_id,
+            event_type: "resource_created",
+            action: "create",
+            body_hash: params.content_hash,
+            managed_hash: &managed_hash,
+            open_hash: &open_hash,
+            payload_extra: None,
+        },
     )
     .await?;
 
@@ -622,15 +640,18 @@ pub async fn update_resource_manifest(
 
     let (_event_id, audit_id) = insert_event_and_audit(
         tx,
-        params.profile_id,
-        params.device_id,
-        base.kb_context_id,
-        params.resource_id,
-        "body_updated",
-        "update_body",
-        params.content_hash,
-        &managed_hash,
-        &open_hash,
+        InsertEventAndAuditParams {
+            profile_id: params.profile_id,
+            device_id: params.device_id,
+            context_id: base.kb_context_id,
+            resource_id: params.resource_id,
+            event_type: "body_updated",
+            action: "update_body",
+            body_hash: params.content_hash,
+            managed_hash: &managed_hash,
+            open_hash: &open_hash,
+            payload_extra: None,
+        },
     )
     .await?;
 

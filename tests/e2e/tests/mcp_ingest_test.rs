@@ -258,15 +258,18 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
 
     ingest_service::insert_event_and_audit(
         &mut tx,
-        profile_id,
-        "mcp",
-        context.id,
-        resource.id,
-        "body_updated",
-        "update_body",
-        &updated_hash,
-        &managed_hash,
-        &open_hash,
+        ingest_service::InsertEventAndAuditParams {
+            profile_id,
+            device_id: "mcp",
+            context_id: context.id,
+            resource_id: resource.id,
+            event_type: "body_updated",
+            action: "update_body",
+            body_hash: &updated_hash,
+            managed_hash: &managed_hash,
+            open_hash: &open_hash,
+            payload_extra: None,
+        },
     )
     .await
     .expect("insert event and audit");
