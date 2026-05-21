@@ -6,6 +6,7 @@
 //! nothing on the server. See
 //! `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
@@ -57,6 +58,52 @@ pub fn write_cursor(state_dir: &Path, context: &str, cursor: &ProjectionCursor) 
     Ok(())
 }
 
+/// Remove projection `.md` files for resources no longer present in the
+/// context. `keep` is the set of absolute file paths the current pull
+/// wrote. Walks `<vault_root>/<owner>/<context>/<doc_type>/*.md` across
+/// every owner directory. Only `.md` files are considered; other files
+/// and other contexts are never touched. Returns the number of files removed.
+pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) -> Result<usize> {
+    let mut removed = 0usize;
+    let owner_iter = match std::fs::read_dir(vault_root) {
+        Ok(iter) => iter,
+        Err(_) => return Ok(0), // vault root absent → nothing to prune
+    };
+    for owner_entry in owner_iter.flatten() {
+        if !owner_entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        // Skip hidden dirs such as `.temper`.
+        if owner_entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let context_dir = owner_entry.path().join(context);
+        if !context_dir.is_dir() {
+            continue;
+        }
+        for doctype_entry in std::fs::read_dir(&context_dir)?.flatten() {
+            if !doctype_entry
+                .file_type()
+                .map(|t| t.is_dir())
+                .unwrap_or(false)
+            {
+                continue;
+            }
+            for file_entry in std::fs::read_dir(doctype_entry.path())?.flatten() {
+                let path = file_entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("md") {
+                    continue;
+                }
+                if !keep.contains(&path) {
+                    std::fs::remove_file(&path)?;
+                    removed += 1;
+                }
+            }
+        }
+    }
+    Ok(removed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -92,5 +139,36 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let state_dir = dir.path().join(".temper");
         assert!(read_cursor(&state_dir, "never-pulled").unwrap().is_none());
+    }
+
+    #[test]
+    fn prune_removes_stale_md_keeps_listed_and_other_contexts() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+
+        let task_dir = root.join("@me/myctx/task");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let keep = task_dir.join("keep.md");
+        let stale = task_dir.join("stale.md");
+        let notes = task_dir.join("notes.txt");
+        std::fs::write(&keep, "keep").unwrap();
+        std::fs::write(&stale, "stale").unwrap();
+        std::fs::write(&notes, "notes").unwrap();
+
+        let other_ctx = root.join("@me/otherctx/task");
+        std::fs::create_dir_all(&other_ctx).unwrap();
+        let other = other_ctx.join("other.md");
+        std::fs::write(&other, "other").unwrap();
+
+        let mut keep_set = HashSet::new();
+        keep_set.insert(keep.clone());
+
+        let pruned = prune_context(root, "myctx", &keep_set).unwrap();
+
+        assert_eq!(pruned, 1, "exactly one stale .md removed");
+        assert!(keep.exists(), "listed file kept");
+        assert!(!stale.exists(), "unlisted .md removed");
+        assert!(notes.exists(), "non-.md file untouched");
+        assert!(other.exists(), "other context untouched");
     }
 }
