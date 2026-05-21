@@ -141,3 +141,45 @@ async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
     assert!(content.contains("temper-id:"), "has identity frontmatter");
     assert!(content.contains("Body text for Write Me"), "has body");
 }
+
+/// Build a CLI `Config` whose vault root is the e2e harness's temp vault.
+/// The harness already constructs a valid `Config` (`app.cli_config`) via
+/// `temper_cli::config::load_from`, pointed at the same temp vault — reuse
+/// it rather than reconstructing a literal that could drift from the real
+/// struct shape.
+fn projection_test_config(app: &common::E2eTestApp) -> temper_cli::config::Config {
+    app.cli_config.clone()
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("pctx").await.expect("ctx");
+    seed_resource(&app, "pctx", "research", "Doc One").await;
+    seed_resource(&app, "pctx", "research", "Doc Two").await;
+
+    let config = projection_test_config(&app);
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "pctx")
+        .await
+        .expect("pull_context");
+
+    assert_eq!(summary.written, 2, "both resources written");
+    assert_eq!(summary.pruned, 0, "nothing stale on a first pull");
+
+    let vault_root = app.vault_dir.path();
+    assert!(vault_root.join("@me/pctx/research/doc-one.md").exists());
+    assert!(vault_root.join("@me/pctx/research/doc-two.md").exists());
+
+    let cursor = temper_cli::projection::read_cursor(&config.state_dir, "pctx")
+        .expect("read_cursor")
+        .expect("cursor written");
+    assert!(
+        cursor.last_event_id.is_some(),
+        "cursor records the context's latest event id"
+    );
+}

@@ -14,9 +14,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use temper_client::TemperClient;
+use temper_core::types::resource::ResourceListParams;
 use temper_core::types::ResourceRow;
 use temper_core::vault::Vault;
 
+use crate::config::Config;
 use crate::error::{Result, TemperError};
 
 /// The per-context staleness cursor, written to
@@ -172,6 +174,89 @@ pub async fn write_resource_file(
     fm.write_to(&path)
         .map_err(|e| TemperError::Config(format!("projection write {}: {e}", path.display())))?;
     Ok(path)
+}
+
+/// Outcome of a `pull_context` call, for the command's output line.
+#[derive(Debug, Clone)]
+pub struct PullSummary {
+    pub context: String,
+    pub written: usize,
+    pub pruned: usize,
+}
+
+/// Page size for listing a context's resources. Contexts are small (tens to
+/// low hundreds of resources); this paginates defensively regardless of the
+/// server's own list cap.
+const PULL_PAGE_SIZE: i64 = 200;
+
+/// Materialize a whole context's resources into the local projection:
+/// list every resource, write each file, prune files for resources no
+/// longer present, then record the per-context staleness cursor.
+///
+/// Idempotent — re-running produces the same tree.
+pub async fn pull_context(
+    client: &TemperClient,
+    config: &Config,
+    context: &str,
+) -> Result<PullSummary> {
+    // 1. List every resource in the context (paginated).
+    let mut rows: Vec<ResourceRow> = Vec::new();
+    let mut offset: i64 = 0;
+    loop {
+        let params = ResourceListParams {
+            context_name: Some(context.to_string()),
+            limit: Some(PULL_PAGE_SIZE),
+            offset: Some(offset),
+            ..Default::default()
+        };
+        let resp = client
+            .resources()
+            .list(&params)
+            .await
+            .map_err(crate::commands::client_err)?;
+        let page_len = resp.rows.len() as i64;
+        rows.extend(resp.rows);
+        if page_len < PULL_PAGE_SIZE {
+            break;
+        }
+        offset += PULL_PAGE_SIZE;
+    }
+
+    // 2. Write each resource's file.
+    let mut keep: HashSet<PathBuf> = HashSet::new();
+    for row in &rows {
+        let path = write_resource_file(client, &config.vault_root, row).await?;
+        keep.insert(path);
+    }
+
+    // 3. Prune files for resources no longer in the context.
+    let pruned = prune_context(&config.vault_root, context, &keep)?;
+
+    // 4. Record the staleness cursor. The context's UUID comes from any
+    //    listed row; an empty context yields no event id.
+    let context_id = rows.first().map(|r| Uuid::from(r.kb_context_id));
+    let last_event_id = match context_id {
+        Some(cid) => client
+            .events()
+            .latest_for_context(cid)
+            .await
+            .map_err(crate::commands::client_err)?,
+        None => None,
+    };
+    write_cursor(
+        &config.state_dir,
+        context,
+        &ProjectionCursor {
+            last_event_id,
+            pulled_at: Utc::now(),
+        },
+    )?;
+
+    Ok(PullSummary {
+        context: context.to_string(),
+        written: keep.len(),
+        pruned,
+    })
 }
 
 #[cfg(test)]
