@@ -16,9 +16,10 @@ mod resource_ref;
 mod surface;
 
 pub use actions::{
-    apply_defaults, apply_defaults_value, ensure_managed_identity_keys, merge_managed_meta,
-    merge_open_meta, validate_create, validate_doctype, validate_open_meta_keys, validate_slug,
-    validate_update, ActionError,
+    apply_defaults, apply_defaults_value, assemble_frontmatter_document,
+    ensure_managed_identity_keys, merge_managed_meta, merge_open_meta, validate_create,
+    validate_doctype, validate_open_meta_keys, validate_slug, validate_update, ActionError,
+    FrontmatterIdentity,
 };
 pub use backend::{Backend, ResourceSummary, SearchHit};
 pub use commands::{
