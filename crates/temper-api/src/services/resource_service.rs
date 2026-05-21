@@ -670,42 +670,29 @@ pub async fn update(
         // `ingest_service::validate_managed_meta`. Validation runs inside the
         // open transaction, so a rejection rolls the whole update back.
         //
-        // Assemble the full frontmatter document for schema validation. The
-        // merged JSONB is only the managed tier; the base schema additionally
-        // requires the tier-1 identity fields `temper-id` / `temper-created`
-        // (which live as `kb_resources` columns, not in the managed_meta
-        // JSONB) plus `temper-type` / `temper-context`.
-        //
-        // Unlike the create/ingest path — which validates *before* the
-        // resource exists and so has no choice but to use placeholders — the
-        // update path holds authoritative values for every one of these. The
-        // `temper-title` / `temper-slug` keys are already in the merged JSONB
-        // via `ensure_managed_identity_keys` above (slug correctly absent for
-        // slug-less resources). Inject the rest from their real sources.
+        // Assemble the full frontmatter document for schema validation via the
+        // shared `temper_core::operations::assemble_frontmatter_document`
+        // helper — the same helper `ingest_service::validate_managed_meta` uses
+        // on the create path. The merged JSONB is only the managed tier; the
+        // base schema additionally requires the tier-1 identity fields that
+        // live as `kb_resources` columns. The update path holds authoritative
+        // values for every one of these (the resource already exists), so it
+        // passes them in via `FrontmatterIdentity` with no placeholders.
         let effective_doc_type = incoming_doc_type
             .as_deref()
             .unwrap_or(&current.doc_type_name);
         let effective_context = incoming_context.as_deref().unwrap_or(&current.context_name);
         {
-            let mut to_validate = managed_value.clone();
-            if let Some(obj) = to_validate.as_object_mut() {
-                // Real identity values — the resource already exists.
-                obj.insert(
-                    "temper-id".to_owned(),
-                    serde_json::json!(resource_id.to_string()),
-                );
-                obj.insert(
-                    "temper-created".to_owned(),
-                    serde_json::json!(current.created.to_rfc3339()),
-                );
-                // `temper-type` / `temper-context` are kept in the managed_meta
-                // JSONB for structural-move detection, so they are normally
-                // already present; `or_insert` covers the legacy-row case.
-                obj.entry("temper-type".to_owned())
-                    .or_insert_with(|| serde_json::json!(effective_doc_type));
-                obj.entry("temper-context".to_owned())
-                    .or_insert_with(|| serde_json::json!(effective_context));
-            }
+            let identity = temper_core::operations::FrontmatterIdentity {
+                id: resource_id,
+                created: current.created,
+                context: effective_context,
+                doc_type: effective_doc_type,
+                title: new_title,
+                slug: new_slug,
+            };
+            let to_validate =
+                temper_core::operations::assemble_frontmatter_document(&managed_value, &identity);
             let yaml = serde_yaml::to_value(&to_validate)
                 .map_err(|e| ApiError::Internal(format!("managed_meta YAML conversion: {e}")))?;
             let issues = match temper_core::schema::validate_frontmatter(effective_doc_type, &yaml)

@@ -82,6 +82,7 @@ async fn mcp_create_resource_with_markdown_is_searchable(pool: sqlx::PgPool) {
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "e2e-round-trip",
             context_id: context.id,
@@ -383,6 +384,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "e2e-test-device",
             context_id: context.id,
@@ -530,6 +532,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "mcp-test",
             context_id: context.id,
@@ -688,6 +691,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "mcp-test",
             context_id: context.id,
@@ -782,6 +786,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "mcp-test",
             context_id: context.id,

@@ -3,7 +3,7 @@
 mod common;
 
 use temper_api::services::{context_service, doc_type_service, ingest_service, resource_service};
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{ProfileId, ResourceId};
 
 /// Helper: resolve profile ID from e2e test user.
 async fn resolve_test_profile(pool: &sqlx::PgPool) -> ProfileId {
@@ -51,6 +51,7 @@ async fn get_by_slug_finds_resource(pool: sqlx::PgPool) {
     ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "test",
             context_id: context.id,
@@ -140,6 +141,7 @@ async fn list_visible_filters_by_doc_type(pool: sqlx::PgPool) {
     ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "test",
             context_id: context.id,
@@ -161,6 +163,7 @@ async fn list_visible_filters_by_doc_type(pool: sqlx::PgPool) {
     ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "test",
             context_id: context.id,

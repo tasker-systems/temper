@@ -6,7 +6,7 @@ use common::fixtures::{self, RESEARCH_DOC_TYPE_ID, TEMPER_CONTEXT_ID};
 use serde_json::json;
 use sqlx::PgPool;
 use temper_api::services::ingest_service::{self, CreateResourceParams};
-use temper_core::types::ids::{ContextId, ProfileId};
+use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 use temper_core::types::ingest::{pack_chunks, PackedChunk};
 use uuid::Uuid;
 
@@ -45,6 +45,7 @@ async fn create_resource_links_revision_to_create_audit(pool: PgPool) {
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &CreateResourceParams {
+            id: ResourceId::new(),
             profile_id: ProfileId::from(profile_uuid),
             device_id: "dev",
             context_id: ContextId::from(context_uuid),

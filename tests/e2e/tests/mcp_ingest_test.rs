@@ -53,6 +53,7 @@ async fn create_resource_with_manifest_inserts_all_records(pool: sqlx::PgPool) {
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "mcp-test",
             context_id: context.id,
@@ -133,6 +134,7 @@ async fn find_by_body_hash_returns_existing(pool: sqlx::PgPool) {
     let first = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "test",
             context_id: context.id,
@@ -201,6 +203,7 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "update-test",
             context_id: context.id,
@@ -350,6 +353,7 @@ async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "e2e-test-device",
             context_id: context.id,
@@ -479,6 +483,7 @@ async fn create_resource_dispatches_on_chunks_packed_presence(pool: sqlx::PgPool
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "precomputed-test-device",
             context_id: context.id,
@@ -683,6 +688,7 @@ async fn update_resource_rejects_tier2_fields_in_managed_meta(pool: sqlx::PgPool
     let resource = ingest_service::create_resource_with_manifest(
         &pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "e2e-test-device",
             context_id: context.id,

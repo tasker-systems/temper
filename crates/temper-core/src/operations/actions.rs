@@ -4,10 +4,13 @@
 //! No I/O, no DB, no file system. Side effects (persistence, network, file
 //! writes) belong to the backend's command handler, not to actions.
 
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use thiserror::Error;
+use uuid::Uuid;
 
 use crate::defaults::apply_managed_defaults;
+use crate::frontmatter::fields::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
 use crate::types::managed_meta::ManagedMeta;
 
 use super::commands::{CreateResource, UpdateResource};
@@ -90,6 +93,107 @@ pub fn apply_defaults(doctype: &str, meta: &mut ManagedMeta) {
 /// that matches your call site's natural type.
 pub fn apply_defaults_value(doctype: &str, meta: &mut serde_json::Value) {
     crate::defaults::apply_managed_defaults(doctype, meta);
+}
+
+/// Tier-1 / tier-2 identity inputs for [`assemble_frontmatter_document`].
+///
+/// These values live as `kb_resources` columns (tier-1) or are derived from
+/// the resolved request (tier-2), not in the managed_meta JSONB. They are
+/// passed in from typed sources so the assembled document never relies on
+/// placeholders.
+///
+/// `id` is always a real `ResourceId` UUID: create paths generate it up front
+/// (before validation) rather than letting the database assign it, so there is
+/// no "id not yet known" state to model.
+pub struct FrontmatterIdentity<'a> {
+    /// Canonical resource id (`temper-id`).
+    pub id: Uuid,
+    /// Creation timestamp (`temper-created`).
+    pub created: DateTime<Utc>,
+    /// Context / namespace (`temper-context`).
+    pub context: &'a str,
+    /// Document type (`temper-type`).
+    pub doc_type: &'a str,
+    /// Display title (`temper-title`).
+    pub title: &'a str,
+    /// Slug (`temper-slug`). `None` for slug-less resources — the key is then
+    /// omitted entirely rather than written as an empty string.
+    pub slug: Option<&'a str>,
+}
+
+/// Assemble the canonical complete frontmatter document for schema validation.
+///
+/// This is the single place that composes the "full temper frontmatter
+/// document" from its parts: the managed-tier JSONB plus the tier-1/tier-2
+/// identity and system keys that live as `kb_resources` columns. Both the
+/// create path (`ingest_service`) and the update path
+/// (`resource_service::update`) delegate here so identity injection is never
+/// re-derived inline at a surface or service.
+///
+/// Steps:
+/// 1. Coerce `managed_meta` to a JSON object (a non-object input yields a
+///    fresh object — downstream schema validation rejects shape errors).
+/// 2. Strip any identity / tier-1 system keys a caller may have smuggled into
+///    the managed tier — those values are authoritative from `identity`.
+/// 3. Apply doc-type managed-tier defaults so an absent optional field hashes
+///    and validates identically to one where the default is explicit.
+/// 4. Inject `temper-id` / `temper-created` / `temper-type` / `temper-context`
+///    / `temper-title` / `temper-slug` from the typed `identity`.
+///
+/// The returned value is intended for [`crate::schema::validate_frontmatter`].
+/// It is **not** the value to persist in the `managed_meta` JSONB column — the
+/// tier-1 keys are owned by `kb_resources` columns; callers persist the
+/// managed tier separately.
+pub fn assemble_frontmatter_document(
+    managed_meta: &Value,
+    identity: &FrontmatterIdentity<'_>,
+) -> Value {
+    let mut doc = if managed_meta.is_object() {
+        managed_meta.clone()
+    } else {
+        Value::Object(serde_json::Map::new())
+    };
+
+    // Strip authoritative system keys — only `identity` may set these.
+    if let Some(obj) = doc.as_object_mut() {
+        for field in IDENTITY_FIELDS.iter().chain(TIER1_SYSTEM_FIELDS.iter()) {
+            obj.remove(*field);
+        }
+    }
+
+    apply_managed_defaults(identity.doc_type, &mut doc);
+
+    let obj = doc.as_object_mut().expect("coerced to object above");
+    obj.insert(
+        "temper-id".to_owned(),
+        Value::String(identity.id.to_string()),
+    );
+    obj.insert(
+        "temper-created".to_owned(),
+        Value::String(identity.created.to_rfc3339()),
+    );
+    obj.insert(
+        "temper-type".to_owned(),
+        Value::String(identity.doc_type.to_owned()),
+    );
+    obj.insert(
+        "temper-context".to_owned(),
+        Value::String(identity.context.to_owned()),
+    );
+    obj.insert(
+        "temper-title".to_owned(),
+        Value::String(identity.title.to_owned()),
+    );
+    match identity.slug {
+        Some(s) => {
+            obj.insert("temper-slug".to_owned(), Value::String(s.to_owned()));
+        }
+        None => {
+            obj.remove("temper-slug");
+        }
+    }
+
+    doc
 }
 
 /// Validate that a slug conforms to the temper slug rules.
@@ -735,6 +839,82 @@ mod tests {
         let mut meta = serde_json::json!({});
         apply_defaults_value("nonexistent", &mut meta);
         assert!(meta.as_object().unwrap().is_empty());
+    }
+
+    fn sample_identity<'a>(doc_type: &'a str, slug: Option<&'a str>) -> FrontmatterIdentity<'a> {
+        FrontmatterIdentity {
+            id: Uuid::parse_str("019d8110-8ff3-70c2-85ae-57e04ed62885").unwrap(),
+            created: DateTime::parse_from_rfc3339("2026-05-21T12:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc),
+            context: "temper",
+            doc_type,
+            title: "My Title",
+            slug,
+        }
+    }
+
+    #[test]
+    fn assemble_frontmatter_document_injects_all_identity_keys() {
+        let managed = json!({"temper-stage": "in-progress"});
+        let doc =
+            assemble_frontmatter_document(&managed, &sample_identity("task", Some("my-task")));
+        assert_eq!(doc["temper-id"], "019d8110-8ff3-70c2-85ae-57e04ed62885");
+        assert_eq!(doc["temper-created"], "2026-05-21T12:00:00+00:00");
+        assert_eq!(doc["temper-type"], "task");
+        assert_eq!(doc["temper-context"], "temper");
+        assert_eq!(doc["temper-title"], "My Title");
+        assert_eq!(doc["temper-slug"], "my-task");
+        // Caller-supplied managed-tier field is preserved.
+        assert_eq!(doc["temper-stage"], "in-progress");
+    }
+
+    #[test]
+    fn assemble_frontmatter_document_strips_smuggled_system_keys() {
+        // A caller must not be able to override authoritative identity values
+        // by stuffing them into the managed tier.
+        let managed = json!({
+            "temper-id": "00000000-0000-0000-0000-000000000000",
+            "temper-created": "1999-01-01T00:00:00Z",
+            "temper-type": "goal",
+            "temper-context": "wrong-ctx",
+            "temper-stage": "backlog",
+        });
+        let doc = assemble_frontmatter_document(&managed, &sample_identity("task", Some("s")));
+        assert_eq!(doc["temper-id"], "019d8110-8ff3-70c2-85ae-57e04ed62885");
+        assert_eq!(doc["temper-created"], "2026-05-21T12:00:00+00:00");
+        assert_eq!(doc["temper-type"], "task");
+        assert_eq!(doc["temper-context"], "temper");
+        assert_eq!(doc["temper-stage"], "backlog");
+    }
+
+    #[test]
+    fn assemble_frontmatter_document_omits_slug_when_none() {
+        let managed = json!({"temper-slug": "stale"});
+        let doc = assemble_frontmatter_document(&managed, &sample_identity("task", None));
+        assert!(
+            doc.get("temper-slug").is_none(),
+            "temper-slug must be absent when slug is None; got: {doc}"
+        );
+    }
+
+    #[test]
+    fn assemble_frontmatter_document_applies_doc_type_defaults() {
+        let doc = assemble_frontmatter_document(&json!({}), &sample_identity("task", Some("s")));
+        assert_eq!(
+            doc["temper-stage"], "backlog",
+            "task doc-type default temper-stage should be filled in"
+        );
+    }
+
+    #[test]
+    fn assemble_frontmatter_document_coerces_non_object_input() {
+        let doc = assemble_frontmatter_document(
+            &serde_json::Value::Null,
+            &sample_identity("session", Some("s")),
+        );
+        assert!(doc.is_object());
+        assert_eq!(doc["temper-title"], "My Title");
     }
 
     #[test]

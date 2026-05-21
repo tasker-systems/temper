@@ -13,7 +13,7 @@
 mod common;
 
 use temper_api::services::{context_service, ingest_service, resource_service};
-use temper_core::types::ids::ProfileId;
+use temper_core::types::ids::{ProfileId, ResourceId};
 
 fn sha2_hex(content: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -56,6 +56,7 @@ async fn seed_resource(
     let resource = ingest_service::create_resource_with_manifest(
         pool,
         &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
             profile_id,
             device_id: "mcp-get-meta",
             context_id: context.id,
