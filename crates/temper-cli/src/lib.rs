@@ -13,6 +13,7 @@ pub mod llm;
 pub mod lookup;
 pub mod manifest_io;
 pub mod output;
+pub mod projection;
 pub mod templates;
 pub mod vault;
 pub mod vault_backend;
