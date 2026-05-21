@@ -155,11 +155,11 @@ pub struct UpdateResourceMetaResponse {
 
 /// Enriched resource response with human-readable names.
 ///
-/// `managed_meta` and `open_meta` are populated by single-resource read
-/// paths (`get_resource`) via [`enrich_resource_with_meta`]. List paths
-/// leave both `None` to avoid one DB round-trip per row; the
-/// `skip_serializing_if` keeps the wire shape backward-compatible for
-/// callers that don't request meta.
+/// `managed_meta` and `open_meta` always carry the resource's
+/// frontmatter — every enrichment path populates them. The
+/// `skip_serializing_if` covers the genuine no-manifest case (a
+/// resource created via POST without a body trio has no manifest row
+/// yet), and keeps the wire shape stable for those resources.
 #[derive(Debug, serde::Serialize)]
 pub struct EnrichedResource {
     pub id: Uuid,
@@ -178,10 +178,16 @@ pub struct EnrichedResource {
     pub open_meta: Option<serde_json::Value>,
 }
 
-async fn enrich_resource(
+/// Assemble an [`EnrichedResource`] from a row plus its already-fetched
+/// meta. Meta is a required, explicit input — there is no hidden DB
+/// fetch here, so every caller decides where meta comes from (a batch
+/// query for lists, `get_content`'s response for the content path).
+async fn build_enriched(
     pool: &sqlx::PgPool,
     profile_id: ProfileId,
     row: &temper_core::types::resource::ResourceRow,
+    managed_meta: Option<ManagedMeta>,
+    open_meta: Option<serde_json::Value>,
 ) -> Result<EnrichedResource, rmcp::ErrorData> {
     let context = context_service::get_visible(pool, profile_id, row.kb_context_id)
         .await
@@ -206,47 +212,51 @@ async fn enrich_resource(
         is_active: row.is_active,
         created: row.created,
         updated: row.updated,
-        managed_meta: None,
-        open_meta: None,
+        managed_meta,
+        open_meta,
     })
 }
 
-/// Enrich a single resource row with its `managed_meta` and `open_meta`
-/// blocks from `kb_resource_manifests`, via [`meta_service::get_meta`].
-///
-/// Used by the `get_resource` MCP tool to make frontmatter readable —
-/// without this the tool returned only core fields plus an optional
-/// body, and anything written via `update_resource_meta` was
-/// write-blind. Visibility is enforced inside `meta_service::get_meta`
-/// (delegates to `resource_service::get_visible`).
-///
-/// List paths intentionally do not call this — adding a per-row meta
-/// fetch would N+1 the list query. List rows leave both fields `None`
-/// and serialize-skip them.
-pub async fn enrich_resource_with_meta(
-    pool: &sqlx::PgPool,
-    profile_id: ProfileId,
-    row: &temper_core::types::resource::ResourceRow,
-) -> Result<EnrichedResource, rmcp::ErrorData> {
-    let mut enriched = enrich_resource(pool, profile_id, row).await?;
-    let meta = meta_service::get_meta(pool, profile_id, row.id)
-        .await
-        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
-    enriched.managed_meta = meta.managed_meta;
-    enriched.open_meta = meta.open_meta;
-    Ok(enriched)
-}
-
-async fn enrich_resources(
+/// Enrich a batch of resource rows, each with its `managed_meta` /
+/// `open_meta`. All manifests are fetched in a single
+/// [`meta_service::get_meta_batch`] query, so the list surface is not
+/// N+1 on meta. Rows are pre-scoped to the caller (the rows came from a
+/// visibility-scoped query), so the batch fetch skips a redundant
+/// per-row visibility check.
+pub async fn enrich_resources(
     pool: &sqlx::PgPool,
     profile_id: ProfileId,
     rows: &[temper_core::types::resource::ResourceRow],
 ) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
+    let ids: Vec<ResourceId> = rows.iter().map(|row| row.id).collect();
+    let mut meta = meta_service::get_meta_batch(pool, &ids)
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
+
     let mut enriched = Vec::with_capacity(rows.len());
     for row in rows {
-        enriched.push(enrich_resource(pool, profile_id, row).await?);
+        let (managed_meta, open_meta) = meta
+            .remove(&row.id)
+            .map(|m| (m.managed_meta, m.open_meta))
+            .unwrap_or((None, None));
+        enriched.push(build_enriched(pool, profile_id, row, managed_meta, open_meta).await?);
     }
     Ok(enriched)
+}
+
+/// Enrich a single resource row, including its frontmatter. Thin
+/// single-row wrapper over [`enrich_resources`].
+pub async fn enrich_resource(
+    pool: &sqlx::PgPool,
+    profile_id: ProfileId,
+    row: &temper_core::types::resource::ResourceRow,
+) -> Result<EnrichedResource, rmcp::ErrorData> {
+    Ok(
+        enrich_resources(pool, profile_id, std::slice::from_ref(row))
+            .await?
+            .pop()
+            .expect("enrich_resources returns one row per input row"),
+    )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -405,23 +415,28 @@ pub async fn get_resource(
 
     if input.include_content.unwrap_or(false) {
         // get_content already returns managed_meta + open_meta alongside the
-        // body, so reuse those values rather than firing a second meta query.
+        // body, so feed those straight into build_enriched — no extra meta query.
         let content = resource_service::get_content(pool, profile.id, row.id.into())
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
             })?;
 
-        let mut enriched = enrich_resource(pool, profile_id, &row).await?;
-        enriched.managed_meta = content.managed_meta;
-        enriched.open_meta = content.open_meta;
+        let enriched = build_enriched(
+            pool,
+            profile_id,
+            &row,
+            content.managed_meta,
+            content.open_meta,
+        )
+        .await?;
 
         Ok(CallToolResult::success(vec![
             rmcp::model::Content::text(to_text(&enriched)),
             rmcp::model::Content::text(content.markdown),
         ]))
     } else {
-        let enriched = enrich_resource_with_meta(pool, profile_id, &row).await?;
+        let enriched = enrich_resource(pool, profile_id, &row).await?;
         Ok(CallToolResult::success(vec![rmcp::model::Content::text(
             to_text(&enriched),
         )]))
