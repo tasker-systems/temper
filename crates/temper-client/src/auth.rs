@@ -1186,6 +1186,11 @@ mod tests {
 
     #[test]
     fn disk_token_store_round_trips_stored_auth() {
+        // `DiskTokenStore::load` intentionally prefers `TEMPER_TOKEN` from the
+        // environment over the on-disk token. A developer shell that exports
+        // `TEMPER_TOKEN` would otherwise make `load()` return that token
+        // instead of the one this test just saved.
+        clear_env();
         let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
         let store = DiskTokenStore::at(tmp.path().to_path_buf());
 

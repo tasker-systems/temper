@@ -534,9 +534,33 @@ pub fn session_path(config: &Config, context: &str, title: &str) -> PathBuf {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Once;
     use tempfile::TempDir;
 
+    /// Scrub temper env vars a developer shell may export. With
+    /// `TEMPER_VAULT_STATE=cloud` inherited, `show` routes to the cloud API
+    /// instead of the local vault, so these local-fixture tests fail off CI.
+    /// Idempotent — runs once per test process.
+    fn isolate_env() {
+        static ENV_INIT: Once = Once::new();
+        ENV_INIT.call_once(|| {
+            // SAFETY: `Once` guarantees a single run; the removed set is
+            // constant, so no test observes a shifting value.
+            unsafe {
+                for var in [
+                    "TEMPER_TOKEN",
+                    "TEMPER_VAULT_STATE",
+                    "TEMPER_PROVIDER",
+                    "TEMPER_DEVICE_ID",
+                ] {
+                    std::env::remove_var(var);
+                }
+            }
+        });
+    }
+
     fn test_vault() -> (TempDir, Config) {
+        isolate_env();
         let tmp = TempDir::new().unwrap();
         let vault_root = tmp.path().to_path_buf();
         let state_dir = vault_root.join(".temper");
