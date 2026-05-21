@@ -183,3 +183,70 @@ async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
         "cursor records the context's latest event id"
     );
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_prunes_resources_deleted_on_server(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("dctx").await.expect("ctx");
+    let keep_id = seed_resource(&app, "dctx", "research", "Keeper").await;
+    let doomed_id = seed_resource(&app, "dctx", "research", "Doomed").await;
+
+    let config = projection_test_config(&app);
+    temper_cli::projection::pull_context(&app.client, &config, "dctx")
+        .await
+        .expect("first pull");
+
+    let vault_root = app.vault_dir.path();
+    assert!(vault_root.join("@me/dctx/research/keeper.md").exists());
+    assert!(vault_root.join("@me/dctx/research/doomed.md").exists());
+
+    // Soft-delete one resource on the server, then re-pull.
+    app.client
+        .resources()
+        .delete(Uuid::from(doomed_id))
+        .await
+        .expect("delete");
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "dctx")
+        .await
+        .expect("second pull");
+
+    assert_eq!(summary.written, 1, "only the survivor is written");
+    assert_eq!(summary.pruned, 1, "the deleted resource's file is pruned");
+    assert!(vault_root.join("@me/dctx/research/keeper.md").exists());
+    assert!(!vault_root.join("@me/dctx/research/doomed.md").exists());
+    let _ = keep_id;
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_is_idempotent(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("ictx").await.expect("ctx");
+    seed_resource(&app, "ictx", "research", "Stable Doc").await;
+
+    let config = projection_test_config(&app);
+    let path = app.vault_dir.path().join("@me/ictx/research/stable-doc.md");
+
+    temper_cli::projection::pull_context(&app.client, &config, "ictx")
+        .await
+        .expect("first pull");
+    let first = std::fs::read_to_string(&path).unwrap();
+
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "ictx")
+        .await
+        .expect("second pull");
+    let second = std::fs::read_to_string(&path).unwrap();
+
+    assert_eq!(first, second, "re-pull produces byte-identical content");
+    assert_eq!(summary.written, 1);
+    assert_eq!(summary.pruned, 0);
+}
