@@ -670,11 +670,18 @@ pub async fn update(
         // `ingest_service::validate_managed_meta`. Validation runs inside the
         // open transaction, so a rejection rolls the whole update back.
         //
-        // The merged JSONB carries `temper-title` (always) and `temper-slug`
-        // (only when the resource has a slug — `ensure_managed_identity_keys`
-        // drops it for slug-less resources, so it must not be re-injected here).
-        // The remaining base-schema-required system fields are injected as
-        // placeholders for the required-field check.
+        // Assemble the full frontmatter document for schema validation. The
+        // merged JSONB is only the managed tier; the base schema additionally
+        // requires the tier-1 identity fields `temper-id` / `temper-created`
+        // (which live as `kb_resources` columns, not in the managed_meta
+        // JSONB) plus `temper-type` / `temper-context`.
+        //
+        // Unlike the create/ingest path — which validates *before* the
+        // resource exists and so has no choice but to use placeholders — the
+        // update path holds authoritative values for every one of these. The
+        // `temper-title` / `temper-slug` keys are already in the merged JSONB
+        // via `ensure_managed_identity_keys` above (slug correctly absent for
+        // slug-less resources). Inject the rest from their real sources.
         let effective_doc_type = incoming_doc_type
             .as_deref()
             .unwrap_or(&current.doc_type_name);
@@ -682,14 +689,22 @@ pub async fn update(
         {
             let mut to_validate = managed_value.clone();
             if let Some(obj) = to_validate.as_object_mut() {
+                // Real identity values — the resource already exists.
+                obj.insert(
+                    "temper-id".to_owned(),
+                    serde_json::json!(resource_id.to_string()),
+                );
+                obj.insert(
+                    "temper-created".to_owned(),
+                    serde_json::json!(current.created.to_rfc3339()),
+                );
+                // `temper-type` / `temper-context` are kept in the managed_meta
+                // JSONB for structural-move detection, so they are normally
+                // already present; `or_insert` covers the legacy-row case.
                 obj.entry("temper-type".to_owned())
                     .or_insert_with(|| serde_json::json!(effective_doc_type));
                 obj.entry("temper-context".to_owned())
                     .or_insert_with(|| serde_json::json!(effective_context));
-                obj.entry("temper-id".to_owned())
-                    .or_insert_with(|| serde_json::json!("00000000-0000-0000-0000-000000000000"));
-                obj.entry("temper-created".to_owned())
-                    .or_insert_with(|| serde_json::json!("2000-01-01T00:00:00Z"));
             }
             let yaml = serde_yaml::to_value(&to_validate)
                 .map_err(|e| ApiError::Internal(format!("managed_meta YAML conversion: {e}")))?;
