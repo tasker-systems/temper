@@ -117,10 +117,10 @@ pub enum Commands {
         ignore: Option<String>,
     },
 
-    /// Pull a resource from the cloud
+    /// Materialize a context's resources into the local read-only projection
     Pull {
-        /// Resource UUID
-        resource_id: String,
+        /// Context name to pull
+        context: String,
     },
 
     /// Push a single resource to the cloud. Target can be a UUID (requires
