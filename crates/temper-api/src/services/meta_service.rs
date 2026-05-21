@@ -2,6 +2,8 @@
 //! through `DbBackend::update_resource` (see `resource_service::update`'s
 //! meta-only branch).
 
+use std::collections::HashMap;
+
 use serde_json::Value;
 use sqlx::PgPool;
 
@@ -51,4 +53,57 @@ pub async fn get_meta(
         managed_hash: row.managed_hash,
         open_hash: row.open_hash,
     })
+}
+
+/// Fetch the meta tier for many resources in a single query, keyed by
+/// `resource_id`.
+///
+/// Unlike [`get_meta`], this does **not** re-run a per-resource
+/// visibility check — the caller must supply `resource_ids` drawn from
+/// rows already scoped to the caller (e.g. via
+/// `resource_service::list_visible` or `get_visible`). The existence of
+/// that visibility-scoped row is the authorization proof; re-fetching it
+/// here would be redundant work.
+///
+/// Resources with no `kb_resource_manifests` row are simply absent from
+/// the returned map — callers treat that as "no meta" rather than an
+/// error (a resource created via POST without a body trio has no
+/// manifest yet).
+pub async fn get_meta_batch(
+    pool: &PgPool,
+    resource_ids: &[ResourceId],
+) -> ApiResult<HashMap<ResourceId, ResourceMetaResponse>> {
+    let ids: Vec<uuid::Uuid> = resource_ids.iter().map(|r| **r).collect();
+
+    let rows = sqlx::query!(
+        r#"SELECT resource_id,
+                  managed_meta as "managed_meta: Value",
+                  open_meta as "open_meta: Value",
+                  managed_hash,
+                  open_hash
+             FROM kb_resource_manifests
+            WHERE resource_id = ANY($1)"#,
+        &ids,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let mut map = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let resource_id = ResourceId::from(row.resource_id);
+        // Lossless typed projection — see the note in `get_meta`.
+        let managed_meta: ManagedMeta =
+            serde_json::from_value(row.managed_meta).unwrap_or_default();
+        map.insert(
+            resource_id,
+            ResourceMetaResponse {
+                resource_id,
+                managed_meta: Some(managed_meta),
+                open_meta: Some(row.open_meta),
+                managed_hash: row.managed_hash,
+                open_hash: row.open_hash,
+            },
+        );
+    }
+    Ok(map)
 }
