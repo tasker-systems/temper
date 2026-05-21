@@ -1,0 +1,102 @@
+#![cfg(feature = "test-db")]
+//! E2e tests for the cloud-only read-only projection (`temper pull`).
+
+mod common;
+
+use temper_core::types::ingest::{pack_chunks, IngestPayload, PackedChunk};
+use temper_core::types::ResourceId;
+use uuid::Uuid;
+
+/// Ingest one resource into `context` and return its id. The ingest path
+/// emits a creation event into `kb_events`, so the context will have at
+/// least one event afterward.
+async fn seed_resource(
+    app: &common::E2eTestApp,
+    context: &str,
+    doc_type: &str,
+    title: &str,
+) -> ResourceId {
+    let body = format!("# {title}\n\nBody text for {title}.");
+    // The per-chunk `content_hash` column is VARCHAR(64); `compute_body_hash`
+    // returns a 71-char `sha256:<hex>` string, so use the raw 64-char hex.
+    let chunk_hash = temper_core::hash::compute_body_hash(&body)
+        .trim_start_matches("sha256:")
+        .to_string();
+    let chunk = PackedChunk {
+        chunk_index: 0,
+        header_path: String::new(),
+        heading_depth: 0,
+        content: body.clone(),
+        content_hash: chunk_hash,
+        embedding: vec![0.0_f32; 768],
+    };
+    let slug = title.to_lowercase().replace(' ', "-");
+    let payload = IngestPayload {
+        title: title.to_string(),
+        origin_uri: format!("test://{slug}"),
+        context_name: context.to_string(),
+        doc_type_name: doc_type.to_string(),
+        content_hash: Some(temper_core::hash::compute_body_hash(&body)),
+        slug,
+        content: body.clone(),
+        metadata: None,
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[chunk]).expect("pack chunks")),
+    };
+    app.client
+        .ingest()
+        .create(&payload)
+        .await
+        .expect("ingest")
+        .id
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("cursor-ctx")
+        .await
+        .expect("ctx");
+
+    seed_resource(&app, "cursor-ctx", "research", "Cursor Doc").await;
+
+    // Resolve the context's UUID from a listed resource row.
+    let listed = app
+        .client
+        .resources()
+        .list(&temper_core::types::resource::ResourceListParams {
+            context_name: Some("cursor-ctx".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("list");
+    let context_id = Uuid::from(listed.rows.first().expect("one row").kb_context_id);
+
+    let latest = app
+        .client
+        .events()
+        .latest_for_context(context_id)
+        .await
+        .expect("latest_for_context");
+    assert!(
+        latest.is_some(),
+        "ingest must have emitted at least one event"
+    );
+
+    // An unknown context has no events.
+    let empty = app
+        .client
+        .events()
+        .latest_for_context(Uuid::nil())
+        .await
+        .expect("latest_for_context empty");
+    assert!(empty.is_none(), "unknown context has no events");
+}
