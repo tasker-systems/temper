@@ -100,3 +100,44 @@ async fn events_cursor_returns_latest_event_for_context(pool: sqlx::PgPool) {
         .expect("latest_for_context empty");
     assert!(empty.is_none(), "unknown context has no events");
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn write_resource_file_materializes_a_document(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("wctx").await.expect("ctx");
+    seed_resource(&app, "wctx", "research", "Write Me").await;
+
+    let listed = app
+        .client
+        .resources()
+        .list(&temper_core::types::resource::ResourceListParams {
+            context_name: Some("wctx".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("list");
+    let row = listed.rows.first().expect("one row");
+
+    let vault_root = app.vault_dir.path();
+    let path = temper_cli::projection::write_resource_file(&app.client, vault_root, row)
+        .await
+        .expect("write_resource_file");
+
+    let expected = vault_root
+        .join("@me")
+        .join("wctx")
+        .join("research")
+        .join("write-me.md");
+    assert_eq!(path, expected);
+    assert!(path.exists(), "file written at canonical path");
+
+    let content = std::fs::read_to_string(&path).unwrap();
+    assert!(content.starts_with("---\n"), "has frontmatter fence");
+    assert!(content.contains("temper-id:"), "has identity frontmatter");
+    assert!(content.contains("Body text for Write Me"), "has body");
+}

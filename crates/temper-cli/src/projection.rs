@@ -13,6 +13,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use temper_client::TemperClient;
+use temper_core::types::ResourceRow;
+use temper_core::vault::Vault;
+
 use crate::error::{Result, TemperError};
 
 /// The per-context staleness cursor, written to
@@ -102,6 +106,72 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
         }
     }
     Ok(removed)
+}
+
+/// Fetch a resource's content and write it as a complete markdown file at
+/// its canonical vault path. Returns the absolute path written.
+///
+/// `row` is a resource summary already obtained from a `list` call; this
+/// makes one further API call (`content`) for the body + frontmatter meta.
+/// Frontmatter assembly reuses `actions::ingest::build_frontmatter_from_resource`
+/// — the same recipe `actions::sync`'s pull path uses — so projected files
+/// are byte-identical to sync-pulled ones.
+pub async fn write_resource_file(
+    client: &TemperClient,
+    vault_root: &Path,
+    row: &ResourceRow,
+) -> Result<PathBuf> {
+    use crate::actions::ingest;
+
+    let content = client
+        .resources()
+        .content(Uuid::from(row.id))
+        .await
+        .map_err(crate::commands::client_err)?;
+
+    // `owner_handle` is literal "@me" for the requester's own resources and
+    // "+team-slug" for team contexts — both are canonical vault directory
+    // components, so use it directly. Empty handle defends against a sparse
+    // server row.
+    let owner: &str = if row.owner_handle.is_empty() {
+        "@me"
+    } else {
+        &row.owner_handle
+    };
+    let context = row.context_name.as_str();
+    let doc_type = row.doc_type_name.as_str();
+
+    let slug_owned;
+    let slug: &str = match row.slug.as_deref() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            slug_owned = ingest::slug_from_title(&row.title);
+            slug_owned.as_str()
+        }
+    };
+
+    let managed_value = content
+        .managed_meta
+        .as_ref()
+        .map(|m| serde_json::to_value(m).unwrap_or(serde_json::Value::Null));
+
+    let fm = ingest::build_frontmatter_from_resource(
+        row,
+        context,
+        doc_type,
+        owner,
+        ingest::normalize_body_for_vault(&content.markdown),
+        managed_value.as_ref(),
+        content.open_meta.as_ref(),
+    )?;
+
+    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, slug);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    fm.write_to(&path)
+        .map_err(|e| TemperError::Config(format!("projection write {}: {e}", path.display())))?;
+    Ok(path)
 }
 
 #[cfg(test)]
