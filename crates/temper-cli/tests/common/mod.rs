@@ -7,28 +7,42 @@ use std::sync::Once;
 
 static AUTH_INIT: Once = Once::new();
 
-/// Point `TEMPER_AUTH_PATH` at a non-existent path so the publish-tail helper
-/// finds no token and no-ops without touching `~/.config/temper/auth.json`
-/// or making any network calls.
+/// Isolate the test process from any temper-related environment variables a
+/// developer's shell may export.
 ///
-/// Idempotent — runs at most once per test process. The value is a constant
-/// (not per-test) so parallel set_var calls converge on the same final state
-/// even if the OS sees the writes in any order. Tests that need a different
-/// auth path can override via `temp_env::with_var` for their scope.
+/// Two kinds of isolation:
+/// - Points `TEMPER_AUTH_PATH` at a non-existent path so the publish-tail
+///   helper finds no token and no-ops without touching
+///   `~/.config/temper/auth.json` or making network calls.
+/// - Removes `TEMPER_TOKEN` / `TEMPER_VAULT_STATE` / `TEMPER_PROVIDER` /
+///   `TEMPER_DEVICE_ID`. A developer who uses the `temper` CLI in cloud mode
+///   has these exported; inherited into a test process they make integration
+///   tests route writes through the cloud API instead of the local vault,
+///   so the local-file assertions fail. CI has none of these set, which is
+///   why the failures only reproduce on configured dev machines.
 ///
-/// Without this, integration tests on a developer machine with a real
-/// `~/.config/temper/auth.json` would silently publish test fixtures to the
-/// production server.
+/// Idempotent — runs at most once per test process. The values written are
+/// constant (not per-test), so parallel calls converge on the same final
+/// state. Tests that need a different auth path can override via
+/// `temp_env::with_var` for their scope.
 pub fn init_isolated_auth() {
     AUTH_INIT.call_once(|| {
-        // SAFETY: Once ensures this closure runs at most once. The value
-        // written is constant across the entire test process, so no test
-        // observes a torn or shifting value.
+        // SAFETY: Once ensures this closure runs at most once. The values
+        // written/removed are constant across the entire test process, so no
+        // test observes a torn or shifting value.
         unsafe {
             std::env::set_var(
                 "TEMPER_AUTH_PATH",
                 "/tmp/temper-cli-tests-no-such-auth-path/auth.json",
             );
+            for var in [
+                "TEMPER_TOKEN",
+                "TEMPER_VAULT_STATE",
+                "TEMPER_PROVIDER",
+                "TEMPER_DEVICE_ID",
+            ] {
+                std::env::remove_var(var);
+            }
         }
     });
 }
