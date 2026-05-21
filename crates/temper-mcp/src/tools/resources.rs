@@ -36,9 +36,12 @@ pub struct CreateResourceInput {
     pub origin_uri: Option<String>,
     /// Optional owner (defaults to @me). Reserved for future team scoping.
     pub owner: Option<String>,
-    /// Managed frontmatter (temper-* fields) as JSON.
+    /// Managed (temper-*) frontmatter. Typed: the schema covers every key
+    /// temper governs and extras round-trip through `ManagedMeta::extra`.
+    /// A concrete object schema (rather than free-form JSON) keeps MCP
+    /// clients from string-encoding nested objects.
     #[serde(default)]
-    pub managed_meta: Option<serde_json::Value>,
+    pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
     #[serde(default)]
     pub open_meta: Option<serde_json::Value>,
@@ -82,9 +85,12 @@ pub struct UpdateResourceInput {
     /// New markdown content. Replaces existing content and triggers
     /// re-processing.
     pub content: Option<String>,
-    /// Managed frontmatter (temper-* fields) as JSON.
+    /// Managed (temper-*) frontmatter. Typed: the schema covers every key
+    /// temper governs and extras round-trip through `ManagedMeta::extra`.
+    /// A concrete object schema (rather than free-form JSON) keeps MCP
+    /// clients from string-encoding nested objects.
     #[serde(default)]
-    pub managed_meta: Option<serde_json::Value>,
+    pub managed_meta: Option<ManagedMeta>,
     /// Open frontmatter (user-owned fields) as JSON.
     #[serde(default)]
     pub open_meta: Option<serde_json::Value>,
@@ -304,7 +310,10 @@ pub async fn create_resource(
     // Inject canonical temper-title / temper-slug into managed_meta JSONB so
     // the local canonical form matches what the server will hash. Symmetric
     // with the CLI send-side wiring in build_ingest_payload (Phase 5 Task 3).
-    let mut managed_meta_value = input.managed_meta.unwrap_or_else(|| serde_json::json!({}));
+    let mut managed_meta_value = serde_json::to_value(input.managed_meta.unwrap_or_default())
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
+        })?;
     temper_core::operations::ensure_managed_identity_keys(
         &mut managed_meta_value,
         &input.title,
@@ -516,7 +525,10 @@ pub async fn update_resource(
     // match what the receive-side will write. Pure meta-only updates skip
     // the fetch — resource_service::update's receive-side ensure call fills
     // canonical keys from the stored title/slug for us.
-    let mut managed_meta_value = input.managed_meta.unwrap_or_else(|| serde_json::json!({}));
+    let mut managed_meta_value = serde_json::to_value(input.managed_meta.unwrap_or_default())
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("managed_meta serialize: {e}"), None)
+        })?;
     if input.title.is_some() || input.slug.is_some() || input.content.is_some() {
         let existing = resource_service::get_visible(pool, profile.id, input.id)
             .await
@@ -669,4 +681,58 @@ pub async fn delete_resource(
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&response),
     )]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gap 1 regression: `managed_meta` is a typed `ManagedMeta`, so an MCP
+    /// client passing a real JSON object (not a string-encoded one)
+    /// deserializes straight into the typed shape.
+    #[test]
+    fn create_resource_input_accepts_object_valued_managed_meta() {
+        let raw = serde_json::json!({
+            "context_name": "demo",
+            "doc_type_name": "task",
+            "title": "Demo Task",
+            "managed_meta": { "temper-stage": "backlog", "temper-mode": "build" },
+        });
+        let input: CreateResourceInput =
+            serde_json::from_value(raw).expect("object-valued managed_meta must deserialize");
+        let managed = input.managed_meta.expect("managed_meta present");
+        assert_eq!(managed.stage.as_deref(), Some("backlog"));
+        assert_eq!(managed.mode.as_deref(), Some("build"));
+    }
+
+    #[test]
+    fn update_resource_input_accepts_object_valued_managed_meta() {
+        let raw = serde_json::json!({
+            "id": "00000000-0000-0000-0000-000000000000",
+            "managed_meta": { "temper-stage": "done" },
+        });
+        let input: UpdateResourceInput =
+            serde_json::from_value(raw).expect("object-valued managed_meta must deserialize");
+        assert_eq!(
+            input
+                .managed_meta
+                .expect("managed_meta present")
+                .stage
+                .as_deref(),
+            Some("done"),
+        );
+    }
+
+    /// Gap 1: the generated JsonSchema must describe `managed_meta` as the
+    /// concrete `ManagedMeta` object rather than free-form JSON — that
+    /// concreteness is what stops MCP clients from string-encoding the field.
+    #[test]
+    fn create_resource_input_managed_meta_schema_is_concrete() {
+        let schema = schemars::schema_for!(CreateResourceInput);
+        let json = serde_json::to_string(&schema).expect("schema serializes");
+        assert!(
+            json.contains("ManagedMeta"),
+            "managed_meta should reference the typed ManagedMeta schema: {json}"
+        );
+    }
 }

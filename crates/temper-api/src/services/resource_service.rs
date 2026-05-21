@@ -659,6 +659,82 @@ pub async fn update(
         // PUT /api/resources/{id}/meta, making defaulting consistent across
         // all meta-touching update paths.
         temper_core::operations::apply_defaults_value(&current.doc_type_name, &mut managed_value);
+
+        // Validate the merged managed_meta against the doc-type schema before
+        // writing. `resource_service::update` is the shared write path for
+        // every meta-touching surface (MCP update_resource / update_resource_meta,
+        // PATCH /api/resources, PUT /api/ingest/{id}, PUT /api/resources/{id}/meta),
+        // and until now it applied doc-type defaults but never validated — an
+        // out-of-enum `temper-stage` or wrong `temper-type` slipped through
+        // silently. This mirrors the validation the create/ingest path runs via
+        // `ingest_service::validate_managed_meta`. Validation runs inside the
+        // open transaction, so a rejection rolls the whole update back.
+        //
+        // Assemble the full frontmatter document for schema validation. The
+        // merged JSONB is only the managed tier; the base schema additionally
+        // requires the tier-1 identity fields `temper-id` / `temper-created`
+        // (which live as `kb_resources` columns, not in the managed_meta
+        // JSONB) plus `temper-type` / `temper-context`.
+        //
+        // Unlike the create/ingest path — which validates *before* the
+        // resource exists and so has no choice but to use placeholders — the
+        // update path holds authoritative values for every one of these. The
+        // `temper-title` / `temper-slug` keys are already in the merged JSONB
+        // via `ensure_managed_identity_keys` above (slug correctly absent for
+        // slug-less resources). Inject the rest from their real sources.
+        let effective_doc_type = incoming_doc_type
+            .as_deref()
+            .unwrap_or(&current.doc_type_name);
+        let effective_context = incoming_context.as_deref().unwrap_or(&current.context_name);
+        {
+            let mut to_validate = managed_value.clone();
+            if let Some(obj) = to_validate.as_object_mut() {
+                // Real identity values — the resource already exists.
+                obj.insert(
+                    "temper-id".to_owned(),
+                    serde_json::json!(resource_id.to_string()),
+                );
+                obj.insert(
+                    "temper-created".to_owned(),
+                    serde_json::json!(current.created.to_rfc3339()),
+                );
+                // `temper-type` / `temper-context` are kept in the managed_meta
+                // JSONB for structural-move detection, so they are normally
+                // already present; `or_insert` covers the legacy-row case.
+                obj.entry("temper-type".to_owned())
+                    .or_insert_with(|| serde_json::json!(effective_doc_type));
+                obj.entry("temper-context".to_owned())
+                    .or_insert_with(|| serde_json::json!(effective_context));
+            }
+            let yaml = serde_yaml::to_value(&to_validate)
+                .map_err(|e| ApiError::Internal(format!("managed_meta YAML conversion: {e}")))?;
+            let issues = match temper_core::schema::validate_frontmatter(effective_doc_type, &yaml)
+            {
+                Ok(issues) => issues,
+                // A schema that won't load almost always means a caller-supplied
+                // unknown doc_type (`temper-type`) — surface that as a 400, the
+                // same way the doc_type FK cascade below does. When the doc_type
+                // came from the stored row instead, a missing schema is genuine
+                // corruption and stays a 500.
+                Err(_) if incoming_doc_type.is_some() => {
+                    return Err(ApiError::BadRequest(format!(
+                        "unknown doc_type: '{effective_doc_type}'"
+                    )));
+                }
+                Err(e) => return Err(ApiError::Internal(format!("schema load: {e}"))),
+            };
+            if !issues.is_empty() {
+                let detail = issues
+                    .iter()
+                    .map(|i| format!("{} {}", i.path, i.message))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                return Err(ApiError::BadRequest(format!(
+                    "managed_meta validation failed for doc type '{effective_doc_type}': {detail}"
+                )));
+            }
+        }
+
         let managed_hash = compute_managed_hash(&current.doc_type_name, &managed_value);
         let open_hash = compute_open_hash(&merged_open);
 
