@@ -250,3 +250,32 @@ async fn pull_is_idempotent(pool: sqlx::PgPool) {
     assert_eq!(summary.written, 1);
     assert_eq!(summary.pruned, 0);
 }
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("ectx").await.expect("ctx");
+
+    // Pull a context that has no resources at all.
+    let config = projection_test_config(&app);
+    let summary = temper_cli::projection::pull_context(&app.client, &config, "ectx")
+        .await
+        .expect("pull_context on empty context");
+
+    assert_eq!(summary.written, 0, "no resources to write");
+    assert_eq!(summary.pruned, 0, "nothing to prune");
+
+    // The cursor sidecar is still written; with no events it records None.
+    let cursor = temper_cli::projection::read_cursor(&config.state_dir, "ectx")
+        .expect("read_cursor")
+        .expect("cursor written even for an empty context");
+    assert!(
+        cursor.last_event_id.is_none(),
+        "an empty context has no event id"
+    );
+}
