@@ -8,6 +8,13 @@
 -- managed/open keys that changed, so `list_events` can answer *what*
 -- changed without re-deriving it by diffing snapshots. Body changes stay
 -- hash-only by design — there is no key set to enumerate for a blob.
+--
+-- `p_payload_extra` carries a `DEFAULT '{}'::jsonb`: it is genuinely
+-- optional enrichment, so callers emitting hash-only events may omit it.
+-- That keeps the function callable from both the Rust services (which
+-- pass it explicitly) and the temper-cloud serverless functions in
+-- TypeScript (which emit only `resource_created` / `body_updated` and
+-- pass 10 positional arguments).
 
 DROP FUNCTION IF EXISTS insert_event_and_audit(
     UUID, UUID, VARCHAR, UUID, UUID, VARCHAR, VARCHAR, TEXT, TEXT, TEXT
@@ -24,7 +31,7 @@ CREATE FUNCTION insert_event_and_audit(
     p_body_hash      TEXT,
     p_managed_hash   TEXT,
     p_open_hash      TEXT,
-    p_payload_extra  JSONB
+    p_payload_extra  JSONB DEFAULT '{}'::jsonb
 ) RETURNS TABLE(event_id UUID, audit_id UUID)
 LANGUAGE plpgsql AS $$
 DECLARE
