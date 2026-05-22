@@ -48,7 +48,7 @@ pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> 
         resource: format!("{base}/"),
         authorization_servers: vec![format!("{base}/")],
         bearer_methods_supported: vec!["header"],
-        scopes_supported: vec!["openid", "profile", "email"],
+        scopes_supported: vec!["openid", "profile", "email", "offline_access"],
     })
 }
 
@@ -64,7 +64,7 @@ pub async fn oauth_authorization_server(
         authorization_endpoint: format!("{auth0}/authorize"),
         token_endpoint: format!("{auth0}/oauth/token"),
         registration_endpoint: format!("{base}/oauth/register"),
-        scopes_supported: vec!["openid", "profile", "email"],
+        scopes_supported: vec!["openid", "profile", "email", "offline_access"],
         response_types_supported: vec!["code"],
         grant_types_supported: vec!["authorization_code", "refresh_token"],
         code_challenge_methods_supported: vec!["S256"],
