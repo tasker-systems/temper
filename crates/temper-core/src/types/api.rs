@@ -46,15 +46,6 @@ pub struct EventListParams {
     pub offset: Option<i64>,
 }
 
-/// Query parameters for the event-cursor endpoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct EventCursorParams {
-    /// The context whose latest event id is requested.
-    pub kb_context_id: Uuid,
-}
-
 /// Response body for the event-cursor endpoint: the most recent event id
 /// recorded for a context, or `None` if the context has no events.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -259,15 +250,6 @@ mod tests {
 mod cursor_tests {
     use super::*;
     use uuid::Uuid;
-
-    #[test]
-    fn event_cursor_params_round_trips() {
-        let id = Uuid::nil();
-        let params = EventCursorParams { kb_context_id: id };
-        let json = serde_json::to_string(&params).unwrap();
-        let back: EventCursorParams = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.kb_context_id, id);
-    }
 
     #[test]
     fn event_cursor_response_round_trips_some_and_none() {
