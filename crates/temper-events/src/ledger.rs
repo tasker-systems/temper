@@ -68,6 +68,15 @@ pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, L
             1 => {}
             _ => return Err(LedgerError::MultipleSupersedes),
         },
+        EventType::RelationshipAsserted
+        | EventType::RelationshipRetyped
+        | EventType::RelationshipReweighted
+        | EventType::RelationshipFolded
+        | EventType::RelationshipDecayed
+        | EventType::RelationshipCorrected => {
+            // Relationship lifecycle events impose no Supersedes invariant;
+            // intra-lifecycle linkage is carried by correlation_id.
+        }
     }
 
     // Validate every reference resolves to a real event.
