@@ -7,6 +7,7 @@ pub mod graph_service;
 pub mod ingest_service;
 pub mod meta_service;
 pub mod profile_service;
+pub mod relationship_service;
 pub mod resource_service;
 pub mod search_service;
 pub mod sync_service;
