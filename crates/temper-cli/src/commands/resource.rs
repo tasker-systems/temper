@@ -283,7 +283,7 @@ pub fn create(
         .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
     // Acquire backend (mode picked via VaultState::from_env) and dispatch.
-    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
+    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.create_resource(cmd))?;
 
     // Discovery event (local mode only — gated on VaultFileWritten presence).
@@ -785,7 +785,7 @@ pub fn delete(
         origin: surface_for_state(),
     };
 
-    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
+    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.delete_resource(cmd))?;
 
     // Translate events into surface output. Cloud-first ordering inside the
@@ -1468,7 +1468,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     };
 
     // 5. Acquire backend + dispatch.
-    let (runtime, backend) = crate::backend_select::build_backend(config, &ctx)?;
+    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
 
     // 6. Mode-implicit rendering. If a VaultFileWritten event is present

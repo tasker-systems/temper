@@ -61,7 +61,7 @@ pub fn save(
     // Local mode: stat the vault file. Cloud mode: try resolve_by_uri.
     let exists = session_exists(config, &context_name, &owner, &slug)?;
 
-    let (runtime, backend) = crate::backend_select::build_backend(config, &context_name)?;
+    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &context_name)?;
 
     let output = if exists {
         // Update path: only if stdin_content is provided, otherwise no-op.

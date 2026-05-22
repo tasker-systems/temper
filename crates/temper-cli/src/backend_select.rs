@@ -7,14 +7,17 @@
 //!
 //! See `docs/superpowers/specs/2026-05-21-cloud-only-vault-deprecation-design.md`.
 
+use std::sync::Arc;
+
 use tokio::runtime::Runtime;
 
+use temper_client::TemperClient;
 use temper_core::operations::Backend;
 
 use crate::config::Config;
 use crate::error::Result;
 
-/// Build a tokio runtime + `Box<dyn Backend>` for a CLI invocation.
+/// Build a tokio runtime + `Box<dyn Backend>` + `Arc<TemperClient>` for a CLI invocation.
 ///
 /// Always returns `CloudBackend` via `assemble_cloud_backend`, which
 /// errors if no token resolves — temper is cloud-only and has no offline
@@ -25,10 +28,19 @@ use crate::error::Result;
 /// runtime, then builds the client on it. Returning both as a tuple
 /// gives surfaces one `block_on` handle without constructing a second
 /// runtime by accident.
-pub fn build_backend(config: &Config, ctx: &str) -> Result<(Runtime, Box<dyn Backend>)> {
+///
+/// The returned `Arc<TemperClient>` is the same client the backend dispatches
+/// through; surfaces use it for the post-write projection refresh.
+pub fn build_backend(
+    config: &Config,
+    ctx: &str,
+) -> Result<(Runtime, Box<dyn Backend>, Arc<TemperClient>)> {
     let (runtime, backend_ctx) = crate::cloud_backend::assemble_cloud_backend(config, ctx)?;
+    // Clone the `Arc` out before `CloudBackend::new` consumes the ctx —
+    // surfaces use it for the post-write projection refresh.
+    let client = Arc::clone(&backend_ctx.client);
     let backend: Box<dyn Backend> = Box::new(crate::cloud_backend::CloudBackend::new(backend_ctx));
-    Ok((runtime, backend))
+    Ok((runtime, backend, client))
 }
 
 #[cfg(test)]
