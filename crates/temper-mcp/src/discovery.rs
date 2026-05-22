@@ -40,26 +40,33 @@ struct AuthorizationServerMetadata {
     resource: String,
 }
 
-/// `GET /.well-known/oauth-protected-resource`
-pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> impl IntoResponse {
-    let base = &state.mcp_config.mcp_base_url;
-
-    Json(ProtectedResourceMetadata {
+/// Build RFC 9728 protected-resource metadata for the given server base URL.
+///
+/// `offline_access` is advertised so conformant MCP clients request it
+/// during the authorization code flow, prompting Auth0 to issue a refresh
+/// token (avoids a full re-auth on every access token expiry).
+fn protected_resource_metadata(base: &str) -> ProtectedResourceMetadata {
+    ProtectedResourceMetadata {
         resource: format!("{base}/"),
         authorization_servers: vec![format!("{base}/")],
         bearer_methods_supported: vec!["header"],
         scopes_supported: vec!["openid", "profile", "email", "offline_access"],
-    })
+    }
 }
 
-/// `GET /.well-known/oauth-authorization-server`
-pub async fn oauth_authorization_server(
-    State(state): State<Arc<McpAppState>>,
-) -> impl IntoResponse {
-    let base = &state.mcp_config.mcp_base_url;
-    let auth0 = state.mcp_config.auth0_domain.trim_end_matches('/');
+/// Build RFC 8414 authorization-server metadata.
+///
+/// `offline_access` is advertised alongside the `refresh_token` grant so
+/// MCP clients can obtain and use refresh tokens (see
+/// [`protected_resource_metadata`]).
+fn authorization_server_metadata(
+    base: &str,
+    auth0_domain: &str,
+    mcp_audience: &str,
+) -> AuthorizationServerMetadata {
+    let auth0 = auth0_domain.trim_end_matches('/');
 
-    Json(AuthorizationServerMetadata {
+    AuthorizationServerMetadata {
         issuer: format!("{auth0}/"),
         authorization_endpoint: format!("{auth0}/authorize"),
         token_endpoint: format!("{auth0}/oauth/token"),
@@ -68,8 +75,25 @@ pub async fn oauth_authorization_server(
         response_types_supported: vec!["code"],
         grant_types_supported: vec!["authorization_code", "refresh_token"],
         code_challenge_methods_supported: vec!["S256"],
-        resource: state.mcp_config.mcp_audience.clone(),
-    })
+        resource: mcp_audience.to_string(),
+    }
+}
+
+/// `GET /.well-known/oauth-protected-resource`
+pub async fn oauth_protected_resource(State(state): State<Arc<McpAppState>>) -> impl IntoResponse {
+    Json(protected_resource_metadata(&state.mcp_config.mcp_base_url))
+}
+
+/// `GET /.well-known/oauth-authorization-server`
+pub async fn oauth_authorization_server(
+    State(state): State<Arc<McpAppState>>,
+) -> impl IntoResponse {
+    let cfg = &state.mcp_config;
+    Json(authorization_server_metadata(
+        &cfg.mcp_base_url,
+        &cfg.auth0_domain,
+        &cfg.mcp_audience,
+    ))
 }
 
 // ── Dynamic Client Registration (thin proxy) ──────────────────────────
@@ -158,4 +182,76 @@ pub async fn register_client(
 /// These are used by desktop/CLI MCP clients that run local OAuth servers.
 fn is_localhost_uri(uri: &str) -> bool {
     uri.starts_with("http://localhost") || uri.starts_with("http://127.0.0.1")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MCP clients only request scopes the server advertises. Without
+    /// `offline_access` here, Auth0 never issues a refresh token and every
+    /// access token expiry forces a full re-auth.
+    #[test]
+    fn protected_resource_metadata_advertises_offline_access() {
+        let meta = protected_resource_metadata("https://temperkb.io");
+        assert!(
+            meta.scopes_supported.contains(&"offline_access"),
+            "offline_access must be advertised: {:?}",
+            meta.scopes_supported
+        );
+    }
+
+    #[test]
+    fn authorization_server_metadata_advertises_offline_access() {
+        let meta = authorization_server_metadata(
+            "https://temperkb.io",
+            "https://tenant.auth0.com/",
+            "https://api.temperkb.io",
+        );
+        assert!(
+            meta.scopes_supported.contains(&"offline_access"),
+            "offline_access must be advertised: {:?}",
+            meta.scopes_supported
+        );
+    }
+
+    /// Advertising `offline_access` is only useful if clients can also
+    /// exchange the resulting refresh token via the `refresh_token` grant.
+    #[test]
+    fn authorization_server_metadata_supports_refresh_token_grant() {
+        let meta = authorization_server_metadata(
+            "https://temperkb.io",
+            "https://tenant.auth0.com/",
+            "https://api.temperkb.io",
+        );
+        assert!(meta.grant_types_supported.contains(&"refresh_token"));
+    }
+
+    /// A trailing slash on the configured Auth0 domain must not produce a
+    /// double slash in the derived endpoint URLs.
+    #[test]
+    fn authorization_server_metadata_trims_trailing_slash_on_issuer() {
+        let meta = authorization_server_metadata(
+            "https://temperkb.io",
+            "https://tenant.auth0.com/",
+            "https://api.temperkb.io",
+        );
+        assert_eq!(meta.issuer, "https://tenant.auth0.com/");
+        assert_eq!(
+            meta.authorization_endpoint,
+            "https://tenant.auth0.com/authorize"
+        );
+    }
+
+    #[test]
+    fn is_localhost_uri_accepts_loopback_callbacks() {
+        assert!(is_localhost_uri("http://localhost:8080/callback"));
+        assert!(is_localhost_uri("http://127.0.0.1:53682/callback"));
+    }
+
+    #[test]
+    fn is_localhost_uri_rejects_remote_uris() {
+        assert!(!is_localhost_uri("https://temperkb.io/callback"));
+        assert!(!is_localhost_uri("https://localhost.evil.com/callback"));
+    }
 }
