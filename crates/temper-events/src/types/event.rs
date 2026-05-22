@@ -33,7 +33,7 @@ pub struct EventReference {
 pub struct Event {
     pub id: Uuid,
     pub event_type_id: Uuid,
-    pub emitter_entity_id: Uuid,
+    pub emitter_profile_id: Uuid,
     pub topic_id: Uuid,
     pub scope_id: Uuid,
     pub payload: serde_json::Value,
@@ -49,7 +49,7 @@ pub struct Event {
 pub struct EventToWrite {
     pub id: Uuid,
     pub event_type: EventType,
-    pub emitter_entity_id: Uuid,
+    pub emitter_profile_id: Uuid,
     pub topic_id: Uuid,
     pub scope_id: Uuid,
     pub payload: serde_json::Value,
@@ -64,7 +64,7 @@ impl EventToWrite {
     /// and freshly generated.
     pub fn new_root(
         event_type: EventType,
-        emitter_entity_id: Uuid,
+        emitter_profile_id: Uuid,
         topic_id: Uuid,
         scope_id: Uuid,
         payload: serde_json::Value,
@@ -74,7 +74,7 @@ impl EventToWrite {
         Self {
             id,
             event_type,
-            emitter_entity_id,
+            emitter_profile_id,
             topic_id,
             scope_id,
             payload,

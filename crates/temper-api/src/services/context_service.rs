@@ -119,8 +119,8 @@ pub async fn create(pool: &PgPool, profile_id: ProfileId, name: &str) -> ApiResu
 
     let event_id = EventId::new();
     sqlx::query(
-        "INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, event_type, payload, created)
-         VALUES ($1, $2, $3, $4, $5, '{}', now())",
+        "INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, event_type_id, payload, created)
+         VALUES ($1, $2, $3, $4, resolve_event_type($5), '{}', now())",
     )
     .bind(event_id)
     .bind(profile_id)

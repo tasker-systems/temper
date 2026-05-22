@@ -625,7 +625,7 @@ async fn audit_events_written_for_lifecycle(pool: sqlx::PgPool) {
 
     // Check audit events
     let submitted_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM kb_events WHERE profile_id = $1 AND event_type = 'join_request.submitted'",
+        "SELECT COUNT(*) FROM kb_events WHERE profile_id = $1 AND event_type_id = (SELECT id FROM kb_event_types WHERE name = 'join_request.submitted')",
     )
     .bind(second_id)
     .fetch_one(&pool)
@@ -638,7 +638,7 @@ async fn audit_events_written_for_lifecycle(pool: sqlx::PgPool) {
     );
 
     let approved_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM kb_events WHERE profile_id = $1 AND event_type = 'join_request.approved'",
+        "SELECT COUNT(*) FROM kb_events WHERE profile_id = $1 AND event_type_id = (SELECT id FROM kb_event_types WHERE name = 'join_request.approved')",
     )
     .bind(second_id)
     .fetch_one(&pool)

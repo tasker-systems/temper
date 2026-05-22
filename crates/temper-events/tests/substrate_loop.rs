@@ -1,93 +1,47 @@
 #![cfg(feature = "test-db")]
 
-use sqlx::PgPool;
-use temper_events::{create_entity, MIGRATOR};
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn create_entity_creates_default_profile(pool: PgPool) {
-    let (entity, profile) = create_entity(&pool, "alice").await.expect("create_entity");
-
-    assert_eq!(entity.name, "alice");
-    assert_eq!(entity.profile_id, profile.id);
-    assert_eq!(profile.name, "default profile for alice");
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn move_entity_to_other_profile(pool: PgPool) {
-    use temper_events::move_entity;
-
-    let (entity, source_profile) = create_entity(&pool, "alice").await.unwrap();
-    let (_, target_profile) = create_entity(&pool, "bob").await.unwrap();
-
-    let moved = move_entity(&pool, entity.id, target_profile.id)
-        .await
-        .unwrap();
-    assert_eq!(moved.profile_id, target_profile.id);
-
-    // Source profile still exists, just unreferenced.
-    let source_still_present: bool = sqlx::query_scalar!(
-        "SELECT EXISTS (SELECT 1 FROM event_substrate.profiles WHERE id = $1)",
-        source_profile.id,
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .unwrap_or(false);
-    assert!(
-        source_still_present,
-        "move_entity must not auto-discard source profile"
-    );
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn discard_empty_profile_succeeds(pool: PgPool) {
-    use temper_events::{discard_profile, move_entity};
-
-    let (entity, source_profile) = create_entity(&pool, "alice").await.unwrap();
-    let (_, target_profile) = create_entity(&pool, "bob").await.unwrap();
-    move_entity(&pool, entity.id, target_profile.id)
-        .await
-        .unwrap();
-
-    discard_profile(&pool, source_profile.id).await.unwrap();
-
-    let still_present: bool = sqlx::query_scalar!(
-        "SELECT EXISTS (SELECT 1 FROM event_substrate.profiles WHERE id = $1)",
-        source_profile.id,
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .unwrap_or(false);
-    assert!(!still_present);
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn discard_profile_with_entities_errors(pool: PgPool) {
-    use temper_events::{discard_profile, LedgerError};
-
-    let (_, profile) = create_entity(&pool, "alice").await.unwrap();
-    let err = discard_profile(&pool, profile.id).await.unwrap_err();
-    assert!(matches!(err, LedgerError::ProfileNotEmpty(id) if id == profile.id));
-}
-
 use chrono::Utc;
 use serde_json::json;
-use temper_events::{append_event, EventToWrite, EventType};
+use sqlx::PgPool;
+use uuid::Uuid;
 
-const PUBLIC_SCOPE_ID: uuid::Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000010");
-const SYSTEM_ENTITY_ID: uuid::Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000030");
-const BOOTSTRAP_TOPIC_ID: uuid::Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000040");
+use temper_events::{
+    append_event, EventReference, EventToWrite, EventType, LedgerError, ReferenceKind, MIGRATOR,
+};
+
+// Seeded by migrations/20260330000002_seed.sql (kb_profiles) and
+// migrations/20260522000001_event_ledger_unification.sql (topic, scope).
+const SYSTEM_PROFILE_ID: Uuid = uuid::uuid!("00000000-0000-0000-0004-000000000001");
+const BOOTSTRAP_TOPIC_ID: Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000040");
+const PUBLIC_SCOPE_ID: Uuid = uuid::uuid!("019e3d6f-2300-7000-8000-000000000010");
+
+fn mutation(id: Uuid, supersedes: Vec<Uuid>, correlation_id: Uuid) -> EventToWrite {
+    EventToWrite {
+        id,
+        event_type: EventType::ConceptMutated,
+        emitter_profile_id: SYSTEM_PROFILE_ID,
+        topic_id: BOOTSTRAP_TOPIC_ID,
+        scope_id: PUBLIC_SCOPE_ID,
+        payload: json!({ "definition": "x" }),
+        metadata: json!({}),
+        references: supersedes
+            .into_iter()
+            .map(|event_id| EventReference {
+                kind: ReferenceKind::Supersedes,
+                event_id,
+            })
+            .collect(),
+        correlation_id,
+        occurred_at: Utc::now(),
+    }
+}
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn append_concept_created_writes_to_ledger(pool: PgPool) {
-    let payload = json!({
-        "definition": "the digital cognitive map artifact model",
-        "elaboration": "events + richly-related resources; markdown is one projection",
-    });
+async fn append_writes_to_ledger(pool: PgPool) {
+    let payload = json!({ "definition": "the disciplined ledger" });
     let write = EventToWrite::new_root(
         EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
+        SYSTEM_PROFILE_ID,
         BOOTSTRAP_TOPIC_ID,
         PUBLIC_SCOPE_ID,
         payload.clone(),
@@ -99,37 +53,31 @@ async fn append_concept_created_writes_to_ledger(pool: PgPool) {
 
     assert_eq!(event.id, write.id);
     assert_eq!(event.correlation_id, write.id);
-    assert_eq!(event.emitter_entity_id, SYSTEM_ENTITY_ID);
+    assert_eq!(event.emitter_profile_id, SYSTEM_PROFILE_ID);
     assert_eq!(event.payload, payload);
 
-    // The row is in the ledger.
-    let row_count: i64 = sqlx::query_scalar!(
-        "SELECT count(*) FROM event_substrate.events WHERE id = $1",
-        write.id,
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .unwrap_or(0);
+    let row_count: i64 =
+        sqlx::query_scalar!("SELECT count(*) FROM kb_events WHERE id = $1", write.id,)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+            .unwrap_or(0);
     assert_eq!(row_count, 1);
 }
 
-use temper_events::LedgerError;
-use uuid::Uuid;
-
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn unknown_entity_errors(pool: PgPool) {
+async fn unknown_profile_errors(pool: PgPool) {
     let bogus = Uuid::now_v7();
     let write = EventToWrite::new_root(
         EventType::ConceptCreated,
         bogus,
         BOOTSTRAP_TOPIC_ID,
         PUBLIC_SCOPE_ID,
-        json!({"definition": "x"}),
+        json!({ "definition": "x" }),
         Utc::now(),
     );
     let err = append_event(&pool, write).await.unwrap_err();
-    assert!(matches!(err, LedgerError::UnknownEntity(id) if id == bogus));
+    assert!(matches!(err, LedgerError::UnknownProfile(id) if id == bogus));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
@@ -137,10 +85,10 @@ async fn unknown_topic_errors(pool: PgPool) {
     let bogus = Uuid::now_v7();
     let write = EventToWrite::new_root(
         EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
+        SYSTEM_PROFILE_ID,
         bogus,
         PUBLIC_SCOPE_ID,
-        json!({"definition": "x"}),
+        json!({ "definition": "x" }),
         Utc::now(),
     );
     let err = append_event(&pool, write).await.unwrap_err();
@@ -152,38 +100,23 @@ async fn unknown_scope_errors(pool: PgPool) {
     let bogus = Uuid::now_v7();
     let write = EventToWrite::new_root(
         EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
+        SYSTEM_PROFILE_ID,
         BOOTSTRAP_TOPIC_ID,
         bogus,
-        json!({"definition": "x"}),
+        json!({ "definition": "x" }),
         Utc::now(),
     );
     let err = append_event(&pool, write).await.unwrap_err();
     assert!(matches!(err, LedgerError::UnknownScope(id) if id == bogus));
 }
 
-use temper_events::{EventReference, ReferenceKind};
-
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn dangling_reference_errors(pool: PgPool) {
     let bogus_event = Uuid::now_v7();
     let id = Uuid::now_v7();
-    let write = EventToWrite {
-        id,
-        event_type: EventType::ConceptMutated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"definition": "x"}),
-        metadata: json!({}),
-        references: vec![EventReference {
-            kind: ReferenceKind::Supersedes,
-            event_id: bogus_event,
-        }],
-        correlation_id: id,
-        occurred_at: Utc::now(),
-    };
-    let err = append_event(&pool, write).await.unwrap_err();
+    let err = append_event(&pool, mutation(id, vec![bogus_event], id))
+        .await
+        .unwrap_err();
     assert!(matches!(
         err,
         LedgerError::DanglingReference { event_id, kind: ReferenceKind::Supersedes }
@@ -192,124 +125,81 @@ async fn dangling_reference_errors(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn append_concept_created_with_supersedes_errors(pool: PgPool) {
-    // First, write a real ConceptCreated so the Supersedes target exists.
+async fn concept_created_with_supersedes_errors(pool: PgPool) {
     let root = EventToWrite::new_root(
         EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
+        SYSTEM_PROFILE_ID,
         BOOTSTRAP_TOPIC_ID,
         PUBLIC_SCOPE_ID,
-        json!({"definition": "root"}),
+        json!({ "definition": "root" }),
         Utc::now(),
     );
     append_event(&pool, root.clone()).await.unwrap();
 
     let id = Uuid::now_v7();
     let bad = EventToWrite {
-        id,
         event_type: EventType::ConceptCreated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"definition": "x"}),
-        metadata: json!({}),
-        references: vec![EventReference {
-            kind: ReferenceKind::Supersedes,
-            event_id: root.id,
-        }],
-        correlation_id: id,
-        occurred_at: Utc::now(),
+        ..mutation(id, vec![root.id], id)
     };
     let err = append_event(&pool, bad).await.unwrap_err();
     assert!(matches!(err, LedgerError::SupersedesOnGenesis));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn append_concept_mutated_without_supersedes_errors(pool: PgPool) {
+async fn concept_mutated_without_supersedes_errors(pool: PgPool) {
     let id = Uuid::now_v7();
-    let bad = EventToWrite {
-        id,
-        event_type: EventType::ConceptMutated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"definition": "x"}),
-        metadata: json!({}),
-        references: vec![],
-        correlation_id: id,
-        occurred_at: Utc::now(),
-    };
-    let err = append_event(&pool, bad).await.unwrap_err();
+    let err = append_event(&pool, mutation(id, vec![], id))
+        .await
+        .unwrap_err();
     assert!(matches!(err, LedgerError::MissingSupersedes));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn append_concept_mutated_with_multiple_supersedes_errors(pool: PgPool) {
+async fn concept_mutated_with_multiple_supersedes_errors(pool: PgPool) {
     let root = EventToWrite::new_root(
         EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
+        SYSTEM_PROFILE_ID,
         BOOTSTRAP_TOPIC_ID,
         PUBLIC_SCOPE_ID,
-        json!({"definition": "root"}),
+        json!({ "definition": "root" }),
         Utc::now(),
     );
     append_event(&pool, root.clone()).await.unwrap();
 
     let id = Uuid::now_v7();
-    let bad = EventToWrite {
-        id,
-        event_type: EventType::ConceptMutated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"definition": "x"}),
-        metadata: json!({}),
-        references: vec![
-            EventReference {
-                kind: ReferenceKind::Supersedes,
-                event_id: root.id,
-            },
-            EventReference {
-                kind: ReferenceKind::Supersedes,
-                event_id: root.id,
-            },
-        ],
-        correlation_id: id,
-        occurred_at: Utc::now(),
-    };
-    let err = append_event(&pool, bad).await.unwrap_err();
+    let err = append_event(&pool, mutation(id, vec![root.id, root.id], id))
+        .await
+        .unwrap_err();
     assert!(matches!(err, LedgerError::MultipleSupersedes));
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
-async fn events_table_is_append_only(pool: PgPool) {
+async fn ledger_is_append_only(pool: PgPool) {
     let root = EventToWrite::new_root(
         EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
+        SYSTEM_PROFILE_ID,
         BOOTSTRAP_TOPIC_ID,
         PUBLIC_SCOPE_ID,
-        json!({"definition": "trigger-test"}),
+        json!({ "definition": "trigger-test" }),
         Utc::now(),
     );
     append_event(&pool, root.clone()).await.unwrap();
 
-    let update_err = sqlx::query!(
-        "UPDATE event_substrate.events SET metadata = $1 WHERE id = $2",
-        json!({"tampered": true}),
-        root.id,
-    )
-    .execute(&pool)
-    .await
-    .unwrap_err();
+    let update_err = sqlx::query("UPDATE kb_events SET metadata = $1 WHERE id = $2")
+        .bind(json!({ "tampered": true }))
+        .bind(root.id)
+        .execute(&pool)
+        .await
+        .unwrap_err();
     assert!(
         update_err
             .to_string()
             .contains("event ledger is append-only"),
-        "expected append-only trigger to raise; got: {}",
-        update_err
+        "expected append-only trigger on UPDATE; got: {update_err}"
     );
 
-    let delete_err = sqlx::query!("DELETE FROM event_substrate.events WHERE id = $1", root.id,)
+    let delete_err = sqlx::query("DELETE FROM kb_events WHERE id = $1")
+        .bind(root.id)
         .execute(&pool)
         .await
         .unwrap_err();
@@ -317,235 +207,39 @@ async fn events_table_is_append_only(pool: PgPool) {
         delete_err
             .to_string()
             .contains("event ledger is append-only"),
-        "expected append-only trigger to raise on DELETE; got: {}",
-        delete_err
+        "expected append-only trigger on DELETE; got: {delete_err}"
     );
-}
-
-use temper_events::project_concept;
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn append_concept_created_projects_to_concept(pool: PgPool) {
-    let root = EventToWrite::new_root(
-        EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
-        BOOTSTRAP_TOPIC_ID,
-        PUBLIC_SCOPE_ID,
-        json!({
-            "definition": "the LLM-wiki is the wrong artifact model",
-            "elaboration": "markdown is one lossy projection of a richer substrate",
-        }),
-        Utc::now(),
-    );
-    let event = append_event(&pool, root.clone()).await.unwrap();
-
-    let concept = project_concept(&pool, event.id)
-        .await
-        .expect("project_concept");
-
-    assert_eq!(
-        concept.current_definition,
-        "the LLM-wiki is the wrong artifact model"
-    );
-    assert_eq!(
-        concept.current_elaboration.as_deref(),
-        Some("markdown is one lossy projection of a richer substrate")
-    );
-    assert_eq!(concept.scope_id, PUBLIC_SCOPE_ID);
-    assert_eq!(concept.topic_id, BOOTSTRAP_TOPIC_ID);
-    assert_eq!(concept.created_by_event_id, event.id);
-    assert_eq!(concept.last_event_id, event.id);
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn mutation_chain_projects_correctly(pool: PgPool) {
-    let root = EventToWrite::new_root(
-        EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
-        BOOTSTRAP_TOPIC_ID,
-        PUBLIC_SCOPE_ID,
-        json!({"definition": "first", "elaboration": "elab1"}),
-        Utc::now(),
-    );
-    let created = append_event(&pool, root.clone()).await.unwrap();
-    let concept = project_concept(&pool, created.id).await.unwrap();
-
-    // First mutation: change definition only.
-    let m1_id = Uuid::now_v7();
-    let m1 = EventToWrite {
-        id: m1_id,
-        event_type: EventType::ConceptMutated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"definition": "second"}),
-        metadata: json!({}),
-        references: vec![EventReference {
-            kind: ReferenceKind::Supersedes,
-            event_id: created.id,
-        }],
-        correlation_id: created.id,
-        occurred_at: Utc::now(),
-    };
-    let m1_event = append_event(&pool, m1).await.unwrap();
-    let after_m1 = project_concept(&pool, m1_event.id).await.unwrap();
-    assert_eq!(after_m1.id, concept.id);
-    assert_eq!(after_m1.current_definition, "second");
-    assert_eq!(after_m1.current_elaboration.as_deref(), Some("elab1"));
-
-    // Second mutation: change elaboration only.
-    let m2_id = Uuid::now_v7();
-    let m2 = EventToWrite {
-        id: m2_id,
-        event_type: EventType::ConceptMutated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"elaboration": "elab2"}),
-        metadata: json!({}),
-        references: vec![EventReference {
-            kind: ReferenceKind::Supersedes,
-            event_id: m1_event.id,
-        }],
-        correlation_id: created.id,
-        occurred_at: Utc::now(),
-    };
-    let m2_event = append_event(&pool, m2).await.unwrap();
-    let after_m2 = project_concept(&pool, m2_event.id).await.unwrap();
-    assert_eq!(after_m2.current_definition, "second");
-    assert_eq!(after_m2.current_elaboration.as_deref(), Some("elab2"));
-}
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn project_concept_is_idempotent(pool: PgPool) {
-    let root = EventToWrite::new_root(
-        EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
-        BOOTSTRAP_TOPIC_ID,
-        PUBLIC_SCOPE_ID,
-        json!({"definition": "idempotency-test"}),
-        Utc::now(),
-    );
-    let event = append_event(&pool, root.clone()).await.unwrap();
-
-    let first = project_concept(&pool, event.id).await.unwrap();
-    let second = project_concept(&pool, event.id).await.unwrap();
-
-    assert_eq!(first, second);
-
-    // The concepts table should hold exactly one row for this genesis event.
-    let count: i64 = sqlx::query_scalar!(
-        "SELECT count(*) FROM event_substrate.concepts WHERE created_by_event_id = $1",
-        event.id,
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .unwrap_or(0);
-    assert_eq!(count, 1);
-}
-
-use temper_events::rebuild_concept;
-
-#[sqlx::test(migrator = "MIGRATOR")]
-async fn rebuild_concept_equals_projection_of_record(pool: PgPool) {
-    // Build a Create -> Mutate -> Mutate chain.
-    let root = EventToWrite::new_root(
-        EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
-        BOOTSTRAP_TOPIC_ID,
-        PUBLIC_SCOPE_ID,
-        json!({"definition": "v0", "elaboration": "e0"}),
-        Utc::now(),
-    );
-    let created = append_event(&pool, root.clone()).await.unwrap();
-    project_concept(&pool, created.id).await.unwrap();
-
-    let m1_id = Uuid::now_v7();
-    let m1 = EventToWrite {
-        id: m1_id,
-        event_type: EventType::ConceptMutated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"definition": "v1"}),
-        metadata: json!({}),
-        references: vec![EventReference {
-            kind: ReferenceKind::Supersedes,
-            event_id: created.id,
-        }],
-        correlation_id: created.id,
-        occurred_at: Utc::now(),
-    };
-    let m1_event = append_event(&pool, m1).await.unwrap();
-    project_concept(&pool, m1_event.id).await.unwrap();
-
-    let m2_id = Uuid::now_v7();
-    let m2 = EventToWrite {
-        id: m2_id,
-        event_type: EventType::ConceptMutated,
-        emitter_entity_id: SYSTEM_ENTITY_ID,
-        topic_id: BOOTSTRAP_TOPIC_ID,
-        scope_id: PUBLIC_SCOPE_ID,
-        payload: json!({"elaboration": "e2"}),
-        metadata: json!({}),
-        references: vec![EventReference {
-            kind: ReferenceKind::Supersedes,
-            event_id: m1_event.id,
-        }],
-        correlation_id: created.id,
-        occurred_at: Utc::now(),
-    };
-    let m2_event = append_event(&pool, m2).await.unwrap();
-    let projection_of_record = project_concept(&pool, m2_event.id).await.unwrap();
-
-    let rebuilt = rebuild_concept(&pool, projection_of_record.id)
-        .await
-        .unwrap();
-
-    assert_eq!(rebuilt, projection_of_record);
 }
 
 #[sqlx::test(migrator = "MIGRATOR")]
 async fn correlation_id_groups_fan_out(pool: PgPool) {
     let root = EventToWrite::new_root(
         EventType::ConceptCreated,
-        SYSTEM_ENTITY_ID,
+        SYSTEM_PROFILE_ID,
         BOOTSTRAP_TOPIC_ID,
         PUBLIC_SCOPE_ID,
-        json!({"definition": "fan-out root"}),
+        json!({ "definition": "fan-out root" }),
         Utc::now(),
     );
     let created = append_event(&pool, root.clone()).await.unwrap();
 
-    // Two mutations sharing the root's correlation_id (fan-out under one intention).
-    for label in ["m1", "m2"] {
+    for _ in 0..2 {
         let id = Uuid::now_v7();
-        let mutation = EventToWrite {
-            id,
-            event_type: EventType::ConceptMutated,
-            emitter_entity_id: SYSTEM_ENTITY_ID,
-            topic_id: BOOTSTRAP_TOPIC_ID,
-            scope_id: PUBLIC_SCOPE_ID,
-            payload: json!({"definition": label}),
-            metadata: json!({}),
-            references: vec![EventReference {
-                kind: ReferenceKind::Supersedes,
-                event_id: created.id,
-            }],
-            correlation_id: created.correlation_id,
-            occurred_at: Utc::now(),
-        };
-        append_event(&pool, mutation).await.unwrap();
+        append_event(
+            &pool,
+            mutation(id, vec![created.id], created.correlation_id),
+        )
+        .await
+        .unwrap();
     }
 
     let count: i64 = sqlx::query_scalar!(
-        "SELECT count(*) FROM event_substrate.events WHERE correlation_id = $1",
+        "SELECT count(*) FROM kb_events WHERE correlation_id = $1",
         created.correlation_id,
     )
     .fetch_one(&pool)
     .await
     .unwrap()
     .unwrap_or(0);
-    assert_eq!(count, 3, "root + 2 mutations all share one correlation_id");
+    assert_eq!(count, 3, "root + 2 mutations share one correlation_id");
 }

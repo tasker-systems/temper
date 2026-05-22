@@ -386,8 +386,8 @@ async fn emit_join_request_event(
         .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
 
     let _ = sqlx::query!(
-        "INSERT INTO kb_events (id, profile_id, device_id, event_type, payload, created)
-         VALUES ($1, $2, 'system', $3, $4, now())",
+        "INSERT INTO kb_events (id, profile_id, device_id, event_type_id, payload, created)
+         VALUES ($1, $2, 'system', resolve_event_type($3), $4, now())",
         event_id as EventId,
         profile_id,
         event_type,

@@ -27,11 +27,12 @@ pub async fn list_visible(
                 SELECT e.id, e.profile_id, e.device_id,
                        e.kb_context_id as "kb_context_id: Uuid",
                        e.resource_id as "resource_id: Uuid",
-                       e.event_type, e.payload as "payload: serde_json::Value", e.created
+                       et.name AS "event_type!", e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
+                  JOIN kb_event_types et ON et.id = e.event_type_id
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
                    AND e.resource_id = $2
-                   AND e.event_type  = $3
+                   AND et.name        = $3
                  ORDER BY e.created DESC
                  LIMIT $4 OFFSET $5
                 "#,
@@ -52,8 +53,9 @@ pub async fn list_visible(
                 SELECT e.id, e.profile_id, e.device_id,
                        e.kb_context_id as "kb_context_id: Uuid",
                        e.resource_id as "resource_id: Uuid",
-                       e.event_type, e.payload as "payload: serde_json::Value", e.created
+                       et.name AS "event_type!", e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
+                  JOIN kb_event_types et ON et.id = e.event_type_id
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
                    AND e.resource_id = $2
                  ORDER BY e.created DESC
@@ -75,10 +77,11 @@ pub async fn list_visible(
                 SELECT e.id, e.profile_id, e.device_id,
                        e.kb_context_id as "kb_context_id: Uuid",
                        e.resource_id as "resource_id: Uuid",
-                       e.event_type, e.payload as "payload: serde_json::Value", e.created
+                       et.name AS "event_type!", e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
+                  JOIN kb_event_types et ON et.id = e.event_type_id
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
-                   AND e.event_type = $2
+                   AND et.name = $2
                  ORDER BY e.created DESC
                  LIMIT $3 OFFSET $4
                 "#,
@@ -98,8 +101,9 @@ pub async fn list_visible(
                 SELECT e.id, e.profile_id, e.device_id,
                        e.kb_context_id as "kb_context_id: Uuid",
                        e.resource_id as "resource_id: Uuid",
-                       e.event_type, e.payload as "payload: serde_json::Value", e.created
+                       et.name AS "event_type!", e.payload as "payload: serde_json::Value", e.created
                   FROM kb_events e
+                  JOIN kb_event_types et ON et.id = e.event_type_id
                  WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))
                  ORDER BY e.created DESC
                  LIMIT $2 OFFSET $3
