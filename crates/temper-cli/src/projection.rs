@@ -92,6 +92,62 @@ fn evaluate_staleness(cursor: &ProjectionCursor, server_latest: Option<Uuid>) ->
     }
 }
 
+/// Resolve a context name to its UUID via the contexts list. Returns `None`
+/// when the context is not found or the API call fails — the caller treats
+/// either as "cannot check", not as an error.
+async fn resolve_context_id(client: &TemperClient, context: &str) -> Option<Uuid> {
+    let rows = client.contexts().list().await.ok()?;
+    rows.into_iter()
+        .find(|c| c.name == context)
+        .map(|c| Uuid::from(c.id))
+}
+
+/// Non-blocking staleness pre-flight for one context. Reads the context's
+/// cursor sidecar; only if one exists does it resolve the context id and
+/// fetch the server's latest event id. Never errors and never blocks:
+///
+/// - no cursor             -> `NotProjected` (zero network calls)
+/// - cursor + server even  -> `Fresh`
+/// - cursor + server ahead -> `Stale`
+/// - any failure           -> `Skipped` (debug log)
+pub async fn check_context_staleness(
+    client: &TemperClient,
+    state_dir: &Path,
+    context: &str,
+) -> StalenessOutcome {
+    let cursor = match read_cursor(state_dir, context) {
+        Ok(Some(cursor)) => cursor,
+        Ok(None) => return StalenessOutcome::NotProjected,
+        Err(e) => {
+            tracing::debug!("staleness check skipped: cursor read failed for {context}: {e}");
+            return StalenessOutcome::Skipped;
+        }
+    };
+    let Some(context_id) = resolve_context_id(client, context).await else {
+        tracing::debug!("staleness check skipped: could not resolve context '{context}'");
+        return StalenessOutcome::Skipped;
+    };
+    let server_latest = match client.events().latest_for_context(context_id).await {
+        Ok(latest) => latest,
+        Err(e) => {
+            tracing::debug!("staleness check skipped: latest_for_context failed: {e}");
+            return StalenessOutcome::Skipped;
+        }
+    };
+    evaluate_staleness(&cursor, server_latest)
+}
+
+/// Run the staleness pre-flight and print one warning line if the context's
+/// projection is stale. All other outcomes are silent. This is the
+/// caller-facing entry point for context-touching commands.
+pub async fn warn_if_context_stale(client: &TemperClient, state_dir: &Path, context: &str) {
+    if check_context_staleness(client, state_dir, context).await == StalenessOutcome::Stale {
+        crate::output::warning(format!(
+            "projection for '{context}' is stale — run `temper pull {context}` to refresh"
+        ));
+    }
+}
+
 /// Remove projection `.md` files for resources no longer present in the
 /// context. `keep` is the set of absolute file paths the current pull
 /// wrote. Walks `<vault_root>/<owner>/<context>/<doc_type>/*.md` across

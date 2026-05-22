@@ -298,6 +298,103 @@ async fn pull_is_idempotent(pool: sqlx::PgPool) {
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn staleness_not_projected_when_context_never_pulled(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("snp").await.expect("ctx");
+    seed_resource(&app, "snp", "research", "Doc").await;
+
+    let config = projection_test_config(&app);
+    let outcome =
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "snp")
+            .await;
+    assert_eq!(
+        outcome,
+        temper_cli::projection::StalenessOutcome::NotProjected
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn staleness_fresh_immediately_after_pull(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("sfr").await.expect("ctx");
+    seed_resource(&app, "sfr", "research", "Doc").await;
+
+    let config = projection_test_config(&app);
+    temper_cli::projection::pull_context(&app.client, &config, "sfr")
+        .await
+        .expect("pull");
+
+    let outcome =
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "sfr")
+            .await;
+    assert_eq!(outcome, temper_cli::projection::StalenessOutcome::Fresh);
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn staleness_stale_after_post_pull_write(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("sst").await.expect("ctx");
+    seed_resource(&app, "sst", "research", "First Doc").await;
+
+    let config = projection_test_config(&app);
+    temper_cli::projection::pull_context(&app.client, &config, "sst")
+        .await
+        .expect("first pull");
+
+    // A write after the pull advances the context's event stream.
+    seed_resource(&app, "sst", "research", "Second Doc").await;
+
+    let outcome =
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "sst")
+            .await;
+    assert_eq!(outcome, temper_cli::projection::StalenessOutcome::Stale);
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn staleness_skipped_when_context_unresolvable(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+
+    // A cursor exists on disk for a context that does not exist on the
+    // server (e.g. a stale sidecar for a deleted context). The check reads
+    // the cursor, fails to resolve the context id, and skips silently.
+    let config = projection_test_config(&app);
+    temper_cli::projection::write_cursor(
+        &config.state_dir,
+        "ghost",
+        &temper_cli::projection::ProjectionCursor {
+            last_event_id: None,
+            pulled_at: chrono::Utc::now(),
+        },
+    )
+    .expect("write cursor");
+
+    let outcome =
+        temper_cli::projection::check_context_staleness(&app.client, &config.state_dir, "ghost")
+            .await;
+    assert_eq!(outcome, temper_cli::projection::StalenessOutcome::Skipped);
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn pull_empty_context_writes_cursor_with_no_event_id(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client
