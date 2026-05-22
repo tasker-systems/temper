@@ -1083,6 +1083,20 @@ fn show_generic(
                         .content(*row.id.as_uuid())
                         .await
                         .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+                    // Per-resource projection refresh: write the fetched
+                    // resource to its canonical projection path. Best-effort
+                    // — a write failure must not stop `show` from displaying.
+                    if let Err(e) = crate::projection::write_resource_file_from_parts(
+                        &config_clone.vault_root,
+                        &row,
+                        &resp,
+                    ) {
+                        crate::output::warning(format!(
+                            "could not refresh projection file for '{slug_inner}': {e}"
+                        ));
+                    }
+
                     Ok(resp.markdown)
                 })
             })?;
