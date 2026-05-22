@@ -664,10 +664,17 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 
     let vault_state = VaultState::from_env();
 
+    let state_dir = config.state_dir.clone();
+
     // Attempt server-first. Fall back to local scan on network error
     // in Local mode only; Cloud mode surfaces the error.
     let rows_result = runtime::with_client(move |client| {
-        Box::pin(async move { fetch_list_rows(client, &doc_type, context.as_deref(), limit).await })
+        Box::pin(async move {
+            if let Some(ctx) = context.as_deref() {
+                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
+            }
+            fetch_list_rows(client, &doc_type, context.as_deref(), limit).await
+        })
     });
 
     let server_rows = match (rows_result, vault_state) {
@@ -1083,6 +1090,20 @@ fn show_generic(
                         .content(*row.id.as_uuid())
                         .await
                         .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+                    // Per-resource projection refresh: write the fetched
+                    // resource to its canonical projection path. Best-effort
+                    // — a write failure must not stop `show` from displaying.
+                    if let Err(e) = crate::projection::write_resource_file_from_parts(
+                        &config_clone.vault_root,
+                        &row,
+                        &resp,
+                    ) {
+                        crate::output::warning(format!(
+                            "could not refresh projection file for '{slug_inner}': {e}"
+                        ));
+                    }
+
                     Ok(resp.markdown)
                 })
             })?;

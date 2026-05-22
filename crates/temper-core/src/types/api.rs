@@ -46,6 +46,15 @@ pub struct EventListParams {
     pub offset: Option<i64>,
 }
 
+/// Response body for the event-cursor endpoint: the most recent event id
+/// recorded for a context, or `None` if the context has no events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct EventCursorResponse {
+    /// Most recent `kb_events.id` for the context, newest by `created`.
+    pub latest_event_id: Option<Uuid>,
+}
+
 /// Default search config for full-text search.
 fn default_search_config() -> String {
     "english".to_string()
@@ -234,5 +243,26 @@ mod tests {
         assert_eq!(params.query.as_deref(), Some("test query"));
         assert_eq!(params.embedding.unwrap(), vec![1.0, 2.0]);
         assert_eq!(params.search_config, "simple");
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+    use uuid::Uuid;
+
+    #[test]
+    fn event_cursor_response_round_trips_some_and_none() {
+        let some = EventCursorResponse {
+            latest_event_id: Some(Uuid::nil()),
+        };
+        let none = EventCursorResponse {
+            latest_event_id: None,
+        };
+        for value in [some, none] {
+            let json = serde_json::to_string(&value).unwrap();
+            let back: EventCursorResponse = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.latest_event_id, value.latest_event_id);
+        }
     }
 }

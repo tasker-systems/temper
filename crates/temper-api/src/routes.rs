@@ -72,6 +72,10 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/ingest", post(handlers::ingest::create))
         .route("/api/ingest/{id}", put(handlers::ingest::update))
         .route("/api/events", get(handlers::events::list))
+        .route(
+            "/api/events/{kb_context_id}/cursor",
+            get(handlers::events::cursor),
+        )
         .route("/api/search", post(handlers::search::search))
         .route("/api/sync/status", post(handlers::sync::status))
         .route("/api/sync/complete", post(handlers::sync::complete))

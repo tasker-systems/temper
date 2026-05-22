@@ -29,6 +29,9 @@ pub fn run(
         Some(search_actions::embed_query(query)?)
     };
 
+    let ctx_for_check = context.map(ToString::to_string);
+    let state_dir = temper_dir.clone();
+
     let results = runtime::with_client(|client| {
         let params = search_actions::build_search_params(search_actions::CliSearchArgs {
             query,
@@ -41,7 +44,12 @@ pub fn run(
             depth,
             no_graph,
         });
-        Box::pin(async move { search_actions::search_api(client, params).await })
+        Box::pin(async move {
+            if let Some(ctx) = ctx_for_check.as_deref() {
+                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
+            }
+            search_actions::search_api(client, params).await
+        })
     })?;
 
     let enriched = search_actions::enrich_results(results, &manifest);

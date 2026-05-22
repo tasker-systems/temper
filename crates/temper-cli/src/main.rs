@@ -351,7 +351,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 ignore.as_deref(),
             )
         }
-        Commands::Pull { resource_id } => commands::pull::run(&resource_id),
+        Commands::Pull { context } => commands::pull::run(&context),
         Commands::Push { target } => commands::push::run(&target),
         Commands::Sync { action } => match action {
             SyncAction::Run { context, format } => {

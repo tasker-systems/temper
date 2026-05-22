@@ -4,7 +4,8 @@ use reqwest::Method;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::api::{EventListParams, EventRow};
+use temper_core::types::api::{EventCursorResponse, EventListParams, EventRow};
+use uuid::Uuid;
 
 /// Sub-client for event listing.
 pub struct EventClient<'a> {
@@ -29,5 +30,18 @@ impl<'a> EventClient<'a> {
         self.http
             .send_json(&Method::GET, "/api/events", req, Some(&token))
             .await
+    }
+
+    /// GET /api/events/{kb_context_id}/cursor — the most recent event id for
+    /// a context.
+    pub async fn latest_for_context(&self, kb_context_id: Uuid) -> Result<Option<Uuid>> {
+        let token = self.http.resolve_token()?;
+        let path = format!("/api/events/{kb_context_id}/cursor");
+        let req = self.http.get(&path);
+        let resp: EventCursorResponse = self
+            .http
+            .send_json(&Method::GET, &path, req, Some(&token))
+            .await?;
+        Ok(resp.latest_event_id)
     }
 }
