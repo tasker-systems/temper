@@ -65,6 +65,33 @@ pub fn write_cursor(state_dir: &Path, context: &str, cursor: &ProjectionCursor) 
     Ok(())
 }
 
+/// Outcome of a non-blocking staleness pre-flight for one context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StalenessOutcome {
+    /// No cursor sidecar — the context was never pulled. The check made no
+    /// network call; the caller stays silent.
+    NotProjected,
+    /// A cursor exists and matches the server's latest event. Silent.
+    Fresh,
+    /// A cursor exists but the server has advanced past it. The caller warns.
+    Stale,
+    /// The check could not complete — offline, or the context could not be
+    /// resolved. Silent (a debug log is emitted at the failure site).
+    Skipped,
+}
+
+/// Compare a context's cursor against the server's latest event id for that
+/// context. Pure: the staleness *decision*, with no IO. The server's id is
+/// recorded into the cursor at pull time, so any divergence means at least
+/// one event landed since the last pull.
+fn evaluate_staleness(cursor: &ProjectionCursor, server_latest: Option<Uuid>) -> StalenessOutcome {
+    if server_latest == cursor.last_event_id {
+        StalenessOutcome::Fresh
+    } else {
+        StalenessOutcome::Stale
+    }
+}
+
 /// Remove projection `.md` files for resources no longer present in the
 /// context. `keep` is the set of absolute file paths the current pull
 /// wrote. Walks `<vault_root>/<owner>/<context>/<doc_type>/*.md` across
@@ -342,6 +369,51 @@ mod tests {
         assert!(!stale.exists(), "unlisted .md removed");
         assert!(notes.exists(), "non-.md file untouched");
         assert!(other.exists(), "other context untouched");
+    }
+
+    #[test]
+    fn evaluate_staleness_equal_ids_is_fresh() {
+        let cursor = ProjectionCursor {
+            last_event_id: Some(Uuid::nil()),
+            pulled_at: Utc::now(),
+        };
+        assert_eq!(
+            evaluate_staleness(&cursor, Some(Uuid::nil())),
+            StalenessOutcome::Fresh
+        );
+    }
+
+    #[test]
+    fn evaluate_staleness_differing_ids_is_stale() {
+        let cursor = ProjectionCursor {
+            last_event_id: Some(Uuid::nil()),
+            pulled_at: Utc::now(),
+        };
+        assert_eq!(
+            evaluate_staleness(&cursor, Some(Uuid::from_u128(1))),
+            StalenessOutcome::Stale
+        );
+    }
+
+    #[test]
+    fn evaluate_staleness_both_none_is_fresh() {
+        let cursor = ProjectionCursor {
+            last_event_id: None,
+            pulled_at: Utc::now(),
+        };
+        assert_eq!(evaluate_staleness(&cursor, None), StalenessOutcome::Fresh);
+    }
+
+    #[test]
+    fn evaluate_staleness_server_advanced_from_none_is_stale() {
+        let cursor = ProjectionCursor {
+            last_event_id: None,
+            pulled_at: Utc::now(),
+        };
+        assert_eq!(
+            evaluate_staleness(&cursor, Some(Uuid::nil())),
+            StalenessOutcome::Stale
+        );
     }
 
     #[test]
