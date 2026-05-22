@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))\n                SELECT e.id, e.profile_id, e.device_id,\n                       e.kb_context_id as \"kb_context_id: Uuid\",\n                       e.resource_id as \"resource_id: Uuid\",\n                       e.event_type, e.payload as \"payload: serde_json::Value\", e.created\n                  FROM kb_events e\n                 WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))\n                   AND e.resource_id = $2\n                   AND e.event_type  = $3\n                 ORDER BY e.created DESC\n                 LIMIT $4 OFFSET $5\n                ",
+  "query": "\n                WITH visible AS (SELECT resource_id FROM resources_visible_to($1))\n                SELECT e.id, e.profile_id, e.device_id,\n                       e.kb_context_id as \"kb_context_id: Uuid\",\n                       e.resource_id as \"resource_id: Uuid\",\n                       et.name AS \"event_type!\", e.payload as \"payload: serde_json::Value\", e.created\n                  FROM kb_events e\n                  JOIN kb_event_types et ON et.id = e.event_type_id\n                 WHERE (e.profile_id = $1 OR e.resource_id IN (SELECT resource_id FROM visible))\n                 ORDER BY e.created DESC\n                 LIMIT $2 OFFSET $3\n                ",
   "describe": {
     "columns": [
       {
@@ -30,7 +30,7 @@
       },
       {
         "ordinal": 5,
-        "name": "event_type",
+        "name": "event_type!",
         "type_info": "Varchar"
       },
       {
@@ -47,8 +47,6 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Uuid",
-        "Text",
         "Int8",
         "Int8"
       ]
@@ -64,5 +62,5 @@
       false
     ]
   },
-  "hash": "690a8921c8708812b2394d09e516754451e9866d9b21b65b29dc8eb38e2f9705"
+  "hash": "035be80f357295a0429849daec3504231a30c720746fb227740f70ff739ea703"
 }

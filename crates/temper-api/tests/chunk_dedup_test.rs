@@ -113,12 +113,12 @@ async fn seed_audit(pool: &PgPool, resource_id: Uuid, body_hash: &str) -> Uuid {
     // kb_resource_audits.event_id is a FK to kb_events — insert that first.
     let event_id: Uuid = sqlx::query_scalar(
         "INSERT INTO kb_events \
-         (id, profile_id, device_id, kb_context_id, resource_id, event_type, payload, created) \
+         (id, profile_id, device_id, kb_context_id, resource_id, event_type_id, payload, created) \
          VALUES (gen_random_uuid(), \
              (SELECT originator_profile_id FROM kb_resources WHERE id = $1), \
              'test-device', \
              (SELECT kb_context_id FROM kb_resources WHERE id = $1), \
-             $1, 'update_body', '{}', now()) RETURNING id",
+             $1, (SELECT id FROM kb_event_types WHERE name = 'body_updated'), '{}', now()) RETURNING id",
     )
     .bind(resource_id)
     .fetch_one(pool)

@@ -1,5 +1,6 @@
+import { randomUUID } from "node:crypto";
 import type postgres from "postgres";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { NeonClient } from "../../src/db.js";
 import type { IngestMetadata } from "../../src/ingest.js";
 import { insertResource, updateResourceHash } from "../../src/ingest.js";
@@ -17,28 +18,21 @@ describe("ingest event parity", () => {
   const TEST_DOC_TYPE_ID = "00000000-0000-0000-0001-000000000004";
 
   let sql: postgres.Sql;
-  const createdResourceIds: string[] = [];
 
   beforeAll(() => {
     sql = getTestDb();
   });
 
-  afterEach(async () => {
-    for (const id of createdResourceIds) {
-      await sql`DELETE FROM kb_resource_audits WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_events WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_resource_manifests WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_resources WHERE id = ${id}::uuid`;
-    }
-    createdResourceIds.length = 0;
-  });
+  // No afterEach teardown: kb_events is append-only and a resource that has
+  // events cannot be hard-deleted. Each test uses a unique origin_uri and
+  // asserts only on its own resource_id, so leftover rows are harmless.
 
   it("insertResource creates event + audit rows", async () => {
     const meta: IngestMetadata = {
       title: "Integration test resource",
       kb_context_id: TEST_CONTEXT_ID,
       kb_doc_type_id: TEST_DOC_TYPE_ID,
-      origin_uri: "test://integration/insert",
+      origin_uri: `test://integration/insert/${randomUUID()}`,
     };
 
     const resource = await insertResource(
@@ -47,13 +41,13 @@ describe("ingest event parity", () => {
       "sha256:test123abc",
       TEST_PROFILE_ID,
     );
-    createdResourceIds.push(resource.id);
 
     const events = await sql`
-      SELECT id, event_type, device_id, payload
-      FROM kb_events
-      WHERE resource_id = ${resource.id}::uuid
-      ORDER BY created DESC
+      SELECT e.id, et.name AS event_type, e.device_id, e.payload
+      FROM kb_events e
+      JOIN kb_event_types et ON et.id = e.event_type_id
+      WHERE e.resource_id = ${resource.id}::uuid
+      ORDER BY e.created DESC
       LIMIT 1
     `;
     expect(events).toHaveLength(1);
@@ -81,7 +75,7 @@ describe("ingest event parity", () => {
       title: "Update test resource",
       kb_context_id: TEST_CONTEXT_ID,
       kb_doc_type_id: TEST_DOC_TYPE_ID,
-      origin_uri: "test://integration/update",
+      origin_uri: `test://integration/update/${randomUUID()}`,
     };
 
     const resource = await insertResource(
@@ -90,7 +84,6 @@ describe("ingest event parity", () => {
       "sha256:original",
       TEST_PROFILE_ID,
     );
-    createdResourceIds.push(resource.id);
 
     await updateResourceHash(
       asNeonClient(sql),
@@ -101,9 +94,11 @@ describe("ingest event parity", () => {
     );
 
     const events = await sql`
-      SELECT event_type FROM kb_events
-      WHERE resource_id = ${resource.id}::uuid
-      ORDER BY created ASC
+      SELECT et.name AS event_type
+      FROM kb_events e
+      JOIN kb_event_types et ON et.id = e.event_type_id
+      WHERE e.resource_id = ${resource.id}::uuid
+      ORDER BY e.created ASC
     `;
     expect(events).toHaveLength(2);
     expect(events[0].event_type).toBe("resource_created");

@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) FROM event_substrate.entities WHERE profile_id = $1",
+  "query": "SELECT EXISTS (SELECT 1 FROM kb_profiles WHERE id = $1)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "count",
-        "type_info": "Int8"
+        "name": "exists",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "781a0bf5ddedfdabe91ebbb96305687d4947010dc7f0591274d012c039749241"
+  "hash": "afe1a658b22f87be1cd20e5a00a9e8f65ca6be7dcea48dc7131880c9656dfcfa"
 }

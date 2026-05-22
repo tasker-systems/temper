@@ -126,10 +126,10 @@ async fn setup_resource_with_body(
 
         let event_id: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_events \
-             (id, profile_id, device_id, kb_context_id, resource_id, event_type, payload, created) \
+             (id, profile_id, device_id, kb_context_id, resource_id, event_type_id, payload, created) \
              VALUES (gen_random_uuid(), \
                  (SELECT owner_profile_id FROM kb_resources WHERE id = $1), \
-                 'test-device', $2, $1, 'resource_created', '{}', now()) RETURNING id",
+                 'test-device', $2, $1, (SELECT id FROM kb_event_types WHERE name = 'resource_created'), '{}', now()) RETURNING id",
         )
         .bind(resource_id)
         .bind(context_id)

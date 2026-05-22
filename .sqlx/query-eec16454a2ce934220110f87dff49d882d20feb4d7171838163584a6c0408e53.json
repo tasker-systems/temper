@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_events (id, profile_id, device_id, event_type_id, payload, created)\n         VALUES ($1, $2, 'system', resolve_event_type($3), $4, now())",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Jsonb"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "eec16454a2ce934220110f87dff49d882d20feb4d7171838163584a6c0408e53"
+}

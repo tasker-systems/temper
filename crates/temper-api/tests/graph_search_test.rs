@@ -68,10 +68,10 @@ async fn test_graph_search_no_edges_degrades(pool: PgPool) {
     // The 4-arg persist_resource_chunks requires an audit row; seed one first.
     let event_id: uuid::Uuid = sqlx::query_scalar(
         "INSERT INTO kb_events \
-         (id, profile_id, device_id, kb_context_id, resource_id, event_type, payload, created) \
+         (id, profile_id, device_id, kb_context_id, resource_id, event_type_id, payload, created) \
          VALUES (gen_random_uuid(), $1, 'test-device', \
              (SELECT kb_context_id FROM kb_resources WHERE id = $2), \
-             $2, 'resource_created', '{}', now()) RETURNING id",
+             $2, (SELECT id FROM kb_event_types WHERE name = 'resource_created'), '{}', now()) RETURNING id",
     )
     .bind(profile)
     .bind(a)

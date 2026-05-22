@@ -118,8 +118,8 @@ export async function resolveContextId(
 
   const eventId = uuidv7();
   await db`
-    INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, event_type, payload, created)
-    VALUES (${eventId}::uuid, ${profileId}::uuid, ${"vercel-cloud"}, ${newId}::uuid, 'context_created', '{}', now())
+    INSERT INTO kb_events (id, profile_id, device_id, kb_context_id, event_type_id, payload, created)
+    VALUES (${eventId}::uuid, ${profileId}::uuid, ${"vercel-cloud"}, ${newId}::uuid, resolve_event_type('context_created'), '{}', now())
   `;
 
   return newId;

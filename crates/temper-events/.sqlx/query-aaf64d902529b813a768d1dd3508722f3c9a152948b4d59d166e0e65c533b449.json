@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n        INSERT INTO event_substrate.events (\n            id, event_type_id, emitter_entity_id, topic_id, scope_id,\n            payload, metadata, \"references\", correlation_id, occurred_at\n        )\n        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)\n        RETURNING\n            id,\n            event_type_id,\n            emitter_entity_id,\n            topic_id,\n            scope_id,\n            payload,\n            metadata,\n            \"references\",\n            correlation_id,\n            occurred_at,\n            recorded_at\n        ",
+  "query": "\n        INSERT INTO kb_events (\n            id, event_type_id, profile_id, device_id, topic_id, scope_id,\n            payload, metadata, \"references\", correlation_id, occurred_at\n        )\n        VALUES ($1, $2, $3, 'ledger', $4, $5, $6, $7, $8, $9, $10)\n        RETURNING\n            id,\n            event_type_id,\n            profile_id        AS \"emitter_profile_id!\",\n            topic_id          AS \"topic_id!\",\n            scope_id          AS \"scope_id!\",\n            payload           AS \"payload!\",\n            metadata,\n            \"references\",\n            correlation_id    AS \"correlation_id!\",\n            occurred_at,\n            created           AS \"recorded_at!\"\n        ",
   "describe": {
     "columns": [
       {
@@ -15,22 +15,22 @@
       },
       {
         "ordinal": 2,
-        "name": "emitter_entity_id",
+        "name": "emitter_profile_id!",
         "type_info": "Uuid"
       },
       {
         "ordinal": 3,
-        "name": "topic_id",
+        "name": "topic_id!",
         "type_info": "Uuid"
       },
       {
         "ordinal": 4,
-        "name": "scope_id",
+        "name": "scope_id!",
         "type_info": "Uuid"
       },
       {
         "ordinal": 5,
-        "name": "payload",
+        "name": "payload!",
         "type_info": "Jsonb"
       },
       {
@@ -45,7 +45,7 @@
       },
       {
         "ordinal": 8,
-        "name": "correlation_id",
+        "name": "correlation_id!",
         "type_info": "Uuid"
       },
       {
@@ -55,7 +55,7 @@
       },
       {
         "ordinal": 10,
-        "name": "recorded_at",
+        "name": "recorded_at!",
         "type_info": "Timestamptz"
       }
     ],
@@ -77,15 +77,15 @@
       false,
       false,
       false,
+      true,
+      true,
       false,
       false,
       false,
-      false,
-      false,
-      false,
+      true,
       false,
       false
     ]
   },
-  "hash": "a8f9b322b29a41e50960e818880c3e95df1460cb1d9a17f069dfd197bb519235"
+  "hash": "aaf64d902529b813a768d1dd3508722f3c9a152948b4d59d166e0e65c533b449"
 }

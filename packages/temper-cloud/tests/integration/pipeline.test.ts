@@ -132,12 +132,51 @@ describe("fixture chunking", () => {
 // 3. Embedding tests — verify 768-dim vectors from extracted+chunked content
 // ---------------------------------------------------------------------------
 
+/**
+ * True when an error is a network-connectivity failure — typically reaching
+ * HuggingFace Hub to pull the embedding model. This is CI-environment flake,
+ * not a code defect, so the embedding test skips rather than fails on it.
+ */
+function isNetworkConnectivityError(err: unknown): boolean {
+  const NETWORK_CODES = new Set([
+    "UND_ERR_CONNECT_TIMEOUT",
+    "UND_ERR_HEADERS_TIMEOUT",
+    "UND_ERR_SOCKET",
+    "ECONNRESET",
+    "ECONNREFUSED",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "ETIMEDOUT",
+  ]);
+  // `fetch failed` wraps the underlying undici error as `.cause`; walk the chain.
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && NETWORK_CODES.has(code)) return true;
+    if (/fetch failed|connect timeout|getaddrinfo|network/i.test(current.message)) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 describe("fixture embedding", () => {
-  it("embeds chunked markdown to 768-dim vectors", async () => {
+  it("embeds chunked markdown to 768-dim vectors", async (ctx) => {
     const { content } = await extractText(join(FIXTURES, "simple.md"));
     const chunks = chunkText(content);
     const texts = chunks.map((c) => c.content);
-    const embeddings = await embedTexts(texts);
+
+    let embeddings: number[][];
+    try {
+      embeddings = await embedTexts(texts);
+    } catch (err) {
+      // Pulling the embedding model reaches HuggingFace Hub over the network.
+      // A connectivity failure there is environment flake, not a defect —
+      // skip so it reads as a skipped test, not a misleading red signal.
+      if (isNetworkConnectivityError(err)) {
+        ctx.skip("HuggingFace Hub unreachable — embedding model could not be pulled");
+      }
+      throw err;
+    }
 
     expect(embeddings.length).toBe(chunks.length);
     for (const vec of embeddings) {

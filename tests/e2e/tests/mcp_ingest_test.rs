@@ -86,7 +86,7 @@ async fn create_resource_with_manifest_inserts_all_records(pool: sqlx::PgPool) {
 
     // Verify event
     let event_count: i64 = sqlx::query_scalar!(
-        "SELECT count(*) FROM kb_events WHERE resource_id = $1 AND event_type = 'resource_created'",
+        "SELECT count(*) FROM kb_events WHERE resource_id = $1 AND event_type_id = (SELECT id FROM kb_event_types WHERE name = 'resource_created')",
         *resource.id,
     )
     .fetch_one(&pool)
@@ -289,7 +289,7 @@ async fn update_resource_changes_manifest_body_hash(pool: sqlx::PgPool) {
 
     // Verify body_updated event was created
     let event_count: i64 = sqlx::query_scalar!(
-        "SELECT count(*) FROM kb_events WHERE resource_id = $1 AND event_type = 'body_updated'",
+        "SELECT count(*) FROM kb_events WHERE resource_id = $1 AND event_type_id = (SELECT id FROM kb_event_types WHERE name = 'body_updated')",
         *resource.id,
     )
     .fetch_one(&pool)
