@@ -304,13 +304,14 @@ trait per the CLAUDE.md service-layer rule:
 
 ### Surface
 
-To make the core exercisable end-to-end, Phase 2 includes the **API
-handler** for the three write commands. Full **CLI + MCP** parity (the
-"first-class edge mechanics — label/weight/type" surfaces the decision doc
-calls for) is an immediate fast-follow within the same plan — mechanical
-once the operations commands exist, and consistent with the
-data+API-first, then CLI+MCP ordering. These surfaces are cloud-mode
-writes (POST to the API); no vault path (see Non-concerns).
+Phase 2 delivers all three write surfaces for the assert / retype /
+reweight commands: the **API handler**, the **CLI** commands, and the
+**MCP** tools — the "first-class edge mechanics — label/weight/type"
+surfaces the decision doc calls for. The CLI and MCP surfaces are
+mechanical once the operations commands exist; they are sequenced after
+the API per the data+API-first, then CLI+MCP ordering, but land in the
+same plan. All three are cloud-mode writes (POST to the API); no vault
+path (see Non-concerns).
 
 ### Graph-build extractor rewire
 
