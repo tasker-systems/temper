@@ -8,7 +8,7 @@ pub mod ledger;
 pub mod types;
 
 pub use errors::LedgerError;
-pub use ledger::append_event;
+pub use ledger::{append_event, append_event_tx};
 pub use types::{
     Event, EventReference, EventToWrite, EventType, Porosity, ReferenceKind, Scope, Topic,
 };
