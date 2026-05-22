@@ -664,10 +664,17 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 
     let vault_state = VaultState::from_env();
 
+    let state_dir = config.state_dir.clone();
+
     // Attempt server-first. Fall back to local scan on network error
     // in Local mode only; Cloud mode surfaces the error.
     let rows_result = runtime::with_client(move |client| {
-        Box::pin(async move { fetch_list_rows(client, &doc_type, context.as_deref(), limit).await })
+        Box::pin(async move {
+            if let Some(ctx) = context.as_deref() {
+                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
+            }
+            fetch_list_rows(client, &doc_type, context.as_deref(), limit).await
+        })
     });
 
     let server_rows = match (rows_result, vault_state) {
