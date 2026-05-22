@@ -134,7 +134,8 @@ itself a `relationship_retyped` event.
 ## Architecture
 
 ```
-write (assert / retype / reweight)
+write — explicit (assert / retype / reweight / fold via API/CLI/MCP)
+        or frontmatter extraction (ingest / resource update → assert / fold)
    │
    ▼
 temper-api projection service ── one DB transaction ──┐
@@ -174,6 +175,12 @@ Following limb 0's posture:
   read-only-vault-as-point-in-time-projection work proceeding in parallel
   (`2026-05-21-cloud-only-vault-deprecation-design`). This work must not
   add a vault write path.
+- **Frontmatter-as-concept retirement is out of scope.** This work
+  rewires the *write side* of the frontmatter edge-extraction path to
+  emit events. It does not remove the frontmatter input, change its
+  managed/open-meta shape, touch meta hashing, or move to a `temper:`
+  YAML inset — that retirement is owned by the cloud-only-vault track
+  (see "Frontmatter edge-extraction rewire → Coordination boundary").
 - **AGE** remains out of scope as a substrate; at most a future
   alternative projection engine, decided later.
 
@@ -186,34 +193,48 @@ Following limb 0's posture:
 Six event types, one unified family. Each gets a typed `temper-core`
 payload struct and a topic-class assignment. Phase 1 *defines all six
 payload shapes* (per the umbrella task's phase-1 description); Phase 2's
-projection builder *acts on* only the first three. Defining decay/fold/
-correct schemas now lets the ledger carry them before the phase-4
-mechanics exist.
+projection builder *acts on* **assert / retype / reweight / fold** —
+`fold` is in scope because it is the edge-*retraction* mechanism (see
+"Fold is retraction" below). The `decay` and `correct` *mechanics* (the
+deformation geometry, the scar) remain phase 4; defining their payload
+schemas now lets the ledger carry them beforehand.
 
 | event type | topic class | payload (beyond ledger envelope) |
 |---|---|---|
-| `relationship_asserted`   | Declaration | `source_resource_id`, `target_resource_id`, `edge_kind`, `polarity`, `label`, `weight` |
-| `relationship_retyped`    | Declaration | references prior event; new `edge_kind` / `label` |
-| `relationship_reweighted` | Declaration | references prior event; new `weight` |
-| `relationship_decayed`    | Deformation | references prior event; decay delta/factor |
-| `relationship_folded`     | Deformation | references prior event; fold marker |
-| `relationship_corrected`  | Judgment    | references prior event; scar payload |
+| `relationship_asserted`   | Declaration | `source` resource id, `target` (a `TargetRef` — resolved id *or* unresolved slug), `edge_kind`, `polarity`, `label`, `weight` |
+| `relationship_retyped`    | Declaration | new `edge_kind` / `label` (lifecycle keyed by `correlation_id`) |
+| `relationship_reweighted` | Declaration | new `weight` |
+| `relationship_folded`     | Deformation | fold marker (edge preserved, removed from default projection) |
+| `relationship_decayed`    | Deformation | decay delta/factor — *schema only in phases 1–2* |
+| `relationship_corrected`  | Judgment    | scar payload — *schema only in phases 1–2* |
 
 Naming follows the dominant snake_case registry convention
 (`resource_created`, `body_updated`).
+
+### Fold is retraction
+
+A `relationship_folded` event means the edge is "preserved but moved off
+the default sheet" (framing schema; research doc). That is *exactly* the
+semantics of an edge that is **no longer current but was not wrong** — the
+default projection excludes it (`is_folded = true`), yet the edge and its
+history remain and stay time-travel-reachable. `relationship_corrected`,
+by contrast, is reserved for edges that were genuinely *wrong* (a
+hallucinated edge, a false is-about) and carries a scar. So edge removal
+is `fold`, not `correct`, and no separate "retraction" event type is
+needed — the six-type family is complete.
 
 ### Event linkage
 
 - `relationship_asserted` is the **root** of a relationship's lifecycle:
   its `id` becomes the `correlation_id` for the whole lifecycle (mirrors
-  the concept-event pattern).
-- `retyped` / `reweighted` / `decayed` / `folded` / `corrected` each
-  share that `correlation_id` and carry the originating assert event in
-  the ledger's `references` array.
-- The two endpoint resources are carried in the **typed payload** (the
-  structured place the projection builder reads) and additionally as
-  ledger `references` entries (so the GIN-indexed `references` lookup
-  answers "events touching resource X").
+  the concept-event pattern). Every later lifecycle event for that edge
+  carries the same `correlation_id` — that is the projection builder's
+  lookup key, so the ledger `references` array is **not** required for
+  the intra-lifecycle link.
+- The endpoint resources are carried in the **typed payload** — the
+  structured place the projection builder reads. (The current
+  `EventReference` type references events only, not entities, so resource
+  endpoints belong in the payload, not in `references`.)
 
 ### Topic / registry seeding
 
@@ -280,21 +301,32 @@ entry points:
 
 - `apply_relationship_event(tx, event)` — given a just-appended
   relationship event, mutate `kb_resource_edges`: `asserted` upserts an
-  edge row; `retyped` / `reweighted` update the projected row and bump
-  `last_event_id`. Runs *within* the append transaction. (decay / fold /
-  correct are recognized but no-op in phase 2 — their projection behavior
-  is phase 4.)
+  edge row (resolving a slug `target` to a resource id, or leaving the
+  edge unprojected if it does not resolve yet); `retyped` / `reweighted`
+  update the projected row and bump `last_event_id`; `folded` sets
+  `is_folded = true` so the edge drops out of the default projection.
+  Runs *within* the append transaction. (`decayed` / `corrected` are
+  recognized but no-op in phase 2 — their projection behavior is phase 4.)
 - `rebuild_edge_projection(tx)` — truncate `kb_resource_edges`, replay
   every relationship event in ledger order, reproduce the edge set.
   Idempotent; doubles as the validation harness.
 
+Because `relationship_asserted` may carry an unresolved slug `target`
+(Gate 3 — `kb_deferred_edges` is retired), the create path re-projects
+pending slug-target assertions when a new resource appears: after a
+resource is created, the projection service resolves any
+`relationship_asserted` events whose slug now matches and projects the
+edge. This is the event-sourced replacement for `resolve_deferred_edges`
+— no holding table, the assertion event itself is the durable record.
+
 ### Write path
 
-Assert / retype / reweight are *writes* and dispatch through the backend
-trait per the CLAUDE.md service-layer rule:
+Assert / retype / reweight / fold are *writes* and dispatch through the
+backend trait per the CLAUDE.md service-layer rule:
 
 - New `temper-core::operations` commands: `AssertRelationship`,
-  `RetypeRelationship`, `ReweightRelationship`.
+  `RetypeRelationship`, `ReweightRelationship`, `FoldRelationship`
+  (`fold` is the explicit "retract this relationship" operation).
 - Dispatched through `DbBackend`; each emits the appropriate
   `DomainEvent`(s).
 - Each command, in **one transaction**: append the ledger event →
@@ -305,22 +337,66 @@ trait per the CLAUDE.md service-layer rule:
 ### Surface
 
 Phase 2 delivers all three write surfaces for the assert / retype /
-reweight commands: the **API handler**, the **CLI** commands, and the
-**MCP** tools — the "first-class edge mechanics — label/weight/type"
+reweight / fold commands: the **API handler**, the **CLI** commands, and
+the **MCP** tools — the "first-class edge mechanics — label/weight/type"
 surfaces the decision doc calls for. The CLI and MCP surfaces are
 mechanical once the operations commands exist; they are sequenced after
 the API per the data+API-first, then CLI+MCP ordering, but land in the
 same plan. All three are cloud-mode writes (POST to the API); no vault
 path (see Non-concerns).
 
-### Graph-build extractor rewire
+### Frontmatter edge-extraction rewire
 
-`temper-cli/src/actions/graph_build.rs` currently writes `kb_resource_edges`
-directly. It must instead **emit `relationship_asserted` events**, mapping
-its heuristic edge-types to `edge_kind` + `label`. In scope for Phase 2 —
-otherwise the extractor and the projection fight. The plan's recon step
-sweeps for any *other* direct writers of `kb_resource_edges` (seed
-fixtures, tests) and routes or adjusts them.
+The real edge-creation path is **not** `graph_build.rs` (that is a
+vault-side CLI tool that scans markdown and writes `open_meta.references`
+frontmatter — it never touches the DB edge table). Edges in
+`kb_resource_edges` are written by `edge_service`, invoked during the
+resource lifecycle:
+
+- `ingest_service.rs` → `edge_service::extract_and_upsert_edges` on
+  resource **create**
+- `resource_service.rs` → `edge_service::reconcile_edges` on resource
+  **update**
+
+Both *derive* edges from resource frontmatter (`open_meta` relationship
+fields + `temper-goal`). So edges today are already a projection — of
+frontmatter, recomputed per resource write. This work changes the
+*source of truth* to the event ledger.
+
+For the validation criterion to hold (full rebuild reproduces every
+edge), this path must emit events rather than upsert directly:
+
+- `extract_and_upsert_edges` → emits `relationship_asserted` events
+  (mapping each frontmatter relation field to `edge_kind` + `label`;
+  unresolved targets become slug-`TargetRef` assertions, not
+  `kb_deferred_edges` rows).
+- `reconcile_edges` → emits `relationship_asserted` for newly-declared
+  relations and `relationship_folded` for relations removed from
+  frontmatter (fold = retraction; the edge was right, just no longer
+  current). Unchanged relations emit nothing.
+
+The frontmatter path emits only `assert` and `fold`; `retype` /
+`reweight` come solely from the explicit API/CLI/MCP write path (a
+frontmatter relation field fixes the `edge_kind`, and extraction always
+uses `weight = 1.0`).
+
+`kb_deferred_edges` and `resolve_deferred_edges` are retired here — the
+slug-`TargetRef` assertion event plus create-path re-projection replace
+them.
+
+**Coordination boundary.** Frontmatter-as-edge-*source* is itself legacy:
+once the cloud-only-vault work makes the local vault a read-only
+projection, `open_meta.references` becomes a *rendered output* of edges,
+not their input. The full retirement of frontmatter-as-concept (managed/
+open-meta hashing, the dash-notation Obsidian-compatible shape, the move
+to a `temper:`-prefixed YAML inset) is **out of scope for this work** and
+owned by the cloud-only-vault track. This work only rewires the
+extraction path's *write side* to emit events; it does not remove the
+frontmatter input or change its shape.
+
+The plan's recon step sweeps for any *other* direct writers of
+`kb_resource_edges` (seed fixtures `scripts/seed-graph-fixtures.sql` /
+`scripts/seed-dev-data.sql`, test fixtures) and routes or adjusts them.
 
 ### Migration of existing edges
 
@@ -343,12 +419,17 @@ event-types.
 - **Unit** — payload struct (de)serialization round-trips; the 8→4
   `edge_type` mapping.
 - **`test-db`** — `apply_relationship_event` for each of assert / retype /
-  reweight; auth gating on the write commands; the unique-constraint
-  upsert behavior.
+  reweight / fold; auth gating on the write commands; the
+  unique-constraint upsert behavior; slug-`TargetRef` assertion projecting
+  no edge until the target resource exists.
+- **`test-db`** — fold removes an edge from the default projection but a
+  full rebuild still reproduces it (folded), proving fold is non-destructive.
 - **e2e** — the headline invariant: assert a graph, snapshot
   `graph_traverse` / `graph_neighbors` output, run `rebuild_edge_projection`,
   assert byte-identical traversal. Plus migration fidelity: pre-existing
-  edges survive a full rebuild.
+  edges survive a full rebuild. Plus the frontmatter round-trip: creating
+  then updating a resource with relationship frontmatter emits the right
+  assert/fold events and the projection matches.
 
 Replay purity holds cleanly here — edge projection is purely structural,
 so drop-and-rebuild is deterministic (unlike embeddings; see the decision
@@ -361,9 +442,13 @@ doc's carried tension).
 Each gets its own spec→plan cycle:
 
 - **Phase 3** — temporal query path: `graph-as-of-T` against event history.
-- **Phase 4** — decay / fold / scar *mechanics*: the projection *behavior*
-  for the `decayed` / `folded` / `corrected` event types whose schemas
-  Phase 1 defines. `is_folded` already exists on the projection table.
+- **Phase 4** — decay / scar *mechanics* and deformation *geometry*: the
+  projection behavior for `relationship_decayed` and
+  `relationship_corrected` (whose payload schemas Phase 1 defines), and
+  the manifold-deformation semantics of fold/decay/correction. Note
+  `relationship_folded`'s *projection* behavior (drop from default set)
+  ships in phase 2 as the retraction mechanism — phase 4 owns the
+  geometric/deformation reading of it, not the `is_folded` flag itself.
 - **Phase 5** — perspective-scoped projection: the graph filtered and
   shaped by emitter-perspective, as a query-time filter over the single
   global projection.
@@ -386,3 +471,13 @@ Each gets its own spec→plan cycle:
   (same source/target/kind/label/polarity) upserts and bumps
   `last_event_id` rather than erroring — confirm this is the intended
   idempotency.
+- **`append_event` is pool-bound.** `temper_events::append_event` takes
+  `&PgPool`, not a transaction — so the spec's "append + project in one
+  transaction" needs a transaction-accepting variant (or an executor
+  generic). The plan introduces this; it is a small, contained change in
+  `temper-events`.
+- **`append_event` event-type match.** `append_event` has an exhaustive
+  `match write.event_type` enforcing `Supersedes`-reference invariants
+  for the two `Concept*` types. Adding six `relationship_*` variants
+  requires arms for them (no `Supersedes` requirement). Mechanical, but
+  it will not compile until handled.
