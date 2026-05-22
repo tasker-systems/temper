@@ -152,6 +152,52 @@ fn projection_test_config(app: &common::E2eTestApp) -> temper_cli::config::Confi
 }
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn write_resource_file_from_parts_materializes_a_document(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client.contexts().create("fpctx").await.expect("ctx");
+    seed_resource(&app, "fpctx", "research", "Parts Doc").await;
+
+    let listed = app
+        .client
+        .resources()
+        .list(&temper_core::types::resource::ResourceListParams {
+            context_name: Some("fpctx".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("list");
+    let row = listed.rows.first().expect("one row");
+    let content = app
+        .client
+        .resources()
+        .content(uuid::Uuid::from(row.id))
+        .await
+        .expect("content");
+
+    let vault_root = app.vault_dir.path();
+    let path = temper_cli::projection::write_resource_file_from_parts(vault_root, row, &content)
+        .expect("write_resource_file_from_parts");
+
+    let expected = vault_root
+        .join("@me")
+        .join("fpctx")
+        .join("research")
+        .join("parts-doc.md");
+    assert_eq!(path, expected);
+    assert!(path.exists(), "file written at canonical path");
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert!(on_disk.starts_with("---\n"), "has frontmatter fence");
+    assert!(on_disk.contains("temper-id:"), "has identity frontmatter");
+    assert!(on_disk.contains("Body text for Parts Doc"), "has body");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn pull_context_materializes_tree_and_writes_cursor(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
     app.client

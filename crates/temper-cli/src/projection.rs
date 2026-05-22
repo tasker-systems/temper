@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use temper_client::TemperClient;
 use temper_core::types::resource::ResourceListParams;
+use temper_core::types::ContentResponse;
 use temper_core::types::ResourceRow;
 use temper_core::vault::Vault;
 
@@ -113,31 +114,25 @@ pub fn prune_context(vault_root: &Path, context: &str, keep: &HashSet<PathBuf>) 
     Ok(removed)
 }
 
-/// Fetch a resource's content and write it as a complete markdown file at
-/// its canonical vault path. Returns the absolute path written.
+/// Assemble and write a resource's projection file from an already-fetched
+/// row and content. The pure-write half of [`write_resource_file`] — it
+/// makes no network call. `pull_context` reaches it via `write_resource_file`
+/// (which fetches first); `temper resource show` calls it directly, because
+/// its cloud branch already holds both the row and the content.
 ///
-/// `row` is a resource summary already obtained from a `list` call; this
-/// makes one further API call (`content`) for the body + frontmatter meta.
 /// Frontmatter assembly reuses `actions::ingest::build_frontmatter_from_resource`
-/// — the same recipe `actions::sync`'s pull path uses — so projected files
-/// are byte-identical to sync-pulled ones.
-pub async fn write_resource_file(
-    client: &TemperClient,
+/// so projected files are byte-identical to sync-pulled ones. Returns the
+/// absolute path written.
+pub fn write_resource_file_from_parts(
     vault_root: &Path,
     row: &ResourceRow,
+    content: &ContentResponse,
 ) -> Result<PathBuf> {
     use crate::actions::ingest;
 
-    let content = client
-        .resources()
-        .content(Uuid::from(row.id))
-        .await
-        .map_err(crate::commands::client_err)?;
-
     // `owner_handle` is literal "@me" for the requester's own resources and
     // "+team-slug" for team contexts — both are canonical vault directory
-    // components, so use it directly. Empty handle defends against a sparse
-    // server row.
+    // components. Empty handle defends against a sparse server row.
     let owner: &str = if row.owner_handle.is_empty() {
         "@me"
     } else {
@@ -177,6 +172,25 @@ pub async fn write_resource_file(
     fm.write_to(&path)
         .map_err(|e| TemperError::Config(format!("projection write {}: {e}", path.display())))?;
     Ok(path)
+}
+
+/// Fetch a resource's content and write it as a complete markdown file at
+/// its canonical vault path. Returns the absolute path written.
+///
+/// `row` is a resource summary already obtained from a `list` call; this
+/// makes one further API call (`content`) for the body + frontmatter meta,
+/// then delegates the assembly + write to [`write_resource_file_from_parts`].
+pub async fn write_resource_file(
+    client: &TemperClient,
+    vault_root: &Path,
+    row: &ResourceRow,
+) -> Result<PathBuf> {
+    let content = client
+        .resources()
+        .content(Uuid::from(row.id))
+        .await
+        .map_err(crate::commands::client_err)?;
+    write_resource_file_from_parts(vault_root, row, &content)
 }
 
 /// Outcome of a `pull_context` call, for the command's output line.
