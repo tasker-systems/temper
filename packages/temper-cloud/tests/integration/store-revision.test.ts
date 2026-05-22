@@ -1,5 +1,5 @@
 import type postgres from "postgres";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { NeonClient } from "../../src/db.js";
 import { insertEventAndAudit } from "../../src/events.js";
 import { type ChunkRow, chunksToJsonb } from "../../src/processing/store.js";
@@ -17,26 +17,14 @@ describe("TS workflow chunk persistence with revision", () => {
   const TEST_DOC_TYPE_ID = "00000000-0000-0000-0001-000000000004";
 
   let sql: postgres.Sql;
-  const createdResourceIds: string[] = [];
 
   beforeAll(() => {
     sql = getTestDb();
   });
 
-  afterEach(async () => {
-    for (const id of createdResourceIds) {
-      // kb_chunks.first_revision_id RESTRICT-references kb_resource_revisions,
-      // so chunks must be deleted before revisions.
-      await sql`DELETE FROM kb_chunk_content WHERE chunk_id IN (SELECT id FROM kb_chunks WHERE resource_id = ${id}::uuid)`;
-      await sql`DELETE FROM kb_chunks WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_resource_revisions WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_resource_audits WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_events WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_resource_manifests WHERE resource_id = ${id}::uuid`;
-      await sql`DELETE FROM kb_resources WHERE id = ${id}::uuid`;
-    }
-    createdResourceIds.length = 0;
-  });
+  // No afterEach teardown: kb_events is append-only and a resource that has
+  // events cannot be hard-deleted. The test uses gen_random_uuid() for every
+  // identifier and asserts only on its own ids, so leftover rows are harmless.
 
   it("calls persist_resource_chunks with audit_id and body_hash", async () => {
     const insertResult = await sql`
@@ -49,7 +37,6 @@ describe("TS workflow chunk persistence with revision", () => {
       RETURNING id
     `;
     const resourceId = insertResult[0].id as string;
-    createdResourceIds.push(resourceId);
 
     const { auditId } = await insertEventAndAudit(asNeonClient(sql), {
       profileId: TEST_PROFILE_ID,
