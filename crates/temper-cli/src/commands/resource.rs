@@ -667,15 +667,13 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 
 /// Delete a resource.
 ///
-/// Delete a resource.
-///
 /// temper is cloud-only: the server-side soft-delete is the operation;
 /// the projection file is removed afterward as a best-effort tail. The
 /// API failure surfaces as an error before any local mutation.
 ///
-/// `force` is accepted for CLI-surface compatibility but is not consulted
-/// — a cloud delete is non-interactive (there is no local-file removal to
-/// confirm; the projection file is derivative).
+/// `force` is forwarded to the backend `DeleteResource` command but does
+/// not gate a CLI-side confirmation prompt — cloud delete is
+/// non-interactive at the surface.
 pub fn delete(
     config: &Config,
     doc_type: &str,
@@ -1082,11 +1080,8 @@ fn build_move_spec_from_args(
 ///    user-targeted message before the operations layer ever sees them.
 /// 3. `--body` flag resolution (stdin/file → `Option<String>`).
 /// 4. Build an `UpdateResource` command and dispatch through `build_backend`.
-/// 5. Render output — mode-implicit via event presence:
-///    - Local (VaultFileWritten present): `"Updated: {rel_path}"` to stderr +
-///      `ResourceUpdate` discovery event.
-///    - Cloud (no VaultFileWritten): JSON `{"temper-slug": ..., "content_hash": ...}`
-///      to stdout. Agent-workflow contract per CLAUDE.md (show-edit-cat cycle).
+/// 5. Render output: JSON `{"temper-slug": ..., "content_hash": ...}` to
+///    stdout — the agent show-edit-cat workflow contract (per CLAUDE.md).
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use std::io::IsTerminal;
 

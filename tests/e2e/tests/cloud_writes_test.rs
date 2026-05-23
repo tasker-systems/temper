@@ -2,7 +2,7 @@
 
 //! End-to-end coverage for cloud-mode write paths.
 //!
-//! Drives `TEMPER_VAULT_STATE=cloud` plus per-test `TEMPER_TOKEN` /
+//! Drives the cloud write path via per-test `TEMPER_TOKEN` /
 //! `TEMPER_API_URL` / `TEMPER_GLOBAL_CONFIG` against an in-process Axum
 //! server backed by a real Postgres test database. No vault directory
 //! is touched for the cloud-mode write paths under test — the cloud
@@ -52,12 +52,11 @@ fn cloud_env<'a>(
     api_url: &'a str,
     token: &'a str,
     global_config: &'a str,
-) -> [(&'static str, Option<&'a str>); 5] {
+) -> [(&'static str, Option<&'a str>); 4] {
     [
         ("TEMPER_API_URL", Some(api_url)),
         ("TEMPER_TOKEN", Some(token)),
         ("TEMPER_GLOBAL_CONFIG", Some(global_config)),
-        ("TEMPER_VAULT_STATE", Some("cloud")),
         ("TEMPER_AUTH_PATH", None),
     ]
 }

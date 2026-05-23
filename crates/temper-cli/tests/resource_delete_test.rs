@@ -6,7 +6,6 @@
 //! Full cloud delete behavior (server-side soft-delete + projection-file
 //! removal) is covered end-to-end in:
 //! - `tests/e2e/tests/cloud_writes_test.rs` — `delete_removes_the_projection_file`
-//! - `tests/e2e/tests/resource_delete_e2e_test.rs`
 //!
 //! The old local-mode non-TTY confirmation gate has been removed: cloud is
 //! the only mode and cloud delete is non-interactive.

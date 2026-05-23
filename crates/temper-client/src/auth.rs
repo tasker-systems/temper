@@ -131,7 +131,9 @@ impl MemoryTokenStore {
     /// can't drift across call sites.
     pub fn from_env_required() -> Result<Self> {
         Self::from_env()?.ok_or_else(|| {
-            ClientError::Other("TEMPER_VAULT_STATE=cloud but TEMPER_TOKEN is not set".into())
+            ClientError::Other(
+                "TEMPER_TOKEN is not set (or empty) — required for a cloud agent session".into(),
+            )
         })
     }
 }
