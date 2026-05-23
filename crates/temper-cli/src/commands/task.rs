@@ -1,5 +1,3 @@
-use temper_core::vault::Vault;
-
 use crate::config::Config;
 use crate::error::{Result, TemperError};
 
@@ -9,115 +7,53 @@ pub use crate::actions::types::TaskInfo;
 
 /// Show a single task's content.
 ///
-/// Local mode: for JSON, emits the `TaskInfo` struct (fast, no API call needed
-/// for the task metadata). For plain text, uses the three-tier freshness
-/// ladder to decide whether to serve from cache or fetch from the API.
-///
-/// Cloud mode: resolves the task id via `GET /api/resources/by-uri` then
-/// fetches content via `GET /api/resources/{id}/content`. No disk writes.
+/// Cloud-only: resolves the task id via `resolve_by_uri`, fetches content,
+/// prints it, and writes the canonical projection file (per-resource
+/// refresh — best-effort).
 pub fn show(
     config: &Config,
     slug_or_suffix: &str,
     context: Option<&str>,
-    format: &str,
+    _format: &str,
 ) -> Result<()> {
-    use crate::actions::{runtime, show_cache};
-    use std::time::Duration;
-    use temper_core::types::VaultState;
+    use crate::actions::runtime;
 
-    let vault_state = VaultState::from_env();
+    let context_s = context.map(str::to_string);
+    let slug_s = slug_or_suffix.to_string();
+    let config_clone = config.clone();
 
-    match vault_state {
-        VaultState::Local => {
-            let Some(task) = find_task(config, slug_or_suffix, context)? else {
-                // Local lookup miss in local mode: fall back to the API.
-                // The vault stays untouched — recovery to disk happens via
-                // `temper sync run`.
-                return super::resource::show_via_api_fallback(
-                    config,
-                    "task",
-                    slug_or_suffix,
-                    context,
-                    format,
-                );
-            };
+    let body = runtime::with_client(|client| {
+        Box::pin(async move {
+            let ctx = context_s.as_deref().ok_or_else(|| {
+                TemperError::Project("no context specified — use --context <name>".into())
+            })?;
+            let owner = config_clone.owner_for_context(ctx);
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner, ctx, "task", &slug_s)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let resp = client
+                .resources()
+                .content(*row.id.as_uuid())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-            if format == "json" {
-                let json = serde_json::to_string_pretty(&task)
-                    .map_err(|e| TemperError::Vault(format!("json serialization failed: {e}")))?;
-                println!("{json}");
-                return Ok(());
+            // Per-resource projection refresh — best-effort.
+            if let Err(e) = crate::projection::write_resource_file_from_parts(
+                &config_clone.vault_root,
+                &row,
+                &resp,
+            ) {
+                crate::output::warning(format!(
+                    "could not refresh projection file for '{slug_s}': {e}"
+                ));
             }
 
-            let vault_layout = Vault::new(&config.vault_root);
-            let owner = config.owner_for_context(&task.context);
-            let path = vault_layout.doc_file(&owner, &task.context, "task", &task.slug);
-            let task_ctx = task.context.clone();
-            let task_slug = task.slug.clone();
-            let config_clone = config.clone();
+            Ok(resp.markdown)
+        })
+    })?;
 
-            // Tier 0: serve from disk if fresh — no runtime or API needed.
-            if let Some(body) = show_cache::read_if_fresh(
-                &path,
-                std::time::Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
-            )? {
-                print!("{body}");
-                return Ok(());
-            }
-
-            let body = runtime::with_client(|client| {
-                Box::pin(async move {
-                    // Local-mode: try fast-path via local file frontmatter / manifest first,
-                    // then fall back to API resolution.
-                    let id = super::resource::resolve_id_local_first(
-                        &config_clone,
-                        client,
-                        Some(&task_ctx),
-                        "task",
-                        &task_slug,
-                    )
-                    .await?;
-                    let result = show_cache::fetch(show_cache::ShowCacheParams {
-                        client,
-                        resource_id: id,
-                        local_path: &path,
-                        debounce: Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
-                    })
-                    .await?;
-                    Ok(result.content)
-                })
-            })?;
-
-            print!("{body}");
-            Ok(())
-        }
-        VaultState::Cloud => {
-            let context_s = context.map(str::to_string);
-            let slug_s = slug_or_suffix.to_string();
-            let config_clone = config.clone();
-
-            let body = runtime::with_client(|client| {
-                Box::pin(async move {
-                    let ctx = context_s.as_deref().ok_or_else(|| {
-                        TemperError::Project("no context specified — use --context <name>".into())
-                    })?;
-                    let owner = config_clone.owner_for_context(ctx);
-                    let row = client
-                        .resources()
-                        .resolve_by_uri(&owner, ctx, "task", &slug_s)
-                        .await
-                        .map_err(crate::actions::runtime::client_err_to_temper)?;
-                    let resp = client
-                        .resources()
-                        .content(*row.id.as_uuid())
-                        .await
-                        .map_err(crate::actions::runtime::client_err_to_temper)?;
-                    Ok(resp.markdown)
-                })
-            })?;
-
-            print!("{body}");
-            Ok(())
-        }
-    }
+    print!("{body}");
+    Ok(())
 }
