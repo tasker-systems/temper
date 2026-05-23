@@ -15,8 +15,8 @@
 //!    render it. Tier-3 is the corruption-resistant path — it always
 //!    reconstructs from canonical server state.
 //!
-//! Cloud mode never calls into this module — callers match on
-//! `VaultState` before invoking.
+//! Cloud mode never calls into this module — callers select the
+//! appropriate code path before invoking.
 //!
 //! Offline degradation: on any network error inside tier 2 or 3, fall
 //! back to "render local with a warn" if a local file exists, otherwise

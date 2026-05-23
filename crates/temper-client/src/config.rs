@@ -123,8 +123,8 @@ pub fn build_client_from(
 ///
 /// Callers choose the store (typically `DiskTokenStore::default_path()` for
 /// local CLI sessions, `MemoryTokenStore::from_env_required()` for cloud).
-/// There is no "default store" here — `VaultState` selection belongs at the
-/// CLI entry point, not the client builder.
+/// There is no "default store" here — store selection belongs at the CLI entry
+/// point, not the client builder.
 pub fn build_client(
     store: std::sync::Arc<dyn crate::auth::TokenStore>,
 ) -> crate::error::Result<crate::TemperClient> {

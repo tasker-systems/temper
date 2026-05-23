@@ -66,7 +66,7 @@ impl TokenStore for DiskTokenStore {
         // current `load_auth()` semantics. Callers in cloud mode should use
         // MemoryTokenStore; this fallback exists for backward compatibility
         // with any tool that instantiates DiskTokenStore without checking
-        // VaultState.
+        // the session mode.
         if let Some(stored) = stored_auth_from_env()? {
             return Ok(Some(stored));
         }
@@ -112,7 +112,7 @@ impl MemoryTokenStore {
 
     /// Initialize from env vars (`TEMPER_TOKEN` + `TEMPER_PROVIDER` +
     /// `TEMPER_DEVICE_ID`). Returns `Ok(None)` when `TEMPER_TOKEN` is unset
-    /// — caller should fall back to disk or error per `VaultState`. Returns
+    /// — caller should fall back to disk or error based on the session mode. Returns
     /// `Err(_)` when the env is set but malformed.
     ///
     /// Unlike [`stored_auth_from_env`], this reads the env **once**; later

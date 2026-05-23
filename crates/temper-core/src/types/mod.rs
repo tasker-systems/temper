@@ -48,8 +48,7 @@ pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
 pub use config::{
     expand_tilde, global_config_path, load_config, load_config_from, AuthConfig, CloudConfig,
     CloudSection, CloudVaultConfig, MergePolicy, SkillConfig, SyncConfig, SyncSubscription,
-    SyncSubscriptions, TemperConfig, UnifiedConfig, UnifiedSyncConfig, VaultState,
-    TEMPER_AUTH_PATH_ENV, TEMPER_VAULT_STATE_ENV,
+    SyncSubscriptions, TemperConfig, UnifiedConfig, UnifiedSyncConfig, TEMPER_AUTH_PATH_ENV,
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
