@@ -1293,3 +1293,123 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
         "post-update projection frontmatter must contain updated title; got: {fm_after_json}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 11: delete removes the projection file
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource delete --type task <slug> --force` soft-deletes on
+/// the server and removes the projection file from
+/// `<vault_root>/@me/<context>/task/<slug>.md`.
+///
+/// Verifies:
+/// 1. The projection file exists after `create` (written by create's tail action
+///    — Task 5).
+/// 2. After `delete --force`, the projection file is gone from disk.
+/// 3. The resource is marked inactive in the database (server-side soft-delete).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+    let vault_root = app.vault_dir.path().to_path_buf();
+
+    // Step 1: Create the resource (projection file written by create's tail action).
+    let api_url2 = api_url.clone();
+    let token2 = token.clone();
+    let global_config_str2 = global_config_str.clone();
+    let cli_config2 = cli_config.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
+            temper_cli::commands::resource::create(
+                &cli_config2,
+                "task",
+                "Delete Projection Test",
+                Some("myapp"),
+                None, // goal
+                None, // mode
+                None, // effort
+                None, // slug override
+                None, // body_flag
+                "text",
+            )
+            .expect("cloud create should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking create joined");
+
+    // Derive slug (Phase 5 unified slug derivation: tasks get {date}-{slugify(title)} prefix).
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-delete-projection-test");
+    let projection_path = vault_root
+        .join("@me")
+        .join("myapp")
+        .join("task")
+        .join(format!("{slug}.md"));
+
+    // Step 2: Assert the projection file exists after create.
+    assert!(
+        projection_path.exists(),
+        "projection file must exist at {} after cloud create",
+        projection_path.display()
+    );
+
+    // Step 3: Delete the resource (force=true so it works in non-TTY test context).
+    let api_url3 = api_url.clone();
+    let token3 = token.clone();
+    let global_config_str3 = global_config_str.clone();
+    let cli_config3 = cli_config.clone();
+    let slug_for_delete = slug.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config_str3), || {
+            temper_cli::commands::resource::delete(
+                &cli_config3,
+                "task",
+                &slug_for_delete,
+                Some("myapp"),
+                true, // force — accepted for CLI compatibility; cloud delete is non-interactive
+            )
+            .expect("cloud delete should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking delete joined");
+
+    // ---- Assertion 1: projection file is gone ----
+    assert!(
+        !projection_path.exists(),
+        "projection file must be removed after cloud delete; path: {}",
+        projection_path.display()
+    );
+
+    // ---- Assertion 2: resource is soft-deleted in the database ----
+    let is_active: bool =
+        sqlx::query_scalar("SELECT r.is_active FROM kb_resources r WHERE r.slug = $1")
+            .bind(&slug)
+            .fetch_one(&pool)
+            .await
+            .expect("resource row must still exist after soft-delete");
+
+    assert!(
+        !is_active,
+        "resource must be soft-deleted (is_active = false) after cloud delete"
+    );
+}

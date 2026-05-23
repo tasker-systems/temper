@@ -687,14 +687,15 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
 
 /// Delete a resource.
 ///
-/// `--force` skips the interactive confirmation prompt for the local-file
-/// removal. In non-TTY contexts (agents, CI), `--force` is required in
-/// local mode because we won't read confirmation from a non-terminal stdin.
-/// Cloud mode is non-interactive — no prompt regardless of `--force`.
+/// Delete a resource.
 ///
-/// Cloud-first ordering: API failure means no local mutation in either mode
-/// (enforced inside `VaultBackend::delete_resource`; CloudBackend has only the
-/// API step).
+/// temper is cloud-only: the server-side soft-delete is the operation;
+/// the projection file is removed afterward as a best-effort tail. The
+/// API failure surfaces as an error before any local mutation.
+///
+/// `force` is accepted for CLI-surface compatibility but is not consulted
+/// — a cloud delete is non-interactive (there is no local-file removal to
+/// confirm; the projection file is derivative).
 pub fn delete(
     config: &Config,
     doc_type: &str,
@@ -702,41 +703,15 @@ pub fn delete(
     context: Option<&str>,
     force: bool,
 ) -> Result<()> {
-    use std::io::IsTerminal;
-
     use temper_core::operations::{DeleteResource, DomainEvent, ResourceRef};
-    use temper_core::types::config::VaultState;
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
     let ctx = require_context(context)?;
-
-    // Local-mode UX gate: non-TTY guard + [y/N] prompt. Cloud mode skips
-    // this — non-interactive by design (no local file to remove).
-    let in_local_mode = matches!(VaultState::from_env(), VaultState::Local);
-    if in_local_mode {
-        if !force && !std::io::stdin().is_terminal() {
-            return Err(TemperError::Vault(
-                "non-interactive stdin detected; pass --force to skip the local-file confirmation"
-                    .to_string(),
-            ));
-        }
-
-        if !force {
-            output::progress(format!("Delete {doc_type}/{slug}? [y/N] "));
-            use std::io::Write as _;
-            std::io::stderr().flush().ok();
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).ok();
-            if !input.trim().eq_ignore_ascii_case("y") {
-                return Ok(());
-            }
-        }
-    }
-
     let owner = config.owner_for_context(&ctx);
+
     let cmd = DeleteResource {
-        resource: ResourceRef::scoped(owner, &ctx, doc_type, slug),
+        resource: ResourceRef::scoped(&owner, &ctx, doc_type, slug),
         force,
         origin: temper_core::operations::Surface::CliCloud,
     };
@@ -744,34 +719,18 @@ pub fn delete(
     let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.delete_resource(cmd))?;
 
-    // Translate events into surface output. Cloud-first ordering inside the
-    // backend guarantees `RemoteSynced` precedes any vault events when both
-    // are emitted, so a single linear scan is order-correct.
-    //
-    // Local mode emits RemoteSynced + VaultFileRemoved + VaultManifestUpdated;
-    // cloud mode emits RemoteSynced only. Same loop, both shapes.
-    //
-    // The "(cloud)" suffix is mode-implicit via event presence: append only
-    // when no VaultFileRemoved is also emitted, otherwise the local-mode
-    // output ("Deleted X (cloud)\nRemoved vault file: ...") would
-    // contradict itself.
-    let has_vault_removed = output
-        .events
-        .iter()
-        .any(|e| matches!(e, DomainEvent::VaultFileRemoved { .. }));
+    // Projection refresh: remove the resource's projection file. Best-effort
+    // — a removal failure must not fail the (already-committed) delete.
+    if let Err(e) =
+        crate::projection::remove_resource_file(&config.vault_root, &owner, &ctx, doc_type, slug)
+    {
+        output::warning(format!("could not remove projection file: {e}"));
+    }
+
+    // CloudBackend emits exactly one `RemoteSynced` event on success.
     for event in &output.events {
-        match event {
-            DomainEvent::RemoteSynced { .. } => {
-                let suffix = if has_vault_removed { "" } else { " (cloud)" };
-                self::output::success(format!("Deleted {doc_type}/{slug}{suffix}"));
-            }
-            DomainEvent::VaultFileRemoved { path } => {
-                self::output::dim(format!("Removed vault file: {path}"));
-            }
-            DomainEvent::VaultManifestUpdated { .. } => {
-                // Internal bookkeeping — not surfaced.
-            }
-            _ => {}
+        if let DomainEvent::RemoteSynced { .. } = event {
+            self::output::success(format!("Deleted {doc_type}/{slug}"));
         }
     }
 
