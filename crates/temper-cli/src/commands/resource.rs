@@ -1423,59 +1423,36 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         origin: temper_core::operations::Surface::CliCloud,
     };
 
-    // 5. Acquire backend + dispatch.
-    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
+    // 5. Acquire the cloud backend + client and dispatch the update.
+    let (runtime, backend, client) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
 
-    // 6. Mode-implicit rendering. If a VaultFileWritten event is present
-    //    (local mode), render rel_path + emit discovery event. Otherwise
-    //    (cloud mode), print the agent-facing JSON with content_hash.
-    if has_vault_file_event(&output.events) {
-        let rel_path = vault_file_path_from_events(&output.events).unwrap_or_default();
-
-        // Discovery event: emit agent-facing ResourceUpdate telemetry.
-        let final_slug = std::path::Path::new(&rel_path)
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let final_ctx = if output.value.context_name.is_empty() {
-            ctx.clone()
-        } else {
-            output.value.context_name.clone()
-        };
-        let final_type = if output.value.doc_type_name.is_empty() {
-            current_type.to_string()
-        } else {
-            output.value.doc_type_name.clone()
-        };
-        let event = Event::ResourceUpdate {
-            ts: Local::now().to_rfc3339(),
-            doc_type: final_type,
-            slug: final_slug,
-            context: final_ctx,
-        };
-        if let Err(e) = discovery::append_event(&config.state_dir, &event) {
-            tracing::warn!("Failed to append discovery event: {e}");
-        }
-
-        output::success(format!("Updated: {rel_path}"));
-    } else {
-        // Cloud mode: print {temper-slug, content_hash} JSON to stdout for
-        // the show-edit-cat agent workflow contract (per CLAUDE.md).
-        let slug_display = output
-            .value
-            .slug
-            .clone()
-            .unwrap_or_else(|| output.value.id.to_string());
-        let hash_display = output.value.body_hash.as_deref().unwrap_or("").to_string();
-        println!(
-            "{}",
-            serde_json::json!({
-                "temper-slug": slug_display,
-                "content_hash": hash_display,
-            })
-        );
+    // 6. Projection refresh: rewrite the affected projection file from
+    //    the returned server row. Best-effort — a projection write
+    //    failure must not fail the update.
+    if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
+        &client,
+        &config.vault_root,
+        &output.value,
+    )) {
+        output::warning(format!("could not rewrite projection file: {e}"));
     }
+
+    // 7. Emit the agent-facing {temper-slug, content_hash} JSON to stdout
+    //    — the show-edit-cat workflow contract (per CLAUDE.md).
+    let slug_display = output
+        .value
+        .slug
+        .clone()
+        .unwrap_or_else(|| output.value.id.to_string());
+    let hash_display = output.value.body_hash.as_deref().unwrap_or("").to_string();
+    println!(
+        "{}",
+        serde_json::json!({
+            "temper-slug": slug_display,
+            "content_hash": hash_display,
+        })
+    );
 
     Ok(())
 }

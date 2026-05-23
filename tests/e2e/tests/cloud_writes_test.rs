@@ -1148,3 +1148,148 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
         "projection frontmatter must contain correct temper-slug; got: {fm_json}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 10: update rewrites the projection file on success
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource update <slug> --type task --title "..."` (meta-only
+/// PATCH) rewrites the existing projection file under
+/// `<vault_root>/@me/<context>/task/<slug>.md` with updated frontmatter.
+///
+/// Verifies:
+/// 1. The projection file exists (written by the create tail action — Task 5).
+/// 2. After the meta-only update, the projection file's frontmatter contains
+///    the new title, proving the projection was rewritten by `update`'s tail action.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+    let vault_root = app.vault_dir.path().to_path_buf();
+
+    // Step 1: Create the resource (projection file is written by the create
+    // tail action — Task 5). Using "task" type so slug gets a date prefix.
+    let api_url2 = api_url.clone();
+    let token2 = token.clone();
+    let global_config_str2 = global_config_str.clone();
+    let cli_config2 = cli_config.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
+            temper_cli::commands::resource::create(
+                &cli_config2,
+                "task",
+                "Update Projection Test",
+                Some("myapp"),
+                None, // goal
+                None, // mode
+                None, // effort
+                None, // slug override
+                None, // body_flag (default body generated)
+                "text",
+            )
+            .expect("cloud create should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking create joined");
+
+    // Derive the slug from the title (Phase 5 unified slug derivation).
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-update-projection-test");
+    let projection_path = vault_root
+        .join("@me")
+        .join("myapp")
+        .join("task")
+        .join(format!("{slug}.md"));
+
+    // Step 2: Assert the projection file exists after create.
+    assert!(
+        projection_path.exists(),
+        "projection file must exist at {} after cloud create",
+        projection_path.display()
+    );
+
+    // Read the pre-update frontmatter to verify it has the original title.
+    let content_before = std::fs::read_to_string(&projection_path)
+        .expect("projection file must be readable before update");
+    let fm_before = temper_core::frontmatter::Frontmatter::try_from(content_before.as_str())
+        .expect("projection file must have valid frontmatter before update");
+    let fm_before_json =
+        serde_json::to_value(fm_before.value()).expect("frontmatter JSON conversion");
+    assert_eq!(
+        fm_before_json.get("temper-title").and_then(|v| v.as_str()),
+        Some("Update Projection Test"),
+        "pre-update frontmatter must have original title; got: {fm_before_json}"
+    );
+
+    // Step 3: Drive a meta-only update (title change, no body) on a blocking
+    // thread. No `test-embed` required — meta-only updates do not touch chunks.
+    let slug_for_update = slug.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::resource::update(
+                &cli_config,
+                &temper_cli::commands::resource::UpdateParams {
+                    slug: &slug_for_update,
+                    doc_type: Some("task"),
+                    type_from: None,
+                    type_to: None,
+                    context: Some("myapp"),
+                    context_to: None,
+                    title: Some("Updated Projection Title"),
+                    tags: &[],
+                    aliases: &[],
+                    relates_to: &[],
+                    references: &[],
+                    depends_on: &[],
+                    extends: &[],
+                    preceded_by: &[],
+                    derived_from: &[],
+                    stage: None,
+                    mode: None,
+                    effort: None,
+                    goal: None,
+                    seq: None,
+                    branch: None,
+                    pr: None,
+                    status: None,
+                    body: None, // meta-only, no chunks_packed needed
+                },
+            )
+            .expect("cloud meta-only update must succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking update joined");
+
+    // ---- Assertion: projection file has the updated title in frontmatter ----
+    let content_after = std::fs::read_to_string(&projection_path)
+        .expect("projection file must be readable after update");
+    let fm_after = temper_core::frontmatter::Frontmatter::try_from(content_after.as_str())
+        .expect("projection file must have valid frontmatter after update");
+    let fm_after_json =
+        serde_json::to_value(fm_after.value()).expect("frontmatter JSON conversion after update");
+    assert_eq!(
+        fm_after_json.get("temper-title").and_then(|v| v.as_str()),
+        Some("Updated Projection Title"),
+        "post-update projection frontmatter must contain updated title; got: {fm_after_json}"
+    );
+}
