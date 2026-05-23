@@ -9,9 +9,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Surface {
-    /// CLI binary with a local vault (no `TEMPER_VAULT_STATE=cloud`).
-    CliLocalVault,
-    /// CLI binary in cloud mode (`TEMPER_VAULT_STATE=cloud`).
+    /// CLI binary operating in cloud mode.
     CliCloud,
     /// MCP server (rmcp tools, in-process to temper-api).
     Mcp,
@@ -25,18 +23,13 @@ mod tests {
 
     #[test]
     fn surface_serializes_snake_case() {
-        let s = serde_json::to_string(&Surface::CliLocalVault).unwrap();
-        assert_eq!(s, "\"cli_local_vault\"");
+        let s = serde_json::to_string(&Surface::CliCloud).unwrap();
+        assert_eq!(s, "\"cli_cloud\"");
     }
 
     #[test]
     fn surface_round_trips() {
-        for variant in [
-            Surface::CliLocalVault,
-            Surface::CliCloud,
-            Surface::Mcp,
-            Surface::ApiHttp,
-        ] {
+        for variant in [Surface::CliCloud, Surface::Mcp, Surface::ApiHttp] {
             let s = serde_json::to_string(&variant).unwrap();
             let back: Surface = serde_json::from_str(&s).unwrap();
             assert_eq!(variant, back);

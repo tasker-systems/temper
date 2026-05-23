@@ -1019,7 +1019,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         let err = validate_create(&cmd).unwrap_err();
@@ -1047,7 +1047,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         let err = validate_create(&cmd).unwrap_err();
@@ -1075,7 +1075,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         validate_create(&cmd).expect("valid task should pass validation");
@@ -1097,7 +1097,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         validate_create(&cmd).expect("non-task doctype should not be subject to task whitelist");

@@ -654,8 +654,8 @@ pub async fn delete_resource(
         resource: temper_core::operations::ResourceRef::Uuid {
             id: ResourceId::from(input.id),
         },
-        // CLI-side concern; DbBackend ignores per spec (the local-file
-        // confirmation prompt lives in CliLocalVault, not here).
+        // CLI-side concern; DbBackend ignores per spec (force=true is only
+        // relevant when a CLI surface presents a confirmation prompt).
         force: false,
         origin: Surface::Mcp,
     };

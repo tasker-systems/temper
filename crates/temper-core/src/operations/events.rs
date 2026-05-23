@@ -1,9 +1,8 @@
 //! DomainEvent — past-tense facts emitted by backend actions.
 //!
-//! Events are backend-qualified: `DbResourceCreated` / `VaultFileWritten`
-//! describe state transitions in a specific backend. The `CliLocalVault`
-//! surface composes events from both backends when its operation chains
-//! them (e.g., write file + push, which emits Vault* + Db* events).
+//! Events are backend-qualified: `DbResourceCreated` describes a state
+//! transition in the DB backend. Surfaces inspect the returned event list
+//! to emit log lines or trigger tail actions.
 //!
 //! Initial variant set covers the operations defined in Phase 1 commands.
 //! Phase 6 (companion spec #3) adds state-machine-related variants.

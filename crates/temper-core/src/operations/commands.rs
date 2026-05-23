@@ -89,9 +89,8 @@ pub struct UpdateResource {
     pub origin: Surface,
 }
 
-/// Delete a resource. In the cloud-first model this is soft-delete on the
-/// server with optional local-file removal as a tail action (handled by
-/// VaultBackend in CliLocalVault surface).
+/// Delete a resource. In the cloud-first model this is a soft-delete on the
+/// server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeleteResource {
     pub resource: ResourceRef,
@@ -122,7 +121,7 @@ mod tests {
     fn show_resource_carries_resource_ref() {
         let cmd = ShowResource {
             resource: ResourceRef::scoped("@me", "temper", "task", "hello"),
-            origin: Surface::CliLocalVault,
+            origin: Surface::CliCloud,
         };
         // Exercises the type compiles + the field is reachable.
         assert!(matches!(cmd.resource, ResourceRef::Scoped { .. }));
