@@ -620,7 +620,6 @@ pub fn render_list(params: &RenderListParams<'_>) -> Result<String> {
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
-    use temper_core::types::config::VaultState;
 
     // Hints for filters that only apply to certain types (unchanged).
     if params.stage.is_some() && params.doc_type != "task" {
@@ -652,64 +651,21 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     let doc_type = params.doc_type.to_string();
     let context = params.context.map(ToString::to_string);
     let limit = params.limit.unwrap_or(20);
-
-    let vault_state = VaultState::from_env();
-
     let state_dir = config.state_dir.clone();
 
-    // Attempt server-first. Fall back to local scan on network error
-    // in Local mode only; Cloud mode surfaces the error.
-    let rows_result = runtime::with_client(move |client| {
+    // Cloud-only list: a non-blocking staleness pre-flight, then the
+    // server query. Any error (network, auth, 4xx/5xx) surfaces as-is —
+    // there is no local-scan fallback.
+    let rows = runtime::with_client(move |client| {
         Box::pin(async move {
             if let Some(ctx) = context.as_deref() {
                 crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
             }
             fetch_list_rows(client, &doc_type, context.as_deref(), limit).await
         })
-    });
+    })?;
 
-    let server_rows = match (rows_result, vault_state) {
-        (Ok(rows), _) => Some(rows),
-        // Local mode: fall back to the local vault scan only when the server
-        // is unreachable. Server-originated errors (4xx/5xx, auth) surface
-        // as-is — silently masking them with stale local data would hide
-        // real problems.
-        (Err(e @ TemperError::Network(_)), VaultState::Local) => {
-            output::hint(format!(
-                "cloud unreachable: {e}. Falling back to local scan."
-            ));
-            None
-        }
-        (Err(e), _) => return Err(e),
-    };
-
-    let body = match server_rows {
-        Some(rows) => render_server_rows(params.doc_type, &rows, format)?,
-        None => render_list(&RenderListParams {
-            doc_type: params.doc_type,
-            config,
-            context: params.context,
-            limit: params.limit,
-            filters: ListFilters {
-                stage: if params.doc_type == "task" {
-                    params.stage
-                } else {
-                    None
-                },
-                goal: if params.doc_type == "task" {
-                    params.goal
-                } else {
-                    None
-                },
-                status: if params.doc_type == "goal" {
-                    params.status
-                } else {
-                    None
-                },
-            },
-            format,
-        })?,
-    };
+    let body = render_server_rows(params.doc_type, &rows, format)?;
 
     if body.trim().is_empty() {
         output::hint(format!("No {} resources found.", params.doc_type));
