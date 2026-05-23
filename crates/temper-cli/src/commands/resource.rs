@@ -14,19 +14,11 @@ use crate::vault;
 
 /// Require a context, returning an error if none specified.
 ///
-/// In cloud mode (no local vault) we skip the vault-filesystem fallback
-/// and trust the provided name directly — there are no context directories
-/// on disk to check.
-fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
-    use temper_core::types::config::VaultState;
+/// temper is cloud-only: there are no context directories on disk to
+/// check, so a supplied name is trusted directly.
+fn require_context(context: Option<&str>) -> Result<String> {
     match context {
-        Some(ctx) => {
-            if matches!(VaultState::from_env(), VaultState::Cloud) {
-                Ok(ctx.to_string())
-            } else {
-                Ok(super::resolve_context_with_fallback(config, ctx).into_owned())
-            }
-        }
+        Some(ctx) => Ok(ctx.to_string()),
         None => Err(TemperError::Project(
             "no context specified — use --context <name>".into(),
         )),
@@ -211,7 +203,7 @@ pub fn create(
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
-    let ctx = require_context(config, context)?;
+    let ctx = require_context(context)?;
 
     // Body resolution — both modes use --body flag + stdin pipe.
     let stdin_is_tty = std::io::stdin().is_terminal();
@@ -700,7 +692,7 @@ pub fn delete(
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
-    let ctx = require_context(config, context)?;
+    let ctx = require_context(context)?;
 
     // Local-mode UX gate: non-TTY guard + [y/N] prompt. Cloud mode skips
     // this — non-interactive by design (no local file to remove).
@@ -930,7 +922,7 @@ fn find_or_compute_local_path(
             return Ok((resolved.path, resolved.context));
         }
     }
-    let ctx = require_context(config, context)?;
+    let ctx = require_context(context)?;
     let owner = config.owner_for_context(&ctx);
     let vault_layout = Vault::new(&config.vault_root);
     let path = vault_layout.doc_file(&owner, &ctx, doc_type, slug);
@@ -1397,7 +1389,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         std::io::stdin(),
     )?;
 
-    let ctx = require_context(config, params.context)?;
+    let ctx = require_context(params.context)?;
 
     // 4. Build the UpdateResource cmd.
     let cmd = UpdateResource {
