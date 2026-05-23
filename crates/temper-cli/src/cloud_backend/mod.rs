@@ -5,8 +5,8 @@
 //! Each trait method translates the command into a `temper_client` API call
 //! and synthesizes the appropriate `DomainEvent`s.
 //!
-//! Unlike `vault_backend`, cloud mode has no offline path — if no token
-//! resolves, `assemble_cloud_backend` errors immediately.
+//! Cloud mode has no offline path — if no token resolves,
+//! `assemble_cloud_backend` errors immediately.
 //!
 //! See `docs/superpowers/specs/2026-05-18-wave1-phase5-surface-dispatch-unification-design.md`.
 
