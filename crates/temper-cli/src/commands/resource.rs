@@ -33,15 +33,6 @@ fn require_context(config: &Config, context: Option<&str>) -> Result<String> {
     }
 }
 
-/// Map current `VaultState` to the appropriate `Surface` origin for cmd construction.
-pub(crate) fn surface_for_state() -> temper_core::operations::Surface {
-    use temper_core::types::config::VaultState;
-    match VaultState::from_env() {
-        VaultState::Local => temper_core::operations::Surface::CliLocalVault,
-        VaultState::Cloud => temper_core::operations::Surface::CliCloud,
-    }
-}
-
 /// True iff `events` contains a `VaultFileWritten` event (local-mode indicator).
 pub(crate) fn has_vault_file_event(events: &[temper_core::operations::DomainEvent]) -> bool {
     use temper_core::operations::DomainEvent;
@@ -269,7 +260,7 @@ pub fn create(
         origin_uri: None,
         chunks_packed: None,
         content_hash: None,
-        origin: surface_for_state(),
+        origin: temper_core::operations::Surface::CliCloud,
     };
 
     // Surface-side pre-flight validation — mirrors the hoist of
@@ -782,7 +773,7 @@ pub fn delete(
     let cmd = DeleteResource {
         resource: ResourceRef::scoped(owner, &ctx, doc_type, slug),
         force,
-        origin: surface_for_state(),
+        origin: temper_core::operations::Surface::CliCloud,
     };
 
     let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
@@ -1464,7 +1455,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
         move_to: build_move_spec_from_args(params),
-        origin: surface_for_state(),
+        origin: temper_core::operations::Surface::CliCloud,
     };
 
     // 5. Acquire backend + dispatch.

@@ -74,7 +74,7 @@ pub fn save(
             managed_meta: None,
             open_meta: None,
             move_to: None,
-            origin: crate::commands::resource::surface_for_state(),
+            origin: temper_core::operations::Surface::CliCloud,
         };
         runtime.block_on(backend.update_resource(cmd))?
     } else {
@@ -95,7 +95,7 @@ pub fn save(
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: crate::commands::resource::surface_for_state(),
+            origin: temper_core::operations::Surface::CliCloud,
         };
         runtime.block_on(backend.create_resource(cmd))?
     };
