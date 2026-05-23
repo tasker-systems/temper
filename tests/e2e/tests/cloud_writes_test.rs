@@ -921,13 +921,13 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
 // Test 7: sync run returns cloud-mode error message
 // ---------------------------------------------------------------------------
 
-/// Cloud `temper sync run` returns the exact redirect error string instead of
-/// attempting a sync (which would fail without a local vault).
+/// Cloud `temper sync run` errors with the cloud-only redirect message instead
+/// of attempting a sync (which would fail without a local vault).
 ///
-/// The error must contain the canonical redirect phrase:
-/// "cloud mode has no local vault to sync"
+/// The error must contain stable substrings from the canonical redirect phrase:
+/// "temper is cloud-only" and "temper pull"
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn cloud_sync_run_redirects_with_message(pool: sqlx::PgPool) {
+async fn sync_run_errors_with_cloud_only_message(pool: sqlx::PgPool) {
     let app = common::setup(pool.clone()).await;
 
     // No profile/context pre-flight needed — the guard fires before any I/O.
@@ -948,16 +948,16 @@ async fn cloud_sync_run_redirects_with_message(pool: sqlx::PgPool) {
     .await
     .expect("spawn_blocking joined");
 
-    // Must be an Err whose message contains the cloud redirect phrase.
+    // Must be an Err whose message contains stable substrings of the redirect.
     let err = result.expect_err("sync run must fail with cloud-mode redirect error");
     let err_str = err.to_string();
     assert!(
-        err_str.contains("cloud mode has no local vault to sync"),
-        "error message must contain redirect phrase; got: {err_str}"
+        err_str.contains("cloud-only"),
+        "error message must contain 'cloud-only'; got: {err_str}"
     );
     assert!(
-        err_str.contains("temper resource create"),
-        "error message must mention 'temper resource create'; got: {err_str}"
+        err_str.contains("temper pull"),
+        "error message must mention 'temper pull'; got: {err_str}"
     );
 }
 
