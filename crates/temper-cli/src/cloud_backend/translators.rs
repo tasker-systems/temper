@@ -237,11 +237,13 @@ pub(crate) fn cmd_to_delete_args<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_core::operations::{
-        BodyUpdate, CreateResource, MoveSpec, ResourceRef, Surface, UpdateResource,
-    };
+    use temper_core::operations::{MoveSpec, ResourceRef, Surface, UpdateResource};
     use temper_core::types::ManagedMeta;
 
+    #[cfg(feature = "test-embed")]
+    use temper_core::operations::{BodyUpdate, CreateResource};
+
+    #[cfg(feature = "test-embed")]
     fn sample_cmd() -> CreateResource {
         CreateResource {
             slug: "2026-05-18-test".to_string(),

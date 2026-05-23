@@ -137,19 +137,6 @@ where
     rt.block_on(f(&client))
 }
 
-/// Like [`with_client`], but wraps the client in `Arc` for use with
-/// concurrent tasks (`tokio::spawn`), shared references across async
-/// boundaries, or patterns that need owned client handles.
-pub fn with_arc_client<F, T>(f: F) -> Result<T>
-where
-    F: FnOnce(Arc<temper_client::TemperClient>) -> Pin<Box<dyn Future<Output = Result<T>>>>,
-{
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
-    let (_config, _store, client) = build_config_store_and_client()?;
-    rt.block_on(f(Arc::new(client)))
-}
-
 /// Create a tokio runtime and temper client pair.
 ///
 /// Use this when you need the runtime and client as separate values —
@@ -286,7 +273,6 @@ mod tests {
 
         temp_env::with_vars(
             [
-                ("TEMPER_VAULT_STATE", Some("local")),
                 ("TEMPER_TOKEN", None),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 (

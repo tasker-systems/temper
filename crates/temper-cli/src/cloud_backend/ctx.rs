@@ -83,7 +83,6 @@ mod tests {
 
         temp_env::with_vars(
             [
-                ("TEMPER_VAULT_STATE", Some("local")),
                 ("TEMPER_TOKEN", None::<&str>),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 (

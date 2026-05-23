@@ -14,12 +14,11 @@ static AUTH_INIT: Once = Once::new();
 /// - Points `TEMPER_AUTH_PATH` at a non-existent path so the publish-tail
 ///   helper finds no token and no-ops without touching
 ///   `~/.config/temper/auth.json` or making network calls.
-/// - Removes `TEMPER_TOKEN` / `TEMPER_VAULT_STATE` / `TEMPER_PROVIDER` /
-///   `TEMPER_DEVICE_ID`. A developer who uses the `temper` CLI in cloud mode
-///   has these exported; inherited into a test process they make integration
-///   tests route writes through the cloud API instead of the local vault,
-///   so the local-file assertions fail. CI has none of these set, which is
-///   why the failures only reproduce on configured dev machines.
+/// - Removes `TEMPER_TOKEN` / `TEMPER_PROVIDER` / `TEMPER_DEVICE_ID`. A
+///   developer who uses the `temper` CLI in cloud mode has these exported;
+///   inherited into a test process they cause auth side-effects. CI has none
+///   of these set, which is why the failures only reproduce on configured dev
+///   machines.
 ///
 /// Idempotent — runs at most once per test process. The values written are
 /// constant (not per-test), so parallel calls converge on the same final
@@ -35,12 +34,7 @@ pub fn init_isolated_auth() {
                 "TEMPER_AUTH_PATH",
                 "/tmp/temper-cli-tests-no-such-auth-path/auth.json",
             );
-            for var in [
-                "TEMPER_TOKEN",
-                "TEMPER_VAULT_STATE",
-                "TEMPER_PROVIDER",
-                "TEMPER_DEVICE_ID",
-            ] {
+            for var in ["TEMPER_TOKEN", "TEMPER_PROVIDER", "TEMPER_DEVICE_ID"] {
                 std::env::remove_var(var);
             }
         }

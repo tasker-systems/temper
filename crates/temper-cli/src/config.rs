@@ -30,12 +30,8 @@ pub struct Config {
     pub contexts: Vec<String>,
     pub subscriptions: Vec<Subscription>,
     pub skill_output: PathBuf,
-    /// The user's profile slug (cached from `client.profile().get()`),
-    /// used by `lookup::find_resource` to scan the legacy
-    /// `@<profile.slug>/` directory for files written during the
-    /// PR #70 / PR #72 window. `None` until the first authenticated
-    /// CLI invocation populates it (lazy-cache wiring deferred to a
-    /// follow-up task; until then legacy fallback is a no-op).
+    /// The user's profile slug (cached from `client.profile().get()`).
+    /// `None` until the first authenticated CLI invocation populates it.
     pub profile_slug: Option<String>,
 }
 
