@@ -880,30 +880,6 @@ pub(crate) async fn resolve_id_local_first(
 
 /// Return the existing local path for a resource if found, or compute where
 /// it would live based on `Vault::doc_file`.
-fn find_or_compute_local_path(
-    config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
-) -> Result<(std::path::PathBuf, String)> {
-    if let Ok(dt) = temper_core::frontmatter::DocType::from_str(doc_type) {
-        if let Ok(resolved) = crate::lookup::find_resource(crate::lookup::FindableResource {
-            config,
-            manifest: None,
-            owner: None,
-            context: context.map(str::to_string),
-            doc_type: dt,
-            slug_or_suffix: slug.to_string(),
-        }) {
-            return Ok((resolved.path, resolved.context));
-        }
-    }
-    let ctx = require_context(context)?;
-    let owner = config.owner_for_context(&ctx);
-    let vault_layout = Vault::new(&config.vault_root);
-    let path = vault_layout.doc_file(&owner, &ctx, doc_type, slug);
-    Ok((path, ctx))
-}
 
 /// Render generic resource output in the requested format.
 ///
@@ -957,9 +933,9 @@ fn render_generic_output(
 
 /// Show a generic resource (goal, research, concept, decision).
 ///
-/// In Local mode: resolves an id from frontmatter or by-uri, then uses the
-/// three-tier freshness ladder (`show_cache::fetch`) before rendering.
-/// In Cloud mode: fetches content directly from the API with no disk write.
+/// Cloud-only: resolves the id via `resolve_by_uri`, fetches content,
+/// renders it, and writes the canonical projection file (per-resource
+/// refresh — best-effort).
 fn show_generic(
     config: &Config,
     doc_type: &str,
@@ -967,145 +943,57 @@ fn show_generic(
     context: Option<&str>,
     format: &str,
 ) -> Result<()> {
-    use crate::actions::{runtime, show_cache};
-    use std::time::Duration;
-    use temper_core::types::VaultState;
+    use crate::actions::runtime;
 
-    let vault_state = VaultState::from_env();
     let doc_type_s = doc_type.to_string();
     let slug_s = slug.to_string();
     let context_owned = context.map(str::to_string);
     let format_s = format.to_string();
 
-    match vault_state {
-        VaultState::Cloud => {
-            let config_clone = config.clone();
-            let doc_type_inner = doc_type_s.clone();
-            let slug_inner = slug_s.clone();
-            let ctx_inner = context_owned.clone();
+    let config_clone = config.clone();
+    let doc_type_inner = doc_type_s.clone();
+    let slug_inner = slug_s.clone();
+    let ctx_inner = context_owned.clone();
 
-            let body = runtime::with_client(|client| {
-                Box::pin(async move {
-                    let ctx = ctx_inner
-                        .as_deref()
-                        .ok_or_else(|| {
-                            TemperError::Project(
-                                "no context specified — use --context <name>".into(),
-                            )
-                        })?
-                        .to_string();
-                    let owner = config_clone.owner_for_context(&ctx);
-                    let row = client
-                        .resources()
-                        .resolve_by_uri(&owner, &ctx, &doc_type_inner, &slug_inner)
-                        .await
-                        .map_err(crate::actions::runtime::client_err_to_temper)?;
-                    let resp = client
-                        .resources()
-                        .content(*row.id.as_uuid())
-                        .await
-                        .map_err(crate::actions::runtime::client_err_to_temper)?;
+    let body = runtime::with_client(|client| {
+        Box::pin(async move {
+            let ctx = ctx_inner
+                .as_deref()
+                .ok_or_else(|| {
+                    TemperError::Project("no context specified — use --context <name>".into())
+                })?
+                .to_string();
+            let owner = config_clone.owner_for_context(&ctx);
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner, &ctx, &doc_type_inner, &slug_inner)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let resp = client
+                .resources()
+                .content(*row.id.as_uuid())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
 
-                    // Per-resource projection refresh: write the fetched
-                    // resource to its canonical projection path. Best-effort
-                    // — a write failure must not stop `show` from displaying.
-                    if let Err(e) = crate::projection::write_resource_file_from_parts(
-                        &config_clone.vault_root,
-                        &row,
-                        &resp,
-                    ) {
-                        crate::output::warning(format!(
-                            "could not refresh projection file for '{slug_inner}': {e}"
-                        ));
-                    }
-
-                    Ok(resp.markdown)
-                })
-            })?;
-
-            let ctx = context_owned.unwrap_or_default();
-            render_generic_output(&doc_type_s, &slug_s, &ctx, config, None, body, &format_s)
-        }
-        VaultState::Local => {
-            let config_clone = config.clone();
-            let doc_type_inner = doc_type_s.clone();
-            let slug_inner = slug_s.clone();
-            let ctx_inner = context_owned.clone();
-
-            // If the local file isn't resolvable on disk at all, route to
-            // the API fallback so the vault stays untouched. The
-            // show_cache path below would write the rebuilt file as
-            // tier-3 — that's correct when the file *was* present but
-            // stale, but cloud-only resources should not be materialized
-            // implicitly. Recovery to disk is `temper sync run`'s job.
-            if temper_core::frontmatter::DocType::from_str(&doc_type_s).is_ok()
-                && crate::lookup::find_resource(crate::lookup::FindableResource {
-                    config,
-                    manifest: None,
-                    owner: None,
-                    context: context.map(str::to_string),
-                    doc_type: temper_core::frontmatter::DocType::from_str(&doc_type_s)?,
-                    slug_or_suffix: slug_s.clone(),
-                })
-                .is_err()
-            {
-                return show_via_api_fallback(config, &doc_type_s, &slug_s, context, &format_s);
+            // Per-resource projection refresh: write the fetched resource
+            // to its canonical projection path. Best-effort — a write
+            // failure must not stop `show` from displaying.
+            if let Err(e) = crate::projection::write_resource_file_from_parts(
+                &config_clone.vault_root,
+                &row,
+                &resp,
+            ) {
+                crate::output::warning(format!(
+                    "could not refresh projection file for '{slug_inner}': {e}"
+                ));
             }
 
-            let (path, ctx) = find_or_compute_local_path(config, &doc_type_s, &slug_s, context)?;
+            Ok(resp.markdown)
+        })
+    })?;
 
-            // Tier 0: debounce check before spinning up the runtime.
-            // If the file is fresh we serve it immediately; no network, no
-            // resource id resolution needed.
-            if let Some(body) = show_cache::read_if_fresh(
-                &path,
-                std::time::Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
-            )? {
-                return render_generic_output(
-                    &doc_type_s,
-                    &slug_s,
-                    &ctx,
-                    config,
-                    Some(&path),
-                    body,
-                    &format_s,
-                );
-            }
-
-            let (body, local_path_for_render) = runtime::with_client(|client| {
-                Box::pin(async move {
-                    // Local-mode: try fast-path via local file frontmatter / manifest first,
-                    // then fall back to API resolution.
-                    let id = resolve_id_local_first(
-                        &config_clone,
-                        client,
-                        ctx_inner.as_deref(),
-                        &doc_type_inner,
-                        &slug_inner,
-                    )
-                    .await?;
-                    let result = show_cache::fetch(show_cache::ShowCacheParams {
-                        client,
-                        resource_id: id,
-                        local_path: &path,
-                        debounce: Duration::from_secs(show_cache::DEFAULT_DEBOUNCE_SECONDS),
-                    })
-                    .await?;
-                    Ok((result.content, path))
-                })
-            })?;
-
-            render_generic_output(
-                &doc_type_s,
-                &slug_s,
-                &ctx,
-                config,
-                Some(&local_path_for_render),
-                body,
-                &format_s,
-            )
-        }
-    }
+    let ctx = context_owned.unwrap_or_default();
+    render_generic_output(&doc_type_s, &slug_s, &ctx, config, None, body, &format_s)
 }
 
 /// Fetch and display edges for a resource via the API.
