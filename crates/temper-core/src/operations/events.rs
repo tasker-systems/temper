@@ -2,10 +2,8 @@
 //!
 //! Events are backend-qualified: `DbResourceCreated` describes a state
 //! transition in the DB backend. Surfaces inspect the returned event list
-//! to emit log lines or trigger tail actions.
-//!
-//! Initial variant set covers the operations defined in Phase 1 commands.
-//! Phase 6 (companion spec #3) adds state-machine-related variants.
+//! to emit log lines or trigger tail actions. Composite events
+//! (`RemoteSynced`, `PushDeferred`) signal sync status across backends.
 
 use serde::{Deserialize, Serialize};
 
@@ -26,14 +24,6 @@ pub enum DomainEvent {
     DbChunksGenerated { resource_id: ResourceId },
     /// Embedding was triggered (asynchronous on the server).
     DbEmbeddingTriggered { resource_id: ResourceId },
-
-    // -------- VaultBackend events --------
-    /// A vault file was written (created or modified).
-    VaultFileWritten { path: String },
-    /// The manifest entry for a resource was updated.
-    VaultManifestUpdated { path: String },
-    /// A vault file was removed.
-    VaultFileRemoved { path: String },
 
     // -------- Composite / cross-backend events --------
     /// A vault-side change was successfully pushed to the API (DbBackend).
@@ -67,9 +57,9 @@ mod tests {
     }
 
     #[test]
-    fn vault_event_round_trips() {
-        let e = DomainEvent::VaultFileWritten {
-            path: "@me/temper/task/foo.md".to_string(),
+    fn db_soft_delete_event_round_trips() {
+        let e = DomainEvent::DbResourceSoftDeleted {
+            resource_id: ResourceId(Uuid::nil()),
         };
         let s = serde_json::to_string(&e).unwrap();
         let back: DomainEvent = serde_json::from_str(&s).unwrap();

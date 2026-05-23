@@ -1814,25 +1814,10 @@ mod render_create_output_tests {
         assert_eq!(parsed["temper-seq"], 3);
     }
 
-    /// Build a `CommandOutput<ResourceRow>` that carries a `VaultFileWritten`
-    /// event with the canonical rel_path the on-disk write would have used.
-    /// Used by tests that assert the local-mode legacy JSON shape
-    /// (`path` field populated). Cloud-mode tests use `CommandOutput::new(row)`
-    /// directly — no event, empty `path` field.
-    fn output_with_vault_file(row: ResourceRow, rel_path: &str) -> CommandOutput<ResourceRow> {
-        use temper_core::operations::DomainEvent;
-        CommandOutput {
-            value: row,
-            events: vec![DomainEvent::VaultFileWritten {
-                path: rel_path.to_string(),
-            }],
-        }
-    }
-
     #[test]
     fn render_create_output_session_json_matches_legacy_shape() {
         let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
-        let output = output_with_vault_file(row, "@me/temper/session/2026-05-14-my-session.md");
+        let output = CommandOutput::new(row);
         let path = std::path::Path::new("@me/temper/session/2026-05-14-my-session.md");
         let json = render_create_output_to_string(&output, "session", "json", Some(path))
             .expect("rendering session JSON should succeed");
@@ -1881,7 +1866,7 @@ mod render_create_output_tests {
             "My Research",
             "temper",
         );
-        let output = output_with_vault_file(row, "@me/temper/research/2026-05-14-my-research.md");
+        let output = CommandOutput::new(row);
         let path = std::path::Path::new("@me/temper/research/2026-05-14-my-research.md");
         let json = render_create_output_to_string(&output, "research", "json", Some(path))
             .expect("rendering research JSON should succeed");
@@ -1912,7 +1897,7 @@ mod render_create_output_tests {
     #[test]
     fn render_create_output_concept_json_matches_legacy_shape() {
         let row = make_resource_row("my-concept", "concept", "My Concept", "temper");
-        let output = output_with_vault_file(row, "@me/temper/concept/my-concept.md");
+        let output = CommandOutput::new(row);
         let path = std::path::Path::new("@me/temper/concept/my-concept.md");
         let json = render_create_output_to_string(&output, "concept", "json", Some(path))
             .expect("rendering concept JSON should succeed");
@@ -1943,7 +1928,7 @@ mod render_create_output_tests {
             "My Decision",
             "temper",
         );
-        let output = output_with_vault_file(row, "@me/temper/decision/2026-05-14-my-decision.md");
+        let output = CommandOutput::new(row);
         let path = std::path::Path::new("@me/temper/decision/2026-05-14-my-decision.md");
         let json = render_create_output_to_string(&output, "decision", "json", Some(path))
             .expect("rendering decision JSON should succeed");
