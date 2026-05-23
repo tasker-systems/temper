@@ -54,8 +54,9 @@ fn render_create_output(
     output: &temper_core::operations::CommandOutput<temper_core::types::resource::ResourceRow>,
     doc_type: &str,
     format: &str,
+    projection_path: Option<&std::path::Path>,
 ) -> Result<()> {
-    let rendered = render_create_output_to_string(output, doc_type, format)?;
+    let rendered = render_create_output_to_string(output, doc_type, format, projection_path)?;
     if !rendered.is_empty() {
         println!("{rendered}");
     }
@@ -93,6 +94,7 @@ fn render_create_output_to_string(
     output: &temper_core::operations::CommandOutput<temper_core::types::resource::ResourceRow>,
     doc_type: &str,
     format: &str,
+    projection_path: Option<&std::path::Path>,
 ) -> Result<String> {
     use temper_core::frontmatter::DocType;
 
@@ -109,13 +111,10 @@ fn render_create_output_to_string(
 
     let today = Local::now().format("%Y-%m-%d").to_string();
 
-    // Mode-implicit `path` field: emit only when a VaultFileWritten event is
-    // present (local mode, real on-disk file). In cloud mode the synthesized
-    // path would point at a nonexistent file — agents chaining
-    // `temper resource create ... --format json | jq -r .path` and cat-ing
-    // the result would hit ENOENT. Mirrors the surface-rendering pattern
-    // used by update (commands::resource::update) and session::save.
-    let vault_path = vault_file_path_from_events(&output.events);
+    // `path` field: the real on-disk projection path when the write succeeded,
+    // empty string otherwise. Agents chaining `temper resource create ... --format
+    // json | jq -r .path` get the actual file path in cloud mode.
+    let vault_path: Option<String> = projection_path.map(|p| p.to_string_lossy().into_owned());
 
     let json = match doctype {
         DocType::Task => serde_json::json!({
@@ -265,18 +264,36 @@ pub fn create(
     temper_core::operations::validate_create(&cmd)
         .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
-    // Acquire backend (mode picked via VaultState::from_env) and dispatch.
-    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
+    // Acquire the cloud backend + client and dispatch the create.
+    let (runtime, backend, client) = crate::backend_select::build_backend(config, &ctx)?;
     let output = runtime.block_on(backend.create_resource(cmd))?;
 
-    // Discovery event (local mode only — gated on VaultFileWritten presence).
-    // Concept and Decision were never emitted pre-Phase 5; preserve that parity.
+    // Projection refresh: write the new resource to its canonical
+    // projection path so the local copy reflects server state at once.
+    // Best-effort — a projection write failure must not fail the create.
+    let projection_path = match runtime.block_on(crate::projection::write_resource_file(
+        &client,
+        &config.vault_root,
+        &output.value,
+    )) {
+        Ok(path) => Some(path),
+        Err(e) => {
+            output::warning(format!("could not write projection file: {e}"));
+            None
+        }
+    };
+
+    // Discovery event for non-Concept/Decision doctypes (Concept and
+    // Decision were never emitted pre-Phase 5; preserve that parity).
     if !matches!(
         doctype_enum,
         temper_core::frontmatter::DocType::Concept | temper_core::frontmatter::DocType::Decision
-    ) && has_vault_file_event(&output.events)
-    {
-        let rel_path = vault_file_path_from_events(&output.events).unwrap_or_default();
+    ) {
+        let rel_path = projection_path
+            .as_deref()
+            .and_then(|p| p.strip_prefix(&config.vault_root).ok())
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let event = Event::ResourceCreate {
             ts: Local::now().to_rfc3339(),
             doc_type: doc_type.to_string(),
@@ -289,7 +306,7 @@ pub fn create(
         }
     }
 
-    render_create_output(&output, doc_type, format)
+    render_create_output(&output, doc_type, format, projection_path.as_deref())
 }
 
 // ---------------------------------------------------------------------------
@@ -2063,7 +2080,7 @@ mod render_create_output_tests {
     fn render_create_output_task_json_matches_legacy_shape() {
         let row = make_resource_row("2026-05-14-test", "task", "Test", "temper");
         let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "task", "json")
+        let json = render_create_output_to_string(&output, "task", "json", None)
             .expect("rendering task JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2083,7 +2100,7 @@ mod render_create_output_tests {
     fn render_create_output_goal_json_matches_legacy_shape() {
         let row = make_resource_row("test-goal", "goal", "Test Goal", "temper");
         let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "goal", "json")
+        let json = render_create_output_to_string(&output, "goal", "json", None)
             .expect("rendering goal JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2106,7 +2123,7 @@ mod render_create_output_tests {
         let mut row = make_resource_row("test-goal-seq", "goal", "Goal With Seq", "temper");
         row.seq = Some(3);
         let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "goal", "json")
+        let json = render_create_output_to_string(&output, "goal", "json", None)
             .expect("rendering goal JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2132,13 +2149,14 @@ mod render_create_output_tests {
     fn render_create_output_session_json_matches_legacy_shape() {
         let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
         let output = output_with_vault_file(row, "@me/temper/session/2026-05-14-my-session.md");
-        let json = render_create_output_to_string(&output, "session", "json")
+        let path = std::path::Path::new("@me/temper/session/2026-05-14-my-session.md");
+        let json = render_create_output_to_string(&output, "session", "json", Some(path))
             .expect("rendering session JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed["title"], "My Session");
         assert_eq!(parsed["context"], "temper");
-        // Path is populated from the VaultFileWritten event (local-mode).
+        // Path is the projection path (now supplied explicitly).
         assert_eq!(
             parsed["path"],
             "@me/temper/session/2026-05-14-my-session.md"
@@ -2157,16 +2175,18 @@ mod render_create_output_tests {
 
     #[test]
     fn render_create_output_session_cloud_mode_emits_empty_path() {
-        // Cloud-mode: no VaultFileWritten event → `path` field empty. Agents
-        // can detect cloud mode by checking for an empty path; no fictional
-        // file path is emitted.
+        // Cloud-mode with no projection path → `path` field empty. Agents
+        // can detect a failed projection write by checking for an empty path.
         let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
         let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "session", "json")
+        let json = render_create_output_to_string(&output, "session", "json", None)
             .expect("rendering session JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["path"], "", "cloud mode must emit empty path");
+        assert_eq!(
+            parsed["path"], "",
+            "no projection path must emit empty path"
+        );
     }
 
     #[test]
@@ -2178,7 +2198,8 @@ mod render_create_output_tests {
             "temper",
         );
         let output = output_with_vault_file(row, "@me/temper/research/2026-05-14-my-research.md");
-        let json = render_create_output_to_string(&output, "research", "json")
+        let path = std::path::Path::new("@me/temper/research/2026-05-14-my-research.md");
+        let json = render_create_output_to_string(&output, "research", "json", Some(path))
             .expect("rendering research JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2208,7 +2229,8 @@ mod render_create_output_tests {
     fn render_create_output_concept_json_matches_legacy_shape() {
         let row = make_resource_row("my-concept", "concept", "My Concept", "temper");
         let output = output_with_vault_file(row, "@me/temper/concept/my-concept.md");
-        let json = render_create_output_to_string(&output, "concept", "json")
+        let path = std::path::Path::new("@me/temper/concept/my-concept.md");
+        let json = render_create_output_to_string(&output, "concept", "json", Some(path))
             .expect("rendering concept JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2238,7 +2260,8 @@ mod render_create_output_tests {
             "temper",
         );
         let output = output_with_vault_file(row, "@me/temper/decision/2026-05-14-my-decision.md");
-        let json = render_create_output_to_string(&output, "decision", "json")
+        let path = std::path::Path::new("@me/temper/decision/2026-05-14-my-decision.md");
+        let json = render_create_output_to_string(&output, "decision", "json", Some(path))
             .expect("rendering decision JSON should succeed");
 
         let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -2269,7 +2292,7 @@ mod render_create_output_tests {
         // Non-JSON format: function prints a success line and returns "".
         // We can't easily capture stdout in unit tests, but we can confirm
         // the return value is empty and no error is returned.
-        let result = render_create_output_to_string(&output, "task", "text")
+        let result = render_create_output_to_string(&output, "task", "text", None)
             .expect("non-JSON format should not error");
         assert!(
             result.is_empty(),
@@ -2281,7 +2304,7 @@ mod render_create_output_tests {
     fn render_create_output_invalid_doctype_returns_error() {
         let row = make_resource_row("test", "task", "Test", "temper");
         let output = CommandOutput::new(row);
-        let result = render_create_output_to_string(&output, "bogus", "json");
+        let result = render_create_output_to_string(&output, "bogus", "json", None);
         assert!(result.is_err(), "invalid doctype must return an error");
     }
 }

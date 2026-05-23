@@ -1064,3 +1064,87 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
         "both cloud-only resources must be active in DB after cloud list"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 9: create writes the canonical projection file
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource create --type task --title "..."` posts to
+/// `/api/ingest`; the CLI then materializes the new resource's projection file
+/// under `<vault_root>/@me/<context>/task/<slug>.md`.
+///
+/// Verifies:
+/// 1. The projection file exists at the canonical vault path.
+/// 2. The file's frontmatter contains the correct `temper-slug`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+    let vault_root = app.vault_dir.path().to_path_buf();
+
+    // Drive cloud-mode create on a blocking thread.
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::resource::create(
+                &cli_config,
+                "task",
+                "Projection Write Test",
+                Some("myapp"),
+                None, // goal
+                None, // mode
+                None, // effort
+                None, // slug override
+                None, // body_flag
+                "text",
+            )
+            .expect("cloud create should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    // ---- Assertion 1: projection file exists at canonical path ----
+    // Phase 5 unified slug derivation: tasks get a `{date}-{slugify(title)}` prefix.
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-projection-write-test");
+    // The file lives at <vault_root>/@me/<context>/task/<slug>.md.
+    let projection_path = vault_root
+        .join("@me")
+        .join("myapp")
+        .join("task")
+        .join(format!("{slug}.md"));
+
+    assert!(
+        projection_path.exists(),
+        "projection file must exist at {} after cloud create",
+        projection_path.display()
+    );
+
+    // ---- Assertion 2: frontmatter temper-slug matches created resource ----
+    let content =
+        std::fs::read_to_string(&projection_path).expect("projection file must be readable");
+    let fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str())
+        .expect("projection file must have valid frontmatter");
+    let fm_json = serde_json::to_value(fm.value()).expect("frontmatter JSON conversion");
+    assert_eq!(
+        fm_json.get("temper-slug").and_then(|v| v.as_str()),
+        Some(slug.as_str()),
+        "projection frontmatter must contain correct temper-slug; got: {fm_json}"
+    );
+}
