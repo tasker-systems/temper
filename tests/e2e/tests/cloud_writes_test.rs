@@ -1412,3 +1412,79 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
         "resource must be soft-deleted (is_active = false) after cloud delete"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test N: cloud show --edges resolves via server-side resolve_by_uri
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource show <slug> --type research --context <ctx> --edges`
+/// must succeed without a manifest entry. Previously `show_edges` loaded the
+/// local manifest to resolve the id and returned a "sync first" error in
+/// cloud-only mode. The fix switches to `client.resources().resolve_by_uri`
+/// (same path as `show`). This test verifies the end-to-end path: create a
+/// resource via the API, then call `show` with `edges: true` and assert it
+/// returns `Ok(())` — even with zero edges.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("edgesctx")
+        .await
+        .expect("create edgesctx context");
+
+    // Seed the resource via the API client (no CLI, no manifest written).
+    use temper_core::types::ingest::{pack_chunks, IngestPayload};
+    app.client
+        .ingest()
+        .create(&IngestPayload {
+            title: "Edges Resolve Test".to_string(),
+            origin_uri: "kb://edgesctx/research/edges-resolve-test".to_string(),
+            context_name: "edgesctx".to_string(),
+            doc_type_name: "research".to_string(),
+            content_hash: None,
+            slug: "edges-resolve-test".to_string(),
+            content: String::new(),
+            metadata: None,
+            managed_meta: Some(serde_json::json!({
+                "temper-title": "Edges Resolve Test"
+            })),
+            open_meta: None,
+            chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        })
+        .await
+        .expect("seed resource via client");
+
+    // Drive show with edges=true on a blocking thread (runtime::with_client
+    // creates an inner tokio runtime — must not nest).
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::resource::show(
+                &cli_config,
+                "research",
+                "edges-resolve-test",
+                Some("edgesctx"),
+                "text",
+                true, // edges — the path under test
+            )
+            .expect(
+                "cloud show --edges must succeed without a manifest entry; \
+                 previously returned 'sync first' error",
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+}

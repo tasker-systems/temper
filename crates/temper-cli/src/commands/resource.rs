@@ -733,7 +733,8 @@ pub fn show(
     }?;
 
     if edges {
-        show_edges(slug, format)?;
+        let ctx = context.unwrap_or("default");
+        show_edges(config, ctx, doc_type, slug, format)?;
     }
 
     Ok(())
@@ -855,30 +856,34 @@ fn show_generic(
 }
 
 /// Fetch and display edges for a resource via the API.
-fn show_edges(slug: &str, format: &str) -> Result<()> {
+///
+/// Cloud-only: resolves the resource id via `resolve_by_uri` using the
+/// same `(owner, context, doc_type, slug)` quadruple the `show` path uses,
+/// then fetches and renders the edge list. No manifest access needed.
+fn show_edges(
+    config: &Config,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+    format: &str,
+) -> Result<()> {
     use crate::actions::runtime;
 
-    let vault_root = crate::config::resolve_vault(None)?;
-    let temper_dir = vault_root.join(".temper");
-    let device_id = runtime::require_device_id()?;
-    let manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
+    let owner_inner = config.owner_for_context(context);
+    let context_inner = context.to_string();
+    let doc_type_inner = doc_type.to_string();
+    let slug_inner = slug.to_string();
 
-    let resource_id = manifest
-        .entries
-        .iter()
-        .find(|(_, entry)| {
-            entry
-                .path
-                .strip_suffix(".md")
-                .and_then(|p| p.rsplit('/').next())
-                == Some(slug)
+    let resource_id = runtime::with_client(|client| {
+        Box::pin(async move {
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner_inner, &context_inner, &doc_type_inner, &slug_inner)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            Ok(*row.id.as_uuid())
         })
-        .map(|(id, _)| uuid::Uuid::from(*id))
-        .ok_or_else(|| {
-            TemperError::Vault(format!(
-                "resource '{slug}' not found in manifest — sync first to use --edges"
-            ))
-        })?;
+    })?;
 
     let edges: Vec<temper_core::types::graph::GraphEdgeRow> = runtime::with_client(|client| {
         Box::pin(async move {
@@ -886,7 +891,7 @@ fn show_edges(slug: &str, format: &str) -> Result<()> {
                 .resources()
                 .edges(resource_id)
                 .await
-                .map_err(crate::commands::client_err)
+                .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })?;
 
