@@ -16,4 +16,3 @@ pub mod output;
 pub mod projection;
 pub mod templates;
 pub mod vault;
-pub mod vault_backend;
