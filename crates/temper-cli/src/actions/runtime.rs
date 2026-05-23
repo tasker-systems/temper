@@ -3,10 +3,9 @@
 //! Eliminates duplicated `tokio::runtime::Runtime::new()` + `build_client()`
 //! boilerplate across command modules.
 //!
-//! Picks a [`temper_client::auth::TokenStore`] based on
-//! [`temper_core::types::VaultState::from_env`]:
-//! `VaultState::Cloud` → `MemoryTokenStore` (ephemeral, env-var-backed);
-//! `VaultState::Local` → `DiskTokenStore::default_path()`
+//! Picks a [`temper_client::auth::TokenStore`] based on `TEMPER_TOKEN`
+//! presence: set → `MemoryTokenStore` (ephemeral, env-var-backed cloud agent);
+//! unset → `DiskTokenStore` at the `TEMPER_AUTH_PATH` / `auth.path` path
 //! (`~/.config/temper/auth.json`). Cloud sessions cannot accidentally write
 //! to disk because the store itself has no disk knowledge.
 
@@ -18,7 +17,6 @@ use temper_client::auth::{DiskTokenStore, MemoryTokenStore, TokenStore};
 use temper_client::config::{auth_path, build_client_from, load_cloud_config};
 use temper_client::error::ClientError;
 use temper_core::types::config::TemperConfig;
-use temper_core::types::VaultState;
 
 use crate::error::{Result, TemperError};
 
@@ -78,29 +76,32 @@ fn humanize_duration(d: chrono::Duration) -> String {
 
 /// Resolve the active [`TokenStore`] for this process.
 ///
-/// In `Local` mode the disk path is computed via
-/// [`temper_client::config::auth_path`] so the same `TEMPER_AUTH_PATH` /
-/// `auth.path` precedence applies to both reads and writes — tests can
-/// isolate from the developer's real `~/.config/temper/auth.json` by setting
-/// `TEMPER_AUTH_PATH` to a tmpdir.
+/// A cloud agent session is handed its token via the `TEMPER_TOKEN` env
+/// var — when that is set, use a [`MemoryTokenStore`]. Otherwise this is
+/// an interactive developer machine: read the token from disk via
+/// [`DiskTokenStore`], honoring the `TEMPER_AUTH_PATH` / `auth.path`
+/// precedence so tests can isolate from `~/.config/temper/auth.json`.
 fn resolve_token_store(config: &TemperConfig) -> Result<Arc<dyn TokenStore>> {
-    match VaultState::from_env() {
-        VaultState::Cloud => {
-            let mem = MemoryTokenStore::from_env_required()
-                .map_err(|e| TemperError::Config(e.to_string()))?;
-            // Cloud-mode AT is refresh-less by design (see
-            // `stored_auth_from_env` docstring). Warn early when the token
-            // is approaching expiry so users have time to re-export.
-            if let Ok(Some(stored)) = mem.load() {
-                if let Some(msg) =
-                    token_expiry_warning(&stored, chrono::Utc::now(), chrono::Duration::hours(1))
-                {
-                    eprintln!("{msg}");
-                }
+    if std::env::var("TEMPER_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_some()
+    {
+        let mem = MemoryTokenStore::from_env_required()
+            .map_err(|e| TemperError::Config(e.to_string()))?;
+        // The env-supplied AT is refresh-less by design (see
+        // `stored_auth_from_env`). Warn early when it is near expiry so
+        // the user has time to re-export.
+        if let Ok(Some(stored)) = mem.load() {
+            if let Some(msg) =
+                token_expiry_warning(&stored, chrono::Utc::now(), chrono::Duration::hours(1))
+            {
+                eprintln!("{msg}");
             }
-            Ok(Arc::new(mem))
         }
-        VaultState::Local => Ok(Arc::new(DiskTokenStore::at(auth_path(config)))),
+        Ok(Arc::new(mem))
+    } else {
+        Ok(Arc::new(DiskTokenStore::at(auth_path(config))))
     }
 }
 
@@ -258,22 +259,18 @@ mod tests {
     }
 
     #[test]
-    fn with_client_errors_when_cloud_mode_but_no_token() {
-        temp_env::with_vars(
-            [
-                ("TEMPER_VAULT_STATE", Some("cloud")),
-                ("TEMPER_TOKEN", None),
-            ],
-            || {
-                let result = with_client(|_client| Box::pin(async { Ok(()) }));
-                let err = result.unwrap_err();
-                let msg = format!("{err}");
-                assert!(
-                    msg.contains("TEMPER_TOKEN"),
-                    "expected TEMPER_TOKEN error: {msg}"
-                );
-            },
-        );
+    fn with_client_errors_when_temper_token_set_but_invalid() {
+        // When TEMPER_TOKEN is present (non-empty), resolve_token_store routes
+        // to MemoryTokenStore::from_env_required. A malformed JWT causes that
+        // to fail early with a Config error (JWT parse failure).
+        temp_env::with_vars([("TEMPER_TOKEN", Some("not-a-valid-jwt"))], || {
+            let result = with_client(|_client| Box::pin(async { Ok(()) }));
+            let err = result.unwrap_err();
+            assert!(
+                matches!(err, TemperError::Config(_)),
+                "expected Config error for malformed TEMPER_TOKEN: {err}"
+            );
+        });
     }
 
     #[test]
