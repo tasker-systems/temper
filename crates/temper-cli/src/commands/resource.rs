@@ -24,7 +24,7 @@ fn require_context(context: Option<&str>) -> Result<String> {
     }
 }
 
-/// Render the result of `VaultBackend::create_resource` to stdout in the
+/// Render the result of `create_resource` to stdout in the
 /// shape that each doctype's pre-B5b dispatch path emitted.
 ///
 /// Doctype-aware switch preserves backward-compatible JSON output. The
@@ -205,9 +205,8 @@ pub fn create(
         }
     });
 
-    // Build the CreateResource cmd. Body-None when no body input; both backends
-    // know how to handle the empty case (VaultBackend writes the doctype template,
-    // CloudBackend synthesizes `# {title}\n` in its translator).
+    // Build the CreateResource cmd. Body-None when no body input; CloudBackend
+    // synthesizes `# {title}\n` in its translator for the empty-body case.
     let cmd = temper_core::operations::CreateResource {
         slug: slug_resolved,
         doctype: doc_type.to_string(),
@@ -237,9 +236,8 @@ pub fn create(
     // `validate_update_args` for update. Without this, cloud-mode create would
     // skip `validate_create` entirely (CloudBackend has no equivalent), and
     // bad inputs (e.g., --mode plan-or-build whitelist violations) would ship
-    // a doomed request to the server. VaultBackend runs `validate_create` as
-    // its first step (vault_backend.rs:484) — hoisting here makes both modes
-    // symmetric and lets local-mode fail-fast benefit cloud-mode too.
+    // a doomed request to the server. Hoisting here lets the CLI fail-fast
+    // before any network call in both modes.
     temper_core::operations::validate_create(&cmd)
         .map_err(|e| TemperError::BadRequest(e.to_string()))?;
 
@@ -543,8 +541,8 @@ pub fn show(
     }?;
 
     if edges {
-        let ctx = context.unwrap_or("default");
-        show_edges(config, ctx, doc_type, slug, format)?;
+        let ctx = require_context(context)?;
+        show_edges(config, &ctx, doc_type, slug, format)?;
     }
 
     Ok(())
@@ -742,10 +740,6 @@ fn show_edges(
 
     Ok(())
 }
-
-// `find_resource_file` retired in favor of `crate::lookup::find_resource`
-// (typed DocType, owner-aware, manifest-aware id resolution, and no
-// slugify-collapse on input — closes C.1 from the 2026-05-09 audit sweep).
 
 /// Parameters for resource update.
 pub struct UpdateParams<'a> {

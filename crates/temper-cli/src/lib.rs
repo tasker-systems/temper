@@ -10,7 +10,6 @@ pub mod extract;
 pub mod format;
 pub mod ids;
 pub mod llm;
-pub mod lookup;
 pub mod manifest_io;
 pub mod output;
 pub mod projection;

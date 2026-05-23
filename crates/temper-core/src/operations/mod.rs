@@ -2,7 +2,7 @@
 //!
 //! This module is the canonical home for command/action/event vocabulary
 //! shared across all surfaces (CLI-local-vault, CLI-cloud, MCP, API-HTTP)
-//! and both backends (DbBackend in temper-api, VaultBackend in temper-cli).
+//! and both backends (DbBackend in temper-api, CloudBackend in temper-cli).
 //!
 //! See `docs/superpowers/specs/2026-05-01-shared-core-execution-paths-design.md`.
 

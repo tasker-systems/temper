@@ -238,6 +238,16 @@ mod inline_research_write_tests {
             )),
             "temper-slug must be '2026-05-23-sample-title'"
         );
+        assert_eq!(
+            get("temper-context"),
+            Some(serde_yaml::Value::String("temper".to_string())),
+            "temper-context must be 'temper'"
+        );
+        assert_eq!(
+            get("temper-type"),
+            Some(serde_yaml::Value::String("research".to_string())),
+            "temper-type must be 'research'"
+        );
         assert_eq!(fm.body().trim(), "body text", "body must be 'body text'");
     }
 

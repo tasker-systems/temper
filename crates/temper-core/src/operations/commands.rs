@@ -81,7 +81,7 @@ pub struct UpdateResource {
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
-    /// File-move spec (VaultBackend only). `DbBackend` ignores `move_to` —
+    /// File-move spec (local-mode only). `DbBackend` ignores `move_to` —
     /// the new context/type is conveyed via `managed_meta` which DbBackend
     /// already handles. This field carries no SQL and does not affect the
     /// `.sqlx/` query cache.

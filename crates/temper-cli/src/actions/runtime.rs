@@ -165,10 +165,6 @@ pub async fn ensure_profile(
         .get()
         .await
         .map_err(|e| TemperError::Api(format!("profile pre-flight: {e}")))?;
-    // Populate the process-wide profile-slug cache so `lookup::find_resource`
-    // can scan the legacy `@<profile.slug>/` directory without an explicit
-    // Config field set. Idempotent — subsequent calls are no-ops.
-    crate::lookup::set_cached_profile_slug(profile.slug.clone());
     Ok(profile)
 }
 
