@@ -28,6 +28,31 @@ The task content lists, as Chunk 5 acceptance criteria, "`Manifest` and `manifes
 
 **This is the same pattern Chunk 4 used.** Chunk 4 was supposed to delete `manifest_io` per its spec literal but deferred because 25 files outside `vault_backend/` referenced it; the deferral is now structural across two more chunks. Chunk 5 acknowledges this and proceeds with the upstream cuts.
 
+### Mid-execution amendment (2026-05-24): Task 7 also deferred to Chunk 7
+
+The original plan-gate audited `manifest_io | Manifest` consumers but did NOT audit `actions::sync` consumers. Mid-execution (between Task 6 and Task 7), the dispatched implementer subagent surfaced three external callers of `actions::sync` that survive the upstream cuts:
+
+| Caller | Symbol(s) | Deferred chunk |
+|---|---|---|
+| `tests/e2e/tests/graph_build_e2e_test.rs:17,372` | `strip_frontmatter`, `sync_orchestration` | Chunk 6 (whole file) |
+| `crates/temper-cli/src/actions/doctor.rs:349` | `normalize_all_entries`, `NormalizeReport` | Chunk 7 (file rework) |
+
+**Resolution (user-confirmed Option C):** Task 7 (delete `actions/sync.rs`) is **deferred to Chunk 7**. The "`actions/sync.rs` is gone" acceptance criterion moves to Chunk 7's checklist alongside `manifest_io.rs` and `temper-core::types::{manifest,sync}`. This mirrors the original plan-gate deferral pattern.
+
+**Adjusted Chunk 5 acceptance criteria:**
+
+| Criterion | Status in Chunk 5 |
+|---|---|
+| `actions/sync.rs` is gone | **DEFERRED to Chunk 7** |
+| `commands/sync_cmd.rs::{status,refresh,reset}` are gone; `run` survives | ✓ Task 6 |
+| `commands/push.rs` is gone | ✓ Task 4 |
+| `publish_local_write_best_effort` gone | ✓ Task 3 |
+| `commands/research` deprecated | ✓ Task 2 |
+| 4 doomed e2e tests deleted | ✓ Task 5 |
+| Plan-gate resolution documented | ✓ Preamble + this amendment |
+
+Tasks 8 (trivial doc-comment sweeps), 9 (pub-orphan sweep), and 10 (verification + consolidated review) proceed as planned. The sweep in Task 9 will naturally be smaller since `actions::sync` survives (so its many internal helpers aren't orphaned).
+
 **False positives confirmed (not real `Manifest`/`manifest_io` consumers):**
 - `crates/temper-cli/src/actions/index_build.rs::IndexManifest` — a `pub(crate)` HNSW sidecar struct, unrelated to sync manifest
 - `crates/temper-cli/src/actions/graph_index/cluster.rs` — comment-only ref to `IndexManifest`
