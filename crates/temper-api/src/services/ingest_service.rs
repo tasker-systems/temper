@@ -559,23 +559,10 @@ pub async fn ingest(
         }
     }
 
-    // 7. Attempt to resolve deferred edges targeting this new resource
-    if let Some(ref slug) = resource.slug {
-        if let Err(e) = super::edge_service::resolve_deferred_edges(
-            pool,
-            &resource.id,
-            Some(slug.as_str()),
-            &profile_id,
-        )
-        .await
-        {
-            tracing::warn!(
-                resource_id = %resource.id,
-                error = %e,
-                "deferred edge resolution failed"
-            );
-        }
-    }
+    // Forward-reference re-projection is handled separately by the
+    // relationship_service create-path projection (see Task 13). The old
+    // `resolve_deferred_edges` call against `kb_deferred_edges` is gone —
+    // pending slug-target assertions live as ledger events now.
 
     Ok(resource)
 }

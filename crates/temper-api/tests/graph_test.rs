@@ -3,7 +3,7 @@
 mod common;
 
 use sqlx::PgPool;
-use temper_core::types::{EdgeType, GraphEdgeRow, GraphNeighborRow, GraphTraversalRow};
+use temper_core::types::graph::{EdgeKind, GraphEdgeRow, GraphNeighborRow, GraphTraversalRow};
 
 /// Inserting an edge and querying neighbors returns the expected peer.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
@@ -18,7 +18,7 @@ async fn test_insert_edge_and_query_neighbors(pool: PgPool) {
 
     // Query outgoing neighbors of r1
     let rows: Vec<(uuid::Uuid, String, String)> = sqlx::query_as(
-        "SELECT resource_id, edge_type::TEXT, direction FROM graph_neighbors($1, $2, 'outgoing', '{}')",
+        "SELECT resource_id, label, direction FROM graph_neighbors($1, $2, 'outgoing', '{}')",
     )
     .bind(profile)
     .bind(r1)
@@ -33,7 +33,7 @@ async fn test_insert_edge_and_query_neighbors(pool: PgPool) {
 
     // Query incoming neighbors of r2
     let rows: Vec<(uuid::Uuid, String, String)> = sqlx::query_as(
-        "SELECT resource_id, edge_type::TEXT, direction FROM graph_neighbors($1, $2, 'incoming', '{}')",
+        "SELECT resource_id, label, direction FROM graph_neighbors($1, $2, 'incoming', '{}')",
     )
     .bind(profile)
     .bind(r2)
@@ -89,12 +89,13 @@ async fn test_neighbors_edge_type_filter(pool: PgPool) {
     common::fixtures::create_test_edge(&pool, r1, r2, "extends", profile).await;
     common::fixtures::create_test_edge(&pool, r1, r3, "references", profile).await;
 
-    // Filter to only 'extends' edges
+    // Filter to only `leads_to` edges (the kind 'extends' projects to).
+    // The p_edge_types filter operates on edge_kind::text post-cutover.
     let rows: Vec<(uuid::Uuid,)> =
         sqlx::query_as("SELECT resource_id FROM graph_neighbors($1, $2, 'both', $3)")
             .bind(profile)
             .bind(r1)
-            .bind(vec!["extends"])
+            .bind(vec!["leads_to"])
             .fetch_all(&pool)
             .await
             .expect("graph_neighbors filtered");
@@ -115,7 +116,7 @@ async fn test_graph_resource_edges(pool: PgPool) {
     common::fixtures::create_test_edge(&pool, r1, r2, "depends_on", profile).await;
 
     let rows: Vec<(uuid::Uuid, String, String, String)> = sqlx::query_as(
-        "SELECT peer_resource_id, peer_title, edge_type::TEXT, direction FROM graph_resource_edges($1, $2)",
+        "SELECT peer_resource_id, peer_title, label, direction FROM graph_resource_edges($1, $2)",
     )
     .bind(profile)
     .bind(r1)
@@ -232,13 +233,15 @@ async fn test_traverse_typed_filter(pool: PgPool) {
     common::fixtures::create_test_edge(&pool, r2, r3, "extends", profile).await;
     common::fixtures::create_test_edge(&pool, r1, r4, "references", profile).await;
 
-    // Filter to 'extends' only
+    // Filter to `leads_to` only (the kind 'extends' projects to).
+    // p_edge_types filters edge_kind::text post-cutover; 'references' maps
+    // to `near`, so it stays filtered out.
     let rows: Vec<(uuid::Uuid, i32)> =
         sqlx::query_as("SELECT resource_id, depth FROM graph_traverse($1, $2, $3, $4)")
             .bind(profile)
             .bind(vec![r1])
             .bind(3_i32)
-            .bind(vec!["extends"])
+            .bind(vec!["leads_to"])
             .fetch_all(&pool)
             .await
             .expect("traverse typed filter");
@@ -262,28 +265,9 @@ async fn test_traverse_path_weight_decay(pool: PgPool) {
     let r2 = common::fixtures::create_test_resource(&pool, profile, "R2", "r2").await;
     let r3 = common::fixtures::create_test_resource(&pool, profile, "R3", "r3").await;
 
-    // Insert edges with custom weights via raw SQL
-    sqlx::query(
-        "INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
-         VALUES (gen_random_uuid(), $1, $2, 'extends', 0.8, '{}', $3)",
-    )
-    .bind(r1)
-    .bind(r2)
-    .bind(profile)
-    .execute(&pool)
-    .await
-    .expect("insert edge r1→r2 weight=0.8");
-
-    sqlx::query(
-        "INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
-         VALUES (gen_random_uuid(), $1, $2, 'extends', 0.6, '{}', $3)",
-    )
-    .bind(r2)
-    .bind(r3)
-    .bind(profile)
-    .execute(&pool)
-    .await
-    .expect("insert edge r2→r3 weight=0.6");
+    // Insert edges with custom weights via the projection-aware fixture.
+    common::fixtures::create_test_edge_weighted(&pool, r1, r2, "extends", 0.8, profile).await;
+    common::fixtures::create_test_edge_weighted(&pool, r2, r3, "extends", 0.6, profile).await;
 
     let rows: Vec<(uuid::Uuid, i32, f64)> = sqlx::query_as(
         "SELECT resource_id, depth, path_weight FROM graph_traverse($1, $2, $3, $4)",
@@ -336,23 +320,23 @@ async fn test_traverse_visibility_blocks_other_profiles(pool: PgPool) {
     common::fixtures::create_test_edge(&pool, b1, a2, "extends", bob).await;
     common::fixtures::create_test_edge(&pool, a1, a2, "relates_to", alice).await;
 
-    // Alice traverses with edge_types=['extends']: should NOT see b1, should NOT reach a2 through b1
+    // Alice traverses filtering to edge_kind 'leads_to' (the kind 'extends'
+    // projects to): should NOT see b1, should NOT reach a2 through b1.
     let rows: Vec<(uuid::Uuid, i32)> =
         sqlx::query_as("SELECT resource_id, depth FROM graph_traverse($1, $2, $3, $4)")
             .bind(alice)
             .bind(vec![a1])
             .bind(5_i32)
-            .bind(vec!["extends"])
+            .bind(vec!["leads_to"])
             .fetch_all(&pool)
             .await
-            .expect("traverse extends as alice");
+            .expect("traverse leads_to as alice");
 
     let ids: Vec<uuid::Uuid> = rows.iter().map(|r| r.0).collect();
     assert!(!ids.contains(&b1), "alice should NOT see bob's resource b1");
-    // a2 is not reachable via extends-only when b1 is filtered out
     assert!(
         !ids.contains(&a2),
-        "a2 should NOT be reachable through b1 via extends"
+        "a2 should NOT be reachable through b1 via leads_to"
     );
 
     // Alice traverses with no type filter: SHOULD see a2 via direct relates_to edge
@@ -420,14 +404,13 @@ async fn test_resource_edges_visibility(pool: PgPool) {
     common::fixtures::create_test_edge(&pool, a1, b1, "references", alice).await;
 
     // graph_resource_edges as alice: should only return the a2 edge
-    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT peer_resource_id, edge_type::TEXT FROM graph_resource_edges($1, $2)",
-    )
-    .bind(alice)
-    .bind(a1)
-    .fetch_all(&pool)
-    .await
-    .expect("resource_edges as alice");
+    let rows: Vec<(uuid::Uuid, String)> =
+        sqlx::query_as("SELECT peer_resource_id, label FROM graph_resource_edges($1, $2)")
+            .bind(alice)
+            .bind(a1)
+            .fetch_all(&pool)
+            .await
+            .expect("resource_edges as alice");
 
     assert_eq!(rows.len(), 1, "alice should see only 1 edge");
     assert_eq!(rows[0].0, a2, "the visible edge should point to a2");
@@ -443,12 +426,35 @@ async fn test_self_edge_rejected(pool: PgPool) {
     let profile = common::fixtures::create_test_profile(&pool, "self@test.com").await;
     let r1 = common::fixtures::create_test_resource(&pool, profile, "R1", "r1").await;
 
+    // Direct INSERT to assert the table CHECK still fires. asserted_by_event_id
+    // / last_event_id reference any visible event row; reuse a synthesized
+    // assertion event via the fixture's path is heavier than needed, so we
+    // synthesize one inline.
+    let event_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_events (id, event_type_id, profile_id, device_id, topic_id, scope_id,
+                                  payload, metadata, "references", correlation_id, occurred_at, created)
+           SELECT $1, (SELECT id FROM kb_event_types WHERE name = 'relationship_asserted'),
+                  $2, 'fixture', '019e3d6f-2300-7000-8000-000000000050',
+                  '019e3d6f-2300-7000-8000-000000000010', '{}'::jsonb,
+                  jsonb_build_object('source','fixture'), '[]'::jsonb, $1, now(), now()"#,
+    )
+    .bind(event_id)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("synth event for self-edge test");
+
     let result = sqlx::query(
-        "INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
-         VALUES (gen_random_uuid(), $1, $1, 'extends', 1.0, '{}', $2)",
+        r#"INSERT INTO kb_resource_edges
+            (id, source_resource_id, target_resource_id,
+             edge_kind, polarity, label, weight,
+             asserted_by_event_id, last_event_id, is_folded)
+           VALUES (gen_random_uuid(), $1, $1, 'leads_to'::edge_kind,
+                   'inverse'::edge_polarity, 'extends', 1.0, $2, $2, false)"#,
     )
     .bind(r1)
-    .bind(profile)
+    .bind(event_id)
     .execute(&pool)
     .await;
 
@@ -472,33 +478,58 @@ async fn test_duplicate_edge_rejected(pool: PgPool) {
     // First edge succeeds
     common::fixtures::create_test_edge(&pool, r1, r2, "extends", profile).await;
 
-    // Duplicate should fail
+    // Synthesize an assertion event so the FK on asserted_by_event_id resolves
+    // when we attempt the direct INSERT below.
+    let event_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_events (id, event_type_id, profile_id, device_id, topic_id, scope_id,
+                                  payload, metadata, "references", correlation_id, occurred_at, created)
+           SELECT $1, (SELECT id FROM kb_event_types WHERE name = 'relationship_asserted'),
+                  $2, 'fixture', '019e3d6f-2300-7000-8000-000000000050',
+                  '019e3d6f-2300-7000-8000-000000000010', '{}'::jsonb,
+                  jsonb_build_object('source','fixture'), '[]'::jsonb, $1, now(), now()"#,
+    )
+    .bind(event_id)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("synth event for dup-edge test");
+
+    // Duplicate (same source, target, edge_kind, label, polarity) should fail.
     let result = sqlx::query(
-        "INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
-         VALUES (gen_random_uuid(), $1, $2, 'extends', 1.0, '{}', $3)",
+        r#"INSERT INTO kb_resource_edges
+            (id, source_resource_id, target_resource_id,
+             edge_kind, polarity, label, weight,
+             asserted_by_event_id, last_event_id, is_folded)
+           VALUES (gen_random_uuid(), $1, $2, 'leads_to'::edge_kind,
+                   'inverse'::edge_polarity, 'extends', 1.0, $3, $3, false)"#,
     )
     .bind(r1)
     .bind(r2)
-    .bind(profile)
+    .bind(event_id)
     .execute(&pool)
     .await;
 
     assert!(result.is_err(), "duplicate edge should be rejected");
 
-    // Different edge type on same pair should succeed
+    // Different label on same pair should succeed (uq_resource_edge includes label).
     let result = sqlx::query(
-        "INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
-         VALUES (gen_random_uuid(), $1, $2, 'references', 1.0, '{}', $3)",
+        r#"INSERT INTO kb_resource_edges
+            (id, source_resource_id, target_resource_id,
+             edge_kind, polarity, label, weight,
+             asserted_by_event_id, last_event_id, is_folded)
+           VALUES (gen_random_uuid(), $1, $2, 'near'::edge_kind,
+                   'forward'::edge_polarity, 'references', 1.0, $3, $3, false)"#,
     )
     .bind(r1)
     .bind(r2)
-    .bind(profile)
+    .bind(event_id)
     .execute(&pool)
     .await;
 
     assert!(
         result.is_ok(),
-        "different edge type on same pair should succeed"
+        "different label on same pair should succeed"
     );
 }
 
@@ -555,7 +586,8 @@ async fn test_list_resource_edges_service(pool: PgPool) {
         .expect("list_resource_edges for A");
 
     assert_eq!(edges.len(), 1, "A should have 1 edge");
-    assert_eq!(edges[0].edge_type, EdgeType::DependsOn);
+    assert_eq!(edges[0].label, "depends_on");
+    assert_eq!(edges[0].edge_kind, EdgeKind::LeadsTo);
     assert_eq!(edges[0].direction, "outgoing");
     assert_eq!(edges[0].peer_slug, "base-doc");
     assert_eq!(edges[0].peer_resource_id, r_b);
@@ -566,7 +598,8 @@ async fn test_list_resource_edges_service(pool: PgPool) {
         .expect("list_resource_edges for B");
 
     assert_eq!(edges_b.len(), 1, "B should have 1 incoming edge");
-    assert_eq!(edges_b[0].edge_type, EdgeType::DependsOn);
+    assert_eq!(edges_b[0].label, "depends_on");
+    assert_eq!(edges_b[0].edge_kind, EdgeKind::LeadsTo);
     assert_eq!(edges_b[0].direction, "incoming");
     assert_eq!(edges_b[0].peer_slug, "dependent-doc");
     assert_eq!(edges_b[0].peer_resource_id, r_a);
@@ -585,7 +618,7 @@ async fn test_from_row_alignment(pool: PgPool) {
 
     // Verify GraphNeighborRow FromRow alignment
     let neighbors: Vec<GraphNeighborRow> = sqlx::query_as(
-        "SELECT resource_id, edge_type, direction, weight, metadata FROM graph_neighbors($1, $2, 'both', '{}')",
+        "SELECT resource_id, edge_kind, polarity, label, direction, weight FROM graph_neighbors($1, $2, 'both', '{}')",
     )
     .bind(profile)
     .bind(r1)
@@ -595,12 +628,13 @@ async fn test_from_row_alignment(pool: PgPool) {
 
     assert_eq!(neighbors.len(), 1);
     assert_eq!(neighbors[0].resource_id, r2);
-    assert_eq!(neighbors[0].edge_type, EdgeType::Extends);
+    assert_eq!(neighbors[0].edge_kind, EdgeKind::LeadsTo);
+    assert_eq!(neighbors[0].label, "extends");
     assert_eq!(neighbors[0].direction, "outgoing");
 
     // Verify GraphEdgeRow FromRow alignment
     let edges: Vec<GraphEdgeRow> = sqlx::query_as(
-        "SELECT edge_id, peer_resource_id, peer_title, peer_slug, edge_type, direction, weight, metadata, created FROM graph_resource_edges($1, $2)",
+        "SELECT edge_id, peer_resource_id, peer_title, peer_slug, edge_kind, polarity, label, direction, weight, created FROM graph_resource_edges($1, $2)",
     )
     .bind(profile)
     .bind(r1)
@@ -611,11 +645,12 @@ async fn test_from_row_alignment(pool: PgPool) {
     assert_eq!(edges.len(), 1);
     assert_eq!(edges[0].peer_resource_id, r2);
     assert_eq!(edges[0].peer_title, "Doc B");
-    assert_eq!(edges[0].edge_type, EdgeType::Extends);
+    assert_eq!(edges[0].edge_kind, EdgeKind::LeadsTo);
+    assert_eq!(edges[0].label, "extends");
 
     // Verify GraphTraversalRow FromRow alignment
     let traversal: Vec<GraphTraversalRow> = sqlx::query_as(
-        "SELECT resource_id, depth, path, edge_type, from_resource_id, path_weight FROM graph_traverse($1, $2, 3, '{}')",
+        "SELECT resource_id, depth, path, edge_kind, polarity, label, from_resource_id, path_weight FROM graph_traverse($1, $2, 3, '{}')",
     )
     .bind(profile)
     .bind(vec![r1])
@@ -626,5 +661,6 @@ async fn test_from_row_alignment(pool: PgPool) {
     assert_eq!(traversal.len(), 1);
     assert_eq!(traversal[0].resource_id, r2);
     assert_eq!(traversal[0].depth, 1);
-    assert_eq!(traversal[0].edge_type, Some(EdgeType::Extends));
+    assert_eq!(traversal[0].edge_kind, Some(EdgeKind::LeadsTo));
+    assert_eq!(traversal[0].label.as_deref(), Some("extends"));
 }

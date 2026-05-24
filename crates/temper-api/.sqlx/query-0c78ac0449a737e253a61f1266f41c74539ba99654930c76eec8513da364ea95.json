@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO kb_resource_manifests\n                   (resource_id, body_hash, managed_meta, open_meta, managed_hash, open_hash, updated)\n               VALUES ($5, '', $1, $3, $2, $4, now())\n               ON CONFLICT (resource_id) DO UPDATE\n                   SET managed_meta = $1, managed_hash = $2,\n                       open_meta    = $3, open_hash    = $4,\n                       updated      = now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Jsonb",
+        "Varchar",
+        "Jsonb",
+        "Varchar",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0c78ac0449a737e253a61f1266f41c74539ba99654930c76eec8513da364ea95"
+}

@@ -379,7 +379,7 @@ async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
     let edges_after_add: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT source_resource_id, target_resource_id, edge_type::TEXT \
+        "SELECT source_resource_id, target_resource_id, label \
          FROM kb_resource_edges \
          WHERE source_resource_id = $1 AND target_resource_id = $2",
     )
@@ -420,8 +420,13 @@ async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
         .expect("meta update (remove) request failed");
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
-    let edges_after_remove: Vec<(uuid::Uuid, uuid::Uuid)> = sqlx::query_as(
-        "SELECT source_resource_id, target_resource_id FROM kb_resource_edges \
+    // Post-cutover: removal folds the row in place (`is_folded = true`), it
+    // does not delete. Positively verify the folded-projection invariant —
+    // one row, marked folded — so a regression to either hard-delete *or*
+    // leaving the row active both fail loudly.
+    let edges_after_remove: Vec<(uuid::Uuid, uuid::Uuid, bool)> = sqlx::query_as(
+        "SELECT source_resource_id, target_resource_id, is_folded \
+         FROM kb_resource_edges \
          WHERE source_resource_id = $1 AND target_resource_id = $2",
     )
     .bind(uuid::Uuid::from(r1.id))
@@ -429,9 +434,15 @@ async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
     .fetch_all(&pool)
     .await
     .expect("fetch edges after remove");
+    assert_eq!(
+        edges_after_remove.len(),
+        1,
+        "relates_to edge row must be preserved (folded) after declaration clear, got {:?}",
+        edges_after_remove
+    );
     assert!(
-        edges_after_remove.is_empty(),
-        "relates_to edge must be removed when declaration is cleared, got {:?}",
+        edges_after_remove[0].2,
+        "relates_to edge must be is_folded = true after declaration is cleared, got {:?}",
         edges_after_remove
     );
 
@@ -459,7 +470,7 @@ async fn meta_patch_reconciles_edges_add_and_remove(pool: sqlx::PgPool) {
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
     let edges_after_readd: Vec<(uuid::Uuid, uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT source_resource_id, target_resource_id, edge_type::TEXT \
+        "SELECT source_resource_id, target_resource_id, label \
          FROM kb_resource_edges \
          WHERE source_resource_id = $1 AND target_resource_id = $2",
     )

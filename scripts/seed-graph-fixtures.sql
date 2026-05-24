@@ -201,58 +201,99 @@ INSERT INTO kb_resources (id, kb_context_id, kb_doc_type_id, origin_uri, title, 
 ON CONFLICT (id) DO UPDATE SET is_active = EXCLUDED.is_active;
 
 -- ─── Edges ─────────────────────────────────────────────────────────────────
--- Edge types: relates_to, extends, depends_on, references, parent_of, preceded_by, derived_from
--- Each edge is (source, target, type).
+-- Edges are projections of `relationship_asserted` events. We synthesize
+-- the assertion event then insert the projected row, mirroring the
+-- migration's genesis-event pattern. Each (source, target, kind, label,
+-- polarity) is unique by the table constraint.
+--
+-- 8->4 mapping for the labels used here:
+--   relates_to   → near    / forward
+--   depends_on   → leads_to / inverse
+--   references   → near    / forward
+--   parent_of    → contains / forward
 
-INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
+DO $$
+DECLARE
+    v_asserted_type uuid := (SELECT id FROM kb_event_types WHERE name = 'relationship_asserted');
+    v_pid uuid := '00000000-0000-0000-0088-000000000001';
+    v_topic uuid := '019e3d6f-2300-7000-8000-000000000050';
+    v_scope uuid := '019e3d6f-2300-7000-8000-000000000010';
 
-    -- c1 → m1, m2, m3 (concept relates_to its members)
-    ('00000000-0000-0000-00e0-000000000001', '00000000-0000-0000-00c1-000000000001',
-     '00000000-0000-0000-00c2-000000000001', 'relates_to', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
-    ('00000000-0000-0000-00e0-000000000002', '00000000-0000-0000-00c1-000000000001',
-     '00000000-0000-0000-00c2-000000000002', 'relates_to', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
-    ('00000000-0000-0000-00e0-000000000003', '00000000-0000-0000-00c1-000000000001',
-     '00000000-0000-0000-00c2-000000000003', 'relates_to', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
+    edge_ids   uuid[] := ARRAY[
+        '00000000-0000-0000-00e0-000000000001'::uuid,
+        '00000000-0000-0000-00e0-000000000002'::uuid,
+        '00000000-0000-0000-00e0-000000000003'::uuid,
+        '00000000-0000-0000-00e0-000000000004'::uuid,
+        '00000000-0000-0000-00e0-000000000005'::uuid,
+        '00000000-0000-0000-00e0-000000000006'::uuid,
+        '00000000-0000-0000-00e0-000000000007'::uuid,
+        '00000000-0000-0000-00e0-000000000008'::uuid,
+        '00000000-0000-0000-00e0-000000000009'::uuid,
+        '00000000-0000-0000-00e1-000000000001'::uuid
+    ];
+    source_ids uuid[] := ARRAY[
+        '00000000-0000-0000-00c1-000000000001'::uuid,
+        '00000000-0000-0000-00c1-000000000001'::uuid,
+        '00000000-0000-0000-00c1-000000000001'::uuid,
+        '00000000-0000-0000-00c1-000000000002'::uuid,
+        '00000000-0000-0000-00c1-000000000002'::uuid,
+        '00000000-0000-0000-00c1-000000000002'::uuid,
+        '00000000-0000-0000-00c1-000000000004'::uuid,
+        '00000000-0000-0000-00c2-000000000006'::uuid,
+        '00000000-0000-0000-00c3-000000000001'::uuid,
+        '00000000-0000-0000-00c2-000000000002'::uuid
+    ];
+    target_ids uuid[] := ARRAY[
+        '00000000-0000-0000-00c2-000000000001'::uuid,
+        '00000000-0000-0000-00c2-000000000002'::uuid,
+        '00000000-0000-0000-00c2-000000000003'::uuid,
+        '00000000-0000-0000-00c2-000000000004'::uuid,
+        '00000000-0000-0000-00c2-000000000005'::uuid,
+        '00000000-0000-0000-00c2-000000000001'::uuid,
+        '00000000-0000-0000-00c2-000000000006'::uuid,
+        '00000000-0000-0000-00c3-000000000001'::uuid,
+        '00000000-0000-0000-00c3-000000000002'::uuid,
+        '00000000-0000-0000-00c4-000000000002'::uuid
+    ];
+    kinds      text[] := ARRAY['near','near','near','near','near','near','near','leads_to','leads_to','near'];
+    polarities text[] := ARRAY['forward','forward','forward','forward','forward','forward','forward','inverse','inverse','forward'];
+    labels     text[] := ARRAY['relates_to','relates_to','relates_to','relates_to','relates_to','relates_to','relates_to','depends_on','depends_on','references'];
 
-    -- c2 → m4, m5, and ALSO m1 (diamond: m1 is shared with c1)
-    ('00000000-0000-0000-00e0-000000000004', '00000000-0000-0000-00c1-000000000002',
-     '00000000-0000-0000-00c2-000000000004', 'relates_to', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
-    ('00000000-0000-0000-00e0-000000000005', '00000000-0000-0000-00c1-000000000002',
-     '00000000-0000-0000-00c2-000000000005', 'relates_to', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
-    ('00000000-0000-0000-00e0-000000000006', '00000000-0000-0000-00c1-000000000002',
-     '00000000-0000-0000-00c2-000000000001', 'relates_to', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
+    v_event_id uuid;
+BEGIN
+    FOR i IN 1 .. array_length(edge_ids, 1) LOOP
+        v_event_id := public.uuid_generate_v7();
 
-    -- c4 → m6 (concept member edge for the tier-3 chain)
-    ('00000000-0000-0000-00e0-000000000007', '00000000-0000-0000-00c1-000000000004',
-     '00000000-0000-0000-00c2-000000000006', 'relates_to', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
+        INSERT INTO kb_events (
+            id, event_type_id, profile_id, device_id, topic_id, scope_id,
+            payload, metadata, "references", correlation_id, occurred_at, created
+        ) VALUES (
+            v_event_id, v_asserted_type, v_pid, 'fixture', v_topic, v_scope,
+            jsonb_build_object(
+                'source_resource_id', source_ids[i],
+                'target', jsonb_build_object('kind', 'resource', 'value', target_ids[i]),
+                'edge_kind', kinds[i],
+                'polarity',  polarities[i],
+                'label',     labels[i],
+                'weight',    1.0
+            ),
+            jsonb_build_object('source', 'fixture'),
+            '[]'::jsonb, v_event_id, now(), now()
+        )
+        ON CONFLICT (id) DO NOTHING;
 
-    -- m6 → t1 (tier-3 reach; depth 2 from c4)
-    ('00000000-0000-0000-00e0-000000000008', '00000000-0000-0000-00c2-000000000006',
-     '00000000-0000-0000-00c3-000000000001', 'depends_on', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001'),
-
-    -- t1 → t2 (tier-4 reach; depth 3 from c4 — must NOT be in depth-2 result)
-    ('00000000-0000-0000-00e0-000000000009', '00000000-0000-0000-00c3-000000000001',
-     '00000000-0000-0000-00c3-000000000002', 'depends_on', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001')
-
-ON CONFLICT DO NOTHING;
-
--- Cross-owner edge attempt: alice tries to link one of her resources to bob's b2
--- (the visibility function should drop b2 so this edge is filtered).
--- Note: this edge is CREATED BY alice but POINTS AT bob's resource.
-INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
-    ('00000000-0000-0000-00e1-000000000001', '00000000-0000-0000-00c2-000000000002',
-     '00000000-0000-0000-00c4-000000000002', 'references', 1.0, '{}',
-     '00000000-0000-0000-0088-000000000001')
-ON CONFLICT DO NOTHING;
+        INSERT INTO kb_resource_edges (
+            id, source_resource_id, target_resource_id,
+            edge_kind, polarity, label, weight,
+            asserted_by_event_id, last_event_id, is_folded
+        ) VALUES (
+            edge_ids[i], source_ids[i], target_ids[i],
+            kinds[i]::edge_kind, polarities[i]::edge_polarity, labels[i], 1.0,
+            v_event_id, v_event_id, false
+        )
+        ON CONFLICT DO NOTHING;
+    END LOOP;
+END $$;
 
 -- ─── Body chunks for excerpt derivation ────────────────────────────────────
 -- Only a handful of resources get seeded content — enough to exercise the

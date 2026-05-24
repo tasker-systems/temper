@@ -1550,7 +1550,7 @@ async fn sync_run_push_meta_only_round_trip(pool: sqlx::PgPool) {
     let edge_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM kb_resource_edges \
          WHERE source_resource_id = $1 AND target_resource_id = $2 \
-           AND edge_type::TEXT = 'relates_to'",
+           AND label = 'relates_to'",
     )
     .bind(uuid::Uuid::from(r1.id))
     .bind(uuid::Uuid::from(r2.id))

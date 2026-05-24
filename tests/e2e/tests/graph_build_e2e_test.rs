@@ -399,10 +399,11 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
         "SELECT count(*) FROM kb_resource_edges e
          JOIN kb_resources src ON e.source_resource_id = src.id
          JOIN kb_resources tgt ON e.target_resource_id = tgt.id
+         JOIN kb_events ev ON ev.id = e.asserted_by_event_id
          WHERE src.slug = 'source'
            AND tgt.slug = 'task-a'
-           AND e.edge_type::text = 'references'
-           AND e.metadata->>'provenance' = 'frontmatter'",
+           AND e.label = 'references'
+           AND ev.metadata->>'intent' = 'derived'",
     )
     .fetch_one(&app.pool)
     .await
@@ -419,7 +420,7 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
          JOIN kb_resources tgt ON e.target_resource_id = tgt.id
          WHERE src.slug = 'my-goal'
            AND tgt.slug = 'task-a'
-           AND e.edge_type::text = 'parent_of'",
+           AND e.label = 'parent_of'",
     )
     .fetch_one(&app.pool)
     .await
@@ -436,7 +437,7 @@ async fn graph_build_then_sync_materializes_edges(pool: PgPool) {
          JOIN kb_resources tgt ON e.target_resource_id = tgt.id
          WHERE src.slug = 'my-goal'
            AND tgt.slug = 'task-b'
-           AND e.edge_type::text = 'parent_of'",
+           AND e.label = 'parent_of'",
     )
     .fetch_one(&app.pool)
     .await

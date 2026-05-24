@@ -7,7 +7,12 @@ use uuid::Uuid;
 
 // ─── Edge Type ──────────────────────────────────────────────────────────────
 
-/// Edge type enum — mirrors the Postgres `edge_type` enum exactly.
+/// Legacy edge-type enum — kept as a pure-Rust mapping table for the
+/// frontmatter rewire. After the schema cutover (`20260522100002`) the
+/// Postgres `edge_type` enum no longer exists; this Rust enum is a
+/// name-keyed mapping that converts a frontmatter relation field (e.g.
+/// `extends`, `depends_on`) into a structural `(EdgeKind, Polarity, label)`
+/// triple via [`EdgeType::legacy_mapping`].
 ///
 /// All edges are directed: `source_resource_id → target_resource_id`.
 /// Symmetric queries (e.g., `relates_to`) union forward + reverse scans.
@@ -15,8 +20,7 @@ use uuid::Uuid;
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "edge_type", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeType {
     RelatesTo,
@@ -221,7 +225,9 @@ pub struct GraphTraversalRow {
     pub resource_id: Uuid,
     pub depth: i32,
     pub path: Vec<Uuid>,
-    pub edge_type: Option<EdgeType>,
+    pub edge_kind: Option<EdgeKind>,
+    pub polarity: Option<Polarity>,
+    pub label: Option<String>,
     pub from_resource_id: Option<Uuid>,
     pub path_weight: f64,
 }
@@ -233,10 +239,11 @@ pub struct GraphTraversalRow {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct GraphNeighborRow {
     pub resource_id: Uuid,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
     pub direction: String,
     pub weight: f64,
-    pub metadata: serde_json::Value,
 }
 
 /// Edge listing row — mirrors the `graph_resource_edges()` SQL function.
@@ -249,30 +256,38 @@ pub struct GraphEdgeRow {
     pub peer_resource_id: Uuid,
     pub peer_title: String,
     pub peer_slug: String,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
     pub direction: String,
     pub weight: f64,
-    pub metadata: serde_json::Value,
     pub created: chrono::DateTime<chrono::Utc>,
 }
 
-/// A resolved edge ready for database insertion.
+/// A resolved edge ready for projection.
 #[derive(Debug, Clone)]
 pub struct ResolvedEdge {
     pub source_resource_id: Uuid,
     pub target_resource_id: Uuid,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
     pub weight: f64,
-    pub metadata: serde_json::Value,
 }
 
 /// Result of edge reconciliation after a frontmatter update.
+///
+/// - `added`     — new `relationship_asserted` events whose target resolved.
+/// - `removed`   — projected edges retracted via `relationship_folded`.
+/// - `unchanged` — declarations already present in the projection.
+/// - `pending`   — `relationship_asserted` events whose target is still an
+///   unresolved slug; the projection will materialize when the target lands.
 #[derive(Debug, Clone)]
 pub struct EdgeReconciliation {
     pub added: usize,
     pub removed: usize,
     pub unchanged: usize,
-    pub deferred: usize,
+    pub pending: usize,
 }
 
 // ─── Subgraph Response Types ────────────────────────────────────────────────
@@ -340,7 +355,9 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub source: Uuid,
     pub target: Uuid,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
 }
 
 /// Full response body for `GET /api/graph/subgraph`.

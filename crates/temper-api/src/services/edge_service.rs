@@ -1,19 +1,43 @@
 //! Edge service — extracts relationship declarations from frontmatter,
-//! resolves targets, and manages edges in `kb_resource_edges`.
+//! resolves targets, and appends `relationship_*` events that project into
+//! `kb_resource_edges`.
 //!
-//! All SQL lives here per the "service layer owns SQL" rule. Resolution and
-//! mutation are batched — each `extract_and_upsert_edges` / `reconcile_edges`
-//! call fires at most O(1) DB round-trips per operation, not O(N) over the
-//! declaration list.
+//! All SQL lives here per the "service layer owns SQL" rule. Resolution is
+//! batched in one DB round-trip; the per-edge writes run inside a single
+//! transaction so the event ledger and the projection stay consistent.
+//!
+//! Provenance is carried on the *event* metadata (`kb_events.metadata->>'intent'`),
+//! not on the (now-dropped) `kb_resource_edges.metadata` column. The
+//! frontmatter rewire stamps `intent = 'derived'` (the edge was derived from
+//! the resource's frontmatter); the migration genesis events use
+//! `intent = 'migration'`; fixtures use `intent = 'fixture'`. The JSON key is
+//! a placeholder for a future typed `intent` enum column on `kb_events`.
 
-use sqlx::PgPool;
+use chrono::Utc;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::ApiResult;
 use temper_core::types::graph::{
-    EdgeReconciliation, EdgeType, ResolvedEdge, ResourceRelationships, TargetRef,
+    EdgeKind, EdgeReconciliation, EdgeType, Polarity, ResolvedEdge, ResourceRelationships,
+    TargetRef,
 };
 use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
+use temper_core::types::relationship_events::{
+    RelationshipAsserted, RelationshipFolded, TargetEndpoint,
+};
+use temper_events::ledger::append_event_tx;
+use temper_events::types::event::{EventToWrite, EventType};
+
+// Topic and scope ids seeded by migrations 20260522000001 / 20260522100001.
+const DECLARATION_TOPIC_ID: &str = "019e3d6f-2300-7000-8000-000000000050";
+const DEFORMATION_TOPIC_ID: &str = "019e3d6f-2300-7000-8000-000000000051";
+const PUBLIC_SCOPE_ID: &str = "019e3d6f-2300-7000-8000-000000000010";
+
+/// Event-metadata `intent` value stamped on `relationship_*` events that
+/// originate from frontmatter reconciliation — the edge is *derived* from
+/// the resource's open_meta declaration set.
+const DERIVED_INTENT: &str = "derived";
 
 // ─── Target Resolution ──────────────────────────────────────────────────────
 
@@ -23,7 +47,7 @@ use temper_core::types::ids::{ContextId, ProfileId, ResourceId};
 /// the source (parent) and the declaring resource becomes the target (child).
 ///
 /// Returns `(resolved, unresolved)` — unresolved refs are forward references
-/// that should be deferred.
+/// that the caller will record as slug-target assertion events.
 ///
 /// Performance: one DB round-trip regardless of declaration count. The query
 /// unnests the declaration list into a `refs` table, joins it against the
@@ -63,10 +87,6 @@ pub async fn resolve_declarations(
             },
         );
 
-    // One round-trip: for each declaration ord, emit every visible candidate
-    // with a same_ctx flag. UUID matches cast the ref_text; slug matches use
-    // string equality. Bounded by the count of visible resources matching
-    // each ref (typically 0–1 for UUIDs, small for slugs).
     let rows = sqlx::query!(
         r#"
         WITH refs(ord, ref_kind, ref_text) AS (
@@ -92,8 +112,6 @@ pub async fn resolve_declarations(
     .fetch_all(pool)
     .await?;
 
-    // Group candidates by ord. `rows` is already ordered (ord ASC, same_ctx
-    // DESC, id ASC) so same_ctx candidates come first for each ord.
     let mut by_ord: std::collections::HashMap<i32, Vec<(Uuid, bool)>> =
         std::collections::HashMap::new();
     for row in rows {
@@ -123,12 +141,14 @@ pub async fn resolve_declarations(
                     );
                     continue;
                 }
+                let (edge_kind, polarity, label) = edge_type.legacy_mapping();
                 resolved.push(ResolvedEdge {
                     source_resource_id: source,
                     target_resource_id: dest,
-                    edge_type: *edge_type,
+                    edge_kind,
+                    polarity,
+                    label: label.to_string(),
                     weight: 1.0,
-                    metadata: serde_json::json!({"provenance": "frontmatter"}),
                 });
             }
             Resolution::Ambiguous => {
@@ -161,8 +181,7 @@ enum Resolution {
 /// Rows arrive ordered by (same_ctx DESC, id ASC). Rules match the legacy
 /// per-ref implementation:
 ///   * Any same-ctx candidate → first one wins (same-context always beats
-///     cross-context, even if multiple same-ctx matches exist — matches the
-///     prior `fetch_optional` semantics).
+///     cross-context).
 ///   * No same-ctx + one cross-ctx → use it.
 ///   * No same-ctx + multiple cross-ctx → Ambiguous.
 fn select_candidate(candidates: &[(Uuid, bool)]) -> Resolution {
@@ -176,195 +195,223 @@ fn select_candidate(candidates: &[(Uuid, bool)]) -> Resolution {
     }
 }
 
-// ─── Upsert & Defer ─────────────────────────────────────────────────────────
+// ─── Event emission + projection ────────────────────────────────────────────
 
-/// Upsert a batch of resolved edges in a single round-trip. Uses ON CONFLICT
-/// to merge metadata, so re-running over the same declarations is idempotent.
-///
-/// Returns the count of edges processed (equal to the input length).
-pub async fn upsert_edges(
-    pool: &PgPool,
-    edges: &[ResolvedEdge],
-    profile_id: &ProfileId,
-) -> ApiResult<usize> {
-    if edges.is_empty() {
-        return Ok(0);
-    }
-
-    let ids: Vec<Uuid> = edges.iter().map(|_| Uuid::now_v7()).collect();
-    let sources: Vec<Uuid> = edges.iter().map(|e| e.source_resource_id).collect();
-    let targets: Vec<Uuid> = edges.iter().map(|e| e.target_resource_id).collect();
-    let edge_types: Vec<String> = edges.iter().map(|e| e.edge_type.to_string()).collect();
-    let weights: Vec<f64> = edges.iter().map(|e| e.weight).collect();
-    let metadata: Vec<serde_json::Value> = edges.iter().map(|e| e.metadata.clone()).collect();
-
-    sqlx::query(
-        "INSERT INTO kb_resource_edges
-            (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id)
-         SELECT u.id, u.source_id, u.target_id, u.edge_type::edge_type, u.weight, u.metadata, $7
-           FROM UNNEST($1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::float8[], $6::jsonb[])
-             AS u(id, source_id, target_id, edge_type, weight, metadata)
-         ON CONFLICT ON CONSTRAINT uq_resource_edge
-         DO UPDATE SET weight = EXCLUDED.weight,
-                       metadata = kb_resource_edges.metadata || EXCLUDED.metadata,
-                       updated = now()",
-    )
-    .bind(&ids)
-    .bind(&sources)
-    .bind(&targets)
-    .bind(&edge_types)
-    .bind(&weights)
-    .bind(&metadata)
-    .bind(**profile_id)
-    .execute(pool)
-    .await?;
-
-    Ok(edges.len())
+fn declaration_topic_id() -> Uuid {
+    Uuid::parse_str(DECLARATION_TOPIC_ID).expect("seeded declaration topic UUID parses")
 }
 
-/// Store unresolved target references in `kb_deferred_edges` in a single round-trip.
-pub async fn defer_edges(
-    pool: &PgPool,
-    resource_id: &ResourceId,
-    context_id: &ContextId,
-    profile_id: &ProfileId,
-    unresolved: &[(EdgeType, TargetRef)],
-) -> ApiResult<usize> {
-    if unresolved.is_empty() {
-        return Ok(0);
-    }
-
-    let ids: Vec<Uuid> = unresolved.iter().map(|_| Uuid::now_v7()).collect();
-    let edge_types: Vec<String> = unresolved.iter().map(|(t, _)| t.to_string()).collect();
-    let target_refs: Vec<String> = unresolved
-        .iter()
-        .map(|(_, t)| match t {
-            TargetRef::Id(uuid) => uuid.to_string(),
-            TargetRef::Slug(slug) => slug.clone(),
-        })
-        .collect();
-
-    sqlx::query(
-        "INSERT INTO kb_deferred_edges
-            (id, source_resource_id, target_ref, target_context_id, edge_type, weight, metadata, created_by_profile_id)
-         SELECT u.id, $2, u.target_ref, $3, u.edge_type::edge_type, 1.0, '{\"provenance\": \"frontmatter\"}'::jsonb, $4
-           FROM UNNEST($1::uuid[], $5::text[], $6::text[])
-             AS u(id, edge_type, target_ref)",
-    )
-    .bind(&ids)
-    .bind(**resource_id)
-    .bind(**context_id)
-    .bind(**profile_id)
-    .bind(&edge_types)
-    .bind(&target_refs)
-    .execute(pool)
-    .await?;
-
-    Ok(unresolved.len())
+fn deformation_topic_id() -> Uuid {
+    Uuid::parse_str(DEFORMATION_TOPIC_ID).expect("seeded deformation topic UUID parses")
 }
 
-/// Attempt to resolve deferred edges that reference a newly-created resource.
-///
-/// Looks up deferred edges matching either the new resource's UUID or slug,
-/// creates the resolved edges, and deletes the deferred records.
-///
-/// Returns the count of newly resolved edges.
-pub async fn resolve_deferred_edges(
-    pool: &PgPool,
-    new_resource_id: &ResourceId,
-    new_slug: Option<&str>,
-    profile_id: &ProfileId,
-) -> ApiResult<usize> {
-    // Build the query to find matching deferred edges
-    let rows: Vec<DeferredEdgeRow> = sqlx::query_as::<_, DeferredEdgeRow>(
-        "SELECT id, source_resource_id, target_ref, edge_type::TEXT AS edge_type, weight, metadata
-           FROM kb_deferred_edges
-          WHERE target_ref = $1::TEXT
-             OR ($2::TEXT IS NOT NULL AND target_ref = $2)",
-    )
-    .bind(**new_resource_id)
-    .bind(new_slug)
-    .fetch_all(pool)
-    .await?;
-
-    let mut edges_to_upsert: Vec<ResolvedEdge> = Vec::new();
-    let mut deferred_ids_to_delete: Vec<Uuid> = Vec::new();
-
-    for row in &rows {
-        let edge_type: EdgeType =
-            match serde_json::from_value(serde_json::Value::String(row.edge_type.clone())) {
-                Ok(et) => et,
-                Err(e) => {
-                    tracing::warn!(
-                        deferred_id = %row.id,
-                        edge_type = %row.edge_type,
-                        error = %e,
-                        "failed to parse deferred edge type, skipping"
-                    );
-                    continue;
-                }
-            };
-
-        // ParentOf means the deferred source declared a parent, so the new
-        // resource is the parent (source) and the declaring resource is the
-        // child (target).
-        let (source, target) = if edge_type == EdgeType::ParentOf {
-            (**new_resource_id, row.source_resource_id)
-        } else {
-            (row.source_resource_id, **new_resource_id)
-        };
-
-        if source == target {
-            tracing::warn!(
-                deferred_id = %row.id,
-                resource_id = %source,
-                "deferred edge would create self-edge, skipping"
-            );
-            continue;
-        }
-
-        edges_to_upsert.push(ResolvedEdge {
-            source_resource_id: source,
-            target_resource_id: target,
-            edge_type,
-            weight: row.weight,
-            metadata: row.metadata.clone(),
-        });
-        deferred_ids_to_delete.push(row.id);
-    }
-
-    let resolved_count = edges_to_upsert.len();
-    if resolved_count > 0 {
-        upsert_edges(pool, &edges_to_upsert, profile_id).await?;
-        // Delete the resolved deferred edges in a single round-trip.
-        sqlx::query("DELETE FROM kb_deferred_edges WHERE id = ANY($1::uuid[])")
-            .bind(&deferred_ids_to_delete)
-            .execute(pool)
-            .await?;
-
-        tracing::info!(
-            resource_id = %new_resource_id,
-            resolved = resolved_count,
-            "resolved deferred edges for new resource"
-        );
-    }
-
-    Ok(resolved_count)
+fn public_scope_id() -> Uuid {
+    Uuid::parse_str(PUBLIC_SCOPE_ID).expect("seeded public scope UUID parses")
 }
 
-/// Internal row type for deferred edge queries.
-#[derive(Debug, sqlx::FromRow)]
-struct DeferredEdgeRow {
-    id: Uuid,
+fn frontmatter_metadata() -> serde_json::Value {
+    // The `metadata` sidecar carries provenance for the assertion event. The
+    // `intent` key is the placeholder for a future typed enum column.
+    serde_json::json!({ "intent": DERIVED_INTENT })
+}
+
+/// Build the `relationship_asserted` payload for a resolved edge.
+///
+/// Uses the typed `RelationshipAsserted` struct so the wire shape stays
+/// compiler-checked against `temper-core::types::relationship_events`.
+fn asserted_payload_resource(edge: &ResolvedEdge) -> ApiResult<serde_json::Value> {
+    let payload = RelationshipAsserted {
+        source_resource_id: edge.source_resource_id,
+        target: TargetEndpoint::Resource(edge.target_resource_id),
+        edge_kind: edge.edge_kind,
+        polarity: edge.polarity,
+        label: edge.label.clone(),
+        weight: edge.weight,
+    };
+    serde_json::to_value(&payload)
+        .map_err(|e| crate::error::ApiError::Internal(format!("serialize asserted payload: {e}")))
+}
+
+/// Build the `relationship_asserted` payload for an unresolved slug target.
+///
+/// Uses the typed `RelationshipAsserted` struct with a `Slug` target
+/// endpoint — the projection builder will resolve it once a resource with
+/// the slug becomes visible.
+fn asserted_payload_slug(
     source_resource_id: Uuid,
-    #[expect(dead_code)]
-    target_ref: String,
-    edge_type: String,
+    edge_kind: EdgeKind,
+    polarity: Polarity,
+    label: &str,
+    target_slug: &str,
     weight: f64,
-    metadata: serde_json::Value,
+) -> ApiResult<serde_json::Value> {
+    let payload = RelationshipAsserted {
+        source_resource_id,
+        target: TargetEndpoint::Slug(target_slug.to_string()),
+        edge_kind,
+        polarity,
+        label: label.to_string(),
+        weight,
+    };
+    serde_json::to_value(&payload).map_err(|e| {
+        crate::error::ApiError::Internal(format!("serialize asserted slug payload: {e}"))
+    })
 }
 
-// ─── Extraction & Reconciliation ────────────────────────────────────────────
+/// Append a `relationship_asserted` event inside the given transaction.
+async fn append_asserted(
+    tx: &mut Transaction<'_, Postgres>,
+    profile_id: Uuid,
+    payload: serde_json::Value,
+    metadata: serde_json::Value,
+) -> ApiResult<Uuid> {
+    let mut write = EventToWrite::new_root(
+        EventType::RelationshipAsserted,
+        profile_id,
+        declaration_topic_id(),
+        public_scope_id(),
+        payload,
+        Utc::now(),
+    );
+    write.metadata = metadata;
+    let event = append_event_tx(tx, write)
+        .await
+        .map_err(|e| crate::error::ApiError::Internal(format!("append asserted: {e}")))?;
+    Ok(event.id)
+}
+
+/// Append a `relationship_folded` event correlated with the original
+/// assertion, inside the given transaction.
+async fn append_folded(
+    tx: &mut Transaction<'_, Postgres>,
+    profile_id: Uuid,
+    correlation_id: Uuid,
+    reason: Option<&str>,
+) -> ApiResult<Uuid> {
+    let payload_struct = RelationshipFolded {
+        reason: reason.map(str::to_string),
+    };
+    let payload = serde_json::to_value(&payload_struct)
+        .map_err(|e| crate::error::ApiError::Internal(format!("serialize folded payload: {e}")))?;
+    let mut write = EventToWrite::new_correlated(
+        EventType::RelationshipFolded,
+        profile_id,
+        deformation_topic_id(),
+        public_scope_id(),
+        payload,
+        correlation_id,
+        Utc::now(),
+    );
+    write.metadata = frontmatter_metadata();
+    let event = append_event_tx(tx, write)
+        .await
+        .map_err(|e| crate::error::ApiError::Internal(format!("append folded: {e}")))?;
+    Ok(event.id)
+}
+
+/// Project one resolved-edge assertion into `kb_resource_edges`. If a row for
+/// the same (source, target, edge_kind, label, polarity) tuple already exists,
+/// update its weight and `last_event_id`; otherwise insert. Idempotent on
+/// re-declaration. Folded rows that match the unique key are revived
+/// (un-folded) — the new assertion supersedes the prior fold.
+async fn project_edge_row(
+    tx: &mut Transaction<'_, Postgres>,
+    edge: &ResolvedEdge,
+    asserted_event_id: Uuid,
+) -> ApiResult<()> {
+    let edge_id = Uuid::now_v7();
+    sqlx::query!(
+        r#"
+        INSERT INTO kb_resource_edges (
+            id, source_resource_id, target_resource_id,
+            edge_kind, polarity, label, weight,
+            asserted_by_event_id, last_event_id, is_folded
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, false)
+        ON CONFLICT ON CONSTRAINT uq_resource_edge
+        DO UPDATE SET
+            weight        = EXCLUDED.weight,
+            last_event_id = EXCLUDED.last_event_id,
+            is_folded     = false,
+            updated       = now()
+        "#,
+        edge_id,
+        edge.source_resource_id,
+        edge.target_resource_id,
+        edge.edge_kind as EdgeKind,
+        edge.polarity as Polarity,
+        edge.label,
+        edge.weight,
+        asserted_event_id,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Mark an edge row as folded (retracted from the default projection).
+async fn fold_edge_row(
+    tx: &mut Transaction<'_, Postgres>,
+    edge_id: Uuid,
+    folded_event_id: Uuid,
+) -> ApiResult<()> {
+    sqlx::query!(
+        r#"
+        UPDATE kb_resource_edges
+           SET is_folded = true,
+               last_event_id = $2,
+               updated = now()
+         WHERE id = $1
+        "#,
+        edge_id,
+        folded_event_id,
+    )
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Append `relationship_asserted` events + project edge rows for the supplied
+/// resolved edges and slug-target assertions, all in one transaction.
+///
+/// Returns `(projected, pending)` where:
+///   * `projected` is the count of resolved edges whose row exists post-call.
+///   * `pending`   is the count of slug-target assertions (forward refs).
+async fn assert_edges_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    profile_id: Uuid,
+    resolved: &[ResolvedEdge],
+    unresolved_slugs: &[(EdgeType, TargetRef)],
+    source_resource_id: Uuid,
+) -> ApiResult<(usize, usize)> {
+    let metadata = frontmatter_metadata();
+
+    for edge in resolved {
+        let payload = asserted_payload_resource(edge)?;
+        let event_id = append_asserted(tx, profile_id, payload, metadata.clone()).await?;
+        project_edge_row(tx, edge, event_id).await?;
+    }
+
+    let mut pending = 0usize;
+    for (edge_type, target) in unresolved_slugs {
+        let TargetRef::Slug(slug) = target else {
+            // Unresolved UUID — the resource doesn't exist or isn't visible.
+            // Record it as a slug assertion using the UUID's text form so the
+            // forward-projection step can still find it once visibility opens
+            // up. (UUID parse failures upstream filter these; we just preserve.)
+            continue;
+        };
+        let (edge_kind, polarity, label) = edge_type.legacy_mapping();
+        let payload =
+            asserted_payload_slug(source_resource_id, edge_kind, polarity, label, slug, 1.0)?;
+        append_asserted(tx, profile_id, payload, metadata.clone()).await?;
+        pending += 1;
+    }
+
+    Ok((resolved.len(), pending))
+}
+
+// ─── Extraction & high-level entry points ───────────────────────────────────
 
 /// Extract edge declarations from a resource's full meta.
 ///
@@ -372,8 +419,8 @@ struct DeferredEdgeRow {
 /// and, for tasks, the `temper-goal` field from `managed_meta` which
 /// yields a reversed `ParentOf` edge to the goal resource.
 ///
-/// Pure function — no database access. Unknown fields in either
-/// tier are ignored.
+/// Pure function — no database access. Unknown fields in either tier are
+/// ignored.
 pub fn extract_declarations_from_resource(
     doc_type: &str,
     managed_meta: &serde_json::Value,
@@ -381,7 +428,6 @@ pub fn extract_declarations_from_resource(
 ) -> Vec<(EdgeType, TargetRef)> {
     let mut edges = Vec::new();
 
-    // Open-meta relationships (existing path)
     if open_meta.is_object() {
         match serde_json::from_value::<ResourceRelationships>(open_meta.clone()) {
             Ok(rels) => edges.extend(rels.to_edge_declarations()),
@@ -394,7 +440,6 @@ pub fn extract_declarations_from_resource(
         }
     }
 
-    // Managed-meta derivations
     if doc_type == "task" {
         if let Some(goal_slug) = managed_meta
             .get("temper-goal")
@@ -412,9 +457,10 @@ pub fn extract_declarations_from_resource(
 }
 
 /// Top-level entry point for the CREATE path: extract edge declarations from
-/// open_meta, resolve targets, upsert resolved edges, and defer unresolved ones.
+/// open_meta, resolve targets, and emit `relationship_asserted` events
+/// (projecting resolved targets and recording slug targets as pending).
 ///
-/// Returns `(created, deferred)` counts.
+/// Returns `(projected, pending)` counts.
 pub async fn extract_and_upsert_edges(
     pool: &PgPool,
     profile_id: &ProfileId,
@@ -432,26 +478,29 @@ pub async fn extract_and_upsert_edges(
     let (resolved, unresolved) =
         resolve_declarations(pool, profile_id, context_id, resource_id, &declarations).await?;
 
-    let created = upsert_edges(pool, &resolved, profile_id).await?;
-    let deferred = defer_edges(pool, resource_id, context_id, profile_id, &unresolved).await?;
+    let mut tx = pool.begin().await?;
+    let (projected, pending) =
+        assert_edges_tx(&mut tx, **profile_id, &resolved, &unresolved, **resource_id).await?;
+    tx.commit().await?;
 
     tracing::info!(
         resource_id = %resource_id,
-        created,
-        deferred,
-        "extracted and upserted edges from open_meta"
+        projected,
+        pending,
+        "extracted and asserted edges from open_meta"
     );
 
-    Ok((created, deferred))
+    Ok((projected, pending))
 }
 
 /// Top-level entry point for the UPDATE path: extract new declarations from
-/// open_meta and reconcile with existing frontmatter-provenance edges.
+/// open_meta and reconcile with existing frontmatter-asserted edges.
 ///
-/// - Edges in new but not existing → added
-/// - Edges in existing but not new → removed
+/// - Edges in new but not existing → emit `relationship_asserted` + project
+/// - Edges in existing but not new → emit `relationship_folded` correlated
+///   with the original assertion (the edge row is folded, not deleted)
 /// - Edges in both → unchanged
-/// - Manual edges (non-frontmatter provenance) are untouched
+/// - Manual / non-frontmatter edges are untouched (filtered by event source)
 pub async fn reconcile_edges(
     pool: &PgPool,
     profile_id: &ProfileId,
@@ -463,110 +512,113 @@ pub async fn reconcile_edges(
 ) -> ApiResult<EdgeReconciliation> {
     let declarations = extract_declarations_from_resource(doc_type, managed_meta, open_meta);
 
-    // Fetch existing frontmatter-provenance edges where this resource is source
-    let outgoing: Vec<ExistingEdgeRow> = sqlx::query_as::<_, ExistingEdgeRow>(
-        "SELECT id, source_resource_id, target_resource_id, edge_type::TEXT AS edge_type
-           FROM kb_resource_edges
-          WHERE source_resource_id = $1
-            AND metadata->>'provenance' = 'frontmatter'",
+    // Existing frontmatter-asserted edges: join through the assertion event so
+    // we filter on `kb_events.metadata->>'intent' = 'derived'`. The (now
+    // dropped) `kb_resource_edges.metadata` column carried this before.
+    let outgoing = sqlx::query_as!(
+        ExistingEdgeRow,
+        r#"
+        SELECT e.id                   AS "id!: Uuid",
+               e.source_resource_id   AS "source_resource_id!: Uuid",
+               e.target_resource_id   AS "target_resource_id!: Uuid",
+               e.label                AS "label!: String",
+               e.asserted_by_event_id AS "asserted_by_event_id!: Uuid"
+          FROM kb_resource_edges e
+          JOIN kb_events ev ON ev.id = e.asserted_by_event_id
+         WHERE e.source_resource_id = $1
+           AND NOT e.is_folded
+           AND ev.metadata->>'intent' = $2
+        "#,
+        **resource_id,
+        DERIVED_INTENT,
     )
-    .bind(**resource_id)
     .fetch_all(pool)
     .await?;
 
-    // Fetch ParentOf edges where this resource is the child (target)
-    let incoming_parent: Vec<ExistingEdgeRow> = sqlx::query_as::<_, ExistingEdgeRow>(
-        "SELECT id, source_resource_id, target_resource_id, edge_type::TEXT AS edge_type
-           FROM kb_resource_edges
-          WHERE target_resource_id = $1
-            AND edge_type::TEXT = 'parent_of'
-            AND metadata->>'provenance' = 'frontmatter'",
+    let incoming_parent = sqlx::query_as!(
+        ExistingEdgeRow,
+        r#"
+        SELECT e.id                   AS "id!: Uuid",
+               e.source_resource_id   AS "source_resource_id!: Uuid",
+               e.target_resource_id   AS "target_resource_id!: Uuid",
+               e.label                AS "label!: String",
+               e.asserted_by_event_id AS "asserted_by_event_id!: Uuid"
+          FROM kb_resource_edges e
+          JOIN kb_events ev ON ev.id = e.asserted_by_event_id
+         WHERE e.target_resource_id = $1
+           AND e.label = 'parent_of'
+           AND NOT e.is_folded
+           AND ev.metadata->>'intent' = $2
+        "#,
+        **resource_id,
+        DERIVED_INTENT,
     )
-    .bind(**resource_id)
     .fetch_all(pool)
     .await?;
 
-    // Combine existing edges into a lookup: (source, target, edge_type) → edge_id
-    let mut existing_map: std::collections::HashMap<(Uuid, Uuid, String), Uuid> =
+    // Lookup: (source, target, label) → (edge_id, correlation_event_id)
+    let mut existing_map: std::collections::HashMap<(Uuid, Uuid, String), (Uuid, Uuid)> =
         std::collections::HashMap::new();
     for row in outgoing.iter().chain(incoming_parent.iter()) {
         existing_map.insert(
             (
                 row.source_resource_id,
                 row.target_resource_id,
-                row.edge_type.clone(),
+                row.label.clone(),
             ),
-            row.id,
+            (row.id, row.asserted_by_event_id),
         );
     }
 
-    // Resolve new declarations
     let (resolved, unresolved) =
         resolve_declarations(pool, profile_id, context_id, resource_id, &declarations).await?;
 
-    // Build the new set for diffing: (source, target, edge_type_str)
     let new_set: std::collections::HashSet<(Uuid, Uuid, String)> = resolved
         .iter()
-        .map(|e| {
-            (
-                e.source_resource_id,
-                e.target_resource_id,
-                e.edge_type.to_string(),
-            )
-        })
+        .map(|e| (e.source_resource_id, e.target_resource_id, e.label.clone()))
         .collect();
 
     let existing_set: std::collections::HashSet<(Uuid, Uuid, String)> =
         existing_map.keys().cloned().collect();
 
-    // Diff
-    let to_add: Vec<&ResolvedEdge> = resolved
+    let to_add: Vec<ResolvedEdge> = resolved
         .iter()
         .filter(|e| {
-            !existing_set.contains(&(
-                e.source_resource_id,
-                e.target_resource_id,
-                e.edge_type.to_string(),
-            ))
+            !existing_set.contains(&(e.source_resource_id, e.target_resource_id, e.label.clone()))
         })
+        .cloned()
         .collect();
 
-    let to_remove: Vec<Uuid> = existing_set
+    let to_fold: Vec<(Uuid, Uuid)> = existing_set
         .difference(&new_set)
         .filter_map(|key| existing_map.get(key).copied())
         .collect();
 
     let unchanged = existing_set.intersection(&new_set).count();
-
-    // Batch additions and removals into one round-trip each.
     let added = to_add.len();
-    if added > 0 {
-        let additions: Vec<ResolvedEdge> = to_add.iter().map(|&e| e.clone()).collect();
-        upsert_edges(pool, &additions, profile_id).await?;
+    let removed = to_fold.len();
+
+    let mut tx = pool.begin().await?;
+
+    // Assertions (additions + slug-target forward refs).
+    let (_projected, pending) =
+        assert_edges_tx(&mut tx, **profile_id, &to_add, &unresolved, **resource_id).await?;
+
+    // Retractions: fold the row + emit a correlated `relationship_folded`.
+    for (edge_id, correlation_event_id) in &to_fold {
+        let folded_event_id =
+            append_folded(&mut tx, **profile_id, *correlation_event_id, None).await?;
+        fold_edge_row(&mut tx, *edge_id, folded_event_id).await?;
     }
 
-    let removed = to_remove.len();
-    if removed > 0 {
-        sqlx::query("DELETE FROM kb_resource_edges WHERE id = ANY($1::uuid[])")
-            .bind(&to_remove)
-            .execute(pool)
-            .await?;
-    }
-
-    // Clear old deferred edges for this source and store new unresolved
-    sqlx::query("DELETE FROM kb_deferred_edges WHERE source_resource_id = $1")
-        .bind(**resource_id)
-        .execute(pool)
-        .await?;
-
-    let deferred = defer_edges(pool, resource_id, context_id, profile_id, &unresolved).await?;
+    tx.commit().await?;
 
     tracing::info!(
         resource_id = %resource_id,
         added,
         removed,
         unchanged,
-        deferred,
+        pending,
         "reconciled edges from open_meta update"
     );
 
@@ -574,17 +626,20 @@ pub async fn reconcile_edges(
         added,
         removed,
         unchanged,
-        deferred,
+        pending,
     })
 }
 
-/// Internal row type for existing edge queries.
-#[derive(Debug, sqlx::FromRow)]
+/// Row shape used to diff existing frontmatter-asserted edges during
+/// `reconcile_edges`. The `asserted_by_event_id` is the lifecycle
+/// `correlation_id` for any follow-on event (e.g. `relationship_folded`).
+#[derive(Debug)]
 struct ExistingEdgeRow {
     id: Uuid,
     source_resource_id: Uuid,
     target_resource_id: Uuid,
-    edge_type: String,
+    label: String,
+    asserted_by_event_id: Uuid,
 }
 
 // ─── Listing ────────────────────────────────────────────────────────────────
@@ -602,7 +657,7 @@ pub async fn list_resource_edges(
     resource_id: Uuid,
 ) -> ApiResult<Vec<temper_core::types::graph::GraphEdgeRow>> {
     use crate::error::ApiError;
-    use temper_core::types::graph::{EdgeType, GraphEdgeRow};
+    use temper_core::types::graph::GraphEdgeRow;
 
     let rows = sqlx::query!(
         r#"
@@ -612,10 +667,11 @@ pub async fn list_resource_edges(
             ge.peer_resource_id          AS "peer_resource_id?: Uuid",
             ge.peer_title                AS "peer_title?: String",
             ge.peer_slug                 AS "peer_slug?: String",
-            ge.edge_type                 AS "edge_type?: EdgeType",
+            ge.edge_kind                 AS "edge_kind?: EdgeKind",
+            ge.polarity                  AS "polarity?: Polarity",
+            ge.label                     AS "label?: String",
             ge.direction                 AS "direction?: String",
             ge.weight                    AS "weight?: f64",
-            ge.metadata                  AS "metadata?: serde_json::Value",
             ge.created                   AS "created?: chrono::DateTime<chrono::Utc>"
           FROM (
               SELECT EXISTS (
@@ -635,9 +691,6 @@ pub async fn list_resource_edges(
         return Err(ApiError::NotFound);
     }
 
-    // Each visible-but-edgeless resource still produces one sentinel row
-    // from the LEFT JOIN where every edge column is NULL; the filter_map
-    // drops those and keeps only real edges.
     let edges = rows
         .into_iter()
         .filter_map(|r| {
@@ -646,10 +699,11 @@ pub async fn list_resource_edges(
                 peer_resource_id: r.peer_resource_id?,
                 peer_title: r.peer_title?,
                 peer_slug: r.peer_slug?,
-                edge_type: r.edge_type?,
+                edge_kind: r.edge_kind?,
+                polarity: r.polarity?,
+                label: r.label?,
                 direction: r.direction?,
                 weight: r.weight?,
-                metadata: r.metadata?,
                 created: r.created?,
             })
         })
@@ -702,7 +756,6 @@ mod tests {
             "irrelevant": "ignored"
         });
         let decls = extract_declarations_from_resource("task", &json!({}), &meta);
-        // extends: 1, depends_on: 2, references: 1 (UUID) = 4
         assert_eq!(decls.len(), 4);
     }
 

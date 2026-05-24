@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use temper_core::frontmatter::document::DocType;
-use temper_core::types::graph::{is_aggregator, EdgeType, GraphEdge, GraphNode, SubgraphResponse};
+use temper_core::types::graph::{
+    is_aggregator, EdgeKind, GraphEdge, GraphNode, Polarity, SubgraphResponse,
+};
 
 /// Hard upper bound on traversal depth. Recursive-CTE cost grows superlinearly
 /// with depth; 10 hops covers any imaginable UI traversal. Clamped silently.
@@ -185,10 +187,13 @@ pub async fn aggregator_subgraph(
         SELECT
             source_resource_id AS "source!: Uuid",
             target_resource_id AS "target!: Uuid",
-            edge_type          AS "edge_type!: EdgeType"
+            edge_kind          AS "edge_kind!: EdgeKind",
+            polarity           AS "polarity!: Polarity",
+            label              AS "label!: String"
           FROM kb_resource_edges
          WHERE source_resource_id = ANY($1::uuid[])
            AND target_resource_id = ANY($1::uuid[])
+           AND NOT is_folded
         "#,
         &node_ids,
     )
@@ -200,7 +205,9 @@ pub async fn aggregator_subgraph(
         .map(|rec| GraphEdge {
             source: rec.source,
             target: rec.target,
-            edge_type: rec.edge_type,
+            edge_kind: rec.edge_kind,
+            polarity: rec.polarity,
+            label: rec.label,
         })
         .collect();
 

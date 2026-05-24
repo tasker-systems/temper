@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT chunk_index as \"chunk_index!: i32\",\n               header_path as \"header_path!: String\",\n               heading_depth as \"heading_depth!: i16\",\n               content as \"content!: String\"\n          FROM kb_current_chunks\n         WHERE resource_id = $1\n         ORDER BY chunk_index\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "chunk_index!: i32",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "header_path!: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "heading_depth!: i16",
+        "type_info": "Int2"
+      },
+      {
+        "ordinal": 3,
+        "name": "content!: String",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8faf772e4d8e78b53cbd75d1ea5111e32b92966ea34447aa063e8d6ea4d4bef1"
+}
