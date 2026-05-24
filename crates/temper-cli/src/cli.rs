@@ -464,27 +464,6 @@ pub enum SyncAction {
         #[arg(long)]
         format: Option<String>,
     },
-    /// Show sync status without making changes
-    Status {
-        /// Context names to check
-        #[arg(long)]
-        context: Vec<String>,
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
-    /// Refresh manifest from server (non-destructive interleave)
-    Refresh {
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
-    /// Reset manifest from scratch (backup + full rebuild)
-    Reset {
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]

@@ -357,18 +357,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 let format = temper_cli::format::resolve_format_str(format.as_deref());
                 commands::sync_cmd::run(&context, format)
             }
-            SyncAction::Status { context, format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::status(&context, format)
-            }
-            SyncAction::Refresh { format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::refresh(format)
-            }
-            SyncAction::Reset { format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::reset(format)
-            }
         },
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
