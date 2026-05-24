@@ -383,6 +383,113 @@ pub async fn apply_relationship_event(
     Ok(())
 }
 
+/// After a resource is created, project any `relationship_asserted` event whose
+/// slug target now resolves to it. The event-sourced replacement for the
+/// retired `kb_deferred_edges` holding table.
+///
+/// Returns the number of events that were re-projected (i.e. produced a new
+/// edge row). Calling this function is idempotent — `apply_relationship_event`
+/// uses `ON CONFLICT … DO UPDATE` so re-running against already-projected
+/// events is safe.
+///
+/// **Context scoping:** Only events whose source resource lives in the same
+/// context (`new_context_id`) as the newly-created target resource are
+/// eligible. This matches the invariant established by the live-write path,
+/// where slug resolution is scoped to the source's own context. Filtering at
+/// SQL avoids fetching events for sources in other contexts only to skip them
+/// inside `apply_relationship_event`.
+///
+/// **Connection:** The caller supplies `&mut PgConnection` rather than
+/// `&PgPool` so the re-projection can be enlisted in the caller's
+/// transaction. `ingest_service::ingest` opens a fresh short-lived
+/// transaction just for this call, immediately after the resource row is
+/// committed.
+///
+/// **Signature deviation from plan:** The plan omitted `new_context_id`. It
+/// was added as an explicit parameter because (a) the caller already has it
+/// in scope and (b) it avoids an extra `SELECT kb_context_id …` round-trip.
+pub async fn reproject_pending_for_resource(
+    tx: &mut sqlx::PgConnection,
+    new_resource_id: Uuid,
+    new_slug: &str,
+    new_context_id: Uuid,
+) -> ApiResult<usize> {
+    // Fetch all relationship_asserted events whose target is Slug(new_slug)
+    // and whose source resource lives in the same context as the new resource.
+    // We filter at SQL to avoid loading cross-context events, then call
+    // apply_relationship_event on each (which handles the upsert atomically).
+    let rows = sqlx::query!(
+        r#"
+        SELECT
+            e.id              AS "id!: Uuid",
+            e.event_type_id   AS "event_type_id!: Uuid",
+            e.profile_id      AS "emitter_profile_id!: Uuid",
+            e.topic_id        AS "topic_id!: Uuid",
+            e.scope_id        AS "scope_id!: Uuid",
+            e.payload         AS "payload!",
+            e.metadata        AS "metadata!",
+            e.references      AS "references!",
+            e.correlation_id  AS "correlation_id!: Uuid",
+            e.occurred_at     AS "occurred_at!",
+            e.created         AS "recorded_at!"
+          FROM kb_events e
+          JOIN kb_event_types et ON et.id = e.event_type_id
+          JOIN kb_resources src ON src.id = (e.payload->>'source_resource_id')::uuid
+         WHERE et.name = 'relationship_asserted'
+           AND e.payload->'target'->>'kind' = 'slug'
+           AND e.payload->'target'->>'value' = $1
+           AND src.kb_context_id = $2
+           AND src.is_active
+         ORDER BY e.occurred_at ASC, e.id ASC
+        "#,
+        new_slug,
+        new_context_id,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let mut projected: usize = 0;
+
+    for r in rows {
+        // Patch the payload so the Slug target resolves to the concrete UUID.
+        // We do this by rewriting the target field before calling
+        // apply_relationship_event, which keeps all the edge-upsert logic in
+        // one place (no duplication of the INSERT … ON CONFLICT block).
+        let mut payload = r.payload.clone();
+        payload["target"] = serde_json::json!({
+            "kind": "resource",
+            "value": new_resource_id
+        });
+
+        let event = Event {
+            id: r.id,
+            event_type_id: r.event_type_id,
+            emitter_profile_id: r.emitter_profile_id,
+            topic_id: r.topic_id,
+            scope_id: r.scope_id,
+            payload,
+            metadata: r.metadata,
+            references: r.references,
+            correlation_id: r.correlation_id,
+            occurred_at: r.occurred_at,
+            recorded_at: r.recorded_at,
+        };
+
+        apply_relationship_event(&mut *tx, &event, EventType::RelationshipAsserted).await?;
+        projected += 1;
+
+        tracing::debug!(
+            event_id = %event.id,
+            source_id = %event.payload["source_resource_id"],
+            new_resource_id = %new_resource_id,
+            slug = new_slug,
+            "re-projected pending slug assertion"
+        );
+    }
+
+    Ok(projected)
+}
+
 /// Row shape for the event replay in `rebuild_edge_projection`.
 struct LedgerEventRow {
     event: Event,

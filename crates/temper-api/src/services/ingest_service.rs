@@ -559,10 +559,32 @@ pub async fn ingest(
         }
     }
 
-    // Forward-reference re-projection is handled separately by the
-    // relationship_service create-path projection (see Task 13). The old
-    // `resolve_deferred_edges` call against `kb_deferred_edges` is gone —
-    // pending slug-target assertions live as ledger events now.
+    // 7. Re-project any pending slug-target assertions whose target slug now
+    // matches the newly-created resource. Runs on a fresh transaction so the
+    // resource row is visible to the slug resolution query inside
+    // `reproject_pending_for_resource`. Non-fatal: a re-projection failure is
+    // logged and does not roll back the resource creation.
+    if let Err(e) = async {
+        let mut tx = pool.begin().await?;
+        super::relationship_service::reproject_pending_for_resource(
+            &mut tx,
+            *resource.id,
+            &payload.slug,
+            *context_id,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok::<_, ApiError>(())
+    }
+    .await
+    {
+        tracing::warn!(
+            resource_id = %resource.id,
+            slug = %payload.slug,
+            error = %e,
+            "pending slug re-projection failed during ingest"
+        );
+    }
 
     Ok(resource)
 }

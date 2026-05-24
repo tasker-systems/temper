@@ -8,7 +8,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_api::services::relationship_service::{
-    apply_relationship_event, rebuild_edge_projection, TOPIC_DECLARATION, TOPIC_DEFORMATION,
+    apply_relationship_event, rebuild_edge_projection, reproject_pending_for_resource,
+    TOPIC_DECLARATION, TOPIC_DEFORMATION,
 };
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::relationship_events::{
@@ -595,5 +596,96 @@ async fn rebuild_slug_resolution_is_context_scoped(pool: PgPool) {
     assert_eq!(
         spurious_edge, 0,
         "no spurious A→C edge via cross-context slug resolution"
+    );
+}
+
+// ─── Test 7: reproject_pending_for_resource projects deferred slug assertions ─
+
+/// Assert A → slug:"pending-b" when no resource "pending-b" exists — no edge
+/// projected. Create resource B with slug "pending-b". Call
+/// `reproject_pending_for_resource` and verify the edge now exists.
+///
+/// This is the event-sourced replacement for the retired `resolve_deferred_edges`
+/// call against `kb_deferred_edges`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_reproject_pending_for_resource(pool: PgPool) {
+    common::fixtures::clean_and_seed(&pool).await;
+    let profile = common::fixtures::create_test_profile(&pool, "reproj@test.com").await;
+    // Resource A already exists.
+    let a = common::fixtures::create_test_resource(&pool, profile, "Doc A", "reproj-a").await;
+
+    // Assert A → slug:"pending-b" — resource "pending-b" does not exist yet.
+    let payload = RelationshipAsserted {
+        source_resource_id: a,
+        target: TargetEndpoint::Slug("pending-b".to_string()),
+        edge_kind: EdgeKind::LeadsTo,
+        polarity: Polarity::Forward,
+        label: "depends_on".to_string(),
+        weight: 1.0,
+    };
+    let payload_value = serde_json::to_value(&payload).expect("serialize");
+
+    let mut write = EventToWrite::new_root(
+        EventType::RelationshipAsserted,
+        profile,
+        declaration_topic_id(),
+        public_scope_id(),
+        payload_value,
+        chrono::Utc::now(),
+    );
+    write.metadata = serde_json::json!({"intent": "fixture"});
+
+    let mut tx = pool.begin().await.expect("begin tx");
+    let event = temper_events::ledger::append_event_tx(&mut tx, write)
+        .await
+        .expect("append event");
+    apply_relationship_event(&mut tx, &event, EventType::RelationshipAsserted)
+        .await
+        .expect("apply — slug unresolved, should not error");
+    tx.commit().await.expect("commit");
+
+    // Confirm no edge was projected (slug not yet resolved).
+    let edge_count_before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_resource_edges WHERE source_resource_id = $1")
+            .bind(a)
+            .fetch_one(&pool)
+            .await
+            .expect("edge count before resource creation");
+    assert_eq!(
+        edge_count_before, 0,
+        "no edge before the target resource exists"
+    );
+
+    // Now create resource B with the awaited slug in the same context as A.
+    // A's context is TEMPER_CONTEXT_ID (as created by create_test_resource).
+    let context_id =
+        uuid::Uuid::parse_str(common::fixtures::TEMPER_CONTEXT_ID).expect("parse context id");
+    let b = common::fixtures::create_test_resource(&pool, profile, "Doc B", "pending-b").await;
+
+    // Run the re-projection.
+    let mut tx = pool.begin().await.expect("begin reproject tx");
+    let projected = reproject_pending_for_resource(&mut tx, b, "pending-b", context_id)
+        .await
+        .expect("reproject_pending_for_resource");
+    tx.commit().await.expect("commit reproject");
+
+    assert_eq!(projected, 1, "one event should have been re-projected");
+
+    // Verify the edge now exists.
+    let edge_count_after: i64 = sqlx::query_scalar(
+        r#"SELECT count(*) FROM kb_resource_edges
+            WHERE source_resource_id = $1
+              AND target_resource_id = $2
+              AND edge_kind = 'leads_to'
+              AND NOT is_folded"#,
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_one(&pool)
+    .await
+    .expect("edge count after reproject");
+    assert_eq!(
+        edge_count_after, 1,
+        "one active leads_to edge A→B expected after re-projection"
     );
 }
