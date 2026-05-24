@@ -198,6 +198,54 @@ impl TemperMcpService {
     }
 
     #[tool(
+        description = "Assert a directed relationship from a source resource to a target slug. Specify the source by owner/context/doctype/slug. Returns a correlation_id that identifies this relationship for future retype, reweight, or fold calls."
+    )]
+    async fn assert_relationship(
+        &self,
+        Parameters(input): Parameters<tools::relationships::AssertRelationshipInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::relationships::assert_relationship(self, input).await
+    }
+
+    #[tool(
+        description = "Change the edge_kind and polarity of an existing relationship. Use the correlation_id returned by assert_relationship to identify the relationship."
+    )]
+    async fn retype_relationship(
+        &self,
+        Parameters(input): Parameters<tools::relationships::RetypeRelationshipInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::relationships::retype_relationship(self, input).await
+    }
+
+    #[tool(
+        description = "Update the weight of an existing relationship. Use the correlation_id returned by assert_relationship to identify the relationship."
+    )]
+    async fn reweight_relationship(
+        &self,
+        Parameters(input): Parameters<tools::relationships::ReweightRelationshipInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::relationships::reweight_relationship(self, input).await
+    }
+
+    #[tool(
+        description = "Retract (fold) an existing relationship, marking it inactive. Optionally provide a human-readable reason. Use the correlation_id returned by assert_relationship to identify the relationship."
+    )]
+    async fn fold_relationship(
+        &self,
+        Parameters(input): Parameters<tools::relationships::FoldRelationshipInput>,
+        Extension(parts): Extension<http::request::Parts>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        self.ensure_profile_from_parts(&parts).await?;
+        tools::relationships::fold_relationship(self, input).await
+    }
+
+    #[tool(
         description = "Search resources using text queries, embedding vectors, or both. Send a plain text 'query' for full-text search — no embedding required."
     )]
     async fn search(
