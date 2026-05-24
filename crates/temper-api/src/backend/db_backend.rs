@@ -1,20 +1,38 @@
 //! `DbBackend` struct + `impl Backend`. Per-request construction.
 
 use async_trait::async_trait;
+use chrono::Utc;
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use temper_core::error::TemperError;
 use temper_core::operations::{
-    Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent, ListResources,
-    ResourceRef, ResourceSummary, SearchHit, SearchResources, ShowResource, Surface,
-    UpdateResource,
+    AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent,
+    FoldRelationship, ListResources, ResourceRef, ResourceSummary, RetypeRelationship,
+    ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_core::types::ids::ProfileId;
+use temper_core::types::relationship_events::{
+    RelationshipAsserted, RelationshipFolded, RelationshipRetyped, RelationshipReweighted,
+    TargetEndpoint,
+};
 use temper_core::types::resource::ResourceRow;
+use temper_events::types::event::{EventToWrite, EventType};
 
-use crate::services::{ingest_service, resource_service};
+use crate::error::ApiError;
+use crate::services::{ingest_service, relationship_service, resource_service};
 
 use super::translators::create_resource_to_ingest_payload;
+
+/// Convert a `sqlx::Error` to `TemperError` via the `ApiError` bridge.
+fn sqlx_err(e: sqlx::Error) -> TemperError {
+    TemperError::from(ApiError::from(e))
+}
+
+/// Convert a `serde_json::Error` to `TemperError` via the `ApiError` bridge.
+fn json_err(e: serde_json::Error) -> TemperError {
+    TemperError::from(ApiError::from(e))
+}
 
 /// Postgres-backed backend impl. Constructed per inbound request.
 pub struct DbBackend {
@@ -47,6 +65,276 @@ impl DbBackend {
 
     pub(crate) fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    /// Parse the fixed scope UUID used by all relationship events.
+    fn public_scope_id() -> Uuid {
+        Uuid::parse_str("019e3d6f-2300-7000-8000-000000000010")
+            .expect("PUBLIC_SCOPE_ID constant is valid UUID")
+    }
+
+    /// Stamp `intent = "explicit"` on an event write — all API/CLI/MCP
+    /// user-driven relationship writes use this provenance marker.
+    fn explicit_intent_metadata() -> serde_json::Value {
+        serde_json::json!({ "intent": "explicit" })
+    }
+
+    /// Assert a new relationship from `cmd.source` to `cmd.target_slug`.
+    ///
+    /// If the target slug resolves to a resource in the same context as the
+    /// source, an edge row is projected immediately. If not, the event is
+    /// still appended (with a `Slug` target endpoint); the edge will be
+    /// projected by Task 13's re-projection pass once the target is created.
+    pub async fn assert_relationship(
+        &self,
+        cmd: AssertRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError> {
+        // 1. Resolve source.
+        let source_resource_id =
+            *super::translators::resolve_resource_ref(self.pool(), self.profile_id(), cmd.source)
+                .await?;
+
+        // 2. Auth before write.
+        resource_service::check_can_modify(self.pool(), *self.profile_id(), source_resource_id)
+            .await
+            .map_err(TemperError::from)?;
+
+        // 3. Validate label.
+        relationship_service::validate_assertion_label(cmd.edge_kind, &cmd.label)
+            .map_err(TemperError::BadRequest)?;
+
+        // 4. Open transaction; look up source context and resolve target slug.
+        let mut tx = self.pool().begin().await.map_err(sqlx_err)?;
+
+        let source_context_id: Uuid = sqlx::query_scalar!(
+            r#"SELECT kb_context_id AS "kb_context_id!: Uuid" FROM kb_resources WHERE id = $1"#,
+            source_resource_id,
+        )
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(sqlx_err)?;
+
+        let target_endpoint = match relationship_service::find_slug_in_context(
+            &mut tx,
+            source_context_id,
+            &cmd.target_slug,
+        )
+        .await
+        .map_err(TemperError::from)?
+        {
+            Some(target_id) => TargetEndpoint::Resource(target_id),
+            None => TargetEndpoint::Slug(cmd.target_slug),
+        };
+
+        // 5–6. Build payload.
+        let payload = serde_json::to_value(&RelationshipAsserted {
+            source_resource_id,
+            target: target_endpoint,
+            edge_kind: cmd.edge_kind,
+            polarity: cmd.polarity,
+            label: cmd.label,
+            weight: cmd.weight,
+        })
+        .map_err(json_err)?;
+
+        // 7. Build event write (root — starts a new correlation chain).
+        let declaration_topic_id = Uuid::parse_str(relationship_service::TOPIC_DECLARATION)
+            .expect("TOPIC_DECLARATION constant is valid UUID");
+        let mut write = EventToWrite::new_root(
+            EventType::RelationshipAsserted,
+            *self.profile_id(),
+            declaration_topic_id,
+            Self::public_scope_id(),
+            payload,
+            Utc::now(),
+        );
+        write.metadata = Self::explicit_intent_metadata();
+
+        // 8–10. Append + project + commit.
+        let event = relationship_service::append_and_project(
+            &mut tx,
+            write,
+            EventType::RelationshipAsserted,
+        )
+        .await
+        .map_err(TemperError::from)?;
+
+        tx.commit().await.map_err(sqlx_err)?;
+
+        // 11. Return correlation_id (== event.id for root events).
+        let correlation_id = event.correlation_id;
+        Ok(CommandOutput::with_events(
+            correlation_id,
+            vec![DomainEvent::DbRelationshipAsserted { correlation_id }],
+        ))
+    }
+
+    /// Retype an existing relationship — changes `edge_kind` / `polarity`.
+    /// Identified by the original assertion's `correlation_id`.
+    pub async fn retype_relationship(
+        &self,
+        cmd: RetypeRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError> {
+        // 1. Find source resource + current label for auth check.
+        let edge = relationship_service::edge_auth_row(self.pool(), cmd.correlation_id)
+            .await
+            .map_err(TemperError::from)?;
+
+        // 2. Auth before write.
+        resource_service::check_can_modify(
+            self.pool(),
+            *self.profile_id(),
+            edge.source_resource_id,
+        )
+        .await
+        .map_err(TemperError::from)?;
+
+        // 3–4. Build payload (carry existing label so the wire struct is complete).
+        let payload = serde_json::to_value(&RelationshipRetyped {
+            edge_kind: cmd.edge_kind,
+            polarity: cmd.polarity,
+            label: edge.label,
+        })
+        .map_err(json_err)?;
+
+        // 5. Build correlated event write.
+        let declaration_topic_id = Uuid::parse_str(relationship_service::TOPIC_DECLARATION)
+            .expect("TOPIC_DECLARATION constant is valid UUID");
+        let mut write = EventToWrite::new_correlated(
+            EventType::RelationshipRetyped,
+            *self.profile_id(),
+            declaration_topic_id,
+            Self::public_scope_id(),
+            payload,
+            cmd.correlation_id,
+            Utc::now(),
+        );
+        write.metadata = Self::explicit_intent_metadata();
+
+        // 6. Append + project + commit.
+        let mut tx = self.pool().begin().await.map_err(sqlx_err)?;
+        relationship_service::append_and_project(&mut tx, write, EventType::RelationshipRetyped)
+            .await
+            .map_err(TemperError::from)?;
+        tx.commit().await.map_err(sqlx_err)?;
+
+        // 7. Return.
+        Ok(CommandOutput::with_events(
+            cmd.correlation_id,
+            vec![DomainEvent::DbRelationshipRetyped {
+                correlation_id: cmd.correlation_id,
+            }],
+        ))
+    }
+
+    /// Reweight an existing relationship — changes `weight`.
+    /// Identified by the original assertion's `correlation_id`.
+    pub async fn reweight_relationship(
+        &self,
+        cmd: ReweightRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError> {
+        // 1. Find source resource for auth check.
+        let edge = relationship_service::edge_auth_row(self.pool(), cmd.correlation_id)
+            .await
+            .map_err(TemperError::from)?;
+
+        // 2. Auth before write.
+        resource_service::check_can_modify(
+            self.pool(),
+            *self.profile_id(),
+            edge.source_resource_id,
+        )
+        .await
+        .map_err(TemperError::from)?;
+
+        // 3–4. Build payload.
+        let payload = serde_json::to_value(&RelationshipReweighted { weight: cmd.weight })
+            .map_err(json_err)?;
+
+        // 5. Build correlated event write.
+        let declaration_topic_id = Uuid::parse_str(relationship_service::TOPIC_DECLARATION)
+            .expect("TOPIC_DECLARATION constant is valid UUID");
+        let mut write = EventToWrite::new_correlated(
+            EventType::RelationshipReweighted,
+            *self.profile_id(),
+            declaration_topic_id,
+            Self::public_scope_id(),
+            payload,
+            cmd.correlation_id,
+            Utc::now(),
+        );
+        write.metadata = Self::explicit_intent_metadata();
+
+        // 6. Append + project + commit.
+        let mut tx = self.pool().begin().await.map_err(sqlx_err)?;
+        relationship_service::append_and_project(&mut tx, write, EventType::RelationshipReweighted)
+            .await
+            .map_err(TemperError::from)?;
+        tx.commit().await.map_err(sqlx_err)?;
+
+        // 7. Return.
+        Ok(CommandOutput::with_events(
+            cmd.correlation_id,
+            vec![DomainEvent::DbRelationshipReweighted {
+                correlation_id: cmd.correlation_id,
+            }],
+        ))
+    }
+
+    /// Fold (retract) an existing relationship — sets `is_folded = true`.
+    /// Identified by the original assertion's `correlation_id`.
+    pub async fn fold_relationship(
+        &self,
+        cmd: FoldRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError> {
+        // 1. Find source resource for auth check.
+        let edge = relationship_service::edge_auth_row(self.pool(), cmd.correlation_id)
+            .await
+            .map_err(TemperError::from)?;
+
+        // 2. Auth before write.
+        resource_service::check_can_modify(
+            self.pool(),
+            *self.profile_id(),
+            edge.source_resource_id,
+        )
+        .await
+        .map_err(TemperError::from)?;
+
+        // 3–4. Build payload.
+        let payload = serde_json::to_value(&RelationshipFolded {
+            reason: cmd.reason.clone(),
+        })
+        .map_err(json_err)?;
+
+        // 5. Build correlated event write (deformation topic for fold).
+        let deformation_topic_id = Uuid::parse_str(relationship_service::TOPIC_DEFORMATION)
+            .expect("TOPIC_DEFORMATION constant is valid UUID");
+        let mut write = EventToWrite::new_correlated(
+            EventType::RelationshipFolded,
+            *self.profile_id(),
+            deformation_topic_id,
+            Self::public_scope_id(),
+            payload,
+            cmd.correlation_id,
+            Utc::now(),
+        );
+        write.metadata = Self::explicit_intent_metadata();
+
+        // 6. Append + project + commit.
+        let mut tx = self.pool().begin().await.map_err(sqlx_err)?;
+        relationship_service::append_and_project(&mut tx, write, EventType::RelationshipFolded)
+            .await
+            .map_err(TemperError::from)?;
+        tx.commit().await.map_err(sqlx_err)?;
+
+        // 7. Return.
+        Ok(CommandOutput::with_events(
+            cmd.correlation_id,
+            vec![DomainEvent::DbRelationshipFolded {
+                correlation_id: cmd.correlation_id,
+            }],
+        ))
     }
 }
 

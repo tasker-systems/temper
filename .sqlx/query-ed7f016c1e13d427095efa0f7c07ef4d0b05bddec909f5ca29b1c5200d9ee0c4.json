@@ -1,22 +1,22 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id FROM kb_event_types WHERE name = $1",
+  "query": "SELECT kb_context_id AS \"kb_context_id!: Uuid\" FROM kb_resources WHERE id = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "id",
+        "name": "kb_context_id!: Uuid",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "Uuid"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "53b54feb299b78a3c956e7c3a9706d899fba070fcc21f30b66e64b4700ac7c8e"
+  "hash": "ed7f016c1e13d427095efa0f7c07ef4d0b05bddec909f5ca29b1c5200d9ee0c4"
 }

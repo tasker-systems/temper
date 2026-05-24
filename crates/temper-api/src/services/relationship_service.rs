@@ -13,12 +13,91 @@ use temper_core::types::relationship_events::{
     RelationshipAsserted, RelationshipFolded, RelationshipRetyped, RelationshipReweighted,
     TargetEndpoint,
 };
-use temper_events::types::event::{Event, EventType};
+use temper_events::ledger::append_event_tx;
+use temper_events::types::event::{Event, EventToWrite, EventType};
 
 /// Topic UUIDs seeded by migration 20260522100001.
 pub const TOPIC_DECLARATION: &str = "019e3d6f-2300-7000-8000-000000000050";
 pub const TOPIC_DEFORMATION: &str = "019e3d6f-2300-7000-8000-000000000051";
 pub const TOPIC_JUDGMENT: &str = "019e3d6f-2300-7000-8000-000000000052";
+
+/// Look up a resource's UUID by its slug within a context.
+///
+/// Scoped to the given context_id so target resolution stays within the
+/// same namespace as the source resource. Returns `None` when no active
+/// resource with that slug exists in the context.
+///
+/// SQL lives here per "service layer owns SQL" rule.
+pub async fn find_slug_in_context(
+    tx: &mut sqlx::PgConnection,
+    context_id: Uuid,
+    slug: &str,
+) -> ApiResult<Option<Uuid>> {
+    let id = sqlx::query_scalar!(
+        r#"
+        SELECT id AS "id!: Uuid"
+          FROM kb_resources
+         WHERE kb_context_id = $1
+           AND slug = $2
+           AND is_active
+         LIMIT 1
+        "#,
+        context_id,
+        slug,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    Ok(id)
+}
+
+/// Minimal row shape for auth + retype lookup from `kb_resource_edges`.
+pub struct EdgeAuthRow {
+    pub source_resource_id: Uuid,
+    pub label: String,
+}
+
+/// Look up the `source_resource_id` and current `label` for an edge identified
+/// by its `asserted_by_event_id` (== `correlation_id` of the root assertion
+/// event).
+///
+/// Returns `NotFound` when no matching active edge row exists.
+pub async fn edge_auth_row(pool: &sqlx::PgPool, correlation_id: Uuid) -> ApiResult<EdgeAuthRow> {
+    let row = sqlx::query!(
+        r#"
+        SELECT source_resource_id AS "source_resource_id!: Uuid",
+               label              AS "label!: String"
+          FROM kb_resource_edges
+         WHERE asserted_by_event_id = $1
+         LIMIT 1
+        "#,
+        correlation_id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    Ok(EdgeAuthRow {
+        source_resource_id: row.source_resource_id,
+        label: row.label,
+    })
+}
+
+/// Append a relationship event (already built as `EventToWrite`) and project
+/// its edge delta into `kb_resource_edges` — all within the caller's
+/// transaction.
+///
+/// The `intent = "explicit"` metadata must already be set on `write` by the
+/// caller before passing it here.
+pub async fn append_and_project(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    write: EventToWrite,
+    event_type: EventType,
+) -> ApiResult<Event> {
+    let event = append_event_tx(tx, write)
+        .await
+        .map_err(|e| ApiError::Internal(format!("append_event_tx: {e}")))?;
+    apply_relationship_event(&mut *tx, &event, event_type).await?;
+    Ok(event)
+}
 
 /// Validation: a relationship label must be non-empty. The mandatory-label
 /// rule stops `near` (and every kind) becoming a vague catch-all. An empty or
