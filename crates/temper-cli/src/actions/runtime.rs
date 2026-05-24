@@ -175,59 +175,6 @@ pub fn require_device_id() -> Result<String> {
     })
 }
 
-/// Publish a freshly-written local file to the server, downgrading transient
-/// failures to warnings so the local file-creation contract still succeeds.
-///
-/// This is the single source of truth for the publish-tail policy invoked by
-/// every Local-mode creator and the update path. Errors are classified
-/// structurally:
-///
-/// - **No token configured** (no `TEMPER_TOKEN`, no auth.json on disk):
-///   `tracing::warn!` and return `Ok(None)`. The user is in offline / not-yet-
-///   authenticated mode; the file exists locally and `temper sync run` will
-///   reconcile after `temper auth login`.
-/// - **`TemperError::Network(_)`**: transient — server unreachable. Warn and
-///   return `Ok(None)`. Sync will recover when connectivity returns.
-/// - **Any other `Err`** (auth/4xx/5xx/validation/conflict): bubble. The user
-///   wants to know about a real failure on the server side.
-/// - **`Ok(_)`**: return `Ok(Some(result))`.
-///
-/// Returns `Ok(None)` for both "no token" and "transient network" so callers
-/// can treat them uniformly: the local file exists either way.
-pub fn publish_local_write_best_effort(
-    vault_root: &std::path::Path,
-    file_path: &std::path::Path,
-) -> Result<Option<crate::actions::sync::PushResult>> {
-    let config = load_cloud_config().map_err(|e| TemperError::Api(e.to_string()))?;
-    let store = resolve_token_store(&config)?;
-
-    if store.load().ok().flatten().is_none() {
-        tracing::warn!(
-            "not authenticated; file created locally and not published — \
-             run `temper auth login` to publish, or run `temper sync run` \
-             after authenticating"
-        );
-        return Ok(None);
-    }
-
-    let vault_root = vault_root.to_path_buf();
-    let file_path = file_path.to_path_buf();
-    let result = with_client(move |client| {
-        Box::pin(async move {
-            crate::actions::sync::publish_local_write(client, &vault_root, &file_path).await
-        })
-    });
-
-    match result {
-        Ok(r) => Ok(Some(r)),
-        Err(TemperError::Network(msg)) => {
-            tracing::warn!("publish failed (offline; sync will recover): {msg}");
-            Ok(None)
-        }
-        Err(e) => Err(e),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,37 +200,6 @@ mod tests {
                 "expected Config error for malformed TEMPER_TOKEN: {err}"
             );
         });
-    }
-
-    #[test]
-    fn publish_best_effort_returns_ok_none_when_no_token() {
-        // Local mode + TEMPER_AUTH_PATH pointed at a non-existent file
-        // simulates a freshly-installed CLI: the disk store finds nothing
-        // and the helper warns + returns Ok(None) without making any API
-        // call. Critical for unit-test isolation on logged-in dev machines.
-        let dir = tempfile::TempDir::new().unwrap();
-        let auth_path = dir.path().join("auth.json");
-        let nonexistent_config = dir.path().join("no-such-config.toml");
-        let vault_root = dir.path();
-        let file_path = dir.path().join("dummy.md");
-
-        temp_env::with_vars(
-            [
-                ("TEMPER_TOKEN", None),
-                ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
-                (
-                    "TEMPER_GLOBAL_CONFIG",
-                    Some(nonexistent_config.to_str().unwrap()),
-                ),
-            ],
-            || {
-                let result = publish_local_write_best_effort(vault_root, &file_path);
-                assert!(
-                    matches!(result, Ok(None)),
-                    "expected Ok(None) on no-token, got {result:?}"
-                );
-            },
-        );
     }
 }
 
