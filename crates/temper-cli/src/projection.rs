@@ -50,8 +50,8 @@ pub fn read_cursor(state_dir: &Path, context: &str) -> Result<Option<ProjectionC
     Ok(serde_json::from_str::<ProjectionCursor>(&content).ok())
 }
 
-/// Atomically write a context's cursor sidecar (temp file + rename, the
-/// pattern used by `manifest_io::save_manifest`).
+/// Atomically write a context's cursor sidecar using the standard
+/// temp-file-plus-rename pattern.
 pub fn write_cursor(state_dir: &Path, context: &str, cursor: &ProjectionCursor) -> Result<()> {
     let path = cursor_path(state_dir, context);
     let dir = path.parent().ok_or_else(|| {
