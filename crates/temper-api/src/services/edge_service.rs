@@ -18,6 +18,7 @@ use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::ApiResult;
+use crate::services::relationship_service::apply_relationship_event;
 use temper_core::types::graph::{
     EdgeKind, EdgeReconciliation, EdgeType, Polarity, ResolvedEdge, ResourceRelationships,
     TargetRef,
@@ -258,8 +259,9 @@ fn asserted_payload_slug(
     })
 }
 
-/// Append a `relationship_asserted` event inside the given transaction.
-async fn append_asserted(
+/// Append a `relationship_asserted` event inside the given transaction and
+/// project its edge delta into `kb_resource_edges` via `apply_relationship_event`.
+async fn append_asserted_and_project(
     tx: &mut Transaction<'_, Postgres>,
     profile_id: Uuid,
     payload: serde_json::Value,
@@ -277,12 +279,14 @@ async fn append_asserted(
     let event = append_event_tx(tx, write)
         .await
         .map_err(|e| crate::error::ApiError::Internal(format!("append asserted: {e}")))?;
+    apply_relationship_event(tx, &event, EventType::RelationshipAsserted).await?;
     Ok(event.id)
 }
 
 /// Append a `relationship_folded` event correlated with the original
-/// assertion, inside the given transaction.
-async fn append_folded(
+/// assertion, inside the given transaction, and project the fold into
+/// `kb_resource_edges` via `apply_relationship_event`.
+async fn append_folded_and_project(
     tx: &mut Transaction<'_, Postgres>,
     profile_id: Uuid,
     correlation_id: Uuid,
@@ -306,73 +310,16 @@ async fn append_folded(
     let event = append_event_tx(tx, write)
         .await
         .map_err(|e| crate::error::ApiError::Internal(format!("append folded: {e}")))?;
+    apply_relationship_event(tx, &event, EventType::RelationshipFolded).await?;
     Ok(event.id)
-}
-
-/// Project one resolved-edge assertion into `kb_resource_edges`. If a row for
-/// the same (source, target, edge_kind, label, polarity) tuple already exists,
-/// update its weight and `last_event_id`; otherwise insert. Idempotent on
-/// re-declaration. Folded rows that match the unique key are revived
-/// (un-folded) — the new assertion supersedes the prior fold.
-async fn project_edge_row(
-    tx: &mut Transaction<'_, Postgres>,
-    edge: &ResolvedEdge,
-    asserted_event_id: Uuid,
-) -> ApiResult<()> {
-    let edge_id = Uuid::now_v7();
-    sqlx::query!(
-        r#"
-        INSERT INTO kb_resource_edges (
-            id, source_resource_id, target_resource_id,
-            edge_kind, polarity, label, weight,
-            asserted_by_event_id, last_event_id, is_folded
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, false)
-        ON CONFLICT ON CONSTRAINT uq_resource_edge
-        DO UPDATE SET
-            weight        = EXCLUDED.weight,
-            last_event_id = EXCLUDED.last_event_id,
-            is_folded     = false,
-            updated       = now()
-        "#,
-        edge_id,
-        edge.source_resource_id,
-        edge.target_resource_id,
-        edge.edge_kind as EdgeKind,
-        edge.polarity as Polarity,
-        edge.label,
-        edge.weight,
-        asserted_event_id,
-    )
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-/// Mark an edge row as folded (retracted from the default projection).
-async fn fold_edge_row(
-    tx: &mut Transaction<'_, Postgres>,
-    edge_id: Uuid,
-    folded_event_id: Uuid,
-) -> ApiResult<()> {
-    sqlx::query!(
-        r#"
-        UPDATE kb_resource_edges
-           SET is_folded = true,
-               last_event_id = $2,
-               updated = now()
-         WHERE id = $1
-        "#,
-        edge_id,
-        folded_event_id,
-    )
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
 }
 
 /// Append `relationship_asserted` events + project edge rows for the supplied
 /// resolved edges and slug-target assertions, all in one transaction.
+///
+/// Each event is appended via `append_asserted_and_project` which delegates
+/// the `kb_resource_edges` projection to `apply_relationship_event`, keeping
+/// the projection logic in a single authoritative place.
 ///
 /// Returns `(projected, pending)` where:
 ///   * `projected` is the count of resolved edges whose row exists post-call.
@@ -388,8 +335,7 @@ async fn assert_edges_tx(
 
     for edge in resolved {
         let payload = asserted_payload_resource(edge)?;
-        let event_id = append_asserted(tx, profile_id, payload, metadata.clone()).await?;
-        project_edge_row(tx, edge, event_id).await?;
+        append_asserted_and_project(tx, profile_id, payload, metadata.clone()).await?;
     }
 
     let mut pending = 0usize;
@@ -404,7 +350,7 @@ async fn assert_edges_tx(
         let (edge_kind, polarity, label) = edge_type.legacy_mapping();
         let payload =
             asserted_payload_slug(source_resource_id, edge_kind, polarity, label, slug, 1.0)?;
-        append_asserted(tx, profile_id, payload, metadata.clone()).await?;
+        append_asserted_and_project(tx, profile_id, payload, metadata.clone()).await?;
         pending += 1;
     }
 
@@ -605,10 +551,8 @@ pub async fn reconcile_edges(
         assert_edges_tx(&mut tx, **profile_id, &to_add, &unresolved, **resource_id).await?;
 
     // Retractions: fold the row + emit a correlated `relationship_folded`.
-    for (edge_id, correlation_event_id) in &to_fold {
-        let folded_event_id =
-            append_folded(&mut tx, **profile_id, *correlation_event_id, None).await?;
-        fold_edge_row(&mut tx, *edge_id, folded_event_id).await?;
+    for (_edge_id, correlation_event_id) in &to_fold {
+        append_folded_and_project(&mut tx, **profile_id, *correlation_event_id, None).await?;
     }
 
     tx.commit().await?;
