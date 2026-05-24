@@ -123,13 +123,6 @@ pub enum Commands {
         context: String,
     },
 
-    /// Push a single resource to the cloud. Target can be a UUID (requires
-    /// a manifest) or a filesystem path. Always sends body + meta together.
-    Push {
-        /// Resource UUID or path to a vault file
-        target: String,
-    },
-
     /// Sync local vault with temper cloud
     Sync {
         #[command(subcommand)]

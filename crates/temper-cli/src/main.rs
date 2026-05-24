@@ -352,7 +352,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             )
         }
         Commands::Pull { context } => commands::pull::run(&context),
-        Commands::Push { target } => commands::push::run(&target),
         Commands::Sync { action } => match action {
             SyncAction::Run { context, format } => {
                 let format = temper_cli::format::resolve_format_str(format.as_deref());

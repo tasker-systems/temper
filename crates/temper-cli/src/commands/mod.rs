@@ -10,7 +10,6 @@ pub mod graph;
 pub mod index;
 pub mod init;
 pub mod pull;
-pub mod push;
 pub mod resource;
 pub mod search_cmd;
 pub mod session;
