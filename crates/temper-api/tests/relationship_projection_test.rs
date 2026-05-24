@@ -435,3 +435,165 @@ async fn test_unresolved_slug_projects_no_edge(pool: PgPool) {
             .expect("edge count");
     assert_eq!(edge_count, 0, "no edge projected for unresolved slug");
 }
+
+// ─── Test 6: slug resolution during rebuild is context-scoped ────────────────
+
+/// Regression guard for Fix B: `apply_relationship_event` (the rebuild path)
+/// must resolve slugs within the source resource's own context, not via
+/// `resources_visible_to` (profile-visibility-scoped, broader).
+///
+/// Setup: Profile P owns two contexts CP1 and CP2. Source A is in CP1.
+/// Target C lives in CP2 with slug "rbs-target". CP1 has NO resource with
+/// slug "rbs-target".
+///
+/// We inject a `relationship_asserted` event with
+/// `source = A, target = Slug("rbs-target")` (as the live-write path would
+/// produce when the slug doesn't resolve in CP1).
+///
+/// Post-fix: rebuild must NOT project an edge A→C because "rbs-target" does
+/// not exist in CP1 (the source's context). Pre-fix, the old
+/// `resources_visible_to` path would have resolved the slug to C (in CP2)
+/// and projected a spurious edge.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn rebuild_slug_resolution_is_context_scoped(pool: PgPool) {
+    use temper_api::services::relationship_service::rebuild_edge_projection;
+
+    common::fixtures::clean_and_seed(&pool).await;
+    let profile = common::fixtures::create_test_profile(&pool, "proj-ctx-slug@test.com").await;
+
+    // Create CP1 (source context).
+    let cp1_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
+           VALUES ($1, 'cp1-rbs', 'kb_profiles', $2)"#,
+    )
+    .bind(cp1_id)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("create CP1");
+
+    // Create CP2 (target context).
+    let cp2_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_contexts (id, name, kb_owner_table, kb_owner_id)
+           VALUES ($1, 'cp2-rbs', 'kb_profiles', $2)"#,
+    )
+    .bind(cp2_id)
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("create CP2");
+
+    // Resource A in CP1 (no slug "rbs-target" in CP1).
+    let doc_type_id = uuid::Uuid::parse_str(common::fixtures::RESEARCH_DOC_TYPE_ID).unwrap();
+    let a = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_resources
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+             originator_profile_id, owner_profile_id, is_active, created, updated)
+           VALUES ($1, $2, $3, $4, 'Source A', 'rbs-src', $5, $5, true, now(), now())"#,
+    )
+    .bind(a)
+    .bind(cp1_id)
+    .bind(doc_type_id)
+    .bind("test://rbs-src")
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("create A in CP1");
+
+    // Resource C in CP2 with slug "rbs-target".
+    let c = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_resources
+            (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+             originator_profile_id, owner_profile_id, is_active, created, updated)
+           VALUES ($1, $2, $3, $4, 'Target C', 'rbs-target', $5, $5, true, now(), now())"#,
+    )
+    .bind(c)
+    .bind(cp2_id)
+    .bind(doc_type_id)
+    .bind("test://rbs-target")
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("create C in CP2");
+
+    // Inject a `relationship_asserted` event with Slug target (as the live path
+    // would produce when the slug didn't resolve in CP1).
+    let payload = RelationshipAsserted {
+        source_resource_id: a,
+        target: TargetEndpoint::Slug("rbs-target".to_string()),
+        edge_kind: EdgeKind::Near,
+        polarity: Polarity::Forward,
+        label: "relates_to".to_string(),
+        weight: 1.0,
+    };
+    let payload_value = serde_json::to_value(&payload).expect("serialize");
+
+    let mut write = EventToWrite::new_root(
+        EventType::RelationshipAsserted,
+        profile,
+        declaration_topic_id(),
+        public_scope_id(),
+        payload_value,
+        Utc::now(),
+    );
+    write.metadata = serde_json::json!({"intent": "fixture"});
+
+    // Apply inline (live path) — no edge should be projected because CP1 has
+    // no "rbs-target".
+    let mut tx = pool.begin().await.expect("begin tx");
+    let event = append_event_tx(&mut tx, write).await.expect("append");
+    apply_relationship_event(&mut tx, &event, EventType::RelationshipAsserted)
+        .await
+        .expect("apply inline");
+    tx.commit().await.expect("commit");
+
+    // Verify no edge was projected inline.
+    let inline_edge_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_resource_edges WHERE source_resource_id = $1")
+            .bind(a)
+            .fetch_one(&pool)
+            .await
+            .expect("inline edge count");
+    assert_eq!(
+        inline_edge_count, 0,
+        "inline apply: no edge in CP1 for slug 'rbs-target'"
+    );
+
+    // Now rebuild — must also produce zero edges (slug "rbs-target" not in CP1).
+    let mut tx = pool.begin().await.expect("begin rebuild tx");
+    rebuild_edge_projection(&mut tx).await.expect("rebuild");
+    tx.commit().await.expect("commit rebuild");
+
+    let rebuilt_edge_count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_resource_edges WHERE source_resource_id = $1")
+            .bind(a)
+            .fetch_one(&pool)
+            .await
+            .expect("rebuilt edge count");
+
+    // Pre-fix: rebuild used resources_visible_to and would have found C in CP2,
+    // producing count=1. Post-fix: context-scoped, count=0.
+    assert_eq!(
+        rebuilt_edge_count, 0,
+        "rebuild must not project edge when slug exists in a different context (CP2) \
+         than the source (CP1)"
+    );
+
+    // Verify C was NOT chosen as the target (belt+suspenders).
+    let spurious_edge: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_resource_edges WHERE source_resource_id = $1 AND target_resource_id = $2",
+    )
+    .bind(a)
+    .bind(c)
+    .fetch_one(&pool)
+    .await
+    .expect("spurious edge check");
+    assert_eq!(
+        spurious_edge, 0,
+        "no spurious A→C edge via cross-context slug resolution"
+    );
+}

@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
 use temper_core::operations::{
-    AssertRelationship, FoldRelationship, ResourceRef, RetypeRelationship, ReweightRelationship,
-    Surface,
+    AssertRelationship, DomainEvent, FoldRelationship, ResourceRef, RetypeRelationship,
+    ReweightRelationship, Surface,
 };
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::ProfileId;
@@ -535,4 +535,279 @@ async fn retype_unauthorized(pool: PgPool) {
         event_count_before, event_count_after,
         "no new event should have been appended after auth failure"
     );
+}
+
+// ─── Test 8: re-assert active edge converts to reweight ──────────────────────
+
+/// Asserting the same edge twice (same source, target slug, kind, label,
+/// polarity) when the edge is still active must divert to a `reweight` under
+/// the FIRST assertion's correlation chain. No second `relationship_asserted`
+/// event should appear in the ledger.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reassert_active_edge_converts_to_reweight(pool: PgPool) {
+    common::fixtures::clean_and_seed(&pool).await;
+    let (profile, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, "rw-reassert@test.com").await;
+    let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-reassert-a").await;
+    let _b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-reassert-b").await;
+
+    // First assertion (weight=1.0).
+    let first_cmd = assert_cmd_scoped(
+        "temper",
+        "rw-reassert-a",
+        "rw-reassert-b",
+        EdgeKind::LeadsTo,
+        Polarity::Forward,
+        "depends_on",
+        1.0,
+    );
+    let first_output = backend(pool.clone(), profile)
+        .assert_relationship(first_cmd)
+        .await
+        .expect("first assert should succeed");
+
+    let first_correlation_id = first_output.value;
+
+    // Capture asserted_by_event_id so we can verify it stays unchanged.
+    let original_asserted_by: Uuid = sqlx::query_scalar(
+        "SELECT asserted_by_event_id FROM kb_resource_edges WHERE asserted_by_event_id = $1",
+    )
+    .bind(first_correlation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("original asserted_by_event_id");
+    assert_eq!(original_asserted_by, first_correlation_id);
+
+    // Second "assertion" with weight=3.0 — same key, edge is active.
+    let second_cmd = assert_cmd_scoped(
+        "temper",
+        "rw-reassert-a",
+        "rw-reassert-b",
+        EdgeKind::LeadsTo,
+        Polarity::Forward,
+        "depends_on",
+        3.0,
+    );
+    let second_output = backend(pool.clone(), profile)
+        .assert_relationship(second_cmd)
+        .await
+        .expect("re-assert should succeed (divert to reweight)");
+
+    // Response must be DbRelationshipReweighted, NOT DbRelationshipAsserted.
+    assert!(
+        second_output
+            .events
+            .iter()
+            .any(|e| matches!(e, DomainEvent::DbRelationshipReweighted { .. })),
+        "re-assert of active edge should produce DbRelationshipReweighted"
+    );
+    assert!(
+        !second_output
+            .events
+            .iter()
+            .any(|e| matches!(e, DomainEvent::DbRelationshipAsserted { .. })),
+        "re-assert of active edge must NOT produce a second DbRelationshipAsserted"
+    );
+
+    // Returned correlation_id must equal the FIRST assertion's correlation_id.
+    assert_eq!(
+        second_output.value, first_correlation_id,
+        "diverted reweight must return the original correlation_id"
+    );
+
+    // Ledger: exactly one `relationship_asserted` + one `relationship_reweighted`.
+    let assert_count: i64 = sqlx::query_scalar(
+        r#"SELECT count(*)
+             FROM kb_events ev
+             JOIN kb_event_types et ON et.id = ev.event_type_id
+            WHERE et.name = 'relationship_asserted'
+              AND (ev.payload->>'source_resource_id')::uuid = $1"#,
+    )
+    .bind(_a)
+    .fetch_one(&pool)
+    .await
+    .expect("assert count");
+    assert_eq!(
+        assert_count, 1,
+        "exactly one relationship_asserted in ledger"
+    );
+
+    let reweight_count: i64 = sqlx::query_scalar(
+        r#"SELECT count(*)
+             FROM kb_events ev
+             JOIN kb_event_types et ON et.id = ev.event_type_id
+            WHERE et.name = 'relationship_reweighted'
+              AND ev.correlation_id = $1"#,
+    )
+    .bind(first_correlation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("reweight count");
+    assert_eq!(
+        reweight_count, 1,
+        "exactly one relationship_reweighted in ledger"
+    );
+
+    // Edge row: weight=3.0, asserted_by_event_id unchanged (pinned to original).
+    let row = sqlx::query!(
+        r#"SELECT weight                AS "weight!: f64",
+                  asserted_by_event_id  AS "asserted_by_event_id!: Uuid",
+                  last_event_id         AS "last_event_id!: Uuid"
+             FROM kb_resource_edges
+            WHERE asserted_by_event_id = $1"#,
+        first_correlation_id,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("edge row after re-assert");
+
+    assert!(
+        (row.weight - 3.0).abs() < f64::EPSILON,
+        "weight should be 3.0 after re-assert diverted to reweight, got {}",
+        row.weight
+    );
+    assert_eq!(
+        row.asserted_by_event_id, first_correlation_id,
+        "asserted_by_event_id must remain pinned to original assertion"
+    );
+    assert_ne!(
+        row.last_event_id, first_correlation_id,
+        "last_event_id must be bumped by the reweight event"
+    );
+}
+
+// ─── Test 9: re-assert folded edge starts new chain ──────────────────────────
+
+/// Assert A→B, fold it, then re-assert. The re-assert must start a new
+/// correlation chain (fresh `relationship_asserted`). The `asserted_by_event_id`
+/// on the row must transfer to the new assertion's event id.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
+    common::fixtures::clean_and_seed(&pool).await;
+    let (profile, context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, "rw-refold@test.com").await;
+    let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-refold-a").await;
+    let _b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-refold-b").await;
+
+    // First assertion.
+    let cmd1 = assert_cmd_scoped(
+        "temper",
+        "rw-refold-a",
+        "rw-refold-b",
+        EdgeKind::LeadsTo,
+        Polarity::Forward,
+        "depends_on",
+        1.0,
+    );
+    let out1 = backend(pool.clone(), profile)
+        .assert_relationship(cmd1)
+        .await
+        .expect("first assert");
+    let first_correlation_id = out1.value;
+
+    // Fold the edge.
+    let fold = FoldRelationship {
+        correlation_id: first_correlation_id,
+        reason: Some("test fold before re-assert".to_string()),
+        origin: Surface::ApiHttp,
+    };
+    backend(pool.clone(), profile)
+        .fold_relationship(fold)
+        .await
+        .expect("fold");
+
+    // Re-assert with weight=2.0 — edge is folded, so a new chain starts.
+    let cmd2 = assert_cmd_scoped(
+        "temper",
+        "rw-refold-a",
+        "rw-refold-b",
+        EdgeKind::LeadsTo,
+        Polarity::Forward,
+        "depends_on",
+        2.0,
+    );
+    let out2 = backend(pool.clone(), profile)
+        .assert_relationship(cmd2)
+        .await
+        .expect("re-assert after fold");
+    let new_correlation_id = out2.value;
+
+    // Response must be DbRelationshipAsserted.
+    assert!(
+        out2.events
+            .iter()
+            .any(|e| matches!(e, DomainEvent::DbRelationshipAsserted { .. })),
+        "re-assert of folded edge should produce DbRelationshipAsserted"
+    );
+
+    // New correlation_id must differ from the first.
+    assert_ne!(
+        new_correlation_id, first_correlation_id,
+        "re-assert after fold must produce a new correlation chain"
+    );
+
+    // Ledger: two `relationship_asserted` events.
+    let assert_count: i64 = sqlx::query_scalar(
+        r#"SELECT count(*)
+             FROM kb_events ev
+             JOIN kb_event_types et ON et.id = ev.event_type_id
+            WHERE et.name = 'relationship_asserted'
+              AND (ev.payload->>'source_resource_id')::uuid = $1"#,
+    )
+    .bind(_a)
+    .fetch_one(&pool)
+    .await
+    .expect("assert event count");
+    assert_eq!(
+        assert_count, 2,
+        "two relationship_asserted events in ledger"
+    );
+
+    // Edge row: is_folded=false, weight=2.0, asserted_by_event_id = new chain.
+    let row = sqlx::query!(
+        r#"SELECT weight                AS "weight!: f64",
+                  is_folded             AS "is_folded!",
+                  asserted_by_event_id  AS "asserted_by_event_id!: Uuid",
+                  last_event_id         AS "last_event_id!: Uuid"
+             FROM kb_resource_edges
+            WHERE source_resource_id = $1"#,
+        _a,
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("edge row after re-assert");
+
+    assert!(!row.is_folded, "edge should be unfolded after re-assert");
+    assert!(
+        (row.weight - 2.0).abs() < f64::EPSILON,
+        "weight should be 2.0 after re-assert, got {}",
+        row.weight
+    );
+    assert_eq!(
+        row.asserted_by_event_id, new_correlation_id,
+        "asserted_by_event_id must be transferred to the new chain"
+    );
+    assert_eq!(
+        row.last_event_id, new_correlation_id,
+        "last_event_id must be the new assertion's event id"
+    );
+
+    // Verify the new chain is healthy: folding via new_correlation_id actually folds the row.
+    let fold2 = FoldRelationship {
+        correlation_id: new_correlation_id,
+        reason: None,
+        origin: Surface::ApiHttp,
+    };
+    backend(pool.clone(), profile)
+        .fold_relationship(fold2)
+        .await
+        .expect("fold via new chain should succeed");
+
+    let is_folded_now: bool =
+        sqlx::query_scalar("SELECT is_folded FROM kb_resource_edges WHERE source_resource_id = $1")
+            .bind(_a)
+            .fetch_one(&pool)
+            .await
+            .expect("is_folded after second fold");
+    assert!(is_folded_now, "fold via new correlation chain must work");
 }

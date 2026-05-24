@@ -31,12 +31,14 @@ pub struct RelationshipAsserted {
     pub weight: f64,
 }
 
-/// `relationship_retyped` — change the structural kind / label. Declaration.
+/// `relationship_retyped` — change the structural kind and polarity. Declaration.
+///
+/// `label` is intentionally absent: no surface exposes label-on-retype, and
+/// the projection apply never updated it. Relabel-on-retype is future scope.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelationshipRetyped {
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
-    pub label: String,
 }
 
 /// `relationship_reweighted` — change the weight. Declaration.

@@ -50,10 +50,87 @@ pub async fn find_slug_in_context(
     Ok(id)
 }
 
+/// Pool-accepting variant of [`find_slug_in_context`] for pre-transaction
+/// read paths (e.g. the active-edge detection check in `assert_relationship`).
+pub async fn find_slug_in_context_pool(
+    pool: &sqlx::PgPool,
+    context_id: Uuid,
+    slug: &str,
+) -> ApiResult<Option<Uuid>> {
+    let id = sqlx::query_scalar!(
+        r#"
+        SELECT id AS "id!: Uuid"
+          FROM kb_resources
+         WHERE kb_context_id = $1
+           AND slug = $2
+           AND is_active
+         LIMIT 1
+        "#,
+        context_id,
+        slug,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(id)
+}
+
 /// Minimal row shape for auth + retype lookup from `kb_resource_edges`.
 pub struct EdgeAuthRow {
     pub source_resource_id: Uuid,
     pub label: String,
+}
+
+/// Minimal row shape for checking whether an active edge already exists,
+/// returned by [`find_active_edge`].
+pub struct ActiveEdgeRow {
+    /// The existing correlation chain root (== `asserted_by_event_id` of the
+    /// edge row, which is the id of the original `relationship_asserted` event).
+    pub correlation_id: Uuid,
+    /// Whether the edge has been folded (retracted).
+    pub is_folded: bool,
+}
+
+/// Look up an existing edge by its natural unique key
+/// `(source_resource_id, target_resource_id, edge_kind, label, polarity)`.
+///
+/// Returns `None` when no matching edge row exists (i.e. this would be a
+/// fresh assertion). Returns `Some(ActiveEdgeRow)` when the row exists,
+/// regardless of `is_folded` state — the caller decides whether to divert
+/// or proceed.
+///
+/// SQL lives here per "service layer owns SQL" rule.
+pub async fn find_active_edge(
+    pool: &sqlx::PgPool,
+    source_resource_id: Uuid,
+    target_resource_id: Uuid,
+    edge_kind: temper_core::types::graph::EdgeKind,
+    label: &str,
+    polarity: temper_core::types::graph::Polarity,
+) -> ApiResult<Option<ActiveEdgeRow>> {
+    let row = sqlx::query!(
+        r#"
+        SELECT asserted_by_event_id AS "correlation_id!: Uuid",
+               is_folded            AS "is_folded!"
+          FROM kb_resource_edges
+         WHERE source_resource_id = $1
+           AND target_resource_id = $2
+           AND edge_kind          = $3
+           AND label              = $4
+           AND polarity           = $5
+         LIMIT 1
+        "#,
+        source_resource_id,
+        target_resource_id,
+        edge_kind as temper_core::types::graph::EdgeKind,
+        label,
+        polarity as temper_core::types::graph::Polarity,
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| ActiveEdgeRow {
+        correlation_id: r.correlation_id,
+        is_folded: r.is_folded,
+    }))
 }
 
 /// Look up the `source_resource_id` and current `label` for an edge identified
@@ -144,25 +221,35 @@ pub async fn apply_relationship_event(
             let target_resource_id = match &payload.target {
                 TargetEndpoint::Resource(id) => *id,
                 TargetEndpoint::Slug(slug) => {
-                    // Attempt to resolve the slug to a resource visible to the
-                    // emitter profile. If unresolved, project nothing.
-                    // TODO(task-13): re-project pending-slug assertions when the
-                    // target resource is created.
-                    let resolved = sqlx::query_scalar!(
-                        r#"
-                        SELECT r.id AS "id!: Uuid"
-                          FROM kb_resources r
-                          JOIN resources_visible_to($1, NULL, '{}') rv
-                            ON rv.resource_id = r.id
-                         WHERE r.slug = $2
-                           AND r.is_active
-                         LIMIT 1
-                        "#,
-                        event.emitter_profile_id,
-                        slug,
+                    // Resolve the slug within the source resource's own context —
+                    // same scoping as the live-write path — so that drop+replay
+                    // produces the same projection regardless of the emitter's
+                    // cross-context visibility.
+                    //
+                    // Step 1: look up source's context_id. If the source was
+                    // deleted after the event was emitted, skip projection.
+                    let source_context_id = sqlx::query_scalar!(
+                        r#"SELECT kb_context_id AS "kb_context_id!: Uuid"
+                             FROM kb_resources
+                            WHERE id = $1"#,
+                        payload.source_resource_id,
                     )
                     .fetch_optional(&mut *tx)
                     .await?;
+
+                    let Some(source_context_id) = source_context_id else {
+                        tracing::debug!(
+                            source_id = %payload.source_resource_id,
+                            event_id = %event.id,
+                            "source resource not found during rebuild — skipping edge projection"
+                        );
+                        return Ok(());
+                    };
+
+                    // Step 2: resolve the slug within the source's context.
+                    // TODO(task-13): re-project pending-slug assertions when the
+                    // target resource is created.
+                    let resolved = find_slug_in_context(&mut *tx, source_context_id, slug).await?;
 
                     match resolved {
                         Some(id) => id,
@@ -189,10 +276,13 @@ pub async fn apply_relationship_event(
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, false)
                 ON CONFLICT ON CONSTRAINT uq_resource_edge
                 DO UPDATE SET
-                    weight        = EXCLUDED.weight,
-                    last_event_id = EXCLUDED.last_event_id,
-                    is_folded     = false,
-                    updated       = now()
+                    -- Re-asserting a folded edge starts a new correlation chain;
+                    -- ownership transfers to the new assertion event.
+                    asserted_by_event_id = EXCLUDED.asserted_by_event_id,
+                    weight               = EXCLUDED.weight,
+                    last_event_id        = EXCLUDED.last_event_id,
+                    is_folded            = false,
+                    updated              = now()
                 "#,
                 edge_id,
                 payload.source_resource_id,
