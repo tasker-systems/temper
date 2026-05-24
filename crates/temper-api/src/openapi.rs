@@ -32,6 +32,10 @@ use temper_core::types::resource::{
         crate::handlers::meta::get_meta,
         crate::handlers::meta::update_meta,
         crate::handlers::edges::list,
+        crate::handlers::edges::assert,
+        crate::handlers::edges::retype,
+        crate::handlers::edges::reweight,
+        crate::handlers::edges::fold,
         crate::handlers::graph::get_subgraph,
     ),
     components(schemas(
@@ -61,6 +65,11 @@ use temper_core::types::resource::{
         temper_core::types::graph::SubgraphResponse,
         temper_core::types::Profile,
         temper_core::types::ProfileAuthLink,
+        crate::handlers::edges::AssertRelationshipRequest,
+        crate::handlers::edges::RetypeRelationshipRequest,
+        crate::handlers::edges::ReweightRelationshipRequest,
+        crate::handlers::edges::FoldRelationshipRequest,
+        crate::handlers::edges::RelationshipAck,
     )),
     modifiers(&SecurityAddon),
     tags(
@@ -71,6 +80,7 @@ use temper_core::types::resource::{
         (name = "Search", description = "Semantic and keyword search"),
         (name = "Meta", description = "Resource frontmatter metadata management"),
         (name = "Graph", description = "Knowledge graph traversal"),
+        (name = "Relationships", description = "Knowledge-graph relationship writes (assert/retype/reweight/fold)"),
     ),
     info(
         title = "Temper Cloud API",
@@ -123,6 +133,7 @@ mod tests {
         assert!(json.contains("/api/search"));
         assert!(json.contains("/api/resources/{id}/meta"));
         assert!(json.contains("/api/resources/{id}/edges"));
+        assert!(json.contains("/api/relationships"));
         assert!(json.contains("/api/graph/subgraph"));
 
         // Verify security scheme
@@ -136,5 +147,6 @@ mod tests {
         assert!(json.contains("\"name\": \"Events\""));
         assert!(json.contains("\"name\": \"Search\""));
         assert!(json.contains("\"name\": \"Health\""));
+        assert!(json.contains("\"name\": \"Relationships\""));
     }
 }

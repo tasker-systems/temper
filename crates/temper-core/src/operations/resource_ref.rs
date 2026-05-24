@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::types::ids::ResourceId;
 
 /// Identifies a resource for a command that targets an existing resource.
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum ResourceRef {
