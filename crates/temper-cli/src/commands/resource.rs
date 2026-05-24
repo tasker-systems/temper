@@ -63,7 +63,7 @@ fn render_create_output(
 /// - Research: `{ "title", "project", "path", "date", "id", "slug" }` where
 ///   `project` is the context name, `path` is vault-relative, `id` is the
 ///   resource UUID (string), `slug` is the date-prefixed slug.
-///   Source: `commands::research::save`, `serde_json::json!` at line 84.
+///   Source: research-doctype create path, serialized via `serde_json::json!`.
 ///
 /// - Concept / Decision: serialized `ResourceCreated` →
 ///   `{ "doc_type", "title", "slug", "context", "path", "date", "id" }`
