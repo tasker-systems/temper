@@ -14,6 +14,7 @@ pub mod http;
 pub mod ingest;
 pub mod login;
 pub mod profile;
+pub mod relationships;
 pub mod resources;
 pub mod search;
 pub mod sync;
@@ -112,6 +113,11 @@ impl TemperClient {
     /// Resource CRUD sub-client.
     pub fn resources(&self) -> resources::ResourceClient<'_> {
         resources::ResourceClient::new(&self.http)
+    }
+
+    /// Relationship write sub-client (assert / retype / reweight / fold).
+    pub fn relationships(&self) -> relationships::RelationshipClient<'_> {
+        relationships::RelationshipClient::new(&self.http)
     }
 
     /// Search sub-client.

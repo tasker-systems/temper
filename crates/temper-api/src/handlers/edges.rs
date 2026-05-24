@@ -9,56 +9,14 @@ use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::edge_service;
 use crate::state::AppState;
 use temper_core::operations::{
-    AssertRelationship, FoldRelationship, ResourceRef, RetypeRelationship, ReweightRelationship,
-    Surface,
+    AssertRelationship, FoldRelationship, RetypeRelationship, ReweightRelationship, Surface,
 };
-use temper_core::types::graph::{EdgeKind, GraphEdgeRow, Polarity};
+use temper_core::types::graph::GraphEdgeRow;
 use temper_core::types::ids::ProfileId;
-
-// ─── Request bodies ──────────────────────────────────────────────────────────
-
-/// Request body for `POST /api/relationships`.
-#[derive(Debug, Clone, serde::Deserialize, utoipa::ToSchema)]
-pub struct AssertRelationshipRequest {
-    /// Source resource — owner, context, doctype, slug.
-    pub source: ResourceRef,
-    /// Target resource slug (resolved within source's context).
-    pub target_slug: String,
-    pub edge_kind: EdgeKind,
-    pub polarity: Polarity,
-    pub label: String,
-    pub weight: f64,
-}
-
-/// Request body for `POST /api/relationships/{correlation_id}/retype`.
-#[derive(Debug, Clone, serde::Deserialize, utoipa::ToSchema)]
-pub struct RetypeRelationshipRequest {
-    pub edge_kind: EdgeKind,
-    pub polarity: Polarity,
-}
-
-/// Request body for `POST /api/relationships/{correlation_id}/reweight`.
-#[derive(Debug, Clone, serde::Deserialize, utoipa::ToSchema)]
-pub struct ReweightRelationshipRequest {
-    pub weight: f64,
-}
-
-/// Request body for `POST /api/relationships/{correlation_id}/fold`.
-#[derive(Debug, Clone, serde::Deserialize, utoipa::ToSchema)]
-pub struct FoldRelationshipRequest {
-    pub reason: Option<String>,
-}
-
-// ─── Response body ───────────────────────────────────────────────────────────
-
-/// Acknowledgement returned by all relationship write endpoints.
-///
-/// Carries the `correlation_id` that identifies the relationship chain.
-/// Future revisions may add the projected edge id or event id.
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct RelationshipAck {
-    pub correlation_id: Uuid,
-}
+use temper_core::types::relationship_requests::{
+    AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
+    ReweightRelationshipRequest,
+};
 
 // ─── Handlers ────────────────────────────────────────────────────────────────
 
