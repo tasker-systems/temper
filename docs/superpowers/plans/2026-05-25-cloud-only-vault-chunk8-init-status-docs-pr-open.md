@@ -201,14 +201,24 @@ git commit -m "cloud-only(ch8): record the chunk 8 implementation plan"
 
 Inventory every test file whose code path is touched by this chunk. Produce explicit delete/keep/repoint verdicts in an **empty commit** so the analysis is bisectable.
 
-Target files (from plan-gate audit):
+Target files (from plan-gate audit + Task 1 mid-execution discovery):
 
 - `crates/temper-cli/tests/init_test.rs` → **REWRITE** (Task 2): asserts will move from `manifest.json`/`events.jsonl` existence to config-file existence + absence of vault-scaffold sidecars.
 - `crates/temper-cli/tests/status_test.rs` → **DELETE the file** (Task 3): tests `count_md_files` which is being removed. New status tests live as `#[cfg(test)] mod tests` inside `commands/status.rs`.
 - `crates/temper-cli/tests/check_test.rs` → **KEEP** (Task 2): calls `init::run` as a test fixture; if `run` signature is preserved (which the plan requires), no edit. Verify at task-time.
+- `crates/temper-cli/tests/skill_test.rs` lines 6-7 → **MODIFY** (Task 2): drop vestigial `state_dir.join("manifest.json")`/`events.jsonl` fixture writes. Surfaced in Task 1 mid-execution; the test fixture writes empty marker files left over from when init scaffolded them, but the test does NOT assert on those files and the code under test (skill generation) does not read them. Removing the two `std::fs::write(...)` lines is safe.
+- `crates/temper-cli/tests/resource_delete_test.rs` lines 21-22 → **MODIFY** (Task 2): same as above — vestigial `manifest.json`/`events.jsonl` fixture writes in `test_config(dir)` helper. Test asserts only on the invalid-doctype early return; no code path under test reads either file.
 - `crates/temper-cli/src/commands/init.rs` inline tests (lines 264-425) → **REWRITE** (Task 2): the 3 `apply_answers_*` tests that assert manifest/events sidecars need new assertions; the 7 `render_config_toml_*` tests stay as-is (TOML rendering is unchanged).
 - `tests/e2e/tests/cloud_writes_test.rs` → **MODIFY** (Task 4): delete Test 7 (`sync_run_errors_with_cloud_only_message`, lines 922-953) + the `sync_cmd::run` reference in the file-header doc-comment (line 10). The rest of the file is unaffected.
 - All other test files in `crates/temper-cli/tests/` and `tests/e2e/tests/` → **KEEP** unchanged.
+
+**Safety verification for `events.jsonl` drop (Task 1 grep-driven):**
+- `discovery::append_event` (line 36-49) uses `OpenOptions::new().create(true).append(true)` — **lazy-creates** the file on first write.
+- `commands::events::load_events` (line 14-19) early-returns `Ok(vec![])` when the file does not exist — tolerates absence.
+- Therefore init.rs may safely drop the empty-file write without breaking the local event log.
+
+**Safety verification for `manifest.json` drop (Task 1 grep-driven):**
+- Workspace-wide `rg 'manifest\.json'` shows the only readers were in `manifest_io.rs` (deleted in Chunk 7). No production code reads `manifest.json` anymore. The init-time write is pure orphan.
 
 Embed-gated tests (`test-embed`): none in this chunk's scope. Phase D's hnsw removal is feature-only; no test bodies are gated on `hnsw`.
 
@@ -299,6 +309,8 @@ Reshape `init` to: ensure config exists at `~/.config/temper/config.toml`, verif
 **Test rewrites:**
 
 - `crates/temper-cli/tests/init_test.rs::test_init_creates_vault_structure`: rewrite to assert config file exists, no manifest sidecar, no events sidecar.
+- `crates/temper-cli/tests/skill_test.rs::test_config_with_global` (lines 6-7): drop the two `std::fs::write(state_dir.join("manifest.json"|"events.jsonl"), ...)` calls. The helper still creates `state_dir` (line 5) — keep that line; just drop the two file writes.
+- `crates/temper-cli/tests/resource_delete_test.rs::test_config` (lines 21-22): drop the two `std::fs::write(...)` calls. Same shape as `skill_test.rs`.
 - Inline `apply_answers_warns_on_existing_vault_but_succeeds`: rewrite to use the config-file marker instead of `.temper/manifest.json`.
 - Inline `apply_answers_creates_vault_structure`: rewrite to assert config-file existence + absence of vault-scaffold sidecars.
 - Inline `no_interactive_defaults_and_applies`: same rewrite. **Beware:** this test currently runs `apply_answers` against a `tempfile::tempdir()` — if `apply_answers` now requires a working `temper-client`, the test needs either a mock client or feature-gating (`#[cfg(feature = "test-db")]`). Prefer the **mock-client** approach: introduce a thin `ContextEnsure` trait so the tests can stub out the server call. If that's too invasive, gate the test on `feature = "test-db"` and run it under `--features test-db` only. Surface the trade-off in the task subagent's prompt; let it decide based on the smallest delta.
