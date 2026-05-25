@@ -218,7 +218,7 @@ async fn meta_patch_preserves_chunks_and_body_hash(pool: sqlx::PgPool) {
         .expect("meta update request failed");
     assert_eq!(resp.status(), reqwest::StatusCode::OK);
 
-    // Manifest: body_hash unchanged, managed/open hashes advanced.
+    // After update: body_hash unchanged, managed/open hashes advanced.
     let manifest_after: (String, String, String) = sqlx::query_as(
         "SELECT body_hash, managed_hash, open_hash FROM kb_resource_manifests WHERE resource_id = $1",
     )
