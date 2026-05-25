@@ -1,8 +1,9 @@
-//! Shared business logic for cloud ingest operations (add and pull).
+//! Shared business logic for cloud ingest operations.
 //!
-//! This module holds the domain logic that was previously duplicated across
-//! `commands::add` and `commands::pull`. Command
-//! modules are now thin wrappers that call into these functions.
+//! Pure helpers consumed by cloud-mode paths: body chunking, frontmatter
+//! construction from server resources, body normalization, URL fetch, and
+//! payload assembly. Manifest-coupled and local-vault helpers were removed
+//! in Chunk 7 (Task 5); the sync/manifest stack is retired in Task 7.
 
 use std::path::{Path, PathBuf};
 
@@ -290,101 +291,6 @@ fn display_name_from_url(url: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Cloud ingest
-// ---------------------------------------------------------------------------
-
-/// Extract a file and upload it via the ingest API.
-///
-/// Performs extract → chunk → embed → pack → upload locally.
-/// Returns `(resource, extracted_content)` — the content is needed by callers
-/// that write vault files.
-#[cfg(feature = "embed")]
-pub async fn ingest_file(
-    client: &temper_client::TemperClient,
-    file_path: &Path,
-    context: &str,
-    doc_type: &str,
-) -> Result<(temper_core::types::ResourceRow, String)> {
-    let extraction = crate::extract::extract_to_markdown(file_path).await?;
-    let extracted_content = extraction.content.clone();
-
-    let title = title_from_path(file_path);
-
-    let device_id = crate::config::load_device_id();
-    let canonical_path = std::fs::canonicalize(file_path)
-        .unwrap_or_else(|_| file_path.to_path_buf())
-        .to_string_lossy()
-        .to_string();
-    let metadata = serde_json::json!({
-        "device_id": device_id,
-        "original_path": canonical_path,
-    });
-
-    let payload = build_ingest_payload(
-        &extraction.content,
-        &title,
-        context,
-        doc_type,
-        Some(metadata),
-        None,
-        None,
-    )?;
-
-    let resource = client
-        .ingest()
-        .create(&payload)
-        .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
-
-    Ok((resource, extracted_content))
-}
-
-/// Fetch a URL and ingest its content via the same pipeline as local files.
-///
-/// Downloads to a temp file, extracts via kreuzberg, then uploads. The origin_uri
-/// is set to the original URL (not the temp file path).
-#[cfg(feature = "embed")]
-pub async fn ingest_url(
-    client: &temper_client::TemperClient,
-    url: &str,
-    context: &str,
-    doc_type: &str,
-) -> Result<(temper_core::types::ResourceRow, String)> {
-    let (temp_path, display_name) = fetch_url_to_tempfile(url).await?;
-
-    let extraction = crate::extract::extract_to_markdown(temp_path.as_ref()).await?;
-    let extracted_content = extraction.content.clone();
-
-    let title = display_name;
-
-    let device_id = crate::config::load_device_id();
-    let metadata = serde_json::json!({
-        "device_id": device_id,
-        "original_url": url,
-    });
-
-    let mut payload = build_ingest_payload(
-        &extraction.content,
-        &title,
-        context,
-        doc_type,
-        Some(metadata),
-        None,
-        None,
-    )?;
-    // Override origin_uri with the original URL
-    payload.origin_uri = url.to_string();
-
-    let resource = client
-        .ingest()
-        .create(&payload)
-        .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
-
-    Ok((resource, extracted_content))
-}
-
-// ---------------------------------------------------------------------------
 // Vault file helpers
 // ---------------------------------------------------------------------------
 
@@ -582,91 +488,6 @@ pub fn normalize_body_for_vault(content: &str) -> String {
     }
 }
 
-/// Write a vault file and register the resource in the manifest.
-///
-/// `slug` determines the vault filename (`{slug}.md`). Pass
-/// `slug_from_title(&resource.title)` when no better slug is available.
-/// `owner` is the profile-handle directory component — resolve via
-/// `Config::owner_for_context(context)`.
-///
-/// Returns the absolute vault path.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "vault write needs owner, context, slug, resource, content, source, and extra fields; \
-              collapse into a VaultWritePlan struct once the surface stabilizes."
-)]
-pub fn write_vault_file_and_register(
-    vault_root: &Path,
-    owner: &str,
-    context: &str,
-    doc_type: &str,
-    slug: &str,
-    resource: &temper_core::types::ResourceRow,
-    content: &str,
-    ingestion_source: Option<&str>,
-    extra_fields: Option<&[(&str, &str)]>,
-) -> Result<PathBuf> {
-    let vault_path = build_vault_path(vault_root, owner, context, doc_type, slug);
-
-    if let Some(parent) = vault_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let fm = build_frontmatter(
-        resource.id,
-        &resource.title,
-        context,
-        doc_type,
-        normalize_body_for_vault(content),
-        ingestion_source,
-        extra_fields,
-    )?;
-    fm.write_to(&vault_path).map_err(|e| {
-        crate::error::TemperError::Vault(format!("ingest write {}: {e}", vault_path.display()))
-    })?;
-
-    // Register in manifest.
-    let temper_dir = vault_root.join(".temper");
-    let device_id_str = crate::config::load_device_id().unwrap_or_else(|| "unknown".to_string());
-    let mut manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id_str)?;
-
-    let content_hash = temper_core::hash::compute_body_hash(content);
-    // After ingest, server body_hash matches our local content_hash
-    let remote_hash = content_hash.clone();
-    let rel_path = vault_path
-        .strip_prefix(vault_root)
-        .unwrap_or(&vault_path)
-        .to_string_lossy()
-        .to_string();
-
-    let mtime_secs = std::fs::metadata(&vault_path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64);
-
-    manifest.entries.insert(
-        resource.id,
-        temper_core::types::ManifestEntry {
-            path: rel_path,
-            body_hash: content_hash,
-            remote_body_hash: remote_hash,
-            managed_hash: String::new(),
-            open_hash: String::new(),
-            remote_managed_hash: String::new(),
-            remote_open_hash: String::new(),
-            synced_at: chrono::Utc::now(),
-            state: temper_core::types::ManifestEntryState::Clean,
-            mtime_secs,
-            last_audit_id: None,
-            provisional: false,
-        },
-    );
-    crate::manifest_io::save_manifest(&temper_dir, &manifest)?;
-
-    Ok(vault_path)
-}
-
 // ---------------------------------------------------------------------------
 // Vault path inference
 // ---------------------------------------------------------------------------
@@ -714,21 +535,6 @@ pub fn infer_context_and_doctype(
         })?;
 
     Ok((context, doc_type))
-}
-
-// ---------------------------------------------------------------------------
-// URI parsing
-// ---------------------------------------------------------------------------
-
-/// Derive a context name from a `kb://{context}/...` URI.
-pub fn derive_context_from_uri(uri: &str) -> Option<String> {
-    let rest = uri.strip_prefix("kb://")?;
-    let segment = rest.split('/').next()?;
-    if segment.is_empty() {
-        None
-    } else {
-        Some(segment.to_string())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -786,155 +592,6 @@ mod tests {
     fn title_from_path_handles_markdown() {
         let path = Path::new("my-document.md");
         assert_eq!(title_from_path(path), "my-document");
-    }
-
-    // --- build_uri ---
-
-    #[test]
-    fn build_uri_formats_correctly() {
-        let uri = build_uri("work", "note", "My Document");
-        assert_eq!(uri, "kb://work/note/my-document");
-    }
-
-    #[test]
-    fn build_uri_handles_spaces() {
-        let uri = build_uri("personal", "resource", "Research Paper");
-        assert_eq!(uri, "kb://personal/resource/research-paper");
-    }
-
-    // --- build_vault_path ---
-
-    #[test]
-    fn build_vault_path_produces_correct_path() {
-        let root = Path::new("/vault");
-        let path = build_vault_path(root, "@me", "work", "note", "my-document");
-        assert_eq!(path, PathBuf::from("/vault/@me/work/note/my-document.md"));
-    }
-
-    #[test]
-    fn build_vault_path_nested_context() {
-        let root = Path::new("/home/user/kb");
-        let path = build_vault_path(root, "@me", "personal", "resource", "research-paper");
-        assert_eq!(
-            path,
-            PathBuf::from("/home/user/kb/@me/personal/resource/research-paper.md")
-        );
-    }
-
-    #[test]
-    fn build_vault_path_threads_non_me_owner() {
-        let root = std::path::Path::new("/vault");
-        let path = build_vault_path(root, "@petetaylor", "work", "note", "my-document");
-        assert_eq!(
-            path,
-            std::path::PathBuf::from("/vault/@petetaylor/work/note/my-document.md")
-        );
-    }
-
-    // --- build_frontmatter ---
-
-    #[test]
-    fn build_frontmatter_includes_required_fields() {
-        let id = Uuid::nil();
-        let fm = build_frontmatter(
-            id,
-            "My Title",
-            "work",
-            "research",
-            String::new(),
-            None,
-            None,
-        )
-        .unwrap();
-        let v = fm.value();
-        assert!(
-            v.get("temper-id").is_some(),
-            "temper-id missing. value:\n{v:?}"
-        );
-        assert_eq!(
-            v.get("title").and_then(|x| x.as_str()),
-            Some("My Title"),
-            "title mismatch"
-        );
-        assert_eq!(
-            v.get("temper-context").and_then(|x| x.as_str()),
-            Some("work"),
-            "temper-context mismatch"
-        );
-        assert_eq!(
-            v.get("temper-type").and_then(|x| x.as_str()),
-            Some("research"),
-            "temper-type mismatch"
-        );
-        assert!(v.get("temper-created").is_some(), "temper-created missing");
-    }
-
-    #[test]
-    fn build_frontmatter_includes_ingestion_source_when_provided() {
-        let id = Uuid::nil();
-        let fm = build_frontmatter(
-            id,
-            "My Title",
-            "work",
-            "research",
-            String::new(),
-            Some("/home/user/file.pdf"),
-            None,
-        )
-        .unwrap();
-        let v = fm.value();
-        assert_eq!(
-            v.get("temper-source").and_then(|x| x.as_str()),
-            Some("/home/user/file.pdf"),
-            "expected temper-source in frontmatter"
-        );
-    }
-
-    #[test]
-    fn build_frontmatter_omits_ingestion_source_when_absent() {
-        let id = Uuid::nil();
-        let fm = build_frontmatter(
-            id,
-            "My Title",
-            "work",
-            "research",
-            String::new(),
-            None,
-            None,
-        )
-        .unwrap();
-        let v = fm.value();
-        assert!(
-            v.get("temper-source").is_none(),
-            "unexpected temper-source in frontmatter"
-        );
-    }
-
-    #[test]
-    fn build_frontmatter_includes_extra_fields() {
-        let id = Uuid::nil();
-        let extras = [("legacy_id", "abc-123"), ("goal", "temper-cloud")];
-        let fm = build_frontmatter(
-            id,
-            "Title",
-            "work",
-            "task",
-            String::new(),
-            None,
-            Some(&extras),
-        )
-        .unwrap();
-        let v = fm.value();
-        assert_eq!(
-            v.get("legacy_id").and_then(|x| x.as_str()),
-            Some("abc-123"),
-            "legacy_id mismatch"
-        );
-        assert_eq!(
-            v.get("goal").and_then(|x| x.as_str()),
-            Some("temper-cloud"),
-            "goal mismatch"
-        );
     }
 
     // --- parse_source_frontmatter ---
@@ -1072,26 +729,6 @@ created: 2026-03-23
         let file = Path::new("/vault/orphan.md");
         let result = infer_context_and_doctype(vault, file, None, None);
         assert!(result.is_err());
-    }
-
-    // --- derive_context_from_uri ---
-
-    #[test]
-    fn derive_context_extracts_from_kb_uri() {
-        let ctx = derive_context_from_uri("kb://work/note/my-doc");
-        assert_eq!(ctx, Some("work".to_string()));
-    }
-
-    #[test]
-    fn derive_context_returns_none_for_non_kb_uri() {
-        let ctx = derive_context_from_uri("https://example.com/doc");
-        assert_eq!(ctx, None);
-    }
-
-    #[test]
-    fn derive_context_returns_none_for_empty_context() {
-        let ctx = derive_context_from_uri("kb:///note/my-doc");
-        assert_eq!(ctx, None);
     }
 
     // --- URL helpers ---
@@ -1235,63 +872,6 @@ created: 2026-03-23
             owner, "@j-cole-taylor",
             "frontmatter must record the canonical owner the caller passed in, \
              not the API's @me shorthand"
-        );
-    }
-
-    #[test]
-    fn local_mode_create_writes_own_resource_under_at_me() {
-        // Regression pin: a `temper resource create` (or any equivalent
-        // local-mode create primitive) must write own-resource files under
-        // `@me/<ctx>/<doctype>/...`, regardless of whether the user's
-        // profile.slug is configured.
-        //
-        // PR #70 / PR #72 broke this by canonicalizing own-resource pulls to
-        // `@<profile.slug>/...`. Task 12 reversed the pull path; Task 13's
-        // B.2 sibling threaded `owner` through the vault-path helpers so
-        // callers can pass an explicit handle. The invariant this test pins
-        // is the **path shape**: today `build_vault_path` hardcodes `@me`
-        // for the unscoped helper, and `Config::owner_for_context` falls back
-        // to `@me` when no subscription is configured for the context. Either
-        // way, the file must land under `@me/`.
-        //
-        // The assert below is on the resulting `PathBuf`, not on the
-        // implementation strategy — so a future refactor that switches from
-        // the hardcoded stub to a `Config::owner_for_context(ctx)` lookup
-        // for own contexts stays green.
-        let tmp = tempfile::TempDir::new().unwrap();
-        let resource = test_resource_row();
-
-        let vault_path = write_vault_file_and_register(
-            tmp.path(),
-            "@me",
-            "temper",
-            "research",
-            "my-doc",
-            &resource,
-            "# Body\n",
-            None,
-            None,
-        )
-        .expect("write_vault_file_and_register should succeed");
-
-        let expected_prefix = tmp.path().join("@me");
-        assert!(
-            vault_path.starts_with(&expected_prefix),
-            "own-resource create must land under {}/, got {}",
-            expected_prefix.display(),
-            vault_path.display(),
-        );
-        // Belt-and-braces: ensure we never accidentally regressed back to
-        // emitting an `@<some-slug>/` directory for own resources.
-        let rel = vault_path.strip_prefix(tmp.path()).unwrap();
-        let first_segment = rel
-            .components()
-            .next()
-            .and_then(|c| c.as_os_str().to_str())
-            .expect("vault path must have an owner segment");
-        assert_eq!(
-            first_segment, "@me",
-            "first vault path segment must be `@me` for own resources, got `{first_segment}`",
         );
     }
 
