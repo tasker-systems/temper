@@ -9,7 +9,7 @@ import {
 	nodeWidthPx,
 	SESSION_GLYPH_COLOR
 } from './styling';
-import type { EdgeType, GraphNode } from '../types/generated/graph';
+import type { GraphNode } from '../types/generated/graph';
 
 function node(partial: Partial<GraphNode>): GraphNode {
 	return {
@@ -89,7 +89,7 @@ describe('buildStylesheet', () => {
 		const edgeTypeSelectors = sheet
 			.map((r) => r.selector)
 			.filter((s) => s.startsWith('edge.etype-'));
-		const types: EdgeType[] = [
+		const types: string[] = [
 			'depends_on',
 			'extends',
 			'parent_of',

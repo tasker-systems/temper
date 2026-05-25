@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT is_system_admin($1)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "is_system_admin",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "ce862cb282cbba0748362f4c1990cbb5dd680743ebea15d1408026976346daf6"
+}

@@ -3,9 +3,9 @@ import { buildAdjacencyIndex, neighborsOf } from './adjacency';
 import type { GraphEdge } from '../types/generated/graph';
 
 const edges: GraphEdge[] = [
-	{ source: 'a', target: 'b', edge_type: 'relates_to' },
-	{ source: 'a', target: 'c', edge_type: 'depends_on' },
-	{ source: 'b', target: 'c', edge_type: 'extends' }
+	{ source: 'a', target: 'b', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+	{ source: 'a', target: 'c', edge_kind: 'near', polarity: 'forward', label: 'depends_on' },
+	{ source: 'b', target: 'c', edge_kind: 'near', polarity: 'forward', label: 'extends' }
 ];
 
 describe('buildAdjacencyIndex', () => {
@@ -22,8 +22,8 @@ describe('buildAdjacencyIndex', () => {
 
 	it('deduplicates parallel edges', () => {
 		const idx = buildAdjacencyIndex([
-			{ source: 'a', target: 'b', edge_type: 'relates_to' },
-			{ source: 'a', target: 'b', edge_type: 'references' }
+			{ source: 'a', target: 'b', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'a', target: 'b', edge_kind: 'near', polarity: 'forward', label: 'references' }
 		]);
 		expect(idx.get('a')).toEqual(new Set(['b']));
 	});

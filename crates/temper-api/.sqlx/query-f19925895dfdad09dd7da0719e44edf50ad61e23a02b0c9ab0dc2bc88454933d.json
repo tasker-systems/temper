@@ -1,0 +1,67 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            resource_id   AS \"id!: Uuid\",\n            slug          AS \"slug!\",\n            title         AS \"title!\",\n            doc_type      AS \"doc_type!\",\n            edge_count    AS \"edge_count!: i32\",\n            session_count AS \"session_count!: i32\",\n            first_chunk   AS \"first_chunk: String\",\n            stage_raw     AS \"stage_raw: String\"\n          FROM graph_subgraph_nodes($1, $2, $3::text[], $4::int)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "slug!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "title!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "doc_type!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "edge_count!: i32",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 5,
+        "name": "session_count!: i32",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 6,
+        "name": "first_chunk: String",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "stage_raw: String",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Varchar",
+        "TextArray",
+        "Int4"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "f19925895dfdad09dd7da0719e44edf50ad61e23a02b0c9ab0dc2bc88454933d"
+}

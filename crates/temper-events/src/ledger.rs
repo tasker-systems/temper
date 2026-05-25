@@ -1,17 +1,24 @@
 use serde_json::Value;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 
 use crate::errors::LedgerError;
 use crate::types::event::{Event, EventReference, EventToWrite, EventType, ReferenceKind};
 
-pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, LedgerError> {
+/// Append within a caller-owned transaction/connection. Every validation
+/// query and the final INSERT run on `conn`, so the caller controls
+/// commit/rollback — this is what lets a surface append a ledger event and
+/// apply its projection delta atomically.
+pub async fn append_event_tx(
+    conn: &mut PgConnection,
+    write: EventToWrite,
+) -> Result<Event, LedgerError> {
     let event_type_name = write.event_type.as_canonical_name();
 
     let event_type_id: uuid::Uuid = sqlx::query_scalar!(
         "SELECT id FROM kb_event_types WHERE name = $1",
         event_type_name,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?
     .ok_or_else(|| LedgerError::UnknownEventType(event_type_name.to_string()))?;
 
@@ -21,7 +28,7 @@ pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, L
         "SELECT EXISTS (SELECT 1 FROM kb_profiles WHERE id = $1)",
         write.emitter_profile_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?
     .unwrap_or(false);
     if !profile_exists {
@@ -32,7 +39,7 @@ pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, L
         "SELECT EXISTS (SELECT 1 FROM kb_topics WHERE id = $1)",
         write.topic_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?
     .unwrap_or(false);
     if !topic_exists {
@@ -43,7 +50,7 @@ pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, L
         "SELECT EXISTS (SELECT 1 FROM kb_scopes WHERE id = $1)",
         write.scope_id,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?
     .unwrap_or(false);
     if !scope_exists {
@@ -68,6 +75,15 @@ pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, L
             1 => {}
             _ => return Err(LedgerError::MultipleSupersedes),
         },
+        EventType::RelationshipAsserted
+        | EventType::RelationshipRetyped
+        | EventType::RelationshipReweighted
+        | EventType::RelationshipFolded
+        | EventType::RelationshipDecayed
+        | EventType::RelationshipCorrected => {
+            // Relationship lifecycle events impose no Supersedes invariant;
+            // intra-lifecycle linkage is carried by correlation_id.
+        }
     }
 
     // Validate every reference resolves to a real event.
@@ -76,7 +92,7 @@ pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, L
             "SELECT EXISTS (SELECT 1 FROM kb_events WHERE id = $1)",
             reference.event_id,
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *conn)
         .await?
         .unwrap_or(false);
         if !exists {
@@ -122,8 +138,15 @@ pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, L
         write.correlation_id,
         write.occurred_at,
     )
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
 
     Ok(event)
+}
+
+/// Append using a pool — acquires a connection and delegates. Unchanged
+/// behavior for existing callers.
+pub async fn append_event(pool: &PgPool, write: EventToWrite) -> Result<Event, LedgerError> {
+    let mut conn = pool.acquire().await?;
+    append_event_tx(&mut conn, write).await
 }

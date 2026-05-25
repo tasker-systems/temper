@@ -559,22 +559,31 @@ pub async fn ingest(
         }
     }
 
-    // 7. Attempt to resolve deferred edges targeting this new resource
-    if let Some(ref slug) = resource.slug {
-        if let Err(e) = super::edge_service::resolve_deferred_edges(
-            pool,
-            &resource.id,
-            Some(slug.as_str()),
-            &profile_id,
+    // 7. Re-project any pending slug-target assertions whose target slug now
+    // matches the newly-created resource. Runs on a fresh transaction so the
+    // resource row is visible to the slug resolution query inside
+    // `reproject_pending_for_resource`. Non-fatal: a re-projection failure is
+    // logged and does not roll back the resource creation.
+    if let Err(e) = async {
+        let mut tx = pool.begin().await?;
+        super::relationship_service::reproject_pending_for_resource(
+            &mut tx,
+            *resource.id,
+            &payload.slug,
+            *context_id,
         )
-        .await
-        {
-            tracing::warn!(
-                resource_id = %resource.id,
-                error = %e,
-                "deferred edge resolution failed"
-            );
-        }
+        .await?;
+        tx.commit().await?;
+        Ok::<_, ApiError>(())
+    }
+    .await
+    {
+        tracing::warn!(
+            resource_id = %resource.id,
+            slug = %payload.slug,
+            error = %e,
+            "pending slug re-projection failed during ingest"
+        );
     }
 
     Ok(resource)

@@ -1249,7 +1249,7 @@ fn show_edges(slug: &str, format: &str) -> Result<()> {
             for e in &outgoing {
                 println!(
                     "    {} \u{2192} {} ({})",
-                    e.edge_type, e.peer_slug, e.peer_title
+                    e.label, e.peer_slug, e.peer_title
                 );
             }
         }
@@ -1258,7 +1258,7 @@ fn show_edges(slug: &str, format: &str) -> Result<()> {
             for e in &incoming {
                 println!(
                     "    {} \u{2190} {} ({})",
-                    e.edge_type, e.peer_slug, e.peer_title
+                    e.label, e.peer_slug, e.peer_title
                 );
             }
         }

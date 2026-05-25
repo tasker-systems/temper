@@ -4,6 +4,7 @@ pub mod check;
 pub mod config;
 pub mod context_cmd;
 pub mod doctor;
+pub mod edge;
 pub mod events;
 pub mod goal;
 pub mod graph;

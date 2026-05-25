@@ -20,7 +20,7 @@ function gnode(partial: Partial<GraphNode>): GraphNode {
 describe('toCytoscapeElements', () => {
 	it('produces one node element per input node, one edge element per edge', () => {
 		const nodes = [gnode({ id: 'a' }), gnode({ id: 'b' })];
-		const edges: GraphEdge[] = [{ source: 'a', target: 'b', edge_type: 'relates_to' }];
+		const edges: GraphEdge[] = [{ source: 'a', target: 'b', edge_kind: 'near', polarity: 'forward', label: 'relates_to' }];
 		const els = toCytoscapeElements(nodes, edges);
 		expect(els.filter((e) => e.group === 'nodes')).toHaveLength(2);
 		expect(els.filter((e) => e.group === 'edges')).toHaveLength(1);
@@ -67,7 +67,7 @@ describe('toCytoscapeElements', () => {
 			gnode({ id: 'a', doc_type: 'concept' }),
 			gnode({ id: 'b', doc_type: 'research' })
 		];
-		const edges: GraphEdge[] = [{ source: 'a', target: 'b', edge_type: 'relates_to' }];
+		const edges: GraphEdge[] = [{ source: 'a', target: 'b', edge_kind: 'near', polarity: 'forward', label: 'relates_to' }];
 		const els = toCytoscapeElements(nodes, edges);
 		const edgeEl = els.find((e) => e.group === 'edges')!;
 		expect(edgeEl.classes).toBe('etype-relates_to');
@@ -77,8 +77,8 @@ describe('toCytoscapeElements', () => {
 	it('gives edges stable unique ids', () => {
 		const nodes = [gnode({ id: 'a' }), gnode({ id: 'b' })];
 		const edges: GraphEdge[] = [
-			{ source: 'a', target: 'b', edge_type: 'relates_to' },
-			{ source: 'a', target: 'b', edge_type: 'depends_on' }
+			{ source: 'a', target: 'b', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'a', target: 'b', edge_kind: 'near', polarity: 'forward', label: 'depends_on' }
 		];
 		const els = toCytoscapeElements(nodes, edges);
 		const edgeIds = els.filter((e) => e.group === 'edges').map((e) => e.data.id);

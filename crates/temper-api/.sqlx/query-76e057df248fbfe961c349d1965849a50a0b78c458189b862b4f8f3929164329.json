@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        UPDATE kb_join_requests jr\n           SET status = 'withdrawn', updated = now()\n          FROM kb_teams t\n         WHERE jr.team_id = t.id\n           AND jr.requesting_profile_id = $1\n           AND t.slug = $2\n           AND jr.status = 'pending'\n        RETURNING jr.id\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "76e057df248fbfe961c349d1965849a50a0b78c458189b862b4f8f3929164329"
+}

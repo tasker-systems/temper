@@ -7,7 +7,12 @@ use uuid::Uuid;
 
 // ─── Edge Type ──────────────────────────────────────────────────────────────
 
-/// Edge type enum — mirrors the Postgres `edge_type` enum exactly.
+/// Legacy edge-type enum — kept as a pure-Rust mapping table for the
+/// frontmatter rewire. After the schema cutover (`20260522100002`) the
+/// Postgres `edge_type` enum no longer exists; this Rust enum is a
+/// name-keyed mapping that converts a frontmatter relation field (e.g.
+/// `extends`, `depends_on`) into a structural `(EdgeKind, Polarity, label)`
+/// triple via [`EdgeType::legacy_mapping`].
 ///
 /// All edges are directed: `source_resource_id → target_resource_id`.
 /// Symmetric queries (e.g., `relates_to`) union forward + reverse scans.
@@ -15,8 +20,7 @@ use uuid::Uuid;
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
-#[sqlx(type_name = "edge_type", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeType {
     RelatesTo,
@@ -38,6 +42,67 @@ impl std::fmt::Display for EdgeType {
             Self::ParentOf => write!(f, "parent_of"),
             Self::PrecededBy => write!(f, "preceded_by"),
             Self::DerivedFrom => write!(f, "derived_from"),
+        }
+    }
+}
+
+// ─── Structural Edge Typing (SSTorytime four-type taxonomy) ─────────────────
+
+/// Structural edge type — the four Semantic-Spacetime primitives. Each kind
+/// carries a distinct traversal algebra:
+/// - `Contains`  — transitive (composition / part-of participation)
+/// - `LeadsTo`   — antisymmetric, causal/temporal order
+/// - `Near`      — symmetric (proximity / similarity)
+/// - `Express`   — leaf attribute (has-property)
+///
+/// Mirrors the Postgres `edge_kind` enum.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "edge_kind", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum EdgeKind {
+    Express,
+    Contains,
+    LeadsTo,
+    Near,
+}
+
+/// Edge direction sign. `source → target` as asserted may run *with* the
+/// structural arrow (`Forward`) or *against* it (`Inverse`) — e.g. a
+/// `depends_on` edge is asserted source=dependant/target=dependency, but the
+/// causal arrow runs dependency→dependant, so it is `Inverse` `LeadsTo`.
+/// `Near` is symmetric: always `Forward`.
+///
+/// Mirrors the Postgres `edge_polarity` enum.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "edge_polarity", rename_all = "snake_case")]
+#[serde(rename_all = "snake_case")]
+pub enum Polarity {
+    Forward,
+    Inverse,
+}
+
+impl EdgeType {
+    /// Map a legacy flat `EdgeType` to its structural `(EdgeKind, Polarity,
+    /// label)` triple. The label is the legacy enum's snake_case name —
+    /// preserving the human relation vocabulary as free-text. Used by the
+    /// schema-cutover migration and the frontmatter edge-extraction rewire.
+    pub fn legacy_mapping(self) -> (EdgeKind, Polarity, &'static str) {
+        match self {
+            Self::ParentOf => (EdgeKind::Contains, Polarity::Forward, "parent_of"),
+            Self::DependsOn => (EdgeKind::LeadsTo, Polarity::Inverse, "depends_on"),
+            Self::PrecededBy => (EdgeKind::LeadsTo, Polarity::Inverse, "preceded_by"),
+            Self::DerivedFrom => (EdgeKind::LeadsTo, Polarity::Inverse, "derived_from"),
+            Self::Extends => (EdgeKind::LeadsTo, Polarity::Inverse, "extends"),
+            Self::RelatesTo => (EdgeKind::Near, Polarity::Forward, "relates_to"),
+            Self::References => (EdgeKind::Near, Polarity::Forward, "references"),
         }
     }
 }
@@ -160,7 +225,9 @@ pub struct GraphTraversalRow {
     pub resource_id: Uuid,
     pub depth: i32,
     pub path: Vec<Uuid>,
-    pub edge_type: Option<EdgeType>,
+    pub edge_kind: Option<EdgeKind>,
+    pub polarity: Option<Polarity>,
+    pub label: Option<String>,
     pub from_resource_id: Option<Uuid>,
     pub path_weight: f64,
 }
@@ -172,10 +239,11 @@ pub struct GraphTraversalRow {
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct GraphNeighborRow {
     pub resource_id: Uuid,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
     pub direction: String,
     pub weight: f64,
-    pub metadata: serde_json::Value,
 }
 
 /// Edge listing row — mirrors the `graph_resource_edges()` SQL function.
@@ -188,30 +256,38 @@ pub struct GraphEdgeRow {
     pub peer_resource_id: Uuid,
     pub peer_title: String,
     pub peer_slug: String,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
     pub direction: String,
     pub weight: f64,
-    pub metadata: serde_json::Value,
     pub created: chrono::DateTime<chrono::Utc>,
 }
 
-/// A resolved edge ready for database insertion.
+/// A resolved edge ready for projection.
 #[derive(Debug, Clone)]
 pub struct ResolvedEdge {
     pub source_resource_id: Uuid,
     pub target_resource_id: Uuid,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
     pub weight: f64,
-    pub metadata: serde_json::Value,
 }
 
 /// Result of edge reconciliation after a frontmatter update.
+///
+/// - `added`     — new `relationship_asserted` events whose target resolved.
+/// - `removed`   — projected edges retracted via `relationship_folded`.
+/// - `unchanged` — declarations already present in the projection.
+/// - `pending`   — `relationship_asserted` events whose target is still an
+///   unresolved slug; the projection will materialize when the target lands.
 #[derive(Debug, Clone)]
 pub struct EdgeReconciliation {
     pub added: usize,
     pub removed: usize,
     pub unchanged: usize,
-    pub deferred: usize,
+    pub pending: usize,
 }
 
 // ─── Subgraph Response Types ────────────────────────────────────────────────
@@ -279,7 +355,9 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub source: Uuid,
     pub target: Uuid,
-    pub edge_type: EdgeType,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
 }
 
 /// Full response body for `GET /api/graph/subgraph`.
@@ -414,6 +492,56 @@ mod tests {
     fn edge_type_display() {
         assert_eq!(EdgeType::ParentOf.to_string(), "parent_of");
         assert_eq!(EdgeType::RelatesTo.to_string(), "relates_to");
+    }
+
+    // ── EdgeKind / Polarity ─────────────────────────────────────────────
+
+    #[test]
+    fn edge_kind_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&EdgeKind::LeadsTo).unwrap(),
+            "\"leads_to\""
+        );
+        assert_eq!(serde_json::to_string(&EdgeKind::Near).unwrap(), "\"near\"");
+    }
+
+    #[test]
+    fn polarity_serializes_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&Polarity::Inverse).unwrap(),
+            "\"inverse\""
+        );
+    }
+
+    #[test]
+    fn legacy_mapping_covers_all_seven_edge_types() {
+        // Every legacy EdgeType maps to a (kind, polarity, label).
+        for et in [
+            EdgeType::RelatesTo,
+            EdgeType::Extends,
+            EdgeType::DependsOn,
+            EdgeType::References,
+            EdgeType::ParentOf,
+            EdgeType::PrecededBy,
+            EdgeType::DerivedFrom,
+        ] {
+            let (kind, polarity, label) = et.legacy_mapping();
+            assert!(!label.is_empty());
+            // depends_on / extends / preceded_by / derived_from are inverse leads_to
+            if matches!(
+                et,
+                EdgeType::DependsOn
+                    | EdgeType::Extends
+                    | EdgeType::PrecededBy
+                    | EdgeType::DerivedFrom
+            ) {
+                assert_eq!(kind, EdgeKind::LeadsTo);
+                assert_eq!(polarity, Polarity::Inverse);
+            }
+        }
+        assert_eq!(EdgeType::ParentOf.legacy_mapping().0, EdgeKind::Contains);
+        assert_eq!(EdgeType::RelatesTo.legacy_mapping().0, EdgeKind::Near);
+        assert_eq!(EdgeType::References.legacy_mapping().0, EdgeKind::Near);
     }
 
     // ── ResourceRelationships serde round-trip ──────────────────────────

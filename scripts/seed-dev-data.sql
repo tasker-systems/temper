@@ -405,42 +405,73 @@ DROP FUNCTION _seed_content;
 
 -- ─── Relationships (edges) for graph visualization ─────────────────────────
 -- Each edge source is a concept; target is a related task/research/session.
--- Also a couple of inter-member edges so depth-2 BFS expansion has reach.
+-- Edges are projections of `relationship_asserted` events — emit the event
+-- and the row together.
 
 DO $$
-DECLARE v_pid UUID := current_setting('seed.profile_id')::uuid;
+DECLARE
+    v_pid uuid := current_setting('seed.profile_id')::uuid;
+    v_asserted_type uuid := (SELECT id FROM kb_event_types WHERE name = 'relationship_asserted');
+    v_topic uuid := '019e3d6f-2300-7000-8000-000000000050';
+    v_scope uuid := '019e3d6f-2300-7000-8000-000000000010';
+
+    source_ids uuid[] := ARRAY[
+        'a0000000-0006-0000-0000-000000000001'::uuid,
+        'a0000000-0006-0000-0000-000000000001'::uuid,
+        'a0000000-0006-0000-0000-000000000002'::uuid,
+        'a0000000-0006-0000-0000-000000000002'::uuid,
+        'a0000000-0006-0000-0000-000000000003'::uuid,
+        'a0000000-0006-0000-0000-000000000003'::uuid,
+        'a0000000-0006-0000-0000-000000000003'::uuid,
+        'a0000000-0004-0000-0000-000000000002'::uuid
+    ];
+    target_ids uuid[] := ARRAY[
+        'a0000000-0002-0000-0000-000000000005'::uuid,
+        'a0000000-0004-0000-0000-000000000002'::uuid,
+        'a0000000-0004-0000-0000-000000000004'::uuid,
+        'a0000000-0003-0000-0000-000000000007'::uuid,
+        'a0000000-0002-0000-0000-000000000001'::uuid,
+        'a0000000-0004-0000-0000-000000000001'::uuid,
+        'a0000000-0003-0000-0000-000000000001'::uuid,
+        'a0000000-0004-0000-0000-000000000001'::uuid
+    ];
+    kinds      text[] := ARRAY['near','near','near','near','near','near','near','leads_to'];
+    polarities text[] := ARRAY['forward','forward','forward','forward','forward','forward','forward','inverse'];
+    labels     text[] := ARRAY['relates_to','relates_to','relates_to','relates_to','relates_to','relates_to','relates_to','depends_on'];
+
+    v_event_id uuid;
 BEGIN
-    -- Idempotency concept → related task/research
-    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
-        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000001',
-         'a0000000-0002-0000-0000-000000000005', 'relates_to', 1.0, '{}', v_pid),
-        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000001',
-         'a0000000-0004-0000-0000-000000000002', 'relates_to', 1.0, '{}', v_pid)
-    ON CONFLICT DO NOTHING;
+    FOR i IN 1 .. array_length(source_ids, 1) LOOP
+        v_event_id := public.uuid_generate_v7();
 
-    -- Zero-copy concept (learning) → rust research / session
-    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
-        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000002',
-         'a0000000-0004-0000-0000-000000000004', 'relates_to', 1.0, '{}', v_pid),
-        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000002',
-         'a0000000-0003-0000-0000-000000000007', 'relates_to', 1.0, '{}', v_pid)
-    ON CONFLICT DO NOTHING;
+        INSERT INTO kb_events (
+            id, event_type_id, profile_id, device_id, topic_id, scope_id,
+            payload, metadata, "references", correlation_id, occurred_at, created
+        ) VALUES (
+            v_event_id, v_asserted_type, v_pid, 'seed', v_topic, v_scope,
+            jsonb_build_object(
+                'source_resource_id', source_ids[i],
+                'target', jsonb_build_object('kind', 'resource', 'value', target_ids[i]),
+                'edge_kind', kinds[i],
+                'polarity',  polarities[i],
+                'label',     labels[i],
+                'weight',    1.0
+            ),
+            jsonb_build_object('source', 'seed'),
+            '[]'::jsonb, v_event_id, now(), now()
+        );
 
-    -- Circuit breaker concept → related research/task/session
-    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
-        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000003',
-         'a0000000-0002-0000-0000-000000000001', 'relates_to', 1.0, '{}', v_pid),
-        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000003',
-         'a0000000-0004-0000-0000-000000000001', 'relates_to', 1.0, '{}', v_pid),
-        (gen_random_uuid(), 'a0000000-0006-0000-0000-000000000003',
-         'a0000000-0003-0000-0000-000000000001', 'relates_to', 1.0, '{}', v_pid)
-    ON CONFLICT DO NOTHING;
-
-    -- Inter-member: research depends_on research (tier-3 expansion signal)
-    INSERT INTO kb_resource_edges (id, source_resource_id, target_resource_id, edge_type, weight, metadata, created_by_profile_id) VALUES
-        (gen_random_uuid(), 'a0000000-0004-0000-0000-000000000002',
-         'a0000000-0004-0000-0000-000000000001', 'depends_on', 1.0, '{}', v_pid)
-    ON CONFLICT DO NOTHING;
+        INSERT INTO kb_resource_edges (
+            id, source_resource_id, target_resource_id,
+            edge_kind, polarity, label, weight,
+            asserted_by_event_id, last_event_id, is_folded
+        ) VALUES (
+            public.uuid_generate_v7(), source_ids[i], target_ids[i],
+            kinds[i]::edge_kind, polarities[i]::edge_polarity, labels[i], 1.0,
+            v_event_id, v_event_id, false
+        )
+        ON CONFLICT DO NOTHING;
+    END LOOP;
 END;
 $$;
 

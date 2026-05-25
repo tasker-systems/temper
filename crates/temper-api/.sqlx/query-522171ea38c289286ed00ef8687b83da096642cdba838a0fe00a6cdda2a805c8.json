@@ -1,0 +1,68 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT\n            source_resource_id AS \"source!: Uuid\",\n            target_resource_id AS \"target!: Uuid\",\n            edge_kind          AS \"edge_kind!: EdgeKind\",\n            polarity           AS \"polarity!: Polarity\",\n            label              AS \"label!: String\"\n          FROM kb_resource_edges\n         WHERE source_resource_id = ANY($1::uuid[])\n           AND target_resource_id = ANY($1::uuid[])\n           AND NOT is_folded\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "source!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "target!: Uuid",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "edge_kind!: EdgeKind",
+        "type_info": {
+          "Custom": {
+            "name": "edge_kind",
+            "kind": {
+              "Enum": [
+                "express",
+                "contains",
+                "leads_to",
+                "near"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "polarity!: Polarity",
+        "type_info": {
+          "Custom": {
+            "name": "edge_polarity",
+            "kind": {
+              "Enum": [
+                "forward",
+                "inverse"
+              ]
+            }
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "label!: String",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "522171ea38c289286ed00ef8687b83da096642cdba838a0fe00a6cdda2a805c8"
+}
