@@ -51,7 +51,11 @@ async fn seed_resource(
 /// Stable snapshot row for `graph_traverse` output.
 /// Sorted by `(resource_id, depth)` since `graph_traverse` returns at most
 /// one row per resource_id (DISTINCT ON), so resource_id is the natural key.
-#[derive(Debug, PartialEq, Eq, Clone, sqlx::FromRow)]
+///
+/// `path_weight` is encoded via `f64::to_bits` so the snapshot survives
+/// floating-point representation differences — matches the pattern in
+/// `NeighborRow.weight_bits`.
+#[derive(Debug, PartialEq, Eq, Clone)]
 struct TraverseRow {
     resource_id: Uuid,
     depth: i32,
@@ -59,6 +63,8 @@ struct TraverseRow {
     polarity: Option<Polarity>,
     label: Option<String>,
     from_resource_id: Option<Uuid>,
+    path: Vec<Uuid>,
+    path_weight_bits: i64,
 }
 
 impl PartialOrd for TraverseRow {
@@ -107,9 +113,18 @@ impl Ord for NeighborRow {
 async fn snapshot_traverse(pool: &PgPool, profile_id: Uuid, seed_ids: &[Uuid]) -> Vec<TraverseRow> {
     // Runtime query_as: graph_traverse returns a composite row type with
     // edge_kind/edge_polarity Postgres enums that the compile-time macro
-    // cannot check against. We project path_weight out (not needed for
-    // snapshot equality) and cast path_weight to avoid float comparison issues.
-    let mut rows: Vec<TraverseRow> = sqlx::query_as(
+    // cannot check against. path_weight is encoded as f64::to_bits to keep
+    // snapshot comparisons stable.
+    let raw: Vec<(
+        Uuid,
+        i32,
+        Option<EdgeKind>,
+        Option<Polarity>,
+        Option<String>,
+        Vec<Uuid>,
+        Option<Uuid>,
+        f64,
+    )> = sqlx::query_as(
         r#"
         SELECT
             resource_id,
@@ -117,7 +132,9 @@ async fn snapshot_traverse(pool: &PgPool, profile_id: Uuid, seed_ids: &[Uuid]) -
             edge_kind,
             polarity,
             label,
-            from_resource_id
+            path,
+            from_resource_id,
+            path_weight
           FROM graph_traverse($1, $2::uuid[], 10, '{}')
         "#,
     )
@@ -126,6 +143,20 @@ async fn snapshot_traverse(pool: &PgPool, profile_id: Uuid, seed_ids: &[Uuid]) -
     .fetch_all(pool)
     .await
     .expect("graph_traverse query");
+
+    let mut rows: Vec<TraverseRow> = raw
+        .into_iter()
+        .map(|(rid, depth, ek, pol, lbl, path, from, pw)| TraverseRow {
+            resource_id: rid,
+            depth,
+            edge_kind: ek,
+            polarity: pol,
+            label: lbl,
+            from_resource_id: from,
+            path,
+            path_weight_bits: pw.to_bits() as i64,
+        })
+        .collect();
     rows.sort();
     rows
 }
@@ -341,7 +372,21 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         "graph_neighbors output must be identical after rebuild_edge_projection"
     );
 
-    let _ = (beta_uuid, gamma_uuid, delta_uuid);
+    // Folded-row persistence: graph_traverse filters folded edges out by
+    // default, so the absence check above is necessary but not sufficient —
+    // a regression where rebuild dropped the row entirely (instead of
+    // preserving it with is_folded=true) would still pass. Query the
+    // projection table directly to assert the row survives in folded form.
+    let folded: (bool,) = sqlx::query_as(
+        "SELECT is_folded FROM kb_resource_edges
+          WHERE source_resource_id = $1 AND target_resource_id = $2",
+    )
+    .bind(alpha_uuid)
+    .bind(delta_uuid)
+    .fetch_one(&app.pool)
+    .await
+    .expect("folded alpha→delta row must survive rebuild in projection table");
+    assert!(folded.0, "alpha→delta must be preserved as is_folded=true");
 }
 
 /// Migration fidelity: pre-existing edges created via the ingest path
@@ -392,8 +437,7 @@ async fn migration_fidelity_ingest_edges_survive_rebuild(pool: PgPool) {
         .await
         .expect("ingest fidelity-goal");
 
-    let task_one_id = app
-        .client
+    app.client
         .ingest()
         .create(&IngestPayload {
             title: "fidelity-task-one".to_string(),
@@ -409,11 +453,9 @@ async fn migration_fidelity_ingest_edges_survive_rebuild(pool: PgPool) {
             chunks_packed: empty_chunks.clone(),
         })
         .await
-        .expect("ingest fidelity-task-one")
-        .id;
+        .expect("ingest fidelity-task-one");
 
-    let task_two_id = app
-        .client
+    app.client
         .ingest()
         .create(&IngestPayload {
             title: "fidelity-task-two".to_string(),
@@ -429,11 +471,7 @@ async fn migration_fidelity_ingest_edges_survive_rebuild(pool: PgPool) {
             chunks_packed: empty_chunks,
         })
         .await
-        .expect("ingest fidelity-task-two")
-        .id;
-
-    let task_one_uuid = Uuid::from(task_one_id);
-    let task_two_uuid = Uuid::from(task_two_id);
+        .expect("ingest fidelity-task-two");
 
     // Resolve goal UUID for seeding traversal.
     let goal_uuid: Uuid = sqlx::query_scalar(
@@ -501,6 +539,4 @@ async fn migration_fidelity_ingest_edges_survive_rebuild(pool: PgPool) {
         neighbors_before, neighbors_after,
         "graph_neighbors for goal must be identical after rebuild"
     );
-
-    let _ = (task_one_uuid, task_two_uuid);
 }
