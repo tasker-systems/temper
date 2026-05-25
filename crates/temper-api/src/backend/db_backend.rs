@@ -83,8 +83,9 @@ impl DbBackend {
     ///
     /// If the target slug resolves to a resource in the same context as the
     /// source, an edge row is projected immediately. If not, the event is
-    /// still appended (with a `Slug` target endpoint); the edge will be
-    /// projected by Task 13's re-projection pass once the target is created.
+    /// still appended (with a `Slug` target endpoint); the edge is projected
+    /// later by `relationship_service::reproject_pending_for_resource`, which
+    /// `ingest_service::ingest` invokes once the target lands.
     ///
     /// **Re-assert semantics:**
     /// - Active edge + re-assert → diverts to a `reweight` under the existing
@@ -92,7 +93,8 @@ impl DbBackend {
     /// - Folded edge + re-assert → fresh assertion (ON CONFLICT transfers
     ///   ownership of `asserted_by_event_id` to the new chain).
     /// - Slug-target re-assert (target not yet resolved) → fresh assert as
-    ///   normal; Task 13 handles the slug-resolves-later case.
+    ///   normal; the slug-resolves-later case is handled by
+    ///   `reproject_pending_for_resource` on the create path.
     pub async fn assert_relationship(
         &self,
         cmd: AssertRelationship,

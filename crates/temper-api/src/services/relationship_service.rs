@@ -197,8 +197,8 @@ pub fn validate_assertion_label(kind: EdgeKind, label: &str) -> Result<(), Strin
 ///
 /// - `RelationshipAsserted`: upsert an edge row keyed by the unique constraint
 ///   `uq_resource_edge`. If the target is a `Slug` that does not resolve to a
-///   visible resource, projection is skipped — pending-target re-projection is
-///   Task 13's scope.
+///   visible resource, projection is skipped — pending-target re-projection
+///   is handled by `reproject_pending_for_resource` on the create path.
 /// - `RelationshipRetyped`: UPDATE the row whose `asserted_by_event_id` equals
 ///   the event's `correlation_id`, updating `edge_kind` and `polarity`.
 /// - `RelationshipReweighted`: UPDATE weight on the correlated row.
