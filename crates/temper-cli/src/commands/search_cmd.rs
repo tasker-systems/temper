@@ -1,10 +1,14 @@
-//! `temper search` — thin CLI wrapper over actions::search.
+//! `temper search` — thin CLI wrapper over actions::search (cloud-only).
 
 use crate::actions::{runtime, search as search_actions};
 use crate::error::Result;
 use crate::format::OutputFormat;
 use uuid::Uuid;
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "all args are CLI-derived primitives; bundling into a struct would mirror clap-generated fields with no semantic benefit"
+)]
 pub fn run(
     query: &str,
     context: Option<&str>,
@@ -18,19 +22,12 @@ pub fn run(
     no_graph: bool,
 ) -> Result<()> {
     let fmt = OutputFormat::parse(format);
-    let vault_root = crate::config::resolve_vault(None)?;
-    let temper_dir = vault_root.join(".temper");
-    let device_id = runtime::require_device_id()?;
-    let manifest = crate::manifest_io::load_manifest(&temper_dir, &device_id)?;
 
     let embedding = if text_only {
         None
     } else {
         Some(search_actions::embed_query(query)?)
     };
-
-    let ctx_for_check = context.map(ToString::to_string);
-    let state_dir = temper_dir.clone();
 
     let results = runtime::with_client(|client| {
         let params = search_actions::build_search_params(search_actions::CliSearchArgs {
@@ -44,17 +41,10 @@ pub fn run(
             depth,
             no_graph,
         });
-        Box::pin(async move {
-            if let Some(ctx) = ctx_for_check.as_deref() {
-                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
-            }
-            search_actions::search_api(client, params).await
-        })
+        Box::pin(async move { search_actions::search_api(client, params).await })
     })?;
 
-    let enriched = search_actions::enrich_results(results, &manifest);
-
-    if enriched.is_empty() {
+    if results.is_empty() {
         if fmt == OutputFormat::Json {
             crate::output::plain("[]");
         } else {
@@ -64,9 +54,9 @@ pub fn run(
     }
 
     if fmt == OutputFormat::Json {
-        crate::output::plain(serde_json::to_string_pretty(&enriched)?);
+        crate::output::plain(serde_json::to_string_pretty(&results)?);
     } else {
-        for line in search_actions::format_text(&enriched) {
+        for line in search_actions::format_text(&results) {
             crate::output::plain(line);
         }
     }
