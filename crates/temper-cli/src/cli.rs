@@ -212,7 +212,7 @@ pub enum Commands {
         full: bool,
     },
 
-    /// Assert or mutate a relationship between resources (cloud-mode only)
+    /// Assert or mutate a relationship between resources (writes go through the cloud API)
     Edge {
         #[command(subcommand)]
         action: EdgeAction,

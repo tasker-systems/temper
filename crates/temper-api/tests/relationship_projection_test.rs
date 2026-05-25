@@ -7,6 +7,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use temper_api::services::ingest_service;
 use temper_api::services::relationship_service::{
     apply_relationship_event, rebuild_edge_projection, reproject_pending_for_resource,
     TOPIC_DECLARATION, TOPIC_DEFORMATION,
@@ -687,5 +688,121 @@ async fn test_reproject_pending_for_resource(pool: PgPool) {
     assert_eq!(
         edge_count_after, 1,
         "one active leads_to edge A→B expected after re-projection"
+    );
+}
+
+// ─── Test 8: end-to-end re-projection through ingest_service::ingest ─────────
+
+/// End-to-end test asserting the create-path re-projection hook in
+/// `ingest_service::ingest` actually fires. Mirrors Test 7's setup but creates
+/// resource B through the production ingest path (not a fixture INSERT), so
+/// the test pins down the hook's transaction ordering and slug/context_id
+/// arguments. A regression in the `reproject_pending_for_resource` call site
+/// in `ingest_service.rs` would pass Test 7 but fail this one.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn test_reproject_pending_fires_through_ingest(pool: PgPool) {
+    use temper_core::types::ids::ProfileId;
+    use temper_core::types::ingest::{pack_chunks, IngestPayload};
+
+    common::fixtures::clean_and_seed(&pool).await;
+    let (profile, owned_context_id) =
+        common::fixtures::create_test_profile_with_context(&pool, "reproj-e2e@test.com").await;
+
+    // Resource A lives in the profile-owned 'temper' context (same context the
+    // ingest call below will resolve to via context_name="temper"). Inserting
+    // directly because `create_test_resource` hardcodes the system context.
+    let a = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_resources
+             (id, kb_context_id, kb_doc_type_id, origin_uri, title, slug,
+              originator_profile_id, owner_profile_id, is_active, created, updated)
+           VALUES ($1, $2,
+                   (SELECT id FROM kb_doc_types WHERE name = 'research'),
+                   $3, 'Doc A', 'reproj-e2e-a', $4, $4, true, now(), now())"#,
+    )
+    .bind(a)
+    .bind(owned_context_id)
+    .bind(format!("test://reproj-e2e-{a}"))
+    .bind(profile)
+    .execute(&pool)
+    .await
+    .expect("insert source resource A");
+
+    // Emit a forward-reference assertion: A → slug:"reproj-e2e-b" — target
+    // resource does not exist yet, so no edge projects.
+    let payload = RelationshipAsserted {
+        source_resource_id: a,
+        target: TargetEndpoint::Slug("reproj-e2e-b".to_string()),
+        edge_kind: EdgeKind::LeadsTo,
+        polarity: Polarity::Forward,
+        label: "depends_on".to_string(),
+        weight: 1.0,
+    };
+    let payload_value = serde_json::to_value(&payload).expect("serialize");
+    let mut write = EventToWrite::new_root(
+        EventType::RelationshipAsserted,
+        profile,
+        declaration_topic_id(),
+        public_scope_id(),
+        payload_value,
+        Utc::now(),
+    );
+    write.metadata = serde_json::json!({"intent": "fixture"});
+
+    let mut tx = pool.begin().await.expect("begin assert tx");
+    append_event_tx(&mut tx, write)
+        .await
+        .expect("append assert event");
+    tx.commit().await.expect("commit assert");
+
+    let edge_count_before: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_resource_edges WHERE source_resource_id = $1")
+            .bind(a)
+            .fetch_one(&pool)
+            .await
+            .expect("count before ingest");
+    assert_eq!(edge_count_before, 0, "no edge before ingest creates B");
+
+    // Now create resource B via the production ingest_service::ingest path.
+    // The re-projection hook should fire after the resource row is committed.
+    let ingest_payload = IngestPayload {
+        title: "Doc B".to_string(),
+        origin_uri: "test://reproj-e2e-b".to_string(),
+        context_name: "temper".to_string(),
+        doc_type_name: "research".to_string(),
+        slug: "reproj-e2e-b".to_string(),
+        content: String::new(),
+        managed_meta: None,
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[]).expect("pack empty chunks")),
+        content_hash: None,
+        metadata: None,
+    };
+    let b = ingest_service::ingest(
+        &pool,
+        ProfileId::from(profile),
+        "test-device",
+        ingest_payload,
+    )
+    .await
+    .expect("ingest B");
+
+    // The edge A→B should now exist — projected by the create-path hook,
+    // not by any explicit reproject call from the test.
+    let edge_count_after: i64 = sqlx::query_scalar(
+        r#"SELECT count(*) FROM kb_resource_edges
+            WHERE source_resource_id = $1
+              AND target_resource_id = $2
+              AND edge_kind = 'leads_to'
+              AND NOT is_folded"#,
+    )
+    .bind(a)
+    .bind(*b.id)
+    .fetch_one(&pool)
+    .await
+    .expect("count after ingest");
+    assert_eq!(
+        edge_count_after, 1,
+        "ingest hook should re-project the pending assertion into a live edge"
     );
 }

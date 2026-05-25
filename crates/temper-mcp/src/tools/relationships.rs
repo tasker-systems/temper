@@ -8,7 +8,7 @@
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
@@ -19,6 +19,7 @@ use temper_core::operations::{
 };
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::ProfileId;
+use temper_core::types::relationship_requests::RelationshipAck;
 
 use crate::service::TemperMcpService;
 
@@ -76,15 +77,6 @@ pub struct FoldRelationshipInput {
     pub reason: Option<String>,
 }
 
-// ── Response type ──────────────────────────────────────────────────────────────
-
-/// Response returned by all relationship write tools.
-#[derive(Debug, Serialize)]
-pub struct RelationshipResponse {
-    /// Correlation ID identifying the relationship chain.
-    pub correlation_id: Uuid,
-}
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 fn to_text<T: serde::Serialize>(value: &T) -> String {
@@ -140,11 +132,11 @@ pub async fn assert_relationship(
         .await
         .map_err(|e| map_err(e, "assert_relationship"))?;
 
-    let response = RelationshipResponse {
+    let ack = RelationshipAck {
         correlation_id: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
+        to_text(&ack),
     )]))
 }
 
@@ -169,11 +161,11 @@ pub async fn retype_relationship(
         .await
         .map_err(|e| map_err(e, "retype_relationship"))?;
 
-    let response = RelationshipResponse {
+    let ack = RelationshipAck {
         correlation_id: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
+        to_text(&ack),
     )]))
 }
 
@@ -197,11 +189,11 @@ pub async fn reweight_relationship(
         .await
         .map_err(|e| map_err(e, "reweight_relationship"))?;
 
-    let response = RelationshipResponse {
+    let ack = RelationshipAck {
         correlation_id: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
+        to_text(&ack),
     )]))
 }
 
@@ -225,11 +217,11 @@ pub async fn fold_relationship(
         .await
         .map_err(|e| map_err(e, "fold_relationship"))?;
 
-    let response = RelationshipResponse {
+    let ack = RelationshipAck {
         correlation_id: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&response),
+        to_text(&ack),
     )]))
 }
 
