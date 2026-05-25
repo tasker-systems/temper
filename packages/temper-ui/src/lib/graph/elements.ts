@@ -114,10 +114,10 @@ export function toCytoscapeElements(
 				id: `e${i}`,
 				source: e.source,
 				target: e.target,
-				type: e.edge_type,
+				type: e.label,
 				sourceFill: sourceNode ? nodeColor(sourceNode.doc_type) : nodeColor('unknown')
 			},
-			classes: `etype-${e.edge_type}`
+			classes: `etype-${e.label}`
 		};
 	});
 

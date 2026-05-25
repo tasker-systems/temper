@@ -51,7 +51,21 @@ export type ResourceRow = { id: ResourceId, kb_context_id: ContextId, kb_doc_typ
  * `None` when no manifest row exists (resource created via POST without a
  * body trio, or the manifest join returned NULL).
  */
-body_hash: string | null, };
+body_hash: string | null, 
+/**
+ * Canonical hash of the typed managed_meta JSONB, from
+ * `kb_resource_manifests`. `None` when no manifest row exists.
+ * `show_cache` tier-2 compares this against the local-computed
+ * `compute_managed_hash` to short-circuit a tier-3 round-trip when
+ * frontmatter content is unchanged.
+ */
+managed_hash: string | null, 
+/**
+ * Canonical hash of the open_meta JSONB, from `kb_resource_manifests`.
+ * `None` when no manifest row exists. Companion to `managed_hash` for
+ * `show_cache` tier-2.
+ */
+open_hash: string | null, };
 
 /**
  * Sort field for resource listing.

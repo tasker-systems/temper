@@ -26,9 +26,9 @@ const nodes = [focus, participantA, participantB, aggregatorC];
 describe('buildNeighborEntries', () => {
 	it('returns one entry per edge touching the focused node', () => {
 		const edges: GraphEdge[] = [
-			{ source: 'focus', target: 'pa', edge_type: 'relates_to' },
-			{ source: 'pb', target: 'focus', edge_type: 'depends_on' },
-			{ source: 'pa', target: 'pb', edge_type: 'extends' } // does not touch focus
+			{ source: 'focus', target: 'pa', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'pb', target: 'focus', edge_kind: 'near', polarity: 'forward', label: 'depends_on' },
+			{ source: 'pa', target: 'pb', edge_kind: 'near', polarity: 'forward', label: 'extends' } // does not touch focus
 		];
 		const out = buildNeighborEntries('focus', nodes, edges);
 		expect(out).toHaveLength(2);
@@ -36,8 +36,8 @@ describe('buildNeighborEntries', () => {
 
 	it('sets dir to → when focus is source, ← when focus is target', () => {
 		const edges: GraphEdge[] = [
-			{ source: 'focus', target: 'pa', edge_type: 'relates_to' },
-			{ source: 'pb', target: 'focus', edge_type: 'depends_on' }
+			{ source: 'focus', target: 'pa', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'pb', target: 'focus', edge_kind: 'near', polarity: 'forward', label: 'depends_on' }
 		];
 		const out = buildNeighborEntries('focus', nodes, edges);
 		const pa = out.find((e) => e.other.id === 'pa')!;
@@ -48,8 +48,8 @@ describe('buildNeighborEntries', () => {
 
 	it('sorts participants before aggregators', () => {
 		const edges: GraphEdge[] = [
-			{ source: 'focus', target: 'ac', edge_type: 'relates_to' },
-			{ source: 'focus', target: 'pa', edge_type: 'relates_to' }
+			{ source: 'focus', target: 'ac', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'focus', target: 'pa', edge_kind: 'near', polarity: 'forward', label: 'relates_to' }
 		];
 		const out = buildNeighborEntries('focus', nodes, edges);
 		expect(out[0].other.id).toBe('pa');
@@ -58,9 +58,9 @@ describe('buildNeighborEntries', () => {
 
 	it('breaks ties by edge type then by neighbor title', () => {
 		const edges: GraphEdge[] = [
-			{ source: 'focus', target: 'pb', edge_type: 'relates_to' },
-			{ source: 'focus', target: 'pa', edge_type: 'relates_to' },
-			{ source: 'focus', target: 'pa', edge_type: 'depends_on' }
+			{ source: 'focus', target: 'pb', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'focus', target: 'pa', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'focus', target: 'pa', edge_kind: 'near', polarity: 'forward', label: 'depends_on' }
 		];
 		const out = buildNeighborEntries('focus', nodes, edges);
 		// depends_on < relates_to alphabetically, so depends_on row first.
@@ -72,8 +72,8 @@ describe('buildNeighborEntries', () => {
 
 	it('drops edges whose other endpoint is missing from the node set', () => {
 		const edges: GraphEdge[] = [
-			{ source: 'focus', target: 'ghost', edge_type: 'relates_to' },
-			{ source: 'focus', target: 'pa', edge_type: 'relates_to' }
+			{ source: 'focus', target: 'ghost', edge_kind: 'near', polarity: 'forward', label: 'relates_to' },
+			{ source: 'focus', target: 'pa', edge_kind: 'near', polarity: 'forward', label: 'relates_to' }
 		];
 		const out = buildNeighborEntries('focus', nodes, edges);
 		expect(out).toHaveLength(1);
@@ -81,7 +81,7 @@ describe('buildNeighborEntries', () => {
 	});
 
 	it('returns [] when the focused node has no edges', () => {
-		const edges: GraphEdge[] = [{ source: 'pa', target: 'pb', edge_type: 'relates_to' }];
+		const edges: GraphEdge[] = [{ source: 'pa', target: 'pb', edge_kind: 'near', polarity: 'forward', label: 'relates_to' }];
 		expect(buildNeighborEntries('focus', nodes, edges)).toEqual([]);
 	});
 });
