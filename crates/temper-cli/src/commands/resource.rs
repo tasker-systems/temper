@@ -158,6 +158,48 @@ fn render_create_output_to_string(
     Ok(s)
 }
 
+/// Resolve `--from <path|url>` into a body string via kreuzberg extraction.
+///
+/// Returns `Some(body)` if `from` is set; `None` if `from` is `None`. Errors
+/// when `from` conflicts with `body` or with piped stdin (non-TTY), when the
+/// path does not exist, or when extraction fails.
+///
+/// URL detection: strings with `http://` or `https://` prefix are fetched to a
+/// tempfile first, then extracted. Everything else is treated as a local path.
+async fn resolve_from_input(
+    from: Option<&str>,
+    body_flag: Option<&str>,
+    stdin_is_tty: bool,
+) -> Result<Option<String>> {
+    let Some(from) = from else { return Ok(None) };
+
+    if body_flag.is_some() {
+        return Err(TemperError::Config(
+            "--from cannot be combined with --body".to_string(),
+        ));
+    }
+    if !stdin_is_tty {
+        return Err(TemperError::Config(
+            "--from cannot be combined with piped stdin".to_string(),
+        ));
+    }
+
+    let extracted = if from.starts_with("http://") || from.starts_with("https://") {
+        let (tmp, _name) = crate::actions::ingest::fetch_url_to_tempfile(from).await?;
+        crate::extract::extract_to_markdown(tmp.as_ref()).await?
+    } else {
+        let path = std::path::Path::new(from);
+        if !path.exists() {
+            return Err(TemperError::Config(format!(
+                "--from path does not exist: {from}"
+            )));
+        }
+        crate::extract::extract_to_markdown(path).await?
+    };
+
+    Ok(Some(extracted.content))
+}
+
 /// Create a new resource.
 #[expect(
     clippy::too_many_arguments,
@@ -173,6 +215,7 @@ pub fn create(
     effort: Option<&str>,
     slug: Option<&str>,
     body_flag: Option<String>,
+    from: Option<String>,
     format: &str,
 ) -> Result<()> {
     use std::io::IsTerminal;
@@ -183,13 +226,34 @@ pub fn create(
 
     let ctx = require_context(context)?;
 
-    // Body resolution — both modes use --body flag + stdin pipe.
     let stdin_is_tty = std::io::stdin().is_terminal();
-    let body_opt = crate::actions::body_source::resolve_body_source(
-        body_flag.as_deref(),
-        stdin_is_tty,
-        std::io::stdin(),
-    )?;
+
+    // --from extraction: resolve before body_source so the two are mutually
+    // exclusive. The async extract uses a dedicated tokio runtime (does not
+    // require a cloud client — kreuzberg operates locally on a file path or
+    // fetched tempfile).
+    let from_body: Option<String> = if from.is_some() {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+        rt.block_on(resolve_from_input(
+            from.as_deref(),
+            body_flag.as_deref(),
+            stdin_is_tty,
+        ))?
+    } else {
+        None
+    };
+
+    // Body resolution — --from wins; fall back to --body flag + stdin pipe.
+    let body_opt = if from_body.is_some() {
+        from_body
+    } else {
+        crate::actions::body_source::resolve_body_source(
+            body_flag.as_deref(),
+            stdin_is_tty,
+            std::io::stdin(),
+        )?
+    };
 
     // Slug derivation (mode-independent — Concept and Goal skip date prefix).
     let doctype_enum = temper_core::frontmatter::DocType::from_str(doc_type)?;
@@ -1364,5 +1428,46 @@ mod render_create_output_tests {
         let output = CommandOutput::new(row);
         let result = render_create_output_to_string(&output, "bogus", "json", None);
         assert!(result.is_err(), "invalid doctype must return an error");
+    }
+}
+
+#[cfg(test)]
+mod from_flag_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn from_and_body_are_mutually_exclusive() {
+        // resolve_from_input errors when both --from and --body are provided.
+        let err = resolve_from_input(Some("/tmp/x.md"), Some("@body.md"), true)
+            .await
+            .expect_err("should error on mutex");
+        assert!(
+            format!("{err}").contains("--from cannot be combined with --body"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn from_and_piped_stdin_are_mutually_exclusive() {
+        // resolve_from_input errors when --from is set and stdin is non-TTY.
+        let err = resolve_from_input(Some("/tmp/x.md"), None, false)
+            .await
+            .expect_err("should error on non-TTY stdin");
+        assert!(
+            format!("{err}").contains("--from cannot be combined with piped stdin"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn from_path_does_not_exist_errors() {
+        // resolve_from_input errors when the path doesn't exist.
+        let err = resolve_from_input(Some("/tmp/definitely_does_not_exist_ch7.md"), None, true)
+            .await
+            .expect_err("should error on missing path");
+        assert!(
+            format!("{err}").contains("--from path does not exist"),
+            "got: {err}"
+        );
     }
 }

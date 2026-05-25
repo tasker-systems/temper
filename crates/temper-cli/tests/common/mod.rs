@@ -65,6 +65,7 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
         None,
         Some(&slug),
         None,
+        None,
         "text",
     )
     .unwrap();
@@ -98,6 +99,7 @@ pub fn create_task(
         mode,
         effort,
         Some(&slug),
+        None,
         None,
         "text",
     )

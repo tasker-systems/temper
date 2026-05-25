@@ -192,6 +192,10 @@ pub enum ResourceAction {
         /// piped stdin implicitly (cloud mode only; ignored in local mode)
         #[arg(long)]
         body: Option<String>,
+        /// Source path or URL — extract markdown via temper-ingest and use as body.
+        /// Mutually exclusive with --body. URL detected by http:// or https:// prefix.
+        #[arg(long, conflicts_with = "body")]
+        from: Option<String>,
         /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
         #[arg(long)]
         format: Option<String>,
