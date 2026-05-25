@@ -1,8 +1,8 @@
-//! `temper init` — guided vault + config setup.
+//! `temper init` — guided config + cloud-context setup.
 //!
 //! The wizard is split into two parts so that tests can drive the apply
 //! step without touching dialoguer: `gather_answers` (interactive) and
-//! `apply_answers` (pure disk work).
+//! `apply_answers` (pure config work + optional cloud ensure).
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +26,58 @@ pub struct WizardAnswers {
     pub vault_path: String,
     pub extra_contexts: Vec<String>,
     pub auth_choice: AuthChoice,
+}
+
+/// Abstraction over server-side context ensuring.
+///
+/// Introduced so tests can inject a mock without building a real
+/// `TemperClient` (and without a running server or `--features test-db`).
+///
+/// The production implementation wraps `TemperClient::contexts()` calls.
+/// The test implementation records calls and returns `Ok(())`.
+pub trait ContextEnsurer {
+    /// Ensure the named context exists server-side. Implementations must
+    /// treat "already exists" (409 Conflict) as success.
+    fn ensure_context(&self, name: &str) -> Result<()>;
+}
+
+/// Production `ContextEnsurer` built from an already-initialized
+/// `TemperClient` + a tokio runtime to drive async calls.
+pub struct ClientContextEnsurer<'a> {
+    client: &'a temper_client::TemperClient,
+    rt: &'a tokio::runtime::Runtime,
+    existing_names: Vec<String>,
+}
+
+impl<'a> ClientContextEnsurer<'a> {
+    pub fn new(
+        client: &'a temper_client::TemperClient,
+        rt: &'a tokio::runtime::Runtime,
+        existing_names: Vec<String>,
+    ) -> Self {
+        Self {
+            client,
+            rt,
+            existing_names,
+        }
+    }
+}
+
+impl ContextEnsurer for ClientContextEnsurer<'_> {
+    fn ensure_context(&self, name: &str) -> Result<()> {
+        if self.existing_names.iter().any(|n| n == name) {
+            return Ok(());
+        }
+        let result = self.rt.block_on(self.client.contexts().create(name));
+        match result {
+            Ok(_) => Ok(()),
+            Err(temper_client::error::ClientError::Conflict { .. }) => {
+                // 409: already exists on the server — idempotent success.
+                Ok(())
+            }
+            Err(e) => Err(TemperError::Api(format!("create context '{name}': {e}"))),
+        }
+    }
 }
 
 fn default_vault_path() -> String {
@@ -73,7 +125,7 @@ pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<(
         output::warning("Init cancelled");
         return Ok(());
     }
-    apply_answers(&answers, register_global)
+    apply_answers(&answers, register_global, None)
 }
 
 /// Non-interactive path — uses all defaults.
@@ -83,7 +135,7 @@ pub fn run_non_interactive(path: &Path, register_global: bool) -> Result<()> {
         extra_contexts: Vec::new(),
         auth_choice: AuthChoice::Auth0,
     };
-    apply_answers(&answers, register_global)
+    apply_answers(&answers, register_global, None)
 }
 
 /// Run the interactive prompts and return collected answers.
@@ -151,42 +203,41 @@ fn print_summary(answers: &WizardAnswers, register_global: bool) {
     output::blank();
 }
 
-/// Write vault dirs and (optionally) the global config file.
-pub fn apply_answers(answers: &WizardAnswers, register_global: bool) -> Result<()> {
+/// Write config (if `register_global`) and ensure server-side contexts exist.
+///
+/// The `ensurer` parameter accepts an optional mock for tests. When `None`,
+/// the production path builds a `TemperClient` from the just-written config.
+/// When `register_global == false`, the cloud-ensure step is skipped entirely
+/// (no config to load from, and tests don't need it).
+pub fn apply_answers(
+    answers: &WizardAnswers,
+    register_global: bool,
+    ensurer: Option<&dyn ContextEnsurer>,
+) -> Result<()> {
     let vault = PathBuf::from(&answers.vault_path);
 
-    // Warn if a .temper/ marker already exists — per Decision 1 we do not
-    // offer to reconfigure, we just point the user at `temper config edit`.
-    let marker = vault.join(".temper");
-    if marker.exists() {
+    // Detect an already-initialized config directory and warn.
+    // We use the config file itself as the marker rather than a vault sidecar.
+    let config_path = global_config_path();
+    if config_path.exists() {
         output::warning(format!(
-            "vault already exists at {}; re-running init is idempotent. \
+            "Temper config already initialized at {}; re-running init is idempotent. \
              To change settings, run `temper config edit`.",
-            vault.display()
+            config_path.display()
         ));
     }
 
+    // Always create the vault root (local projection cache root).
     std::fs::create_dir_all(&vault)?;
 
+    // Create the .temper/ state dir — the projection cursor sidecar
+    // (`projection/<ctx>.json`) lives here. projection.rs does its own
+    // create_dir_all lazily, but having .temper/ present after init is
+    // harmless and expected by convention.
     let state_dir = vault.join(".temper");
     std::fs::create_dir_all(&state_dir)?;
-    let manifest_path = state_dir.join("manifest.json");
-    if !manifest_path.exists() {
-        std::fs::write(&manifest_path, "{}\n")?;
-    }
-    let events_path = state_dir.join("events.jsonl");
-    if !events_path.exists() {
-        std::fs::write(&events_path, "")?;
-    }
-
-    // Create default/ and any extra contexts
-    std::fs::create_dir_all(vault.join("default"))?;
-    for ctx in &answers.extra_contexts {
-        std::fs::create_dir_all(vault.join(ctx))?;
-    }
 
     if register_global {
-        let config_path = global_config_path();
         if !config_path.exists() {
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -197,9 +248,76 @@ pub fn apply_answers(answers: &WizardAnswers, register_global: bool) -> Result<(
         } else {
             output::dim("Global config already exists, skipping");
         }
+
+        // Cloud-ensure step: only when auth is enabled.
+        if answers.auth_choice == AuthChoice::Auth0 {
+            ensure_server_contexts(answers, ensurer)?;
+        }
     }
 
-    output::success("Vault initialized successfully");
+    output::success(
+        "Temper initialized successfully. Run `temper pull default` to materialize a local projection.",
+    );
+    Ok(())
+}
+
+/// Ensure the default context and any extra contexts exist server-side.
+///
+/// Accepts an optional injected `ContextEnsurer` for tests. When `None`,
+/// builds a production client from the just-written config.
+fn ensure_server_contexts(
+    answers: &WizardAnswers,
+    ensurer: Option<&dyn ContextEnsurer>,
+) -> Result<()> {
+    let all_contexts: Vec<String> = std::iter::once("default".to_string())
+        .chain(answers.extra_contexts.iter().cloned())
+        .collect();
+
+    if let Some(e) = ensurer {
+        // Test / injected path.
+        for ctx in &all_contexts {
+            e.ensure_context(ctx)?;
+        }
+        return Ok(());
+    }
+
+    // Production path: build client from the config we just wrote.
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
+
+    let (_config, _store, client) = match crate::actions::runtime::build_config_store_and_client() {
+        Ok(triple) => triple,
+        Err(TemperError::Api(msg)) if msg.contains("not authenticated") => {
+            output::warning(
+                "Auth required — run `temper auth login` to authenticate, \
+                 then `temper init` again to ensure server-side contexts.",
+            );
+            return Ok(());
+        }
+        Err(e) => return Err(e),
+    };
+
+    // List existing contexts to avoid redundant creates.
+    let existing = match rt.block_on(client.contexts().list()) {
+        Ok(rows) => rows.into_iter().map(|r| r.name).collect::<Vec<_>>(),
+        Err(temper_client::error::ClientError::NotAuthenticated)
+        | Err(temper_client::error::ClientError::TokenExpired) => {
+            output::warning(
+                "Auth required — run `temper auth login` to authenticate, \
+                 then `temper init` again to ensure server-side contexts.",
+            );
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(TemperError::Api(format!("list contexts: {e}")));
+        }
+    };
+
+    let prod_ensurer = ClientContextEnsurer::new(&client, &rt, existing);
+    for ctx in &all_contexts {
+        prod_ensurer.ensure_context(ctx)?;
+    }
+
     Ok(())
 }
 
@@ -258,8 +376,33 @@ api_url = "https://temperkb.io"
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
     use temper_core::types::config::TemperConfig;
     use validator::Validate;
+
+    /// Mock `ContextEnsurer` that records which context names were ensured.
+    struct MockEnsurer {
+        ensured: RefCell<Vec<String>>,
+    }
+
+    impl MockEnsurer {
+        fn new() -> Self {
+            Self {
+                ensured: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn ensured_names(&self) -> Vec<String> {
+            self.ensured.borrow().clone()
+        }
+    }
+
+    impl ContextEnsurer for MockEnsurer {
+        fn ensure_context(&self, name: &str) -> Result<()> {
+            self.ensured.borrow_mut().push(name.to_string());
+            Ok(())
+        }
+    }
 
     /// Round-trip guard: the rendered TOML must parse into a valid
     /// `TemperConfig` for every auth choice. This catches template drift
@@ -375,17 +518,53 @@ mod tests {
     fn apply_answers_warns_on_existing_vault_but_succeeds() {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path().join("existing");
-        // Pre-create a .temper/ marker to simulate an existing vault
-        std::fs::create_dir_all(vault.join(".temper")).unwrap();
+        std::fs::create_dir_all(&vault).unwrap();
         let answers = WizardAnswers {
             vault_path: vault.to_string_lossy().to_string(),
             extra_contexts: vec![],
             auth_choice: AuthChoice::Auth0,
         };
-        // Should succeed (no error) — the existing-vault warning is emitted via output::warning
-        // and does not block. Test verifies idempotent behavior.
-        apply_answers(&answers, false).expect("should warn but succeed");
-        assert!(vault.join(".temper/manifest.json").exists());
+        // register_global=false — the config-file marker lives at
+        // global_config_path() (not in the tmpdir), so we can't pre-create
+        // it reliably in a unit test. We just verify apply succeeds and
+        // that .temper/ is created even with no register_global.
+        apply_answers(&answers, false, None).expect("should warn but succeed");
+        // .temper/ state dir is created regardless of register_global.
+        assert!(vault.join(".temper").is_dir());
+        // No manifest or events sidecars.
+        assert!(!vault.join(".temper/manifest.json").exists());
+        assert!(!vault.join(".temper/events.jsonl").exists());
+    }
+
+    #[test]
+    fn apply_answers_creates_vault_structure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault_path = tmp.path().join("vault");
+        let answers = WizardAnswers {
+            vault_path: vault_path.to_string_lossy().to_string(),
+            extra_contexts: vec!["writing".into()],
+            auth_choice: AuthChoice::None,
+        };
+        apply_answers(&answers, false, None).expect("apply should succeed");
+        // .temper/ state dir exists.
+        assert!(vault_path.join(".temper").is_dir());
+        // No manifest, no events sidecars.
+        assert!(!vault_path.join(".temper/manifest.json").exists());
+        assert!(!vault_path.join(".temper/events.jsonl").exists());
+        // No per-context subdirectories.
+        assert!(!vault_path.join("default").exists());
+        assert!(!vault_path.join("writing").exists());
+    }
+
+    #[test]
+    fn no_interactive_defaults_and_applies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("v");
+        run_non_interactive(&vault, false).expect("non-interactive run should succeed");
+        // .temper/ created.
+        assert!(vault.join(".temper").is_dir());
+        // No per-context subdirectory.
+        assert!(!vault.join("default").exists());
     }
 
     #[test]
@@ -400,27 +579,23 @@ mod tests {
     }
 
     #[test]
-    fn apply_answers_creates_vault_structure() {
+    fn mock_ensurer_called_for_default_and_extra_contexts() {
         let tmp = tempfile::tempdir().unwrap();
         let vault_path = tmp.path().join("vault");
         let answers = WizardAnswers {
             vault_path: vault_path.to_string_lossy().to_string(),
             extra_contexts: vec!["writing".into()],
-            auth_choice: AuthChoice::None,
+            auth_choice: AuthChoice::Auth0,
         };
-        apply_answers(&answers, false).expect("apply should succeed");
-        assert!(vault_path.join(".temper/manifest.json").exists());
-        assert!(vault_path.join(".temper/events.jsonl").exists());
-        assert!(vault_path.join("default").exists());
-        assert!(vault_path.join("writing").exists());
-    }
-
-    #[test]
-    fn no_interactive_defaults_and_applies() {
-        let tmp = tempfile::tempdir().unwrap();
-        let vault = tmp.path().join("v");
-        run_non_interactive(&vault, false).expect("non-interactive run should succeed");
-        assert!(vault.join(".temper").exists());
-        assert!(vault.join("default").exists());
+        let mock = MockEnsurer::new();
+        // register_global=false means the cloud-ensure block is skipped,
+        // but the ensurer is passed directly to ensure_server_contexts via
+        // the injected path in apply_answers when register_global=true.
+        // Test the helper directly to verify mock dispatch works.
+        ensure_server_contexts(&answers, Some(&mock))
+            .expect("ensure_server_contexts should succeed");
+        let names = mock.ensured_names();
+        assert!(names.contains(&"default".to_string()));
+        assert!(names.contains(&"writing".to_string()));
     }
 }

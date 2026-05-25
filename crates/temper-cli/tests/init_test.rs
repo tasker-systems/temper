@@ -7,8 +7,23 @@ fn test_init_creates_vault_structure() {
 
     temper_cli::commands::init::run(&vault_path, true, false).unwrap();
 
-    // New structure: .temper/manifest.json, .temper/events.jsonl, default/
-    assert!(vault_path.join(".temper/manifest.json").exists());
-    assert!(vault_path.join(".temper/events.jsonl").exists());
-    assert!(vault_path.join("default").is_dir());
+    // Cloud-only invariants: vault root + .temper/ state dir exist;
+    // no manifest.json or events.jsonl sidecars; no per-context subdirs.
+    assert!(vault_path.is_dir(), "vault root should be created");
+    assert!(
+        vault_path.join(".temper").is_dir(),
+        ".temper/ state dir should be created"
+    );
+    assert!(
+        !vault_path.join(".temper/manifest.json").exists(),
+        "manifest.json must not be written"
+    );
+    assert!(
+        !vault_path.join(".temper/events.jsonl").exists(),
+        "events.jsonl must not be written"
+    );
+    assert!(
+        !vault_path.join("default").exists(),
+        "per-context subdir must not be created"
+    );
 }

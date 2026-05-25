@@ -3,8 +3,6 @@ use tempfile::TempDir;
 fn test_config_with_global(dir: &TempDir) -> temper_cli::config::Config {
     let state_dir = dir.path().join(".temper");
     std::fs::create_dir_all(&state_dir).unwrap();
-    std::fs::write(state_dir.join("manifest.json"), "{}\n").unwrap();
-    std::fs::write(state_dir.join("events.jsonl"), "").unwrap();
 
     // skill::generate reads global_config_path(), so we need a real config file
     let config_path = dir.path().join("global-config.toml");
