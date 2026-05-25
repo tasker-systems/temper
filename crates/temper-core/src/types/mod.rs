@@ -22,7 +22,6 @@ pub mod ids;
 pub mod ingest;
 pub mod invitation;
 pub mod managed_meta;
-pub mod manifest;
 pub mod merge;
 pub mod ownership;
 pub mod profile;
@@ -62,7 +61,6 @@ pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, Resourc
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
 pub use managed_meta::{ManagedMeta, MetaUpdatePayload, ResourceManifestRow};
-pub use manifest::{Manifest, ManifestEntry, ManifestEntryState};
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};

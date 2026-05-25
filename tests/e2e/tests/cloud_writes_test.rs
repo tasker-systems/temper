@@ -109,6 +109,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                 None, // effort
                 None, // slug override
                 None, // body_flag (default body generated)
+                None, // from
                 "text",
             )
             .expect("cloud create should succeed")
@@ -832,6 +833,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                 None,
                 None,
                 Some(body_flag),
+                None, // from
                 "text",
             )
             .expect("cloud create for dedup test")
@@ -1110,6 +1112,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
                 None, // effort
                 None, // slug override
                 None, // body_flag
+                None, // from
                 "text",
             )
             .expect("cloud create should succeed")
@@ -1201,6 +1204,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                 None, // effort
                 None, // slug override
                 None, // body_flag (default body generated)
+                None, // from
                 "text",
             )
             .expect("cloud create should succeed")
@@ -1346,6 +1350,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                 None, // effort
                 None, // slug override
                 None, // body_flag
+                None, // from
                 "text",
             )
             .expect("cloud create should succeed")
