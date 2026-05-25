@@ -54,17 +54,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Validate vault frontmatter and repair drift
-    Doctor {
-        #[command(subcommand)]
-        action: Option<DoctorAction>,
-        /// Filter by context
-        #[arg(long)]
-        context: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
-        #[arg(long)]
-        format: Option<String>,
-    },
     /// Context primer for new sessions
     Warmup {
         #[arg(long)]
@@ -454,14 +443,4 @@ pub enum SyncAction {
 pub enum ConfigAction {
     /// Open config.toml in $EDITOR with validate-then-save semantics
     Edit,
-}
-
-#[derive(Subcommand)]
-pub enum DoctorAction {
-    /// Auto-fix issues (rename legacy fields, backfill missing fields)
-    Fix {
-        /// Preview fixes without writing (dry run)
-        #[arg(long)]
-        dry_run: bool,
-    },
 }
