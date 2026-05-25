@@ -1,4 +1,3 @@
-pub mod add;
 pub mod auth;
 pub mod check;
 pub mod config;

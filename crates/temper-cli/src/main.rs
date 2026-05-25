@@ -312,30 +312,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 SkillAction::Check => temper_cli::commands::skill::check(&config),
             }
         }
-        Commands::Add {
-            path,
-            dir,
-            context,
-            doc_type,
-            format,
-            force,
-            dry_run,
-            ignore,
-        } => {
-            let format = temper_cli::format::resolve_format_str(format.as_deref());
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            commands::add::run(
-                &config,
-                &path,
-                dir,
-                context.as_deref(),
-                &doc_type,
-                format,
-                force,
-                dry_run,
-                ignore.as_deref(),
-            )
-        }
         Commands::Pull { context } => commands::pull::run(&context),
         Commands::Sync { action } => match action {
             SyncAction::Run { context, format } => {

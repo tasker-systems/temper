@@ -79,33 +79,6 @@ pub enum Commands {
         action: TeamAction,
     },
 
-    /// Add a file, URL, or directory to the vault
-    Add {
-        /// File path, directory path, URL, or resource UUID (for promotion)
-        path: String,
-        /// Add all files in a directory
-        #[arg(long)]
-        dir: bool,
-        /// Context name (required for file imports, unless --doc-type auto)
-        #[arg(long)]
-        context: Option<String>,
-        /// Doc type — use "auto" to read from each file's YAML frontmatter
-        #[arg(long, default_value = "research")]
-        doc_type: String,
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-        /// Override size guardrails
-        #[arg(long)]
-        force: bool,
-        /// Preview what would be added without uploading
-        #[arg(long)]
-        dry_run: bool,
-        /// Regex pattern to exclude files (matched against filename)
-        #[arg(long)]
-        ignore: Option<String>,
-    },
-
     /// Materialize a context's resources into the local read-only projection
     Pull {
         /// Context name to pull
