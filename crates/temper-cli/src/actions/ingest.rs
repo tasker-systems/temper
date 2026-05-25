@@ -1,110 +1,14 @@
 //! Shared business logic for cloud ingest operations.
 //!
 //! Pure helpers consumed by cloud-mode paths: body chunking, frontmatter
-//! construction from server resources, body normalization, URL fetch, and
-//! payload assembly. Manifest-coupled and local-vault helpers were removed
-//! in Chunk 7 (Task 5); the sync/manifest stack is retired in Task 7.
-
-use std::path::{Path, PathBuf};
-
-use temper_core::vault::Vault;
-use uuid::Uuid;
+//! construction from server resources, body normalization, and URL fetch.
+//! Manifest-coupled and local-vault helpers were removed in Chunk 7
+//! (Tasks 5 + 8); the sync/manifest stack is retired in Task 7.
 
 use crate::error::{Result, TemperError};
 
 // ---------------------------------------------------------------------------
-// Title / URI helpers
-// ---------------------------------------------------------------------------
-
-/// Extract a display title from a file path (stem only, no extension).
-pub fn title_from_path(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Untitled")
-        .to_string()
-}
-
-/// Build a `kb://` URI from context, doc_type, and title.
-pub fn build_uri(context: &str, doc_type: &str, title: &str) -> String {
-    format!(
-        "kb://{context}/{doc_type}/{}",
-        title.to_lowercase().replace(' ', "-")
-    )
-}
-
-// ---------------------------------------------------------------------------
-// Source frontmatter parsing
-// ---------------------------------------------------------------------------
-
-/// Structured metadata parsed from a source file's YAML frontmatter.
-///
-/// Field names are normalised from legacy formats (e.g. `type` → `doc_type`,
-/// `id` → `legacy_id`).
-#[derive(Debug, Default)]
-pub struct ParsedFrontmatter {
-    pub title: Option<String>,
-    pub doc_type: Option<String>,
-    pub context: Option<String>,
-    pub slug: Option<String>,
-    pub date: Option<String>,
-    pub legacy_id: Option<String>,
-    pub provisional_id: Option<String>,
-    pub goal: Option<String>,
-    pub stage: Option<String>,
-    pub mode: Option<String>,
-    pub effort: Option<String>,
-    pub status: Option<String>,
-}
-
-/// Parse YAML frontmatter from a source markdown file and return structured
-/// metadata.  Maps legacy field names (`type` → `doc_type`, `id` →
-/// `legacy_id`).
-pub fn parse_source_frontmatter(content: &str) -> Option<ParsedFrontmatter> {
-    let yaml = temper_core::frontmatter::parse_yaml_block(content)?;
-
-    let s = |key: &str| yaml.get(key).and_then(|v| v.as_str()).map(String::from);
-
-    Some(ParsedFrontmatter {
-        title: s("title"),
-        doc_type: s("temper-type")
-            .or_else(|| s("doc_type"))
-            .or_else(|| s("type")),
-        context: s("temper-context").or_else(|| s("context")),
-        slug: s("slug"),
-        date: s("date")
-            .or_else(|| s("temper-created").map(|c| c[..10].to_string()))
-            .or_else(|| s("created").map(|c| c[..10].to_string())),
-        legacy_id: s("temper-id").or_else(|| s("id")),
-        provisional_id: s("temper-provisional-id"),
-        goal: s("temper-goal").or_else(|| s("goal")),
-        stage: s("temper-stage").or_else(|| s("stage")),
-        mode: s("temper-mode").or_else(|| s("mode")),
-        effort: s("temper-effort").or_else(|| s("effort")),
-        status: s("temper-status").or_else(|| s("status")),
-    })
-}
-
-/// Strip YAML frontmatter from markdown content, returning only the body.
-///
-/// If the content does not start with `---`, returns the original content
-/// unchanged.
-pub fn strip_frontmatter(content: &str) -> &str {
-    let trimmed = content.trim_start();
-    if !trimmed.starts_with("---") {
-        return content;
-    }
-    let rest = &trimmed[3..];
-    if let Some(end) = rest.find("\n---") {
-        // Skip past the closing `---` and the newline after it.
-        let after = &rest[end + 4..];
-        after.strip_prefix('\n').unwrap_or(after)
-    } else {
-        content
-    }
-}
-
-// ---------------------------------------------------------------------------
-// IngestPayload construction
+// Slug / body helpers
 // ---------------------------------------------------------------------------
 
 /// Slugify a title for use in URIs and slugs.
@@ -125,8 +29,8 @@ pub struct BodyChunks {
 
 /// Compute (content_hash, chunks_packed) from raw markdown without
 /// vault/manifest side effects. Single source of truth for chunk + hash
-/// extraction; used by both `build_ingest_payload` (cloud and local create)
-/// and the cloud-mode update path.
+/// extraction; used by `cmd_to_ingest_payload` (cloud create) and the
+/// cloud-mode update path in `cloud_backend/translators.rs`.
 #[cfg(feature = "embed")]
 pub fn compute_body_chunks(content: &str) -> Result<BodyChunks> {
     use temper_core::types::ingest::pack_chunks;
@@ -140,50 +44,6 @@ pub fn compute_body_chunks(content: &str) -> Result<BodyChunks> {
     Ok(BodyChunks {
         content_hash,
         chunks_packed,
-    })
-}
-
-/// Build a wire-ready `IngestPayload` from extracted markdown.
-///
-/// Performs chunk → embed → pack locally, producing a payload ready
-/// for POST /api/ingest.
-#[cfg(feature = "embed")]
-pub fn build_ingest_payload(
-    content: &str,
-    title: &str,
-    context: &str,
-    doc_type: &str,
-    metadata: Option<serde_json::Value>,
-    managed_meta: Option<temper_core::types::ManagedMeta>,
-    open_meta: Option<serde_json::Value>,
-) -> Result<temper_core::types::IngestPayload> {
-    let slug = slug_from_title(title);
-    let origin_uri = build_uri(context, doc_type, &slug);
-    let body = compute_body_chunks(content)?;
-
-    let mut managed_meta_value = managed_meta
-        .map(|m| serde_json::to_value(m))
-        .transpose()
-        .map_err(|e| TemperError::Extraction(format!("managed_meta serialization failed: {e}")))?
-        .unwrap_or_else(|| serde_json::json!({}));
-    temper_core::operations::ensure_managed_identity_keys(
-        &mut managed_meta_value,
-        title,
-        Some(&slug),
-    );
-
-    Ok(temper_core::types::IngestPayload {
-        title: title.to_owned(),
-        origin_uri,
-        context_name: context.to_owned(),
-        doc_type_name: doc_type.to_owned(),
-        content_hash: Some(body.content_hash),
-        slug,
-        content: content.to_owned(),
-        metadata,
-        managed_meta: Some(managed_meta_value),
-        open_meta,
-        chunks_packed: Some(body.chunks_packed),
     })
 }
 
@@ -291,119 +151,15 @@ fn display_name_from_url(url: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Vault file helpers
+// Frontmatter construction
 // ---------------------------------------------------------------------------
-
-/// Canonical vault path for a managed resource.
-///
-/// `{vault_root}/{owner}/{context}/{doc_type}/{slug}.md`
-///
-/// `owner` is the profile-handle component (e.g. `"@me"` or `"@alice"`).
-/// Callers should resolve via `Config::owner_for_context(context)` when
-/// they have a `Config` in scope; the literal `"@me"` is appropriate for
-/// tests and contexts without a configured subscription.
-pub fn build_vault_path(
-    vault_root: &Path,
-    owner: &str,
-    context: &str,
-    doc_type: &str,
-    slug: &str,
-) -> PathBuf {
-    Vault::new(vault_root).doc_file(owner, context, doc_type, slug)
-}
-
-/// De-duplicate a vault slug by appending `-2`, `-3`, etc. when the target
-/// path already exists.
-pub fn dedup_vault_slug(
-    vault_root: &Path,
-    owner: &str,
-    context: &str,
-    doc_type: &str,
-    slug: &str,
-) -> String {
-    let base_path = build_vault_path(vault_root, owner, context, doc_type, slug);
-    if !base_path.exists() {
-        return slug.to_string();
-    }
-    for i in 2..1000 {
-        let candidate = format!("{slug}-{i}");
-        let path = build_vault_path(vault_root, owner, context, doc_type, &candidate);
-        if !path.exists() {
-            return candidate;
-        }
-    }
-    // Extremely unlikely — fall back to UUID-suffixed slug.
-    format!("{slug}-{}", Uuid::now_v7())
-}
-
-/// Generate YAML frontmatter for a new vault file with a provisional ID.
-///
-/// Uses `temper-provisional-id` instead of `temper-id` to indicate the ID
-/// hasn't been confirmed by the server yet.
-pub fn build_provisional_frontmatter(
-    id: impl std::fmt::Display,
-    title: &str,
-    context: &str,
-    doc_type: &str,
-) -> String {
-    let now = chrono::Utc::now().to_rfc3339();
-    format!(
-        "---\ntemper-provisional-id: {id}\ntemper-type: {doc_type}\ntemper-context: {context}\ntemper-created: {now}\ntemper-title: \"{title}\"\n---\n\n"
-    )
-}
-
-/// Construct a fresh `Frontmatter` for a vault file. Caller can mutate
-/// further or write to disk via `Frontmatter::write_to`.
-///
-/// `extra_fields` allows callers to inject additional managed-tier
-/// key-value pairs (e.g. `temper-stage`, `temper-mode`) without bloating
-/// the signature.
-pub fn build_frontmatter(
-    id: impl std::fmt::Display,
-    title: &str,
-    context: &str,
-    doc_type: &str,
-    body: String,
-    ingestion_source: Option<&str>,
-    extra_fields: Option<&[(&str, &str)]>,
-) -> crate::error::Result<temper_core::frontmatter::Frontmatter> {
-    use temper_core::frontmatter::{DocType, Frontmatter};
-
-    let dt = DocType::from_str(doc_type)?;
-    let now = chrono::Utc::now().to_rfc3339();
-    let mut fm = Frontmatter::new(dt, body);
-    fm.set_managed_field("temper-id", serde_json::Value::String(id.to_string()));
-    fm.set_managed_field(
-        "temper-context",
-        serde_json::Value::String(context.to_string()),
-    );
-    fm.set_managed_field("temper-created", serde_json::Value::String(now));
-    fm.set_managed_field("title", serde_json::Value::String(title.to_string()));
-    if let Some(source) = ingestion_source {
-        fm.set_managed_field(
-            "temper-source",
-            serde_json::Value::String(source.to_string()),
-        );
-    }
-    if let Some(fields) = extra_fields {
-        for (key, value) in fields {
-            fm.set_managed_field(key, serde_json::Value::String(value.to_string()));
-        }
-    }
-    Ok(fm)
-}
 
 /// Build a complete `Frontmatter` from a server `ResourceRow` plus the
 /// caller-resolved canonical owner sigil.
 ///
 /// `canonical_owner` is the value to write into `temper-owner`. The caller
 /// is responsible for resolving the API's `@me` shorthand to
-/// `@<profile.slug>`. Async/loop callers should use
-/// `crate::actions::sync::OwnerResolver` (caches the profile fetch across
-/// multiple resources); callers that already have the profile slug in scope
-/// can use `crate::actions::sync::resolve_owner_for_frontmatter` (pure, no
-/// client). Team handles (`+<team-slug>`) and other users' handles can be
-/// passed through unchanged by both helpers.
+/// `@<profile.slug>`.
 ///
 /// Combines resource-level fields (id, type, context, created, title) with
 /// managed_meta fields (temper-* keys, stage, mode, effort, etc.) and
@@ -489,55 +245,6 @@ pub fn normalize_body_for_vault(content: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Vault path inference
-// ---------------------------------------------------------------------------
-
-/// Infer context and doc_type for a vault file.
-///
-/// Uses frontmatter overrides if provided, otherwise infers from the file's
-/// position in the owner-scoped vault hierarchy:
-/// `{vault}/{owner}/{context}/{doc_type}/{slug}.md`.
-pub fn infer_context_and_doctype(
-    vault_root: &Path,
-    file_path: &Path,
-    fm_context: Option<&str>,
-    fm_doc_type: Option<&str>,
-) -> Result<(String, String)> {
-    let rel = file_path
-        .strip_prefix(vault_root)
-        .map_err(|_| {
-            TemperError::Config(format!(
-                "file {} is not inside vault {}",
-                file_path.display(),
-                vault_root.display()
-            ))
-        })?
-        .to_string_lossy()
-        .to_string();
-
-    let dir_parsed = Vault::parse_rel(&rel);
-
-    let context = fm_context
-        .map(|s| s.to_string())
-        .or_else(|| dir_parsed.as_ref().map(|p| p.context.to_string()))
-        .ok_or_else(|| {
-            TemperError::Config(format!("cannot infer context for {}", file_path.display()))
-        })?;
-
-    let doc_type = fm_doc_type
-        .map(|s| s.to_string())
-        .or_else(|| dir_parsed.as_ref().map(|p| p.doc_type.to_string()))
-        .ok_or_else(|| {
-            TemperError::Config(format!(
-            "cannot infer doc_type for {} (file must be at {{owner}}/{{context}}/{{doc_type}}/{{slug}}.md)",
-            file_path.display()
-        ))
-        })?;
-
-    Ok((context, doc_type))
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -572,163 +279,6 @@ mod tests {
         let hex_part = &hash[7..];
         assert!(hex_part.chars().all(|c| c.is_ascii_hexdigit()));
         assert!(hex_part.chars().all(|c| !c.is_uppercase()));
-    }
-
-    // --- Title extraction ---
-
-    #[test]
-    fn title_from_path_extracts_stem() {
-        let path = Path::new("/home/user/docs/research-paper.pdf");
-        assert_eq!(title_from_path(path), "research-paper");
-    }
-
-    #[test]
-    fn title_from_path_handles_no_extension() {
-        let path = Path::new("/home/user/notes/README");
-        assert_eq!(title_from_path(path), "README");
-    }
-
-    #[test]
-    fn title_from_path_handles_markdown() {
-        let path = Path::new("my-document.md");
-        assert_eq!(title_from_path(path), "my-document");
-    }
-
-    // --- parse_source_frontmatter ---
-
-    #[test]
-    fn parse_frontmatter_task() {
-        let content = r#"---
-id: "019d17fd-c400-72c1-8c8a-a1ed6c25a158"
-type: task
-title: "Prettier Temper CLI"
-slug: "2026-03-23-prettier-temper-cli"
-context: "temper"
-goal: "temper-maintenance"
-stage: in-progress
-mode: build
-effort: medium
----
-
-# Prettier Temper CLI
-"#;
-        let fm = parse_source_frontmatter(content).expect("should parse");
-        assert_eq!(fm.title.as_deref(), Some("Prettier Temper CLI"));
-        assert_eq!(fm.doc_type.as_deref(), Some("task"));
-        assert_eq!(fm.slug.as_deref(), Some("2026-03-23-prettier-temper-cli"));
-        assert_eq!(fm.context.as_deref(), Some("temper"));
-        assert_eq!(fm.goal.as_deref(), Some("temper-maintenance"));
-        assert_eq!(fm.stage.as_deref(), Some("in-progress"));
-        assert_eq!(fm.mode.as_deref(), Some("build"));
-        assert_eq!(fm.effort.as_deref(), Some("medium"));
-        assert_eq!(
-            fm.legacy_id.as_deref(),
-            Some("019d17fd-c400-72c1-8c8a-a1ed6c25a158")
-        );
-    }
-
-    #[test]
-    fn parse_frontmatter_goal() {
-        let content = r#"---
-id: "019d20f9-6a90-7e52-80d7-20c2f36cabb1"
-type: goal
-title: "Maintenance"
-slug: "temper-maintenance"
-context: "temper"
-status: active
-created: 2026-03-23
----
-
-# Maintenance
-"#;
-        let fm = parse_source_frontmatter(content).expect("should parse");
-        assert_eq!(fm.doc_type.as_deref(), Some("goal"));
-        assert_eq!(fm.status.as_deref(), Some("active"));
-        assert_eq!(fm.date.as_deref(), Some("2026-03-23"));
-    }
-
-    #[test]
-    fn parse_frontmatter_session_minimal() {
-        let content = "---\ntype: session\ndate: 2026-03-27\ncontext: temper\n---\n\n# Session\n";
-        let fm = parse_source_frontmatter(content).expect("should parse");
-        assert_eq!(fm.doc_type.as_deref(), Some("session"));
-        assert_eq!(fm.date.as_deref(), Some("2026-03-27"));
-        assert!(fm.legacy_id.is_none());
-    }
-
-    #[test]
-    fn parse_frontmatter_new_format() {
-        let content =
-            "---\ntemper-id: abc-123\ntemper-type: research\ntemper-context: work\n---\n\nBody\n";
-        let fm = parse_source_frontmatter(content).expect("should parse");
-        assert_eq!(fm.doc_type.as_deref(), Some("research"));
-        assert_eq!(fm.legacy_id.as_deref(), Some("abc-123"));
-        assert_eq!(fm.context.as_deref(), Some("work"));
-    }
-
-    #[test]
-    fn parse_frontmatter_returns_none_without_frontmatter() {
-        let content = "# Just a heading\n\nSome text.\n";
-        assert!(parse_source_frontmatter(content).is_none());
-    }
-
-    // --- strip_frontmatter ---
-
-    #[test]
-    fn strip_frontmatter_removes_yaml_block() {
-        let content = "---\ntype: task\ntemper-title: Test\n---\n# Body\n";
-        let body = strip_frontmatter(content);
-        assert_eq!(body, "# Body\n");
-    }
-
-    #[test]
-    fn strip_frontmatter_preserves_blank_line_gap() {
-        let content = "---\ntype: task\n---\n\n# Body\n";
-        let body = strip_frontmatter(content);
-        assert_eq!(body, "\n# Body\n");
-    }
-
-    #[test]
-    fn strip_frontmatter_returns_content_without_frontmatter() {
-        let content = "# No frontmatter here\n";
-        assert_eq!(strip_frontmatter(content), content);
-    }
-
-    #[test]
-    fn strip_frontmatter_handles_no_trailing_newline() {
-        let content = "---\ntype: task\n---\nBody text";
-        let body = strip_frontmatter(content);
-        assert_eq!(body, "Body text");
-    }
-
-    // --- infer_context_and_doctype ---
-
-    #[test]
-    fn infer_context_doctype_from_path() {
-        let vault = Path::new("/vault");
-        let file = Path::new("/vault/@me/temper/research/my-notes.md");
-        let (ctx, dt) = infer_context_and_doctype(vault, file, None, None).unwrap();
-        assert_eq!(ctx, "temper");
-        assert_eq!(dt, "research");
-    }
-
-    #[test]
-    fn infer_context_doctype_frontmatter_override() {
-        let vault = Path::new("/vault");
-        let file = Path::new("/vault/@me/temper/research/my-notes.md");
-        let (ctx, dt) =
-            infer_context_and_doctype(vault, file, Some("custom-context"), Some("session"))
-                .unwrap();
-        assert_eq!(ctx, "custom-context");
-        assert_eq!(dt, "session");
-    }
-
-    #[test]
-    fn infer_context_doctype_rejects_shallow() {
-        let vault = Path::new("/vault");
-        let file = Path::new("/vault/orphan.md");
-        let result = infer_context_and_doctype(vault, file, None, None);
-        assert!(result.is_err());
     }
 
     // --- URL helpers ---
@@ -796,28 +346,6 @@ created: 2026-03-23
     fn display_name_from_url_root() {
         // Domain "example.com" is treated as a filename — dot stripped → "example"
         assert_eq!(display_name_from_url("https://example.com/"), "example");
-    }
-
-    // --- provisional_id parsing ---
-
-    #[test]
-    fn test_parse_provisional_id() {
-        let content = "---\ntemper-provisional-id: \"019d6088-3a3b-71a3-b26c-d38b8338773e\"\ntemper-title: \"Test\"\n---\n\nBody";
-        let fm = parse_source_frontmatter(content).unwrap();
-        assert_eq!(
-            fm.provisional_id.as_deref(),
-            Some("019d6088-3a3b-71a3-b26c-d38b8338773e")
-        );
-        assert!(fm.legacy_id.is_none());
-    }
-
-    #[test]
-    fn test_parse_both_ids_prefers_temper_id() {
-        let content =
-            "---\ntemper-id: \"aaa\"\ntemper-provisional-id: \"bbb\"\ntemper-title: \"Test\"\n---\n\nBody";
-        let fm = parse_source_frontmatter(content).unwrap();
-        assert_eq!(fm.legacy_id.as_deref(), Some("aaa"));
-        assert_eq!(fm.provisional_id.as_deref(), Some("bbb"));
     }
 
     fn test_resource_row() -> temper_core::types::ResourceRow {
@@ -1085,87 +613,6 @@ created: 2026-03-23
         assert!(
             id_pos < stage_pos.min(effort_pos).min(relates_pos),
             "identity fields must precede data fields. Got:\n{serialized}"
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "test-embed")]
-    fn build_ingest_payload_injects_temper_title_and_slug_into_managed_meta() {
-        let payload = build_ingest_payload(
-            "# Hello\n\nbody",
-            "Hello World",
-            "test-ctx",
-            "task",
-            None,
-            Some(temper_core::types::ManagedMeta {
-                stage: Some("backlog".to_owned()),
-                ..Default::default()
-            }),
-            None,
-        )
-        .unwrap();
-        let managed = payload.managed_meta.expect("managed_meta set");
-        assert_eq!(managed["temper-title"], "Hello World");
-        assert_eq!(managed["temper-slug"], "hello-world");
-        assert_eq!(managed["temper-stage"], "backlog");
-    }
-
-    #[test]
-    #[cfg(feature = "test-embed")]
-    fn build_ingest_payload_attaches_managed_meta_when_some() {
-        let mm = temper_core::types::ManagedMeta {
-            stage: Some("backlog".to_string()),
-            ..Default::default()
-        };
-        let payload = build_ingest_payload(
-            "# Test\nBody",
-            "Test Title",
-            "temper",
-            "task",
-            None,
-            Some(mm.clone()),
-            None,
-        )
-        .expect("payload");
-        // managed_meta is serialized to serde_json::Value; stage is renamed to
-        // "temper-stage" by the ManagedMeta serde attribute.
-        assert_eq!(
-            payload
-                .managed_meta
-                .as_ref()
-                .and_then(|m| m.get("temper-stage"))
-                .and_then(|v| v.as_str()),
-            Some("backlog")
-        );
-        assert!(payload.open_meta.is_none());
-    }
-
-    #[test]
-    #[cfg(feature = "test-embed")]
-    fn build_ingest_payload_attaches_open_meta_when_some() {
-        let om = serde_json::json!({"tags": ["rust"]});
-        let payload = build_ingest_payload("# X", "T", "ctx", "session", None, None, Some(om))
-            .expect("payload");
-        assert_eq!(
-            payload.open_meta.as_ref().and_then(|o| o.get("tags")),
-            Some(&serde_json::json!(["rust"]))
-        );
-    }
-
-    #[test]
-    #[cfg(feature = "test-embed")]
-    fn build_ingest_payload_uses_compute_body_chunks() {
-        let content = "# Test\n\nBody.";
-        let payload = build_ingest_payload(content, "Title", "ctx", "session", None, None, None)
-            .expect("payload");
-        let direct = compute_body_chunks(content).expect("direct compute");
-        assert_eq!(
-            payload.content_hash.as_deref(),
-            Some(direct.content_hash.as_str())
-        );
-        assert_eq!(
-            payload.chunks_packed.as_deref(),
-            Some(direct.chunks_packed.as_str())
         );
     }
 
