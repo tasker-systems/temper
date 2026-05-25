@@ -3,8 +3,8 @@
 //! C1: meta-only updates must reconcile frontmatter-provenance edges.
 //!
 //! Before C1 the meta-only update path did not call
-//! `edge_service::reconcile_edges`, so relationship frontmatter written
-//! by `temper graph build` never produced knowledge-graph edges on the
+//! `edge_service::reconcile_edges`, so relationship frontmatter from
+//! sync-driven meta updates never produced knowledge-graph edges on the
 //! server. These tests pin the fixed behavior. Dispatch is now through
 //! `DbBackend::update_resource` (translator's meta-only branch).
 

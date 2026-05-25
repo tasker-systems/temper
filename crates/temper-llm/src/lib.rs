@@ -8,7 +8,6 @@ mod agent;
 mod mock;
 mod provider;
 pub mod providers;
-pub mod types;
 
 pub use agent::{Agent, AgentError, AgentOutcome, Tool, ToolHandler};
 pub use mock::{MockLlmProvider, MockScenario};
@@ -16,4 +15,3 @@ pub use provider::{JsonSchema, LlmError, LlmProvider, LlmResponse, Message, Tool
 pub use providers::claude::ClaudeProvider;
 pub use providers::openai_compatible::OpenAiCompatibleProvider;
 pub use schemars::Schema;
-pub use types::{Cluster, ConceptProposal, MemberEdge, SeedPhrase};

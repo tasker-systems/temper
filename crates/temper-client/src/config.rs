@@ -332,7 +332,6 @@ scopes        = ["openid"]
             },
             cloud: CloudSection::default(),
             llm: Default::default(),
-            graph_index: Default::default(),
         };
         let err = oauth_config(&config).unwrap_err();
         let msg = err.to_string();
@@ -358,7 +357,6 @@ scopes        = ["openid"]
             },
             cloud: CloudSection::default(),
             llm: Default::default(),
-            graph_index: Default::default(),
         };
         let err = oauth_config(&config).unwrap_err();
         let msg = err.to_string();
