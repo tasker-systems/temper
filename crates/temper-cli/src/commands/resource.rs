@@ -5,10 +5,7 @@ use temper_core::schema;
 use crate::config::Config;
 use crate::discovery::{self, Event};
 use crate::error::{Result, TemperError};
-use crate::format::OutputFormat;
 use crate::output;
-use crate::output::columns as col_registry;
-use crate::output::table::TableRenderer;
 use crate::vault;
 
 /// Require a context, returning an error if none specified.
@@ -393,93 +390,6 @@ async fn fetch_list_rows(
     Ok(resp.rows)
 }
 
-/// Map a server `ResourceRow` to the frontmatter-shaped `serde_json::Value`
-/// that `col_registry::extract_row` expects. The registry was built for
-/// local scan_rows output; we adapt the server row shape to the same
-/// keys so rendering is unchanged.
-fn row_to_frontmatter_value(row: &temper_core::types::resource::ResourceRow) -> serde_json::Value {
-    let mut map = serde_json::Map::new();
-    map.insert(
-        "temper-title".into(),
-        serde_json::Value::String(row.title.clone()),
-    );
-    if let Some(slug) = &row.slug {
-        map.insert(
-            "temper-slug".into(),
-            serde_json::Value::String(slug.clone()),
-        );
-    }
-    map.insert(
-        "temper-updated".into(),
-        serde_json::Value::String(row.updated.to_rfc3339()),
-    );
-    map.insert(
-        "temper-context".into(),
-        serde_json::Value::String(row.context_name.clone()),
-    );
-    map.insert(
-        "temper-type".into(),
-        serde_json::Value::String(row.doc_type_name.clone()),
-    );
-    if let Some(stage) = &row.stage {
-        map.insert(
-            "temper-stage".into(),
-            serde_json::Value::String(stage.clone()),
-        );
-    }
-    if let Some(mode) = &row.mode {
-        map.insert(
-            "temper-mode".into(),
-            serde_json::Value::String(mode.clone()),
-        );
-    }
-    if let Some(effort) = &row.effort {
-        map.insert(
-            "temper-effort".into(),
-            serde_json::Value::String(effort.clone()),
-        );
-    }
-    if let Some(seq) = row.seq {
-        map.insert("temper-seq".into(), serde_json::Value::Number(seq.into()));
-    }
-    serde_json::Value::Object(map)
-}
-
-/// Render server rows using the per-doctype column registry.
-fn render_server_rows(
-    doc_type: &str,
-    rows: &[temper_core::types::resource::ResourceRow],
-    format: OutputFormat,
-) -> Result<String> {
-    match format {
-        OutputFormat::Json => Ok(serde_json::to_string_pretty(
-            &rows
-                .iter()
-                .map(row_to_frontmatter_value)
-                .collect::<Vec<_>>(),
-        )
-        .unwrap_or_default()),
-        OutputFormat::Pretty | OutputFormat::NoTty | OutputFormat::Toon => {
-            let columns = col_registry::display_columns(doc_type);
-            if columns.is_empty() || rows.is_empty() {
-                return Ok(String::new());
-            }
-            let mut renderer = TableRenderer::new(columns.clone());
-            for row in rows {
-                let fm_value = row_to_frontmatter_value(row);
-                renderer.push_row(col_registry::extract_row(&fm_value, &columns));
-            }
-            Ok(
-                if format == OutputFormat::Pretty || format == OutputFormat::Toon {
-                    renderer.render_pretty()
-                } else {
-                    renderer.render_no_tty()
-                },
-            )
-        }
-    }
-}
-
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
@@ -510,7 +420,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         }
     }
 
-    let format = OutputFormat::parse(params.format);
+    let fmt = crate::format::OutputFormat::resolve(Some(params.format));
     let doc_type = params.doc_type.to_string();
     let context = params.context.map(ToString::to_string);
     let limit = params.limit.unwrap_or(20);
@@ -528,14 +438,8 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         })
     })?;
 
-    let body = render_server_rows(params.doc_type, &rows, format)?;
-
-    if body.trim().is_empty() {
-        output::hint(format!("No {} resources found.", params.doc_type));
-        return Ok(());
-    }
-
-    output::plain(body.trim_end());
+    let rendered = crate::format::render(&rows, fmt)?;
+    println!("{rendered}");
     Ok(())
 }
 
@@ -1471,5 +1375,66 @@ mod from_flag_tests {
             format!("{err}").contains("--from path does not exist"),
             "got: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod resource_list_render_tests {
+    use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+    use temper_core::types::resource::ResourceRow;
+
+    /// Task 7: verify that `render()` passthrough includes internal wire fields
+    /// like `body_hash` that the old `row_to_frontmatter_value` + `render_server_rows`
+    /// path deliberately dropped. This is the canary for the breaking change.
+    #[test]
+    fn render_resource_list_json_passes_wire_type_with_internals() {
+        let rows: Vec<ResourceRow> = vec![ResourceRow {
+            id: ResourceId(uuid::Uuid::nil()),
+            kb_context_id: ContextId(uuid::Uuid::nil()),
+            kb_doc_type_id: DocTypeId(uuid::Uuid::nil()),
+            origin_uri: "test://origin".to_string(),
+            title: "Test Resource".to_string(),
+            slug: Some("test-resource".to_string()),
+            originator_profile_id: ProfileId(uuid::Uuid::nil()),
+            owner_profile_id: ProfileId(uuid::Uuid::nil()),
+            is_active: true,
+            created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            updated: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+            context_name: "temper".to_string(),
+            doc_type_name: "research".to_string(),
+            owner_handle: "@me".to_string(),
+            stage: None,
+            seq: None,
+            mode: None,
+            effort: None,
+            body_hash: Some("abc123deadbeef".to_string()),
+            managed_hash: None,
+            open_hash: None,
+        }];
+
+        let out =
+            crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");
+
+        // The whole point of Task 7 is that internal fields are now visible.
+        // body_hash is the canary; if the old re-shaping survives anywhere, this fails.
+        assert!(
+            out.contains("body_hash") || out.contains("\"body_hash\""),
+            "body_hash should appear in passthrough JSON: {out}"
+        );
+        // Old frontmatter keys must NOT appear — they were the re-shaped output.
+        assert!(
+            !out.contains("temper-slug"),
+            "re-shaped temper-slug key must not appear in wire passthrough: {out}"
+        );
+        assert!(
+            !out.contains("temper-title"),
+            "re-shaped temper-title key must not appear in wire passthrough: {out}"
+        );
+        // The actual wire field names should be present.
+        assert!(
+            out.contains("\"title\""),
+            "wire field 'title' missing: {out}"
+        );
+        assert!(out.contains("\"slug\""), "wire field 'slug' missing: {out}");
     }
 }
