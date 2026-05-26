@@ -362,7 +362,11 @@ pub enum ContextAction {
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
     /// Log in via browser OAuth (PKCE flow)
-    Login,
+    Login {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Store a JWT directly, reading from stdin (avoids shell-history /
     /// `ps` / `/proc` leakage). Usage:
     ///   temper auth export-token | temper auth token
@@ -374,9 +378,17 @@ pub enum AuthAction {
         provider: String,
     },
     /// Clear stored credentials
-    Logout,
+    Logout {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Show current auth status
-    Status,
+    Status {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Export a refreshed access token (local mode only).
     ///
     /// Token goes to stdout (plain JWT, pipeable); security warning goes to

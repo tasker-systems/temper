@@ -282,10 +282,10 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             TeamAction::Leave { team: _ } => temper_cli::commands::team::leave(),
         },
         Commands::Auth { action } => match action {
-            AuthAction::Login => temper_cli::commands::auth::login(),
+            AuthAction::Login { format } => temper_cli::commands::auth::login(format),
             AuthAction::Token { provider } => temper_cli::commands::auth::token(&provider),
-            AuthAction::Logout => temper_cli::commands::auth::logout(),
-            AuthAction::Status => temper_cli::commands::auth::status(),
+            AuthAction::Logout { format } => temper_cli::commands::auth::logout(format),
+            AuthAction::Status { format } => temper_cli::commands::auth::status(format),
             AuthAction::ExportToken => temper_cli::commands::auth::export_token(),
         },
         Commands::Skill { action } => {
