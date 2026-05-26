@@ -1023,7 +1023,7 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 9: create writes the canonical projection file
+// Test 8: create writes the canonical projection file
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper resource create --type task --title "..."` posts to
@@ -1108,7 +1108,7 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 10: update rewrites the projection file on success
+// Test 9: update rewrites the projection file on success
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper resource update <slug> --type task --title "..."` (meta-only
@@ -1254,7 +1254,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 11: delete removes the projection file
+// Test 10: delete removes the projection file
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper resource delete --type task <slug> --force` soft-deletes on
@@ -1375,7 +1375,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test N: cloud show --edges resolves via server-side resolve_by_uri
+// Test 11: cloud show --edges resolves via server-side resolve_by_uri
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper resource show <slug> --type research --context <ctx> --edges`
