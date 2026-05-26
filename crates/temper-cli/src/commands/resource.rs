@@ -7,6 +7,38 @@ use crate::error::{Result, TemperError};
 use crate::output;
 use crate::vault;
 
+/// Flat result emitted by `temper resource create`.
+///
+/// `ResourceRow` is flattened so all wire-type fields appear at the top level
+/// alongside `status`. Breaking change (Task 9): replaces the 7-variant
+/// per-doctype JSON shape map (Task/Goal/Session/Research/Concept/Decision/default).
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct CreateActionResult {
+    pub status: &'static str,
+    #[serde(flatten)]
+    pub resource: temper_core::types::resource::ResourceRow,
+}
+
+/// Flat result emitted by `temper resource update`.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct UpdateActionResult {
+    pub status: &'static str,
+    #[serde(flatten)]
+    pub resource: temper_core::types::resource::ResourceRow,
+}
+
+/// Result emitted by `temper resource delete`.
+///
+/// `id` is omitted: `delete_resource` returns `CommandOutput<()>` — the
+/// backend does not surface the deleted row, so there is no id in scope
+/// at the call site without an extra round-trip.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct DeleteActionResult {
+    pub status: &'static str,
+    pub slug: String,
+    pub doc_type: String,
+}
+
 /// Require a context, returning an error if none specified.
 ///
 /// temper is cloud-only: there are no context directories on disk to
@@ -18,140 +50,6 @@ fn require_context(context: Option<&str>) -> Result<String> {
             "no context specified — use --context <name>".into(),
         )),
     }
-}
-
-/// Render the result of `create_resource` to stdout in the
-/// shape that each doctype's pre-B5b dispatch path emitted.
-///
-/// Doctype-aware switch preserves backward-compatible JSON output. The
-/// dispatch itself is now uniform; only output shape varies by doctype.
-fn render_create_output(
-    output: &temper_core::operations::CommandOutput<temper_core::types::resource::ResourceRow>,
-    doc_type: &str,
-    format: &str,
-    projection_path: Option<&std::path::Path>,
-) -> Result<()> {
-    let rendered = render_create_output_to_string(output, doc_type, format, projection_path)?;
-    if !rendered.is_empty() {
-        println!("{rendered}");
-    }
-    Ok(())
-}
-
-/// Test-friendly core of `render_create_output` — returns the string that
-/// would be printed (empty string for the non-JSON success path).
-///
-/// Audited per-doctype JSON shapes (preserved verbatim from pre-B5b dispatch,
-/// confirmed 2026-05-14):
-///
-/// - Task: `{ "type": "task", "temper-slug", "temper-title", "temper-context" }`
-///   Source: `commands::resource::create` match arm "task" lines 158–167.
-///
-/// - Goal: serialized `GoalInfo` → `{ "temper-title", "temper-slug",
-///   "temper-context", "temper-seq" (Option<u32>), "temper-status" }`
-///   Shape: `crate::actions::types::GoalInfo` (seq from ResourceRow.seq).
-///
-/// - Session: `{ "title", "context", "path", "date" }` where `path` is the
-///   vault-relative file path (`{owner}/{context}/session/{slug}.md`) and
-///   `date` is today's date (`%Y-%m-%d`).
-///   Source: `commands::session::save`, inline `SessionCreated` struct.
-///
-/// - Research: `{ "title", "project", "path", "date", "id", "slug" }` where
-///   `project` is the context name, `path` is vault-relative, `id` is the
-///   resource UUID (string), `slug` is the date-prefixed slug.
-///   Source: research-doctype create path, serialized via `serde_json::json!`.
-///
-/// - Concept / Decision: serialized `ResourceCreated` →
-///   `{ "doc_type", "title", "slug", "context", "path", "date", "id" }`
-///   where `path` is vault-relative and `id` is the UUID (string).
-///   Source: `create_simple_resource`, inline `ResourceCreated` struct.
-fn render_create_output_to_string(
-    output: &temper_core::operations::CommandOutput<temper_core::types::resource::ResourceRow>,
-    doc_type: &str,
-    format: &str,
-    projection_path: Option<&std::path::Path>,
-) -> Result<String> {
-    use temper_core::frontmatter::DocType;
-
-    let row = &output.value;
-    let doctype = DocType::from_str(doc_type)
-        .map_err(|e| TemperError::Vault(format!("invalid doctype: {e}")))?;
-
-    if format != "json" {
-        // Non-JSON path: emit a "Created: <slug>" success line.
-        let slug_display = row.slug.as_deref().unwrap_or("(no slug)");
-        output::success(format!("Created: {slug_display}"));
-        return Ok(String::new());
-    }
-
-    let today = Local::now().format("%Y-%m-%d").to_string();
-
-    // `path` field: the real on-disk projection path when the write succeeded,
-    // empty string otherwise. Agents chaining `temper resource create ... --format
-    // json | jq -r .path` get the actual file path in cloud mode.
-    let vault_path: Option<String> = projection_path.map(|p| p.to_string_lossy().into_owned());
-
-    let json = match doctype {
-        DocType::Task => serde_json::json!({
-            "type": "task",
-            "temper-slug": row.slug,
-            "temper-title": row.title,
-            "temper-context": row.context_name,
-        }),
-        DocType::Goal => {
-            // Goal JSON is the GoalInfo serialization shape. `status` is always
-            // "active" at create time. `seq` comes from ResourceRow.seq (i64 →
-            // u32 lossy-cast; matches the i64 stored in managed_meta.seq).
-            serde_json::json!({
-                "temper-title": row.title,
-                "temper-slug": row.slug,
-                "temper-context": row.context_name,
-                "temper-seq": row.seq.and_then(|s| u32::try_from(s).ok()),
-                "temper-status": "active",
-            })
-        }
-        DocType::Session => {
-            // Session JSON: title, context, vault-relative path (local only),
-            // today's date.
-            serde_json::json!({
-                "title": row.title,
-                "context": row.context_name,
-                "path": vault_path.as_deref().unwrap_or(""),
-                "date": today,
-            })
-        }
-        DocType::Research => {
-            // Research JSON: title, project (=context), vault-relative path
-            // (local only), today's date, id (UUID string), slug.
-            let slug = row.slug.as_deref().unwrap_or("");
-            serde_json::json!({
-                "title": row.title,
-                "project": row.context_name,
-                "path": vault_path.as_deref().unwrap_or(""),
-                "date": today,
-                "id": row.id.to_string(),
-                "slug": slug,
-            })
-        }
-        DocType::Concept | DocType::Decision => {
-            // Concept/Decision JSON: doc_type, title, slug, context, vault-relative
-            // path (local only), today's date, id (UUID string).
-            let slug = row.slug.as_deref().unwrap_or("");
-            serde_json::json!({
-                "doc_type": row.doc_type_name,
-                "title": row.title,
-                "slug": slug,
-                "context": row.context_name,
-                "path": vault_path.as_deref().unwrap_or(""),
-                "date": today,
-                "id": row.id.to_string(),
-            })
-        }
-    };
-
-    let s = serde_json::to_string_pretty(&json)
-        .map_err(|e| TemperError::Vault(format!("json render failed: {e}")))?;
-    Ok(s)
 }
 
 /// Resolve `--from <path|url>` into a body string via kreuzberg extraction.
@@ -343,7 +241,14 @@ pub fn create(
         }
     }
 
-    render_create_output(&output, doc_type, format, projection_path.as_deref())
+    let result = CreateActionResult {
+        status: "ok",
+        resource: output.value,
+    };
+    let fmt = crate::format::OutputFormat::resolve(Some(format));
+    let rendered = crate::format::render(&result, fmt)?;
+    println!("{rendered}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -458,7 +363,7 @@ pub fn delete(
     context: Option<&str>,
     force: bool,
 ) -> Result<()> {
-    use temper_core::operations::{DeleteResource, DomainEvent, ResourceRef};
+    use temper_core::operations::{DeleteResource, ResourceRef};
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
@@ -482,12 +387,17 @@ pub fn delete(
         output::warning(format!("could not remove projection file: {e}"));
     }
 
-    // CloudBackend emits exactly one `RemoteSynced` event on success.
-    for event in &output.events {
-        if let DomainEvent::RemoteSynced { .. } = event {
-            self::output::success(format!("Deleted {doc_type}/{slug}"));
-        }
-    }
+    // `delete_resource` returns `CommandOutput<()>` — no row in scope.
+    // Emit slug + doc_type from the inputs (Task 9 flat result shape).
+    let _ = output;
+    let result = DeleteActionResult {
+        status: "ok",
+        slug: slug.to_string(),
+        doc_type: doc_type.to_string(),
+    };
+    let fmt = crate::format::OutputFormat::resolve(None);
+    let rendered = crate::format::render(&result, fmt)?;
+    println!("{rendered}");
 
     Ok(())
 }
@@ -871,21 +781,15 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         output::warning(format!("could not rewrite projection file: {e}"));
     }
 
-    // 7. Emit the agent-facing {temper-slug, content_hash} JSON to stdout
-    //    — the show-edit-cat workflow contract (per CLAUDE.md).
-    let slug_display = output
-        .value
-        .slug
-        .clone()
-        .unwrap_or_else(|| output.value.id.to_string());
-    let hash_display = output.value.body_hash.as_deref().unwrap_or("").to_string();
-    println!(
-        "{}",
-        serde_json::json!({
-            "temper-slug": slug_display,
-            "content_hash": hash_display,
-        })
-    );
+    // 7. Emit the flat UpdateActionResult to stdout (Task 9: replaces the
+    //    bespoke { "temper-slug", "content_hash" } shape).
+    let result = UpdateActionResult {
+        status: "ok",
+        resource: output.value,
+    };
+    let fmt = crate::format::OutputFormat::resolve(None);
+    let rendered = crate::format::render(&result, fmt)?;
+    println!("{rendered}");
 
     Ok(())
 }
@@ -1033,13 +937,13 @@ mod build_helpers_tests {
 }
 
 #[cfg(test)]
-mod render_create_output_tests {
-    use temper_core::operations::CommandOutput;
+mod action_result_tests {
     use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
     use temper_core::types::resource::ResourceRow;
 
-    use super::render_create_output_to_string;
+    use super::{CreateActionResult, DeleteActionResult, UpdateActionResult};
 
+    /// Build a minimal `ResourceRow` fixture for action result tests.
     pub(super) fn make_resource_row(
         slug: &str,
         doc_type: &str,
@@ -1071,221 +975,117 @@ mod render_create_output_tests {
         }
     }
 
+    /// Task 9: `CreateActionResult` flattens `ResourceRow` — all wire-type
+    /// fields appear at the top level alongside `status`. The old per-doctype
+    /// `temper-slug` / `temper-title` keys must not appear.
     #[test]
-    fn render_create_output_task_json_matches_legacy_shape() {
-        let row = make_resource_row("2026-05-14-test", "task", "Test", "temper");
-        let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "task", "json", None)
-            .expect("rendering task JSON should succeed");
+    fn render_create_action_result_json_is_flat() {
+        let row = make_resource_row("2026-05-14-test", "task", "Test Task", "temper");
+        let result = CreateActionResult {
+            status: "ok",
+            resource: row,
+        };
+        let out =
+            crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
 
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["type"], "task");
-        assert_eq!(parsed["temper-slug"], "2026-05-14-test");
-        assert_eq!(parsed["temper-title"], "Test");
-        assert_eq!(parsed["temper-context"], "temper");
-        // Exactly 4 fields — no extras leaking in.
-        assert_eq!(
-            parsed.as_object().unwrap().len(),
-            4,
-            "task JSON must have exactly 4 fields"
+        // status and flattened wire fields at top level.
+        assert!(out.contains("\"status\": \"ok\""), "status missing: {out}");
+        assert!(out.contains("\"slug\""), "slug missing: {out}");
+        assert!(out.contains("\"title\""), "title missing: {out}");
+        assert!(
+            out.contains("\"context_name\""),
+            "context_name missing: {out}"
+        );
+
+        // Old per-doctype keys must not appear.
+        assert!(
+            !out.contains("temper-slug"),
+            "legacy temper-slug key must not appear: {out}"
+        );
+        assert!(
+            !out.contains("temper-title"),
+            "legacy temper-title key must not appear: {out}"
+        );
+        assert!(
+            !out.contains("temper-context"),
+            "legacy temper-context key must not appear: {out}"
         );
     }
 
+    /// Flat shape works for all doctypes — research previously used a
+    /// distinct `project` key; now `context_name` is the wire field.
     #[test]
-    fn render_create_output_goal_json_matches_legacy_shape() {
-        let row = make_resource_row("test-goal", "goal", "Test Goal", "temper");
-        let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "goal", "json", None)
-            .expect("rendering goal JSON should succeed");
-
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["temper-title"], "Test Goal");
-        assert_eq!(parsed["temper-slug"], "test-goal");
-        assert_eq!(parsed["temper-context"], "temper");
-        assert_eq!(parsed["temper-status"], "active");
-        // seq is None → JSON null
-        assert!(parsed["temper-seq"].is_null());
-        // Exactly 5 fields.
-        assert_eq!(
-            parsed.as_object().unwrap().len(),
-            5,
-            "goal JSON must have exactly 5 fields"
-        );
-    }
-
-    #[test]
-    fn render_create_output_goal_json_includes_seq_when_set() {
-        let mut row = make_resource_row("test-goal-seq", "goal", "Goal With Seq", "temper");
-        row.seq = Some(3);
-        let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "goal", "json", None)
-            .expect("rendering goal JSON should succeed");
-
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["temper-seq"], 3);
-    }
-
-    #[test]
-    fn render_create_output_session_json_matches_legacy_shape() {
-        let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
-        let output = CommandOutput::new(row);
-        let path = std::path::Path::new("@me/temper/session/2026-05-14-my-session.md");
-        let json = render_create_output_to_string(&output, "session", "json", Some(path))
-            .expect("rendering session JSON should succeed");
-
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["title"], "My Session");
-        assert_eq!(parsed["context"], "temper");
-        // Path is the projection path (now supplied explicitly).
-        assert_eq!(
-            parsed["path"],
-            "@me/temper/session/2026-05-14-my-session.md"
-        );
-        // date field is today's date — just verify it parses and is non-empty.
-        let date = parsed["date"].as_str().expect("date must be a string");
-        assert!(!date.is_empty(), "date must be non-empty");
-        assert_eq!(date.len(), 10, "date must be %Y-%m-%d (10 chars)");
-        // Exactly 4 fields.
-        assert_eq!(
-            parsed.as_object().unwrap().len(),
-            4,
-            "session JSON must have exactly 4 fields"
-        );
-    }
-
-    #[test]
-    fn render_create_output_session_cloud_mode_emits_empty_path() {
-        // Cloud-mode with no projection path → `path` field empty. Agents
-        // can detect a failed projection write by checking for an empty path.
-        let row = make_resource_row("2026-05-14-my-session", "session", "My Session", "temper");
-        let output = CommandOutput::new(row);
-        let json = render_create_output_to_string(&output, "session", "json", None)
-            .expect("rendering session JSON should succeed");
-
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(
-            parsed["path"], "",
-            "no projection path must emit empty path"
-        );
-    }
-
-    #[test]
-    fn render_create_output_research_json_matches_legacy_shape() {
+    fn render_create_action_result_research_uses_wire_context_name() {
         let row = make_resource_row(
             "2026-05-14-my-research",
             "research",
             "My Research",
             "temper",
         );
-        let output = CommandOutput::new(row);
-        let path = std::path::Path::new("@me/temper/research/2026-05-14-my-research.md");
-        let json = render_create_output_to_string(&output, "research", "json", Some(path))
-            .expect("rendering research JSON should succeed");
+        let result = CreateActionResult {
+            status: "ok",
+            resource: row,
+        };
+        let out =
+            crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
 
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["title"], "My Research");
-        // Legacy research uses "project" (not "context").
-        assert_eq!(parsed["project"], "temper");
-        assert_eq!(
-            parsed["path"],
-            "@me/temper/research/2026-05-14-my-research.md"
-        );
-        // id is the UUID string of the ResourceId.
-        let id = parsed["id"].as_str().expect("id must be a string");
-        assert!(!id.is_empty(), "id must be non-empty");
-        // slug field present.
-        assert_eq!(parsed["slug"], "2026-05-14-my-research");
-        let date = parsed["date"].as_str().expect("date must be a string");
-        assert_eq!(date.len(), 10, "date must be %Y-%m-%d");
-        // Exactly 6 fields: title, project, path, date, id, slug.
-        assert_eq!(
-            parsed.as_object().unwrap().len(),
-            6,
-            "research JSON must have exactly 6 fields"
-        );
-    }
-
-    #[test]
-    fn render_create_output_concept_json_matches_legacy_shape() {
-        let row = make_resource_row("my-concept", "concept", "My Concept", "temper");
-        let output = CommandOutput::new(row);
-        let path = std::path::Path::new("@me/temper/concept/my-concept.md");
-        let json = render_create_output_to_string(&output, "concept", "json", Some(path))
-            .expect("rendering concept JSON should succeed");
-
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["doc_type"], "concept");
-        assert_eq!(parsed["title"], "My Concept");
-        assert_eq!(parsed["slug"], "my-concept");
-        assert_eq!(parsed["context"], "temper");
-        assert_eq!(parsed["path"], "@me/temper/concept/my-concept.md");
-        let id = parsed["id"].as_str().expect("id must be a string");
-        assert!(!id.is_empty(), "id must be non-empty");
-        let date = parsed["date"].as_str().expect("date must be a string");
-        assert_eq!(date.len(), 10, "date must be %Y-%m-%d");
-        // Exactly 7 fields: doc_type, title, slug, context, path, date, id.
-        assert_eq!(
-            parsed.as_object().unwrap().len(),
-            7,
-            "concept JSON must have exactly 7 fields"
-        );
-    }
-
-    #[test]
-    fn render_create_output_decision_json_matches_legacy_shape() {
-        let row = make_resource_row(
-            "2026-05-14-my-decision",
-            "decision",
-            "My Decision",
-            "temper",
-        );
-        let output = CommandOutput::new(row);
-        let path = std::path::Path::new("@me/temper/decision/2026-05-14-my-decision.md");
-        let json = render_create_output_to_string(&output, "decision", "json", Some(path))
-            .expect("rendering decision JSON should succeed");
-
-        let parsed: serde_json::Value = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed["doc_type"], "decision");
-        assert_eq!(parsed["title"], "My Decision");
-        assert_eq!(parsed["slug"], "2026-05-14-my-decision");
-        assert_eq!(parsed["context"], "temper");
-        assert_eq!(
-            parsed["path"],
-            "@me/temper/decision/2026-05-14-my-decision.md"
-        );
-        let id = parsed["id"].as_str().expect("id must be a string");
-        assert!(!id.is_empty(), "id must be non-empty");
-        let date = parsed["date"].as_str().expect("date must be a string");
-        assert_eq!(date.len(), 10, "date must be %Y-%m-%d");
-        // Exactly 7 fields: doc_type, title, slug, context, path, date, id.
-        assert_eq!(
-            parsed.as_object().unwrap().len(),
-            7,
-            "decision JSON must have exactly 7 fields"
-        );
-    }
-
-    #[test]
-    fn render_create_output_non_json_format_returns_empty_string() {
-        let row = make_resource_row("2026-05-14-test", "task", "Test", "temper");
-        let output = CommandOutput::new(row);
-        // Non-JSON format: function prints a success line and returns "".
-        // We can't easily capture stdout in unit tests, but we can confirm
-        // the return value is empty and no error is returned.
-        let result = render_create_output_to_string(&output, "task", "text", None)
-            .expect("non-JSON format should not error");
+        // Wire field name, not legacy `project`.
         assert!(
-            result.is_empty(),
-            "non-JSON format must return empty string"
+            out.contains("\"context_name\""),
+            "context_name missing: {out}"
+        );
+        assert!(
+            !out.contains("\"project\""),
+            "legacy project key must not appear: {out}"
         );
     }
 
+    /// `UpdateActionResult` has the same flat shape as `CreateActionResult`.
     #[test]
-    fn render_create_output_invalid_doctype_returns_error() {
-        let row = make_resource_row("test", "task", "Test", "temper");
-        let output = CommandOutput::new(row);
-        let result = render_create_output_to_string(&output, "bogus", "json", None);
-        assert!(result.is_err(), "invalid doctype must return an error");
+    fn render_update_action_result_json_is_flat() {
+        let mut row = make_resource_row("my-task", "task", "My Task", "temper");
+        row.body_hash = Some("sha256:abc".to_string());
+        let result = UpdateActionResult {
+            status: "ok",
+            resource: row,
+        };
+        let out =
+            crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
+
+        assert!(out.contains("\"status\": \"ok\""), "status missing: {out}");
+        assert!(out.contains("\"slug\""), "slug missing: {out}");
+        // body_hash is now visible (was hidden in the old { temper-slug, content_hash } shape).
+        assert!(
+            out.contains("body_hash"),
+            "body_hash should appear in wire passthrough: {out}"
+        );
+        // Old bespoke key must not appear.
+        assert!(
+            !out.contains("content_hash"),
+            "legacy content_hash key must not appear as a separate top-level field: {out}"
+        );
+    }
+
+    /// `DeleteActionResult` emits `{ status, slug, doc_type }`.
+    #[test]
+    fn render_delete_action_result_json_includes_slug_and_doc_type() {
+        let result = DeleteActionResult {
+            status: "ok",
+            slug: "test-slug".to_string(),
+            doc_type: "task".to_string(),
+        };
+        let out =
+            crate::format::render(&result, crate::format::OutputFormat::Json).expect("json render");
+
+        assert!(out.contains("\"status\": \"ok\""), "status missing: {out}");
+        assert!(
+            out.contains("\"slug\": \"test-slug\""),
+            "slug missing: {out}"
+        );
+        assert!(
+            out.contains("\"doc_type\": \"task\""),
+            "doc_type missing: {out}"
+        );
     }
 }
 
