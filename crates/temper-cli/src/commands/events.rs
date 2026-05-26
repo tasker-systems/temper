@@ -1,7 +1,6 @@
 use crate::config::Config;
 use crate::discovery::Event;
 use crate::error::{Result, TemperError};
-use crate::output;
 
 /// Extract the context field from any Event variant.
 pub fn event_context(event: &Event) -> &str {
@@ -38,46 +37,65 @@ pub fn load_events(config: &Config, project: Option<&str>, limit: usize) -> Resu
     Ok(events)
 }
 
-/// Format a single event as a human-readable line.
-fn format_event(event: &Event) -> String {
-    match event {
-        Event::ResourceCreate {
-            ts,
-            doc_type,
-            title,
-            context,
-            ..
-        } => format!("{ts}  {context:<12}  resource_create  {doc_type}: {title}"),
-        Event::ResourceUpdate {
-            ts,
-            doc_type,
-            slug,
-            context,
-        } => format!("{ts}  {context:<12}  resource_update  {doc_type}: {slug}"),
-    }
-}
-
 /// Run the events command — print events to stdout.
 pub fn run(config: &Config, project: Option<&str>, limit: usize, format: &str) -> Result<()> {
     let events = load_events(config, project, limit)?;
-
-    if events.is_empty() {
-        output::hint("No events found.");
-        return Ok(());
-    }
-
-    match format {
-        "json" => {
-            for event in &events {
-                println!("{}", serde_json::to_string(event).unwrap_or_default());
-            }
-        }
-        _ => {
-            for event in &events {
-                output::plain(format_event(event));
-            }
-        }
-    }
-
+    let fmt = crate::format::OutputFormat::parse(format);
+    let rendered = crate::format::render(&events, fmt)?;
+    println!("{rendered}");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_events() -> Vec<Event> {
+        vec![
+            Event::ResourceCreate {
+                ts: "2026-05-26T12:00:00Z".to_string(),
+                doc_type: "task".to_string(),
+                title: "Sample".to_string(),
+                path: "task/sample.md".to_string(),
+                context: "temper".to_string(),
+            },
+            Event::ResourceUpdate {
+                ts: "2026-05-26T12:01:00Z".to_string(),
+                doc_type: "task".to_string(),
+                slug: "sample".to_string(),
+                context: "temper".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn render_events_json_is_array() {
+        let events = fixture_events();
+        let out =
+            crate::format::render(&events, crate::format::OutputFormat::Json).expect("json render");
+        assert!(out.starts_with('['), "json should be an array: {out}");
+        assert!(out.contains("resource_create"), "json: {out}");
+        assert!(out.contains("Sample"), "json: {out}");
+    }
+
+    #[test]
+    fn render_events_toon_includes_event_marker() {
+        let events = fixture_events();
+        let out =
+            crate::format::render(&events, crate::format::OutputFormat::Toon).expect("toon render");
+        // Contains-check on stable field names.
+        assert!(
+            out.contains("ts") || out.contains("doc_type"),
+            "toon: {out}"
+        );
+        assert!(out.contains("temper"), "toon: {out}");
+    }
+
+    #[test]
+    fn render_empty_events_json_is_empty_array() {
+        let events: Vec<Event> = vec![];
+        let out =
+            crate::format::render(&events, crate::format::OutputFormat::Json).expect("json render");
+        assert_eq!(out.trim(), "[]");
+    }
 }
