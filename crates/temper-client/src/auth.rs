@@ -25,8 +25,8 @@ pub const TEMPER_DEVICE_ID_ENV: &str = "TEMPER_DEVICE_ID";
 //
 // Every function that previously called the free `load_auth` / `save_auth`
 // functions must move to accepting `&dyn TokenStore` so the caller chooses
-// the backing storage explicitly. `VaultState::Cloud` MUST use
-// MemoryTokenStore; `DiskTokenStore` reaching a cloud session would write
+// the backing storage explicitly. Agent / cloud sessions MUST use
+// MemoryTokenStore; `DiskTokenStore` reaching such a session would write
 // refreshed tokens to the agent's $HOME.
 
 pub trait TokenStore: Send + Sync {
@@ -66,7 +66,7 @@ impl TokenStore for DiskTokenStore {
         // current `load_auth()` semantics. Callers in cloud mode should use
         // MemoryTokenStore; this fallback exists for backward compatibility
         // with any tool that instantiates DiskTokenStore without checking
-        // VaultState.
+        // the session mode.
         if let Some(stored) = stored_auth_from_env()? {
             return Ok(Some(stored));
         }
@@ -112,7 +112,7 @@ impl MemoryTokenStore {
 
     /// Initialize from env vars (`TEMPER_TOKEN` + `TEMPER_PROVIDER` +
     /// `TEMPER_DEVICE_ID`). Returns `Ok(None)` when `TEMPER_TOKEN` is unset
-    /// — caller should fall back to disk or error per `VaultState`. Returns
+    /// — caller should fall back to disk or error based on the session mode. Returns
     /// `Err(_)` when the env is set but malformed.
     ///
     /// Unlike [`stored_auth_from_env`], this reads the env **once**; later
@@ -131,7 +131,9 @@ impl MemoryTokenStore {
     /// can't drift across call sites.
     pub fn from_env_required() -> Result<Self> {
         Self::from_env()?.ok_or_else(|| {
-            ClientError::Other("TEMPER_VAULT_STATE=cloud but TEMPER_TOKEN is not set".into())
+            ClientError::Other(
+                "TEMPER_TOKEN is not set (or empty) — required for a cloud agent session".into(),
+            )
         })
     }
 }

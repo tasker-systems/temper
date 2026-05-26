@@ -22,7 +22,6 @@ pub mod ids;
 pub mod ingest;
 pub mod invitation;
 pub mod managed_meta;
-pub mod manifest;
 pub mod merge;
 pub mod ownership;
 pub mod profile;
@@ -50,8 +49,7 @@ pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
 pub use config::{
     expand_tilde, global_config_path, load_config, load_config_from, AuthConfig, CloudConfig,
     CloudSection, CloudVaultConfig, MergePolicy, SkillConfig, SyncConfig, SyncSubscription,
-    SyncSubscriptions, TemperConfig, UnifiedConfig, UnifiedSyncConfig, VaultState,
-    TEMPER_AUTH_PATH_ENV, TEMPER_VAULT_STATE_ENV,
+    SyncSubscriptions, TemperConfig, UnifiedConfig, UnifiedSyncConfig, TEMPER_AUTH_PATH_ENV,
 };
 pub use conflict::{ConflictRecord, TemperSystemAnnotation};
 pub use context::{ContextCreateRequest, ContextRow, ContextRowWithCounts};
@@ -65,7 +63,6 @@ pub use ids::{ContextId, DocTypeId, EventId, ProfileId, ResourceAuditId, Resourc
 pub use ingest::{pack_chunks, unpack_chunks, IngestPayload, PackError, PackedChunk};
 pub use invitation::{InvitationStatus, TeamInvitation};
 pub use managed_meta::{ManagedMeta, MetaUpdatePayload, ResourceManifestRow};
-pub use manifest::{Manifest, ManifestEntry, ManifestEntryState};
 pub use merge::{MergeResult, MergeStrategy, PushKind};
 pub use ownership::ResourceOwnership;
 pub use profile::{DeactivationCheck, Profile, ProfileAuthLink};
@@ -75,9 +72,9 @@ pub use resource::{
     ResourceUpdateRequest, SortOrder,
 };
 pub use sync::{
-    MergedResource, ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
+    MergedResource, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
     SyncContextEntries, SyncManifestEntry, SyncManifestItem, SyncManifestResponse, SyncPullItem,
-    SyncPushItem, SyncRemovedItem, SyncResolveRequest, SyncStatusRequest, SyncStatusResponse,
+    SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
 pub use team::{Team, TeamMember, TeamRole};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};

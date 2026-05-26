@@ -1,7 +1,7 @@
 //! Shared body-trio computation for create/update resource flows.
 //!
 //! Both `temper-api` (server-side, `DbBackend::update_resource`) and
-//! `temper-cli` (client-side, `VaultBackend::update_resource`) need to compute
+//! `temper-cli` (client-side, `CloudBackend::update_resource`) need to compute
 //! `(content_hash, chunks_packed)` for a body when the caller didn't pre-compute
 //! it. Lives here because the success path needs `temper_ingest::pipeline::prepare_markdown`,
 //! which is not reachable from `temper-core` (would create a circular dep —

@@ -6,7 +6,6 @@ use crate::output;
 /// Extract the context field from any Event variant.
 pub fn event_context(event: &Event) -> &str {
     match event {
-        Event::Normalize { project, .. } => project.as_deref().unwrap_or("general"),
         Event::ResourceCreate { context, .. } | Event::ResourceUpdate { context, .. } => context,
     }
 }
@@ -42,18 +41,6 @@ pub fn load_events(config: &Config, project: Option<&str>, limit: usize) -> Resu
 /// Format a single event as a human-readable line.
 fn format_event(event: &Event) -> String {
     match event {
-        Event::Normalize {
-            ts,
-            project,
-            ids_backfilled,
-            files_moved,
-            stages_migrated,
-            slugs_fixed,
-            frontmatter_fixed,
-        } => {
-            let proj = project.as_deref().unwrap_or("general");
-            format!("{ts}  {proj:<12}  normalize       ids:{ids_backfilled} moved:{files_moved} stages:{stages_migrated} slugs:{slugs_fixed} fm:{frontmatter_fixed}")
-        }
         Event::ResourceCreate {
             ts,
             doc_type,

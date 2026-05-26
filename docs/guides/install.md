@@ -40,8 +40,8 @@ irm https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install
    - macOS/Linux: symlinks `~/.local/bin/temper` → the extracted binary
    - Windows: appends the install directory to your user PATH
 
-The archive contains `temper[.exe]`, a bundled `libonnxruntime` for local
-embedding workflows (`temper graph build`, `temper index`), and a copy of the
+The archive contains `temper[.exe]`, a bundled `libonnxruntime` for the local
+embedding pipeline (used server-side; CLI ingestion routes through the cloud API), and a copy of the
 project LICENSE.
 
 ## Pinning to a specific version
@@ -100,14 +100,14 @@ Windows arm64) or you want a custom build, clone the repo and `cargo install`:
 ```sh
 git clone https://github.com/tasker-systems/temper
 cd temper
-cargo install --path crates/temper-cli --features embed,extract,hnsw
+cargo install --path crates/temper-cli --features embed,extract
 ```
 
 You'll need:
 - A Rust toolchain (install via [rustup](https://rustup.rs))
 - A C++ compiler (for transitive deps)
-- ONNX Runtime installed on your system if you want `temper graph build`
-  and `temper index` to work. On macOS, `brew install onnxruntime` suffices.
+- ONNX Runtime installed on your system if you want local embedding support.
+  On macOS, `brew install onnxruntime` suffices.
 
 ## Troubleshooting
 
@@ -139,12 +139,11 @@ The `temper.exe` binary is currently unsigned. On first run, you may see a
 SmartScreen "Windows protected your PC" dialog. Click **More info** →
 **Run anyway**. (Code-signing is tracked as a future enhancement.)
 
-### `temper graph build` fails with "ONNX Runtime not found"
+### ONNX Runtime not found
 
-The installer bundles `libonnxruntime` next to the `temper` binary, and the
-binary looks for it there automatically. If this error appears after a fresh
-install, file an issue at https://github.com/tasker-systems/temper/issues
-with the output of:
+The installer bundles `libonnxruntime` next to the `temper` binary for the
+embedding pipeline. If you see a library-load error, file an issue at
+https://github.com/tasker-systems/temper/issues with the output of:
 
 ```sh
 temper --version

@@ -83,7 +83,7 @@ pub struct ManagedMeta {
     #[serde(rename = "temper-llm-model", skip_serializing_if = "Option::is_none")]
     pub llm_model: Option<String>,
 
-    /// UUIDv7 of the graph-index run that created this resource
+    /// UUIDv7 stamp from a (historical) LLM-assisted run.
     #[serde(rename = "temper-llm-run", skip_serializing_if = "Option::is_none")]
     pub llm_run: Option<String>,
 

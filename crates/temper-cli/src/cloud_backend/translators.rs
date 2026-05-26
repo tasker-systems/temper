@@ -4,8 +4,6 @@
 //! produces the wire payload that `temper-client` accepts. Translators
 //! are pure — they don't perform I/O or async work. The async dispatch
 //! lives in `cloud_backend.rs::impl Backend`.
-//!
-//! Mirror of `vault_backend/translators.rs`.
 
 #[cfg(feature = "embed")]
 use crate::error::{Result, TemperError};
@@ -30,7 +28,6 @@ use temper_core::types::ingest::IngestPayload;
 /// `ensure_managed_identity_keys` with `cmd.title` + `Some(cmd.slug)` from the
 /// typed cmd, so the wire payload's `temper-title` and `temper-slug` always
 /// derive from the same typed source as the server-side receive-side fill.
-/// Mirrors `VaultBackend::create_resource` (vault_backend.rs:502).
 ///
 /// **`origin_uri`:** empty string today — server constructs the canonical
 /// URI from `(owner, context, doctype, slug)`.
@@ -95,8 +92,7 @@ pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayloa
 /// `move_to: Some(MoveSpec { context_to, type_to })` but no
 /// `managed_meta.context` / `managed_meta.doc_type`, synthesizes
 /// minimal managed_meta entries so the server-side row reflects the
-/// move. Mirror of `vault_backend/translators.rs`'s synthesize_move_to
-/// pattern (PR #79). Explicit caller-supplied values always win.
+/// move. Explicit caller-supplied values always win.
 ///
 /// **Body-trio:** computed only when `cmd.body` is `Some`. Short-circuits
 /// when `BodyUpdate` already carries pre-computed `content_hash` and
@@ -241,11 +237,13 @@ pub(crate) fn cmd_to_delete_args<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_core::operations::{
-        BodyUpdate, CreateResource, MoveSpec, ResourceRef, Surface, UpdateResource,
-    };
+    use temper_core::operations::{MoveSpec, ResourceRef, Surface, UpdateResource};
     use temper_core::types::ManagedMeta;
 
+    #[cfg(feature = "test-embed")]
+    use temper_core::operations::{BodyUpdate, CreateResource};
+
+    #[cfg(feature = "test-embed")]
     fn sample_cmd() -> CreateResource {
         CreateResource {
             slug: "2026-05-18-test".to_string(),
@@ -319,8 +317,7 @@ mod tests {
     fn cmd_to_ingest_payload_always_injects_identity_keys() {
         // Symmetric defense (CLAUDE.md): even when caller-supplied managed_meta
         // is default, the wire payload must carry `temper-title` and `temper-slug`
-        // injected from the typed cmd. This is the test that guards the
-        // VaultBackend-equivalent invariant from vault_backend/tests.rs:668.
+        // injected from the typed cmd.
         let mut cmd = sample_cmd();
         cmd.managed_meta = ManagedMeta::default();
         let payload = cmd_to_ingest_payload(&cmd).expect("should succeed");

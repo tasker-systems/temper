@@ -17,7 +17,6 @@ pub mod profile;
 pub mod relationships;
 pub mod resources;
 pub mod search;
-pub mod sync;
 pub mod upload;
 
 use std::sync::Arc;
@@ -148,11 +147,6 @@ impl TemperClient {
     /// Ingest sub-client.
     pub fn ingest(&self) -> ingest::IngestClient<'_> {
         ingest::IngestClient::new(&self.http)
-    }
-
-    /// Sync sub-client.
-    pub fn sync(&self) -> sync::SyncClient<'_> {
-        sync::SyncClient::new(&self.http)
     }
 
     // ----- Auth lifecycle -----

@@ -187,14 +187,20 @@ mod tests {
 /// `DiskTokenStore`; a cloud-mode invocation would have nothing to export
 /// (cloud sessions receive their token via `TEMPER_TOKEN`).
 pub fn export_token() -> Result<()> {
-    use temper_core::types::VaultState;
-
-    if matches!(VaultState::from_env(), VaultState::Cloud) {
+    // `export-token` reads from the on-disk `DiskTokenStore` grant. A
+    // cloud agent session (`TEMPER_TOKEN` set) has no disk grant to
+    // export — refuse with a directive to run this on the laptop.
+    if std::env::var("TEMPER_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_some()
+    {
         return Err(crate::error::TemperError::Config(
-            "temper auth export-token is a local-mode command — \
-             TEMPER_VAULT_STATE=cloud has no local grant to export. \
-             Run this on your laptop, paste the token into the cloud \
-             session's secrets, and the agent will read TEMPER_TOKEN."
+            "temper auth export-token reads the on-disk grant — this \
+             session was handed its token via TEMPER_TOKEN and has \
+             nothing to export. Run this on your laptop, paste the token \
+             into the cloud session's secrets, and the agent reads \
+             TEMPER_TOKEN."
                 .into(),
         ));
     }

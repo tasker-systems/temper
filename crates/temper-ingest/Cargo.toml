@@ -4,9 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "Embedding and extraction pipeline for temper knowledge base"
 
-[package.metadata.cargo-machete]
-ignored = ["tantivy", "hnsw_rs"]
-
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "5"
@@ -24,8 +21,6 @@ ort = { version = "2.0.0-rc.12", default-features = false, features = [
 regex = "1"
 sha2 = "0.10"
 similar = "2"
-tantivy = { version = "0.22", optional = true }
-hnsw_rs = { version = "0.3", optional = true }
 temper-core = { path = "../temper-core" }
 thiserror = "2"
 tokenizers = { version = "0.22", optional = true }
@@ -39,5 +34,4 @@ default = ["embed", "extract"]
 embed = ["dep:ndarray", "dep:ort", "dep:tokenizers"]
 embed-download = ["dep:hf-hub", "dep:ndarray", "dep:ort", "dep:tokenizers"]
 extract = ["dep:kreuzberg"]
-hnsw = ["dep:tantivy", "dep:hnsw_rs"]
 test-embed = ["embed"]

@@ -1,7 +1,7 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, Commands, ConfigAction, ContextAction, DoctorAction, ResourceAction,
-    SkillAction, SyncAction, TeamAction,
+    AuthAction, Cli, Commands, ConfigAction, ContextAction, EdgeAction, ResourceAction,
+    SkillAction, TeamAction,
 };
 use temper_cli::commands;
 
@@ -119,6 +119,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     show_template,
                     stdin: _,
                     body,
+                    from,
                     format,
                 } => {
                     if show_template {
@@ -142,6 +143,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         effort.as_deref(),
                         slug.as_deref(),
                         body,
+                        from,
                         format,
                     )
                 }
@@ -266,23 +268,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 temper_cli::commands::context_cmd::list(&config)
             }
         },
-        Commands::Doctor {
-            action,
-            context,
-            format,
-        } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            match action {
-                Some(DoctorAction::Fix { dry_run }) => {
-                    temper_cli::commands::doctor::run_fix(&config, context.as_deref(), dry_run)?;
-                }
-                None => {
-                    let format = temper_cli::format::resolve_format_str(format.as_deref());
-                    temper_cli::commands::doctor::run(&config, context.as_deref(), format)?;
-                }
-            }
-            Ok(())
-        }
         Commands::Warmup { context, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
@@ -327,50 +312,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 SkillAction::Check => temper_cli::commands::skill::check(&config),
             }
         }
-        Commands::Add {
-            path,
-            dir,
-            context,
-            doc_type,
-            format,
-            force,
-            dry_run,
-            ignore,
-        } => {
-            let format = temper_cli::format::resolve_format_str(format.as_deref());
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            commands::add::run(
-                &config,
-                &path,
-                dir,
-                context.as_deref(),
-                &doc_type,
-                format,
-                force,
-                dry_run,
-                ignore.as_deref(),
-            )
-        }
         Commands::Pull { context } => commands::pull::run(&context),
-        Commands::Push { target } => commands::push::run(&target),
-        Commands::Sync { action } => match action {
-            SyncAction::Run { context, format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::run(&context, format)
-            }
-            SyncAction::Status { context, format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::status(&context, format)
-            }
-            SyncAction::Refresh { format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::refresh(format)
-            }
-            SyncAction::Reset { format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::reset(format)
-            }
-        },
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
         },
@@ -399,14 +341,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                 depth,
                 no_graph,
             )
-        }
-        Commands::Graph { action } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::graph::run(&config, action)
-        }
-        Commands::Index { context, full } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::index::run(&config, context.as_deref(), full)
         }
         Commands::Edge { action } => temper_cli::commands::edge::run(action),
     }

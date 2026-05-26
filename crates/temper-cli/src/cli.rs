@@ -75,17 +75,6 @@ pub enum Commands {
         #[command(subcommand)]
         action: ContextAction,
     },
-    /// Validate vault frontmatter and repair drift
-    Doctor {
-        #[command(subcommand)]
-        action: Option<DoctorAction>,
-        /// Filter by context
-        #[arg(long)]
-        context: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
-        #[arg(long)]
-        format: Option<String>,
-    },
     /// Context primer for new sessions
     Warmup {
         #[arg(long)]
@@ -111,50 +100,10 @@ pub enum Commands {
         action: TeamAction,
     },
 
-    /// Add a file, URL, or directory to the vault
-    Add {
-        /// File path, directory path, URL, or resource UUID (for promotion)
-        path: String,
-        /// Add all files in a directory
-        #[arg(long)]
-        dir: bool,
-        /// Context name (required for file imports, unless --doc-type auto)
-        #[arg(long)]
-        context: Option<String>,
-        /// Doc type — use "auto" to read from each file's YAML frontmatter
-        #[arg(long, default_value = "research")]
-        doc_type: String,
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-        /// Override size guardrails
-        #[arg(long)]
-        force: bool,
-        /// Preview what would be added without uploading
-        #[arg(long)]
-        dry_run: bool,
-        /// Regex pattern to exclude files (matched against filename)
-        #[arg(long)]
-        ignore: Option<String>,
-    },
-
     /// Materialize a context's resources into the local read-only projection
     Pull {
         /// Context name to pull
         context: String,
-    },
-
-    /// Push a single resource to the cloud. Target can be a UUID (requires
-    /// a manifest) or a filesystem path. Always sends body + meta together.
-    Push {
-        /// Resource UUID or path to a vault file
-        target: String,
-    },
-
-    /// Sync local vault with temper cloud
-    Sync {
-        #[command(subcommand)]
-        action: SyncAction,
     },
 
     /// Manage temper global config
@@ -194,22 +143,6 @@ pub enum Commands {
         /// Disable graph expansion (enabled by default)
         #[arg(long)]
         no_graph: bool,
-    },
-
-    /// Build, inspect, or manage the knowledge graph from vault frontmatter
-    Graph {
-        #[command(subcommand)]
-        action: GraphAction,
-    },
-
-    /// Build an HNSW vector index over the vault
-    Index {
-        /// Scope to a single context (default: all contexts)
-        #[arg(long)]
-        context: Option<String>,
-        /// Force a full rebuild (delete existing index)
-        #[arg(long)]
-        full: bool,
     },
 
     /// Assert or mutate a relationship between resources (writes go through the cloud API)
@@ -253,6 +186,10 @@ pub enum ResourceAction {
         /// piped stdin implicitly (cloud mode only; ignored in local mode)
         #[arg(long)]
         body: Option<String>,
+        /// Source path or URL — extract markdown via temper-ingest and use as body.
+        /// Mutually exclusive with --body. URL detected by http:// or https:// prefix.
+        #[arg(long, conflicts_with = "body")]
+        from: Option<String>,
         /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
         #[arg(long)]
         format: Option<String>,
@@ -488,81 +425,9 @@ pub enum SkillAction {
 }
 
 #[derive(Subcommand)]
-pub enum SyncAction {
-    /// Run a full sync cycle
-    Run {
-        /// Context names to sync (default: all configured)
-        #[arg(long)]
-        context: Vec<String>,
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
-    /// Show sync status without making changes
-    Status {
-        /// Context names to check
-        #[arg(long)]
-        context: Vec<String>,
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
-    /// Refresh manifest from server (non-destructive interleave)
-    Refresh {
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
-    /// Reset manifest from scratch (backup + full rebuild)
-    Reset {
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
-}
-
-#[derive(Subcommand)]
 pub enum ConfigAction {
     /// Open config.toml in $EDITOR with validate-then-save semantics
     Edit,
-}
-
-#[derive(Subcommand)]
-pub enum DoctorAction {
-    /// Auto-fix issues (rename legacy fields, backfill missing fields)
-    Fix {
-        /// Preview fixes without writing (dry run)
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum GraphAction {
-    /// Seed the vault with graph relationships discovered from markdown bodies
-    Build {
-        /// Scope to a single context (default: all contexts)
-        #[arg(long)]
-        context: Option<String>,
-        /// Preview changes without writing files
-        #[arg(long)]
-        dry_run: bool,
-        /// Include per-file edge detail in the report
-        #[arg(short, long)]
-        verbose: bool,
-    },
-    /// Discover concepts via LLM judgment over the HNSW index
-    Index {
-        /// Scope to a single context (default: all contexts)
-        #[arg(long)]
-        context: Option<String>,
-        /// Preview without writing concept files or member edges
-        #[arg(long)]
-        dry_run: bool,
-        /// Include per-concept detail in the report
-        #[arg(short, long)]
-        verbose: bool,
-    },
 }
 
 #[derive(Subcommand, Debug)]

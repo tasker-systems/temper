@@ -1,10 +1,6 @@
 use serde::{Deserialize, Serialize};
 use validator::Validate;
 
-/// Environment variable that selects between local-vault and cloud-mode
-/// operation. See the cloud-mode design spec for semantics.
-pub const TEMPER_VAULT_STATE_ENV: &str = "TEMPER_VAULT_STATE";
-
 /// Environment variable that overrides the on-disk auth file location used by
 /// `DiskTokenStore`. Resolution precedence (highest to lowest): this env var,
 /// `auth.path` in `config.toml`, default (`~/.config/temper/auth.json`).
@@ -13,69 +9,24 @@ pub const TEMPER_VAULT_STATE_ENV: &str = "TEMPER_VAULT_STATE";
 /// via `MemoryTokenStore` and must not touch disk regardless.
 pub const TEMPER_AUTH_PATH_ENV: &str = "TEMPER_AUTH_PATH";
 
-/// Operating mode for a temper session.
-///
-/// `Local` is the existing manifest-backed three-way sync flow.
-/// `Cloud` routes resource commands straight through the API with no
-/// full-vault mirror — for ephemeral cloud agent sessions. Dispatch
-/// is not yet wired through to respect this mode (see the cloud-mode
-/// design spec, Unit B.2); this type is recognized but not yet enforced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum VaultState {
-    #[default]
-    Local,
-    Cloud,
-}
-
-impl VaultState {
-    /// Resolve the active [`VaultState`] from the `TEMPER_VAULT_STATE` env var.
-    ///
-    /// Defaults to `Local` when the var is unset, empty, or an unrecognized
-    /// value (a warning is logged for unrecognized values so a typo is visible
-    /// but non-fatal).
-    pub fn from_env() -> Self {
-        match std::env::var(TEMPER_VAULT_STATE_ENV)
-            .ok()
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            None => Self::Local,
-            Some("local") => Self::Local,
-            Some("cloud") => Self::Cloud,
-            Some(other) => {
-                tracing::warn!(
-                    value = other,
-                    "unrecognized {TEMPER_VAULT_STATE_ENV} value — defaulting to local"
-                );
-                Self::Local
-            }
-        }
-    }
-
-    pub fn is_cloud(self) -> bool {
-        matches!(self, Self::Cloud)
-    }
-}
-
 /// Merge policy for conflict resolution within a subscription scope.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MergePolicy {
-    /// Require explicit resolution via `temper sync resolve`
+    /// Require explicit resolution by the caller — no auto-merge.
     #[default]
     Manual,
     /// Auto-merge: keep both contributions with section attribution
     Auto,
 }
 
-/// A sync subscription — defines which resources to materialize locally.
+/// A subscription — defines which resources to materialize locally via
+/// `temper pull <context>`.
 ///
-/// Subscriptions scope `temper sync` to specific contexts, teams, and/or
-/// doc types. Resources matching any subscription are included in sync.
-/// Stored in `config.toml` under `[[sync.subscriptions]]`.
+/// Subscriptions scope projection pulls to specific contexts, teams, and/or
+/// doc types. Resources matching any subscription are included in the
+/// local projection. Stored in `config.toml` under `[[sync.subscriptions]]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncSubscription {
     /// Context name to subscribe to (e.g., "temper", "tasker")
@@ -302,121 +253,6 @@ impl LlmConfig {
     }
 }
 
-/// Graph index configuration — controls TF-IDF seed extraction and cluster formation.
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-pub struct GraphIndexConfig {
-    /// Minimum number of documents a phrase must appear in to be considered a seed.
-    #[serde(default = "default_seed_min_doc_frequency")]
-    pub seed_min_doc_frequency: usize,
-    /// Maximum number of seed phrases to extract per context.
-    #[serde(default = "default_seed_top_n")]
-    pub seed_top_n: usize,
-    /// Cosine similarity threshold for including a document in a cluster.
-    #[serde(default = "default_cluster_similarity_threshold")]
-    pub cluster_similarity_threshold: f32,
-    /// Maximum number of members per cluster.
-    #[serde(default = "default_cluster_max_members")]
-    pub cluster_max_members: usize,
-    /// Minimum number of members for a cluster to generate a concept.
-    #[serde(default = "default_concept_min_members")]
-    pub concept_min_members: usize,
-    /// Default edge type when adding relates-to edges to members.
-    #[serde(default = "default_concept_default_edge_type")]
-    pub concept_default_edge_type: String,
-    /// Weight applied to tokens occurring in the frontmatter `title` field
-    /// during TF-IDF seed extraction. Higher values boost title terms.
-    #[serde(default = "default_seed_title_weight")]
-    pub seed_title_weight: f32,
-    /// Weight applied to tokens occurring inside H1 heading text.
-    #[serde(default = "default_seed_h1_weight")]
-    pub seed_h1_weight: f32,
-    /// Weight applied to tokens occurring inside H2 or H3 heading text.
-    #[serde(default = "default_seed_h2_h3_weight")]
-    pub seed_h2_h3_weight: f32,
-    /// Weight applied to tokens occurring in ordinary body prose
-    /// (everything outside title and H1/H2/H3 headings).
-    #[serde(default = "default_seed_body_weight")]
-    pub seed_body_weight: f32,
-    /// Drop seed phrases that appear in more than this fraction of documents.
-    /// Catches "gravity well" terms whose IDF can't overcome title-weighting.
-    /// Default: 0.5 (drop anything in >50% of docs).
-    #[serde(default = "default_seed_max_doc_frequency_ratio")]
-    pub seed_max_doc_frequency_ratio: f32,
-    /// Threshold above which two clusters are considered duplicates (Jaccard
-    /// of member_id sets). When exceeded, the lower-scored cluster is dropped.
-    /// Default: 0.8 (80% overlap).
-    #[serde(default = "default_cluster_overlap_threshold")]
-    pub cluster_overlap_threshold: f32,
-    /// Drop a seed whose phrase embedding is within this cosine threshold of
-    /// an already-accepted higher-scored seed's embedding. Catches topical
-    /// siblings (e.g., "ui" and "sveltekit foundat") that Jaccard cluster
-    /// dedup misses because their clusters diverge in membership even when
-    /// they're about the same topic.
-    /// Default: 0.85.
-    #[serde(default = "default_seed_phrase_similarity_threshold")]
-    pub seed_phrase_similarity_threshold: f32,
-}
-
-fn default_seed_min_doc_frequency() -> usize {
-    2
-}
-fn default_seed_top_n() -> usize {
-    50
-}
-fn default_cluster_similarity_threshold() -> f32 {
-    0.70
-}
-fn default_cluster_max_members() -> usize {
-    12
-}
-fn default_concept_min_members() -> usize {
-    3
-}
-fn default_concept_default_edge_type() -> String {
-    "relates-to".to_string()
-}
-fn default_seed_title_weight() -> f32 {
-    10.0
-}
-fn default_seed_h1_weight() -> f32 {
-    5.0
-}
-fn default_seed_h2_h3_weight() -> f32 {
-    2.0
-}
-fn default_seed_body_weight() -> f32 {
-    1.0
-}
-fn default_seed_max_doc_frequency_ratio() -> f32 {
-    0.5
-}
-fn default_cluster_overlap_threshold() -> f32 {
-    0.8
-}
-fn default_seed_phrase_similarity_threshold() -> f32 {
-    0.85
-}
-
-impl Default for GraphIndexConfig {
-    fn default() -> Self {
-        Self {
-            seed_min_doc_frequency: default_seed_min_doc_frequency(),
-            seed_top_n: default_seed_top_n(),
-            cluster_similarity_threshold: default_cluster_similarity_threshold(),
-            cluster_max_members: default_cluster_max_members(),
-            concept_min_members: default_concept_min_members(),
-            concept_default_edge_type: default_concept_default_edge_type(),
-            seed_title_weight: default_seed_title_weight(),
-            seed_h1_weight: default_seed_h1_weight(),
-            seed_h2_h3_weight: default_seed_h2_h3_weight(),
-            seed_body_weight: default_seed_body_weight(),
-            seed_max_doc_frequency_ratio: default_seed_max_doc_frequency_ratio(),
-            cluster_overlap_threshold: default_cluster_overlap_threshold(),
-            seed_phrase_similarity_threshold: default_seed_phrase_similarity_threshold(),
-        }
-    }
-}
-
 /// Cloud API section of the configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
@@ -460,9 +296,6 @@ pub struct TemperConfig {
     #[serde(default)]
     #[validate(nested)]
     pub llm: LlmConfig,
-    #[serde(default)]
-    #[validate(nested)]
-    pub graph_index: GraphIndexConfig,
 }
 
 impl Default for TemperConfig {
@@ -476,7 +309,6 @@ impl Default for TemperConfig {
             auth: Default::default(),
             cloud: Default::default(),
             llm: Default::default(),
-            graph_index: Default::default(),
         }
     }
 }
@@ -551,83 +383,6 @@ mod tests {
     #[test]
     fn test_merge_policy_default() {
         assert_eq!(MergePolicy::default(), MergePolicy::Manual);
-    }
-
-    // --- VaultState ---
-
-    use std::sync::Mutex;
-
-    /// Serialize tests that mutate TEMPER_VAULT_STATE to prevent cross-thread races.
-    static VAULT_STATE_ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    #[test]
-    fn vault_state_defaults_to_local() {
-        assert_eq!(VaultState::default(), VaultState::Local);
-    }
-
-    #[test]
-    fn vault_state_serde_is_lowercase() {
-        assert_eq!(
-            serde_json::to_string(&VaultState::Cloud).unwrap(),
-            "\"cloud\""
-        );
-        assert_eq!(
-            serde_json::to_string(&VaultState::Local).unwrap(),
-            "\"local\""
-        );
-    }
-
-    #[test]
-    fn vault_state_from_env_unset_is_local() {
-        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
-        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
-        assert_eq!(VaultState::from_env(), VaultState::Local);
-    }
-
-    #[test]
-    fn vault_state_from_env_cloud() {
-        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
-        std::env::set_var(TEMPER_VAULT_STATE_ENV, "cloud");
-        let state = VaultState::from_env();
-        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
-        assert_eq!(state, VaultState::Cloud);
-        assert!(state.is_cloud());
-    }
-
-    #[test]
-    fn vault_state_from_env_explicit_local() {
-        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
-        std::env::set_var(TEMPER_VAULT_STATE_ENV, "local");
-        let state = VaultState::from_env();
-        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
-        assert_eq!(state, VaultState::Local);
-    }
-
-    #[test]
-    fn vault_state_from_env_unknown_value_falls_back_to_local() {
-        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
-        std::env::set_var(TEMPER_VAULT_STATE_ENV, "interstellar");
-        let state = VaultState::from_env();
-        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
-        assert_eq!(state, VaultState::Local);
-    }
-
-    #[test]
-    fn vault_state_from_env_empty_is_local() {
-        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
-        std::env::set_var(TEMPER_VAULT_STATE_ENV, "");
-        let state = VaultState::from_env();
-        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
-        assert_eq!(state, VaultState::Local);
-    }
-
-    #[test]
-    fn vault_state_from_env_trims_whitespace() {
-        let _guard = VAULT_STATE_ENV_LOCK.lock().unwrap();
-        std::env::set_var(TEMPER_VAULT_STATE_ENV, "  cloud  ");
-        let state = VaultState::from_env();
-        std::env::remove_var(TEMPER_VAULT_STATE_ENV);
-        assert_eq!(state, VaultState::Cloud);
     }
 
     #[test]

@@ -81,7 +81,7 @@ pub struct UpdateResource {
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
-    /// File-move spec (VaultBackend only). `DbBackend` ignores `move_to` —
+    /// File-move spec (local-mode only). `DbBackend` ignores `move_to` —
     /// the new context/type is conveyed via `managed_meta` which DbBackend
     /// already handles. This field carries no SQL and does not affect the
     /// `.sqlx/` query cache.
@@ -89,9 +89,8 @@ pub struct UpdateResource {
     pub origin: Surface,
 }
 
-/// Delete a resource. In the cloud-first model this is soft-delete on the
-/// server with optional local-file removal as a tail action (handled by
-/// VaultBackend in CliLocalVault surface).
+/// Delete a resource. In the cloud-first model this is a soft-delete on the
+/// server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeleteResource {
     pub resource: ResourceRef,
@@ -162,7 +161,7 @@ mod tests {
     fn show_resource_carries_resource_ref() {
         let cmd = ShowResource {
             resource: ResourceRef::scoped("@me", "temper", "task", "hello"),
-            origin: Surface::CliLocalVault,
+            origin: Surface::CliCloud,
         };
         // Exercises the type compiles + the field is reachable.
         assert!(matches!(cmd.resource, ResourceRef::Scoped { .. }));

@@ -1,7 +1,7 @@
 //! `CloudBackendCtx` — per-request context for cloud-mode CLI dispatch.
 //!
-//! Unlike `VaultBackendCtx`, cloud mode has no offline path. If no token
-//! resolves, `assemble_cloud_backend` returns an error directing the user
+//! Cloud mode has no offline path. If no token resolves,
+//! `assemble_cloud_backend` returns an error directing the user
 //! to `temper auth login`.
 
 use std::sync::Arc;
@@ -14,7 +14,6 @@ use crate::error::{Result, TemperError};
 
 /// Per-request context for constructing a [`super::CloudBackend`].
 ///
-/// Mirrors [`crate::vault_backend::VaultBackendCtx`]'s shape.
 /// All fields are public so call-sites can build the struct directly
 /// without a further builder method. The ctx struct satisfies the
 /// project's "params structs at 5+ args" rule.
@@ -84,7 +83,6 @@ mod tests {
 
         temp_env::with_vars(
             [
-                ("TEMPER_VAULT_STATE", Some("local")),
                 ("TEMPER_TOKEN", None::<&str>),
                 ("TEMPER_AUTH_PATH", Some(auth_path.to_str().unwrap())),
                 (

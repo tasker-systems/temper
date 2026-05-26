@@ -2,12 +2,12 @@
 
 //! End-to-end coverage for cloud-mode write paths.
 //!
-//! Drives `TEMPER_VAULT_STATE=cloud` plus per-test `TEMPER_TOKEN` /
+//! Drives the cloud write path via per-test `TEMPER_TOKEN` /
 //! `TEMPER_API_URL` / `TEMPER_GLOBAL_CONFIG` against an in-process Axum
 //! server backed by a real Postgres test database. No vault directory
 //! is touched for the cloud-mode write paths under test — the cloud
 //! branches in `commands::resource::create` / `update` / `list` /
-//! `show` and the `sync_cmd::run` cloud guard are exercised end to end.
+//! `show` are exercised end to end.
 //!
 //! Cloud mode uses `MemoryTokenStore::from_env_required()` which reads
 //! the JWT from `TEMPER_TOKEN`. `TEMPER_AUTH_PATH` (disk store) is only
@@ -52,12 +52,11 @@ fn cloud_env<'a>(
     api_url: &'a str,
     token: &'a str,
     global_config: &'a str,
-) -> [(&'static str, Option<&'a str>); 5] {
+) -> [(&'static str, Option<&'a str>); 4] {
     [
         ("TEMPER_API_URL", Some(api_url)),
         ("TEMPER_TOKEN", Some(token)),
         ("TEMPER_GLOBAL_CONFIG", Some(global_config)),
-        ("TEMPER_VAULT_STATE", Some("cloud")),
         ("TEMPER_AUTH_PATH", None),
     ]
 }
@@ -110,6 +109,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                 None, // effort
                 None, // slug override
                 None, // body_flag (default body generated)
+                None, // from
                 "text",
             )
             .expect("cloud create should succeed")
@@ -833,6 +833,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                 None,
                 None,
                 Some(body_flag),
+                None, // from
                 "text",
             )
             .expect("cloud create for dedup test")
@@ -918,51 +919,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: sync run returns cloud-mode error message
-// ---------------------------------------------------------------------------
-
-/// Cloud `temper sync run` returns the exact redirect error string instead of
-/// attempting a sync (which would fail without a local vault).
-///
-/// The error must contain the canonical redirect phrase:
-/// "cloud mode has no local vault to sync"
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn cloud_sync_run_redirects_with_message(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
-
-    // No profile/context pre-flight needed — the guard fires before any I/O.
-
-    let global_config = app.vault_dir.path().join("no-such-config.toml");
-    let api_url = format!("http://{}", app.addr);
-    let token = app.token.clone();
-    let global_config_str = global_config.to_str().unwrap().to_string();
-
-    let result = tokio::task::spawn_blocking(move || {
-        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::sync_cmd::run(
-                &[], // contexts (empty = all)
-                "text",
-            )
-        })
-    })
-    .await
-    .expect("spawn_blocking joined");
-
-    // Must be an Err whose message contains the cloud redirect phrase.
-    let err = result.expect_err("sync run must fail with cloud-mode redirect error");
-    let err_str = err.to_string();
-    assert!(
-        err_str.contains("cloud mode has no local vault to sync"),
-        "error message must contain redirect phrase; got: {err_str}"
-    );
-    assert!(
-        err_str.contains("temper resource create"),
-        "error message must mention 'temper resource create'; got: {err_str}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 8: cloud list returns remote-only resources
+// Test 7: cloud list returns remote-only resources
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper list --type session` returns server rows including resources
@@ -1063,4 +1020,432 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
         count, 2,
         "both cloud-only resources must be active in DB after cloud list"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: create writes the canonical projection file
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource create --type task --title "..."` posts to
+/// `/api/ingest`; the CLI then materializes the new resource's projection file
+/// under `<vault_root>/@me/<context>/task/<slug>.md`.
+///
+/// Verifies:
+/// 1. The projection file exists at the canonical vault path.
+/// 2. The file's frontmatter contains the correct `temper-slug`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+    let vault_root = app.vault_dir.path().to_path_buf();
+
+    // Drive cloud-mode create on a blocking thread.
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::resource::create(
+                &cli_config,
+                "task",
+                "Projection Write Test",
+                Some("myapp"),
+                None, // goal
+                None, // mode
+                None, // effort
+                None, // slug override
+                None, // body_flag
+                None, // from
+                "text",
+            )
+            .expect("cloud create should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    // ---- Assertion 1: projection file exists at canonical path ----
+    // Phase 5 unified slug derivation: tasks get a `{date}-{slugify(title)}` prefix.
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-projection-write-test");
+    // The file lives at <vault_root>/@me/<context>/task/<slug>.md.
+    let projection_path = vault_root
+        .join("@me")
+        .join("myapp")
+        .join("task")
+        .join(format!("{slug}.md"));
+
+    assert!(
+        projection_path.exists(),
+        "projection file must exist at {} after cloud create",
+        projection_path.display()
+    );
+
+    // ---- Assertion 2: frontmatter temper-slug matches created resource ----
+    let content =
+        std::fs::read_to_string(&projection_path).expect("projection file must be readable");
+    let fm = temper_core::frontmatter::Frontmatter::try_from(content.as_str())
+        .expect("projection file must have valid frontmatter");
+    let fm_json = serde_json::to_value(fm.value()).expect("frontmatter JSON conversion");
+    assert_eq!(
+        fm_json.get("temper-slug").and_then(|v| v.as_str()),
+        Some(slug.as_str()),
+        "projection frontmatter must contain correct temper-slug; got: {fm_json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: update rewrites the projection file on success
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource update <slug> --type task --title "..."` (meta-only
+/// PATCH) rewrites the existing projection file under
+/// `<vault_root>/@me/<context>/task/<slug>.md` with updated frontmatter.
+///
+/// Verifies:
+/// 1. The projection file exists (written by the create tail action — Task 5).
+/// 2. After the meta-only update, the projection file's frontmatter contains
+///    the new title, proving the projection was rewritten by `update`'s tail action.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+    let vault_root = app.vault_dir.path().to_path_buf();
+
+    // Step 1: Create the resource (projection file is written by the create
+    // tail action — Task 5). Using "task" type so slug gets a date prefix.
+    let api_url2 = api_url.clone();
+    let token2 = token.clone();
+    let global_config_str2 = global_config_str.clone();
+    let cli_config2 = cli_config.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
+            temper_cli::commands::resource::create(
+                &cli_config2,
+                "task",
+                "Update Projection Test",
+                Some("myapp"),
+                None, // goal
+                None, // mode
+                None, // effort
+                None, // slug override
+                None, // body_flag (default body generated)
+                None, // from
+                "text",
+            )
+            .expect("cloud create should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking create joined");
+
+    // Derive the slug from the title (Phase 5 unified slug derivation).
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-update-projection-test");
+    let projection_path = vault_root
+        .join("@me")
+        .join("myapp")
+        .join("task")
+        .join(format!("{slug}.md"));
+
+    // Step 2: Assert the projection file exists after create.
+    assert!(
+        projection_path.exists(),
+        "projection file must exist at {} after cloud create",
+        projection_path.display()
+    );
+
+    // Read the pre-update frontmatter to verify it has the original title.
+    let content_before = std::fs::read_to_string(&projection_path)
+        .expect("projection file must be readable before update");
+    let fm_before = temper_core::frontmatter::Frontmatter::try_from(content_before.as_str())
+        .expect("projection file must have valid frontmatter before update");
+    let fm_before_json =
+        serde_json::to_value(fm_before.value()).expect("frontmatter JSON conversion");
+    assert_eq!(
+        fm_before_json.get("temper-title").and_then(|v| v.as_str()),
+        Some("Update Projection Test"),
+        "pre-update frontmatter must have original title; got: {fm_before_json}"
+    );
+
+    // Step 3: Drive a meta-only update (title change, no body) on a blocking
+    // thread. No `test-embed` required — meta-only updates do not touch chunks.
+    let slug_for_update = slug.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::resource::update(
+                &cli_config,
+                &temper_cli::commands::resource::UpdateParams {
+                    slug: &slug_for_update,
+                    doc_type: Some("task"),
+                    type_from: None,
+                    type_to: None,
+                    context: Some("myapp"),
+                    context_to: None,
+                    title: Some("Updated Projection Title"),
+                    tags: &[],
+                    aliases: &[],
+                    relates_to: &[],
+                    references: &[],
+                    depends_on: &[],
+                    extends: &[],
+                    preceded_by: &[],
+                    derived_from: &[],
+                    stage: None,
+                    mode: None,
+                    effort: None,
+                    goal: None,
+                    seq: None,
+                    branch: None,
+                    pr: None,
+                    status: None,
+                    body: None, // meta-only, no chunks_packed needed
+                },
+            )
+            .expect("cloud meta-only update must succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking update joined");
+
+    // ---- Assertion: projection file has the updated title in frontmatter ----
+    let content_after = std::fs::read_to_string(&projection_path)
+        .expect("projection file must be readable after update");
+    let fm_after = temper_core::frontmatter::Frontmatter::try_from(content_after.as_str())
+        .expect("projection file must have valid frontmatter after update");
+    let fm_after_json =
+        serde_json::to_value(fm_after.value()).expect("frontmatter JSON conversion after update");
+    assert_eq!(
+        fm_after_json.get("temper-title").and_then(|v| v.as_str()),
+        Some("Updated Projection Title"),
+        "post-update projection frontmatter must contain updated title; got: {fm_after_json}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: delete removes the projection file
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource delete --type task <slug> --force` soft-deletes on
+/// the server and removes the projection file from
+/// `<vault_root>/@me/<context>/task/<slug>.md`.
+///
+/// Verifies:
+/// 1. The projection file exists after `create` (written by create's tail action
+///    — Task 5).
+/// 2. After `delete --force`, the projection file is gone from disk.
+/// 3. The resource is marked inactive in the database (server-side soft-delete).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+    let vault_root = app.vault_dir.path().to_path_buf();
+
+    // Step 1: Create the resource (projection file written by create's tail action).
+    let api_url2 = api_url.clone();
+    let token2 = token.clone();
+    let global_config_str2 = global_config_str.clone();
+    let cli_config2 = cli_config.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
+            temper_cli::commands::resource::create(
+                &cli_config2,
+                "task",
+                "Delete Projection Test",
+                Some("myapp"),
+                None, // goal
+                None, // mode
+                None, // effort
+                None, // slug override
+                None, // body_flag
+                None, // from
+                "text",
+            )
+            .expect("cloud create should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking create joined");
+
+    // Derive slug (Phase 5 unified slug derivation: tasks get {date}-{slugify(title)} prefix).
+    let date_prefix = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let slug = format!("{date_prefix}-delete-projection-test");
+    let projection_path = vault_root
+        .join("@me")
+        .join("myapp")
+        .join("task")
+        .join(format!("{slug}.md"));
+
+    // Step 2: Assert the projection file exists after create.
+    assert!(
+        projection_path.exists(),
+        "projection file must exist at {} after cloud create",
+        projection_path.display()
+    );
+
+    // Step 3: Delete the resource (force=true so it works in non-TTY test context).
+    let api_url3 = api_url.clone();
+    let token3 = token.clone();
+    let global_config_str3 = global_config_str.clone();
+    let cli_config3 = cli_config.clone();
+    let slug_for_delete = slug.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config_str3), || {
+            temper_cli::commands::resource::delete(
+                &cli_config3,
+                "task",
+                &slug_for_delete,
+                Some("myapp"),
+                true, // force — accepted for CLI compatibility; cloud delete is non-interactive
+            )
+            .expect("cloud delete should succeed")
+        })
+    })
+    .await
+    .expect("spawn_blocking delete joined");
+
+    // ---- Assertion 1: projection file is gone ----
+    assert!(
+        !projection_path.exists(),
+        "projection file must be removed after cloud delete; path: {}",
+        projection_path.display()
+    );
+
+    // ---- Assertion 2: resource is soft-deleted in the database ----
+    let is_active: bool =
+        sqlx::query_scalar("SELECT r.is_active FROM kb_resources r WHERE r.slug = $1")
+            .bind(&slug)
+            .fetch_one(&pool)
+            .await
+            .expect("resource row must still exist after soft-delete");
+
+    assert!(
+        !is_active,
+        "resource must be soft-deleted (is_active = false) after cloud delete"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test N: cloud show --edges resolves via server-side resolve_by_uri
+// ---------------------------------------------------------------------------
+
+/// Cloud `temper resource show <slug> --type research --context <ctx> --edges`
+/// must succeed without a manifest entry. Previously `show_edges` loaded the
+/// local manifest to resolve the id and returned a "sync first" error in
+/// cloud-only mode. The fix switches to `client.resources().resolve_by_uri`
+/// (same path as `show`). This test verifies the end-to-end path: create a
+/// resource via the API, then call `show` with `edges: true` and assert it
+/// returns `Ok(())` — even with zero edges.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("edgesctx")
+        .await
+        .expect("create edgesctx context");
+
+    // Seed the resource via the API client (no CLI, no manifest written).
+    use temper_core::types::ingest::{pack_chunks, IngestPayload};
+    app.client
+        .ingest()
+        .create(&IngestPayload {
+            title: "Edges Resolve Test".to_string(),
+            origin_uri: "kb://edgesctx/research/edges-resolve-test".to_string(),
+            context_name: "edgesctx".to_string(),
+            doc_type_name: "research".to_string(),
+            content_hash: None,
+            slug: "edges-resolve-test".to_string(),
+            content: String::new(),
+            metadata: None,
+            managed_meta: Some(serde_json::json!({
+                "temper-title": "Edges Resolve Test"
+            })),
+            open_meta: None,
+            chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        })
+        .await
+        .expect("seed resource via client");
+
+    // Drive show with edges=true on a blocking thread (runtime::with_client
+    // creates an inner tokio runtime — must not nest).
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+
+    tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::resource::show(
+                &cli_config,
+                "research",
+                "edges-resolve-test",
+                Some("edgesctx"),
+                "text",
+                true, // edges — the path under test
+            )
+            .expect(
+                "cloud show --edges must succeed without a manifest entry; \
+                 previously returned 'sync first' error",
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
 }

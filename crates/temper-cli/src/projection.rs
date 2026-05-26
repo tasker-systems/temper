@@ -50,8 +50,8 @@ pub fn read_cursor(state_dir: &Path, context: &str) -> Result<Option<ProjectionC
     Ok(serde_json::from_str::<ProjectionCursor>(&content).ok())
 }
 
-/// Atomically write a context's cursor sidecar (temp file + rename, the
-/// pattern used by `manifest_io::save_manifest`).
+/// Atomically write a context's cursor sidecar using the standard
+/// temp-file-plus-rename pattern.
 pub fn write_cursor(state_dir: &Path, context: &str, cursor: &ProjectionCursor) -> Result<()> {
     let path = cursor_path(state_dir, context);
     let dir = path.parent().ok_or_else(|| {
@@ -276,6 +276,30 @@ pub async fn write_resource_file(
     write_resource_file_from_parts(vault_root, row, &content)
 }
 
+/// Remove a resource's projection file at its canonical vault path.
+///
+/// A best-effort counterpart to [`write_resource_file_from_parts`], used
+/// by `temper resource delete` after a successful server-side delete. An
+/// already-absent file is a silent success — the projection is
+/// derivative, so "the file is gone" is the desired end state either way.
+pub fn remove_resource_file(
+    vault_root: &Path,
+    owner: &str,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+) -> Result<()> {
+    let path = Vault::new(vault_root).doc_file(owner, context, doc_type, slug);
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(TemperError::Config(format!(
+            "projection remove {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
 /// Outcome of a `pull_context` call, for the command's output line.
 #[derive(Debug, Clone)]
 pub struct PullSummary {
@@ -478,5 +502,26 @@ mod tests {
         let missing = dir.path().join("does-not-exist");
         let pruned = prune_context(&missing, "anyctx", &HashSet::new()).unwrap();
         assert_eq!(pruned, 0, "absent vault root prunes nothing, no error");
+    }
+
+    #[test]
+    fn remove_resource_file_deletes_the_canonical_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let task_dir = root.join("@me/myctx/task");
+        std::fs::create_dir_all(&task_dir).unwrap();
+        let file = task_dir.join("doomed.md");
+        std::fs::write(&file, "body").unwrap();
+
+        remove_resource_file(root, "@me", "myctx", "task", "doomed").unwrap();
+
+        assert!(!file.exists(), "projection file removed");
+    }
+
+    #[test]
+    fn remove_resource_file_is_ok_when_file_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        // Never-written file: removal is a silent no-op, not an error.
+        remove_resource_file(dir.path(), "@me", "myctx", "task", "ghost").unwrap();
     }
 }

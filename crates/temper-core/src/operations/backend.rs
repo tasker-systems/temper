@@ -2,7 +2,7 @@
 //!
 //! Two impls are planned:
 //! - `DbBackend` in `temper-api` (Postgres persistence + chunking + embedding)
-//! - `VaultBackend` in `temper-cli` (local-file persistence with optional sync)
+//! - `CloudBackend` in `temper-cli` (cloud-mode dispatch via `temper-client`)
 //!
 //! Both produce `CommandOutput<T>` per command — typed value + events emitted.
 //!
@@ -37,7 +37,7 @@ pub struct SearchHit {
     pub score: f32,
 }
 
-/// The shared contract for both DbBackend (in temper-api) and VaultBackend
+/// The shared contract for both DbBackend (in temper-api) and CloudBackend
 /// (in temper-cli). Each command method takes a command struct, executes it
 /// against the backend's persistence, and returns a `CommandOutput<T>` with
 /// the typed value plus emitted events.

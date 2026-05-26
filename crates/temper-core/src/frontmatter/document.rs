@@ -96,9 +96,7 @@ impl Frontmatter {
 
     /// Mutable access to the canonicalized frontmatter value.
     ///
-    /// Used by higher-level orchestrators (e.g. `normalize_file`) that
-    /// need to inject doc-type defaults before writing back. Callers
-    /// that mutate this value are responsible for maintaining the
+    /// Callers that mutate this value are responsible for maintaining the
     /// alias-normalized + mapping-typed invariant.
     pub fn value_mut(&mut self) -> &mut serde_yaml::Value {
         &mut self.value

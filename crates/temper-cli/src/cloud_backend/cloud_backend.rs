@@ -3,7 +3,7 @@
 //! Each method translates the inbound `temper-core::operations` command
 //! into a `temper-client` API call via the translators in `translators.rs`,
 //! then projects the wire response back into `CommandOutput<...>`. No vault
-//! file IO, no manifest IO — those are `VaultBackend`'s domain.
+//! file IO, no manifest IO — this backend is cloud-only.
 //!
 //! Show/list/search return explicit "reads stay surface-direct" errors per
 //! the parent spec contract (reads are surface-direct in both modes; the
@@ -27,7 +27,7 @@ pub struct CloudBackend {
     #[expect(
         dead_code,
         reason = "kept for forward-compat (per-request profile resolution); \
-                  fields settled in Task 1 to mirror VaultBackend shape"
+                  fields settled in Task 1 to mirror the backend shape"
     )]
     pub(crate) config: Arc<Config>,
     #[expect(dead_code, reason = "stored for Phase 6 telemetry/event tagging")]

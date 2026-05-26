@@ -4,10 +4,7 @@
 //! managed-tier defaults (`temper-stage`, `temper-status`); `apply_open_defaults`
 //! populates open-tier defaults (`date` for session/research). Phase 6's
 //! Migration A established that `date` belongs in open_meta — these helpers
-//! enforce that split for new ingest writes too. The YAML-form helper
-//! (`crate::normalize::apply_doc_type_defaults_yaml`) operates on the merged
-//! frontmatter mapping where the split is irrelevant; the caller's
-//! `split_managed_open` routes keys to the right tier downstream.
+//! enforce that split for new ingest writes too.
 
 /// Apply doc-type-specific defaults to managed_meta.
 /// Only sets fields that are absent — never overwrites caller-provided values.

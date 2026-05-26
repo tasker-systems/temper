@@ -1,4 +1,4 @@
-//! Pure shared actions — used by both DbBackend and VaultBackend before persisting.
+//! Pure shared actions — used by both DbBackend and CloudBackend before persisting.
 //!
 //! Each action is a pure function: takes inputs, returns transformed outputs.
 //! No I/O, no DB, no file system. Side effects (persistence, network, file
@@ -424,8 +424,7 @@ pub fn validate_update(cmd: &UpdateResource) -> Result<(), ActionError> {
 /// from MCP / API clients that bypass the CLI's `Frontmatter::try_from`
 /// alias normalization. The CLI's strict `Frontmatter` pipeline already
 /// rejects unknown keys client-side, so well-formed CLI payloads pass
-/// this check unchanged. Used by both DbBackend's update path and (future)
-/// VaultBackend.
+/// this check unchanged. Used by both DbBackend's update path and CloudBackend.
 pub fn validate_open_meta_keys(open_meta: &serde_json::Value) -> Result<(), String> {
     let Some(obj) = open_meta.as_object() else {
         return Ok(());
@@ -1019,7 +1018,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         let err = validate_create(&cmd).unwrap_err();
@@ -1047,7 +1046,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         let err = validate_create(&cmd).unwrap_err();
@@ -1075,7 +1074,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         validate_create(&cmd).expect("valid task should pass validation");
@@ -1097,7 +1096,7 @@ mod tests {
             origin_uri: None,
             chunks_packed: None,
             content_hash: None,
-            origin: super::super::Surface::CliLocalVault,
+            origin: super::super::Surface::CliCloud,
         };
 
         validate_create(&cmd).expect("non-task doctype should not be subject to task whitelist");
