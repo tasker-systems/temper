@@ -459,7 +459,7 @@ fn render_server_rows(
                 .collect::<Vec<_>>(),
         )
         .unwrap_or_default()),
-        OutputFormat::Pretty | OutputFormat::NoTty => {
+        OutputFormat::Pretty | OutputFormat::NoTty | OutputFormat::Toon => {
             let columns = col_registry::display_columns(doc_type);
             if columns.is_empty() || rows.is_empty() {
                 return Ok(String::new());
@@ -469,11 +469,13 @@ fn render_server_rows(
                 let fm_value = row_to_frontmatter_value(row);
                 renderer.push_row(col_registry::extract_row(&fm_value, &columns));
             }
-            Ok(if format == OutputFormat::Pretty {
-                renderer.render_pretty()
-            } else {
-                renderer.render_no_tty()
-            })
+            Ok(
+                if format == OutputFormat::Pretty || format == OutputFormat::Toon {
+                    renderer.render_pretty()
+                } else {
+                    renderer.render_no_tty()
+                },
+            )
         }
     }
 }
