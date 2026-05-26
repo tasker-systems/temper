@@ -32,8 +32,7 @@ QoL sweep task (Group F).
 |----------|--------|--------|
 | JSON shape strictness | Strict wire-type passthrough | Smallest scope; matches "cloud API IS the truth" framing literally |
 | Default `--format` | Auto: Toon (TTY) / Json (non-TTY) | Mirrors current Pretty/NoTty auto-detection; lowest friction for humans + agents |
-| Toon implementation | `toon-format` crate v0.5 (TOON v1.4 spec) | Most-downloaded, actively maintained, serde-native; org-owned repo |
-| Toon migration to v3.0 | Deferred follow-up | toon-format may catch up to v3.0; revisit after ecosystem stabilizes |
+| Toon implementation | `toon-format` crate v0.5 (TOON v3.0 spec) | Most-downloaded, actively maintained, serde-native; org-owned repo; spec-current |
 | `resource show` | Toon = raw markdown + frontmatter; Json = full API response | Body is the meaningful output for the `show` idiom |
 | Non-API commands | All data-emitting commands get `--format`; action commands stay terse | Universal coverage without forcing JSON noise on every interaction |
 | Migration strategy | Rip-and-replace, no deprecation shim | Per `feedback_no_premature_backward_compat`; project is one month old |
@@ -87,8 +86,8 @@ abstraction.** Concretely:
   the `FormatChoice` enum, the `render<T>` function, and the
   `render_resource_show` function. Nothing else escapes.
 
-This way, swapping the Toon backend — to `toon-rs` for TOON v3.0 spec
-compliance, or to a hand-rolled implementation — touches a single file.
+This way, swapping the Toon backend — to a competing crate or a
+hand-rolled implementation — touches a single file.
 
 ### Files deleted at end of PR
 
@@ -218,8 +217,6 @@ preserving the re-shaped JSON would defeat the simplification.
 
 ## Out of Scope
 
-- **TOON v3.0 spec migration.** Captured as a follow-up; happens when
-  the ecosystem (toon-format or successor) catches up.
 - **Wire-type tightening.** The "Wire types, but tighten the wire shape"
   alternative (dropping `body_hash` et al. from `ResourceRow` at the
   API level) was considered but deferred — it doubles the blast radius
