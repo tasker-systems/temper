@@ -50,27 +50,22 @@ pub enum OutputFormat {
     Toon,
 }
 
-#[derive(Clone, Copy, Debug)]
-pub enum FormatChoice {
-    Explicit(OutputFormat),
-    Auto,
-}
-
-impl FormatChoice {
-    /// Resolve `Auto` against the current stdout TTY state.
-    pub fn resolve(self) -> OutputFormat;
+impl OutputFormat {
+    /// Resolve an optional explicit `--format` value to a concrete format.
+    /// `None` → TTY → Toon; non-TTY → Json.
+    pub fn resolve(explicit: Option<&str>) -> Self;
 }
 
 /// Render any `Serialize` value in the chosen format.
-pub fn render<T: Serialize>(value: &T, fmt: OutputFormat) -> Result<String>;
+pub fn render<T: Serialize>(value: &T, fmt: OutputFormat) -> Result<String, TemperError>;
 
 /// `temper resource show` exception: Toon emits markdown body with
 /// frontmatter; Json emits the full API response struct.
 pub fn render_resource_show(
-    metadata: &ResourceRow,
+    metadata: &serde_json::Value,
     body: &str,
     fmt: OutputFormat,
-) -> Result<String>;
+) -> Result<String, TemperError>;
 ```
 
 ### Encapsulation invariant
@@ -83,8 +78,8 @@ abstraction.** Concretely:
 - `toon-format` types are imported *only* in `output/format.rs`. No call
   site references them.
 - Our public surface from `output/format.rs` is the `OutputFormat` enum,
-  the `FormatChoice` enum, the `render<T>` function, and the
-  `render_resource_show` function. Nothing else escapes.
+  the `render<T>` function, and the `render_resource_show` function.
+  Nothing else escapes.
 
 This way, swapping the Toon backend — to a competing crate or a
 hand-rolled implementation — touches a single file.
