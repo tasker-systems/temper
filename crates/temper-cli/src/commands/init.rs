@@ -7,10 +7,20 @@
 use std::path::{Path, PathBuf};
 
 use dialoguer::{theme::ColorfulTheme, Confirm, Input, Select};
+use serde::Serialize;
 
 use crate::config::global_config_path;
 use crate::error::{Result, TemperError};
+use crate::format::{render, OutputFormat};
 use crate::output;
+
+/// Structured summary emitted in non-interactive mode with --format.
+#[derive(Debug, Serialize)]
+pub(crate) struct InitSummary {
+    pub vault_path: String,
+    pub contexts: Vec<String>,
+    pub auth: String,
+}
 
 /// User selection for auth provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,9 +119,14 @@ fn prompt_err(e: dialoguer::Error) -> TemperError {
 }
 
 /// CLI entry point dispatched from `main.rs`.
-pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<()> {
+pub fn run(
+    path: &Path,
+    no_interactive: bool,
+    register_global: bool,
+    format: Option<String>,
+) -> Result<()> {
     if no_interactive {
-        return run_non_interactive(path, register_global);
+        return run_non_interactive(path, register_global, format);
     }
     let initial_vault = resolve_initial_vault(path);
     let answers = gather_answers(&initial_vault)?;
@@ -128,14 +143,38 @@ pub fn run(path: &Path, no_interactive: bool, register_global: bool) -> Result<(
     apply_answers(&answers, register_global, None)
 }
 
-/// Non-interactive path — uses all defaults.
-pub fn run_non_interactive(path: &Path, register_global: bool) -> Result<()> {
+/// Non-interactive path — uses all defaults, optionally emitting structured output.
+pub fn run_non_interactive(
+    path: &Path,
+    register_global: bool,
+    format: Option<String>,
+) -> Result<()> {
     let answers = WizardAnswers {
         vault_path: resolve_initial_vault(path),
         extra_contexts: Vec::new(),
         auth_choice: AuthChoice::Auth0,
     };
-    apply_answers(&answers, register_global, None)
+    apply_answers(&answers, register_global, None)?;
+
+    // Emit structured summary when a format is explicitly requested.
+    if format.is_some() {
+        let mut contexts = vec!["default".to_string()];
+        contexts.extend(answers.extra_contexts.iter().cloned());
+        let auth = match answers.auth_choice {
+            AuthChoice::Auth0 => "auth0".to_string(),
+            AuthChoice::None => "none".to_string(),
+        };
+        let summary = InitSummary {
+            vault_path: answers.vault_path.clone(),
+            contexts,
+            auth,
+        };
+        let fmt = OutputFormat::resolve(format.as_deref());
+        let rendered = render(&summary, fmt)?;
+        println!("{rendered}");
+    }
+
+    Ok(())
 }
 
 /// Run the interactive prompts and return collected answers.
@@ -550,7 +589,7 @@ mod tests {
     fn no_interactive_defaults_and_applies() {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path().join("v");
-        run_non_interactive(&vault, false).expect("non-interactive run should succeed");
+        run_non_interactive(&vault, false, None).expect("non-interactive run should succeed");
         // .temper/ created.
         assert!(vault.join(".temper").is_dir());
         // No per-context subdirectory.
@@ -587,5 +626,21 @@ mod tests {
         let names = mock.ensured_names();
         assert!(names.contains(&"default".to_string()));
         assert!(names.contains(&"writing".to_string()));
+    }
+
+    #[test]
+    fn render_init_summary_json_includes_vault_path() {
+        let summary = InitSummary {
+            vault_path: "/tmp/my-vault".to_string(),
+            contexts: vec!["default".to_string(), "writing".to_string()],
+            auth: "auth0".to_string(),
+        };
+        let out = crate::format::render(&summary, crate::format::OutputFormat::Json)
+            .expect("json render");
+        assert!(out.contains("\"vault_path\""), "json: {out}");
+        assert!(out.contains("/tmp/my-vault"), "json: {out}");
+        assert!(out.contains("\"contexts\""), "json: {out}");
+        assert!(out.contains("\"auth\""), "json: {out}");
+        assert!(out.contains("auth0"), "json: {out}");
     }
 }

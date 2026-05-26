@@ -81,15 +81,16 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         Commands::Init {
             path,
             no_interactive,
+            format,
         } => {
             let vault_path = path
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-            temper_cli::commands::init::run(&vault_path, no_interactive, true)
+            temper_cli::commands::init::run(&vault_path, no_interactive, true, format)
         }
-        Commands::Check { quiet } => {
+        Commands::Check { quiet, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::check::run(&config, quiet)
+            temper_cli::commands::check::run(&config, quiet, format)
         }
         Commands::Status { verbose, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
@@ -271,7 +272,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         Commands::Warmup { context, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
-            let format = temper_cli::format::resolve_format_str(format.as_deref());
+            let format = temper_cli::format::OutputFormat::resolve(format.as_deref());
             temper_cli::commands::warmup::run(&config, context, format)
         }
         Commands::Team { action } => match action {

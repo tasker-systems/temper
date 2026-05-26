@@ -45,11 +45,18 @@ pub enum Commands {
         /// Skip interactive prompts
         #[arg(long)]
         no_interactive: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise).
+        /// Only active in non-interactive mode; TTY wizard always uses styled output.
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Check vault integrity and tool health
     Check {
         #[arg(long)]
         quiet: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Show vault status overview
     Status {

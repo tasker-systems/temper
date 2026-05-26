@@ -1,89 +1,42 @@
+use serde::Serialize;
 use temper_core::vault::Vault;
 
 use crate::config::Config;
 use crate::error::Result;
+use crate::format::{render, OutputFormat};
 
 const MAX_SESSION_LINES: usize = 500;
 
+/// Structured session entry for JSON/Toon rendering.
+#[derive(Debug, Serialize)]
+pub(crate) struct WarmupSession {
+    pub date: String,
+    pub title: String,
+}
+
+/// In-progress task entry for JSON/Toon rendering.
+#[derive(Debug, Serialize)]
+pub(crate) struct WarmupTask {
+    pub title: String,
+    pub slug: String,
+    pub mode: Option<String>,
+    pub effort: Option<String>,
+}
+
+/// Full warmup result — serialized by `render()` for JSON and Toon outputs.
+#[derive(Debug, Serialize)]
+pub(crate) struct WarmupResult {
+    pub project: String,
+    pub recent_sessions: Vec<WarmupSession>,
+    pub last_session_content: Option<String>,
+    pub in_progress_tasks: Vec<WarmupTask>,
+}
+
 /// Run the warmup command — output a context primer for a new session.
-pub fn run(config: &Config, project: Option<&str>, format: &str) -> Result<()> {
+pub fn run(config: &Config, project: Option<&str>, format: OutputFormat) -> Result<()> {
     let project_name = project.unwrap_or("general");
-
-    match format {
-        "json" => run_json(config, project_name),
-        _ => run_text(config, project_name),
-    }
-}
-
-fn run_text(config: &Config, project: &str) -> Result<()> {
-    println!("# Session Context: {project}");
-    println!();
-
-    // Section 1: Recent sessions
-    println!("## Recent Sessions");
-    println!();
-    let sessions = collect_recent_sessions(config, project, 5);
-    if sessions.is_empty() {
-        println!("No recent sessions.");
-    } else {
-        for (date, title, _path) in &sessions {
-            println!("- {date}: {title}");
-        }
-    }
-    println!();
-
-    // Section: In-progress tasks
-    let in_progress = collect_in_progress_tasks(config, project);
-    if !in_progress.is_empty() {
-        println!("## In-Progress Tasks");
-        println!();
-        for (title, slug, mode, effort) in &in_progress {
-            let mode_label = mode.as_deref().unwrap_or("no-mode");
-            let effort_label = effort.as_deref().unwrap_or("no-effort");
-            println!("- [{mode_label}/{effort_label}] {slug}: {title}");
-        }
-        println!();
-    }
-
-    // Section 2: Last session content
-    if let Some((_date, _title, path)) = sessions.first() {
-        println!("## Last Session");
-        println!();
-        if let Ok(content) = std::fs::read_to_string(path) {
-            let lines: Vec<&str> = content.lines().collect();
-            if lines.len() > MAX_SESSION_LINES {
-                for line in &lines[..MAX_SESSION_LINES] {
-                    println!("{line}");
-                }
-                println!();
-                println!(
-                    "... (truncated at {MAX_SESSION_LINES} lines, see full note at {})",
-                    path.display()
-                );
-            } else {
-                print!("{content}");
-            }
-        }
-        println!();
-    }
-
-    Ok(())
-}
-
-fn run_json(config: &Config, project: &str) -> Result<()> {
-    let sessions = collect_recent_sessions(config, project, 5);
-    let in_progress = collect_in_progress_tasks(config, project);
-    let in_progress_json: Vec<_> = in_progress
-        .iter()
-        .map(|(title, slug, mode, effort)| {
-            serde_json::json!({
-                "title": title,
-                "slug": slug,
-                "mode": mode,
-                "effort": effort,
-            })
-        })
-        .collect();
+    let sessions = collect_recent_sessions(config, project_name, 5);
+    let in_progress = collect_in_progress_tasks(config, project_name);
 
     let last_session_content = sessions.first().and_then(|(_, _, path)| {
         std::fs::read_to_string(path).ok().map(|content| {
@@ -96,19 +49,29 @@ fn run_json(config: &Config, project: &str) -> Result<()> {
         })
     });
 
-    let output = serde_json::json!({
-        "project": project,
-        "recent_sessions": sessions.iter().map(|(date, title, _)| {
-            serde_json::json!({"date": date, "title": title})
-        }).collect::<Vec<_>>(),
-        "last_session_content": last_session_content,
-        "in_progress_tasks": in_progress_json,
-    });
+    let result = WarmupResult {
+        project: project_name.to_string(),
+        recent_sessions: sessions
+            .iter()
+            .map(|(date, title, _)| WarmupSession {
+                date: date.clone(),
+                title: title.clone(),
+            })
+            .collect(),
+        last_session_content,
+        in_progress_tasks: in_progress
+            .into_iter()
+            .map(|(title, slug, mode, effort)| WarmupTask {
+                title,
+                slug,
+                mode,
+                effort,
+            })
+            .collect(),
+    };
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&output).unwrap_or_default()
-    );
+    let rendered = render(&result, format)?;
+    println!("{rendered}");
     Ok(())
 }
 
