@@ -37,7 +37,10 @@ pub(crate) fn create_resource_to_ingest_payload(cmd: CreateResource) -> IngestPa
         slug: cmd.slug,
         content: body,
         metadata: None,
-        managed_meta: Some(serde_json::to_value(&cmd.managed_meta).unwrap_or_default()),
+        managed_meta: Some(
+            serde_json::to_value(&cmd.managed_meta)
+                .expect("ManagedMeta is a typed struct with infallible serde derives"),
+        ),
         open_meta: cmd.open_meta,
         chunks_packed: cmd.chunks_packed,
     }

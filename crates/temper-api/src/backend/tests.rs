@@ -84,13 +84,13 @@ async fn create_resource_unknown_doctype_returns_temper_error(pool: PgPool) {
     };
 
     let err = backend.create_resource(cmd).await.unwrap_err();
-    // Whatever specific TemperError variant ingest_service returns for an
-    // unknown doctype (likely BadRequest after the From<ApiError> conversion).
-    // Asserting it's an error of any non-Internal kind is the contract.
+    // Unknown doctype surfaces as ApiError::BadRequest from
+    // ingest_service::resolve_doc_type, which the From<ApiError> impl in
+    // crates/temper-api/src/error.rs maps to TemperError::BadRequest.
     use temper_core::error::TemperError;
     assert!(
-        !matches!(err, TemperError::Api(_)),
-        "expected typed variant for unknown doctype, got generic Api: {err:?}"
+        matches!(err, TemperError::BadRequest(_)),
+        "expected BadRequest for unknown doctype, got {err:?}"
     );
 }
 
