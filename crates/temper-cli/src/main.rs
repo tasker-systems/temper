@@ -213,6 +213,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     pr,
                     status,
                     body,
+                    format,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
                         slug: &slug,
@@ -239,6 +240,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         pr: pr.as_deref(),
                         status: status.as_deref(),
                         body,
+                        format,
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
@@ -247,12 +249,14 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     r#type,
                     context,
                     force,
+                    format,
                 } => temper_cli::commands::resource::delete(
                     &config,
                     &r#type,
                     &slug,
                     context.as_deref(),
                     force,
+                    format,
                 ),
             }
         }
@@ -284,7 +288,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         },
         Commands::Auth { action } => match action {
             AuthAction::Login { format } => temper_cli::commands::auth::login(format),
-            AuthAction::Token { provider } => temper_cli::commands::auth::token(&provider),
+            AuthAction::Token { provider, format } => {
+                temper_cli::commands::auth::token(&provider, format)
+            }
             AuthAction::Logout { format } => temper_cli::commands::auth::logout(format),
             AuthAction::Status { format } => temper_cli::commands::auth::status(format),
             AuthAction::ExportToken => temper_cli::commands::auth::export_token(),

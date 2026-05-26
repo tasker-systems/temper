@@ -158,7 +158,8 @@ fn session_exists(_config: &Config, context: &str, owner: &str, slug: &str) -> R
 /// Cloud-only: requires a context; resolves the session id via
 /// `GET /api/resources/by-uri` and fetches content via
 /// `GET /api/resources/{id}/content`. Also refreshes the local projection
-/// file (best-effort). JSON emits a `SessionShow`-shaped struct.
+/// file (best-effort). Routes through `render_resource_show` for consistent
+/// json|toon output (same as task::show and show_generic).
 pub fn show(
     config: &Config,
     slug_or_suffix: &str,
@@ -167,20 +168,11 @@ pub fn show(
 ) -> Result<()> {
     use crate::actions::runtime;
 
-    #[derive(Serialize)]
-    struct SessionShow {
-        date: String,
-        context: String,
-        title: String,
-        path: String,
-        content: String,
-    }
-
     let ctx_s = context.map(str::to_string);
     let slug_s = slug_or_suffix.to_string();
     let config_clone = config.clone();
 
-    let body = runtime::with_client(|client| {
+    let (row, body) = runtime::with_client(|client| {
         Box::pin(async move {
             let ctx = ctx_s.as_deref().ok_or_else(|| {
                 crate::error::TemperError::Project(
@@ -210,25 +202,15 @@ pub fn show(
                 ));
             }
 
-            Ok(resp.markdown)
+            Ok((row, resp.markdown))
         })
     })?;
 
-    if format == "json" {
-        let ctx = context.unwrap_or("");
-        let info = SessionShow {
-            date: String::new(),
-            context: ctx.to_string(),
-            title: slug_or_suffix.to_string(),
-            path: String::new(),
-            content: body,
-        };
-        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
-        println!("{json}");
-        return Ok(());
-    }
-
-    print!("{body}");
+    let metadata = serde_json::to_value(&row)
+        .map_err(|e| crate::error::TemperError::Api(format!("metadata serialize: {e}")))?;
+    let fmt = crate::format::OutputFormat::parse(format);
+    let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;
+    println!("{rendered}");
     Ok(())
 }
 

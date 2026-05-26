@@ -135,7 +135,7 @@ pub enum Commands {
         /// Maximum results (default 10)
         #[arg(long)]
         limit: Option<i64>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
         /// Use text-only search (no local embedding needed)
@@ -200,7 +200,7 @@ pub enum ResourceAction {
         /// Mutually exclusive with --body. URL detected by http:// or https:// prefix.
         #[arg(long, conflicts_with = "body")]
         from: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
     },
@@ -224,7 +224,7 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
     },
@@ -238,7 +238,7 @@ pub enum ResourceAction {
         /// Filter by context
         #[arg(long)]
         context: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
         /// Show graph edges connected to this resource
@@ -328,6 +328,9 @@ pub enum ResourceAction {
         /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
         #[arg(long)]
         body: Option<String>,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Delete a resource (cloud-first soft-delete; local cleanup as tail in local mode)
     ///
@@ -348,6 +351,9 @@ pub enum ResourceAction {
         /// Skip the local-file confirmation prompt
         #[arg(long)]
         force: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
 }
 
@@ -390,6 +396,9 @@ pub enum AuthAction {
         /// `auth0:DOMAIN` for custom Auth0 tenants.
         #[arg(long, default_value = "auth0")]
         provider: String,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Clear stored credentials
     Logout {

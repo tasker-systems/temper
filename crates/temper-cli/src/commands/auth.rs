@@ -1,10 +1,9 @@
-//! `temper auth` subcommands: login, logout, status.
+//! `temper auth` subcommands: login, logout, status, token.
 //!
-//! All output is JSON so the commands can be consumed programmatically.
-//!
-//! `login`, `logout`, and `token` are inherently disk-mode operations —
-//! they persist credentials to `~/.config/temper/auth.json`. Cloud sessions
-//! receive tokens via `TEMPER_TOKEN` and don't invoke these commands.
+//! All subcommands accept `--format json | toon` (auto-detected from TTY
+//! when omitted). `login`, `logout`, and `token` are inherently disk-mode
+//! operations — they persist credentials to `~/.config/temper/auth.json`.
+//! Cloud sessions receive tokens via `TEMPER_TOKEN` and don't invoke these.
 
 use temper_client::auth::{DiskTokenStore, TokenStore};
 
@@ -70,7 +69,7 @@ pub fn logout(format: Option<String>) -> Result<()> {
 ///
 /// Writes to disk unconditionally — cloud sessions receive tokens via
 /// `TEMPER_TOKEN` and don't invoke this command.
-pub fn token(provider: &str) -> Result<()> {
+pub fn token(provider: &str, format: Option<String>) -> Result<()> {
     let stdin_content = crate::vault::read_stdin_if_piped();
     if stdin_content.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(crate::error::TemperError::Config(
@@ -80,10 +79,14 @@ pub fn token(provider: &str) -> Result<()> {
                 .into(),
         ));
     }
-    token_from_stdin(stdin_content.as_deref(), provider)
+    token_from_stdin(stdin_content.as_deref(), provider, format)
 }
 
-fn token_from_stdin(stdin_content: Option<&str>, provider: &str) -> Result<()> {
+fn token_from_stdin(
+    stdin_content: Option<&str>,
+    provider: &str,
+    format: Option<String>,
+) -> Result<()> {
     let jwt_raw = stdin_content
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -124,8 +127,9 @@ fn token_from_stdin(stdin_content: Option<&str>, provider: &str) -> Result<()> {
         expires_at: Some(stored.expires_at),
         profile_id: stored.profile_id,
     };
-    let json = serde_json::to_string_pretty(&status).map_err(crate::error::TemperError::Json)?;
-    println!("{json}");
+    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
+    let rendered = crate::format::render(&status, fmt)?;
+    println!("{rendered}");
     Ok(())
 }
 
@@ -218,7 +222,7 @@ mod tests {
 
     #[test]
     fn token_from_stdin_errors_when_empty() {
-        let err = token_from_stdin(Some(""), "auth0").unwrap_err();
+        let err = token_from_stdin(Some(""), "auth0", None).unwrap_err();
         assert!(
             format!("{err}").contains("stdin"),
             "expected empty-stdin error"
@@ -227,7 +231,7 @@ mod tests {
 
     #[test]
     fn token_from_stdin_errors_when_none() {
-        let err = token_from_stdin(None, "auth0").unwrap_err();
+        let err = token_from_stdin(None, "auth0", None).unwrap_err();
         assert!(
             format!("{err}").contains("stdin"),
             "expected empty-stdin error"
@@ -269,10 +273,39 @@ mod tests {
         // later — then check we surface the provider error.
         // Simpler: validate provider check path independently.
         let fake_jwt = "aGVhZGVy.cGF5bG9hZA.c2ln"; // "header.payload.sig" base64url
-        let err = token_from_stdin(Some(fake_jwt), "github").unwrap_err();
+        let err = token_from_stdin(Some(fake_jwt), "github", None).unwrap_err();
         // Either JWT parse fails (likely) or provider parse fails. Both are
         // Config errors — we just want the end-to-end to refuse.
         assert!(matches!(err, crate::error::TemperError::Config(_)));
+    }
+
+    /// Verify that `auth token` routes through `render()` — the AuthStatus
+    /// struct is what the token handler emits; test that json|toon both
+    /// produce non-empty, valid output for the authenticated shape.
+    #[test]
+    fn render_auth_token_status_json_passthrough() {
+        let status = make_auth_status(true);
+        let out =
+            crate::format::render(&status, crate::format::OutputFormat::Json).expect("json render");
+        assert!(
+            out.contains("\"authenticated\": true"),
+            "token render must include authenticated: {out}"
+        );
+        assert!(
+            out.contains("\"expires_at\""),
+            "token render must include expires_at: {out}"
+        );
+    }
+
+    #[test]
+    fn render_auth_token_status_toon_is_non_empty() {
+        let status = make_auth_status(true);
+        let out =
+            crate::format::render(&status, crate::format::OutputFormat::Toon).expect("toon render");
+        assert!(
+            !out.is_empty(),
+            "token toon render should not be empty: {out}"
+        );
     }
 }
 

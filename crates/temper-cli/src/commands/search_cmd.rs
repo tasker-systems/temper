@@ -44,15 +44,6 @@ pub fn run(
         Box::pin(async move { search_actions::search_api(client, params).await })
     })?;
 
-    if results.is_empty() {
-        if fmt == OutputFormat::Json {
-            crate::output::plain("[]");
-        } else {
-            crate::output::warning("No results found.");
-        }
-        return Ok(());
-    }
-
     let rendered = crate::format::render(&results, fmt)?;
     crate::output::plain(rendered);
 

@@ -39,6 +39,14 @@ pub(crate) struct DeleteActionResult {
     pub doc_type: String,
 }
 
+/// Result emitted by `temper resource show --edges`. Groups graph edges by
+/// direction and routes through `render()` for consistent json|toon output.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct EdgesReport {
+    pub outgoing: Vec<temper_core::types::graph::GraphEdgeRow>,
+    pub incoming: Vec<temper_core::types::graph::GraphEdgeRow>,
+}
+
 /// Require a context, returning an error if none specified.
 ///
 /// temper is cloud-only: there are no context directories on disk to
@@ -362,6 +370,7 @@ pub fn delete(
     slug: &str,
     context: Option<&str>,
     force: bool,
+    format: Option<String>,
 ) -> Result<()> {
     use temper_core::operations::{DeleteResource, ResourceRef};
 
@@ -395,7 +404,7 @@ pub fn delete(
         slug: slug.to_string(),
         doc_type: doc_type.to_string(),
     };
-    let fmt = crate::format::OutputFormat::resolve(None);
+    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
     let rendered = crate::format::render(&result, fmt)?;
     println!("{rendered}");
 
@@ -535,40 +544,20 @@ fn show_edges(
         })
     })?;
 
-    if edges.is_empty() {
-        if format != "json" {
-            println!("\nEdges: (none)");
-        }
-        return Ok(());
-    }
-
-    if format == "json" {
-        let json = serde_json::to_string_pretty(&edges).unwrap_or_default();
-        println!("{json}");
-    } else {
-        println!("\nEdges:");
-        let outgoing: Vec<_> = edges.iter().filter(|e| e.direction == "outgoing").collect();
-        let incoming: Vec<_> = edges.iter().filter(|e| e.direction == "incoming").collect();
-
-        if !outgoing.is_empty() {
-            println!("  outgoing:");
-            for e in &outgoing {
-                println!(
-                    "    {} \u{2192} {} ({})",
-                    e.label, e.peer_slug, e.peer_title
-                );
-            }
-        }
-        if !incoming.is_empty() {
-            println!("  incoming:");
-            for e in &incoming {
-                println!(
-                    "    {} \u{2190} {} ({})",
-                    e.label, e.peer_slug, e.peer_title
-                );
-            }
-        }
-    }
+    let outgoing: Vec<_> = edges
+        .iter()
+        .filter(|e| e.direction == "outgoing")
+        .cloned()
+        .collect();
+    let incoming: Vec<_> = edges
+        .iter()
+        .filter(|e| e.direction == "incoming")
+        .cloned()
+        .collect();
+    let report = EdgesReport { outgoing, incoming };
+    let fmt = crate::format::OutputFormat::parse(format);
+    let rendered = crate::format::render(&report, fmt)?;
+    println!("{rendered}");
 
     Ok(())
 }
@@ -606,6 +595,8 @@ pub struct UpdateParams<'a> {
     /// `Some("-")` (explicit stdin; errors if empty), or `Some("@<path>")`
     /// (read from file; errors if empty). Applies in both local and cloud mode.
     pub body: Option<String>,
+    /// Output format: `None` auto-detects from TTY; `Some("json")` or `Some("toon")` explicit.
+    pub format: Option<String>,
 }
 
 /// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
@@ -787,7 +778,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         status: "ok",
         resource: output.value,
     };
-    let fmt = crate::format::OutputFormat::resolve(None);
+    let fmt = crate::format::OutputFormat::resolve(params.format.as_deref());
     let rendered = crate::format::render(&result, fmt)?;
     println!("{rendered}");
 
@@ -880,6 +871,7 @@ mod build_helpers_tests {
             pr: None,
             status: None,
             body: None,
+            format: None,
         }
     }
 
@@ -1188,6 +1180,127 @@ mod resource_list_render_tests {
             "wire field 'title' missing: {out}"
         );
         assert!(out.contains("\"slug\""), "wire field 'slug' missing: {out}");
+    }
+}
+
+/// Tests for the `EdgesReport` struct and its render path.
+#[cfg(test)]
+mod edges_report_tests {
+    use super::EdgesReport;
+    use temper_core::types::graph::{EdgeKind, GraphEdgeRow, Polarity};
+
+    fn make_edge(direction: &str, label: &str) -> GraphEdgeRow {
+        GraphEdgeRow {
+            edge_id: uuid::Uuid::nil(),
+            peer_resource_id: uuid::Uuid::nil(),
+            peer_title: "Peer Title".to_string(),
+            peer_slug: "peer-slug".to_string(),
+            edge_kind: EdgeKind::Express,
+            polarity: Polarity::Forward,
+            label: label.to_string(),
+            direction: direction.to_string(),
+            weight: 1.0,
+            created: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn render_edges_report_json_passthrough() {
+        let report = EdgesReport {
+            outgoing: vec![make_edge("outgoing", "depends_on")],
+            incoming: vec![make_edge("incoming", "blocks")],
+        };
+        let out =
+            crate::format::render(&report, crate::format::OutputFormat::Json).expect("json render");
+        assert!(
+            out.contains("\"outgoing\""),
+            "json should have outgoing key: {out}"
+        );
+        assert!(
+            out.contains("\"incoming\""),
+            "json should have incoming key: {out}"
+        );
+        assert!(
+            out.contains("\"depends_on\""),
+            "outgoing label should appear: {out}"
+        );
+        assert!(
+            out.contains("\"blocks\""),
+            "incoming label should appear: {out}"
+        );
+    }
+
+    #[test]
+    fn render_edges_report_empty_emits_empty_arrays() {
+        let report = EdgesReport {
+            outgoing: vec![],
+            incoming: vec![],
+        };
+        let out =
+            crate::format::render(&report, crate::format::OutputFormat::Json).expect("json render");
+        assert!(
+            out.contains("\"outgoing\": []"),
+            "empty outgoing should be []: {out}"
+        );
+        assert!(
+            out.contains("\"incoming\": []"),
+            "empty incoming should be []: {out}"
+        );
+    }
+}
+
+/// Tests for the `session::show` migration — verifies that the render path
+/// uses `render_resource_show` and produces the correct json|toon shapes
+/// given a session-shaped metadata fixture.
+#[cfg(test)]
+mod session_show_render_tests {
+    #[test]
+    fn render_resource_show_session_json_includes_content_key() {
+        // Simulate the metadata shape emitted by `session::show` after
+        // migrating to `render_resource_show`. The session row serializes to
+        // a `ResourceRow`-shaped value; the body becomes `content`.
+        let metadata = serde_json::json!({
+            "slug": "2026-05-26-daily-standup",
+            "title": "Daily Standup",
+            "doc_type_name": "session",
+            "context_name": "temper",
+        });
+        let body = "# Daily Standup\n\nToday's notes.\n";
+        let out =
+            crate::format::render_resource_show(&metadata, body, crate::format::OutputFormat::Json)
+                .expect("json render");
+        assert!(
+            out.contains("\"content\""),
+            "json composite must have content key: {out}"
+        );
+        assert!(
+            out.contains("Today's notes"),
+            "json must embed the body: {out}"
+        );
+        assert!(
+            out.contains("\"doc_type_name\""),
+            "metadata fields must be preserved: {out}"
+        );
+    }
+
+    #[test]
+    fn render_resource_show_session_toon_emits_frontmatter_then_body() {
+        let metadata = serde_json::json!({
+            "slug": "2026-05-26-daily-standup",
+            "title": "Daily Standup",
+        });
+        let body = "# Daily Standup\n\nToday's notes.\n";
+        let out =
+            crate::format::render_resource_show(&metadata, body, crate::format::OutputFormat::Toon)
+                .expect("toon render");
+        assert!(
+            out.starts_with("---\n"),
+            "toon must open with frontmatter: {out}"
+        );
+        assert!(
+            out.contains("Daily Standup"),
+            "toon must include body: {out}"
+        );
     }
 }
 

@@ -142,6 +142,7 @@ pub fn move_task_to_stage(
         pr: None,
         status: None,
         body: None,
+        format: None,
     };
     temper_cli::commands::resource::update(config, &params).unwrap();
 }
