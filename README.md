@@ -86,14 +86,17 @@ For version pinning, uninstall instructions, and building from source (including
 ## Quick Start
 
 ```bash
-# Initialize a vault — temper asks how you work
+# Initialize — temper configures auth and ensures your default context server-side
 temper init
 
 # Add a context for your project
 temper context add myapp
 
-# Add your docs — temper extracts markdown and indexes it
-temper add --context myapp --dir ~/projects/myapp/docs
+# Materialize a local projection of the context
+temper pull myapp
+
+# Add a document — temper extracts markdown and ingests it via the cloud pipeline
+temper resource create --from ~/projects/myapp/docs/design.md --context myapp
 
 # Search across your vault
 temper search "authentication decisions"
@@ -142,7 +145,7 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper session save [title]` | Create/update session note |
 | `temper session list` | List recent sessions |
 | `temper research save <title>` | Create research note |
-| `temper add <path>` | Add a file, URL, or directory to the vault (managed, frontmatter, sync-ready) |
+| `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, and store via cloud pipeline) |
 
 ### Goals and Tasks
 
@@ -167,9 +170,8 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | Command | Description |
 |---------|-------------|
 | `temper auth` | Authenticate with temper cloud |
-| `temper sync` | Sync local vault with temper cloud |
-| `temper pull <resource>` | Pull a resource from the cloud |
-| `temper remove <resource>` | Remove a resource from the cloud |
+| `temper pull <context>` | Materialize a local projection of a context |
+| `temper resource delete <slug>` | Delete a resource from the cloud (soft-delete) |
 
 ## Semantic Search
 
@@ -208,13 +210,11 @@ This runs `temper warmup` on every new session, injecting active tasks, recent s
 
 ## Temper Cloud
 
-Your vault stays as markdown files on your machine. `temper sync` uses a manifest-based protocol to compute diffs between your local state and the server — a three-way comparison of local file, manifest record, and remote content. Non-conflicting changes merge automatically at the paragraph level using Rust-native diffing. Genuine conflicts are annotated in `.conflict.md` files for human resolution.
-
-Your vault can also live in a git repo, sync to Obsidian, or coexist with any other tool that reads files — temper's sync is self-contained and doesn't depend on or interfere with external version control.
+The cloud is the source of truth. Resources are created and updated via the API; the local vault is a projection cache materialized on demand via `temper pull <context>`. All content is stored as markdown with YAML frontmatter and remains human-readable — browse it in any editor, Obsidian, or on GitHub.
 
 What cloud adds:
 
-- **Cross-machine sync** with manifest-based diffing and auto-merge
+- **Cross-machine access** — pull any context to any device with `temper pull`
 - **Semantic search** powered by pgvector embeddings
 - **MCP server** for direct agent integration
 - **Team contexts** with granular access control

@@ -1,6 +1,6 @@
 # Cloud Agent Development Guide
 
-This document describes how to prepare tasks for and work as a cloud-based Claude Code agent on the temper project. Cloud agents run in Anthropic's remote infrastructure without access to the local vault, IDE, or persistent filesystem.
+This document describes how to prepare tasks for and work as a cloud-based Claude Code agent on the temper project. Cloud agents run in Anthropic's remote infrastructure without access to the local projection cache, IDE, or persistent filesystem.
 
 ## What is a Cloud Agent?
 
@@ -14,7 +14,7 @@ Cloud agents have access to:
 - Context provided in the task prompt
 
 Cloud agents do NOT have access to:
-- The local knowledge vault (`~/projects/kb-vault`)
+- The local projection cache (`~/projects/kb-vault` — a derivative of cloud state)
 - `~/.config/temper/config.toml` or other local config
 - The Temper MCP server (can't use it to help build it)
 - External URLs (can't curl production endpoints to verify)
@@ -29,7 +29,6 @@ Cloud and ephemeral sessions can bootstrap temper without running the browser OA
 | `TEMPER_TOKEN` | JWT access token for the temper API | When set, the client uses this in-memory and does not read `~/.config/temper/auth.json`. Malformed tokens error rather than silently falling through. |
 | `TEMPER_PROVIDER` | Auth0 provider name that issued the token | Defaults to `auth0`. Typically only needed when a non-default provider is configured. |
 | `TEMPER_DEVICE_ID` | Stable device id for this session | When unset, a fresh UUIDv7 is generated per session. Set explicitly if you want a stable device id across session restarts. |
-| `TEMPER_VAULT_STATE` | Operating mode: `local` or `cloud` | Defaults to `local`. Dispatch for `cloud` mode is not yet wired (tracked under cloud-mode Unit B.2); the value is recognized so subsequent PRs can check it. |
 | `TEMPER_API_URL` | API base URL override | Existing variable; takes precedence over config. |
 
 For a SessionStart hook (`.claude/settings.local.json`), export `TEMPER_TOKEN` alongside `cargo install --path crates/temper-cli`, and the temper CLI will authenticate without any interactive step or disk state.
