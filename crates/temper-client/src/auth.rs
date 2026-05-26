@@ -25,8 +25,8 @@ pub const TEMPER_DEVICE_ID_ENV: &str = "TEMPER_DEVICE_ID";
 //
 // Every function that previously called the free `load_auth` / `save_auth`
 // functions must move to accepting `&dyn TokenStore` so the caller chooses
-// the backing storage explicitly. `VaultState::Cloud` MUST use
-// MemoryTokenStore; `DiskTokenStore` reaching a cloud session would write
+// the backing storage explicitly. Agent / cloud sessions MUST use
+// MemoryTokenStore; `DiskTokenStore` reaching such a session would write
 // refreshed tokens to the agent's $HOME.
 
 pub trait TokenStore: Send + Sync {

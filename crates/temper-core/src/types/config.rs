@@ -14,18 +14,19 @@ pub const TEMPER_AUTH_PATH_ENV: &str = "TEMPER_AUTH_PATH";
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum MergePolicy {
-    /// Require explicit resolution via `temper sync resolve`
+    /// Require explicit resolution by the caller — no auto-merge.
     #[default]
     Manual,
     /// Auto-merge: keep both contributions with section attribution
     Auto,
 }
 
-/// A sync subscription — defines which resources to materialize locally.
+/// A subscription — defines which resources to materialize locally via
+/// `temper pull <context>`.
 ///
-/// Subscriptions scope `temper sync` to specific contexts, teams, and/or
-/// doc types. Resources matching any subscription are included in sync.
-/// Stored in `config.toml` under `[[sync.subscriptions]]`.
+/// Subscriptions scope projection pulls to specific contexts, teams, and/or
+/// doc types. Resources matching any subscription are included in the
+/// local projection. Stored in `config.toml` under `[[sync.subscriptions]]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SyncSubscription {
     /// Context name to subscribe to (e.g., "temper", "tasker")

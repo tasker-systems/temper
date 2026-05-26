@@ -127,8 +127,9 @@ pub fn validate_frontmatter(
 /// [`validate_frontmatter`] with the clone. The original frontmatter is not
 /// mutated.
 ///
-/// Use this from CLI code paths (`temper doctor`, `temper sync` normalize).
-/// Server code paths should continue to call [`validate_frontmatter`] directly.
+/// Use this from CLI code paths that may inspect a resource holding a
+/// provisional id before its first publish. Server code paths should call
+/// [`validate_frontmatter`] directly.
 ///
 /// # Errors
 /// Propagates any error from [`validate_frontmatter`].

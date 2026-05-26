@@ -13,10 +13,9 @@ use crate::frontmatter::registry::{lookup, KnownOpenField};
 /// missing opening `---`, missing closing `---`, or YAML parse failure.
 ///
 /// Intended for validator-style code that needs to inspect potentially
-/// malformed or legacy-format files (e.g. the `temper doctor` scanner
-/// that flags files with `type:` instead of `temper-type:`) and for
-/// ingest discovery readers that process foreign markdown files that may
-/// not yet carry any temper-* frontmatter at all.
+/// malformed or legacy-format files, and for ingest discovery readers
+/// that process foreign markdown files that may not yet carry any
+/// temper-* frontmatter at all.
 pub fn parse_yaml_block(content: &str) -> Option<serde_yaml::Value> {
     let content = content.trim_start();
     if !content.starts_with("---") {
