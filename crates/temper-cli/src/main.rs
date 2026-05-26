@@ -1,7 +1,6 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, Commands, ConfigAction, ContextAction, ResourceAction, SkillAction,
-    SyncAction, TeamAction,
+    AuthAction, Cli, Commands, ConfigAction, ContextAction, ResourceAction, SkillAction, TeamAction,
 };
 use temper_cli::commands;
 
@@ -313,12 +312,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             }
         }
         Commands::Pull { context } => commands::pull::run(&context),
-        Commands::Sync { action } => match action {
-            SyncAction::Run { context, format } => {
-                let format = temper_cli::format::resolve_format_str(format.as_deref());
-                commands::sync_cmd::run(&context, format)
-            }
-        },
         Commands::Config { action } => match action {
             ConfigAction::Edit => commands::config::edit(),
         },

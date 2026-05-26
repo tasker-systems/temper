@@ -85,12 +85,6 @@ pub enum Commands {
         context: String,
     },
 
-    /// Sync local vault with temper cloud
-    Sync {
-        #[command(subcommand)]
-        action: SyncAction,
-    },
-
     /// Manage temper global config
     Config {
         #[command(subcommand)]
@@ -401,19 +395,6 @@ pub enum SkillAction {
     },
     /// Check skill status
     Check,
-}
-
-#[derive(Subcommand)]
-pub enum SyncAction {
-    /// Run a full sync cycle
-    Run {
-        /// Context names to sync (default: all configured)
-        #[arg(long)]
-        context: Vec<String>,
-        /// Output format
-        #[arg(long)]
-        format: Option<String>,
-    },
 }
 
 #[derive(Subcommand)]

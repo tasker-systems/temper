@@ -70,9 +70,9 @@ pub use resource::{
     ResourceUpdateRequest, SortOrder,
 };
 pub use sync::{
-    MergedResource, ResolutionType, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
+    MergedResource, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
     SyncContextEntries, SyncManifestEntry, SyncManifestItem, SyncManifestResponse, SyncPullItem,
-    SyncPushItem, SyncRemovedItem, SyncResolveRequest, SyncStatusRequest, SyncStatusResponse,
+    SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
 pub use team::{Team, TeamMember, TeamRole};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};

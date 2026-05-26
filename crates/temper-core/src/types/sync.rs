@@ -148,27 +148,6 @@ pub struct SyncManifestResponse {
     pub items: Vec<SyncManifestItem>,
 }
 
-// ---------------------------------------------------------------------------
-// Resolve endpoint (I6c — placeholder types)
-// ---------------------------------------------------------------------------
-
-/// Conflict resolution type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResolutionType {
-    Local,
-    Remote,
-    Merged,
-}
-
-/// Request body for `POST /api/sync/resolve` (I6c).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncResolveRequest {
-    pub resource_id: ResourceId,
-    pub resolution: ResolutionType,
-    pub content_hash: String,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,18 +217,6 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         let parsed: SyncCompleteResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.updated_count, 3);
-    }
-
-    #[test]
-    fn resolution_type_serde() {
-        assert_eq!(
-            serde_json::to_string(&ResolutionType::Local).unwrap(),
-            "\"local\""
-        );
-        assert_eq!(
-            serde_json::to_string(&ResolutionType::Merged).unwrap(),
-            "\"merged\""
-        );
     }
 
     #[test]

@@ -7,7 +7,7 @@
 //! server backed by a real Postgres test database. No vault directory
 //! is touched for the cloud-mode write paths under test — the cloud
 //! branches in `commands::resource::create` / `update` / `list` /
-//! `show` and the `sync_cmd::run` cloud guard are exercised end to end.
+//! `show` are exercised end to end.
 //!
 //! Cloud mode uses `MemoryTokenStore::from_env_required()` which reads
 //! the JWT from `TEMPER_TOKEN`. `TEMPER_AUTH_PATH` (disk store) is only
@@ -919,51 +919,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: sync run returns cloud-mode error message
-// ---------------------------------------------------------------------------
-
-/// Cloud `temper sync run` errors with the cloud-only redirect message instead
-/// of attempting a sync (which would fail without a local vault).
-///
-/// The error must contain stable substrings from the canonical redirect phrase:
-/// "temper is cloud-only" and "temper pull"
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn sync_run_errors_with_cloud_only_message(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
-
-    // No profile/context pre-flight needed — the guard fires before any I/O.
-
-    let global_config = app.vault_dir.path().join("no-such-config.toml");
-    let api_url = format!("http://{}", app.addr);
-    let token = app.token.clone();
-    let global_config_str = global_config.to_str().unwrap().to_string();
-
-    let result = tokio::task::spawn_blocking(move || {
-        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
-            temper_cli::commands::sync_cmd::run(
-                &[], // contexts (empty = all)
-                "text",
-            )
-        })
-    })
-    .await
-    .expect("spawn_blocking joined");
-
-    // Must be an Err whose message contains stable substrings of the redirect.
-    let err = result.expect_err("sync run must fail with cloud-mode redirect error");
-    let err_str = err.to_string();
-    assert!(
-        err_str.contains("cloud-only"),
-        "error message must contain 'cloud-only'; got: {err_str}"
-    );
-    assert!(
-        err_str.contains("temper pull"),
-        "error message must mention 'temper pull'; got: {err_str}"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 8: cloud list returns remote-only resources
+// Test 7: cloud list returns remote-only resources
 // ---------------------------------------------------------------------------
 
 /// Cloud `temper list --type session` returns server rows including resources
