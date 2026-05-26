@@ -57,6 +57,19 @@ args = [
   "--no-fail-fast"
 ]
 
+[tasks.test-e2e-embed]
+description = "Run E2E tests with embed pipeline gated on (requires Docker Postgres + ONNX runtime); matches CI's Embed job"
+command = "cargo"
+args = [
+  "nextest",
+  "run",
+  "--manifest-path",
+  "tests/e2e/Cargo.toml",
+  "--features",
+  "test-db,test-embed",
+  "--no-fail-fast"
+]
+
 [tasks.test-all-rust]
 description = "Run all Rust test tiers"
 command = "cargo"
