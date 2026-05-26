@@ -285,17 +285,7 @@ fn ensure_server_contexts(
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| TemperError::Api(format!("tokio runtime: {e}")))?;
 
-    let (_config, _store, client) = match crate::actions::runtime::build_config_store_and_client() {
-        Ok(triple) => triple,
-        Err(TemperError::Api(msg)) if msg.contains("not authenticated") => {
-            output::warning(
-                "Auth required — run `temper auth login` to authenticate, \
-                 then `temper init` again to ensure server-side contexts.",
-            );
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    };
+    let (_config, _store, client) = crate::actions::runtime::build_config_store_and_client()?;
 
     // List existing contexts to avoid redundant creates.
     let existing = match rt.block_on(client.contexts().list()) {
