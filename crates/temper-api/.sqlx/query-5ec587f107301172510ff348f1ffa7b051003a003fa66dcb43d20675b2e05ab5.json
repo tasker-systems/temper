@@ -1,12 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT count(*) FROM kb_events WHERE id = $1",
+  "query": "SELECT has_system_access($1)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "count",
-        "type_info": "Int8"
+        "name": "has_system_access",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "e7cb4f5293e106c1a130116c7b3628b5a5637a390f15dc87dcbc15a5298ff22a"
+  "hash": "5ec587f107301172510ff348f1ffa7b051003a003fa66dcb43d20675b2e05ab5"
 }

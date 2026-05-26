@@ -17,12 +17,9 @@ pub const RESEARCH_DOC_TYPE_ID: &str = "00000000-0000-0000-0001-000000000004";
 /// Preserves the System and Anonymous profiles inserted by migrations.
 pub async fn clean_and_seed(pool: &PgPool) {
     // Delete in reverse FK order. Leave kb_doc_types, kb_contexts,
-    // and the two seed profiles intact.
-    sqlx::query("DELETE FROM kb_deferred_edges")
-        .execute(pool)
-        .await
-        .expect("clean kb_deferred_edges");
-
+    // and the two seed profiles intact. `kb_deferred_edges` was dropped in
+    // the edges-as-projection cutover (migration 20260522100002); slug
+    // forward references now live as `relationship_asserted` events.
     sqlx::query("DELETE FROM kb_resource_edges")
         .execute(pool)
         .await
@@ -266,7 +263,12 @@ pub async fn create_test_resource_with_manifest(
     id
 }
 
-/// Insert a directed edge between two resources.
+/// Insert a directed edge between two resources by synthesizing a
+/// `relationship_asserted` event and projecting its edge row — the same
+/// path the migration uses for genesis events. `edge_type` is a legacy
+/// frontmatter relation label (e.g. `extends`, `depends_on`); the function
+/// maps it to `(edge_kind, polarity, label)` via the same 7-variant table
+/// `EdgeType::legacy_mapping()` exposes. Weight defaults to 1.0.
 pub async fn create_test_edge(
     pool: &PgPool,
     source_id: uuid::Uuid,
@@ -274,21 +276,79 @@ pub async fn create_test_edge(
     edge_type: &str,
     profile_id: uuid::Uuid,
 ) -> uuid::Uuid {
-    let id = uuid::Uuid::now_v7();
+    create_test_edge_weighted(pool, source_id, target_id, edge_type, 1.0, profile_id).await
+}
+
+/// As [`create_test_edge`], with an explicit weight (for path-decay tests).
+pub async fn create_test_edge_weighted(
+    pool: &PgPool,
+    source_id: uuid::Uuid,
+    target_id: uuid::Uuid,
+    edge_type: &str,
+    weight: f64,
+    profile_id: uuid::Uuid,
+) -> uuid::Uuid {
+    let (edge_kind, polarity) = match edge_type {
+        "parent_of" => ("contains", "forward"),
+        "depends_on" | "preceded_by" | "derived_from" | "extends" => ("leads_to", "inverse"),
+        "relates_to" | "references" => ("near", "forward"),
+        other => panic!("unknown legacy edge_type in test fixture: {other}"),
+    };
+
+    let event_id = uuid::Uuid::now_v7();
+    let payload = serde_json::json!({
+        "source_resource_id": source_id,
+        "target": { "kind": "resource", "value": target_id },
+        "edge_kind": edge_kind,
+        "polarity":  polarity,
+        "label":     edge_type,
+        "weight":    weight,
+    });
+
     sqlx::query(
-        r#"INSERT INTO kb_resource_edges
-            (id, source_resource_id, target_resource_id, edge_type,
-             weight, metadata, created_by_profile_id)
-           VALUES ($1, $2, $3, $4::edge_type, 1.0, '{}', $5)"#,
+        r#"INSERT INTO kb_events (
+              id, event_type_id, profile_id, device_id, topic_id, scope_id,
+              payload, metadata, "references", correlation_id, occurred_at, created
+           )
+           SELECT $1,
+                  (SELECT id FROM kb_event_types WHERE name = 'relationship_asserted'),
+                  $2,
+                  'fixture',
+                  '019e3d6f-2300-7000-8000-000000000050',
+                  '019e3d6f-2300-7000-8000-000000000010',
+                  $3::jsonb,
+                  jsonb_build_object('intent', 'fixture'),
+                  '[]'::jsonb,
+                  $1,
+                  now(),
+                  now()"#,
     )
-    .bind(id)
-    .bind(source_id)
-    .bind(target_id)
-    .bind(edge_type)
+    .bind(event_id)
     .bind(profile_id)
+    .bind(&payload)
     .execute(pool)
     .await
-    .expect("create test edge");
+    .expect("synthesize relationship_asserted event for fixture");
 
-    id
+    let edge_id = uuid::Uuid::now_v7();
+    sqlx::query(
+        r#"INSERT INTO kb_resource_edges
+            (id, source_resource_id, target_resource_id,
+             edge_kind, polarity, label, weight,
+             asserted_by_event_id, last_event_id, is_folded)
+           VALUES ($1, $2, $3, $4::edge_kind, $5::edge_polarity, $6, $7, $8, $8, false)"#,
+    )
+    .bind(edge_id)
+    .bind(source_id)
+    .bind(target_id)
+    .bind(edge_kind)
+    .bind(polarity)
+    .bind(edge_type)
+    .bind(weight)
+    .bind(event_id)
+    .execute(pool)
+    .await
+    .expect("project edge row for fixture");
+
+    edge_id
 }

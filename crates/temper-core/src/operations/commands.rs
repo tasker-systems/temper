@@ -113,6 +113,46 @@ pub struct SearchResources {
     pub origin: Surface,
 }
 
+/// Assert a new relationship from `source` to `target_slug`. Cloud-only —
+/// emits a `relationship_asserted` event and projects an edge row.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssertRelationship {
+    pub source: ResourceRef,
+    pub target_slug: String,
+    pub edge_kind: crate::types::graph::EdgeKind,
+    pub polarity: crate::types::graph::Polarity,
+    pub label: String,
+    pub weight: f64,
+    pub origin: Surface,
+}
+
+/// Retype an existing relationship (identified by its assertion's
+/// `correlation_id`) — changes `edge_kind` / `polarity`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RetypeRelationship {
+    pub correlation_id: uuid::Uuid,
+    pub edge_kind: crate::types::graph::EdgeKind,
+    pub polarity: crate::types::graph::Polarity,
+    pub origin: Surface,
+}
+
+/// Reweight an existing relationship — changes `weight`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReweightRelationship {
+    pub correlation_id: uuid::Uuid,
+    pub weight: f64,
+    pub origin: Surface,
+}
+
+/// Fold (retract) an existing relationship — sets `is_folded = true`.
+/// Optional human-readable reason for audit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FoldRelationship {
+    pub correlation_id: uuid::Uuid,
+    pub reason: Option<String>,
+    pub origin: Surface,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +210,20 @@ mod tests {
         let s = serde_json::to_string(&cmd).unwrap();
         let back: ListResources = serde_json::from_str(&s).unwrap();
         assert_eq!(cmd, back);
+    }
+
+    #[test]
+    fn assert_relationship_command_round_trips() {
+        let cmd = AssertRelationship {
+            source: ResourceRef::scoped("@me", "temper", "task", "a"),
+            target_slug: "b".to_string(),
+            edge_kind: crate::types::graph::EdgeKind::LeadsTo,
+            polarity: crate::types::graph::Polarity::Inverse,
+            label: "depends_on".to_string(),
+            weight: 1.0,
+            origin: Surface::ApiHttp,
+        };
+        let s = serde_json::to_string(&cmd).unwrap();
+        assert_eq!(serde_json::from_str::<AssertRelationship>(&s).unwrap(), cmd);
     }
 }

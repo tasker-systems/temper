@@ -1,0 +1,59 @@
+//! Wire types for the `/api/relationships` write endpoints.
+//!
+//! Shared between `temper-api` (server-side, OpenAPI schema source) and
+//! `temper-client` (client-side, typed request builder). The structs both
+//! `Serialize` (so the client can post them) and `Deserialize` (so the
+//! server can extract them); both sides re-use the same struct rather than
+//! string-mirroring a JSON shape.
+
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::operations::ResourceRef;
+use crate::types::graph::{EdgeKind, Polarity};
+
+/// Request body for `POST /api/relationships`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct AssertRelationshipRequest {
+    /// Source resource — owner, context, doctype, slug.
+    pub source: ResourceRef,
+    /// Target resource slug (resolved within source's context).
+    pub target_slug: String,
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+    pub label: String,
+    pub weight: f64,
+}
+
+/// Request body for `POST /api/relationships/{correlation_id}/retype`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RetypeRelationshipRequest {
+    pub edge_kind: EdgeKind,
+    pub polarity: Polarity,
+}
+
+/// Request body for `POST /api/relationships/{correlation_id}/reweight`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct ReweightRelationshipRequest {
+    pub weight: f64,
+}
+
+/// Request body for `POST /api/relationships/{correlation_id}/fold`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct FoldRelationshipRequest {
+    pub reason: Option<String>,
+}
+
+/// Acknowledgement returned by all relationship write endpoints.
+///
+/// Carries the `correlation_id` that identifies the relationship chain.
+/// Future revisions may add the projected edge id or event id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+pub struct RelationshipAck {
+    pub correlation_id: Uuid,
+}

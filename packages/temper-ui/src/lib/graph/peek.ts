@@ -1,16 +1,17 @@
-import type { EdgeType, GraphEdge, GraphNode } from '../types/generated/graph';
+import type { GraphEdge, GraphNode } from '../types/generated/graph';
 
 /**
  * One row in the peek's neighbors list.
  *
  *   - `dir`   : `'→'` when the focused node is the edge source, `'←'` when it's
  *                the target. Displayed as a small glyph in the row.
- *   - `type`  : the relationship label shown to the left of the neighbor's name.
+ *   - `type`  : the relationship label (free text from the edge row) shown to
+ *               the left of the neighbor's name.
  *   - `other` : the full `GraphNode` for the non-focused end of the edge.
  */
 export interface NeighborEntry {
 	dir: '→' | '←';
-	type: EdgeType;
+	type: string;
 	other: GraphNode;
 }
 
@@ -42,10 +43,10 @@ export function buildNeighborEntries(
 	for (const e of edges) {
 		if (e.source === focusId) {
 			const other = byId.get(e.target);
-			if (other) entries.push({ dir: '→', type: e.edge_type, other });
+			if (other) entries.push({ dir: '→', type: e.label, other });
 		} else if (e.target === focusId) {
 			const other = byId.get(e.source);
-			if (other) entries.push({ dir: '←', type: e.edge_type, other });
+			if (other) entries.push({ dir: '←', type: e.label, other });
 		}
 	}
 

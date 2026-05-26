@@ -63,13 +63,16 @@ async fn resource_update_reconciles_edges_via_open_meta(pool: PgPool) {
         .await
         .expect("resource_service::update with extends");
 
-    // The frontmatter-provenance edge source → target must exist.
+    // The frontmatter edge source → target must exist (joined through the
+    // assertion event to verify the source='frontmatter' provenance signal).
     let created_count: i64 = sqlx::query_scalar(
-        r#"SELECT count(*) FROM kb_resource_edges
-           WHERE source_resource_id = $1
-             AND target_resource_id = $2
-             AND edge_type::TEXT = 'extends'
-             AND metadata->>'provenance' = 'frontmatter'"#,
+        r#"SELECT count(*) FROM kb_resource_edges e
+            JOIN kb_events ev ON ev.id = e.asserted_by_event_id
+           WHERE e.source_resource_id = $1
+             AND e.target_resource_id = $2
+             AND e.label = 'extends'
+             AND NOT e.is_folded
+             AND ev.metadata->>'intent' = 'derived'"#,
     )
     .bind(source)
     .bind(target)
@@ -104,20 +107,22 @@ async fn resource_update_reconciles_edges_via_open_meta(pool: PgPool) {
     .await
     .expect("resource_service::update clearing extends");
 
-    // The frontmatter edge must be gone after reconciliation.
-    let remaining: i64 = sqlx::query_scalar(
+    // The frontmatter edge must be folded after reconciliation; the row
+    // survives but is off the default projection.
+    let remaining_active: i64 = sqlx::query_scalar(
         r#"SELECT count(*) FROM kb_resource_edges
            WHERE source_resource_id = $1
-             AND target_resource_id = $2"#,
+             AND target_resource_id = $2
+             AND NOT is_folded"#,
     )
     .bind(source)
     .bind(target)
     .fetch_one(&pool)
     .await
-    .expect("count edges after clear");
+    .expect("count active edges after clear");
     assert_eq!(
-        remaining, 0,
-        "clearing extends via resource_service::update must reconcile the edge away"
+        remaining_active, 0,
+        "clearing extends via resource_service::update must fold the edge"
     );
 }
 

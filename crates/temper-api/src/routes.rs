@@ -59,6 +59,19 @@ pub fn create_app(state: AppState) -> Router {
             get(handlers::resources::get_content),
         )
         .route("/api/resources/{id}/edges", get(handlers::edges::list))
+        .route("/api/relationships", post(handlers::edges::assert))
+        .route(
+            "/api/relationships/{correlation_id}/retype",
+            post(handlers::edges::retype),
+        )
+        .route(
+            "/api/relationships/{correlation_id}/reweight",
+            post(handlers::edges::reweight),
+        )
+        .route(
+            "/api/relationships/{correlation_id}/fold",
+            post(handlers::edges::fold),
+        )
         .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))
         .route(
             "/api/resources/{id}/meta",

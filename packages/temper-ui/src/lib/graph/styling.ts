@@ -1,4 +1,4 @@
-import type { EdgeType, GraphNode } from '../types/generated/graph';
+import type { GraphNode } from '../types/generated/graph';
 
 /**
  * Knowledge-graph doctype palette.
@@ -256,9 +256,14 @@ export function buildStylesheet(): CytoscapeStyle {
 	];
 }
 
-// ─── Edge-type dash patterns (exposed for the legend/peek to reuse) ────────
+// ─── Edge-label dash patterns (exposed for the legend/peek to reuse) ───────
+//
+// Keyed on the free-text edge `label` rather than the structural `EdgeKind`,
+// because the visual encoding tracks the semantic relation (the label) — the
+// same label keeps the same dash pattern across structural kinds. Unknown
+// labels fall through to solid.
 
-const EDGE_DASH: Record<EdgeType, string> = {
+const EDGE_DASH: Record<string, string> = {
 	depends_on: '',
 	extends: '',
 	parent_of: '',
@@ -268,7 +273,7 @@ const EDGE_DASH: Record<EdgeType, string> = {
 	references: '2,3'
 };
 
-/** SVG-compatible `stroke-dasharray` for an edge type. Empty = solid. */
-export function edgeStrokeDasharray(edgeType: EdgeType): string {
-	return EDGE_DASH[edgeType] ?? '';
+/** SVG-compatible `stroke-dasharray` for an edge label. Empty = solid. */
+export function edgeStrokeDasharray(edgeLabel: string): string {
+	return EDGE_DASH[edgeLabel] ?? '';
 }

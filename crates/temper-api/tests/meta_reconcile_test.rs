@@ -95,13 +95,16 @@ async fn meta_update_reconciles_edges(pool: PgPool) {
     )
     .await;
 
-    // The edge should exist: source -> target, type extends, frontmatter provenance.
+    // The edge should exist: source -> target, label 'extends', via a
+    // frontmatter-sourced relationship_asserted event.
     let created_count: i64 = sqlx::query_scalar(
-        r#"SELECT count(*) FROM kb_resource_edges
-           WHERE source_resource_id = $1
-             AND target_resource_id = $2
-             AND edge_type::TEXT = 'extends'
-             AND metadata->>'provenance' = 'frontmatter'"#,
+        r#"SELECT count(*) FROM kb_resource_edges e
+            JOIN kb_events ev ON ev.id = e.asserted_by_event_id
+           WHERE e.source_resource_id = $1
+             AND e.target_resource_id = $2
+             AND e.label = 'extends'
+             AND NOT e.is_folded
+             AND ev.metadata->>'intent' = 'derived'"#,
     )
     .bind(source)
     .bind(target)
@@ -131,20 +134,23 @@ async fn meta_update_reconciles_edges(pool: PgPool) {
     // pattern in tests/e2e/tests/meta_test.rs::meta_patch_reconciles_edges_add_and_remove.
     meta_only_update(&pool, profile_id, source, json!({"extends": []})).await;
 
-    // The frontmatter edge must be gone.
-    let remaining: i64 = sqlx::query_scalar(
+    // The frontmatter edge must be folded (off the default projection).
+    // Rows survive in the table; the default projection filters them out
+    // via `NOT is_folded`.
+    let remaining_active: i64 = sqlx::query_scalar(
         r#"SELECT count(*) FROM kb_resource_edges
            WHERE source_resource_id = $1
-             AND target_resource_id = $2"#,
+             AND target_resource_id = $2
+             AND NOT is_folded"#,
     )
     .bind(source)
     .bind(target)
     .fetch_one(&pool)
     .await
-    .expect("count edges after clear");
+    .expect("count active edges after clear");
     assert_eq!(
-        remaining, 0,
-        "clearing extends via meta update must reconcile the edge away"
+        remaining_active, 0,
+        "clearing extends via meta update must fold the edge"
     );
 
     // Chunk state still untouched.

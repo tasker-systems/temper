@@ -4458,6 +4458,7 @@ dependencies = [
  "serde_yaml",
  "sqlx",
  "temper-core",
+ "temper-events",
  "temper-ingest",
  "thiserror 2.0.18",
  "tokio",

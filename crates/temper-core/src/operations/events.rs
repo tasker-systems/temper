@@ -6,6 +6,7 @@
 //! (`RemoteSynced`, `PushDeferred`) signal sync status across backends.
 
 use serde::{Deserialize, Serialize};
+use uuid::Uuid;
 
 use crate::types::ids::ResourceId;
 
@@ -24,6 +25,16 @@ pub enum DomainEvent {
     DbChunksGenerated { resource_id: ResourceId },
     /// Embedding was triggered (asynchronous on the server).
     DbEmbeddingTriggered { resource_id: ResourceId },
+
+    // -------- Relationship-write events --------
+    /// A new relationship was asserted; an edge row was projected.
+    DbRelationshipAsserted { correlation_id: Uuid },
+    /// An existing relationship was retyped.
+    DbRelationshipRetyped { correlation_id: Uuid },
+    /// An existing relationship was reweighted.
+    DbRelationshipReweighted { correlation_id: Uuid },
+    /// An existing relationship was folded (retracted from the default sheet).
+    DbRelationshipFolded { correlation_id: Uuid },
 
     // -------- Composite / cross-backend events --------
     /// A vault-side change was successfully pushed to the API (DbBackend).
@@ -73,5 +84,15 @@ mod tests {
         };
         let s = serde_json::to_string(&e).unwrap();
         assert!(s.contains("offline"));
+    }
+
+    #[test]
+    fn relationship_event_round_trips() {
+        let e = DomainEvent::DbRelationshipAsserted {
+            correlation_id: Uuid::nil(),
+        };
+        let s = serde_json::to_string(&e).unwrap();
+        let back: DomainEvent = serde_json::from_str(&s).unwrap();
+        assert_eq!(e, back);
     }
 }

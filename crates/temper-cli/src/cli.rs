@@ -1,5 +1,26 @@
 use clap::{Parser, Subcommand};
 
+/// CLI-local enum mirroring `EdgeKind` for clap `value_enum` parsing.
+///
+/// Kept in `cli.rs` (not `temper-core`) to avoid adding a `clap` dependency to
+/// `temper-core`. Maps to `temper_core::types::graph::EdgeKind` at dispatch time
+/// via `From<CliEdgeKind>` in `commands/edge.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CliEdgeKind {
+    Express,
+    Contains,
+    #[value(name = "leads-to")]
+    LeadsTo,
+    Near,
+}
+
+/// CLI-local enum mirroring `Polarity` for clap `value_enum` parsing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum CliPolarity {
+    Forward,
+    Inverse,
+}
+
 #[derive(Parser)]
 #[command(
     name = "temper",
@@ -122,6 +143,12 @@ pub enum Commands {
         /// Disable graph expansion (enabled by default)
         #[arg(long)]
         no_graph: bool,
+    },
+
+    /// Assert or mutate a relationship between resources (writes go through the cloud API)
+    Edge {
+        #[command(subcommand)]
+        action: EdgeAction,
     },
 }
 
@@ -401,4 +428,74 @@ pub enum SkillAction {
 pub enum ConfigAction {
     /// Open config.toml in $EDITOR with validate-then-save semantics
     Edit,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum EdgeAction {
+    /// Assert a new relationship between two resources.
+    ///
+    /// Sends a `POST /api/relationships` request. Returns a `correlation_id`
+    /// that identifies the relationship chain for subsequent retype/reweight/fold.
+    Assert {
+        /// Owner of the source resource (e.g. "@me" or "+team-acme")
+        #[arg(long)]
+        source_owner: String,
+        /// Context of the source resource
+        #[arg(long)]
+        source_context: String,
+        /// Doc type of the source resource (e.g. "task", "goal")
+        #[arg(long)]
+        source_doctype: String,
+        /// Slug of the source resource
+        #[arg(long)]
+        source_slug: String,
+        /// Slug of the target resource (resolved within source's context)
+        #[arg(long)]
+        target: String,
+        /// Edge kind (express, contains, leads-to, near)
+        #[arg(long, value_enum)]
+        kind: CliEdgeKind,
+        /// Edge polarity (forward, inverse)
+        #[arg(long, value_enum)]
+        polarity: CliPolarity,
+        /// Human-readable label for the relationship (e.g. "depends_on")
+        #[arg(long)]
+        label: String,
+        /// Edge weight (default: 1.0)
+        #[arg(long, default_value = "1.0")]
+        weight: f64,
+    },
+    /// Change the kind and polarity of an existing relationship.
+    ///
+    /// Sends `POST /api/relationships/{correlation_id}/retype`.
+    Retype {
+        /// Correlation ID of the relationship to retype
+        correlation_id: uuid::Uuid,
+        /// New edge kind
+        #[arg(long, value_enum)]
+        kind: CliEdgeKind,
+        /// New edge polarity
+        #[arg(long, value_enum)]
+        polarity: CliPolarity,
+    },
+    /// Adjust the weight of an existing relationship.
+    ///
+    /// Sends `POST /api/relationships/{correlation_id}/reweight`.
+    Reweight {
+        /// Correlation ID of the relationship to reweight
+        correlation_id: uuid::Uuid,
+        /// New weight value
+        #[arg(long)]
+        weight: f64,
+    },
+    /// Retract (soft-delete) an existing relationship.
+    ///
+    /// Sends `POST /api/relationships/{correlation_id}/fold`.
+    Fold {
+        /// Correlation ID of the relationship to fold
+        correlation_id: uuid::Uuid,
+        /// Optional human-readable reason for folding
+        #[arg(long)]
+        reason: Option<String>,
+    },
 }
