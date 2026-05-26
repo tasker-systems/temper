@@ -263,9 +263,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     temper_cli::commands::context_cmd::create_remote(client, &name).await
                 })
             }),
-            ContextAction::List => {
+            ContextAction::List { format } => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
-                temper_cli::commands::context_cmd::list(&config)
+                temper_cli::commands::context_cmd::list(&config, format)
             }
         },
         Commands::Warmup { context, format } => {

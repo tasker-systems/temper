@@ -356,7 +356,11 @@ pub enum ContextAction {
         name: String,
     },
     /// List configured contexts
-    List,
+    List {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
