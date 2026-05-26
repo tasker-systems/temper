@@ -1,5 +1,4 @@
 use chrono::Local;
-use serde::Serialize;
 use temper_core::schema;
 
 use crate::config::Config;
@@ -518,56 +517,6 @@ pub fn show(
     Ok(())
 }
 
-/// Render generic resource output in the requested format.
-///
-/// `local_path` is `None` in Cloud mode (no file on disk).
-fn render_generic_output(
-    doc_type: &str,
-    slug: &str,
-    context: &str,
-    config: &Config,
-    local_path: Option<&std::path::Path>,
-    body: String,
-    format: &str,
-) -> Result<()> {
-    if format == "json" {
-        let fm = temper_core::frontmatter::Frontmatter::try_from(body.as_str()).ok();
-        let title = fm
-            .as_ref()
-            .and_then(|f| f.value().get("temper-title"))
-            .and_then(|v| v.as_str())
-            .unwrap_or(slug);
-        let path_str = local_path
-            .and_then(|p| p.strip_prefix(&config.vault_root).ok())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        #[derive(Serialize)]
-        struct ResourceShow<'a> {
-            doc_type: &'a str,
-            slug: &'a str,
-            title: &'a str,
-            context: &'a str,
-            path: String,
-            content: String,
-        }
-        let info = ResourceShow {
-            doc_type,
-            slug,
-            title,
-            context,
-            path: path_str,
-            content: body,
-        };
-        let json = serde_json::to_string_pretty(&info).unwrap_or_default();
-        println!("{json}");
-        return Ok(());
-    }
-
-    print!("{body}");
-    Ok(())
-}
-
 /// Show a generic resource (goal, research, concept, decision).
 ///
 /// Cloud-only: resolves the id via `resolve_by_uri`, fetches content,
@@ -582,17 +531,16 @@ fn show_generic(
 ) -> Result<()> {
     use crate::actions::runtime;
 
-    let doc_type_s = doc_type.to_string();
     let slug_s = slug.to_string();
     let context_owned = context.map(str::to_string);
     let format_s = format.to_string();
 
     let config_clone = config.clone();
-    let doc_type_inner = doc_type_s.clone();
+    let doc_type_inner = doc_type.to_string();
     let slug_inner = slug_s.clone();
     let ctx_inner = context_owned.clone();
 
-    let body = runtime::with_client(|client| {
+    let (row, body) = runtime::with_client(|client| {
         Box::pin(async move {
             let ctx = ctx_inner
                 .as_deref()
@@ -625,12 +573,16 @@ fn show_generic(
                 ));
             }
 
-            Ok(resp.markdown)
+            Ok((row, resp.markdown))
         })
     })?;
 
-    let ctx = context_owned.unwrap_or_default();
-    render_generic_output(&doc_type_s, &slug_s, &ctx, config, None, body, &format_s)
+    let fmt = crate::format::OutputFormat::resolve(Some(&format_s));
+    let metadata = serde_json::to_value(&row)
+        .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
+    let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;
+    println!("{rendered}");
+    Ok(())
 }
 
 /// Fetch and display edges for a resource via the API.
@@ -1436,5 +1388,50 @@ mod resource_list_render_tests {
             "wire field 'title' missing: {out}"
         );
         assert!(out.contains("\"slug\""), "wire field 'slug' missing: {out}");
+    }
+}
+
+#[cfg(test)]
+mod resource_show_render_tests {
+    #[test]
+    fn render_resource_show_toon_emits_frontmatter_then_body() {
+        let metadata = serde_json::json!({
+            "temper-title": "Hello",
+            "temper-slug": "hello",
+        });
+        let body = "# Hello\n\nBody text.\n";
+        let out =
+            crate::format::render_resource_show(&metadata, body, crate::format::OutputFormat::Toon)
+                .expect("toon render");
+        assert!(
+            out.starts_with("---\n"),
+            "toon should start with frontmatter fence: {out}"
+        );
+        assert!(out.contains("# Hello"), "toon body missing: {out}");
+        assert!(
+            out.contains("temper-title"),
+            "frontmatter title missing: {out}"
+        );
+    }
+
+    #[test]
+    fn render_resource_show_json_emits_composite() {
+        let metadata = serde_json::json!({
+            "slug": "hello",
+            "title": "Hello",
+        });
+        let body = "# Hello\n\nBody text.\n";
+        let out =
+            crate::format::render_resource_show(&metadata, body, crate::format::OutputFormat::Json)
+                .expect("json render");
+        assert!(
+            out.contains("\"content\""),
+            "json should have content key: {out}"
+        );
+        assert!(out.contains("# Hello"), "body should be embedded: {out}");
+        assert!(
+            out.contains("\"slug\""),
+            "metadata should be preserved: {out}"
+        );
     }
 }
