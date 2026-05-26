@@ -55,6 +55,9 @@ pub enum Commands {
     Status {
         #[arg(long)]
         verbose: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Show recent vault events
     Events {

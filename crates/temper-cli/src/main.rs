@@ -91,9 +91,9 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             temper_cli::commands::check::run(&config, quiet)
         }
-        Commands::Status { verbose } => {
+        Commands::Status { verbose, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::status::run(&config, verbose)
+            temper_cli::commands::status::run(&config, verbose, format)
         }
         Commands::Events {
             context,
