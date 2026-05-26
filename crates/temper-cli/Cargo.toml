@@ -35,7 +35,7 @@ temper-core = { path = "../temper-core" }
 temper-ingest = { path = "../temper-ingest" }
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-toon-format = "0.2"
+toon-format = "0.5"
 toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

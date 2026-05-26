@@ -69,19 +69,16 @@ impl OutputFormat {
 }
 
 /// Render any `Serialize` value in the chosen format. `Json` uses
-/// `serde_json::to_string_pretty`; `Toon` uses `toon_format::encode_default`
-/// (via `serde_json::Value` intermediate).
+/// `serde_json::to_string_pretty`; `Toon` uses `toon_format::encode_default`,
+/// which accepts `T: Serialize` directly (no intermediate `serde_json::Value`).
 /// `Pretty` and `NoTty` fall through to JSON until Task 11 deletes them.
 pub fn render<T: Serialize>(value: &T, fmt: OutputFormat) -> Result<String, TemperError> {
     match fmt {
         OutputFormat::Json | OutputFormat::Pretty | OutputFormat::NoTty => {
             Ok(serde_json::to_string_pretty(value)?)
         }
-        OutputFormat::Toon => {
-            let json_value = serde_json::to_value(value)?;
-            toon_format::encode_default(&json_value)
-                .map_err(|e| TemperError::Api(format!("toon render: {e}")))
-        }
+        OutputFormat::Toon => toon_format::encode_default(value)
+            .map_err(|e| TemperError::Api(format!("toon render: {e}"))),
     }
 }
 
@@ -121,17 +118,10 @@ pub fn output<T: Serialize + std::fmt::Display>(value: &T, format: OutputFormat)
                 serde_json::to_string_pretty(value).unwrap_or_default()
             );
         }
-        OutputFormat::Toon => {
-            let result = serde_json::to_value(value)
-                .map_err(|e| format!("json conversion: {e}"))
-                .and_then(|v| {
-                    toon_format::encode_default(&v).map_err(|e| format!("toon render: {e}"))
-                });
-            match result {
-                Ok(s) => println!("{s}"),
-                Err(_) => println!("{value}"),
-            }
-        }
+        OutputFormat::Toon => match toon_format::encode_default(value) {
+            Ok(s) => println!("{s}"),
+            Err(_) => println!("{value}"),
+        },
         OutputFormat::Pretty | OutputFormat::NoTty => println!("{value}"),
     }
 }
