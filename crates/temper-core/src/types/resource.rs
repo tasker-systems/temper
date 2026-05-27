@@ -103,6 +103,11 @@ pub struct ResourceListParams {
     pub limit: Option<i64>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
+    /// When true, the list endpoint returns `ResourceMetaListResponse`
+    /// (`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`
+    /// (`Vec<ResourceRow>` rows). Default: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta_only: Option<bool>,
 }
 
 /// Aggregated doc-type facet counts for the current filter set.
@@ -110,6 +115,7 @@ pub struct ResourceListParams {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceFacets {
     pub doc_type: std::collections::HashMap<String, i64>,
 }
@@ -119,6 +125,7 @@ pub struct ResourceFacets {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListResponse {
     pub rows: Vec<ResourceRow>,
     pub total: i64,

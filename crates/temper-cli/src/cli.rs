@@ -227,6 +227,14 @@ pub enum ResourceAction {
         /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
+        /// Return `Vec<ResourceMetaResponse>` rows instead of
+        /// `Vec<ResourceRow>` rows. Hits GET /api/resources?meta_only=true.
+        #[arg(long)]
+        meta_only: bool,
+        /// Subselect top-level response keys on each row (anchor key
+        /// always preserved). Use jq for nested projection.
+        #[arg(long, value_delimiter = ',')]
+        fields: Vec<String>,
     },
     /// Show a resource's content
     Show {
@@ -244,6 +252,14 @@ pub enum ResourceAction {
         /// Show graph edges connected to this resource
         #[arg(long)]
         edges: bool,
+        /// Return only the resource's meta tier (managed + open
+        /// frontmatter, hashes); no body. Calls GET /meta endpoint.
+        #[arg(long, conflicts_with = "edges")]
+        meta_only: bool,
+        /// Subselect top-level response keys (resource_id always
+        /// preserved). Use jq for nested projection.
+        #[arg(long, value_delimiter = ',')]
+        fields: Vec<String>,
     },
     /// Update a resource's frontmatter and/or body
     ///
@@ -533,4 +549,69 @@ pub enum EdgeAction {
         #[arg(long)]
         reason: Option<String>,
     },
+}
+
+#[cfg(test)]
+mod meta_only_flag_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn show_accepts_meta_only_and_fields() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper",
+            "resource",
+            "show",
+            "my-slug",
+            "--type",
+            "task",
+            "--context",
+            "temper",
+            "--meta-only",
+            "--fields",
+            "managed_meta,open_meta",
+        ]);
+        assert!(
+            m.is_ok(),
+            "show with --meta-only and --fields failed to parse: {:?}",
+            m.err()
+        );
+    }
+
+    #[test]
+    fn show_meta_only_conflicts_with_edges() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper",
+            "resource",
+            "show",
+            "my-slug",
+            "--type",
+            "task",
+            "--meta-only",
+            "--edges",
+        ]);
+        assert!(m.is_err(), "--meta-only and --edges must conflict");
+    }
+
+    #[test]
+    fn list_accepts_meta_only_and_fields() {
+        let cmd = Cli::command();
+        let m = cmd.try_get_matches_from([
+            "temper",
+            "resource",
+            "list",
+            "--type",
+            "task",
+            "--meta-only",
+            "--fields",
+            "managed_meta",
+        ]);
+        assert!(
+            m.is_ok(),
+            "list with --meta-only and --fields failed: {:?}",
+            m.err()
+        );
+    }
 }

@@ -33,6 +33,7 @@ temper-mcp = { path = "../../crates/temper-mcp" }
 temp-env = "0.3"
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
+toml = "0.8"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = [
   "env-filter",

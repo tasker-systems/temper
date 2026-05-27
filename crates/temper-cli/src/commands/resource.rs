@@ -263,6 +263,19 @@ pub fn create(
 // Cloud-only resource list pipeline
 // ---------------------------------------------------------------------------
 
+/// Parameters for the public `show` command, bundled to keep the CLI entry
+/// signature compact (and clippy happy).
+#[derive(Debug, Clone, Copy)]
+pub struct ShowParams<'a> {
+    pub doc_type: &'a str,
+    pub slug: &'a str,
+    pub context: Option<&'a str>,
+    pub format: &'a str,
+    pub edges: bool,
+    pub meta_only: bool,
+    pub fields: &'a [String],
+}
+
 /// Parameters for the public `list` command, bundled to keep the CLI entry
 /// signature compact (and clippy happy).
 #[derive(Debug, Clone, Copy)]
@@ -274,38 +287,12 @@ pub struct ListParams<'a> {
     pub goal: Option<&'a str>,
     pub status: Option<&'a str>,
     pub format: &'a str,
-}
-
-/// Cloud-first list: call the server, return rows sorted server-side
-/// (`ORDER BY updated DESC`).
-async fn fetch_list_rows(
-    client: &temper_client::TemperClient,
-    doc_type: &str,
-    context: Option<&str>,
-    limit: usize,
-) -> Result<Vec<temper_core::types::resource::ResourceRow>> {
-    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
-
-    let params = ResourceListParams {
-        doc_type_name: Some(doc_type.to_string()),
-        context_name: context.map(ToString::to_string),
-        sort: Some(ResourceSortField::Updated),
-        order: Some(SortOrder::Desc),
-        limit: Some(limit as i64),
-        ..Default::default()
-    };
-    let resp = client
-        .resources()
-        .list(&params)
-        .await
-        .map_err(crate::actions::runtime::client_err_to_temper)?;
-    Ok(resp.rows)
+    pub meta_only: bool,
+    pub fields: &'a [String],
 }
 
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
-    use crate::actions::runtime;
-
     // Hints for filters that only apply to certain types (unchanged).
     if params.stage.is_some() && params.doc_type != "task" {
         output::hint(format!(
@@ -332,25 +319,116 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         }
     }
 
+    if params.meta_only {
+        return list_meta_only(config, params);
+    }
+
+    use crate::actions::runtime;
+    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+
     let fmt = crate::format::OutputFormat::resolve(Some(params.format));
     let doc_type = params.doc_type.to_string();
     let context = params.context.map(ToString::to_string);
     let limit = params.limit.unwrap_or(20);
     let state_dir = config.state_dir.clone();
+    let fields_owned: Vec<String> = params.fields.to_vec();
+    let api_params = ResourceListParams {
+        doc_type_name: Some(doc_type.clone()),
+        context_name: context.clone(),
+        sort: Some(ResourceSortField::Updated),
+        order: Some(SortOrder::Desc),
+        limit: Some(limit as i64),
+        ..Default::default()
+    };
 
     // Cloud-only list: a non-blocking staleness pre-flight, then the
     // server query. Any error (network, auth, 4xx/5xx) surfaces as-is —
     // there is no local-scan fallback.
-    let rows = runtime::with_client(move |client| {
+    let response = runtime::with_client(move |client| {
         Box::pin(async move {
             if let Some(ctx) = context.as_deref() {
                 crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
             }
-            fetch_list_rows(client, &doc_type, context.as_deref(), limit).await
+            client
+                .resources()
+                .list(&api_params)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })?;
 
-    let rendered = crate::format::render(&rows, fmt)?;
+    let mut envelope = serde_json::to_value(&response)
+        .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
+
+    if !fields_owned.is_empty() {
+        let rows = envelope
+            .get_mut("rows")
+            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
+            .take();
+        let filtered_rows =
+            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
+                .map_err(map_projection_error)?;
+        envelope["rows"] = filtered_rows;
+    }
+
+    let rendered = crate::format::render(&envelope, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `list --meta-only`: call client.resources().list_meta() and emit
+/// the ResourceMetaListResponse shape. Applies the shared top-level
+/// projection filter to each row in the envelope when `fields` is
+/// non-empty; the envelope keys (`rows`, `total`, `facets`) are
+/// preserved untouched.
+fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
+    use crate::actions::runtime;
+    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+
+    let limit = params.limit.unwrap_or(50);
+    let api_params = ResourceListParams {
+        doc_type_name: Some(params.doc_type.to_string()),
+        context_name: params.context.map(ToString::to_string),
+        sort: Some(ResourceSortField::Updated),
+        order: Some(SortOrder::Desc),
+        limit: Some(limit as i64),
+        meta_only: Some(true),
+        ..Default::default()
+    };
+    let format_str = params.format.to_string();
+    let fields_owned: Vec<String> = params.fields.to_vec();
+    let context_owned = params.context.map(ToString::to_string);
+    let state_dir = config.state_dir.clone();
+
+    let response = runtime::with_client(|client| {
+        Box::pin(async move {
+            if let Some(ctx) = context_owned.as_deref() {
+                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
+            }
+            client
+                .resources()
+                .list_meta(&api_params)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let mut envelope = serde_json::to_value(&response)
+        .map_err(|e| TemperError::Api(format!("meta list serialize: {e}")))?;
+
+    if !fields_owned.is_empty() {
+        let rows = envelope
+            .get_mut("rows")
+            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
+            .take();
+        let filtered_rows =
+            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "resource_id")
+                .map_err(map_projection_error)?;
+        envelope["rows"] = filtered_rows;
+    }
+
+    let fmt = crate::format::OutputFormat::resolve(Some(&format_str));
+    let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
     Ok(())
 }
@@ -412,28 +490,111 @@ pub fn delete(
 }
 
 /// Show a resource's content.
-pub fn show(
+pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
+    let _ = temper_core::frontmatter::DocType::from_str(params.doc_type)?;
+
+    if params.meta_only {
+        return show_meta_only(
+            config,
+            params.doc_type,
+            params.slug,
+            params.context,
+            params.format,
+            params.fields,
+        );
+    }
+
+    match params.doc_type {
+        "task" => crate::commands::task::show(config, params.slug, params.context, params.format),
+        "session" => {
+            crate::commands::session::show(config, params.slug, params.context, params.format)
+        }
+        _ => show_generic(
+            config,
+            params.doc_type,
+            params.slug,
+            params.context,
+            params.format,
+        ),
+    }?;
+
+    if params.edges {
+        let ctx = require_context(params.context)?;
+        show_edges(config, &ctx, params.doc_type, params.slug, params.format)?;
+    }
+
+    Ok(())
+}
+
+/// `show --meta-only`: hit GET /api/resources/{id}/meta and emit the
+/// ResourceMetaResponse shape under the chosen format. Applies the
+/// shared top-level projection filter when `fields` is non-empty.
+///
+/// Cloud-only: resolves the resource id via `resolve_by_uri` using
+/// the same (owner, context, doc_type, slug) quadruple `show_generic`
+/// uses, then calls `get_meta` instead of `content`.
+fn show_meta_only(
     config: &Config,
     doc_type: &str,
     slug: &str,
     context: Option<&str>,
     format: &str,
-    edges: bool,
+    fields: &[String],
 ) -> Result<()> {
+    use crate::actions::runtime;
+
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
 
-    match doc_type {
-        "task" => crate::commands::task::show(config, slug, context, format),
-        "session" => crate::commands::session::show(config, slug, context, format),
-        _ => show_generic(config, doc_type, slug, context, format),
-    }?;
+    let config_clone = config.clone();
+    let doc_type_inner = doc_type.to_string();
+    let slug_inner = slug.to_string();
+    let ctx_inner = context.map(str::to_string);
+    let fields_inner = fields.to_vec();
 
-    if edges {
-        let ctx = require_context(context)?;
-        show_edges(config, &ctx, doc_type, slug, format)?;
-    }
+    let meta = runtime::with_client(|client| {
+        Box::pin(async move {
+            let ctx = ctx_inner
+                .as_deref()
+                .ok_or_else(|| {
+                    TemperError::Project("no context specified — use --context <name>".into())
+                })?
+                .to_string();
+            let owner = config_clone.owner_for_context(&ctx);
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner, &ctx, &doc_type_inner, &slug_inner)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let meta = client
+                .resources()
+                .get_meta(*row.id.as_uuid())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            Ok(meta)
+        })
+    })?;
 
+    let value = serde_json::to_value(&meta)
+        .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
+    let filtered =
+        temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
+            .map_err(map_projection_error)?;
+    let fmt = crate::format::OutputFormat::resolve(Some(format));
+    let rendered = crate::format::render(&filtered, fmt)?;
+    println!("{rendered}");
     Ok(())
+}
+
+fn map_projection_error(err: temper_core::projection::ProjectionError) -> TemperError {
+    use temper_core::projection::ProjectionError;
+    match err {
+        ProjectionError::DottedPath { hint } => TemperError::Project(format!(
+            "--fields supports top-level keys only; use jq for nested projection: {hint}"
+        )),
+        ProjectionError::EmptyField => {
+            TemperError::Project("--fields contained an empty field name".into())
+        }
+    }
 }
 
 /// Show a generic resource (goal, research, concept, decision).
@@ -1346,5 +1507,106 @@ mod resource_show_render_tests {
             out.contains("\"slug\""),
             "metadata should be preserved: {out}"
         );
+    }
+}
+
+#[cfg(test)]
+mod list_meta_only_tests {
+    use temper_core::projection::apply_top_level_filter;
+
+    #[test]
+    fn list_meta_filter_applies_per_row_and_preserves_envelope() {
+        // Build a stub ResourceMetaListResponse-shaped JSON
+        let envelope = serde_json::json!({
+            "rows": [
+                {
+                    "resource_id": "11111111-1111-1111-1111-111111111111",
+                    "managed_meta": {"stage": "in-progress"},
+                    "open_meta": {"tags": []},
+                    "managed_hash": "sha256:a",
+                    "open_hash": "sha256:b"
+                },
+                {
+                    "resource_id": "22222222-2222-2222-2222-222222222222",
+                    "managed_meta": {"stage": "done"},
+                    "open_meta": null,
+                    "managed_hash": "sha256:c",
+                    "open_hash": "sha256:d"
+                }
+            ],
+            "total": 2,
+            "facets": {"doc_type": {"task": 2}}
+        });
+
+        // Filter the rows array (the action layer will apply the filter
+        // to envelope.rows specifically, not to the whole envelope).
+        let rows = envelope.get("rows").cloned().expect("rows");
+        let filtered_rows =
+            apply_top_level_filter(rows, &["managed_meta".to_string()], "resource_id")
+                .expect("filter");
+
+        // Each row should have only resource_id + managed_meta
+        let arr = filtered_rows.as_array().expect("array");
+        assert_eq!(arr.len(), 2);
+        for row in arr {
+            assert!(row.get("resource_id").is_some(), "anchor missing in {row}");
+            assert!(
+                row.get("managed_meta").is_some(),
+                "managed_meta missing in {row}"
+            );
+            assert!(
+                row.get("open_meta").is_none(),
+                "open_meta should be dropped"
+            );
+            assert!(row.get("managed_hash").is_none(), "hash should be dropped");
+        }
+    }
+}
+
+#[cfg(test)]
+mod show_meta_only_tests {
+    use temper_core::projection::apply_top_level_filter;
+    use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
+
+    fn fake_meta_response() -> ResourceMetaResponse {
+        ResourceMetaResponse {
+            resource_id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
+            managed_meta: Some(ManagedMeta {
+                title: Some("test".to_string()),
+                ..Default::default()
+            }),
+            open_meta: Some(serde_json::json!({"tags": ["x"]})),
+            managed_hash: "sha256:test".to_string(),
+            open_hash: "sha256:test".to_string(),
+        }
+    }
+
+    #[test]
+    fn show_meta_only_fields_filter_preserves_anchor_and_managed_meta_only() {
+        let response = fake_meta_response();
+        let value = serde_json::to_value(&response).expect("serialize");
+        let filtered = apply_top_level_filter(value, &["managed_meta".to_string()], "resource_id")
+            .expect("filter");
+        assert!(filtered.get("resource_id").is_some(), "anchor missing");
+        assert!(
+            filtered.get("managed_meta").is_some(),
+            "managed_meta missing"
+        );
+        assert!(
+            filtered.get("open_meta").is_none(),
+            "open_meta should be filtered out"
+        );
+        assert!(
+            filtered.get("managed_hash").is_none(),
+            "managed_hash should be filtered out"
+        );
+    }
+
+    #[test]
+    fn show_meta_only_no_fields_returns_full_response() {
+        let response = fake_meta_response();
+        let value = serde_json::to_value(&response).expect("serialize");
+        let unfiltered = apply_top_level_filter(value.clone(), &[], "resource_id").expect("filter");
+        assert_eq!(unfiltered, value);
     }
 }
