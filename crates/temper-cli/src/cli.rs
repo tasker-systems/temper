@@ -192,8 +192,8 @@ pub enum ResourceAction {
         show_template: bool,
         #[arg(long, hide = true)]
         stdin: bool,
-        /// Body content: '@PATH' reads a file, '-' reads stdin, omit to use
-        /// piped stdin implicitly (cloud mode only; ignored in local mode)
+        /// Body content: '@PATH' reads a file, '-' reads stdin, or omit to
+        /// use piped stdin implicitly.
         #[arg(long)]
         body: Option<String>,
         /// Source path or URL — extract markdown via temper-ingest and use as body.
@@ -263,12 +263,11 @@ pub enum ResourceAction {
     },
     /// Update a resource's frontmatter and/or body
     ///
-    /// Mutates frontmatter from flag args. Optionally rewrites the body
-    /// via `--body @<path>` (file), `--body -` (explicit stdin), or
-    /// implicit non-TTY stdin (e.g. `cat new.md | temper resource update <slug>`).
-    /// Works in both local and cloud mode; in local mode the file is
-    /// rewritten and best-effort published; in cloud mode the body trio
-    /// (content + content_hash + chunks_packed) is PATCHed in one call.
+    /// Mutates frontmatter from flag args. Optionally rewrites the body via
+    /// `--body @<path>` (file), `--body -` (explicit stdin), or implicit
+    /// non-TTY stdin (e.g. `cat new.md | temper resource update <slug>`). The
+    /// body trio (content + content_hash + chunks_packed) is PATCHed alongside
+    /// any frontmatter changes in a single API call.
     Update {
         /// Resource slug
         slug: String,
@@ -348,13 +347,14 @@ pub enum ResourceAction {
         #[arg(long)]
         format: Option<String>,
     },
-    /// Delete a resource (cloud-first soft-delete; local cleanup as tail in local mode)
+    /// Delete a resource (soft-delete via the API).
     ///
-    /// Soft-deletes the resource server-side (`is_active = false`), then in
-    /// local mode removes the vault file and clears the manifest entry.
-    /// In cloud mode the API call is the entire operation. API failure means
-    /// no local mutation. Use `--force` to skip the local-file confirmation
-    /// prompt; non-TTY callers (agents, CI) must pass `--force`.
+    /// Sets `is_active = false` server-side; the row is preserved. Removing a
+    /// projected file from disk with `rm` is just a local cache miss and has no
+    /// server effect — run `temper resource delete` to actually delete, then
+    /// `temper pull <context>` to re-materialize state on a fresh device.
+    /// Use `--force` to skip the confirmation prompt; non-TTY callers (agents,
+    /// CI) must pass `--force`.
     Delete {
         /// Resource slug
         slug: String,
@@ -428,7 +428,7 @@ pub enum AuthAction {
         #[arg(long)]
         format: Option<String>,
     },
-    /// Export a refreshed access token (local mode only).
+    /// Export a refreshed access token.
     ///
     /// Token goes to stdout (plain JWT, pipeable); security warning goes to
     /// stderr. Pipe into a cloud session's secret manager as `TEMPER_TOKEN`.

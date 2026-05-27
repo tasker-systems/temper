@@ -319,11 +319,24 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     } else {
                         config.skill_output.clone()
                     };
-                    temper_cli::commands::skill::install(&config, &skill_dir)?;
-                    temper_cli::output::success(format!(
-                        "Skill installed: {}",
-                        skill_dir.display()
-                    ));
+                    let report = temper_cli::commands::skill::install(&config, &skill_dir)?;
+                    if report.is_no_op() {
+                        temper_cli::output::success(format!(
+                            "Skill already up to date ({} files): {}",
+                            report.total,
+                            skill_dir.display()
+                        ));
+                    } else {
+                        temper_cli::output::success(format!(
+                            "Skill installed: {} ({} of {} files updated)",
+                            skill_dir.display(),
+                            report.changed.len(),
+                            report.total
+                        ));
+                        for path in &report.changed {
+                            temper_cli::output::item(path);
+                        }
+                    }
                     Ok(())
                 }
                 SkillAction::Check => temper_cli::commands::skill::check(&config),

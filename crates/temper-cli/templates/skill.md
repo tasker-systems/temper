@@ -33,13 +33,15 @@ User-created guidance files. Read and apply any files found here.
 ## On Task Start
 
 > **CLI sequence**: There is no `task start` command. To start a task:
-> 1. `temper resource show <slug> --type task` — read the task content
-> 2. `temper resource update <slug> --type task --stage in-progress` — mark it active
+> 1. `temper resource show <slug> --type task --context <ctx>` — read the task content
+> 2. `temper resource update <slug> --type task --context <ctx> --stage in-progress` — mark it active
 >
 > Stages are: `backlog`, `in-progress`, `done`, `cancelled` (not "active").
+> `resource update` and `resource create` REQUIRE `--context`; `show` and
+> `list` do not.
 
-1. Read the task content via `temper resource show <slug> --type task` — extract mode and effort
-2. Move the task to in-progress: `temper resource update <slug> --type task --stage in-progress`
+1. Read the task content via `temper resource show <slug> --type task --context <ctx>` — extract mode and effort
+2. Move the task to in-progress: `temper resource update <slug> --type task --context <ctx> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
 4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
 5. Check for `guidance/fundamentals.md`:
@@ -53,17 +55,17 @@ User-created guidance files. Read and apply any files found here.
 ## On Task Resume
 
 > **CLI sequence**: To resume a task from a previous session:
-> 1. `temper resource show <slug> --type task` — reload the task content
+> 1. `temper resource show <slug> --type task --context <ctx>` — reload the task content
 > 2. `temper resource list --type session --context <ctx>` — find the most recent session
 > 3. `temper resource show <title-slug> --type session --context <ctx>` — read the session's "Next Steps"
 > 4. Continue from the workflow file for this task's mode/effort
 
-1. Read the task content via `temper resource show <slug> --type task` — extract mode, effort, and context
+1. Read the task content via `temper resource show <slug> --type task --context <ctx>` — extract mode, effort, and context
 2. List recent sessions: `temper resource list --type session --context <ctx>`
 3. Read the most recent session note: `temper resource show <title-slug> --type session --context <ctx>`
    - The slug is the title column from `resource list` output
    - Supports partial matching — a unique substring of the slug is enough
-4. If the task is not already in-progress, move it: `temper resource update <slug> --type task --stage in-progress`
+4. If the task is not already in-progress, move it: `temper resource update <slug> --type task --context <ctx> --stage in-progress`
 5. Check for `guidance/fundamentals.md` — read if it exists
 6. Check auto-memory for user plugin preferences
 7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
@@ -129,6 +131,39 @@ User-created guidance files. Read and apply any files found here.
 | `task create [--context <ctx>]` | On Task Create |
 | `session start [--context <ctx>]` | On Session Start |
 | Other commands (search, session save, etc.) | Read `reference.md` for syntax |
+
+## Cheap Orientation (read-side projection)
+
+When you need to peek at a resource or scan a list without paying for the full
+body, use the projection flags. They make orientation reads dramatically
+cheaper, both in tokens and in API work:
+
+- `temper resource show <slug> --type <t> --meta-only` — frontmatter (managed +
+  open) and hashes only; no body. Calls `GET /api/resources/<id>/meta`.
+- `temper resource list --type <t> --context <ctx> --meta-only` — meta tier per
+  row instead of full row payloads.
+- `--fields <a,b,c>` on either of the above — subselect top-level response
+  keys (the anchor key — `id` or `resource_id` — is always preserved). For
+  nested projection, pipe through `jq`.
+- `temper resource show <slug> --type <t> --edges` — adds the graph edges
+  connected to this resource. Cannot be combined with `--meta-only`.
+
+Reach for these first when triaging a context, comparing a few resources, or
+deciding whether to read the body. Fall back to the full `show` only when you
+need the body.
+
+## Vault Projection (local cache)
+
+The vault directory is a **read-only projection cache** of cloud state, not the
+source of truth. To refresh missing or stale projected files:
+
+```bash
+temper pull <context>
+```
+
+Deleting a projected file with `rm` has no server effect — it just creates a
+local cache miss. To actually delete a resource, use `temper resource delete
+<slug> --type <t> --context <ctx> [--force]`.
 
 ## Subagent Dispatch
 

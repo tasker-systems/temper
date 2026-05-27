@@ -64,8 +64,49 @@ static REFERENCE_FOOTER: &str = r#"
 1. `temper search "<topic>"` -- find relevant documents and notes
 2. `temper context [<name>]` -- understand current context and recent activity
 3. Use search results to guide targeted file reads
+4. Reach for `--meta-only` / `--fields` on `resource show` and `resource list`
+   when you need cheap orientation rather than full bodies (see below)
 
 Search first, read second. Don't guess at file paths.
+
+## Orientation Projection (cheap reads)
+
+The read-side projection flags let you peek at structure without paying for
+full bodies — useful when triaging a context, comparing a few resources, or
+deciding whether to read more deeply.
+
+| Pattern | What it returns |
+|---------|-----------------|
+| `temper resource show <slug> --type <t> --meta-only` | Frontmatter (managed + open) and hashes; no body. Calls `GET /api/resources/<id>/meta`. |
+| `temper resource list --type <t> --context <ctx> --meta-only` | Meta-tier rows instead of full row payloads. |
+| `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key (`id` or `resource_id`) is always preserved. Pipe through `jq` for nested projection. |
+| `temper resource show <slug> --type <t> --edges` | Adds the graph edges connected to this resource. Mutually exclusive with `--meta-only`. |
+
+## Vault Projection (local cache)
+
+The vault directory is a **read-only projection cache** of cloud state. To
+refresh missing or stale projected files for a context:
+
+```bash
+temper pull <context>
+```
+
+`rm`'ing a projected file has no server effect — it just creates a local cache
+miss. To actually delete a resource server-side, run `temper resource delete
+<slug> --type <t> --context <ctx> [--force]`.
+
+## Context Requirement
+
+| Verb | `--context` required? |
+|------|----------------------|
+| `resource show` | optional |
+| `resource list` | optional |
+| `resource create` | **required** |
+| `resource update` | **required** |
+| `resource delete` | optional (recommended) |
+
+Omitting `--context` on a write surfaces the error
+`Project error: no context specified — use --context <name>`.
 
 ## Template Access
 
@@ -217,13 +258,36 @@ pub fn generate(_config: &Config) -> Result<String> {
     Ok(generate_reference())
 }
 
+/// Report of what changed during `install`.
+///
+/// Lets the caller distinguish between a real refresh and a no-op so agents
+/// (and humans) can tell whether an install actually did anything.
+#[derive(Debug, Default)]
+pub struct InstallReport {
+    pub total: usize,
+    pub changed: Vec<String>,
+}
+
+impl InstallReport {
+    pub fn is_no_op(&self) -> bool {
+        self.changed.is_empty()
+    }
+}
+
 /// Install skill directory and command wrapper.
 ///
 /// 1. Generate all skill files
 /// 2. Write skill files (except command-wrapper.md) into `skill_dir`
 /// 3. Write command-wrapper.md to `~/.claude/commands/temper.md`
-pub fn install(config: &Config, skill_dir: &Path) -> Result<()> {
+///
+/// Skips writes when the destination already matches the generated content,
+/// returning an `InstallReport` that lists every file whose bytes changed.
+pub fn install(config: &Config, skill_dir: &Path) -> Result<InstallReport> {
     let files = generate_skill_files(config)?;
+    let mut report = InstallReport {
+        total: files.len(),
+        changed: Vec::new(),
+    };
 
     // Ensure skill_dir and subdirectories exist
     for sub in &["workflows", "guidance"] {
@@ -248,8 +312,9 @@ pub fn install(config: &Config, skill_dir: &Path) -> Result<()> {
                 ))
             })?;
         }
-        std::fs::write(&dest, content)
-            .map_err(|e| TemperError::Config(format!("cannot write {}: {}", dest.display(), e)))?;
+        if write_if_changed(&dest, content)? {
+            report.changed.push(rel_path.clone());
+        }
     }
 
     // Write command-wrapper.md to ~/.claude/commands/temper.md
@@ -261,12 +326,25 @@ pub fn install(config: &Config, skill_dir: &Path) -> Result<()> {
             TemperError::Config(format!("cannot create {}: {}", commands_dir.display(), e))
         })?;
         let wrapper_path = commands_dir.join("temper.md");
-        std::fs::write(&wrapper_path, wrapper_content).map_err(|e| {
-            TemperError::Config(format!("cannot write {}: {}", wrapper_path.display(), e))
-        })?;
+        if write_if_changed(&wrapper_path, wrapper_content)? {
+            report.changed.push("command-wrapper.md".to_string());
+        }
     }
 
-    Ok(())
+    Ok(report)
+}
+
+/// Write `content` to `dest` only if the on-disk bytes differ. Returns
+/// `true` if a write happened (or the file did not previously exist).
+fn write_if_changed(dest: &Path, content: &str) -> Result<bool> {
+    if let Ok(existing) = std::fs::read_to_string(dest) {
+        if existing == content {
+            return Ok(false);
+        }
+    }
+    std::fs::write(dest, content)
+        .map_err(|e| TemperError::Config(format!("cannot write {}: {}", dest.display(), e)))?;
+    Ok(true)
 }
 
 /// Check skill installation status.
@@ -627,6 +705,14 @@ mod tests {
         assert!(
             reference.contains("## Skill-Only Commands"),
             "should have Skill-Only Commands"
+        );
+        assert!(
+            reference.contains("## Orientation Projection"),
+            "should have Orientation Projection section"
+        );
+        assert!(
+            reference.contains("## Context Requirement"),
+            "should have Context Requirement section"
         );
     }
 
