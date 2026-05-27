@@ -15,14 +15,38 @@ use crate::error::Result;
 use crate::output;
 use crate::projection::{check_context_staleness, read_cursor, StalenessOutcome};
 
-pub fn run(config: &Config, _verbose: bool) -> Result<()> {
-    output::header("Temper Status");
-    output::label("Config", crate::config::global_config_path().display());
-    output::label("Vault", config.vault_root.display());
-    output::blank();
+/// Structured output shape for `temper status`.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct StatusReport {
+    pub contexts: Vec<ContextStatus>,
+}
 
+/// Per-context entry in [`StatusReport`].
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct ContextStatus {
+    pub name: String,
+    /// Kebab-case staleness wire string: `fresh`, `stale`, `not-projected`, `skipped`.
+    pub staleness: String,
+    pub projected: u64,
+    pub server: Option<u64>,
+}
+
+/// Map a [`StalenessOutcome`] to its stable kebab-case wire string.
+fn staleness_str(outcome: StalenessOutcome) -> &'static str {
+    match outcome {
+        StalenessOutcome::Fresh => "fresh",
+        StalenessOutcome::Stale => "stale",
+        StalenessOutcome::NotProjected => "not-projected",
+        StalenessOutcome::Skipped => "skipped",
+    }
+}
+
+pub fn run(config: &Config, _verbose: bool, format: Option<String>) -> Result<()> {
     if config.contexts.is_empty() {
-        output::hint("  (no contexts configured)");
+        let report = StatusReport { contexts: vec![] };
+        let fmt = crate::format::OutputFormat::resolve(format.as_deref());
+        let rendered = crate::format::render(&report, fmt)?;
+        println!("{rendered}");
         return Ok(());
     }
 
@@ -35,120 +59,96 @@ pub fn run(config: &Config, _verbose: bool) -> Result<()> {
         Err(e) => {
             // Cannot build a runtime — fall back to degraded report.
             output::warning("cloud unreachable — showing local cursor info only");
-            render_degraded(config);
+            let report = StatusReport {
+                contexts: degraded_items(config),
+            };
+            let fmt = crate::format::OutputFormat::resolve(format.as_deref());
+            if let Ok(rendered) = crate::format::render(&report, fmt) {
+                println!("{rendered}");
+            }
             return Err(e);
         }
     };
 
     let client_result = build_config_store_and_client();
 
-    match client_result {
+    let items: Vec<ContextStatus> = match client_result {
         Ok((_cfg, _store, client)) => {
             // Fetch all visible contexts from server (includes resource_count).
             let server_contexts = rt.block_on(client.contexts().list());
             match server_contexts {
                 Ok(server_ctxs) => {
-                    output::header("Contexts");
                     let mut names = config.contexts.clone();
                     names.sort();
-                    for ctx_name in &names {
-                        let staleness = rt.block_on(check_context_staleness(
-                            &client,
-                            &config.state_dir,
-                            ctx_name,
-                        ));
-                        let owner = config.owner_for_context(ctx_name);
-                        let projected =
-                            count_projected_md_files(&config.vault_root, &owner, ctx_name);
-                        let server_count = server_ctxs
-                            .iter()
-                            .find(|c| c.name == *ctx_name)
-                            .map(|c| c.resource_count);
-
-                        render_context_line(ctx_name, staleness, projected, server_count);
-                    }
+                    names
+                        .iter()
+                        .map(|ctx_name| {
+                            let staleness = rt.block_on(check_context_staleness(
+                                &client,
+                                &config.state_dir,
+                                ctx_name,
+                            ));
+                            let owner = config.owner_for_context(ctx_name);
+                            let projected =
+                                count_projected_md_files(&config.vault_root, &owner, ctx_name);
+                            let server_count = server_ctxs
+                                .iter()
+                                .find(|c| c.name == *ctx_name)
+                                .map(|c| c.resource_count);
+                            ContextStatus {
+                                name: ctx_name.clone(),
+                                staleness: staleness_str(staleness).to_string(),
+                                projected: projected as u64,
+                                server: server_count.map(|n| n as u64),
+                            }
+                        })
+                        .collect()
                 }
                 Err(_) => {
                     // API call failed — degrade gracefully.
-                    output::warning(
-                        "Contexts (cloud unreachable — showing local cursor info only)",
-                    );
-                    render_degraded(config);
+                    output::warning("cloud unreachable — showing local cursor info only");
+                    degraded_items(config)
                 }
             }
         }
         Err(_) => {
             // Client build failed (not authenticated, no config, etc.).
-            output::warning("Contexts (cloud unreachable — showing local cursor info only)");
-            render_degraded(config);
+            output::warning("cloud unreachable — showing local cursor info only");
+            degraded_items(config)
         }
-    }
+    };
+
+    let report = StatusReport { contexts: items };
+    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
+    let rendered = crate::format::render(&report, fmt)?;
+    println!("{rendered}");
 
     Ok(())
 }
 
-/// Render one context status line.
-///
-/// Format (tty):
-///
-/// ```text
-///   <ctx-name>    Fresh    [12 projected / 12 server]
-///   <ctx-name>    Stale    [47 projected / 51 server]  → run `temper pull <ctx-name>`
-///   <ctx-name>    —        (not projected — run `temper pull <ctx-name>`)
-///   <ctx-name>    Skipped  [47 projected / ? server]
-/// ```
-fn render_context_line(
-    name: &str,
-    outcome: StalenessOutcome,
-    projected: usize,
-    server_count: Option<i64>,
-) {
-    let indicator = match outcome {
-        StalenessOutcome::Fresh => "Fresh",
-        StalenessOutcome::Stale => "Stale",
-        StalenessOutcome::NotProjected => "—",
-        StalenessOutcome::Skipped => "Skipped",
-    };
-
-    match outcome {
-        StalenessOutcome::NotProjected => {
-            output::plain(format!(
-                "  {name:<16} {indicator:<8}  (not projected — run `temper pull {name}`)"
-            ));
-        }
-        StalenessOutcome::Stale => {
-            let counts = format_counts(projected, server_count);
-            output::plain(format!(
-                "  {name:<16} {indicator:<8}  {counts}  → run `temper pull {name}`"
-            ));
-        }
-        StalenessOutcome::Fresh | StalenessOutcome::Skipped => {
-            let counts = format_counts(projected, server_count);
-            output::plain(format!("  {name:<16} {indicator:<8}  {counts}"));
-        }
-    }
-}
-
-/// Format the projected-vs-server counts bracket.
-fn format_counts(projected: usize, server_count: Option<i64>) -> String {
-    match server_count {
-        Some(sc) => format!("[{projected} projected / {sc} server]"),
-        None => format!("[{projected} projected / ? server]"),
-    }
-}
-
-/// Degraded render path: no API available. Shows cursor presence only.
-fn render_degraded(config: &Config) {
+/// Degraded item list: no API available. Uses cursor presence to infer staleness.
+fn degraded_items(config: &Config) -> Vec<ContextStatus> {
     let mut names = config.contexts.clone();
     names.sort();
-    for ctx_name in &names {
-        let cursor = read_cursor(&config.state_dir, ctx_name).ok().flatten();
-        let indicator = if cursor.is_some() { "cached" } else { "—" };
-        let pulled = cursor
-            .map(|c| format!("  (last pulled: {})", c.pulled_at.format("%Y-%m-%d")))
-            .unwrap_or_else(|| "  (not projected)".to_string());
-        output::plain(format!("  {ctx_name:<16} {indicator:<8}{pulled}"));
-    }
+    names
+        .iter()
+        .map(|ctx_name| {
+            let cursor = read_cursor(&config.state_dir, ctx_name).ok().flatten();
+            let staleness = if cursor.is_some() {
+                "skipped"
+            } else {
+                "not-projected"
+            };
+            let owner = config.owner_for_context(ctx_name);
+            let projected = count_projected_md_files(&config.vault_root, &owner, ctx_name);
+            ContextStatus {
+                name: ctx_name.clone(),
+                staleness: staleness.to_string(),
+                projected: projected as u64,
+                server: None,
+            }
+        })
+        .collect()
 }
 
 /// Count `.md` files under `<vault_root>/<owner>/<context>/<doc_type>/*.md`
@@ -237,5 +237,38 @@ mod tests {
             1,
             "only .md files counted"
         );
+    }
+
+    #[test]
+    fn render_status_report_json_shape() {
+        let report = StatusReport {
+            contexts: vec![ContextStatus {
+                name: "temper".to_string(),
+                staleness: "fresh".to_string(),
+                projected: 42,
+                server: Some(42),
+            }],
+        };
+        let out =
+            crate::format::render(&report, crate::format::OutputFormat::Json).expect("json render");
+        assert!(out.contains("\"contexts\""), "json: {out}");
+        assert!(out.contains("\"staleness\": \"fresh\""), "json: {out}");
+        assert!(out.contains("\"projected\": 42"), "json: {out}");
+    }
+
+    #[test]
+    fn render_status_report_toon_includes_context_name() {
+        let report = StatusReport {
+            contexts: vec![ContextStatus {
+                name: "temper".to_string(),
+                staleness: "fresh".to_string(),
+                projected: 42,
+                server: Some(42),
+            }],
+        };
+        let out =
+            crate::format::render(&report, crate::format::OutputFormat::Toon).expect("toon render");
+        assert!(out.contains("temper"), "toon: {out}");
+        assert!(out.contains("fresh"), "toon: {out}");
     }
 }

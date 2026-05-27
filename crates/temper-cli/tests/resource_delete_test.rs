@@ -35,8 +35,14 @@ fn rejects_invalid_doctype() {
 
     // `force=true` so the only thing that can fail before a network call
     // is `DocType::from_str` rejecting the unknown doctype.
-    let result =
-        temper_cli::commands::resource::delete(&config, "widget", "any-slug", Some("myapp"), true);
+    let result = temper_cli::commands::resource::delete(
+        &config,
+        "widget",
+        "any-slug",
+        Some("myapp"),
+        true,
+        None,
+    );
 
     let err = result.expect_err("invalid doctype must error before the API call");
     let msg = format!("{err}");

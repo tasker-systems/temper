@@ -81,19 +81,20 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
         Commands::Init {
             path,
             no_interactive,
+            format,
         } => {
             let vault_path = path
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-            temper_cli::commands::init::run(&vault_path, no_interactive, true)
+            temper_cli::commands::init::run(&vault_path, no_interactive, true, format)
         }
-        Commands::Check { quiet } => {
+        Commands::Check { quiet, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::check::run(&config, quiet)
+            temper_cli::commands::check::run(&config, quiet, format)
         }
-        Commands::Status { verbose } => {
+        Commands::Status { verbose, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::status::run(&config, verbose)
+            temper_cli::commands::status::run(&config, verbose, format)
         }
         Commands::Events {
             context,
@@ -212,6 +213,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     pr,
                     status,
                     body,
+                    format,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
                         slug: &slug,
@@ -238,6 +240,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         pr: pr.as_deref(),
                         status: status.as_deref(),
                         body,
+                        format,
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
@@ -246,12 +249,14 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     r#type,
                     context,
                     force,
+                    format,
                 } => temper_cli::commands::resource::delete(
                     &config,
                     &r#type,
                     &slug,
                     context.as_deref(),
                     force,
+                    format,
                 ),
             }
         }
@@ -263,15 +268,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     temper_cli::commands::context_cmd::create_remote(client, &name).await
                 })
             }),
-            ContextAction::List => {
+            ContextAction::List { format } => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
-                temper_cli::commands::context_cmd::list(&config)
+                temper_cli::commands::context_cmd::list(&config, format)
             }
         },
         Commands::Warmup { context, format } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
-            let format = temper_cli::format::resolve_format_str(format.as_deref());
+            let format = temper_cli::format::OutputFormat::resolve(format.as_deref());
             temper_cli::commands::warmup::run(&config, context, format)
         }
         Commands::Team { action } => match action {
@@ -282,10 +287,12 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             TeamAction::Leave { team: _ } => temper_cli::commands::team::leave(),
         },
         Commands::Auth { action } => match action {
-            AuthAction::Login => temper_cli::commands::auth::login(),
-            AuthAction::Token { provider } => temper_cli::commands::auth::token(&provider),
-            AuthAction::Logout => temper_cli::commands::auth::logout(),
-            AuthAction::Status => temper_cli::commands::auth::status(),
+            AuthAction::Login { format } => temper_cli::commands::auth::login(format),
+            AuthAction::Token { provider, format } => {
+                temper_cli::commands::auth::token(&provider, format)
+            }
+            AuthAction::Logout { format } => temper_cli::commands::auth::logout(format),
+            AuthAction::Status { format } => temper_cli::commands::auth::status(format),
             AuthAction::ExportToken => temper_cli::commands::auth::export_token(),
         },
         Commands::Skill { action } => {

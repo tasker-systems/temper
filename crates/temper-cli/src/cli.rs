@@ -45,16 +45,26 @@ pub enum Commands {
         /// Skip interactive prompts
         #[arg(long)]
         no_interactive: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise).
+        /// Only active in non-interactive mode; TTY wizard always uses styled output.
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Check vault integrity and tool health
     Check {
         #[arg(long)]
         quiet: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Show vault status overview
     Status {
         #[arg(long)]
         verbose: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Show recent vault events
     Events {
@@ -125,7 +135,7 @@ pub enum Commands {
         /// Maximum results (default 10)
         #[arg(long)]
         limit: Option<i64>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
         /// Use text-only search (no local embedding needed)
@@ -190,7 +200,7 @@ pub enum ResourceAction {
         /// Mutually exclusive with --body. URL detected by http:// or https:// prefix.
         #[arg(long, conflicts_with = "body")]
         from: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
     },
@@ -214,7 +224,7 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
     },
@@ -228,7 +238,7 @@ pub enum ResourceAction {
         /// Filter by context
         #[arg(long)]
         context: Option<String>,
-        /// Output format (pretty, no-tty, json — auto-detected from TTY by default)
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
         #[arg(long)]
         format: Option<String>,
         /// Show graph edges connected to this resource
@@ -318,6 +328,9 @@ pub enum ResourceAction {
         /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
         #[arg(long)]
         body: Option<String>,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Delete a resource (cloud-first soft-delete; local cleanup as tail in local mode)
     ///
@@ -338,6 +351,9 @@ pub enum ResourceAction {
         /// Skip the local-file confirmation prompt
         #[arg(long)]
         force: bool,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
 }
 
@@ -356,13 +372,21 @@ pub enum ContextAction {
         name: String,
     },
     /// List configured contexts
-    List,
+    List {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
 }
 
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
     /// Log in via browser OAuth (PKCE flow)
-    Login,
+    Login {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Store a JWT directly, reading from stdin (avoids shell-history /
     /// `ps` / `/proc` leakage). Usage:
     ///   temper auth export-token | temper auth token
@@ -372,11 +396,22 @@ pub enum AuthAction {
         /// `auth0:DOMAIN` for custom Auth0 tenants.
         #[arg(long, default_value = "auth0")]
         provider: String,
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
     },
     /// Clear stored credentials
-    Logout,
+    Logout {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Show current auth status
-    Status,
+    Status {
+        /// Output format: json | toon (default: toon on TTY, json otherwise)
+        #[arg(long)]
+        format: Option<String>,
+    },
     /// Export a refreshed access token (local mode only).
     ///
     /// Token goes to stdout (plain JWT, pipeable); security warning goes to

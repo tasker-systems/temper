@@ -3,7 +3,7 @@ use tempfile::TempDir;
 #[test]
 fn test_check_valid_vault() {
     let dir = TempDir::new().unwrap();
-    temper_cli::commands::init::run(dir.path(), true, false).unwrap();
+    temper_cli::commands::init::run(dir.path(), true, false, None).unwrap();
 
     let config = temper_cli::config::Config {
         vault_root: dir.path().to_path_buf(),
@@ -14,6 +14,6 @@ fn test_check_valid_vault() {
         profile_slug: None,
     };
 
-    let result = temper_cli::commands::check::run(&config, false);
+    let result = temper_cli::commands::check::run(&config, false, None);
     assert!(result.is_ok());
 }

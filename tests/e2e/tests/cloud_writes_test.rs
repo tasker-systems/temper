@@ -296,6 +296,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: None,
+                    format: None,
                 },
             )
             .expect("cloud meta-only update must succeed")
@@ -447,6 +448,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: Some(body_flag),
+                    format: None,
                 },
             )
             .expect("cloud body+meta update must succeed")
@@ -599,6 +601,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: Some(body_flag),
+                    format: None,
                 },
             )
             .expect("cloud body-only update must succeed")
@@ -740,6 +743,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
                     pr: None,
                     status: None,
                     body: Some(body_flag),
+                    format: None,
                 },
             )
         })
@@ -892,6 +896,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: Some(body_flag2),
+                    format: None,
                 },
             )
             .expect("second (identical) PATCH must succeed")
@@ -1231,6 +1236,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
                     pr: None,
                     status: None,
                     body: None, // meta-only, no chunks_packed needed
+                    format: None,
                 },
             )
             .expect("cloud meta-only update must succeed")
@@ -1346,6 +1352,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
                 &slug_for_delete,
                 Some("myapp"),
                 true, // force — accepted for CLI compatibility; cloud delete is non-interactive
+                None,
             )
             .expect("cloud delete should succeed")
         })

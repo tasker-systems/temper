@@ -87,23 +87,6 @@ pub fn truncate_snippet(text: &str, max_chars: usize) -> String {
     }
 }
 
-/// Format cloud search results as human-readable text lines.
-pub fn format_text(results: &[UnifiedSearchResultRow]) -> Vec<String> {
-    let mut lines = Vec::new();
-    for (i, r) in results.iter().enumerate() {
-        lines.push(format!(
-            "{}. {} (score: {:.2}, via {})",
-            i + 1,
-            r.title,
-            r.combined_score,
-            r.origin
-        ));
-        lines.push(format!("   {}", r.slug));
-        lines.push(String::new());
-    }
-    lines
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,24 +152,25 @@ mod tests {
     }
 
     #[test]
-    fn test_format_text_includes_score_and_origin() {
-        let row = UnifiedSearchResultRow {
+    fn render_search_results_json_is_passthrough_array() {
+        use temper_core::types::api::UnifiedSearchResultRow;
+        let rows: Vec<UnifiedSearchResultRow> = vec![UnifiedSearchResultRow {
             resource_id: uuid::Uuid::nil(),
-            title: "Test".to_string(),
-            slug: "test".to_string(),
-            kb_uri: "kb://x/y/z".to_string(),
-            origin_uri: "file://...".to_string(),
+            title: "Test Resource".to_string(),
+            slug: "test-resource".to_string(),
+            kb_uri: "kb://temper/test-resource".to_string(),
+            origin_uri: "file:///some/path.md".to_string(),
             context: None,
             doc_type: "task".to_string(),
             fts_score: 0.5,
             vector_score: 0.0,
             combined_score: 0.5,
             origin: "fts".to_string(),
-        };
-        let lines = format_text(&[row]);
-        assert!(lines[0].contains("Test"));
-        assert!(lines[0].contains("0.50"));
-        assert!(lines[0].contains("fts"));
-        assert!(lines[1].contains("test"));
+        }];
+        let out =
+            crate::format::render(&rows, crate::format::OutputFormat::Json).expect("json render");
+        assert!(out.starts_with('['), "json should be an array: {out}");
+        assert!(out.contains("\"slug\""), "json: {out}");
+        assert!(out.contains("\"title\""), "json: {out}");
     }
 }

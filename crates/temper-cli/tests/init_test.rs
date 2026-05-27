@@ -5,7 +5,7 @@ fn test_init_creates_vault_structure() {
     let dir = TempDir::new().unwrap();
     let vault_path = dir.path().join("myvault");
 
-    temper_cli::commands::init::run(&vault_path, true, false).unwrap();
+    temper_cli::commands::init::run(&vault_path, true, false, None).unwrap();
 
     // Cloud-only invariants: vault root + .temper/ state dir exist;
     // no manifest.json or events.jsonl sidecars; no per-context subdirs.

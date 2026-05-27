@@ -44,22 +44,8 @@ pub fn run(
         Box::pin(async move { search_actions::search_api(client, params).await })
     })?;
 
-    if results.is_empty() {
-        if fmt == OutputFormat::Json {
-            crate::output::plain("[]");
-        } else {
-            crate::output::warning("No results found.");
-        }
-        return Ok(());
-    }
-
-    if fmt == OutputFormat::Json {
-        crate::output::plain(serde_json::to_string_pretty(&results)?);
-    } else {
-        for line in search_actions::format_text(&results) {
-            crate::output::plain(line);
-        }
-    }
+    let rendered = crate::format::render(&results, fmt)?;
+    crate::output::plain(rendered);
 
     Ok(())
 }

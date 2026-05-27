@@ -94,20 +94,34 @@ pub async fn create_remote(client: &temper_client::TemperClient, name: &str) -> 
 }
 
 /// List configured contexts.
-pub fn list(config: &Config) -> Result<()> {
-    if config.contexts.is_empty() {
-        output::hint("No contexts configured.");
-        return Ok(());
-    }
-
+pub fn list(config: &Config, format: Option<String>) -> Result<()> {
     let mut names = config.contexts.clone();
     names.sort();
 
-    output::plain(format!("{:<30} CONTEXT", "NAME"));
-    output::dim("-".repeat(40));
-    for name in &names {
-        output::plain(format!("{:<30} {name}", name));
+    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
+    let rendered = crate::format::render(&names, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn render_context_list_json_is_array_of_strings() {
+        let contexts = vec!["temper".to_string(), "knowledge".to_string()];
+        let out = crate::format::render(&contexts, crate::format::OutputFormat::Json)
+            .expect("json render");
+        assert!(out.contains("\"temper\""), "json: {out}");
+        assert!(out.contains("\"knowledge\""), "json: {out}");
+        assert!(out.starts_with('['), "json should be an array: {out}");
     }
 
-    Ok(())
+    #[test]
+    fn render_context_list_toon_contains_context_names() {
+        let contexts = vec!["temper".to_string(), "knowledge".to_string()];
+        let out = crate::format::render(&contexts, crate::format::OutputFormat::Toon)
+            .expect("toon render");
+        assert!(out.contains("temper"), "toon: {out}");
+        assert!(out.contains("knowledge"), "toon: {out}");
+    }
 }
