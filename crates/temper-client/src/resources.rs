@@ -6,7 +6,9 @@ use uuid::Uuid;
 use crate::error::Result;
 use crate::http::HttpClient;
 use temper_core::types::graph::GraphEdgeRow;
-use temper_core::types::managed_meta::{MetaUpdatePayload, ResourceMetaResponse};
+use temper_core::types::managed_meta::{
+    MetaUpdatePayload, ResourceMetaListResponse, ResourceMetaResponse,
+};
 use temper_core::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceListParams,
     ResourceListResponse, ResourceRow, ResourceUpdateRequest,
@@ -32,6 +34,19 @@ impl<'a> ResourceClient<'a> {
     pub async fn list(&self, params: &ResourceListParams) -> Result<ResourceListResponse> {
         let token = self.http.resolve_token()?;
         let req = self.http.get("/api/resources").query(params);
+        self.http
+            .send_json(&Method::GET, "/api/resources", req, Some(&token))
+            .await
+    }
+
+    /// List visible resources with meta projection (`Vec<ResourceMetaResponse>`
+    /// rows). Sibling of [`ResourceClient::list`]; forces
+    /// `meta_only=true` on the wire.
+    pub async fn list_meta(&self, params: &ResourceListParams) -> Result<ResourceMetaListResponse> {
+        let mut params = params.clone();
+        params.meta_only = Some(true);
+        let token = self.http.resolve_token()?;
+        let req = self.http.get("/api/resources").query(&params);
         self.http
             .send_json(&Method::GET, "/api/resources", req, Some(&token))
             .await
@@ -147,5 +162,28 @@ impl<'a> ResourceClient<'a> {
         self.http
             .send_json(&Method::PUT, &path, req, Some(&token))
             .await
+    }
+}
+
+#[cfg(test)]
+mod meta_list_tests {
+    use super::*;
+
+    // Signature-level guard: confirms list_meta exists with the
+    // expected types. Use a named helper (not a closure) to avoid
+    // 'fn pointer lifetime' constraints; this still fails to compile
+    // if the signature drifts.
+    fn _assert_callable<'a>(
+        client: &'a ResourceClient<'a>,
+        params: &'a temper_core::types::resource::ResourceListParams,
+    ) -> impl std::future::Future<
+        Output = crate::error::Result<temper_core::types::managed_meta::ResourceMetaListResponse>,
+    > + 'a {
+        client.list_meta(params)
+    }
+
+    #[test]
+    fn list_meta_signature_check() {
+        // Compile-time only.
     }
 }
