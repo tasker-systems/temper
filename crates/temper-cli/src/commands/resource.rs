@@ -754,7 +754,7 @@ pub struct UpdateParams<'a> {
     /// Body source flag: `None` (rely on stdin auto-detection — non-empty piped
     /// stdin updates the body; empty implicit stdin means no body update),
     /// `Some("-")` (explicit stdin; errors if empty), or `Some("@<path>")`
-    /// (read from file; errors if empty). Applies in both local and cloud mode.
+    /// (read from file; errors if empty).
     pub body: Option<String>,
     /// Output format: `None` auto-detects from TTY; `Some("json")` or `Some("toon")` explicit.
     pub format: Option<String>,

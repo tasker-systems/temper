@@ -74,7 +74,7 @@ Related tasks, concepts, or contexts touched
 What to pick up next session
 EOF
 
-temper resource update <slug> --type task --stage done
+temper resource update <slug> --type task --context <ctx> --stage done
 ```
 
 If the overall work is not yet finished, the next session picks up from the trail left here.

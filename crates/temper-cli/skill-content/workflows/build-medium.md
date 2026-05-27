@@ -58,5 +58,5 @@ Related tasks, concepts, or contexts touched
 What to pick up next session
 EOF
 
-temper resource update <slug> --type task --stage done
+temper resource update <slug> --type task --context <ctx> --stage done
 ```

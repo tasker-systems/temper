@@ -71,7 +71,12 @@ fn test_skill_install_writes_directory() {
     let config = test_config_with_global(&dir);
 
     let skill_dir = dir.path().join("skill-output");
-    temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+    let report = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+    assert!(
+        !report.is_no_op(),
+        "first install into empty dir should report changed files"
+    );
+    assert_eq!(report.changed.len(), report.total);
 
     assert!(skill_dir.join("SKILL.md").exists());
     assert!(skill_dir.join("reference.md").exists());
@@ -84,6 +89,31 @@ fn test_skill_install_writes_directory() {
     assert!(skill_dir.join("workflows/plan-medium.md").exists());
     assert!(skill_dir.join("workflows/plan-large.md").exists());
     assert!(skill_dir.join("guidance").is_dir());
+
+    unsafe {
+        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
+    }
+}
+
+#[test]
+fn test_skill_install_is_idempotent() {
+    let dir = TempDir::new().unwrap();
+    let config = test_config_with_global(&dir);
+
+    let skill_dir = dir.path().join("skill-output");
+    temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+    let second = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+    assert!(
+        second.is_no_op(),
+        "second install with no changes should be a no-op, got: {:?}",
+        second.changed
+    );
+
+    // Mutating one file should make the next install report exactly that file.
+    let mutated = skill_dir.join("subagent-guidance.md");
+    std::fs::write(&mutated, "stale\n").unwrap();
+    let third = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+    assert_eq!(third.changed, vec!["subagent-guidance.md".to_string()]);
 
     unsafe {
         std::env::remove_var("TEMPER_GLOBAL_CONFIG");
