@@ -156,8 +156,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     goal,
                     status,
                     format,
-                    meta_only: _meta_only,
-                    fields: _fields,
+                    meta_only,
+                    fields,
                 } => {
                     let format = temper_cli::format::resolve_format_str(format.as_deref());
                     temper_cli::commands::resource::list(
@@ -170,6 +170,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             goal: goal.as_deref(),
                             status: status.as_deref(),
                             format,
+                            meta_only,
+                            fields: &fields,
                         },
                     )
                 }

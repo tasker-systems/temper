@@ -274,6 +274,8 @@ pub struct ListParams<'a> {
     pub goal: Option<&'a str>,
     pub status: Option<&'a str>,
     pub format: &'a str,
+    pub meta_only: bool,
+    pub fields: &'a [String],
 }
 
 /// Cloud-first list: call the server, return rows sorted server-side
@@ -304,8 +306,6 @@ async fn fetch_list_rows(
 
 /// List resources of a given type (unified pipeline for all doc types).
 pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
-    use crate::actions::runtime;
-
     // Hints for filters that only apply to certain types (unchanged).
     if params.stage.is_some() && params.doc_type != "task" {
         output::hint(format!(
@@ -332,6 +332,12 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
         }
     }
 
+    if params.meta_only {
+        return list_meta_only(config, params);
+    }
+
+    use crate::actions::runtime;
+
     let fmt = crate::format::OutputFormat::resolve(Some(params.format));
     let doc_type = params.doc_type.to_string();
     let context = params.context.map(ToString::to_string);
@@ -351,6 +357,60 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     })?;
 
     let rendered = crate::format::render(&rows, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+/// `list --meta-only`: call client.resources().list_meta() and emit
+/// the ResourceMetaListResponse shape. Applies the shared top-level
+/// projection filter to each row in the envelope when `fields` is
+/// non-empty; the envelope keys (`rows`, `total`, `facets`) are
+/// preserved untouched.
+fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
+    use crate::actions::runtime;
+    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
+
+    let limit = params.limit.unwrap_or(50);
+    let api_params = ResourceListParams {
+        doc_type_name: Some(params.doc_type.to_string()),
+        context_name: params.context.map(ToString::to_string),
+        sort: Some(ResourceSortField::Updated),
+        order: Some(SortOrder::Desc),
+        limit: Some(limit as i64),
+        meta_only: Some(true),
+        ..Default::default()
+    };
+    let format_str = params.format.to_string();
+    let fields_owned: Vec<String> = params.fields.to_vec();
+
+    let _ = config; // config carried for symmetry with other list helpers
+
+    let response = runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .list_meta(&api_params)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
+    let mut envelope = serde_json::to_value(&response)
+        .map_err(|e| TemperError::Api(format!("meta list serialize: {e}")))?;
+
+    if !fields_owned.is_empty() {
+        let rows = envelope
+            .get_mut("rows")
+            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
+            .take();
+        let filtered_rows =
+            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "resource_id")
+                .map_err(map_projection_error)?;
+        envelope["rows"] = filtered_rows;
+    }
+
+    let fmt = crate::format::OutputFormat::resolve(Some(&format_str));
+    let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
     Ok(())
 }
@@ -1423,6 +1483,59 @@ mod resource_show_render_tests {
             out.contains("\"slug\""),
             "metadata should be preserved: {out}"
         );
+    }
+}
+
+#[cfg(test)]
+mod list_meta_only_tests {
+    use temper_core::projection::apply_top_level_filter;
+
+    #[test]
+    fn list_meta_filter_applies_per_row_and_preserves_envelope() {
+        // Build a stub ResourceMetaListResponse-shaped JSON
+        let envelope = serde_json::json!({
+            "rows": [
+                {
+                    "resource_id": "11111111-1111-1111-1111-111111111111",
+                    "managed_meta": {"stage": "in-progress"},
+                    "open_meta": {"tags": []},
+                    "managed_hash": "sha256:a",
+                    "open_hash": "sha256:b"
+                },
+                {
+                    "resource_id": "22222222-2222-2222-2222-222222222222",
+                    "managed_meta": {"stage": "done"},
+                    "open_meta": null,
+                    "managed_hash": "sha256:c",
+                    "open_hash": "sha256:d"
+                }
+            ],
+            "total": 2,
+            "facets": {"doc_type": {"task": 2}}
+        });
+
+        // Filter the rows array (the action layer will apply the filter
+        // to envelope.rows specifically, not to the whole envelope).
+        let rows = envelope.get("rows").cloned().expect("rows");
+        let filtered_rows =
+            apply_top_level_filter(rows, &["managed_meta".to_string()], "resource_id")
+                .expect("filter");
+
+        // Each row should have only resource_id + managed_meta
+        let arr = filtered_rows.as_array().expect("array");
+        assert_eq!(arr.len(), 2);
+        for row in arr {
+            assert!(row.get("resource_id").is_some(), "anchor missing in {row}");
+            assert!(
+                row.get("managed_meta").is_some(),
+                "managed_meta missing in {row}"
+            );
+            assert!(
+                row.get("open_meta").is_none(),
+                "open_meta should be dropped"
+            );
+            assert!(row.get("managed_hash").is_none(), "hash should be dropped");
+        }
     }
 }
 
