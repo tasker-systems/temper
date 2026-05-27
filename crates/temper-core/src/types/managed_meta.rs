@@ -143,6 +143,23 @@ pub struct ResourceMetaResponse {
     pub open_hash: String,
 }
 
+/// Paginated meta-only response for resource list endpoints.
+///
+/// Mirror of [`crate::types::resource::ResourceListResponse`] with the
+/// row type swapped to [`ResourceMetaResponse`]. Returned by
+/// `GET /api/resources?meta_only=true`. Facets and total are computed
+/// identically to the default list response — projection-independent.
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(feature = "typescript", ts(export, export_to = "managed_meta.ts"))]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+pub struct ResourceMetaListResponse {
+    pub rows: Vec<ResourceMetaResponse>,
+    pub total: i64,
+    pub facets: crate::types::resource::ResourceFacets,
+}
+
 /// Payload for meta-only sync updates that do not require re-chunking.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
@@ -188,6 +205,8 @@ pub struct ResourceManifestRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::resource::ResourceFacets;
+    use std::collections::HashMap;
     use uuid::Uuid;
 
     #[test]
@@ -403,5 +422,24 @@ mod tests {
         let json = r#"{"temper-slug":"improve-sync"}"#;
         let parsed: ManagedMeta = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.slug.as_deref(), Some("improve-sync"));
+    }
+
+    #[test]
+    fn resource_meta_list_response_roundtrip() {
+        let response = ResourceMetaListResponse {
+            rows: vec![],
+            total: 0,
+            facets: ResourceFacets {
+                doc_type: HashMap::new(),
+            },
+        };
+        let json = serde_json::to_value(&response).expect("serialize");
+        let back: ResourceMetaListResponse =
+            serde_json::from_value(json.clone()).expect("deserialize");
+        assert_eq!(back.total, 0);
+        assert!(back.rows.is_empty());
+        assert_eq!(json["rows"], serde_json::json!([]));
+        assert_eq!(json["total"], 0);
+        assert!(json["facets"].is_object());
     }
 }

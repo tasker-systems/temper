@@ -110,6 +110,7 @@ pub struct ResourceListParams {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceFacets {
     pub doc_type: std::collections::HashMap<String, i64>,
 }
@@ -119,6 +120,7 @@ pub struct ResourceFacets {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "resource.ts"))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceListResponse {
     pub rows: Vec<ResourceRow>,
     pub total: i64,
