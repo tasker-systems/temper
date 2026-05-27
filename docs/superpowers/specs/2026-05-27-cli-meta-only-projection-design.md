@@ -385,7 +385,10 @@ flow.
 - Nested-path rejection: `--fields managed_meta.stage` produces non-zero
   exit and a stderr message containing `jq` invocation.
 
-## Out of Scope (with reasons)
+## Design Paths Rejected
+
+These are not deferred — they are deliberate rejections on design merit.
+The reasons should not erode under future pressure.
 
 ### MCP `meta_only` parameter
 
@@ -394,41 +397,50 @@ by default (`include_content=false` skips body fetch; result is
 `EnrichedResource`, which is row + meta). Adding `meta_only` would force
 the narrower `ResourceMetaResponse` shape, which is *strictly poorer*
 than `EnrichedResource` (loses joined display fields like `context_name`,
-`doc_type_name`, `owner_handle`). MCP gets the `fields` projection
-parameter only — that's the actual load-bearing gap for MCP, since MCP
-responses cannot be piped through `jq`.
+`doc_type_name`, `owner`). MCP gets the `fields` projection parameter
+only — that's the actual load-bearing gap for MCP, since MCP responses
+cannot be piped through `jq`.
 
 ### `--fields` with nested paths or jq expressions
 
 Top-level keys only is a deliberate boundary. Anything deeper is a
 projection that wants the full power of `jq`, and the CLI emits
-`jq`-pipeable json, so the path is already open. Embedding `jaq-core` to
-support nested paths would mean owning a jq compatibility layer; outside
-this task's scope.
+`jq`-pipeable json, so the path is already open. Embedding `jaq-core`
+to support nested paths would mean owning a jq compatibility layer —
+not a scope choice, a category rejection. The boundary lives at "we do
+not own a query language."
 
 ### YAML output / on-disk frontmatter parity
 
-PR #97 closed the bespoke-output-shape door. The on-disk YAML frontmatter
-exists for humans-and-Obsidian; the CLI does not aim for parity with it.
-Agents who want the on-disk shape can `cat` the projected file directly
-(when the projection cache is populated).
+PR #97 closed the bespoke-output-shape door. The on-disk YAML
+frontmatter exists for humans-and-Obsidian; the CLI does not aim for
+parity with it. Agents who want the on-disk shape can `cat` the
+projected file directly (when the projection cache is populated). This
+is not a "yet" — it is a "no", load-bearing on the cloud-only-vault
+direction.
+
+## Deferred
+
+These are in-scope-elsewhere or in-scope-later. Capturing them keeps
+this design honest about what it touches and what it doesn't.
 
 ### Skill content refresh
 
-The temper skill (SKILL.md, workflows, reference.md) has stale
-content from the local-vault era — including `task start` sequences that
+The temper skill (SKILL.md, workflows, reference.md) has stale content
+from the local-vault era — including `task start` sequences that
 predate the requirement to pass `--context` explicitly. This is real
-work, but it lives in sibling task `2026-05-27-qol-for-get-meta-and-skill-refresh`.
-That task is sequenced *after* this one so SKILL.md is touched once
-(dropping dead vault-mode references and promoting the new `--meta-only`
-flag in the same pass).
+work, but it lives in sibling task
+`2026-05-27-qol-for-get-meta-and-skill-refresh`. That task is sequenced
+*after* this one so SKILL.md is touched once (dropping dead vault-mode
+references and promoting the new `--meta-only` flag in the same pass).
 
 ### Resource-by-slug for the meta endpoint
 
 `GET /api/resources/{id}/meta` is by-ID. The CLI resolves slug-to-id
-through the existing show path before calling `get_meta`. Adding a
-by-slug meta endpoint is doable but unmotivated for this task — the
-CLI's slug-to-id resolution is already a single cheap call.
+through the existing show path before calling `get_meta`. A by-slug
+meta endpoint is doable but unmotivated for this task — the CLI's
+slug-to-id resolution is already a single cheap call. Add it when a
+direct caller (not the CLI) demonstrates the need.
 
 ## Connections
 
