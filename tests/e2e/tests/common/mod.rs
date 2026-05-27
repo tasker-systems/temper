@@ -86,14 +86,21 @@ fn temper_bin_path() -> std::path::PathBuf {
 
 /// Run the `temper` CLI binary against the in-process Axum server.
 ///
+/// The CLI's `load_global_config` requires the global config file to
+/// exist (unlike `temper-core::load_config_from` which returns defaults
+/// when absent). In CI the runner has no `~/.config/temper/config.toml`,
+/// so this helper materializes the test app's `TemperConfig` to a
+/// temp TOML file and points `TEMPER_GLOBAL_CONFIG` at it.
+///
 /// Sets `TEMPER_API_URL` to the test server's URL and `TEMPER_TOKEN`
 /// to the test JWT so the CLI hits the real handler stack without
 /// needing a separate auth round-trip. Spawned via `spawn_blocking`
 /// so we don't block the runtime.
 ///
 /// Verified env-var names against `crates/temper-client/src/config.rs`
-/// (`TEMPER_API_URL`) and `crates/temper-cli/src/actions/runtime.rs`
-/// (`TEMPER_TOKEN`).
+/// (`TEMPER_API_URL`), `crates/temper-cli/src/actions/runtime.rs`
+/// (`TEMPER_TOKEN`), and `crates/temper-core/src/types/config.rs`
+/// (`TEMPER_GLOBAL_CONFIG`).
 pub async fn run_temper_cli(
     app: &E2eTestApp,
     args: &[&str],
@@ -102,10 +109,19 @@ pub async fn run_temper_cli(
     let url = app.base_url();
     let token = app.token.clone();
     let args_owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+
+    // Materialize the test TemperConfig to a TOML file inside the test's
+    // vault temp directory so the spawned CLI can read it. The path lives
+    // alongside the vault projection so it shares the test's cleanup.
+    let config_toml = toml::to_string(&app.config).expect("serialize test TemperConfig to TOML");
+    let config_path = app.vault_dir.path().join("test-temper-config.toml");
+    std::fs::write(&config_path, config_toml).expect("write test config for CLI invocation");
+
     tokio::task::spawn_blocking(move || {
         std::process::Command::new(&bin)
             .env("TEMPER_API_URL", &url)
             .env("TEMPER_TOKEN", &token)
+            .env("TEMPER_GLOBAL_CONFIG", &config_path)
             .args(&args_owned)
             .output()
     })
