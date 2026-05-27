@@ -77,6 +77,13 @@ pub struct ListResourcesInput {
     pub limit: Option<i64>,
     /// Pagination offset.
     pub offset: Option<i64>,
+    /// Subselect top-level response keys for each row. Anchor key `id`
+    /// is always preserved per row. Nested paths (containing `.`) are
+    /// rejected with a hint pointing at `jq` — MCP callers should
+    /// perform deeper projection at their own end. When None or empty,
+    /// no filtering is applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fields: Option<Vec<String>>,
 }
 
 /// MCP input for update_resource.
@@ -538,8 +545,34 @@ pub async fn list_resources(
         })?;
 
     let enriched = enrich_resources(pool, profile_id, &response.rows).await?;
+
+    let array_value = serde_json::to_value(&enriched)
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
+
+    let filtered = if let Some(fields) = input.fields.as_deref() {
+        temper_core::projection::apply_top_level_filter(array_value, fields, "id")
+            .map_err(|e| match e {
+                temper_core::projection::ProjectionError::DottedPath { hint } => {
+                    rmcp::ErrorData::invalid_params(
+                        format!(
+                            "fields supports top-level keys only; use jq for nested projection: {hint}"
+                        ),
+                        None,
+                    )
+                }
+                temper_core::projection::ProjectionError::EmptyField => {
+                    rmcp::ErrorData::invalid_params(
+                        "fields contained an empty entry".to_string(),
+                        None,
+                    )
+                }
+            })?
+    } else {
+        array_value
+    };
+
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
-        to_text(&enriched),
+        serde_json::to_string_pretty(&filtered).unwrap_or_else(|_| "[]".to_string()),
     )]))
 }
 
@@ -819,5 +852,46 @@ mod fields_projection_tests {
             filtered.get("open_meta").is_none(),
             "open_meta should be dropped"
         );
+    }
+
+    #[test]
+    fn list_resources_input_accepts_fields() {
+        // Compile-time check that ListResourcesInput grows the fields field.
+        let _input = ListResourcesInput {
+            context_name: None,
+            doc_type_name: None,
+            limit: None,
+            offset: None,
+            fields: Some(vec!["managed_meta".to_string()]),
+        };
+    }
+
+    #[test]
+    fn enriched_resource_array_filtered_by_fields() {
+        let value = serde_json::json!([
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "title": "A",
+                "managed_meta": {"stage": "done"}
+            },
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "title": "B",
+                "managed_meta": {"stage": "in-progress"}
+            }
+        ]);
+        let filtered = temper_core::projection::apply_top_level_filter(
+            value,
+            &["managed_meta".to_string()],
+            "id",
+        )
+        .expect("filter");
+        let arr = filtered.as_array().expect("array");
+        assert_eq!(arr.len(), 2);
+        for row in arr {
+            assert!(row.get("id").is_some());
+            assert!(row.get("managed_meta").is_some());
+            assert!(row.get("title").is_none());
+        }
     }
 }
