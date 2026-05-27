@@ -419,8 +419,14 @@ pub fn show(
     context: Option<&str>,
     format: &str,
     edges: bool,
+    meta_only: bool,
+    fields: &[String],
 ) -> Result<()> {
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
+
+    if meta_only {
+        return show_meta_only(config, doc_type, slug, context, format, fields);
+    }
 
     match doc_type {
         "task" => crate::commands::task::show(config, slug, context, format),
@@ -434,6 +440,77 @@ pub fn show(
     }
 
     Ok(())
+}
+
+/// `show --meta-only`: hit GET /api/resources/{id}/meta and emit the
+/// ResourceMetaResponse shape under the chosen format. Applies the
+/// shared top-level projection filter when `fields` is non-empty.
+///
+/// Cloud-only: resolves the resource id via `resolve_by_uri` using
+/// the same (owner, context, doc_type, slug) quadruple `show_generic`
+/// uses, then calls `get_meta` instead of `content`.
+fn show_meta_only(
+    config: &Config,
+    doc_type: &str,
+    slug: &str,
+    context: Option<&str>,
+    format: &str,
+    fields: &[String],
+) -> Result<()> {
+    use crate::actions::runtime;
+
+    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
+
+    let config_clone = config.clone();
+    let doc_type_inner = doc_type.to_string();
+    let slug_inner = slug.to_string();
+    let ctx_inner = context.map(str::to_string);
+    let fields_inner = fields.to_vec();
+
+    let meta = runtime::with_client(|client| {
+        Box::pin(async move {
+            let ctx = ctx_inner
+                .as_deref()
+                .ok_or_else(|| {
+                    TemperError::Project("no context specified — use --context <name>".into())
+                })?
+                .to_string();
+            let owner = config_clone.owner_for_context(&ctx);
+            let row = client
+                .resources()
+                .resolve_by_uri(&owner, &ctx, &doc_type_inner, &slug_inner)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let meta = client
+                .resources()
+                .get_meta(*row.id.as_uuid())
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            Ok(meta)
+        })
+    })?;
+
+    let value = serde_json::to_value(&meta)
+        .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
+    let filtered =
+        temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
+            .map_err(map_projection_error)?;
+    let fmt = crate::format::OutputFormat::resolve(Some(format));
+    let rendered = crate::format::render(&filtered, fmt)?;
+    println!("{rendered}");
+    Ok(())
+}
+
+fn map_projection_error(err: temper_core::projection::ProjectionError) -> TemperError {
+    use temper_core::projection::ProjectionError;
+    match err {
+        ProjectionError::DottedPath { hint } => TemperError::Project(format!(
+            "--fields supports top-level keys only; use jq for nested projection: {hint}"
+        )),
+        ProjectionError::EmptyField => {
+            TemperError::Project("--fields contained an empty field name".into())
+        }
+    }
 }
 
 /// Show a generic resource (goal, research, concept, decision).
@@ -1346,5 +1423,53 @@ mod resource_show_render_tests {
             out.contains("\"slug\""),
             "metadata should be preserved: {out}"
         );
+    }
+}
+
+#[cfg(test)]
+mod show_meta_only_tests {
+    use temper_core::projection::apply_top_level_filter;
+    use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
+
+    fn fake_meta_response() -> ResourceMetaResponse {
+        ResourceMetaResponse {
+            resource_id: temper_core::types::ResourceId::from(uuid::Uuid::nil()),
+            managed_meta: Some(ManagedMeta {
+                title: Some("test".to_string()),
+                ..Default::default()
+            }),
+            open_meta: Some(serde_json::json!({"tags": ["x"]})),
+            managed_hash: "sha256:test".to_string(),
+            open_hash: "sha256:test".to_string(),
+        }
+    }
+
+    #[test]
+    fn show_meta_only_fields_filter_preserves_anchor_and_managed_meta_only() {
+        let response = fake_meta_response();
+        let value = serde_json::to_value(&response).expect("serialize");
+        let filtered = apply_top_level_filter(value, &["managed_meta".to_string()], "resource_id")
+            .expect("filter");
+        assert!(filtered.get("resource_id").is_some(), "anchor missing");
+        assert!(
+            filtered.get("managed_meta").is_some(),
+            "managed_meta missing"
+        );
+        assert!(
+            filtered.get("open_meta").is_none(),
+            "open_meta should be filtered out"
+        );
+        assert!(
+            filtered.get("managed_hash").is_none(),
+            "managed_hash should be filtered out"
+        );
+    }
+
+    #[test]
+    fn show_meta_only_no_fields_returns_full_response() {
+        let response = fake_meta_response();
+        let value = serde_json::to_value(&response).expect("serialize");
+        let unfiltered = apply_top_level_filter(value.clone(), &[], "resource_id").expect("filter");
+        assert_eq!(unfiltered, value);
     }
 }

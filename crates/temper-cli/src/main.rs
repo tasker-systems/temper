@@ -179,8 +179,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     context,
                     format,
                     edges,
-                    meta_only: _meta_only,
-                    fields: _fields,
+                    meta_only,
+                    fields,
                 } => {
                     let format = temper_cli::format::resolve_format_str(format.as_deref());
                     temper_cli::commands::resource::show(
@@ -190,6 +190,8 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         context.as_deref(),
                         format,
                         edges,
+                        meta_only,
+                        &fields,
                     )
                 }
                 ResourceAction::Update {
