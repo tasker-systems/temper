@@ -15,8 +15,28 @@ use crate::state::AppState;
 
 use temper_core::operations::{Backend, CreateResource, DeleteResource, ResourceRef, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
-use temper_core::types::managed_meta::ManagedMeta;
+use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
 use temper_core::types::resource::{ContentResponse, DeleteResponse};
+
+/// Combined response for `GET /api/resources`.
+///
+/// Returned shape depends on the `meta_only` query parameter. utoipa
+/// represents this as `oneOf<ResourceListResponse, ResourceMetaListResponse>`.
+#[derive(serde::Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum ListResourcesResponse {
+    Default(ResourceListResponse),
+    Meta(ResourceMetaListResponse),
+}
+
+impl axum::response::IntoResponse for ListResourcesResponse {
+    fn into_response(self) -> axum::response::Response {
+        match self {
+            Self::Default(r) => axum::Json(r).into_response(),
+            Self::Meta(r) => axum::Json(r).into_response(),
+        }
+    }
+}
 
 /// Derive a URL-safe slug from a title.
 ///
@@ -42,7 +62,7 @@ fn slugify_title(title: &str) -> String {
     params(ResourceListParams),
     security(("bearer_auth" = [])),
     responses(
-        (status = 200, description = "Paginated list of visible resources with facets", body = ResourceListResponse),
+        (status = 200, description = "Paginated list of visible resources with facets, or meta-only rows when meta_only=true", body = ListResourcesResponse),
         (status = 401, description = "Unauthorized", body = ErrorBody),
     )
 )]
@@ -50,10 +70,16 @@ pub async fn list(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(params): Query<ResourceListParams>,
-) -> ApiResult<Json<ResourceListResponse>> {
-    resource_service::list_visible(&state.pool, auth.0.profile.id, params)
-        .await
-        .map(Json)
+) -> ApiResult<ListResourcesResponse> {
+    if params.meta_only.unwrap_or(false) {
+        let response =
+            resource_service::list_visible_meta(&state.pool, auth.0.profile.id, params).await?;
+        Ok(ListResourcesResponse::Meta(response))
+    } else {
+        let response =
+            resource_service::list_visible(&state.pool, auth.0.profile.id, params).await?;
+        Ok(ListResourcesResponse::Default(response))
+    }
 }
 
 #[utoipa::path(

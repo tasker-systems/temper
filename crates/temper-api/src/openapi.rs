@@ -2,11 +2,13 @@ use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
 use utoipa::{Modify, OpenApi};
 
 use crate::error::{ErrorBody, ErrorDetail};
+use crate::handlers::resources::ListResourcesResponse;
 use temper_core::types::api::{
     EventCursorResponse, EventRow, HealthResponse, ProfileUpdateRequest, SearchParams,
     SearchResultRow, UnifiedSearchResultRow,
 };
 use temper_core::types::context::ContextRowWithCounts;
+use temper_core::types::managed_meta::ResourceMetaListResponse;
 use temper_core::types::resource::{
     ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets, ResourceListResponse,
     ResourceRow, ResourceUpdateRequest,
@@ -42,6 +44,8 @@ use temper_core::types::resource::{
         HealthResponse,
         ResourceRow,
         ResourceListResponse,
+        ResourceMetaListResponse,
+        ListResourcesResponse,
         ResourceFacets,
         ResourceCreateRequest,
         ResourceUpdateRequest,
