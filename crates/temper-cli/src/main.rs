@@ -187,13 +187,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     let format = temper_cli::format::resolve_format_str(format.as_deref());
                     temper_cli::commands::resource::show(
                         &config,
-                        &r#type,
-                        &slug,
-                        context.as_deref(),
-                        format,
-                        edges,
-                        meta_only,
-                        &fields,
+                        temper_cli::commands::resource::ShowParams {
+                            doc_type: &r#type,
+                            slug: &slug,
+                            context: context.as_deref(),
+                            format,
+                            edges,
+                            meta_only,
+                            fields: &fields,
+                        },
                     )
                 }
                 ResourceAction::Update {

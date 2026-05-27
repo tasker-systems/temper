@@ -175,13 +175,15 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::show(
                 &cli_config2,
-                "session",
-                &slug_for_show,
-                Some("myapp"),
-                "text",
-                false, // edges
-                false, // meta_only
-                &[],   // fields
+                temper_cli::commands::resource::ShowParams {
+                    doc_type: "session",
+                    slug: &slug_for_show,
+                    context: Some("myapp"),
+                    format: "text",
+                    edges: false,
+                    meta_only: false,
+                    fields: &[],
+                },
             )
             .expect("cloud show must succeed for a freshly created resource")
         })
@@ -1445,13 +1447,15 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
             temper_cli::commands::resource::show(
                 &cli_config,
-                "research",
-                "edges-resolve-test",
-                Some("edgesctx"),
-                "text",
-                true,  // edges — the path under test
-                false, // meta_only
-                &[],   // fields
+                temper_cli::commands::resource::ShowParams {
+                    doc_type: "research",
+                    slug: "edges-resolve-test",
+                    context: Some("edgesctx"),
+                    format: "text",
+                    edges: true, // edges — the path under test
+                    meta_only: false,
+                    fields: &[],
+                },
             )
             .expect(
                 "cloud show --edges must succeed without a manifest entry; \

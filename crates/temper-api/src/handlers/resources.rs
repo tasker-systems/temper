@@ -22,7 +22,7 @@ use temper_core::types::resource::{ContentResponse, DeleteResponse};
 ///
 /// Returned shape depends on the `meta_only` query parameter. utoipa
 /// represents this as `oneOf<ResourceListResponse, ResourceMetaListResponse>`.
-#[derive(serde::Serialize, utoipa::ToSchema)]
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 #[serde(untagged)]
 pub enum ListResourcesResponse {
     Default(ResourceListResponse),

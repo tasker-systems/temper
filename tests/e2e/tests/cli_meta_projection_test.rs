@@ -274,3 +274,88 @@ async fn list_meta_only_returns_meta_list_response_shape(pool: sqlx::PgPool) {
     assert!(stdout.get("total").is_some(), "envelope missing total");
     assert!(stdout.get("facets").is_some(), "envelope missing facets");
 }
+
+/// `temper resource list --type task --context meta-cli --fields slug,stage --format json`
+/// (without --meta-only) should filter each ResourceRow in the envelope rows to
+/// include only the anchor field `id` plus the requested fields. Fields not in
+/// the selection (`title`, `created`, `updated`, `body_hash`) must be absent.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn list_default_with_fields_filters_response(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    app.client.profile().get().await.expect("profile");
+    app.client.contexts().create("meta-cli").await.expect("ctx");
+
+    let payload = IngestPayload {
+        title: "List Fields Test".to_string(),
+        origin_uri: "test://e2e/list-fields-test".to_string(),
+        context_name: "meta-cli".to_string(),
+        doc_type_name: "task".to_string(),
+        content_hash: Some(
+            "listfields00000000000000000000000000000000000000000000000000000".to_string(),
+        ),
+        slug: "list-fields-test".to_string(),
+        content: "# Test".to_string(),
+        metadata: None,
+        managed_meta: Some(serde_json::json!({"stage": "in-progress"})),
+        open_meta: None,
+        chunks_packed: Some(pack_chunks(&[]).unwrap()),
+    };
+    app.client.ingest().create(&payload).await.expect("ingest");
+
+    let output = common::run_temper_cli(
+        &app,
+        &[
+            "resource",
+            "list",
+            "--type",
+            "task",
+            "--context",
+            "meta-cli",
+            "--fields",
+            "slug,stage",
+            "--format",
+            "json",
+        ],
+    )
+    .await
+    .expect("cli run");
+
+    assert!(
+        output.status.success(),
+        "cli failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout: Value = serde_json::from_slice(&output.stdout).expect("json parse");
+    let rows = stdout
+        .get("rows")
+        .expect("envelope.rows")
+        .as_array()
+        .expect("array");
+    assert!(!rows.is_empty(), "expected at least one row: {stdout}");
+    for row in rows {
+        // Anchor field is always preserved
+        assert!(row.get("id").is_some(), "anchor `id` missing in row: {row}");
+        // Requested fields present
+        assert!(row.get("slug").is_some(), "slug missing in row: {row}");
+        assert!(row.get("stage").is_some(), "stage missing in row: {row}");
+        // Fields NOT in the selection must be absent
+        assert!(
+            row.get("title").is_none(),
+            "title should be filtered out: {row}"
+        );
+        assert!(
+            row.get("created").is_none(),
+            "created should be filtered out: {row}"
+        );
+        assert!(
+            row.get("updated").is_none(),
+            "updated should be filtered out: {row}"
+        );
+        assert!(
+            row.get("body_hash").is_none(),
+            "body_hash should be filtered out: {row}"
+        );
+    }
+    assert!(stdout.get("total").is_some(), "envelope missing total");
+    assert!(stdout.get("facets").is_some(), "envelope missing facets");
+}

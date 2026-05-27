@@ -263,6 +263,19 @@ pub fn create(
 // Cloud-only resource list pipeline
 // ---------------------------------------------------------------------------
 
+/// Parameters for the public `show` command, bundled to keep the CLI entry
+/// signature compact (and clippy happy).
+#[derive(Debug, Clone, Copy)]
+pub struct ShowParams<'a> {
+    pub doc_type: &'a str,
+    pub slug: &'a str,
+    pub context: Option<&'a str>,
+    pub format: &'a str,
+    pub edges: bool,
+    pub meta_only: bool,
+    pub fields: &'a [String],
+}
+
 /// Parameters for the public `list` command, bundled to keep the CLI entry
 /// signature compact (and clippy happy).
 #[derive(Debug, Clone, Copy)]
@@ -276,32 +289,6 @@ pub struct ListParams<'a> {
     pub format: &'a str,
     pub meta_only: bool,
     pub fields: &'a [String],
-}
-
-/// Cloud-first list: call the server, return rows sorted server-side
-/// (`ORDER BY updated DESC`).
-async fn fetch_list_rows(
-    client: &temper_client::TemperClient,
-    doc_type: &str,
-    context: Option<&str>,
-    limit: usize,
-) -> Result<Vec<temper_core::types::resource::ResourceRow>> {
-    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
-
-    let params = ResourceListParams {
-        doc_type_name: Some(doc_type.to_string()),
-        context_name: context.map(ToString::to_string),
-        sort: Some(ResourceSortField::Updated),
-        order: Some(SortOrder::Desc),
-        limit: Some(limit as i64),
-        ..Default::default()
-    };
-    let resp = client
-        .resources()
-        .list(&params)
-        .await
-        .map_err(crate::actions::runtime::client_err_to_temper)?;
-    Ok(resp.rows)
 }
 
 /// List resources of a given type (unified pipeline for all doc types).
@@ -337,26 +324,54 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     }
 
     use crate::actions::runtime;
+    use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
     let fmt = crate::format::OutputFormat::resolve(Some(params.format));
     let doc_type = params.doc_type.to_string();
     let context = params.context.map(ToString::to_string);
     let limit = params.limit.unwrap_or(20);
     let state_dir = config.state_dir.clone();
+    let fields_owned: Vec<String> = params.fields.to_vec();
+    let api_params = ResourceListParams {
+        doc_type_name: Some(doc_type.clone()),
+        context_name: context.clone(),
+        sort: Some(ResourceSortField::Updated),
+        order: Some(SortOrder::Desc),
+        limit: Some(limit as i64),
+        ..Default::default()
+    };
 
     // Cloud-only list: a non-blocking staleness pre-flight, then the
     // server query. Any error (network, auth, 4xx/5xx) surfaces as-is —
     // there is no local-scan fallback.
-    let rows = runtime::with_client(move |client| {
+    let response = runtime::with_client(move |client| {
         Box::pin(async move {
             if let Some(ctx) = context.as_deref() {
                 crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
             }
-            fetch_list_rows(client, &doc_type, context.as_deref(), limit).await
+            client
+                .resources()
+                .list(&api_params)
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })?;
 
-    let rendered = crate::format::render(&rows, fmt)?;
+    let mut envelope = serde_json::to_value(&response)
+        .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
+
+    if !fields_owned.is_empty() {
+        let rows = envelope
+            .get_mut("rows")
+            .ok_or_else(|| TemperError::Api("response missing `rows` envelope key".into()))?
+            .take();
+        let filtered_rows =
+            temper_core::projection::apply_top_level_filter(rows, &fields_owned, "id")
+                .map_err(map_projection_error)?;
+        envelope["rows"] = filtered_rows;
+    }
+
+    let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
     Ok(())
 }
@@ -382,11 +397,14 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
     };
     let format_str = params.format.to_string();
     let fields_owned: Vec<String> = params.fields.to_vec();
-
-    let _ = config; // config carried for symmetry with other list helpers
+    let context_owned = params.context.map(ToString::to_string);
+    let state_dir = config.state_dir.clone();
 
     let response = runtime::with_client(|client| {
         Box::pin(async move {
+            if let Some(ctx) = context_owned.as_deref() {
+                crate::projection::warn_if_context_stale(client, &state_dir, ctx).await;
+            }
             client
                 .resources()
                 .list_meta(&api_params)
@@ -472,31 +490,37 @@ pub fn delete(
 }
 
 /// Show a resource's content.
-pub fn show(
-    config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
-    format: &str,
-    edges: bool,
-    meta_only: bool,
-    fields: &[String],
-) -> Result<()> {
-    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
+pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
+    let _ = temper_core::frontmatter::DocType::from_str(params.doc_type)?;
 
-    if meta_only {
-        return show_meta_only(config, doc_type, slug, context, format, fields);
+    if params.meta_only {
+        return show_meta_only(
+            config,
+            params.doc_type,
+            params.slug,
+            params.context,
+            params.format,
+            params.fields,
+        );
     }
 
-    match doc_type {
-        "task" => crate::commands::task::show(config, slug, context, format),
-        "session" => crate::commands::session::show(config, slug, context, format),
-        _ => show_generic(config, doc_type, slug, context, format),
+    match params.doc_type {
+        "task" => crate::commands::task::show(config, params.slug, params.context, params.format),
+        "session" => {
+            crate::commands::session::show(config, params.slug, params.context, params.format)
+        }
+        _ => show_generic(
+            config,
+            params.doc_type,
+            params.slug,
+            params.context,
+            params.format,
+        ),
     }?;
 
-    if edges {
-        let ctx = require_context(context)?;
-        show_edges(config, &ctx, doc_type, slug, format)?;
+    if params.edges {
+        let ctx = require_context(params.context)?;
+        show_edges(config, &ctx, params.doc_type, params.slug, params.format)?;
     }
 
     Ok(())

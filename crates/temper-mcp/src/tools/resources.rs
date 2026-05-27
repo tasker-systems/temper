@@ -385,6 +385,24 @@ pub async fn create_resource(
     )]))
 }
 
+/// Map a `ProjectionError` to an `rmcp::ErrorData` invalid-params response.
+///
+/// Centralises the error-boundary translation so both `get_resource` and
+/// `list_resources` can call `.map_err(map_projection_err)?` without
+/// duplicating the match arms.
+fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::ErrorData {
+    use temper_core::projection::ProjectionError;
+    match e {
+        ProjectionError::DottedPath { hint } => rmcp::ErrorData::invalid_params(
+            format!("fields supports top-level keys only; use jq for nested projection: {hint}"),
+            None,
+        ),
+        ProjectionError::EmptyField => {
+            rmcp::ErrorData::invalid_params("fields contained an empty entry".to_string(), None)
+        }
+    }
+}
+
 pub async fn get_resource(
     svc: &TemperMcpService,
     input: GetResourceInput,
@@ -463,22 +481,7 @@ pub async fn get_resource(
 
     let filtered = if let Some(fields) = input.fields.as_deref() {
         temper_core::projection::apply_top_level_filter(enriched_value, fields, "id")
-            .map_err(|e| match e {
-                temper_core::projection::ProjectionError::DottedPath { hint } => {
-                    rmcp::ErrorData::invalid_params(
-                        format!(
-                            "fields supports top-level keys only; use jq for nested projection: {hint}"
-                        ),
-                        None,
-                    )
-                }
-                temper_core::projection::ProjectionError::EmptyField => {
-                    rmcp::ErrorData::invalid_params(
-                        "fields contained an empty entry".to_string(),
-                        None,
-                    )
-                }
-            })?
+            .map_err(map_projection_err)?
     } else {
         enriched_value
     };
@@ -551,22 +554,7 @@ pub async fn list_resources(
 
     let filtered = if let Some(fields) = input.fields.as_deref() {
         temper_core::projection::apply_top_level_filter(array_value, fields, "id")
-            .map_err(|e| match e {
-                temper_core::projection::ProjectionError::DottedPath { hint } => {
-                    rmcp::ErrorData::invalid_params(
-                        format!(
-                            "fields supports top-level keys only; use jq for nested projection: {hint}"
-                        ),
-                        None,
-                    )
-                }
-                temper_core::projection::ProjectionError::EmptyField => {
-                    rmcp::ErrorData::invalid_params(
-                        "fields contained an empty entry".to_string(),
-                        None,
-                    )
-                }
-            })?
+            .map_err(map_projection_err)?
     } else {
         array_value
     };
