@@ -53,6 +53,66 @@ impl E2eTestApp {
     }
 }
 
+/// Resolve the path to the compiled `temper` binary.
+///
+/// `CARGO_BIN_EXE_temper` is only set by cargo for integration tests in the
+/// same package that declares the binary. For this e2e crate (which lists
+/// `temper-cli` as a dev-dependency), we derive the path from the workspace
+/// target directory instead — the binary lives in `<workspace_root>/target/
+/// <profile>/temper` relative to this crate's manifest.
+fn temper_bin_path() -> std::path::PathBuf {
+    // CARGO_MANIFEST_DIR for this crate is `tests/e2e`. Walk up two levels to
+    // reach the workspace root, then into `target/debug/` (nextest always uses
+    // the debug profile unless --release is passed).
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set by cargo");
+    let workspace_root = std::path::Path::new(&manifest_dir)
+        .parent() // tests/
+        .and_then(|p| p.parent()) // workspace root
+        .expect("could not resolve workspace root from CARGO_MANIFEST_DIR");
+
+    // Honour CARGO_TARGET_DIR override (rare but valid). Fall back to the
+    // conventional `target/` directory inside the workspace root.
+    let target_dir = if let Ok(d) = std::env::var("CARGO_TARGET_DIR") {
+        std::path::PathBuf::from(d)
+    } else {
+        workspace_root.join("target")
+    };
+
+    let profile = std::env::var("CARGO_PROFILE").unwrap_or_else(|_| "debug".to_string());
+
+    target_dir.join(&profile).join("temper")
+}
+
+/// Run the `temper` CLI binary against the in-process Axum server.
+///
+/// Sets `TEMPER_API_URL` to the test server's URL and `TEMPER_TOKEN`
+/// to the test JWT so the CLI hits the real handler stack without
+/// needing a separate auth round-trip. Spawned via `spawn_blocking`
+/// so we don't block the runtime.
+///
+/// Verified env-var names against `crates/temper-client/src/config.rs`
+/// (`TEMPER_API_URL`) and `crates/temper-cli/src/actions/runtime.rs`
+/// (`TEMPER_TOKEN`).
+pub async fn run_temper_cli(
+    app: &E2eTestApp,
+    args: &[&str],
+) -> std::io::Result<std::process::Output> {
+    let bin = temper_bin_path();
+    let url = app.base_url();
+    let token = app.token.clone();
+    let args_owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+    tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&bin)
+            .env("TEMPER_API_URL", &url)
+            .env("TEMPER_TOKEN", &token)
+            .args(&args_owned)
+            .output()
+    })
+    .await
+    .expect("spawn_blocking join")
+}
+
 /// JWT claims for test tokens.
 #[derive(Debug, Serialize, Deserialize)]
 struct TestClaims {

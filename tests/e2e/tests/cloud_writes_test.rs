@@ -180,6 +180,8 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
                 Some("myapp"),
                 "text",
                 false, // edges
+                false, // meta_only
+                &[],   // fields
             )
             .expect("cloud show must succeed for a freshly created resource")
         })
@@ -1001,6 +1003,8 @@ async fn cloud_list_returns_remote_only_resources(pool: sqlx::PgPool) {
                     goal: None,
                     status: None,
                     format: "text",
+                    meta_only: false,
+                    fields: &[],
                 },
             )
             .expect("cloud list must succeed")
@@ -1445,7 +1449,9 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
                 "edges-resolve-test",
                 Some("edgesctx"),
                 "text",
-                true, // edges — the path under test
+                true,  // edges — the path under test
+                false, // meta_only
+                &[],   // fields
             )
             .expect(
                 "cloud show --edges must succeed without a manifest entry; \
