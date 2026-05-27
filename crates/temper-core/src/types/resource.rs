@@ -103,6 +103,11 @@ pub struct ResourceListParams {
     pub limit: Option<i64>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
     pub offset: Option<i64>,
+    /// When true, the list endpoint returns `ResourceMetaListResponse`
+    /// (`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`
+    /// (`Vec<ResourceRow>` rows). Default: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meta_only: Option<bool>,
 }
 
 /// Aggregated doc-type facet counts for the current filter set.

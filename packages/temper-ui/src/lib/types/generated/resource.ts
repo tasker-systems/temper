@@ -34,7 +34,13 @@ export type ResourceFacets = { doc_type: { [key in string]?: bigint }, };
 /**
  * Query parameters for listing visible resources.
  */
-export type ResourceListParams = { kb_context_id: string | null, kb_doc_type_id: string | null, context_name: string | null, doc_type_name: string | null, owner: string | null, q: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, };
+export type ResourceListParams = { kb_context_id: string | null, kb_doc_type_id: string | null, context_name: string | null, doc_type_name: string | null, owner: string | null, q: string | null, sort: ResourceSortField | null, order: SortOrder | null, limit: number | null, offset: number | null, 
+/**
+ * When true, the list endpoint returns `ResourceMetaListResponse`
+ * (`Vec<ResourceMetaResponse>` rows) instead of `ResourceListResponse`
+ * (`Vec<ResourceRow>` rows). Default: false.
+ */
+meta_only: boolean | null, };
 
 /**
  * Paginated response for resource list endpoints, with doc-type facets.

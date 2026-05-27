@@ -122,6 +122,7 @@ pub(crate) fn list_filter_to_params(filter: ListFilter) -> ResourceListParams {
         order: None,
         limit: filter.limit.map(|n| n as i64),
         offset: None,
+        meta_only: None,
     }
 }
 

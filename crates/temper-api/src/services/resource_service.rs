@@ -291,6 +291,50 @@ pub async fn list_visible(
     })
 }
 
+/// Variant of [`list_visible`] that returns each resource's meta
+/// projection instead of the row scalars. Same filters, same facets,
+/// same pagination; only the row type differs.
+///
+/// Reuses the same SQL filter pipeline and facets query; joins with
+/// `meta_service::get_meta_batch` to produce `Vec<ResourceMetaResponse>`.
+pub async fn list_visible_meta(
+    pool: &PgPool,
+    profile_id: Uuid,
+    params: ResourceListParams,
+) -> ApiResult<temper_core::types::managed_meta::ResourceMetaListResponse> {
+    use temper_core::types::managed_meta::ResourceMetaListResponse;
+
+    // Run the existing list query first; we reuse its rows, total, facets.
+    let list_response = list_visible(pool, profile_id, params).await?;
+
+    // Collect resource IDs for the batch meta fetch.
+    let ids: Vec<temper_core::types::ResourceId> =
+        list_response.rows.iter().map(|r| r.id).collect();
+
+    if ids.is_empty() {
+        return Ok(ResourceMetaListResponse {
+            rows: vec![],
+            total: list_response.total,
+            facets: list_response.facets,
+        });
+    }
+
+    let mut meta_map = crate::services::meta_service::get_meta_batch(pool, &ids).await?;
+
+    // Preserve the row order from the list query (sort fidelity).
+    let meta_rows: Vec<_> = list_response
+        .rows
+        .iter()
+        .filter_map(|row| meta_map.remove(&row.id))
+        .collect();
+
+    Ok(ResourceMetaListResponse {
+        rows: meta_rows,
+        total: list_response.total,
+        facets: list_response.facets,
+    })
+}
+
 /// Get a single resource by ID, scoped to profile visibility.
 pub async fn get_visible(
     pool: &PgPool,
@@ -1208,5 +1252,30 @@ mod tests {
             serde_json::to_value(&delta).unwrap(),
             json!({"managed_keys_changed": ["temper-stage"], "open_keys_changed": []})
         );
+    }
+
+    /// Signature-level guard: confirms `list_visible_meta` exists with the
+    /// expected types. Full integration coverage lives in
+    /// `tests/e2e/tests/cli_meta_projection_test.rs`.
+    #[test]
+    fn list_visible_meta_has_expected_signature() {
+        // Verify the function is callable with expected argument and return types.
+        // `if false` prevents execution at test time (no pool available) while
+        // still requiring the call to type-check at compile time.
+        fn _assert_types(
+            pool: &sqlx::PgPool,
+            profile_id: uuid::Uuid,
+            params: temper_core::types::resource::ResourceListParams,
+        ) {
+            let _: std::pin::Pin<
+                Box<
+                    dyn std::future::Future<
+                            Output = crate::error::ApiResult<
+                                temper_core::types::managed_meta::ResourceMetaListResponse,
+                            >,
+                        > + Send,
+                >,
+            > = Box::pin(list_visible_meta(pool, profile_id, params));
+        }
     }
 }
