@@ -177,3 +177,68 @@ jobs:
         # local_mode_session_create_wire_shape_regression — all retired in
         # PR #94's cloud-only sweep.
         run: cargo nextest run -p temper-e2e --features "test-db,test-embed" --locked --test-threads 1 --no-fail-fast -E 'binary(mcp_round_trip_test) + test(=cloud_update_body_and_meta_in_one_request) + test(=cloud_update_body_only_no_managed_meta) + test(=cloud_update_chunk_dedupe_skips_unchanged)'
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Informational, never a merge gate: introduced before CODECOV_TOKEN is
+    # configured, and correctness is already gated by the integration-tests job
+    # (which runs the same test-db tier uninstrumented). `continue-on-error`
+    # keeps a missing token or a Codecov outage from blocking PRs. Mirrors the
+    # test-db tier only — embed/ONNX coverage is out of scope for the baseline.
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-trixie
+        env:
+          POSTGRES_DB: temper_development
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U temper -d temper_development"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Setup Rust build cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: coverage-v1
+
+      - name: Install cargo-nextest, cargo-llvm-cov, cargo-sqlx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: nextest,cargo-llvm-cov,sqlx-cli
+
+      - name: Run migrations
+        run: cargo sqlx migrate run
+
+      - name: Generate coverage (test-db tier)
+        # Mirrors the integration-tests job's tier so the baseline reflects
+        # unit + DB integration + e2e. No ONNX: instrumentation only compiles
+        # the embed feature, it never initializes ort at runtime here.
+        run: cargo llvm-cov nextest --workspace --features test-db --locked --no-fail-fast --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: lcov.info
+          fail_ci_if_error: false
