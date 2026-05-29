@@ -184,7 +184,7 @@ async fn list_visible_filters_by_doc_type(pool: sqlx::PgPool) {
     // List with doc_type filter = research
     let params = resource_service::ResourceListParams {
         kb_context_id: Some(context.id.into()),
-        kb_doc_type_id: Some(research_id.into()),
+        kb_doc_type_id: Some(research_id),
         limit: Some(50),
         ..Default::default()
     };
@@ -207,7 +207,7 @@ async fn doc_type_get_name_by_id(pool: sqlx::PgPool) {
         .await
         .expect("research doc_type");
 
-    let name = doc_type_service::get_name_by_id(&pool, research_id.into())
+    let name = doc_type_service::get_name_by_id(&pool, research_id)
         .await
         .expect("get_name_by_id");
 

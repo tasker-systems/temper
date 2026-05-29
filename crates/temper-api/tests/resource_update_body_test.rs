@@ -18,8 +18,6 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-#[cfg(feature = "test-embed")]
-use temper_core::types::ingest::pack_chunks;
 use temper_core::types::ingest::PackedChunk;
 
 // ---------------------------------------------------------------------------
@@ -37,13 +35,6 @@ fn make_packed_chunk(index: u32, content: &str, content_hash: &str) -> PackedChu
         content_hash: content_hash.to_string(),
         embedding: vec![0.0_f32; 768],
     }
-}
-
-/// Encode a list of chunks into the `chunks_packed` wire format.
-/// Only needed by test-embed seeding helpers.
-#[cfg(feature = "test-embed")]
-fn encode_chunks(chunks: &[PackedChunk]) -> String {
-    pack_chunks(chunks).expect("pack_chunks must succeed for test data")
 }
 
 /// Create a JWT-authenticated profile + resource with a manifest row containing

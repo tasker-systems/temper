@@ -10,7 +10,7 @@ use crate::error::{Result, TemperError};
 /// Outcome of parsing + validating edited TOML content.
 #[derive(Debug)]
 pub enum ParseOutcome {
-    Valid(TemperConfig),
+    Valid(Box<TemperConfig>),
     Invalid(String),
 }
 
@@ -23,7 +23,7 @@ pub fn parse_and_validate(content: &str) -> ParseOutcome {
     if let Err(errors) = parsed.validate() {
         return ParseOutcome::Invalid(format_errors(&errors));
     }
-    ParseOutcome::Valid(parsed)
+    ParseOutcome::Valid(Box::new(parsed))
 }
 
 fn format_errors(errors: &validator::ValidationErrors) -> String {

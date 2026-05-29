@@ -133,6 +133,96 @@ fn token_from_stdin(
     Ok(())
 }
 
+/// Export a refreshed access token from the local grant.
+///
+/// Token goes to stdout (plain, single line — pipeable to `pbcopy`, an
+/// agent's secret input, etc.). Security warning goes to stderr.
+///
+/// Refuses to run in cloud mode — `export-token` reads from the local
+/// `DiskTokenStore`; a cloud-mode invocation would have nothing to export
+/// (cloud sessions receive their token via `TEMPER_TOKEN`).
+pub fn export_token() -> Result<()> {
+    // `export-token` reads from the on-disk `DiskTokenStore` grant. A
+    // cloud agent session (`TEMPER_TOKEN` set) has no disk grant to
+    // export — refuse with a directive to run this on the laptop.
+    if std::env::var("TEMPER_TOKEN")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .is_some()
+    {
+        return Err(crate::error::TemperError::Config(
+            "temper auth export-token reads the on-disk grant — this \
+             session was handed its token via TEMPER_TOKEN and has \
+             nothing to export. Run this on your laptop, paste the token \
+             into the cloud session's secrets, and the agent reads \
+             TEMPER_TOKEN."
+                .into(),
+        ));
+    }
+
+    let config = temper_client::config::load_cloud_config()
+        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
+    let oauth = temper_client::config::oauth_config(&config)
+        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
+    let store = DiskTokenStore::default_path();
+
+    print_export_warning();
+
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
+    let token = rt.block_on(export_token_with_store(
+        &store,
+        &oauth.token_url,
+        &oauth.client_id,
+    ))?;
+    println!("{token}");
+    Ok(())
+}
+
+async fn export_token_with_store(
+    store: &dyn TokenStore,
+    token_url: &str,
+    client_id: &str,
+) -> Result<String> {
+    temper_client::auth::get_valid_token(store, token_url, client_id)
+        .await
+        .map_err(|e| crate::error::TemperError::Config(e.to_string()))
+}
+
+fn print_export_warning() {
+    eprintln!("⚠  This access token grants full access to your temper account at");
+    eprintln!("   your current permission levels until it expires (~24 hours).");
+    eprintln!("   Once issued, the token cannot be revoked early — treat leaked");
+    eprintln!("   tokens as live for their full lifetime. Per-session revocation");
+    eprintln!("   is coming in Unit D of the cloud-mode goal.");
+    eprintln!();
+    eprintln!("   Recommended handling:");
+    eprintln!("     temper auth export-token | pbcopy          # macOS clipboard");
+    eprintln!("     temper auth export-token | wl-copy         # Linux wayland");
+    eprintln!("     temper auth export-token | <agent-secret-input>");
+    eprintln!("   AVOID:");
+    eprintln!("     temper auth export-token > token.txt       # file lands in backups");
+    eprintln!(
+        "     TEMPER_TOKEN=$(temper auth export-token)   # shell history + /proc/<pid>/environ"
+    );
+    eprintln!();
+}
+
+/// Print the current auth status.
+pub fn status(format: Option<String>) -> Result<()> {
+    runtime::with_client(|client| {
+        Box::pin(async move {
+            let status = client
+                .auth_status()
+                .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
+            let fmt = crate::format::OutputFormat::resolve(format.as_deref());
+            let rendered = crate::format::render(&status, fmt)?;
+            println!("{rendered}");
+            Ok(())
+        })
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,94 +397,4 @@ mod tests {
             "token toon render should not be empty: {out}"
         );
     }
-}
-
-/// Export a refreshed access token from the local grant.
-///
-/// Token goes to stdout (plain, single line — pipeable to `pbcopy`, an
-/// agent's secret input, etc.). Security warning goes to stderr.
-///
-/// Refuses to run in cloud mode — `export-token` reads from the local
-/// `DiskTokenStore`; a cloud-mode invocation would have nothing to export
-/// (cloud sessions receive their token via `TEMPER_TOKEN`).
-pub fn export_token() -> Result<()> {
-    // `export-token` reads from the on-disk `DiskTokenStore` grant. A
-    // cloud agent session (`TEMPER_TOKEN` set) has no disk grant to
-    // export — refuse with a directive to run this on the laptop.
-    if std::env::var("TEMPER_TOKEN")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .is_some()
-    {
-        return Err(crate::error::TemperError::Config(
-            "temper auth export-token reads the on-disk grant — this \
-             session was handed its token via TEMPER_TOKEN and has \
-             nothing to export. Run this on your laptop, paste the token \
-             into the cloud session's secrets, and the agent reads \
-             TEMPER_TOKEN."
-                .into(),
-        ));
-    }
-
-    let config = temper_client::config::load_cloud_config()
-        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-    let oauth = temper_client::config::oauth_config(&config)
-        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-    let store = DiskTokenStore::default_path();
-
-    print_export_warning();
-
-    let rt = tokio::runtime::Runtime::new()
-        .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-    let token = rt.block_on(export_token_with_store(
-        &store,
-        &oauth.token_url,
-        &oauth.client_id,
-    ))?;
-    println!("{token}");
-    Ok(())
-}
-
-async fn export_token_with_store(
-    store: &dyn TokenStore,
-    token_url: &str,
-    client_id: &str,
-) -> Result<String> {
-    temper_client::auth::get_valid_token(store, token_url, client_id)
-        .await
-        .map_err(|e| crate::error::TemperError::Config(e.to_string()))
-}
-
-fn print_export_warning() {
-    eprintln!("⚠  This access token grants full access to your temper account at");
-    eprintln!("   your current permission levels until it expires (~24 hours).");
-    eprintln!("   Once issued, the token cannot be revoked early — treat leaked");
-    eprintln!("   tokens as live for their full lifetime. Per-session revocation");
-    eprintln!("   is coming in Unit D of the cloud-mode goal.");
-    eprintln!();
-    eprintln!("   Recommended handling:");
-    eprintln!("     temper auth export-token | pbcopy          # macOS clipboard");
-    eprintln!("     temper auth export-token | wl-copy         # Linux wayland");
-    eprintln!("     temper auth export-token | <agent-secret-input>");
-    eprintln!("   AVOID:");
-    eprintln!("     temper auth export-token > token.txt       # file lands in backups");
-    eprintln!(
-        "     TEMPER_TOKEN=$(temper auth export-token)   # shell history + /proc/<pid>/environ"
-    );
-    eprintln!();
-}
-
-/// Print the current auth status.
-pub fn status(format: Option<String>) -> Result<()> {
-    runtime::with_client(|client| {
-        Box::pin(async move {
-            let status = client
-                .auth_status()
-                .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-            let fmt = crate::format::OutputFormat::resolve(format.as_deref());
-            let rendered = crate::format::render(&status, fmt)?;
-            println!("{rendered}");
-            Ok(())
-        })
-    })
 }

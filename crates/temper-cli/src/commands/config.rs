@@ -51,7 +51,7 @@ pub fn edit() -> Result<()> {
                 let idx = Select::with_theme(&ColorfulTheme::default())
                     .with_prompt("What now?")
                     .default(0)
-                    .items(&choices)
+                    .items(choices)
                     .interact()
                     .map_err(|e| TemperError::Config(format!("prompt error: {e}")))?;
                 if idx == 1 {

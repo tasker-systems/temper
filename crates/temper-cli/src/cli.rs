@@ -37,6 +37,14 @@ pub struct Cli {
 }
 
 #[derive(Subcommand)]
+// clap command enums are parsed once per process at startup and never stored in
+// bulk or moved on a hot path, so the variant-size disparity has no runtime cost.
+// Boxing individual CLI arg fields (clippy's suggestion) hurts derive ergonomics
+// and readability for no benefit.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap arg-definition enum, parsed once"
+)]
 pub enum Commands {
     /// Initialize a new vault
     Init {
@@ -163,6 +171,10 @@ pub enum Commands {
 }
 
 #[derive(Subcommand)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "clap arg-definition enum, parsed once"
+)]
 pub enum ResourceAction {
     /// Create a new resource
     Create {

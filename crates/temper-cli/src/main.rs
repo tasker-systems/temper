@@ -1,7 +1,6 @@
 use clap::Parser;
 use temper_cli::cli::{
-    AuthAction, Cli, Commands, ConfigAction, ContextAction, EdgeAction, ResourceAction,
-    SkillAction, TeamAction,
+    AuthAction, Cli, Commands, ConfigAction, ContextAction, ResourceAction, SkillAction, TeamAction,
 };
 use temper_cli::commands;
 

@@ -109,22 +109,26 @@ impl Ord for NeighborRow {
     }
 }
 
+/// Raw `graph_traverse` row tuple as returned by the runtime `query_as`:
+/// (resource_id, depth, edge_kind, polarity, label, path, from_resource_id, path_weight).
+type TraverseRawRow = (
+    Uuid,
+    i32,
+    Option<EdgeKind>,
+    Option<Polarity>,
+    Option<String>,
+    Vec<Uuid>,
+    Option<Uuid>,
+    f64,
+);
+
 /// Query `graph_traverse` for all resources reachable from `seed_ids`.
 async fn snapshot_traverse(pool: &PgPool, profile_id: Uuid, seed_ids: &[Uuid]) -> Vec<TraverseRow> {
     // Runtime query_as: graph_traverse returns a composite row type with
     // edge_kind/edge_polarity Postgres enums that the compile-time macro
     // cannot check against. path_weight is encoded as f64::to_bits to keep
     // snapshot comparisons stable.
-    let raw: Vec<(
-        Uuid,
-        i32,
-        Option<EdgeKind>,
-        Option<Polarity>,
-        Option<String>,
-        Vec<Uuid>,
-        Option<Uuid>,
-        f64,
-    )> = sqlx::query_as(
+    let raw: Vec<TraverseRawRow> = sqlx::query_as(
         r#"
         SELECT
             resource_id,
@@ -223,7 +227,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let profile_id = Uuid::from(profile.id);
+    let profile_id = profile.id;
 
     app.client
         .contexts()
@@ -405,7 +409,7 @@ async fn migration_fidelity_ingest_edges_survive_rebuild(pool: PgPool) {
         .get()
         .await
         .expect("profile pre-flight");
-    let profile_id = Uuid::from(profile.id);
+    let profile_id = profile.id;
 
     app.client
         .contexts()

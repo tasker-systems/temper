@@ -118,13 +118,14 @@ args = ["fmt", "--all"]
 [tasks.rust-clippy]
 description = "Run Clippy lints"
 command = "cargo"
-args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+args = ["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]
 
 [tasks.rust-clippy-fix]
 description = "Fix Clippy issues"
 command = "cargo"
 args = [
   "clippy",
+  "--workspace",
   "--all-targets",
   "--all-features",
   "--fix",
