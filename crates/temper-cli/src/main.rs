@@ -135,16 +135,18 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     let format = temper_cli::format::resolve_format_str(format.as_deref());
                     temper_cli::commands::resource::create(
                         &config,
-                        &r#type,
-                        &title,
-                        context.as_deref(),
-                        goal.as_deref(),
-                        mode.as_deref(),
-                        effort.as_deref(),
-                        slug.as_deref(),
-                        body,
-                        from,
-                        format,
+                        temper_cli::commands::resource::CreateResourceArgs {
+                            doc_type: &r#type,
+                            title: &title,
+                            context: context.as_deref(),
+                            goal: goal.as_deref(),
+                            mode: mode.as_deref(),
+                            effort: effort.as_deref(),
+                            slug: slug.as_deref(),
+                            body_flag: body,
+                            from,
+                            format,
+                        },
                     )
                 }
                 ResourceAction::List {

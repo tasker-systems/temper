@@ -101,16 +101,18 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
             temper_cli::commands::resource::create(
                 &cli_config,
-                "session",
-                "Cloud Round-Trip Session",
-                Some("myapp"),
-                None, // goal
-                None, // mode
-                None, // effort
-                None, // slug override
-                None, // body_flag (default body generated)
-                None, // from
-                "text",
+                temper_cli::commands::resource::CreateResourceArgs {
+                    doc_type: "session",
+                    title: "Cloud Round-Trip Session",
+                    context: Some("myapp"),
+                    goal: None,
+                    mode: None,
+                    effort: None,
+                    slug: None,
+                    body_flag: None, // default body generated
+                    from: None,
+                    format: "text",
+                },
             )
             .expect("cloud create should succeed")
         })
@@ -833,16 +835,18 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::create(
                 &cli_config,
-                "session",
-                "Chunk Dedup Test",
-                Some("myapp"),
-                None,
-                None,
-                None,
-                None,
-                Some(body_flag),
-                None, // from
-                "text",
+                temper_cli::commands::resource::CreateResourceArgs {
+                    doc_type: "session",
+                    title: "Chunk Dedup Test",
+                    context: Some("myapp"),
+                    goal: None,
+                    mode: None,
+                    effort: None,
+                    slug: None,
+                    body_flag: Some(body_flag),
+                    from: None,
+                    format: "text",
+                },
             )
             .expect("cloud create for dedup test")
         })
@@ -1071,16 +1075,18 @@ async fn create_writes_canonical_projection_file(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
             temper_cli::commands::resource::create(
                 &cli_config,
-                "task",
-                "Projection Write Test",
-                Some("myapp"),
-                None, // goal
-                None, // mode
-                None, // effort
-                None, // slug override
-                None, // body_flag
-                None, // from
-                "text",
+                temper_cli::commands::resource::CreateResourceArgs {
+                    doc_type: "task",
+                    title: "Projection Write Test",
+                    context: Some("myapp"),
+                    goal: None,
+                    mode: None,
+                    effort: None,
+                    slug: None,
+                    body_flag: None,
+                    from: None,
+                    format: "text",
+                },
             )
             .expect("cloud create should succeed")
         })
@@ -1163,16 +1169,18 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::create(
                 &cli_config2,
-                "task",
-                "Update Projection Test",
-                Some("myapp"),
-                None, // goal
-                None, // mode
-                None, // effort
-                None, // slug override
-                None, // body_flag (default body generated)
-                None, // from
-                "text",
+                temper_cli::commands::resource::CreateResourceArgs {
+                    doc_type: "task",
+                    title: "Update Projection Test",
+                    context: Some("myapp"),
+                    goal: None,
+                    mode: None,
+                    effort: None,
+                    slug: None,
+                    body_flag: None, // default body generated
+                    from: None,
+                    format: "text",
+                },
             )
             .expect("cloud create should succeed")
         })
@@ -1310,16 +1318,18 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::create(
                 &cli_config2,
-                "task",
-                "Delete Projection Test",
-                Some("myapp"),
-                None, // goal
-                None, // mode
-                None, // effort
-                None, // slug override
-                None, // body_flag
-                None, // from
-                "text",
+                temper_cli::commands::resource::CreateResourceArgs {
+                    doc_type: "task",
+                    title: "Delete Projection Test",
+                    context: Some("myapp"),
+                    goal: None,
+                    mode: None,
+                    effort: None,
+                    slug: None,
+                    body_flag: None,
+                    from: None,
+                    format: "text",
+                },
             )
             .expect("cloud create should succeed")
         })

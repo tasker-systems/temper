@@ -57,16 +57,18 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
     let slug = slugify(title);
     temper_cli::commands::resource::create(
         config,
-        "goal",
-        title,
-        Some(context),
-        None,
-        None,
-        None,
-        Some(&slug),
-        None,
-        None,
-        "text",
+        temper_cli::commands::resource::CreateResourceArgs {
+            doc_type: "goal",
+            title,
+            context: Some(context),
+            goal: None,
+            mode: None,
+            effort: None,
+            slug: Some(&slug),
+            body_flag: None,
+            from: None,
+            format: "text",
+        },
     )
     .unwrap();
     slug
@@ -92,16 +94,18 @@ pub fn create_task(
     let slug = format!("{today}-{}", slugify(title));
     temper_cli::commands::resource::create(
         config,
-        "task",
-        title,
-        Some(context),
-        goal_slug,
-        mode,
-        effort,
-        Some(&slug),
-        None,
-        None,
-        "text",
+        temper_cli::commands::resource::CreateResourceArgs {
+            doc_type: "task",
+            title,
+            context: Some(context),
+            goal: goal_slug,
+            mode,
+            effort,
+            slug: Some(&slug),
+            body_flag: None,
+            from: None,
+            format: "text",
+        },
     )
     .unwrap();
     slug
