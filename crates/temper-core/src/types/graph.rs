@@ -60,6 +60,12 @@ impl std::fmt::Display for EdgeType {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// Inline the variants into every MCP input schema rather than emitting a
+// `$ref` into `$defs`. The Anthropic tool-use layer does not resolve
+// `$ref`/`$defs`, so a referenced scalar enum reaches the model with no type
+// signal and is sent back as `null`. Inlining surfaces the `enum` values
+// directly on the field. See tasks/review-mcp-assert-relationship-edge-issues.
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "edge_kind", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +87,8 @@ pub enum EdgeKind {
 #[cfg_attr(feature = "typescript", ts(export, export_to = "graph.ts"))]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
+// Inline into MCP input schemas — see the note on `EdgeKind` above.
+#[cfg_attr(feature = "mcp", schemars(inline))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "edge_polarity", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
