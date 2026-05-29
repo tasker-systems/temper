@@ -305,6 +305,70 @@ mod tests {
         assert_eq!(input.reason, None);
     }
 
+    /// Generate the tool input schema the same way rmcp does at runtime
+    /// (`SchemaSettings::draft2020_12`, ref-based generator). This is the exact
+    /// path that surfaced the bug: scalar enums emitted as `$ref` into `$defs`
+    /// reach the Anthropic tool-use layer with no type signal and come back as
+    /// `null`. See `crate::tools::relationships` and the
+    /// `review-mcp-assert-relationship-edge-issues` task.
+    fn rmcp_schema_for<T: schemars::JsonSchema>() -> serde_json::Value {
+        let generator = schemars::generate::SchemaSettings::draft2020_12().into_generator();
+        serde_json::to_value(generator.into_root_schema_for::<T>()).unwrap()
+    }
+
+    /// A schema field must inline a string enum (`{"type":"string","enum":[…]}`)
+    /// rather than reference it via `$ref` — otherwise the MCP client cannot
+    /// see the allowed values and sends `null`.
+    fn assert_inline_string_enum(field: &serde_json::Value, variants: &[&str]) {
+        assert!(
+            field.get("$ref").is_none(),
+            "field must be inlined, not a $ref: {field}"
+        );
+        assert_eq!(
+            field.get("type").and_then(|t| t.as_str()),
+            Some("string"),
+            "field must be a string enum: {field}"
+        );
+        let got: Vec<&str> = field
+            .get("enum")
+            .and_then(|e| e.as_array())
+            .expect("field must carry inline enum variants")
+            .iter()
+            .map(|v| v.as_str().expect("enum variant is a string"))
+            .collect();
+        assert_eq!(got, variants, "inline enum variants must match: {field}");
+    }
+
+    #[test]
+    fn assert_relationship_schema_inlines_edge_kind_and_polarity() {
+        let schema = rmcp_schema_for::<AssertRelationshipInput>();
+        assert!(
+            schema.get("$defs").is_none(),
+            "no $defs block should remain once enums are inlined: {schema}"
+        );
+        let props = &schema["properties"];
+        assert_inline_string_enum(
+            &props["edge_kind"],
+            &["express", "contains", "leads_to", "near"],
+        );
+        assert_inline_string_enum(&props["polarity"], &["forward", "inverse"]);
+    }
+
+    #[test]
+    fn retype_relationship_schema_inlines_edge_kind_and_polarity() {
+        let schema = rmcp_schema_for::<RetypeRelationshipInput>();
+        assert!(
+            schema.get("$defs").is_none(),
+            "no $defs block should remain once enums are inlined: {schema}"
+        );
+        let props = &schema["properties"];
+        assert_inline_string_enum(
+            &props["edge_kind"],
+            &["express", "contains", "leads_to", "near"],
+        );
+        assert_inline_string_enum(&props["polarity"], &["forward", "inverse"]);
+    }
+
     #[test]
     fn assert_relationship_input_edge_kind_variants() {
         for (kind_str, expected) in [
