@@ -116,6 +116,9 @@ pub struct CreateResourceArgs<'a> {
     pub mode: Option<&'a str>,
     pub effort: Option<&'a str>,
     pub slug: Option<&'a str>,
+    /// Session→task link target slug (session only). When `Some`, after the
+    /// session is created a session→task `advances` relationship is asserted.
+    pub task: Option<&'a str>,
     pub body_flag: Option<String>,
     pub from: Option<String>,
     pub format: &'a str,
@@ -131,6 +134,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         mode,
         effort,
         slug,
+        task,
         body_flag,
         from,
         format,
@@ -140,6 +144,14 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     use temper_core::types::ManagedMeta;
 
     let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
+
+    // Fail-fast: --task linking is only valid for sessions. Reject before any
+    // create round-trip (mirrors the validate_create fail-fast hoist below).
+    if task.is_some() && doc_type != "session" {
+        return Err(TemperError::BadRequest(format!(
+            "--task linking is only supported for --type session (got --type {doc_type})"
+        )));
+    }
 
     let ctx = require_context(context)?;
 
@@ -261,6 +273,61 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         };
         if let Err(e) = discovery::append_event(&config.state_dir, &event) {
             tracing::warn!("Failed to append discovery event: {e}");
+        }
+    }
+
+    // Session→task linking. Only reached for sessions (validated fail-fast
+    // above). The session resource is already created; the link is a best-
+    // effort tail — an unknown task warns and skips rather than failing the
+    // (already-committed) create. `find_task` owns its own runtime via
+    // `with_client`, so it is called outside `runtime.block_on`.
+    if let Some(task_slug) = task {
+        // The whole link is best-effort: the session is already committed, so
+        // no failure here (ambiguous/errored task lookup, or a failed assert)
+        // may turn a successful create into a command failure. Each failure
+        // mode warns and the create still succeeds.
+        match crate::actions::task::find_task(config, task_slug, Some(&ctx)) {
+            Ok(Some(task_info)) => {
+                use temper_core::operations::ResourceRef;
+                use temper_core::types::graph::{EdgeKind, Polarity};
+                use temper_core::types::relationship_requests::AssertRelationshipRequest;
+
+                let req = AssertRelationshipRequest {
+                    source: ResourceRef::uuid(output.value.id),
+                    target_slug: task_info.slug.clone(),
+                    edge_kind: EdgeKind::LeadsTo,
+                    polarity: Polarity::Forward,
+                    label: "advances".to_string(),
+                    weight: 1.0,
+                };
+                match runtime.block_on(async {
+                    client
+                        .relationships()
+                        .assert(&req)
+                        .await
+                        .map_err(crate::commands::client_err)
+                }) {
+                    Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
+                    Err(e) => tracing::warn!(
+                        task = task_slug,
+                        error = %e,
+                        "session→task assert failed; session created without link"
+                    ),
+                }
+            }
+            Ok(None) => {
+                tracing::warn!(
+                    task = task_slug,
+                    "task not found for session link; skipping relationship assert"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    task = task_slug,
+                    error = %e,
+                    "task lookup failed for session link; skipping relationship assert"
+                );
+            }
         }
     }
 

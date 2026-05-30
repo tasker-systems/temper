@@ -1,6 +1,22 @@
 use tempfile::TempDir;
 
-fn test_config_with_global(dir: &TempDir) -> temper_cli::config::Config {
+/// Build a `Config` plus the environment overrides skill tests need, without
+/// touching the process environment directly. Callers wrap their test body in
+/// `temp_env::with_vars(env, || { ... })` so the overrides are scoped, restored
+/// on exit (even on panic), and serialized against other env-mutating tests.
+///
+/// Two overrides matter:
+/// - `TEMPER_GLOBAL_CONFIG` — `skill::generate` / `compute_config_hash` read the
+///   global config from here.
+/// - `HOME` — `skill::install` writes the command wrapper to
+///   `~/.claude/commands/temper.md` via `dirs::home_dir()`. Pointing `HOME` at
+///   the tempdir keeps that write inside the test's isolated space instead of
+///   the shared real home, which otherwise causes parallel skill tests to race
+///   (each test's config hash differs, so concurrent installs clobber each
+///   other) and pollutes the developer's actual command wrapper.
+fn test_config_with_global(
+    dir: &TempDir,
+) -> (temper_cli::config::Config, Vec<(String, Option<String>)>) {
     let state_dir = dir.path().join(".temper");
     std::fs::create_dir_all(&state_dir).unwrap();
 
@@ -34,171 +50,165 @@ scopes = ["openid"]
     )
     .unwrap();
 
-    // Point TEMPER_GLOBAL_CONFIG to our test config
-    unsafe {
-        std::env::set_var("TEMPER_GLOBAL_CONFIG", config_path.to_str().unwrap());
-    }
+    let env = vec![
+        (
+            "TEMPER_GLOBAL_CONFIG".to_string(),
+            Some(config_path.to_string_lossy().into_owned()),
+        ),
+        (
+            "HOME".to_string(),
+            Some(dir.path().to_string_lossy().into_owned()),
+        ),
+    ];
 
-    temper_cli::config::Config {
+    let config = temper_cli::config::Config {
         vault_root: dir.path().to_path_buf(),
         state_dir,
         contexts: vec!["myapp".to_string()],
         subscriptions: Vec::new(),
         skill_output: dir.path().join("skill-output"),
         profile_slug: None,
-    }
+    };
+
+    (config, env)
 }
 
 #[test]
 fn test_skill_generate_produces_valid_content() {
     let dir = TempDir::new().unwrap();
-    let config = test_config_with_global(&dir);
+    let (config, env) = test_config_with_global(&dir);
 
-    let content = temper_cli::commands::skill::generate(&config).unwrap();
-    // generate() now returns reference.md content (generated from clap)
-    assert!(content.contains("temper"));
-    assert!(content.contains("# CLI Reference"));
-    assert!(content.contains("## Commands"));
-
-    unsafe {
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+    temp_env::with_vars(env, || {
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        // generate() now returns reference.md content (generated from clap)
+        assert!(content.contains("temper"));
+        assert!(content.contains("# CLI Reference"));
+        assert!(content.contains("## Commands"));
+    });
 }
 
 #[test]
 fn test_skill_install_writes_directory() {
     let dir = TempDir::new().unwrap();
-    let config = test_config_with_global(&dir);
+    let (config, env) = test_config_with_global(&dir);
 
-    let skill_dir = dir.path().join("skill-output");
-    let report = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
-    assert!(
-        !report.is_no_op(),
-        "first install into empty dir should report changed files"
-    );
-    assert_eq!(report.changed.len(), report.total);
+    temp_env::with_vars(env, || {
+        let skill_dir = dir.path().join("skill-output");
+        let report = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        assert!(
+            !report.is_no_op(),
+            "first install into empty dir should report changed files"
+        );
+        assert_eq!(report.changed.len(), report.total);
 
-    assert!(skill_dir.join("SKILL.md").exists());
-    assert!(skill_dir.join("reference.md").exists());
-    assert!(skill_dir.join("subagent-guidance.md").exists());
-    assert!(skill_dir.join("session-lifecycle.md").exists());
-    assert!(skill_dir.join("workflows/build-small.md").exists());
-    assert!(skill_dir.join("workflows/build-medium.md").exists());
-    assert!(skill_dir.join("workflows/build-large.md").exists());
-    assert!(skill_dir.join("workflows/plan-small.md").exists());
-    assert!(skill_dir.join("workflows/plan-medium.md").exists());
-    assert!(skill_dir.join("workflows/plan-large.md").exists());
-    assert!(skill_dir.join("guidance").is_dir());
-
-    unsafe {
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+        assert!(skill_dir.join("SKILL.md").exists());
+        assert!(skill_dir.join("reference.md").exists());
+        assert!(skill_dir.join("subagent-guidance.md").exists());
+        assert!(skill_dir.join("session-lifecycle.md").exists());
+        assert!(skill_dir.join("workflows/build-small.md").exists());
+        assert!(skill_dir.join("workflows/build-medium.md").exists());
+        assert!(skill_dir.join("workflows/build-large.md").exists());
+        assert!(skill_dir.join("workflows/plan-small.md").exists());
+        assert!(skill_dir.join("workflows/plan-medium.md").exists());
+        assert!(skill_dir.join("workflows/plan-large.md").exists());
+        assert!(skill_dir.join("guidance").is_dir());
+    });
 }
 
 #[test]
 fn test_skill_install_is_idempotent() {
     let dir = TempDir::new().unwrap();
-    let config = test_config_with_global(&dir);
+    let (config, env) = test_config_with_global(&dir);
 
-    let skill_dir = dir.path().join("skill-output");
-    temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
-    let second = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
-    assert!(
-        second.is_no_op(),
-        "second install with no changes should be a no-op, got: {:?}",
-        second.changed
-    );
+    temp_env::with_vars(env, || {
+        let skill_dir = dir.path().join("skill-output");
+        temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        let second = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        assert!(
+            second.is_no_op(),
+            "second install with no changes should be a no-op, got: {:?}",
+            second.changed
+        );
 
-    // Mutating one file should make the next install report exactly that file.
-    let mutated = skill_dir.join("subagent-guidance.md");
-    std::fs::write(&mutated, "stale\n").unwrap();
-    let third = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
-    assert_eq!(third.changed, vec!["subagent-guidance.md".to_string()]);
-
-    unsafe {
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+        // Mutating one file should make the next install report exactly that file.
+        let mutated = skill_dir.join("subagent-guidance.md");
+        std::fs::write(&mutated, "stale\n").unwrap();
+        let third = temper_cli::commands::skill::install(&config, &skill_dir).unwrap();
+        assert_eq!(third.changed, vec!["subagent-guidance.md".to_string()]);
+    });
 }
 
 #[test]
 fn test_skill_generate_includes_reference_sections() {
     let dir = TempDir::new().unwrap();
-    let config = test_config_with_global(&dir);
+    let (config, env) = test_config_with_global(&dir);
 
-    // generate() now returns reference.md with generated commands and footer
-    let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(
-        content.contains("## Invocation"),
-        "should contain invocation section"
-    );
-    assert!(
-        content.contains("## Task Stages"),
-        "should contain task stages footer"
-    );
-
-    unsafe {
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+    temp_env::with_vars(env, || {
+        // generate() now returns reference.md with generated commands and footer
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        assert!(
+            content.contains("## Invocation"),
+            "should contain invocation section"
+        );
+        assert!(
+            content.contains("## Task Stages"),
+            "should contain task stages footer"
+        );
+    });
 }
 
 #[test]
 fn test_skill_generate_includes_command_table() {
     let dir = TempDir::new().unwrap();
-    let config = test_config_with_global(&dir);
+    let (config, env) = test_config_with_global(&dir);
 
-    // generate() now returns reference.md with the generated command table
-    let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("| Command | Syntax |"));
-    assert!(content.contains("| init |"));
-    assert!(content.contains("| search |"));
-
-    unsafe {
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+    temp_env::with_vars(env, || {
+        // generate() now returns reference.md with the generated command table
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        assert!(content.contains("| Command | Syntax |"));
+        assert!(content.contains("| init |"));
+        assert!(content.contains("| search |"));
+    });
 }
 
 #[test]
 fn test_skill_generate_includes_task_commands() {
     let dir = TempDir::new().unwrap();
-    let config = test_config_with_global(&dir);
+    let (config, env) = test_config_with_global(&dir);
 
-    // generate() now returns reference.md with resource subcommands
-    let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(content.contains("| resource create |"));
-    assert!(content.contains("| resource list |"));
-    assert!(content.contains("--mode"));
-    assert!(content.contains("--effort"));
-
-    unsafe {
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+    temp_env::with_vars(env, || {
+        // generate() now returns reference.md with resource subcommands
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        assert!(content.contains("| resource create |"));
+        assert!(content.contains("| resource list |"));
+        assert!(content.contains("--mode"));
+        assert!(content.contains("--effort"));
+    });
 }
 
 #[test]
 fn test_skill_generate_includes_skill_only_commands() {
     let dir = TempDir::new().unwrap();
-    let config = test_config_with_global(&dir);
+    let (config, env) = test_config_with_global(&dir);
 
-    // generate() now returns reference.md which includes skill-only commands in footer
-    let content = temper_cli::commands::skill::generate(&config).unwrap();
-    assert!(
-        content.contains("## Skill-Only Commands"),
-        "should contain skill-only commands section"
-    );
-    assert!(
-        content.contains("task start"),
-        "should contain task start skill command"
-    );
-    assert!(
-        content.contains("task resume"),
-        "should contain task resume skill command"
-    );
-    assert!(
-        content.contains("session start"),
-        "should contain session start skill command"
-    );
-
-    unsafe {
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+    temp_env::with_vars(env, || {
+        // generate() now returns reference.md which includes skill-only commands in footer
+        let content = temper_cli::commands::skill::generate(&config).unwrap();
+        assert!(
+            content.contains("## Skill-Only Commands"),
+            "should contain skill-only commands section"
+        );
+        assert!(
+            content.contains("task start"),
+            "should contain task start skill command"
+        );
+        assert!(
+            content.contains("task resume"),
+            "should contain task resume skill command"
+        );
+        assert!(
+            content.contains("session start"),
+            "should contain session start skill command"
+        );
+    });
 }
