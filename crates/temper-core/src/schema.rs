@@ -8,6 +8,7 @@ use crate::frontmatter::fields::{KNOWN_TEMPER_FIELDS, SYSTEM_MANAGED_FIELDS};
 use jsonschema::{Resource, Validator};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashSet};
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // Embedded schemas
@@ -322,6 +323,34 @@ pub fn required_fields(doc_type: &str) -> Result<Vec<String>> {
 pub fn enum_fields(doc_type: &str) -> Result<BTreeMap<String, Vec<String>>> {
     let schema = schema_value(doc_type)?;
     Ok(extract_enum_fields(&schema))
+}
+
+/// Cached non-null string enum values for the `task` doc-type schema,
+/// keyed by property name (e.g. `"temper-mode"` → `["plan", "build"]`).
+///
+/// The task schema is the single source of truth for valid `temper-mode` /
+/// `temper-effort` values. This caches the parsed enums so the embedded JSON
+/// is parsed at most once. JSON `null` entries in the schema enum (the schema
+/// allows the field to be absent/null) are filtered out — validation only runs
+/// on `Some(value)`, so callers want the concrete string set.
+static TASK_ENUM_VALUES: OnceLock<BTreeMap<String, Vec<String>>> = OnceLock::new();
+
+/// Return the allowed non-null string enum values for a property of the `task`
+/// schema, or an empty slice if the property has no string enum constraint.
+///
+/// Backed by [`enum_fields`] (which already filters non-string entries, so JSON
+/// `null` is dropped) and cached in a [`OnceLock`]. This is the schema-backed
+/// replacement for hard-coded mode/effort whitelists — the JSON schema at
+/// `schemas/task.schema.json` is the single source of truth.
+///
+/// # Panics
+/// Panics if the embedded task schema fails to parse, which would indicate a
+/// build-time error in the committed schema file rather than a runtime
+/// condition.
+pub fn task_enum_values(field: &str) -> &'static [String] {
+    let map = TASK_ENUM_VALUES
+        .get_or_init(|| enum_fields("task").expect("embedded task schema must parse"));
+    map.get(field).map_or(&[], Vec::as_slice)
 }
 
 fn extract_required_fields(schema: &serde_json::Value) -> Vec<String> {
@@ -720,6 +749,40 @@ temper-slug: "test-task"
         assert!(
             !issues.is_empty(),
             "invalid enum value must still be reported"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // task_enum_values tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn task_enum_values_mode_excludes_null() {
+        assert_eq!(
+            task_enum_values("temper-mode"),
+            &["plan".to_string(), "build".to_string()],
+            "temper-mode enum should be exactly [plan, build] with JSON null filtered out"
+        );
+    }
+
+    #[test]
+    fn task_enum_values_effort_excludes_null() {
+        assert_eq!(
+            task_enum_values("temper-effort"),
+            &[
+                "small".to_string(),
+                "medium".to_string(),
+                "large".to_string()
+            ],
+            "temper-effort enum should be exactly [small, medium, large] with JSON null filtered out"
+        );
+    }
+
+    #[test]
+    fn task_enum_values_unknown_field_is_empty() {
+        assert!(
+            task_enum_values("temper-goal").is_empty(),
+            "a property with no string enum constraint should return an empty slice"
         );
     }
 

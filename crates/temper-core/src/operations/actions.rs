@@ -16,12 +16,6 @@ use crate::types::managed_meta::ManagedMeta;
 use super::commands::{CreateResource, UpdateResource};
 use super::resource_ref::ResourceRef;
 
-/// Whitelist of recognized mode values for `DocType::Task`.
-const VALID_TASK_MODES: &[&str] = &["plan", "build"];
-
-/// Whitelist of recognized effort values for `DocType::Task`.
-const VALID_TASK_EFFORTS: &[&str] = &["small", "medium", "large"];
-
 /// Errors that can arise during pure-action execution.
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum ActionError {
@@ -362,16 +356,18 @@ pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
     match doctype {
         crate::frontmatter::DocType::Task => {
             if let Some(mode) = cmd.managed_meta.mode.as_deref() {
-                if !VALID_TASK_MODES.contains(&mode) {
+                let valid = crate::schema::task_enum_values("temper-mode");
+                if !valid.iter().any(|v| v == mode) {
                     return Err(ActionError::InvalidValue(format!(
-                        "mode '{mode}' not in {VALID_TASK_MODES:?}"
+                        "mode '{mode}' not in {valid:?}"
                     )));
                 }
             }
             if let Some(effort) = cmd.managed_meta.effort.as_deref() {
-                if !VALID_TASK_EFFORTS.contains(&effort) {
+                let valid = crate::schema::task_enum_values("temper-effort");
+                if !valid.iter().any(|v| v == effort) {
                     return Err(ActionError::InvalidValue(format!(
-                        "effort '{effort}' not in {VALID_TASK_EFFORTS:?}"
+                        "effort '{effort}' not in {valid:?}"
                     )));
                 }
             }

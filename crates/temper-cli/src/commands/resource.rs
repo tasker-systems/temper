@@ -102,24 +102,39 @@ async fn resolve_from_input(
     Ok(Some(extracted.content))
 }
 
+/// CLI-derived arguments for `create`. Bundles the domain parameters parsed
+/// from the `temper resource create` clap subcommand. `config` stays a
+/// separate parameter on `create` — it is infrastructure, not CLI-derived
+/// domain data. Field ownership mirrors the clap-destructured values to keep
+/// the call site free of extra clones.
+#[derive(Debug)]
+pub struct CreateResourceArgs<'a> {
+    pub doc_type: &'a str,
+    pub title: &'a str,
+    pub context: Option<&'a str>,
+    pub goal: Option<&'a str>,
+    pub mode: Option<&'a str>,
+    pub effort: Option<&'a str>,
+    pub slug: Option<&'a str>,
+    pub body_flag: Option<String>,
+    pub from: Option<String>,
+    pub format: &'a str,
+}
+
 /// Create a new resource.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "per-doctype creators have different required args; params struct deferred to Task 12+"
-)]
-pub fn create(
-    config: &Config,
-    doc_type: &str,
-    title: &str,
-    context: Option<&str>,
-    goal: Option<&str>,
-    mode: Option<&str>,
-    effort: Option<&str>,
-    slug: Option<&str>,
-    body_flag: Option<String>,
-    from: Option<String>,
-    format: &str,
-) -> Result<()> {
+pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
+    let CreateResourceArgs {
+        doc_type,
+        title,
+        context,
+        goal,
+        mode,
+        effort,
+        slug,
+        body_flag,
+        from,
+        format,
+    } = args;
     use std::io::IsTerminal;
 
     use temper_core::types::ManagedMeta;
@@ -796,53 +811,54 @@ fn build_partial_managed_meta_from_args(
     })
 }
 
+/// Typed partial `open_meta` payload built from update CLI list flags.
+///
+/// Serialized keys are byte-identical to the historical stringly-keyed map:
+/// the graph-edge fields carry kebab-case `rename`s. Every field uses
+/// `skip_serializing_if` so an all-empty value serializes to `{}` — the
+/// `None`-on-empty contract is reconstructed by `build_partial_open_meta_from_args`.
+///
+/// This is a focused CLI-local struct rather than a reuse of the graph-edge
+/// struct in `temper-core` (which omits `tags`/`aliases`/`references` and uses
+/// snake_case serialization).
+#[derive(Debug, serde::Serialize)]
+struct PartialOpenMeta<'a> {
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    tags: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    aliases: &'a [String],
+    #[serde(rename = "relates-to", skip_serializing_if = "<[String]>::is_empty")]
+    relates_to: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    references: &'a [String],
+    #[serde(rename = "depends-on", skip_serializing_if = "<[String]>::is_empty")]
+    depends_on: &'a [String],
+    #[serde(skip_serializing_if = "<[String]>::is_empty")]
+    extends: &'a [String],
+    #[serde(rename = "preceded-by", skip_serializing_if = "<[String]>::is_empty")]
+    preceded_by: &'a [String],
+    #[serde(rename = "derived-from", skip_serializing_if = "<[String]>::is_empty")]
+    derived_from: &'a [String],
+}
+
 /// Build a partial `open_meta` JSON object from update CLI list flags. Returns
-/// `None` if no open-meta list flags were passed.
+/// `None` if no open-meta list flags were passed (all vecs empty).
 fn build_partial_open_meta_from_args(params: &UpdateParams<'_>) -> Option<serde_json::Value> {
-    let mut obj = serde_json::Map::new();
-    if !params.tags.is_empty() {
-        obj.insert("tags".to_string(), serde_json::json!(params.tags));
-    }
-    if !params.aliases.is_empty() {
-        obj.insert("aliases".to_string(), serde_json::json!(params.aliases));
-    }
-    if !params.relates_to.is_empty() {
-        obj.insert(
-            "relates-to".to_string(),
-            serde_json::json!(params.relates_to),
-        );
-    }
-    if !params.references.is_empty() {
-        obj.insert(
-            "references".to_string(),
-            serde_json::json!(params.references),
-        );
-    }
-    if !params.depends_on.is_empty() {
-        obj.insert(
-            "depends-on".to_string(),
-            serde_json::json!(params.depends_on),
-        );
-    }
-    if !params.extends.is_empty() {
-        obj.insert("extends".to_string(), serde_json::json!(params.extends));
-    }
-    if !params.preceded_by.is_empty() {
-        obj.insert(
-            "preceded-by".to_string(),
-            serde_json::json!(params.preceded_by),
-        );
-    }
-    if !params.derived_from.is_empty() {
-        obj.insert(
-            "derived-from".to_string(),
-            serde_json::json!(params.derived_from),
-        );
-    }
-    if obj.is_empty() {
+    let partial = PartialOpenMeta {
+        tags: params.tags,
+        aliases: params.aliases,
+        relates_to: params.relates_to,
+        references: params.references,
+        depends_on: params.depends_on,
+        extends: params.extends,
+        preceded_by: params.preceded_by,
+        derived_from: params.derived_from,
+    };
+    let value = serde_json::to_value(&partial).ok()?;
+    if value.as_object().is_some_and(|o| o.is_empty()) {
         None
     } else {
-        Some(serde_json::Value::Object(obj))
+        Some(value)
     }
 }
 
