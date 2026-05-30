@@ -282,8 +282,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // (already-committed) create. `find_task` owns its own runtime via
     // `with_client`, so it is called outside `runtime.block_on`.
     if let Some(task_slug) = task {
-        match crate::actions::task::find_task(config, task_slug, Some(&ctx))? {
-            Some(task_info) => {
+        // The whole link is best-effort: the session is already committed, so
+        // no failure here (ambiguous/errored task lookup, or a failed assert)
+        // may turn a successful create into a command failure. Each failure
+        // mode warns and the create still succeeds.
+        match crate::actions::task::find_task(config, task_slug, Some(&ctx)) {
+            Ok(Some(task_info)) => {
                 use temper_core::operations::ResourceRef;
                 use temper_core::types::graph::{EdgeKind, Polarity};
                 use temper_core::types::relationship_requests::AssertRelationshipRequest;
@@ -296,19 +300,32 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                     label: "advances".to_string(),
                     weight: 1.0,
                 };
-                runtime.block_on(async {
+                match runtime.block_on(async {
                     client
                         .relationships()
                         .assert(&req)
                         .await
                         .map_err(crate::commands::client_err)
-                })?;
-                output::success(format!("Linked session → task {}", task_info.slug));
+                }) {
+                    Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
+                    Err(e) => tracing::warn!(
+                        task = task_slug,
+                        error = %e,
+                        "session→task assert failed; session created without link"
+                    ),
+                }
             }
-            None => {
+            Ok(None) => {
                 tracing::warn!(
                     task = task_slug,
                     "task not found for session link; skipping relationship assert"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    task = task_slug,
+                    error = %e,
+                    "task lookup failed for session link; skipping relationship assert"
                 );
             }
         }

@@ -413,3 +413,87 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
         "error message should explain --task is session-only; got: {err_msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test 5: ambiguous --task suffix → session still created, no edge, no failure
+// ---------------------------------------------------------------------------
+
+/// An ambiguous `--task` suffix makes `find_task` return `Err` (not `None`).
+/// The link is a best-effort tail on an already-committed session, so the
+/// lookup error is warned + skipped: the session is still created, no edge is
+/// asserted, and `create` returns `Ok(())`.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    // Two tasks sharing the "-widget" suffix → `--task widget` is ambiguous.
+    seed_task(&app.client, "myapp", "alpha-widget", "Alpha Widget").await;
+    seed_task(&app.client, "myapp", "beta-widget", "Beta Widget").await;
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+    let cli_config = app.cli_config.clone();
+
+    let title = "Ambiguous Link Session";
+
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
+            temper_cli::commands::resource::create(
+                &cli_config,
+                temper_cli::commands::resource::CreateResourceArgs {
+                    doc_type: "session",
+                    title,
+                    context: Some("myapp"),
+                    goal: None,
+                    mode: None,
+                    effort: None,
+                    slug: None,
+                    task: Some("widget"),
+                    body_flag: None,
+                    from: None,
+                    format: "text",
+                },
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    assert!(
+        result.is_ok(),
+        "an ambiguous --task lookup must not fail the create; got {result:?}"
+    );
+
+    let owner = app.cli_config.owner_for_context("myapp");
+    let slug = session_slug(title);
+    let session_row = app
+        .client
+        .resources()
+        .resolve_by_uri(&owner, "myapp", "session", &slug)
+        .await
+        .expect("session must exist even though task link was skipped");
+
+    let edges = app
+        .client
+        .resources()
+        .edges(*session_row.id.as_uuid())
+        .await
+        .expect("fetch session edges");
+    assert!(
+        edges.is_empty(),
+        "no edge must be asserted for an ambiguous task suffix; got {edges:?}"
+    );
+}
