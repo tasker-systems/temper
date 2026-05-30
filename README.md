@@ -151,10 +151,12 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 
 | Command | Description |
 |---------|-------------|
-| `temper task create --title <t>` | Create a task |
-| `temper task list` | List tasks |
-| `temper goal create --title <t>` | Create a goal |
-| `temper goal list` | List goals |
+| `temper resource create --type task --title <t> --context <ctx>` | Create a task |
+| `temper resource create --type goal --title <t> --context <ctx>` | Create a goal |
+| `temper resource list --type task [--context <ctx>]` | List tasks (or any doc type) |
+| `temper resource update <slug> --type task --context <ctx> --stage done` | Mark a task done |
+
+> `temper resource create` and `temper resource update` require `--context`.
 
 ### Contexts and Skills
 

@@ -9,7 +9,9 @@ temper-cloud runs two runtimes in a single Vercel project at **temperkb.io**:
 - **Rust (axum)** handles the core API: resource CRUD, search, profiles, teams, events
 - **TypeScript (Node.js)** handles file upload and the async processing workflow
 
-Both runtimes share the same JWT authentication (EdDSA via Neon Auth JWKS). Vercel's file-based routing auto-detects the runtime from `api/axum.rs` (Rust) and `api/upload.ts` (TypeScript).
+Both runtimes share the same JWT authentication (EdDSA via Auth0 JWKS).[^auth] Vercel's file-based routing auto-detects the runtime from `api/axum.rs` (Rust) and `api/upload.ts` (TypeScript).
+
+[^auth]: Auth migrated from Neon Auth (early development) to Auth0 for the production CLI OAuth device flow.
 
 ```
                           temperkb.io
@@ -64,7 +66,7 @@ Content-Type: application/json
 ```
 
 The Rust handler:
-1. Verifies the JWT (EdDSA, Neon Auth JWKS)
+1. Verifies the JWT (EdDSA, Auth0 JWKS)
 2. Resolves the authenticated profile from `kb_profiles`
 3. Generates a UUIDv7 resource ID
 4. Inserts into `resources` with the profile as originator and owner
@@ -274,7 +276,7 @@ Both endpoints verify the same JWT:
 | Property | Value |
 |----------|-------|
 | Algorithm | EdDSA (Ed25519) |
-| Key source | JWKS endpoint (Neon Auth) |
+| Key source | JWKS endpoint (Auth0) |
 | Required claims | `sub`, `email` |
 | Profile resolution | `kb_profiles.auth_provider_sub = claims.sub` |
 | Resource authorization | `resources_visible_to(profile_id)` SQL function |

@@ -1,5 +1,11 @@
 # Pre-Deployment Security & Architecture Audit
 
+> **Historical audit artifact (point-in-time, 2026-03-28).** This document captures a
+> snapshot at a specific moment and does **not** reflect the current architecture. Since
+> this audit: auth migrated from Neon Auth to Auth0 (production CLI OAuth device flow), and
+> iteration **I5a** removed the ratatui TUI (replaced by the SvelteKit web UI). The findings
+> below are preserved as-is for the record; do not treat them as a current-state description.
+
 **Date:** 2026-03-28
 **Scope:** temper-api crate + full schema, pre-I4 (Vercel deployment)
 **Branch:** jcoletaylor/temper-cloud

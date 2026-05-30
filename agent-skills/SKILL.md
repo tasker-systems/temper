@@ -27,6 +27,13 @@ and portable.
 > create resources with full content, and `search` for text-based discovery. See
 > `knowledge-base.md` for MCP access patterns and `claude-desktop.md` for Claude Desktop setup.
 
+> **Post-cloud-only**: Temper is now cloud-only — the **server is authoritative**. The local
+> vault directory is a **read-only projection cache** materialized on demand via
+> `temper pull <context>`; it is no longer the source of truth. All writes route through the
+> cloud API (`temper resource create`/`update`). Removing a projected file with `rm` has no
+> server effect — it's just a local cache miss that `temper pull` re-materializes. To actually
+> delete a resource, use `temper resource delete`.
+
 **Important distinction**: The vault holds the *strategic layer* — milestones, tickets,
 sessions, concepts. Design specs, implementation plans, and code live in the *project
 repositories* themselves (often under `docs/superpowers/specs/` and `docs/superpowers/plans/`).
