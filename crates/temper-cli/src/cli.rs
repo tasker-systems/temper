@@ -199,6 +199,10 @@ pub enum ResourceAction {
         /// Override auto-generated slug (goal only)
         #[arg(long)]
         slug: Option<String>,
+        /// Link this session to a task by slug (session only). Asserts a
+        /// session→task `advances` relationship after creation.
+        #[arg(long)]
+        task: Option<String>,
         /// Print the raw template and exit
         #[arg(long)]
         show_template: bool,
