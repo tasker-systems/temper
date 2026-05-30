@@ -1,22 +1,26 @@
 use serde::Serialize;
-use temper_core::vault::Vault;
+use temper_core::types::resource::{ResourceListParams, ResourceRow, ResourceSortField, SortOrder};
 
+use crate::actions::runtime;
 use crate::config::Config;
 use crate::error::Result;
 use crate::format::{render, OutputFormat};
 
 const MAX_SESSION_LINES: usize = 500;
 
+/// How many recent sessions to surface in the warmup primer.
+const RECENT_SESSION_LIMIT: usize = 5;
+
 /// Structured session entry for JSON/Toon rendering.
 #[derive(Debug, Serialize)]
-pub(crate) struct WarmupSession {
+pub struct WarmupSession {
     pub date: String,
     pub title: String,
 }
 
 /// In-progress task entry for JSON/Toon rendering.
 #[derive(Debug, Serialize)]
-pub(crate) struct WarmupTask {
+pub struct WarmupTask {
     pub title: String,
     pub slug: String,
     pub mode: Option<String>,
@@ -25,7 +29,7 @@ pub(crate) struct WarmupTask {
 
 /// Full warmup result — serialized by `render()` for JSON and Toon outputs.
 #[derive(Debug, Serialize)]
-pub(crate) struct WarmupResult {
+pub struct WarmupResult {
     pub project: String,
     pub recent_sessions: Vec<WarmupSession>,
     pub last_session_content: Option<String>,
@@ -33,104 +37,112 @@ pub(crate) struct WarmupResult {
 }
 
 /// Run the warmup command — output a context primer for a new session.
+///
+/// Thin wrapper: all data collection lives in [`build_warmup_result`] so it is
+/// testable from an external crate. This function only builds, renders, prints.
 pub fn run(config: &Config, project: Option<&str>, format: OutputFormat) -> Result<()> {
-    let project_name = project.unwrap_or("general");
-    let sessions = collect_recent_sessions(config, project_name, 5);
-    let in_progress = collect_in_progress_tasks(config, project_name);
-
-    let last_session_content = sessions.first().and_then(|(_, _, path)| {
-        std::fs::read_to_string(path).ok().map(|content| {
-            let lines: Vec<&str> = content.lines().collect();
-            if lines.len() > MAX_SESSION_LINES {
-                lines[..MAX_SESSION_LINES].join("\n")
-            } else {
-                content
-            }
-        })
-    });
-
-    let result = WarmupResult {
-        project: project_name.to_string(),
-        recent_sessions: sessions
-            .iter()
-            .map(|(date, title, _)| WarmupSession {
-                date: date.clone(),
-                title: title.clone(),
-            })
-            .collect(),
-        last_session_content,
-        in_progress_tasks: in_progress
-            .into_iter()
-            .map(|(title, slug, mode, effort)| WarmupTask {
-                title,
-                slug,
-                mode,
-                effort,
-            })
-            .collect(),
-    };
-
+    let result = build_warmup_result(config, project)?;
     let rendered = render(&result, format)?;
     println!("{rendered}");
     Ok(())
 }
 
-/// Collect recent session files for a project, sorted by date descending.
-/// Returns (date, title, path) tuples.
-fn collect_recent_sessions(
-    config: &Config,
-    project: &str,
-    limit: usize,
-) -> Vec<(String, String, std::path::PathBuf)> {
-    let vault_layout = Vault::new(&config.vault_root);
-    let owner = config.owner_for_context(project);
-    let sessions_dir = vault_layout.doc_type_dir(&owner, project, "session");
-    if !sessions_dir.exists() {
-        return vec![];
-    }
+/// Collect everything the warmup primer reports: recent sessions, the most
+/// recent session's body, and in-progress tasks.
+///
+/// Cloud-only: sessions are listed from the API (`client.resources().list`),
+/// the last session's body is fetched via `client.resources().content`, and
+/// tasks come from the cloud-backed [`crate::commands::task::load_tasks`]. The
+/// local vault is a read-only projection cache that is empty/absent on a fresh
+/// device, so a `fs::read_dir` scan would silently return nothing there.
+///
+/// Sessions + last-session content are gathered in a single `with_client`
+/// closure (one runtime); tasks come from `load_tasks`, which manages its own
+/// runtime, in a sequential (not nested) call.
+pub fn build_warmup_result(config: &Config, project: Option<&str>) -> Result<WarmupResult> {
+    let project_name = project.unwrap_or("general").to_string();
 
-    let mut entries: Vec<(String, String, std::path::PathBuf)> = Vec::new();
+    let (recent_sessions, last_session_content) =
+        collect_sessions_with_content(&project_name, RECENT_SESSION_LIMIT)?;
+    let in_progress_tasks = collect_in_progress_tasks(config, &project_name);
 
-    if let Ok(dir) = std::fs::read_dir(&sessions_dir) {
-        for entry in dir.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let stem = path
-                .file_stem()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string();
-
-            // Parse date from filename: "YYYY-MM-DD — Title"
-            let date = if stem.len() >= 10 {
-                stem[..10].to_string()
-            } else {
-                "unknown".to_string()
-            };
-
-            let title = if let Some(pos) = stem.find(" \u{2014} ") {
-                stem[pos + " \u{2014} ".len()..].to_string()
-            } else {
-                stem.clone()
-            };
-
-            entries.push((date, title, path));
-        }
-    }
-
-    entries.sort_by(|a, b| b.0.cmp(&a.0));
-    entries.truncate(limit);
-    entries
+    Ok(WarmupResult {
+        project: project_name,
+        recent_sessions,
+        last_session_content,
+        in_progress_tasks,
+    })
 }
 
-/// Collect in-progress tasks for a project.
-/// Returns (title, slug, mode, effort) tuples.
-fn collect_in_progress_tasks(
-    config: &Config,
-    project: &str,
-) -> Vec<(String, String, Option<String>, Option<String>)> {
+/// List recent sessions for a context (most-recent-first, capped at `limit`)
+/// and fetch the most-recent session's body, truncated to [`MAX_SESSION_LINES`].
+///
+/// Both reads share one tokio runtime via a single `with_client` closure.
+fn collect_sessions_with_content(
+    context: &str,
+    limit: usize,
+) -> Result<(Vec<WarmupSession>, Option<String>)> {
+    let api_params = ResourceListParams {
+        doc_type_name: Some("session".to_string()),
+        context_name: Some(context.to_string()),
+        sort: Some(ResourceSortField::Created),
+        order: Some(SortOrder::Desc),
+        limit: Some(limit as i64),
+        ..Default::default()
+    };
+
+    runtime::with_client(move |client| {
+        let api_params = api_params.clone();
+        Box::pin(async move {
+            let response = client
+                .resources()
+                .list(&api_params)
+                .await
+                .map_err(runtime::client_err_to_temper)?;
+
+            let sessions: Vec<WarmupSession> = response.rows.iter().map(session_from_row).collect();
+
+            // Most-recent session's body — fetched only when there is one.
+            let last_session_content = match response.rows.first() {
+                Some(row) => {
+                    let resp = client
+                        .resources()
+                        .content(*row.id.as_uuid())
+                        .await
+                        .map_err(runtime::client_err_to_temper)?;
+                    Some(truncate_lines(resp.markdown, MAX_SESSION_LINES))
+                }
+                None => None,
+            };
+
+            Ok((sessions, last_session_content))
+        })
+    })
+}
+
+/// Derive a [`WarmupSession`] from a resource row: the date is the row's
+/// creation timestamp (`%Y-%m-%d`) and the title is the row's `title` column
+/// (kept in sync with `temper-title` on every write).
+fn session_from_row(row: &ResourceRow) -> WarmupSession {
+    WarmupSession {
+        date: row.created.format("%Y-%m-%d").to_string(),
+        title: row.title.clone(),
+    }
+}
+
+/// Truncate `content` to at most `max_lines` lines, joining with `\n`. Inputs
+/// at or under the limit are returned unchanged.
+fn truncate_lines(content: String, max_lines: usize) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() > max_lines {
+        lines[..max_lines].join("\n")
+    } else {
+        content
+    }
+}
+
+/// Collect in-progress tasks for a project from the cloud-backed task list.
+fn collect_in_progress_tasks(config: &Config, project: &str) -> Vec<WarmupTask> {
     let tasks = match crate::commands::task::load_tasks(config, Some(project), None) {
         Ok(t) => t,
         Err(_) => return vec![],
@@ -138,6 +150,11 @@ fn collect_in_progress_tasks(
     tasks
         .into_iter()
         .filter(|t| t.stage == "in-progress")
-        .map(|t| (t.title, t.slug, t.mode, t.effort))
+        .map(|t| WarmupTask {
+            title: t.title,
+            slug: t.slug,
+            mode: t.mode,
+            effort: t.effort,
+        })
         .collect()
 }
