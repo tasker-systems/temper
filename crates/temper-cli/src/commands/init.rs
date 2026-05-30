@@ -207,7 +207,7 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
     let idx = Select::with_theme(&theme)
         .with_prompt("Auth provider")
         .default(0)
-        .items(&items)
+        .items(items)
         .interact()
         .map_err(prompt_err)?;
 

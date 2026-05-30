@@ -68,7 +68,7 @@ async fn single_turn_final() {
     let provider = MockLlmProvider::new("mock", "mock")
         .scenario(MockScenario::SingleTurn(json!({"title": "Test"})));
 
-    let mut agent = Agent::new(Arc::new(provider), vec![], 1, NoState::default());
+    let mut agent = Agent::new(Arc::new(provider), vec![], 1, NoState);
 
     let outcome = agent.run("system", "user").await.unwrap();
 
@@ -149,7 +149,7 @@ async fn unknown_tool_not_found() {
     });
 
     // No tools registered — the single tool call will fail with ToolNotFound.
-    let mut agent = Agent::new(Arc::new(provider), vec![], 3, NoState::default());
+    let mut agent = Agent::new(Arc::new(provider), vec![], 3, NoState);
 
     let err = agent.run("system", "call something").await.unwrap_err();
     assert!(matches!(err, AgentError::ToolNotFound(ref n) if n == "nonexistent"));
@@ -172,7 +172,7 @@ async fn tool_handler_error_surfaces() {
         ErrorHandler,
     );
 
-    let mut agent = Agent::new(Arc::new(provider), vec![tool], 3, NoState::default());
+    let mut agent = Agent::new(Arc::new(provider), vec![tool], 3, NoState);
 
     let err = agent.run("system", "call error_tool").await.unwrap_err();
     match err {

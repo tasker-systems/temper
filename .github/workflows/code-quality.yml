@@ -7,7 +7,32 @@ jobs:
   rust-quality:
     name: Rust Quality
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    # Clippy runs `--workspace --all-targets`, which compiles test targets that
+    # use compile-time `sqlx::query!()` macros. `cargo sqlx prepare` cannot cache
+    # queries from test targets, so under SQLX_OFFLINE those macros fail with
+    # "set DATABASE_URL to use query macros online". Provide a migrated Postgres
+    # so the macros verify online — the same service the integration-tests job
+    # uses.
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.2-pg18-trixie
+        env:
+          POSTGRES_DB: temper_development
+          POSTGRES_USER: temper
+          POSTGRES_PASSWORD: temper
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5437:5432
+        options: >-
+          --health-cmd "pg_isready -U temper -d temper_development"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://temper:temper@localhost:5437/temper_development
 
     steps:
       - name: Checkout code
@@ -23,11 +48,19 @@ jobs:
         with:
           prefix-key: code-quality
 
+      - name: Install cargo-sqlx
+        uses: taiki-e/install-action@v2
+        with:
+          tool: sqlx-cli
+
+      - name: Run migrations
+        run: cargo sqlx migrate run
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Run Clippy lints
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
       - name: Check documentation builds
         run: cargo doc --workspace --no-deps --document-private-items

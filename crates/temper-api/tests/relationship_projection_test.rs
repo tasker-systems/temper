@@ -33,25 +33,26 @@ fn public_scope_id() -> Uuid {
     Uuid::parse_str(PUBLIC_SCOPE_ID).expect("PUBLIC_SCOPE_ID parses")
 }
 
-/// Append a `relationship_asserted` root event and apply it as a projection.
-/// Returns the event id (== correlation_id for root events).
-async fn assert_and_project(
-    pool: &PgPool,
-    profile_id: Uuid,
+/// The edge a fixture `relationship_asserted` event should declare.
+struct EdgeSpec {
     source_id: Uuid,
     target_id: Uuid,
     edge_kind: EdgeKind,
     polarity: Polarity,
-    label: &str,
+    label: &'static str,
     weight: f64,
-) -> Uuid {
+}
+
+/// Append a `relationship_asserted` root event and apply it as a projection.
+/// Returns the event id (== correlation_id for root events).
+async fn assert_and_project(pool: &PgPool, profile_id: Uuid, spec: EdgeSpec) -> Uuid {
     let payload = RelationshipAsserted {
-        source_resource_id: source_id,
-        target: TargetEndpoint::Resource(target_id),
-        edge_kind,
-        polarity,
-        label: label.to_string(),
-        weight,
+        source_resource_id: spec.source_id,
+        target: TargetEndpoint::Resource(spec.target_id),
+        edge_kind: spec.edge_kind,
+        polarity: spec.polarity,
+        label: spec.label.to_string(),
+        weight: spec.weight,
     };
     let payload_value = serde_json::to_value(&payload).expect("serialize RelationshipAsserted");
 
@@ -91,12 +92,14 @@ async fn test_asserted_projects_edge_row(pool: PgPool) {
     assert_and_project(
         &pool,
         profile,
-        a,
-        b,
-        EdgeKind::LeadsTo,
-        Polarity::Forward,
-        "depends_on",
-        1.0,
+        EdgeSpec {
+            source_id: a,
+            target_id: b,
+            edge_kind: EdgeKind::LeadsTo,
+            polarity: Polarity::Forward,
+            label: "depends_on",
+            weight: 1.0,
+        },
     )
     .await;
 
@@ -132,12 +135,14 @@ async fn test_reweighted_updates_weight(pool: PgPool) {
     let assertion_event_id = assert_and_project(
         &pool,
         profile,
-        a,
-        b,
-        EdgeKind::LeadsTo,
-        Polarity::Forward,
-        "depends_on",
-        1.0,
+        EdgeSpec {
+            source_id: a,
+            target_id: b,
+            edge_kind: EdgeKind::LeadsTo,
+            polarity: Polarity::Forward,
+            label: "depends_on",
+            weight: 1.0,
+        },
     )
     .await;
 
@@ -218,12 +223,14 @@ async fn test_folded_sets_is_folded_and_excluded_from_neighbors(pool: PgPool) {
     let assertion_event_id = assert_and_project(
         &pool,
         profile,
-        a,
-        b,
-        EdgeKind::LeadsTo,
-        Polarity::Forward,
-        "depends_on",
-        1.0,
+        EdgeSpec {
+            source_id: a,
+            target_id: b,
+            edge_kind: EdgeKind::LeadsTo,
+            polarity: Polarity::Forward,
+            label: "depends_on",
+            weight: 1.0,
+        },
     )
     .await;
 
@@ -294,12 +301,14 @@ async fn test_rebuild_reproduces_projection(pool: PgPool) {
     assert_and_project(
         &pool,
         profile,
-        a,
-        b,
-        EdgeKind::LeadsTo,
-        Polarity::Forward,
-        "depends_on",
-        1.0,
+        EdgeSpec {
+            source_id: a,
+            target_id: b,
+            edge_kind: EdgeKind::LeadsTo,
+            polarity: Polarity::Forward,
+            label: "depends_on",
+            weight: 1.0,
+        },
     )
     .await;
 
@@ -307,12 +316,14 @@ async fn test_rebuild_reproduces_projection(pool: PgPool) {
     let ac_assertion_id = assert_and_project(
         &pool,
         profile,
-        a,
-        c,
-        EdgeKind::Near,
-        Polarity::Forward,
-        "relates_to",
-        0.5,
+        EdgeSpec {
+            source_id: a,
+            target_id: c,
+            edge_kind: EdgeKind::Near,
+            polarity: Polarity::Forward,
+            label: "relates_to",
+            weight: 0.5,
+        },
     )
     .await;
 

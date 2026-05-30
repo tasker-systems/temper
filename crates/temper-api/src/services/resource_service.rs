@@ -1267,7 +1267,11 @@ mod tests {
             profile_id: uuid::Uuid,
             params: temper_core::types::resource::ResourceListParams,
         ) {
-            let _: std::pin::Pin<
+            // Bind to a named (underscore-prefixed) variable rather than `_`:
+            // this preserves the compile-time type assertion while avoiding
+            // `clippy::let_underscore_future` (the future is never polled by
+            // design — `_assert_types` is never called).
+            let _future: std::pin::Pin<
                 Box<
                     dyn std::future::Future<
                             Output = crate::error::ApiResult<

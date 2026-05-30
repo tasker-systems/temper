@@ -10,10 +10,10 @@
 //!    frontmatter's `temper-updated`, touch the local mtime to now and
 //!    render the local content.
 //! 3. **Full-fetch**: if metadata diverges or no local file exists, call
-//!    `GET /resources/{id}/content`, rebuild the full file (frontmatter
-//!    + body) from the server response, overwrite the local file, and
-//!    render it. Tier-3 is the corruption-resistant path — it always
-//!    reconstructs from canonical server state.
+//!    `GET /resources/{id}/content`, rebuild the full file
+//!    (frontmatter + body) from the server response, overwrite the local
+//!    file, and render it. Tier-3 is the corruption-resistant path — it
+//!    always reconstructs from canonical server state.
 //!
 //! Cloud mode never calls into this module — callers select the
 //! appropriate code path before invoking.

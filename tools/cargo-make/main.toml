@@ -40,6 +40,18 @@ args = [
   "--no-fail-fast"
 ]
 
+[tasks.coverage]
+description = "Generate code coverage via llvm-cov + nextest, incl. DB tests (requires Docker Postgres + the llvm-tools-preview rustup component)"
+command = "cargo"
+args = [
+  "llvm-cov",
+  "nextest",
+  "--workspace",
+  "--features",
+  "test-db",
+  "--no-fail-fast"
+]
+
 [tasks.test-all]
 description = "Run all test tiers including embedder and TypeScript tests"
 dependencies = ["test-all-rust", "ts-test", "ts-test-integration"]
@@ -118,13 +130,14 @@ args = ["fmt", "--all"]
 [tasks.rust-clippy]
 description = "Run Clippy lints"
 command = "cargo"
-args = ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"]
+args = ["clippy", "--workspace", "--all-targets", "--all-features", "--", "-D", "warnings"]
 
 [tasks.rust-clippy-fix]
 description = "Fix Clippy issues"
 command = "cargo"
 args = [
   "clippy",
+  "--workspace",
   "--all-targets",
   "--all-features",
   "--fix",

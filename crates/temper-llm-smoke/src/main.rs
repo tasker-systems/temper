@@ -198,7 +198,8 @@ async fn build_provider(args: &Args) -> anyhow::Result<(Arc<dyn LlmProvider>, St
                 .map_err(|e| anyhow::anyhow!("ClaudeProvider::new: {e}"))?;
             Ok((Arc::new(p), "anthropic".to_string(), model))
         }
-        "ollama" | "openai" | _ => {
+        // ollama, openai, and any other key route through the OpenAI-compatible provider.
+        _ => {
             let url = args
                 .url
                 .clone()

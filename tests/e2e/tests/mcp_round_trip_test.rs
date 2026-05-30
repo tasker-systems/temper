@@ -312,7 +312,7 @@ async fn mcp_describe_doc_type_returns_usable_example(_pool: sqlx::PgPool) {
         serde_json::json!("2000-01-01T00:00:00Z"),
     );
 
-    let yaml_value: serde_yaml::Value = serde_yaml::to_value(&serde_json::Value::Object(synthetic))
+    let yaml_value: serde_yaml::Value = serde_yaml::to_value(serde_json::Value::Object(synthetic))
         .expect("JSON to YAML conversion");
 
     let issues =
@@ -424,9 +424,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     let updated_hash = format!("sha256:{}", sha2_hex(updated_content));
 
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(resource.id),
-        },
+        resource: ResourceRef::Uuid { id: resource.id },
         body: Some(BodyUpdate {
             content: updated_content.to_string(),
             content_hash: Some(updated_hash.clone()),

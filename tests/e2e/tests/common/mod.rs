@@ -57,31 +57,23 @@ impl E2eTestApp {
 ///
 /// `CARGO_BIN_EXE_temper` is only set by cargo for integration tests in the
 /// same package that declares the binary. For this e2e crate (which lists
-/// `temper-cli` as a dev-dependency), we derive the path from the workspace
-/// target directory instead — the binary lives in `<workspace_root>/target/
-/// <profile>/temper` relative to this crate's manifest.
+/// `temper-cli` as a dev-dependency), we derive the path from the *running
+/// test executable* instead: the test binary and the `temper` binary are built
+/// into the same target directory, so resolving relative to `current_exe()` is
+/// robust to relocated target dirs. In particular `cargo llvm-cov` builds into
+/// `target/llvm-cov-target/` rather than `target/`, which a hard-coded
+/// `<workspace>/target/<profile>/` path would miss (the CLI-spawning e2e tests
+/// then fail with `NotFound` under coverage).
+///
+/// The test executable lives in `<target>/<profile>/deps/`; the `temper` binary
+/// is one level up in `<target>/<profile>/`.
 fn temper_bin_path() -> std::path::PathBuf {
-    // CARGO_MANIFEST_DIR for this crate is `tests/e2e`. Walk up two levels to
-    // reach the workspace root, then into `target/debug/` (nextest always uses
-    // the debug profile unless --release is passed).
-    let manifest_dir =
-        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set by cargo");
-    let workspace_root = std::path::Path::new(&manifest_dir)
-        .parent() // tests/
-        .and_then(|p| p.parent()) // workspace root
-        .expect("could not resolve workspace root from CARGO_MANIFEST_DIR");
-
-    // Honour CARGO_TARGET_DIR override (rare but valid). Fall back to the
-    // conventional `target/` directory inside the workspace root.
-    let target_dir = if let Ok(d) = std::env::var("CARGO_TARGET_DIR") {
-        std::path::PathBuf::from(d)
-    } else {
-        workspace_root.join("target")
-    };
-
-    let profile = std::env::var("CARGO_PROFILE").unwrap_or_else(|_| "debug".to_string());
-
-    target_dir.join(&profile).join("temper")
+    let mut path = std::env::current_exe().expect("current_exe() for the running test binary");
+    path.pop(); // drop the test-binary filename → .../deps
+    if path.ends_with("deps") {
+        path.pop(); // → .../<profile>
+    }
+    path.join("temper")
 }
 
 /// Run the `temper` CLI binary against the in-process Axum server.
