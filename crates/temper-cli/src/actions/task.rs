@@ -6,13 +6,20 @@ use crate::actions::types::TaskInfo;
 use crate::config::Config;
 use crate::error::{Result, TemperError};
 
+/// Per-context cap on the number of tasks fetched by [`load_tasks`]. Tasks per
+/// context are bounded in practice, so this generous cap avoids pagination
+/// while protecting against a runaway response. If a context ever returns
+/// exactly this many rows the result is assumed truncated and a warning is
+/// emitted (no-silent-caps).
+const TASK_LIST_LIMIT: i64 = 1000;
+
 /// Load all tasks, optionally filtered by context and/or goal.
 ///
 /// Cloud-only: tasks are listed from the API via `client.resources().list_meta`,
 /// not by scanning the local vault. The local vault is a read-only projection
 /// cache that is empty/absent on a fresh device, so a disk scan would silently
-/// return nothing there. This keeps `load_tasks` (and its callers `next_seq` /
-/// `find_task`) correct regardless of projection state.
+/// return nothing there. This keeps `load_tasks` (and its caller `find_task`)
+/// correct regardless of projection state.
 ///
 /// Each `TaskInfo` is built by combining the server's `managed_meta` (which
 /// carries `temper-title`, `temper-slug`, `temper-stage`, `temper-mode`,
@@ -22,8 +29,11 @@ use crate::error::{Result, TemperError};
 /// read from a row column.
 ///
 /// The function is synchronous: `runtime::with_client` builds its own tokio
-/// runtime, and all callers (`warmup::collect_in_progress_tasks`, `next_seq`,
-/// `find_task`) are synchronous and not already inside a runtime.
+/// runtime, and all callers (`warmup::collect_in_progress_tasks`, `find_task`)
+/// are synchronous and not already inside a runtime.
+///
+/// Per-context results are capped (see `TASK_LIST_LIMIT`); hitting the cap
+/// emits a `tracing::warn!` rather than silently dropping the overflow.
 pub fn load_tasks(
     config: &Config,
     context: Option<&str>,
@@ -45,9 +55,7 @@ pub fn load_tasks(
             context_name: Some(ctx.clone()),
             sort: Some(ResourceSortField::Seq),
             order: Some(SortOrder::Asc),
-            // Tasks per context are bounded; a generous cap avoids pagination
-            // while still protecting against a runaway response.
-            limit: Some(1000),
+            limit: Some(TASK_LIST_LIMIT),
             ..Default::default()
         };
 
@@ -62,6 +70,15 @@ pub fn load_tasks(
                     .map_err(runtime::client_err_to_temper)
             })
         })?;
+
+        if response.rows.len() as i64 == TASK_LIST_LIMIT {
+            tracing::warn!(
+                context = %ctx_for_query,
+                limit = TASK_LIST_LIMIT,
+                "task list hit the per-context cap; tasks beyond the cap were not \
+                 loaded (find_task / warmup may be incomplete for this context)"
+            );
+        }
 
         for row in response.rows {
             let Some(meta) = row.managed_meta else {
@@ -108,13 +125,6 @@ fn task_info_from_meta(meta: ManagedMeta, context: &str) -> Result<TaskInfo> {
         branch: meta.branch,
         pr: meta.pr,
     })
-}
-
-/// Get the next seq value for a new task in a goal.
-pub fn next_seq(config: &Config, context: &str, goal_slug: &str) -> Result<u32> {
-    let tasks = load_tasks(config, Some(context), Some(goal_slug))?;
-    let max_seq = tasks.iter().filter_map(|t| t.seq).max().unwrap_or(0);
-    Ok(max_seq + 10)
 }
 
 /// Find a task by exact slug or unambiguous suffix match.
