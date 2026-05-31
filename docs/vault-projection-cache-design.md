@@ -258,13 +258,13 @@ The `--force` flag is accepted on the delete command
 with or without `--force`. The flag is a holdover from the pre-cloud local mode,
 which had a TTY confirmation gate that the cloud-only migration removed.
 
-> **Doc drift:** [`CLAUDE.md`](../CLAUDE.md) currently states that non-TTY callers
-> "must pass `--force` because the confirmation prompt won't read from a
-> non-terminal stdin." That described the old local-mode behavior. In current
-> code there is no prompt on any surface, so `--force` is a no-op; passing it
-> remains harmless and forward-compatible. The accurate statement is: *`temper
-> resource delete` is non-interactive on all surfaces.* Agents and CI may pass
-> `--force` for clarity, but it changes nothing.
+> **Note:** [`CLAUDE.md`](../CLAUDE.md) and the `temper resource delete` CLI help
+> (`cli.rs`) both state the accurate behavior: *`temper resource delete` is
+> non-interactive on all surfaces.* Agents and CI may pass `--force` for clarity,
+> but it changes nothing. (Earlier docs described the old local-mode behavior
+> where non-TTY callers "must pass `--force` because the confirmation prompt
+> won't read from a non-terminal stdin"; that prompt was removed by the
+> cloud-only migration.)
 
 ## Recovery: fresh device or accidental `rm`
 
