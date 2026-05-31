@@ -4,7 +4,6 @@ pub mod config;
 pub mod context_cmd;
 pub mod edge;
 pub mod events;
-pub mod goal;
 pub mod init;
 pub mod pull;
 pub mod resource;
