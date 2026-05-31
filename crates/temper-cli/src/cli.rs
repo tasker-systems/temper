@@ -369,8 +369,9 @@ pub enum ResourceAction {
     /// projected file from disk with `rm` is just a local cache miss and has no
     /// server effect — run `temper resource delete` to actually delete, then
     /// `temper pull <context>` to re-materialize state on a fresh device.
-    /// Use `--force` to skip the confirmation prompt; non-TTY callers (agents,
-    /// CI) must pass `--force`.
+    /// Delete is non-interactive on all surfaces — there is no confirmation
+    /// prompt. `--force` is vestigial (a no-op holdover from the pre-cloud
+    /// local-mode TTY gate); it is accepted for clarity but changes nothing.
     Delete {
         /// Resource slug
         slug: String,
