@@ -1,6 +1,5 @@
 pub mod body_source;
 pub mod config;
-pub mod goal;
 pub mod ingest;
 pub mod progress;
 pub mod runtime;

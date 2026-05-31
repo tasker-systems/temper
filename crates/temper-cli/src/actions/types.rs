@@ -25,21 +25,6 @@ pub struct TaskInfo {
     pub pr: Option<String>,
 }
 
-/// Goal metadata parsed from frontmatter.
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct GoalInfo {
-    #[serde(rename = "temper-title")]
-    pub title: String,
-    #[serde(rename = "temper-slug")]
-    pub slug: String,
-    #[serde(rename = "temper-context")]
-    pub context: String,
-    #[serde(default, rename = "temper-seq")]
-    pub seq: Option<u32>,
-    #[serde(rename = "temper-status")]
-    pub status: String,
-}
-
 /// A single search hit with score and metadata.
 #[derive(Debug, Clone, Serialize)]
 pub struct SearchHit {
