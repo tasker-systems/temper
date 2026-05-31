@@ -29,11 +29,12 @@ fn claude_success_body() -> serde_json::Value {
 /// given mock-server URI. Tests use the `TEMPER_LLM_CLAUDE_BASE_URL_OVERRIDE`
 /// test hook in the provider.
 fn build_provider_with_override(uri: &str) -> ClaudeProvider {
-    // SAFETY: single-threaded test, setting an env var for this process.
-    unsafe {
-        std::env::set_var("TEMPER_LLM_CLAUDE_BASE_URL_OVERRIDE", uri);
-    }
-    ClaudeProvider::new("claude-sonnet-4", "test-key".to_string(), 30).unwrap()
+    // The override is read once inside `ClaudeProvider::new` and stored on the
+    // provider, so scoping the env var to just the constructor call is enough —
+    // `temp_env::with_var` restores the prior value (or unsets it) on return.
+    temp_env::with_var("TEMPER_LLM_CLAUDE_BASE_URL_OVERRIDE", Some(uri), || {
+        ClaudeProvider::new("claude-sonnet-4", "test-key".to_string(), 30).unwrap()
+    })
 }
 
 #[tokio::test]

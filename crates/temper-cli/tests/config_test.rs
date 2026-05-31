@@ -26,15 +26,13 @@ fn test_resolve_vault_from_env() {
     fs::create_dir_all(&vault_dir).unwrap();
 
     // TEMPER_VAULT takes priority over global config
-    unsafe {
-        std::env::set_var("TEMPER_VAULT", vault_dir.to_str().unwrap());
-        std::env::set_var("TEMPER_GLOBAL_CONFIG", config_path.to_str().unwrap());
-    }
-    let result = temper_cli::config::resolve_vault(None);
-    unsafe {
-        std::env::remove_var("TEMPER_VAULT");
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
-    }
+    let result = temp_env::with_vars(
+        [
+            ("TEMPER_VAULT", Some(vault_dir.to_str().unwrap())),
+            ("TEMPER_GLOBAL_CONFIG", Some(config_path.to_str().unwrap())),
+        ],
+        || temper_cli::config::resolve_vault(None),
+    );
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), vault_dir);
 }

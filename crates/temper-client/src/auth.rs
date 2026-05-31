@@ -843,74 +843,45 @@ mod tests {
 
     // --- auth_path_with: the unified resolver ---
     //
-    // Mirrors the api_url precedence pattern. These tests serialize on
-    // ENV_LOCK with the rest of the env-mutating tests in this module to
-    // avoid races over TEMPER_AUTH_PATH / TEMPER_GLOBAL_CONFIG.
+    // Mirrors the api_url precedence pattern. `temp_env::with_var(s)` scopes the
+    // env overrides to each closure, restores the prior value (or unsets it) on
+    // return — even on panic — and serializes against other env-mutating tests
+    // via its own internal mutex.
 
     #[test]
     fn auth_path_with_env_var_takes_priority_over_config() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
-        let prev_global = std::env::var("TEMPER_GLOBAL_CONFIG").ok();
-
         let mut config = temper_core::types::config::TemperConfig::default();
         config.auth.path = Some("/tmp/from-config/auth.json".to_string());
-        std::env::set_var("TEMPER_AUTH_PATH", "/tmp/from-env/auth.json");
 
-        let path = auth_path_with(Some(&config));
+        let path = temp_env::with_var("TEMPER_AUTH_PATH", Some("/tmp/from-env/auth.json"), || {
+            auth_path_with(Some(&config))
+        });
         assert_eq!(path, std::path::PathBuf::from("/tmp/from-env/auth.json"));
-
-        // Restore.
-        match prev_env {
-            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
-            None => std::env::remove_var("TEMPER_AUTH_PATH"),
-        }
-        match prev_global {
-            Some(v) => std::env::set_var("TEMPER_GLOBAL_CONFIG", v),
-            None => std::env::remove_var("TEMPER_GLOBAL_CONFIG"),
-        }
     }
 
     #[test]
     fn auth_path_with_uses_config_field_when_env_unset() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
-        std::env::remove_var("TEMPER_AUTH_PATH");
-
         let mut config = temper_core::types::config::TemperConfig::default();
         config.auth.path = Some("/tmp/custom/auth.json".to_string());
-        let path = auth_path_with(Some(&config));
-        assert_eq!(path, std::path::PathBuf::from("/tmp/custom/auth.json"));
 
-        match prev_env {
-            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
-            None => std::env::remove_var("TEMPER_AUTH_PATH"),
-        }
+        let path = temp_env::with_var("TEMPER_AUTH_PATH", None::<&str>, || {
+            auth_path_with(Some(&config))
+        });
+        assert_eq!(path, std::path::PathBuf::from("/tmp/custom/auth.json"));
     }
 
     #[test]
     fn auth_path_with_falls_back_to_default_when_neither_set() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
-        std::env::remove_var("TEMPER_AUTH_PATH");
-
         let config = temper_core::types::config::TemperConfig::default();
-        let path = auth_path_with(Some(&config));
-        assert_eq!(path, auth_json_path());
 
-        match prev_env {
-            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
-            None => std::env::remove_var("TEMPER_AUTH_PATH"),
-        }
+        let path = temp_env::with_var("TEMPER_AUTH_PATH", None::<&str>, || {
+            auth_path_with(Some(&config))
+        });
+        assert_eq!(path, auth_json_path());
     }
 
     #[test]
     fn auth_path_with_loads_config_when_none_passed() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
-        let prev_global = std::env::var("TEMPER_GLOBAL_CONFIG").ok();
-        std::env::remove_var("TEMPER_AUTH_PATH");
-
         // Point TEMPER_GLOBAL_CONFIG at a config.toml that sets auth.path,
         // then call auth_path_with(None) so the resolver loads config itself.
         let dir = TempDir::new().unwrap();
@@ -920,43 +891,34 @@ mod tests {
             "[vault]\npath = \"~/vault\"\n[auth]\npath = \"/tmp/loaded-from-toml/auth.json\"\n",
         )
         .unwrap();
-        std::env::set_var("TEMPER_GLOBAL_CONFIG", &cfg_path);
 
-        let path = auth_path_with(None);
+        let path = temp_env::with_vars(
+            [
+                ("TEMPER_AUTH_PATH", None),
+                ("TEMPER_GLOBAL_CONFIG", Some(cfg_path.to_str().unwrap())),
+            ],
+            || auth_path_with(None),
+        );
         assert_eq!(
             path,
             std::path::PathBuf::from("/tmp/loaded-from-toml/auth.json")
         );
-
-        match prev_env {
-            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
-            None => std::env::remove_var("TEMPER_AUTH_PATH"),
-        }
-        match prev_global {
-            Some(v) => std::env::set_var("TEMPER_GLOBAL_CONFIG", v),
-            None => std::env::remove_var("TEMPER_GLOBAL_CONFIG"),
-        }
     }
 
     #[test]
     fn resolve_auth_path_honors_env_override() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let prev_env = std::env::var("TEMPER_AUTH_PATH").ok();
-        std::env::set_var("TEMPER_AUTH_PATH", "/tmp/resolve-test/auth.json");
-
         // resolve_auth_path is the no-arg path used by load_auth and
         // DiskTokenStore::default_path — must honor the env var even
         // without a TemperConfig in scope.
-        let path = resolve_auth_path();
+        let path = temp_env::with_var(
+            "TEMPER_AUTH_PATH",
+            Some("/tmp/resolve-test/auth.json"),
+            resolve_auth_path,
+        );
         assert_eq!(
             path,
             std::path::PathBuf::from("/tmp/resolve-test/auth.json")
         );
-
-        match prev_env {
-            Some(v) => std::env::set_var("TEMPER_AUTH_PATH", v),
-            None => std::env::remove_var("TEMPER_AUTH_PATH"),
-        }
     }
 
     // --- auth_status when no file ---
@@ -1000,11 +962,6 @@ mod tests {
 
     // --- JWT parsing + env-var bootstrap ---
 
-    use std::sync::Mutex;
-
-    /// Serialize tests that mutate TEMPER_TOKEN / TEMPER_PROVIDER / TEMPER_DEVICE_ID.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
     /// Build a fake JWT with the given JSON claims object as payload. The
     /// signature is ignored by the parser so we use a placeholder string.
     fn fake_jwt(claims: &serde_json::Value) -> String {
@@ -1014,10 +971,18 @@ mod tests {
         format!("{header}.{payload}.sig")
     }
 
-    fn clear_env() {
-        std::env::remove_var(TEMPER_TOKEN_ENV);
-        std::env::remove_var(TEMPER_PROVIDER_ENV);
-        std::env::remove_var(TEMPER_DEVICE_ID_ENV);
+    /// The three cloud-mode env vars these tests mutate, all cleared (`None`).
+    /// Spread into a `temp_env::with_vars` slice so a test starts from a known
+    /// "no env auth" baseline, then overrides individual vars with `Some(..)`.
+    /// `temp_env` scopes every entry to the closure and restores prior values
+    /// (or unsets them) on return — even on panic — and serializes env-mutating
+    /// tests via its own internal mutex, so no explicit lock is needed.
+    fn cleared_env() -> [(&'static str, Option<&'static str>); 3] {
+        [
+            (TEMPER_TOKEN_ENV, None),
+            (TEMPER_PROVIDER_ENV, None),
+            (TEMPER_DEVICE_ID_ENV, None),
+        ]
     }
 
     #[test]
@@ -1107,40 +1072,43 @@ mod tests {
 
     #[test]
     fn env_bootstrap_none_when_token_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let result = stored_auth_from_env().unwrap();
+        let result = temp_env::with_vars(cleared_env(), stored_auth_from_env).unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn env_bootstrap_none_when_token_empty() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
-        std::env::set_var(TEMPER_TOKEN_ENV, "");
-        let result = stored_auth_from_env().unwrap();
-        clear_env();
+        let result = temp_env::with_vars(
+            [
+                (TEMPER_TOKEN_ENV, Some("")),
+                (TEMPER_PROVIDER_ENV, None),
+                (TEMPER_DEVICE_ID_ENV, None),
+            ],
+            stored_auth_from_env,
+        )
+        .unwrap();
         assert!(result.is_none());
     }
 
     #[test]
     fn env_bootstrap_builds_in_memory_auth() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
         let exp = (Utc::now() + Duration::hours(2)).timestamp();
         let sub = uuid::Uuid::now_v7();
         let jwt = fake_jwt(&serde_json::json!({
             "exp": exp,
             "sub": sub.to_string(),
         }));
-        std::env::set_var(TEMPER_TOKEN_ENV, &jwt);
-        std::env::set_var(TEMPER_PROVIDER_ENV, "auth0:test.auth0.com");
-        std::env::set_var(TEMPER_DEVICE_ID_ENV, "fixed-device");
 
-        let stored = stored_auth_from_env()
-            .unwrap()
-            .expect("env should produce auth");
-        clear_env();
+        let stored = temp_env::with_vars(
+            [
+                (TEMPER_TOKEN_ENV, Some(jwt.as_str())),
+                (TEMPER_PROVIDER_ENV, Some("auth0:test.auth0.com")),
+                (TEMPER_DEVICE_ID_ENV, Some("fixed-device")),
+            ],
+            stored_auth_from_env,
+        )
+        .unwrap()
+        .expect("env should produce auth");
 
         assert_eq!(stored.access_token.expose_secret(), jwt);
         assert_eq!(stored.provider, Provider::auth0("test.auth0.com"));
@@ -1154,19 +1122,22 @@ mod tests {
 
     #[test]
     fn env_bootstrap_defaults_provider_and_generates_device_id() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
         let exp = (Utc::now() + Duration::hours(1)).timestamp();
         let jwt = fake_jwt(&serde_json::json!({
             "exp": exp,
             "sub": uuid::Uuid::now_v7().to_string(),
         }));
-        std::env::set_var(TEMPER_TOKEN_ENV, &jwt);
 
-        let stored = stored_auth_from_env()
-            .unwrap()
-            .expect("env should produce auth");
-        clear_env();
+        let stored = temp_env::with_vars(
+            [
+                (TEMPER_TOKEN_ENV, Some(jwt.as_str())),
+                (TEMPER_PROVIDER_ENV, None),
+                (TEMPER_DEVICE_ID_ENV, None),
+            ],
+            stored_auth_from_env,
+        )
+        .unwrap()
+        .expect("env should produce auth");
 
         assert_eq!(stored.provider, Provider::auth0(default_auth0_domain()));
         let device_id = stored.device_id.expect("device_id should be generated");
@@ -1175,11 +1146,14 @@ mod tests {
 
     #[test]
     fn env_bootstrap_surfaces_malformed_token_as_error() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
-        std::env::set_var(TEMPER_TOKEN_ENV, "this.is.not-valid");
-        let result = stored_auth_from_env();
-        clear_env();
+        let result = temp_env::with_vars(
+            [
+                (TEMPER_TOKEN_ENV, Some("this.is.not-valid")),
+                (TEMPER_PROVIDER_ENV, None),
+                (TEMPER_DEVICE_ID_ENV, None),
+            ],
+            stored_auth_from_env,
+        );
         assert!(
             result.is_err(),
             "malformed TEMPER_TOKEN must error, not fall through"
@@ -1191,38 +1165,39 @@ mod tests {
         // `DiskTokenStore::load` intentionally prefers `TEMPER_TOKEN` from the
         // environment over the on-disk token. A developer shell that exports
         // `TEMPER_TOKEN` would otherwise make `load()` return that token
-        // instead of the one this test just saved.
-        clear_env();
-        let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
-        let store = DiskTokenStore::at(tmp.path().to_path_buf());
+        // instead of the one this test just saved — so the whole body runs
+        // with the env cleared via `temp_env`.
+        temp_env::with_vars(cleared_env(), || {
+            let tmp = tempfile::NamedTempFile::new().expect("tmpfile");
+            let store = DiskTokenStore::at(tmp.path().to_path_buf());
 
-        let auth = StoredAuth {
-            provider: Provider::auth0(default_auth0_domain()),
-            access_token: "at_test".to_string().into(),
-            refresh_token: Some("rt_test".to_string().into()),
-            expires_at: Utc::now() + Duration::hours(1),
-            profile_id: Some(uuid::Uuid::now_v7()),
-            device_id: Some(uuid::Uuid::now_v7().to_string()),
-        };
+            let auth = StoredAuth {
+                provider: Provider::auth0(default_auth0_domain()),
+                access_token: "at_test".to_string().into(),
+                refresh_token: Some("rt_test".to_string().into()),
+                expires_at: Utc::now() + Duration::hours(1),
+                profile_id: Some(uuid::Uuid::now_v7()),
+                device_id: Some(uuid::Uuid::now_v7().to_string()),
+            };
 
-        store.save(&auth).expect("save");
-        let loaded = store.load().expect("load").expect("some");
-        assert_eq!(
-            loaded.access_token.expose_secret(),
-            auth.access_token.expose_secret()
-        );
-        assert_eq!(
-            loaded.refresh_token.as_ref().map(|s| s.expose_secret()),
-            auth.refresh_token.as_ref().map(|s| s.expose_secret())
-        );
-        assert_eq!(loaded.provider, auth.provider);
+            store.save(&auth).expect("save");
+            let loaded = store.load().expect("load").expect("some");
+            assert_eq!(
+                loaded.access_token.expose_secret(),
+                auth.access_token.expose_secret()
+            );
+            assert_eq!(
+                loaded.refresh_token.as_ref().map(|s| s.expose_secret()),
+                auth.refresh_token.as_ref().map(|s| s.expose_secret())
+            );
+            assert_eq!(loaded.provider, auth.provider);
 
-        store.clear().expect("clear");
-        let after_clear = store.load().expect("load after clear");
-        // Env var may still populate on CI — guard against false failure.
-        if std::env::var("TEMPER_TOKEN").is_err() {
+            store.clear().expect("clear");
+            let after_clear = store.load().expect("load after clear");
+            // TEMPER_TOKEN is unset inside this closure, so load() must fall
+            // through to the (now-cleared) disk store.
             assert!(after_clear.is_none());
-        }
+        });
     }
 
     #[test]
@@ -1252,62 +1227,64 @@ mod tests {
 
     #[test]
     fn memory_token_store_returns_what_was_saved_not_env() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
+        temp_env::with_vars(cleared_env(), || {
+            let store = MemoryTokenStore::empty();
+            assert!(store.load().expect("load").is_none());
 
-        let store = MemoryTokenStore::empty();
-        assert!(store.load().expect("load").is_none());
+            let auth = StoredAuth {
+                provider: Provider::auth0(default_auth0_domain()),
+                access_token: secrecy::SecretString::from("at_v1"),
+                refresh_token: None,
+                expires_at: Utc::now() + Duration::hours(1),
+                profile_id: None,
+                device_id: None,
+            };
+            store.save(&auth).expect("save");
 
-        let auth = StoredAuth {
-            provider: Provider::auth0(default_auth0_domain()),
-            access_token: secrecy::SecretString::from("at_v1"),
-            refresh_token: None,
-            expires_at: Utc::now() + Duration::hours(1),
-            profile_id: None,
-            device_id: None,
-        };
-        store.save(&auth).expect("save");
+            let loaded = store.load().expect("load").expect("some");
+            assert_eq!(loaded.access_token.expose_secret(), "at_v1");
 
-        let loaded = store.load().expect("load").expect("some");
-        assert_eq!(loaded.access_token.expose_secret(), "at_v1");
-
-        store.clear().expect("clear");
-        assert!(store.load().expect("load after clear").is_none());
+            store.clear().expect("clear");
+            assert!(store.load().expect("load after clear").is_none());
+        });
     }
 
     #[test]
     fn memory_token_store_from_env_reads_token_once() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
-
         let exp = (Utc::now() + Duration::hours(1)).timestamp();
         let sub = uuid::Uuid::now_v7();
         let jwt = fake_jwt(&serde_json::json!({
             "exp": exp,
             "sub": sub.to_string(),
         }));
-        std::env::set_var(TEMPER_TOKEN_ENV, &jwt);
 
-        let store = MemoryTokenStore::from_env()
-            .expect("from_env")
-            .expect("some");
+        temp_env::with_vars(
+            [
+                (TEMPER_TOKEN_ENV, Some(jwt.as_str())),
+                (TEMPER_PROVIDER_ENV, None),
+                (TEMPER_DEVICE_ID_ENV, None),
+            ],
+            || {
+                let store = MemoryTokenStore::from_env()
+                    .expect("from_env")
+                    .expect("some");
 
-        // Mutate env after construction — store must NOT re-read.
-        std::env::set_var(TEMPER_TOKEN_ENV, "junk_not_a_jwt");
-
-        let loaded = store.load().expect("load").expect("some");
-        // Token came from the initial parse, not from the junk env.
-        assert_eq!(loaded.provider, Provider::auth0(default_auth0_domain()));
-        assert_eq!(loaded.access_token.expose_secret(), jwt);
-
-        clear_env();
+                // Mutate env after construction — store must NOT re-read. This
+                // inner override is itself scoped and restored by temp_env.
+                temp_env::with_var(TEMPER_TOKEN_ENV, Some("junk_not_a_jwt"), || {
+                    let loaded = store.load().expect("load").expect("some");
+                    // Token came from the initial parse, not from the junk env.
+                    assert_eq!(loaded.provider, Provider::auth0(default_auth0_domain()));
+                    assert_eq!(loaded.access_token.expose_secret(), jwt);
+                });
+            },
+        );
     }
 
     #[test]
     fn memory_token_store_from_env_required_errors_without_token() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
-        let err = MemoryTokenStore::from_env_required().unwrap_err();
+        let err =
+            temp_env::with_vars(cleared_env(), MemoryTokenStore::from_env_required).unwrap_err();
         assert!(
             matches!(err, ClientError::Other(_)),
             "expected ClientError::Other, got {err:?}"
@@ -1361,9 +1338,6 @@ mod tests {
 
     #[test]
     fn load_auth_prefers_env_over_disk() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        clear_env();
-
         // Build env-var JWT with a recognizable profile_id.
         let env_profile = uuid::Uuid::now_v7();
         let exp = (Utc::now() + Duration::hours(1)).timestamp();
@@ -1371,10 +1345,15 @@ mod tests {
             "exp": exp,
             "sub": env_profile.to_string(),
         }));
-        std::env::set_var(TEMPER_TOKEN_ENV, &jwt);
 
-        let loaded = load_auth().unwrap().expect("should load env-var auth");
-        clear_env();
+        let loaded = temp_env::with_vars(
+            [
+                (TEMPER_TOKEN_ENV, Some(jwt.as_str())),
+                (TEMPER_PROVIDER_ENV, None),
+                (TEMPER_DEVICE_ID_ENV, None),
+            ],
+            || load_auth().unwrap().expect("should load env-var auth"),
+        );
 
         // Env-var path is distinguishable by refresh_token=None and matching JWT.
         assert_eq!(loaded.access_token.expose_secret(), jwt);
