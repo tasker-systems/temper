@@ -140,13 +140,9 @@ pub fn build_client(
 mod tests {
     use super::*;
     use std::fs;
-    use std::sync::Mutex;
     use tempfile::TempDir;
 
     use temper_core::types::config::{AuthConfig, CloudSection};
-
-    /// Serialize tests that mutate `TEMPER_API_URL` to prevent races.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Find a provider in the Vec by name (test convenience).
     fn find_provider<'a>(config: &'a TemperConfig, name: &str) -> &'a AuthProvider {
@@ -225,20 +221,17 @@ api_url = "https://api.example.com"
 
     #[test]
     fn api_url_uses_config_by_default() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let config = TemperConfig::default();
-        std::env::remove_var("TEMPER_API_URL");
-        let url = api_url(&config);
+        let url = temp_env::with_var("TEMPER_API_URL", None::<&str>, || api_url(&config));
         assert_eq!(url, "https://temperkb.io");
     }
 
     #[test]
     fn api_url_env_var_takes_priority() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let config = TemperConfig::default();
-        std::env::set_var("TEMPER_API_URL", "https://localhost:3000");
-        let url = api_url(&config);
-        std::env::remove_var("TEMPER_API_URL");
+        let url = temp_env::with_var("TEMPER_API_URL", Some("https://localhost:3000"), || {
+            api_url(&config)
+        });
         assert_eq!(url, "https://localhost:3000");
     }
 
@@ -246,42 +239,34 @@ api_url = "https://api.example.com"
 
     #[test]
     fn auth_path_falls_back_to_default_when_neither_env_nor_config_set() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("TEMPER_AUTH_PATH");
         let config = TemperConfig::default();
-        let path = auth_path(&config);
+        let path = temp_env::with_var("TEMPER_AUTH_PATH", None::<&str>, || auth_path(&config));
         assert_eq!(path, crate::auth::auth_json_path());
     }
 
     #[test]
     fn auth_path_uses_config_field_when_env_unset() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        std::env::remove_var("TEMPER_AUTH_PATH");
         let mut config = TemperConfig::default();
         config.auth.path = Some("/tmp/custom/auth.json".to_string());
-        let path = auth_path(&config);
+        let path = temp_env::with_var("TEMPER_AUTH_PATH", None::<&str>, || auth_path(&config));
         assert_eq!(path, std::path::PathBuf::from("/tmp/custom/auth.json"));
     }
 
     #[test]
     fn auth_path_env_var_takes_priority_over_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = TemperConfig::default();
         config.auth.path = Some("/tmp/from-config/auth.json".to_string());
-        std::env::set_var("TEMPER_AUTH_PATH", "/tmp/from-env/auth.json");
-        let path = auth_path(&config);
-        std::env::remove_var("TEMPER_AUTH_PATH");
+        let path = temp_env::with_var("TEMPER_AUTH_PATH", Some("/tmp/from-env/auth.json"), || {
+            auth_path(&config)
+        });
         assert_eq!(path, std::path::PathBuf::from("/tmp/from-env/auth.json"));
     }
 
     #[test]
     fn auth_path_ignores_empty_env_var() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let mut config = TemperConfig::default();
         config.auth.path = Some("/tmp/from-config/auth.json".to_string());
-        std::env::set_var("TEMPER_AUTH_PATH", "");
-        let path = auth_path(&config);
-        std::env::remove_var("TEMPER_AUTH_PATH");
+        let path = temp_env::with_var("TEMPER_AUTH_PATH", Some(""), || auth_path(&config));
         assert_eq!(path, std::path::PathBuf::from("/tmp/from-config/auth.json"));
     }
 
@@ -418,19 +403,21 @@ scopes        = ["openid", "profile"]
 
     #[test]
     fn build_client_succeeds_with_defaults() {
-        let _guard = ENV_LOCK.lock().unwrap();
         // Point TEMPER_GLOBAL_CONFIG at a non-existent path inside a temp dir
         // so load_config() falls back to TemperConfig::default() instead of
         // reading the developer's real ~/.config/temper/config.toml (which
         // might be in any format at any time).
         let dir = TempDir::new().unwrap();
         let nonexistent = dir.path().join("no-such-config.toml");
-        std::env::set_var("TEMPER_GLOBAL_CONFIG", &nonexistent);
-        std::env::remove_var("TEMPER_API_URL");
         let store: std::sync::Arc<dyn crate::auth::TokenStore> =
             std::sync::Arc::new(crate::auth::MemoryTokenStore::empty());
-        let result = build_client(store);
-        std::env::remove_var("TEMPER_GLOBAL_CONFIG");
+        let result = temp_env::with_vars(
+            [
+                ("TEMPER_GLOBAL_CONFIG", Some(nonexistent.to_str().unwrap())),
+                ("TEMPER_API_URL", None),
+            ],
+            || build_client(store),
+        );
         assert!(result.is_ok(), "build_client failed: {:?}", result.err());
     }
 
