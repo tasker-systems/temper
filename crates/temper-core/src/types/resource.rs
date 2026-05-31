@@ -97,6 +97,7 @@ pub struct ResourceListParams {
     pub doc_type_name: Option<String>,
     pub owner: Option<String>,
     pub q: Option<String>,
+    pub stage: Option<String>,
     pub sort: Option<ResourceSortField>,
     pub order: Option<SortOrder>,
     #[cfg_attr(feature = "typescript", ts(type = "number | null"))]
