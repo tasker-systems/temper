@@ -106,10 +106,10 @@ pub(crate) fn update_resource_to_request(
 
 /// Translate `ListFilter` → `ResourceListParams`.
 ///
-/// Only the filters represented in both shapes are forwarded. `stage` and
-/// `goal` are not first-class params on `ResourceListParams` today and would
-/// require a `q`-string extension or a service-layer change — captured in
-/// the spec's "Open Questions" as a follow-up; for 3a they're ignored.
+/// Only the filters represented in both shapes are forwarded. `stage` is a
+/// first-class param on `ResourceListParams` and forwards to the server-side
+/// `vb.stage` predicate. `goal` is not yet a first-class param (it would
+/// require a JSONB lift on `managed_meta->>'temper-goal'`) and is ignored.
 pub(crate) fn list_filter_to_params(filter: ListFilter) -> ResourceListParams {
     ResourceListParams {
         kb_context_id: None,
@@ -118,6 +118,7 @@ pub(crate) fn list_filter_to_params(filter: ListFilter) -> ResourceListParams {
         doc_type_name: filter.doctype,
         owner: Some("@me".to_string()),
         q: None,
+        stage: filter.stage,
         sort: None,
         order: None,
         limit: filter.limit.map(|n| n as i64),

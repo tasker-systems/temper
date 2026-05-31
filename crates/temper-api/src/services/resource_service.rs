@@ -162,6 +162,9 @@ fn build_filters(params: &ResourceListParams, profile_id: Uuid) -> FilterBuilder
             fb.push_fts(q);
         }
     }
+    if let Some(ref stage) = params.stage {
+        fb.push_text("vb.stage", stage);
+    }
 
     fb
 }
