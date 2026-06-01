@@ -123,7 +123,7 @@ pub fn run(
     path: &Path,
     no_interactive: bool,
     register_global: bool,
-    format: Option<String>,
+    format: OutputFormat,
 ) -> Result<()> {
     if no_interactive {
         return run_non_interactive(path, register_global, format);
@@ -143,12 +143,9 @@ pub fn run(
     apply_answers(&answers, register_global, None)
 }
 
-/// Non-interactive path — uses all defaults, optionally emitting structured output.
-pub fn run_non_interactive(
-    path: &Path,
-    register_global: bool,
-    format: Option<String>,
-) -> Result<()> {
+/// Non-interactive path — uses all defaults, emitting a structured summary in
+/// the resolved output format.
+pub fn run_non_interactive(path: &Path, register_global: bool, format: OutputFormat) -> Result<()> {
     let answers = WizardAnswers {
         vault_path: resolve_initial_vault(path),
         extra_contexts: Vec::new(),
@@ -156,23 +153,21 @@ pub fn run_non_interactive(
     };
     apply_answers(&answers, register_global, None)?;
 
-    // Emit structured summary when a format is explicitly requested.
-    if format.is_some() {
-        let mut contexts = vec!["default".to_string()];
-        contexts.extend(answers.extra_contexts.iter().cloned());
-        let auth = match answers.auth_choice {
-            AuthChoice::Auth0 => "auth0".to_string(),
-            AuthChoice::None => "none".to_string(),
-        };
-        let summary = InitSummary {
-            vault_path: answers.vault_path.clone(),
-            contexts,
-            auth,
-        };
-        let fmt = OutputFormat::resolve(format.as_deref());
-        let rendered = render(&summary, fmt)?;
-        println!("{rendered}");
-    }
+    // Non-interactive mode always emits a structured summary (the TTY wizard
+    // uses styled output instead). The format is resolved globally upstream.
+    let mut contexts = vec!["default".to_string()];
+    contexts.extend(answers.extra_contexts.iter().cloned());
+    let auth = match answers.auth_choice {
+        AuthChoice::Auth0 => "auth0".to_string(),
+        AuthChoice::None => "none".to_string(),
+    };
+    let summary = InitSummary {
+        vault_path: answers.vault_path.clone(),
+        contexts,
+        auth,
+    };
+    let rendered = render(&summary, format)?;
+    println!("{rendered}");
 
     Ok(())
 }
@@ -589,7 +584,8 @@ mod tests {
     fn no_interactive_defaults_and_applies() {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path().join("v");
-        run_non_interactive(&vault, false, None).expect("non-interactive run should succeed");
+        run_non_interactive(&vault, false, OutputFormat::Json)
+            .expect("non-interactive run should succeed");
         // .temper/ created.
         assert!(vault.join(".temper").is_dir());
         // No per-context subdirectory.

@@ -12,7 +12,7 @@ pub fn show(
     config: &Config,
     slug_or_suffix: &str,
     context: Option<&str>,
-    format: &str,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use crate::actions::runtime;
 
@@ -56,7 +56,6 @@ pub fn show(
 
     let metadata = serde_json::to_value(&row)
         .map_err(|e| crate::error::TemperError::Api(format!("metadata serialize: {e}")))?;
-    let fmt = crate::format::OutputFormat::parse(format);
     let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;
     println!("{rendered}");
     Ok(())

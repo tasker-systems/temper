@@ -32,6 +32,16 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub vault: Option<String>,
 
+    /// Output format: json | toon (default: toon on a TTY, json otherwise).
+    /// Precedence: --format → TEMPER_FORMAT → cli.format config → TTY default.
+    #[arg(long, global = true)]
+    pub format: Option<String>,
+
+    /// Color output: auto | always | never (default: auto).
+    /// Precedence: --color → TEMPER_COLOR → cli.color config → NO_COLOR → auto.
+    #[arg(long, global = true)]
+    pub color: Option<String>,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -53,26 +63,16 @@ pub enum Commands {
         /// Skip interactive prompts
         #[arg(long)]
         no_interactive: bool,
-        /// Output format: json | toon (default: toon on TTY, json otherwise).
-        /// Only active in non-interactive mode; TTY wizard always uses styled output.
-        #[arg(long)]
-        format: Option<String>,
     },
     /// Check vault integrity and tool health
     Check {
         #[arg(long)]
         quiet: bool,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
     },
     /// Show vault status overview
     Status {
         #[arg(long)]
         verbose: bool,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
     },
     /// Show recent vault events
     Events {
@@ -80,8 +80,6 @@ pub enum Commands {
         context: Option<String>,
         #[arg(long, default_value = "20")]
         limit: usize,
-        #[arg(long)]
-        format: Option<String>,
     },
     /// Manage resources (tasks, goals, sessions, research, concepts, decisions)
     Resource {
@@ -97,8 +95,6 @@ pub enum Commands {
     Warmup {
         #[arg(long)]
         context: Option<String>,
-        #[arg(long)]
-        format: Option<String>,
     },
     /// Manage Claude Code skill
     Skill {
@@ -143,9 +139,6 @@ pub enum Commands {
         /// Maximum results (default 10)
         #[arg(long)]
         limit: Option<i64>,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
         /// Use text-only search (no local embedding needed)
         #[arg(long)]
         text_only: bool,
@@ -216,9 +209,6 @@ pub enum ResourceAction {
         /// Mutually exclusive with --body. URL detected by http:// or https:// prefix.
         #[arg(long, conflicts_with = "body")]
         from: Option<String>,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
     },
     /// List resources of a given type
     List {
@@ -240,9 +230,6 @@ pub enum ResourceAction {
         /// Filter by status (goal only)
         #[arg(long)]
         status: Option<String>,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
         /// Return `Vec<ResourceMetaResponse>` rows instead of
         /// `Vec<ResourceRow>` rows. Hits GET /api/resources?meta_only=true.
         #[arg(long)]
@@ -262,9 +249,6 @@ pub enum ResourceAction {
         /// Filter by context
         #[arg(long)]
         context: Option<String>,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
         /// Show graph edges connected to this resource
         #[arg(long)]
         edges: bool,
@@ -359,9 +343,6 @@ pub enum ResourceAction {
         /// Body source: omit (auto-detect stdin), `-` (explicit stdin), or `@<path>` (file)
         #[arg(long)]
         body: Option<String>,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
     },
     /// Delete a resource (soft-delete via the API).
     ///
@@ -384,9 +365,6 @@ pub enum ResourceAction {
         /// Skip the local-file confirmation prompt
         #[arg(long)]
         force: bool,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
     },
 }
 
@@ -405,21 +383,13 @@ pub enum ContextAction {
         name: String,
     },
     /// List configured contexts
-    List {
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
-    },
+    List,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum AuthAction {
     /// Log in via browser OAuth (PKCE flow)
-    Login {
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
-    },
+    Login,
     /// Store a JWT directly, reading from stdin (avoids shell-history /
     /// `ps` / `/proc` leakage). Usage:
     ///   temper auth export-token | temper auth token
@@ -429,22 +399,11 @@ pub enum AuthAction {
         /// `auth0:DOMAIN` for custom Auth0 tenants.
         #[arg(long, default_value = "auth0")]
         provider: String,
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
     },
     /// Clear stored credentials
-    Logout {
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
-    },
+    Logout,
     /// Show current auth status
-    Status {
-        /// Output format: json | toon (default: toon on TTY, json otherwise)
-        #[arg(long)]
-        format: Option<String>,
-    },
+    Status,
     /// Export a refreshed access token.
     ///
     /// Token goes to stdout (plain JWT, pipeable); security warning goes to

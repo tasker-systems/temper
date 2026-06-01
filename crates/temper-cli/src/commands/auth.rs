@@ -9,6 +9,7 @@ use temper_client::auth::{DiskTokenStore, TokenStore};
 
 use crate::actions::runtime;
 use crate::error::Result;
+use crate::format::OutputFormat;
 
 /// Confirmation struct emitted by action commands (login, logout).
 ///
@@ -21,8 +22,8 @@ struct AuthAction<'a> {
 }
 
 /// Run the OAuth2 PKCE login flow, persist the token, and print auth status.
-pub fn login(format: Option<String>) -> Result<()> {
-    runtime::with_client(|client| {
+pub fn login(fmt: OutputFormat) -> Result<()> {
+    runtime::with_client(move |client| {
         Box::pin(async move {
             let stored = client
                 .auth_login()
@@ -33,7 +34,6 @@ pub fn login(format: Option<String>) -> Result<()> {
                 status: "logged_in",
                 profile,
             };
-            let fmt = crate::format::OutputFormat::resolve(format.as_deref());
             let rendered = crate::format::render(&action, fmt)?;
             println!("{rendered}");
             Ok(())
@@ -42,7 +42,7 @@ pub fn login(format: Option<String>) -> Result<()> {
 }
 
 /// Clear stored credentials and print confirmation.
-pub fn logout(format: Option<String>) -> Result<()> {
+pub fn logout(fmt: OutputFormat) -> Result<()> {
     DiskTokenStore::default_path()
         .clear()
         .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
@@ -50,7 +50,6 @@ pub fn logout(format: Option<String>) -> Result<()> {
         status: "logged_out",
         profile: None,
     };
-    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
     let rendered = crate::format::render(&action, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -69,7 +68,7 @@ pub fn logout(format: Option<String>) -> Result<()> {
 ///
 /// Writes to disk unconditionally — cloud sessions receive tokens via
 /// `TEMPER_TOKEN` and don't invoke this command.
-pub fn token(provider: &str, format: Option<String>) -> Result<()> {
+pub fn token(provider: &str, fmt: OutputFormat) -> Result<()> {
     let stdin_content = crate::vault::read_stdin_if_piped();
     if stdin_content.is_none() && std::io::IsTerminal::is_terminal(&std::io::stdin()) {
         return Err(crate::error::TemperError::Config(
@@ -79,14 +78,10 @@ pub fn token(provider: &str, format: Option<String>) -> Result<()> {
                 .into(),
         ));
     }
-    token_from_stdin(stdin_content.as_deref(), provider, format)
+    token_from_stdin(stdin_content.as_deref(), provider, fmt)
 }
 
-fn token_from_stdin(
-    stdin_content: Option<&str>,
-    provider: &str,
-    format: Option<String>,
-) -> Result<()> {
+fn token_from_stdin(stdin_content: Option<&str>, provider: &str, fmt: OutputFormat) -> Result<()> {
     let jwt_raw = stdin_content
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -127,7 +122,6 @@ fn token_from_stdin(
         expires_at: Some(stored.expires_at),
         profile_id: stored.profile_id,
     };
-    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
     let rendered = crate::format::render(&status, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -209,13 +203,12 @@ fn print_export_warning() {
 }
 
 /// Print the current auth status.
-pub fn status(format: Option<String>) -> Result<()> {
-    runtime::with_client(|client| {
+pub fn status(fmt: OutputFormat) -> Result<()> {
+    runtime::with_client(move |client| {
         Box::pin(async move {
             let status = client
                 .auth_status()
                 .map_err(|e| crate::error::TemperError::Config(e.to_string()))?;
-            let fmt = crate::format::OutputFormat::resolve(format.as_deref());
             let rendered = crate::format::render(&status, fmt)?;
             println!("{rendered}");
             Ok(())
@@ -312,7 +305,7 @@ mod tests {
 
     #[test]
     fn token_from_stdin_errors_when_empty() {
-        let err = token_from_stdin(Some(""), "auth0", None).unwrap_err();
+        let err = token_from_stdin(Some(""), "auth0", OutputFormat::Json).unwrap_err();
         assert!(
             format!("{err}").contains("stdin"),
             "expected empty-stdin error"
@@ -321,7 +314,7 @@ mod tests {
 
     #[test]
     fn token_from_stdin_errors_when_none() {
-        let err = token_from_stdin(None, "auth0", None).unwrap_err();
+        let err = token_from_stdin(None, "auth0", OutputFormat::Json).unwrap_err();
         assert!(
             format!("{err}").contains("stdin"),
             "expected empty-stdin error"
@@ -363,7 +356,7 @@ mod tests {
         // later — then check we surface the provider error.
         // Simpler: validate provider check path independently.
         let fake_jwt = "aGVhZGVy.cGF5bG9hZA.c2ln"; // "header.payload.sig" base64url
-        let err = token_from_stdin(Some(fake_jwt), "github", None).unwrap_err();
+        let err = token_from_stdin(Some(fake_jwt), "github", OutputFormat::Json).unwrap_err();
         // Either JWT parse fails (likely) or provider parse fails. Both are
         // Config errors — we just want the end-to-end to refuse.
         assert!(matches!(err, crate::error::TemperError::Config(_)));

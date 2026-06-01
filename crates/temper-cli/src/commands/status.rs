@@ -41,10 +41,9 @@ fn staleness_str(outcome: StalenessOutcome) -> &'static str {
     }
 }
 
-pub fn run(config: &Config, _verbose: bool, format: Option<String>) -> Result<()> {
+pub fn run(config: &Config, _verbose: bool, fmt: crate::format::OutputFormat) -> Result<()> {
     if config.contexts.is_empty() {
         let report = StatusReport { contexts: vec![] };
-        let fmt = crate::format::OutputFormat::resolve(format.as_deref());
         let rendered = crate::format::render(&report, fmt)?;
         println!("{rendered}");
         return Ok(());
@@ -62,7 +61,6 @@ pub fn run(config: &Config, _verbose: bool, format: Option<String>) -> Result<()
             let report = StatusReport {
                 contexts: degraded_items(config),
             };
-            let fmt = crate::format::OutputFormat::resolve(format.as_deref());
             if let Ok(rendered) = crate::format::render(&report, fmt) {
                 println!("{rendered}");
             }
@@ -119,7 +117,6 @@ pub fn run(config: &Config, _verbose: bool, format: Option<String>) -> Result<()
     };
 
     let report = StatusReport { contexts: items };
-    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
     let rendered = crate::format::render(&report, fmt)?;
     println!("{rendered}");
 

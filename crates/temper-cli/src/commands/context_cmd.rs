@@ -94,11 +94,10 @@ pub async fn create_remote(client: &temper_client::TemperClient, name: &str) -> 
 }
 
 /// List configured contexts.
-pub fn list(config: &Config, format: Option<String>) -> Result<()> {
+pub fn list(config: &Config, fmt: crate::format::OutputFormat) -> Result<()> {
     let mut names = config.contexts.clone();
     names.sort();
 
-    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
     let rendered = crate::format::render(&names, fmt)?;
     println!("{rendered}");
     Ok(())

@@ -134,14 +134,6 @@ pub fn render_resource_show(
     }
 }
 
-/// Resolve an optional explicit format to its canonical string form
-/// (auto-detecting the TTY when `None`). Convenience wrapper for callsites
-/// that still pass `&str` (Warmup, search) — these can migrate to `resolve`
-/// directly in a future cleanup.
-pub fn resolve_format_str(explicit: Option<&str>) -> &'static str {
-    OutputFormat::resolve(explicit).as_str()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
