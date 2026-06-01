@@ -70,7 +70,7 @@ Temper v1 only ships Linux x86_64 binaries. Build from source:
 
   git clone https://github.com/${REPO}
   cd temper
-  cargo install --path crates/temper-cli --features embed,extract,hnsw
+  cargo install --path crates/temper-cli --features embed,extract
 EOF
             exit 1
         fi
