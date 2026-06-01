@@ -99,13 +99,13 @@ miss. To actually delete a resource server-side, run `temper resource delete
 
 | Verb | `--context` required? |
 |------|----------------------|
-| `resource show` | optional |
-| `resource list` | optional |
+| `resource list` | optional (omitting lists across all contexts) |
+| `resource show` | **required** |
 | `resource create` | **required** |
 | `resource update` | **required** |
-| `resource delete` | optional (recommended) |
+| `resource delete` | **required** |
 
-Omitting `--context` on a write surfaces the error
+Omitting `--context` where it is required surfaces the error
 `Project error: no context specified — use --context <name>`.
 
 ## Template Access

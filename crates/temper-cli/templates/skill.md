@@ -37,8 +37,9 @@ User-created guidance files. Read and apply any files found here.
 > 2. `temper resource update <slug> --type task --context <ctx> --stage in-progress` — mark it active
 >
 > Stages are: `backlog`, `in-progress`, `done`, `cancelled` (not "active").
-> `resource update` and `resource create` REQUIRE `--context`; `show` and
-> `list` do not.
+> `resource update`, `resource create`, and `resource show` REQUIRE
+> `--context`. `resource list` does not (omitting `--context` lists
+> across all contexts).
 
 1. Read the task content via `temper resource show <slug> --type task --context <ctx>` — extract mode and effort
 2. Move the task to in-progress: `temper resource update <slug> --type task --context <ctx> --stage in-progress`
