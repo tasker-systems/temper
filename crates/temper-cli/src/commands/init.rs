@@ -393,6 +393,14 @@ output = "~/.claude/skills/temper"
 {auth_section}
 [cloud]
 api_url = "https://temperkb.io"
+
+# [cli] — output-presentation defaults (optional; omit for agent-first auto behavior).
+# Precedence for each knob: CLI flag > env var > this config > tty-aware default.
+#   format: "json" | "toon"            env: TEMPER_FORMAT  (default: toon on a TTY, json otherwise)
+#   color:  "auto" | "always" | "never"  env: TEMPER_COLOR  (NO_COLOR honored; default: auto)
+# [cli]
+# format = "json"
+# color = "auto"
 "#
     )
 }
@@ -500,8 +508,18 @@ mod tests {
         assert!(toml.contains(r#"name = "auth0""#));
         assert!(toml.contains("[cloud]"));
         assert!(toml.contains(r#"api_url = "https://temperkb.io""#));
-        // Must NOT contain removed fields
-        assert!(!toml.contains("[cli]"), "cli section should not be written");
+        // The [cli] output-defaults section ships commented-out (documentation
+        // only): the template must not ACTIVATE any cli setting, so a fresh
+        // config keeps agent-first auto behavior. Parsing confirms it stays None.
+        let cfg: TemperConfig = toml::from_str(&toml).expect("rendered config parses");
+        assert!(
+            cfg.cli.format.is_none() && cfg.cli.color.is_none(),
+            "commented [cli] template must not activate format/color"
+        );
+        assert!(
+            toml.contains("# [cli]"),
+            "cli docs should be present (commented)"
+        );
         assert!(
             !toml.contains("framework ="),
             "skill.framework should not be written"
