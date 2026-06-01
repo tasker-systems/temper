@@ -36,7 +36,7 @@ installing Rust (https://rustup.rs) and running:
 
   git clone https://github.com/$Repo
   cd temper
-  cargo install --path crates/temper-cli --features embed,extract,hnsw
+  cargo install --path crates/temper-cli --features embed,extract
 "@
     exit 1
 }

@@ -74,7 +74,7 @@ jobs:
             --release \
             --package temper-cli \
             --target ${{ matrix.target.triple }} \
-            --features embed,extract,hnsw
+            --features embed,extract
 
       - name: Download ONNX Runtime (${{ matrix.target.name }})
         shell: bash
