@@ -20,11 +20,6 @@ pub enum OutputFormat {
 }
 
 impl OutputFormat {
-    /// Parse a `--format` string. Unknown values auto-detect via TTY.
-    pub fn parse(s: &str) -> Self {
-        Self::parse_opt(s).unwrap_or_else(Self::auto)
-    }
-
     /// Parse a format string, returning `None` for unrecognized values.
     ///
     /// Used by `resolve_with` so that unknown env/config values fall through
@@ -34,14 +29,6 @@ impl OutputFormat {
             "json" => Some(Self::Json),
             "toon" => Some(Self::Toon),
             _ => None,
-        }
-    }
-
-    /// Resolve the effective format given an optional explicit CLI value.
-    pub fn resolve(explicit: Option<&str>) -> Self {
-        match explicit {
-            Some(s) => Self::parse(s),
-            None => Self::auto(),
         }
     }
 
@@ -87,14 +74,6 @@ impl OutputFormat {
             Self::Json
         }
     }
-
-    /// Canonical string form for the few remaining `&str`-taking callsites.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Json => "json",
-            Self::Toon => "toon",
-        }
-    }
 }
 
 /// Render any `Serialize` value in the chosen format. `Json` uses
@@ -138,28 +117,6 @@ pub fn render_resource_show(
 mod tests {
     use super::*;
     use serde::Serialize;
-
-    #[test]
-    fn parse_json_lowercase() {
-        assert_eq!(OutputFormat::parse("json"), OutputFormat::Json);
-    }
-
-    #[test]
-    fn parse_toon_lowercase() {
-        assert_eq!(OutputFormat::parse("toon"), OutputFormat::Toon);
-    }
-
-    #[test]
-    fn parse_unknown_defaults_to_auto() {
-        let v = OutputFormat::parse("text");
-        assert!(matches!(v, OutputFormat::Toon | OutputFormat::Json));
-    }
-
-    #[test]
-    fn resolve_explicit_honors_value() {
-        assert_eq!(OutputFormat::resolve(Some("json")), OutputFormat::Json);
-        assert_eq!(OutputFormat::resolve(Some("toon")), OutputFormat::Toon);
-    }
 
     #[derive(Serialize)]
     struct Fixture {
