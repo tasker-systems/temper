@@ -123,7 +123,7 @@ pub fn run(
     path: &Path,
     no_interactive: bool,
     register_global: bool,
-    format: Option<String>,
+    format: OutputFormat,
 ) -> Result<()> {
     if no_interactive {
         return run_non_interactive(path, register_global, format);
@@ -143,12 +143,9 @@ pub fn run(
     apply_answers(&answers, register_global, None)
 }
 
-/// Non-interactive path — uses all defaults, optionally emitting structured output.
-pub fn run_non_interactive(
-    path: &Path,
-    register_global: bool,
-    format: Option<String>,
-) -> Result<()> {
+/// Non-interactive path — uses all defaults, emitting a structured summary in
+/// the resolved output format.
+pub fn run_non_interactive(path: &Path, register_global: bool, format: OutputFormat) -> Result<()> {
     let answers = WizardAnswers {
         vault_path: resolve_initial_vault(path),
         extra_contexts: Vec::new(),
@@ -156,23 +153,21 @@ pub fn run_non_interactive(
     };
     apply_answers(&answers, register_global, None)?;
 
-    // Emit structured summary when a format is explicitly requested.
-    if format.is_some() {
-        let mut contexts = vec!["default".to_string()];
-        contexts.extend(answers.extra_contexts.iter().cloned());
-        let auth = match answers.auth_choice {
-            AuthChoice::Auth0 => "auth0".to_string(),
-            AuthChoice::None => "none".to_string(),
-        };
-        let summary = InitSummary {
-            vault_path: answers.vault_path.clone(),
-            contexts,
-            auth,
-        };
-        let fmt = OutputFormat::resolve(format.as_deref());
-        let rendered = render(&summary, fmt)?;
-        println!("{rendered}");
-    }
+    // Non-interactive mode always emits a structured summary (the TTY wizard
+    // uses styled output instead). The format is resolved globally upstream.
+    let mut contexts = vec!["default".to_string()];
+    contexts.extend(answers.extra_contexts.iter().cloned());
+    let auth = match answers.auth_choice {
+        AuthChoice::Auth0 => "auth0".to_string(),
+        AuthChoice::None => "none".to_string(),
+    };
+    let summary = InitSummary {
+        vault_path: answers.vault_path.clone(),
+        contexts,
+        auth,
+    };
+    let rendered = render(&summary, format)?;
+    println!("{rendered}");
 
     Ok(())
 }
@@ -398,6 +393,14 @@ output = "~/.claude/skills/temper"
 {auth_section}
 [cloud]
 api_url = "https://temperkb.io"
+
+# [cli] — output-presentation defaults (optional; omit for agent-first auto behavior).
+# Precedence for each knob: CLI flag > env var > this config > tty-aware default.
+#   format: "json" | "toon"            env: TEMPER_FORMAT  (default: toon on a TTY, json otherwise)
+#   color:  "auto" | "always" | "never"  env: TEMPER_COLOR  (NO_COLOR honored; default: auto)
+# [cli]
+# format = "json"
+# color = "auto"
 "#
     )
 }
@@ -505,8 +508,18 @@ mod tests {
         assert!(toml.contains(r#"name = "auth0""#));
         assert!(toml.contains("[cloud]"));
         assert!(toml.contains(r#"api_url = "https://temperkb.io""#));
-        // Must NOT contain removed fields
-        assert!(!toml.contains("[cli]"), "cli section should not be written");
+        // The [cli] output-defaults section ships commented-out (documentation
+        // only): the template must not ACTIVATE any cli setting, so a fresh
+        // config keeps agent-first auto behavior. Parsing confirms it stays None.
+        let cfg: TemperConfig = toml::from_str(&toml).expect("rendered config parses");
+        assert!(
+            cfg.cli.format.is_none() && cfg.cli.color.is_none(),
+            "commented [cli] template must not activate format/color"
+        );
+        assert!(
+            toml.contains("# [cli]"),
+            "cli docs should be present (commented)"
+        );
         assert!(
             !toml.contains("framework ="),
             "skill.framework should not be written"
@@ -589,7 +602,8 @@ mod tests {
     fn no_interactive_defaults_and_applies() {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path().join("v");
-        run_non_interactive(&vault, false, None).expect("non-interactive run should succeed");
+        run_non_interactive(&vault, false, OutputFormat::Json)
+            .expect("non-interactive run should succeed");
         // .temper/ created.
         assert!(vault.join(".temper").is_dir());
         // No per-context subdirectory.

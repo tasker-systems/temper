@@ -117,7 +117,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
                     task: Some("implement-widget"),
                     body_flag: None,
                     from: None,
-                    format: "text",
+                    format: temper_cli::format::OutputFormat::Json,
                 },
             )
             .expect("cloud create with --task must succeed")
@@ -243,7 +243,7 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
                     task: None,
                     body_flag: None,
                     from: None,
-                    format: "text",
+                    format: temper_cli::format::OutputFormat::Json,
                 },
             )
             .expect("cloud create without --task must succeed")
@@ -317,7 +317,7 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
                     task: Some("does-not-exist-anywhere"),
                     body_flag: None,
                     from: None,
-                    format: "text",
+                    format: temper_cli::format::OutputFormat::Json,
                 },
             )
         })
@@ -395,7 +395,7 @@ async fn create_non_session_with_task_errors(pool: sqlx::PgPool) {
                     task: Some("implement-widget"),
                     body_flag: None,
                     from: None,
-                    format: "text",
+                    format: temper_cli::format::OutputFormat::Json,
                 },
             )
         })
@@ -464,7 +464,7 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
                     task: Some("widget"),
                     body_flag: None,
                     from: None,
-                    format: "text",
+                    format: temper_cli::format::OutputFormat::Json,
                 },
             )
         })

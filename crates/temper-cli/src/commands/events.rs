@@ -38,9 +38,13 @@ pub fn load_events(config: &Config, project: Option<&str>, limit: usize) -> Resu
 }
 
 /// Run the events command — print events to stdout.
-pub fn run(config: &Config, project: Option<&str>, limit: usize, format: &str) -> Result<()> {
+pub fn run(
+    config: &Config,
+    project: Option<&str>,
+    limit: usize,
+    fmt: crate::format::OutputFormat,
+) -> Result<()> {
     let events = load_events(config, project, limit)?;
-    let fmt = crate::format::OutputFormat::parse(format);
     let rendered = crate::format::render(&events, fmt)?;
     println!("{rendered}");
     Ok(())

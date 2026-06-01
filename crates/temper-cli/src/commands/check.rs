@@ -19,7 +19,7 @@ pub(crate) struct CheckReport {
     pub checks: Vec<CheckItem>,
 }
 
-pub fn run(config: &Config, quiet: bool, format: Option<String>) -> Result<()> {
+pub fn run(config: &Config, quiet: bool, fmt: OutputFormat) -> Result<()> {
     let vault_result = check_vault(config);
     let state_result = check_state(config);
 
@@ -65,8 +65,6 @@ pub fn run(config: &Config, quiet: bool, format: Option<String>) -> Result<()> {
     ];
 
     let has_errors = checks.iter().any(|c| c.status == "error");
-
-    let fmt = OutputFormat::resolve(format.as_deref());
 
     // quiet mode: suppress output, just propagate errors.
     if quiet {

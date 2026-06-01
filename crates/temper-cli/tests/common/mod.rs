@@ -68,7 +68,7 @@ pub fn create_goal(config: &temper_cli::config::Config, context: &str, title: &s
             task: None,
             body_flag: None,
             from: None,
-            format: "text",
+            format: temper_cli::format::OutputFormat::Json,
         },
     )
     .unwrap();
@@ -106,7 +106,7 @@ pub fn create_task(
             task: None,
             body_flag: None,
             from: None,
-            format: "text",
+            format: temper_cli::format::OutputFormat::Json,
         },
     )
     .unwrap();
@@ -148,7 +148,7 @@ pub fn move_task_to_stage(
         pr: None,
         status: None,
         body: None,
-        format: None,
+        format: temper_cli::format::OutputFormat::Json,
     };
     temper_cli::commands::resource::update(config, &params).unwrap();
 }

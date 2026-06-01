@@ -121,7 +121,7 @@ pub struct CreateResourceArgs<'a> {
     pub task: Option<&'a str>,
     pub body_flag: Option<String>,
     pub from: Option<String>,
-    pub format: &'a str,
+    pub format: crate::format::OutputFormat,
 }
 
 /// Create a new resource.
@@ -335,8 +335,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         status: "ok",
         resource: output.value,
     };
-    let fmt = crate::format::OutputFormat::resolve(Some(format));
-    let rendered = crate::format::render(&result, fmt)?;
+    let rendered = crate::format::render(&result, format)?;
     println!("{rendered}");
     Ok(())
 }
@@ -352,7 +351,7 @@ pub struct ShowParams<'a> {
     pub doc_type: &'a str,
     pub slug: &'a str,
     pub context: Option<&'a str>,
-    pub format: &'a str,
+    pub format: crate::format::OutputFormat,
     pub edges: bool,
     pub meta_only: bool,
     pub fields: &'a [String],
@@ -368,7 +367,7 @@ pub struct ListParams<'a> {
     pub stage: Option<&'a str>,
     pub goal: Option<&'a str>,
     pub status: Option<&'a str>,
-    pub format: &'a str,
+    pub format: crate::format::OutputFormat,
     pub meta_only: bool,
     pub fields: &'a [String],
 }
@@ -408,7 +407,7 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     use crate::actions::runtime;
     use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
-    let fmt = crate::format::OutputFormat::resolve(Some(params.format));
+    let fmt = params.format;
     let doc_type = params.doc_type.to_string();
     let context = params.context.map(ToString::to_string);
     let limit = params.limit.unwrap_or(20);
@@ -479,7 +478,7 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
         meta_only: Some(true),
         ..Default::default()
     };
-    let format_str = params.format.to_string();
+    let fmt = params.format;
     let fields_owned: Vec<String> = params.fields.to_vec();
     let context_owned = params.context.map(ToString::to_string);
     let state_dir = config.state_dir.clone();
@@ -511,7 +510,6 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
         envelope["rows"] = filtered_rows;
     }
 
-    let fmt = crate::format::OutputFormat::resolve(Some(&format_str));
     let rendered = crate::format::render(&envelope, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -532,7 +530,7 @@ pub fn delete(
     slug: &str,
     context: Option<&str>,
     force: bool,
-    format: Option<String>,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use temper_core::operations::{DeleteResource, ResourceRef};
 
@@ -566,7 +564,6 @@ pub fn delete(
         slug: slug.to_string(),
         doc_type: doc_type.to_string(),
     };
-    let fmt = crate::format::OutputFormat::resolve(format.as_deref());
     let rendered = crate::format::render(&result, fmt)?;
     println!("{rendered}");
 
@@ -622,7 +619,7 @@ fn show_meta_only(
     doc_type: &str,
     slug: &str,
     context: Option<&str>,
-    format: &str,
+    fmt: crate::format::OutputFormat,
     fields: &[String],
 ) -> Result<()> {
     use crate::actions::runtime;
@@ -663,7 +660,6 @@ fn show_meta_only(
     let filtered =
         temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
             .map_err(map_projection_error)?;
-    let fmt = crate::format::OutputFormat::resolve(Some(format));
     let rendered = crate::format::render(&filtered, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -691,13 +687,12 @@ fn show_generic(
     doc_type: &str,
     slug: &str,
     context: Option<&str>,
-    format: &str,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use crate::actions::runtime;
 
     let slug_s = slug.to_string();
     let context_owned = context.map(str::to_string);
-    let format_s = format.to_string();
 
     let config_clone = config.clone();
     let doc_type_inner = doc_type.to_string();
@@ -741,7 +736,6 @@ fn show_generic(
         })
     })?;
 
-    let fmt = crate::format::OutputFormat::resolve(Some(&format_s));
     let metadata = serde_json::to_value(&row)
         .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
     let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;
@@ -759,7 +753,7 @@ fn show_edges(
     context: &str,
     doc_type: &str,
     slug: &str,
-    format: &str,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use crate::actions::runtime;
 
@@ -800,7 +794,6 @@ fn show_edges(
         .cloned()
         .collect();
     let report = EdgesReport { outgoing, incoming };
-    let fmt = crate::format::OutputFormat::parse(format);
     let rendered = crate::format::render(&report, fmt)?;
     println!("{rendered}");
 
@@ -840,8 +833,8 @@ pub struct UpdateParams<'a> {
     /// `Some("-")` (explicit stdin; errors if empty), or `Some("@<path>")`
     /// (read from file; errors if empty).
     pub body: Option<String>,
-    /// Output format: `None` auto-detects from TTY; `Some("json")` or `Some("toon")` explicit.
-    pub format: Option<String>,
+    /// Output format, resolved globally upstream in `main`.
+    pub format: crate::format::OutputFormat,
 }
 
 /// Build a partial `ManagedMeta` from update CLI flags. Returns `None` if no
@@ -1024,8 +1017,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         status: "ok",
         resource: output.value,
     };
-    let fmt = crate::format::OutputFormat::resolve(params.format.as_deref());
-    let rendered = crate::format::render(&result, fmt)?;
+    let rendered = crate::format::render(&result, params.format)?;
     println!("{rendered}");
 
     Ok(())
@@ -1117,7 +1109,7 @@ mod build_helpers_tests {
             pr: None,
             status: None,
             body: None,
-            format: None,
+            format: crate::format::OutputFormat::Json,
         }
     }
 

@@ -41,7 +41,7 @@ fn rejects_invalid_doctype() {
         "any-slug",
         Some("myapp"),
         true,
-        None,
+        temper_cli::format::OutputFormat::Json,
     );
 
     let err = result.expect_err("invalid doctype must error before the API call");

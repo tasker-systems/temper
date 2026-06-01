@@ -14,14 +14,13 @@ pub fn show(
     config: &Config,
     slug_or_suffix: &str,
     context: Option<&str>,
-    format: &str,
+    fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use crate::actions::runtime;
 
     let context_s = context.map(str::to_string);
     let slug_s = slug_or_suffix.to_string();
     let config_clone = config.clone();
-    let format_s = format.to_string();
 
     let (row, body) = runtime::with_client(|client| {
         Box::pin(async move {
@@ -55,7 +54,6 @@ pub fn show(
         })
     })?;
 
-    let fmt = crate::format::OutputFormat::resolve(Some(&format_s));
     let metadata = serde_json::to_value(&row)
         .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
     let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;

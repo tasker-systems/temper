@@ -14,15 +14,13 @@ pub fn run(
     context: Option<&str>,
     doc_type: Option<&str>,
     limit: Option<i64>,
-    format: &str,
+    fmt: OutputFormat,
     text_only: bool,
     seed_ids: Vec<Uuid>,
     edge_types: Vec<String>,
     depth: Option<i32>,
     no_graph: bool,
 ) -> Result<()> {
-    let fmt = OutputFormat::parse(format);
-
     let embedding = if text_only {
         None
     } else {

@@ -253,6 +253,24 @@ impl LlmConfig {
     }
 }
 
+/// CLI output-presentation defaults, stored under `[cli]` in config.toml.
+///
+/// These fields supply the config-file layer of the resolution precedence
+/// chain for CLI output settings. Resolution order (highest to lowest):
+/// `flag → env → config → tty-default`. That resolution logic lives in
+/// the CLI (temper-cli); this struct is intentionally free-form (no
+/// `#[validate(...)]` constraints) so the CLI decides what constitutes a
+/// valid value and can fall through to defaults when given garbage input.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Validate)]
+pub struct CliSection {
+    /// Default output format: `"json"` | `"toon"`. `None` when unset.
+    #[serde(default)]
+    pub format: Option<String>,
+    /// Default color choice: `"auto"` | `"always"` | `"never"`. `None` when unset.
+    #[serde(default)]
+    pub color: Option<String>,
+}
+
 /// Cloud API section of the configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
@@ -296,6 +314,9 @@ pub struct TemperConfig {
     #[serde(default)]
     #[validate(nested)]
     pub llm: LlmConfig,
+    #[serde(default)]
+    #[validate(nested)]
+    pub cli: CliSection,
 }
 
 impl Default for TemperConfig {
@@ -309,6 +330,7 @@ impl Default for TemperConfig {
             auth: Default::default(),
             cloud: Default::default(),
             llm: Default::default(),
+            cli: Default::default(),
         }
     }
 }
@@ -448,15 +470,16 @@ path = "~/vault"
 
     #[test]
     fn stale_cli_section_and_skill_framework_parse_without_error() {
-        // Forward-compat guarantee: stale configs containing the removed
-        // `[cli]` section and `skill.framework` field must still parse.
+        // Forward-compat guarantee: configs with unknown fields inside `[cli]`
+        // (e.g. `progress`) and unknown fields inside `[skill]` (e.g.
+        // `framework`) must still parse without error.
         //
         // This works because none of the config structs use
         // `#[serde(deny_unknown_fields)]` — serde's default behavior is to
-        // ignore unknown fields. If a future contributor adds that attribute
-        // to TemperConfig (or any nested struct), this test will fail as the
-        // signal that the clean break in Task 8 broke forward compat and
-        // either the attribute should come back off or a migration is needed.
+        // ignore unknown fields within each section. If a future contributor
+        // adds that attribute to TemperConfig or CliSection, this test will
+        // fail as the signal that forward compat broke and the attribute
+        // should come back off or a migration is needed.
         let toml_str = r#"
 [vault]
 path = "~/Documents/temper-vault"
@@ -471,6 +494,46 @@ framework = "superpowers"
         let cfg: TemperConfig = toml::from_str(toml_str).expect("stale config must parse");
         assert_eq!(cfg.vault.path, "~/Documents/temper-vault");
         assert_eq!(cfg.skill.output, "~/.claude/skills/temper");
+    }
+
+    #[test]
+    fn cli_section_parses_format_and_color() {
+        let toml_str = r#"
+[vault]
+path = "~/vault"
+
+[cli]
+format = "json"
+color = "never"
+"#;
+        let cfg: TemperConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.cli.format, Some("json".to_string()));
+        assert_eq!(cfg.cli.color, Some("never".to_string()));
+    }
+
+    #[test]
+    fn cli_section_absent_yields_none_fields() {
+        let toml_str = r#"
+[vault]
+path = "~/vault"
+"#;
+        let cfg: TemperConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.cli.format, None);
+        assert_eq!(cfg.cli.color, None);
+    }
+
+    #[test]
+    fn cli_section_default_has_none_fields() {
+        let cli = CliSection::default();
+        assert_eq!(cli.format, None);
+        assert_eq!(cli.color, None);
+    }
+
+    #[test]
+    fn temper_config_default_cli_has_none_fields() {
+        let cfg = TemperConfig::default();
+        assert_eq!(cfg.cli.format, None);
+        assert_eq!(cfg.cli.color, None);
     }
 
     #[test]

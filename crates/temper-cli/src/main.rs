@@ -3,6 +3,7 @@ use temper_cli::cli::{
     AuthAction, Cli, Commands, ConfigAction, ContextAction, ResourceAction, SkillAction, TeamAction,
 };
 use temper_cli::commands;
+use temper_cli::format::OutputFormat;
 
 fn main() {
     tracing_subscriber::fmt()
@@ -13,7 +14,14 @@ fn main() {
 
     let cli = Cli::parse();
 
-    if let Err(e) = run(cli) {
+    // Resolve global output settings once, before dispatch. Color is applied
+    // before `run` so all output — including the error path below — obeys it.
+    let global_cfg = temper_core::types::config::load_config().unwrap_or_default();
+    temper_cli::color::apply_color_choice(cli.color.as_deref(), global_cfg.cli.color.as_deref());
+    let output_format =
+        OutputFormat::resolve_with(cli.format.as_deref(), global_cfg.cli.format.as_deref());
+
+    if let Err(e) = run(cli, output_format) {
         match &e {
             temper_cli::error::TemperError::SystemAccessRequired(details) => {
                 render_system_access_required(
@@ -75,35 +83,29 @@ fn render_system_access_required(
     }
 }
 
-fn run(cli: Cli) -> temper_cli::error::Result<()> {
+fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
     match cli.command {
         Commands::Init {
             path,
             no_interactive,
-            format,
         } => {
             let vault_path = path
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-            temper_cli::commands::init::run(&vault_path, no_interactive, true, format)
+            temper_cli::commands::init::run(&vault_path, no_interactive, true, output_format)
         }
-        Commands::Check { quiet, format } => {
+        Commands::Check { quiet } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::check::run(&config, quiet, format)
+            temper_cli::commands::check::run(&config, quiet, output_format)
         }
-        Commands::Status { verbose, format } => {
+        Commands::Status { verbose } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
-            temper_cli::commands::status::run(&config, verbose, format)
+            temper_cli::commands::status::run(&config, verbose, output_format)
         }
-        Commands::Events {
-            context,
-            limit,
-            format,
-        } => {
+        Commands::Events { context, limit } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
-            let format = temper_cli::format::resolve_format_str(format.as_deref());
-            temper_cli::commands::events::run(&config, context, limit, format)
+            temper_cli::commands::events::run(&config, context, limit, output_format)
         }
         Commands::Resource { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
@@ -121,7 +123,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     stdin: _,
                     body,
                     from,
-                    format,
                 } => {
                     if show_template {
                         let content = temper_cli::vault::get_template(&r#type)?;
@@ -133,7 +134,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             "--title is required for resource create".into(),
                         )
                     })?;
-                    let format = temper_cli::format::resolve_format_str(format.as_deref());
                     temper_cli::commands::resource::create(
                         &config,
                         temper_cli::commands::resource::CreateResourceArgs {
@@ -147,7 +147,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                             task: task.as_deref(),
                             body_flag: body,
                             from,
-                            format,
+                            format: output_format,
                         },
                     )
                 }
@@ -158,49 +158,41 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     stage,
                     goal,
                     status,
-                    format,
                     meta_only,
                     fields,
-                } => {
-                    let format = temper_cli::format::resolve_format_str(format.as_deref());
-                    temper_cli::commands::resource::list(
-                        &config,
-                        temper_cli::commands::resource::ListParams {
-                            doc_type: &r#type,
-                            context: context.as_deref(),
-                            limit,
-                            stage: stage.as_deref(),
-                            goal: goal.as_deref(),
-                            status: status.as_deref(),
-                            format,
-                            meta_only,
-                            fields: &fields,
-                        },
-                    )
-                }
+                } => temper_cli::commands::resource::list(
+                    &config,
+                    temper_cli::commands::resource::ListParams {
+                        doc_type: &r#type,
+                        context: context.as_deref(),
+                        limit,
+                        stage: stage.as_deref(),
+                        goal: goal.as_deref(),
+                        status: status.as_deref(),
+                        format: output_format,
+                        meta_only,
+                        fields: &fields,
+                    },
+                ),
                 ResourceAction::Show {
                     slug,
                     r#type,
                     context,
-                    format,
                     edges,
                     meta_only,
                     fields,
-                } => {
-                    let format = temper_cli::format::resolve_format_str(format.as_deref());
-                    temper_cli::commands::resource::show(
-                        &config,
-                        temper_cli::commands::resource::ShowParams {
-                            doc_type: &r#type,
-                            slug: &slug,
-                            context: context.as_deref(),
-                            format,
-                            edges,
-                            meta_only,
-                            fields: &fields,
-                        },
-                    )
-                }
+                } => temper_cli::commands::resource::show(
+                    &config,
+                    temper_cli::commands::resource::ShowParams {
+                        doc_type: &r#type,
+                        slug: &slug,
+                        context: context.as_deref(),
+                        format: output_format,
+                        edges,
+                        meta_only,
+                        fields: &fields,
+                    },
+                ),
                 ResourceAction::Update {
                     slug,
                     r#type,
@@ -226,7 +218,6 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     pr,
                     status,
                     body,
-                    format,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
                         slug: &slug,
@@ -253,7 +244,7 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                         pr: pr.as_deref(),
                         status: status.as_deref(),
                         body,
-                        format,
+                        format: output_format,
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
@@ -262,14 +253,13 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     r#type,
                     context,
                     force,
-                    format,
                 } => temper_cli::commands::resource::delete(
                     &config,
                     &r#type,
                     &slug,
                     context.as_deref(),
                     force,
-                    format,
+                    output_format,
                 ),
             }
         }
@@ -281,16 +271,15 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
                     temper_cli::commands::context_cmd::create_remote(client, &name).await
                 })
             }),
-            ContextAction::List { format } => {
+            ContextAction::List => {
                 let config = temper_cli::config::load(cli.vault.as_deref())?;
-                temper_cli::commands::context_cmd::list(&config, format)
+                temper_cli::commands::context_cmd::list(&config, output_format)
             }
         },
-        Commands::Warmup { context, format } => {
+        Commands::Warmup { context } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             let context = context.as_deref();
-            let format = temper_cli::format::OutputFormat::resolve(format.as_deref());
-            temper_cli::commands::warmup::run(&config, context, format)
+            temper_cli::commands::warmup::run(&config, context, output_format)
         }
         Commands::Team { action } => match action {
             TeamAction::Join { team: _, message } => {
@@ -300,12 +289,12 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             TeamAction::Leave { team: _ } => temper_cli::commands::team::leave(),
         },
         Commands::Auth { action } => match action {
-            AuthAction::Login { format } => temper_cli::commands::auth::login(format),
-            AuthAction::Token { provider, format } => {
-                temper_cli::commands::auth::token(&provider, format)
+            AuthAction::Login => temper_cli::commands::auth::login(output_format),
+            AuthAction::Token { provider } => {
+                temper_cli::commands::auth::token(&provider, output_format)
             }
-            AuthAction::Logout { format } => temper_cli::commands::auth::logout(format),
-            AuthAction::Status { format } => temper_cli::commands::auth::status(format),
+            AuthAction::Logout => temper_cli::commands::auth::logout(output_format),
+            AuthAction::Status => temper_cli::commands::auth::status(output_format),
             AuthAction::ExportToken => temper_cli::commands::auth::export_token(),
         },
         Commands::Skill { action } => {
@@ -354,27 +343,23 @@ fn run(cli: Cli) -> temper_cli::error::Result<()> {
             context,
             doc_type,
             limit,
-            format,
             text_only,
             seed_ids,
             edge_types,
             depth,
             no_graph,
-        } => {
-            let format = temper_cli::format::resolve_format_str(format.as_deref());
-            commands::search_cmd::run(
-                &query,
-                context.as_deref(),
-                doc_type.as_deref(),
-                limit,
-                format,
-                text_only,
-                seed_ids,
-                edge_types,
-                depth,
-                no_graph,
-            )
-        }
+        } => commands::search_cmd::run(
+            &query,
+            context.as_deref(),
+            doc_type.as_deref(),
+            limit,
+            output_format,
+            text_only,
+            seed_ids,
+            edge_types,
+            depth,
+            no_graph,
+        ),
         Commands::Edge { action } => temper_cli::commands::edge::run(action),
     }
 }

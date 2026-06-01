@@ -48,4 +48,4 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 mcp = ["schemars"]
 test-db = []
 typescript = ["ts-rs"]
-web-api = ["utoipa"]
+web-api = ["utoipa", "utoipa/chrono"]
