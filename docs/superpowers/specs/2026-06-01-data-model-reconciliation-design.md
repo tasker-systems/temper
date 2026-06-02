@@ -160,6 +160,16 @@ Moves **out** of `kb_resources`:
 
 ### 2. `kb_resource_homes` / `kb_resource_access` (the access wrapper)
 
+> **⚠ PROVISIONAL — gated on the access/capability-model spec.** The `kb_resource_access` shape below,
+> and specifically the `access_level` enum (`vault | mutable | immutable`) it reuses, are **not final**.
+> Research (see the access/RBAC problem-shape, sibling spec
+> `2026-06-02-access-capability-model-design`) established that `vault/mutable/immutable` is a vault-era
+> artifact that double-encodes a single write boolean with `team_role`, is undefined across the
+> polymorphic anchor set, and ignores a second orthogonal axis (resolution-permeability). The
+> **navigation-vs-grant split, the polymorphic anchors, and the producer/consumer functions are stable**;
+> the *capability vocabulary* on grants is being redesigned. Treat `access_level` here as a placeholder
+> until that spec lands. `kb_resource_homes` is unaffected.
+
 ```sql
 kb_resource_homes (                  -- navigation: where a resource lives. one per resource.
     id                    uuid pk,
@@ -373,6 +383,12 @@ under "files are derivative projection artifacts."
   across CLI/MCP/skill. This spec commits the *kernel-side* slug drop (§4); the surface UX is a tracked
   Domain-A follow-up spec, since it touches every command.
 - **Domain-B operational tables** and whether they earn a `cogmap.*` schema namespace.
+- **The access/capability (RBAC) model** — retiring/replacing `access_level` (vault/mutable/immutable),
+  resolving its overlap with `team_role`/`watcher`, representing the two orthogonal axes (read/write
+  porosity × resolution-permeability), scope `contains`-hierarchy visibility, and default-safety/scope
+  lifecycle. This is its own foundational sibling spec (`2026-06-02-access-capability-model-design`).
+  **This spec's `kb_resource_access`/`access_level` DDL is gated on its outcome** (see §2) — the
+  navigation/grant/producer-consumer backbone is stable; the capability vocabulary is not.
 
 ## Connections
 
