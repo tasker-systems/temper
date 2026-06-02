@@ -119,84 +119,171 @@ identity, content, edges, properties, or access → substrate; anything that kno
 
 ## DDL Revisions
 
-The 2026-05-27 access-wrapper DDL carries **verbatim** except for the deltas below. The polymorphic-
-projection substance the boundary decision committed to preserving — `(anchor_table, anchor_id)`
-discriminator polymorphism, homes-vs-access split, producer/consumer access bifurcation, teams-DAG +
-recursive CTE, the access functions — is unchanged.
+> **Grounding note.** This section is written against the **actual current schema** (the base
+> `20260330000001_consolidated_schema.sql` plus all 39 later migrations, reconciled), **not** the
+> 2026-05-27 design document — which proposed a `kb_resources` shape (`body text`, `content_hash`,
+> `mimetype`) that was never built and conflicts with reality. The polymorphic-projection *substance*
+> of 2026-05-27 (the `(anchor_table, anchor_id)` discriminator, homes-vs-access split, producer/consumer
+> access bifurcation, teams-DAG + recursive CTE) is preserved; the table shapes below are the real
+> transformations.
 
-### 1. `kb_resources` drops `kb_doc_type_id`
+### Current reality the access-wrapper transforms
 
-The kernel has no doctype concept. `kb_resources` is pure identity + content:
+- `kb_resources` today is already lean: `(id, kb_context_id, kb_doc_type_id, origin_uri [no longer
+  unique], title, slug [nullable], originator_profile_id, owner_profile_id, is_active, created, updated)`.
+  `content_hash`/`mimetype`/`resource_mode` were **already dropped** in `20260404000002` — so the spec's
+  earlier "drop `resource_mode`" item is moot; it's gone.
+- **Content** is externalized: `kb_chunks` → `kb_chunk_content` (TOAST), versioned via
+  `kb_resource_revisions`, rendered through the `kb_current_chunks` view. There is no `body` column.
+- **Frontmatter** lives in `kb_resource_manifests.{managed_meta, open_meta}` (JSONB) with
+  `{body,managed,open}_hash`.
+- **`kb_scopes` already exists** (`id, name, porosity`), and `kb_events` is already the unified
+  append-only ledger (`event_type_id`→`kb_event_types`, `topic_id`, `scope_id`, `correlation_id`).
+
+### 1. `kb_resources` slims to identity; anchor/ownership move to homes; doctype + slug leave entirely
 
 ```sql
 kb_resources (
-    id             uuid pk default uuid_generate_v7(),
-    title          text not null,
-    body           text,
-    content_hash   varchar(64),
-    mimetype       varchar(128),
-    resource_mode  varchar(16) not null default 'added' check (resource_mode in ('added','imported')),
-    is_active      boolean not null default true,
-    created        timestamptz not null,
-    updated        timestamptz not null
+    id          uuid pk,            -- uuid_generate_v7
+    title       text not null,
+    origin_uri  text not null,      -- canonical source uri; not unique
+    is_active   boolean not null default true,
+    created     timestamptz not null,
+    updated     timestamptz not null
 );
 ```
 
-### 2. `kb_doc_types` is removed from the kernel schema
+Moves **out** of `kb_resources`:
+- `kb_context_id`, `owner_profile_id`, `originator_profile_id` → `kb_resource_homes` (navigation/anchor)
+- `kb_doc_type_id` → **dropped**; doctype becomes a `kb_properties` row `key='doc_type'` (see §3)
+- `slug` → **dropped entirely** (see §4 — slug retirement)
 
-The doctype catalog (the seven `*.schema.json` + descriptions) becomes `temper-workflow` code/config.
-If a server-side doctype registry table is ever wanted, it is a Domain-A-owned table under the revised
-SQL-ownership rule. YAGNI for now.
-
-### 3. `kb_properties` is the canonical structured-meta model (two-variant kind)
-
-`property_kind` carries **no** frontmatter-tier awareness. The managed/open distinction only ever
-earned its keep when a human could hand-edit header YAML and expect round-trip; under cloud-only every
-write goes through the API and provenance lives in the event ledger (`asserted_by_event_id`). So the
-enum is exactly the 2026-05-27 salience taxonomy:
+### 2. `kb_resource_homes` / `kb_resource_access` (the access wrapper)
 
 ```sql
-create type property_kind as enum ('keyword', 'facet');
---   facet    → key-value structured meta. doc_type, behavior:*, the typed workflow fields
---              (stage/mode/effort/…), and arbitrary user metadata all live here.
---   keyword  → bare salience tag (no key).
+kb_resource_homes (                  -- navigation: where a resource lives. one per resource.
+    id                    uuid pk,
+    resource_id           uuid not null unique references kb_resources(id),
+    anchor_table          varchar(64) not null check (anchor_table in ('kb_contexts','kb_scopes')),
+    anchor_id             uuid not null,
+    originator_profile_id uuid not null references kb_profiles(id),
+    owner_profile_id      uuid not null references kb_profiles(id),
+    created               timestamptz not null default now()
+);
+create index idx_kb_resource_homes_anchor on kb_resource_homes(anchor_table, anchor_id);
 
+kb_resource_access (                 -- additive grants beyond the home anchor. subsumes kb_team_resources.
+    id                    uuid pk,
+    resource_id           uuid not null references kb_resources(id),
+    anchor_table          varchar(64) not null
+                            check (anchor_table in ('kb_contexts','kb_scopes','kb_teams','kb_profiles')),
+    anchor_id             uuid not null,
+    access_level          access_level not null,   -- existing enum: vault | mutable | immutable
+    granted_by_profile_id uuid not null references kb_profiles(id),
+    granted_at            timestamptz not null default now(),
+    unique (resource_id, anchor_table, anchor_id)
+);
+create index idx_kb_resource_access_anchor   on kb_resource_access(anchor_table, anchor_id);
+create index idx_kb_resource_access_resource on kb_resource_access(resource_id);
+```
+
+The home anchor confers implicit `vault` access; `kb_resource_access` extends to additional anchors.
+`kb_resource_homes` has **no `slug`** (slug retired) and therefore no `(anchor, slug)` uniqueness — the
+only resource identity is the UUID PK. Teams-DAG (`kb_teams_parents`), `kb_team_scopes`, and the
+producer/consumer access functions (`resources_visible_to`, `resources_accessible_to_scope`) carry from
+2026-05-27, rewritten against these tables.
+
+### 3. `kb_properties` — the canonical structured-meta model (single shape, non-null key)
+
+No `property_kind` enum. Every property is a non-null `(key, value)` pair; a bare keyword/tag is named
+explicitly as `key='tag'`. This kills the nullable-in-`UNIQUE` smell (Postgres treats NULLs as distinct,
+so a nullable key never dedups) and preserves the symmetric salience-overlap self-join (one shape, both
+resource-side and scope-side). `is_folded` is the **event-projection soft-retract**, identical to the
+built `kb_resource_edges` pattern: a `property_retracted` event folds the row; live reads filter
+`WHERE NOT is_folded`; the row survives for event-history correspondence.
+
+```sql
 kb_properties (
     id                    uuid pk default uuid_generate_v7(),
     owner_table           varchar(64) not null check (owner_table in ('kb_resources','kb_scopes')),
     owner_id              uuid not null,
-    property_kind         property_kind not null,
-    property_key          text,              -- required for facet; null for keyword
+    property_key          text not null,
     property_value        jsonb not null,
-    weight                float not null default 1.0,
+    weight                float not null default 1.0,   -- meaningful for salience; 1.0 for plain metadata
     asserted_by_event_id  uuid not null references kb_events(id),
     last_event_id         uuid not null references kb_events(id),
     is_folded             boolean not null default false,
     created               timestamptz not null default now(),
-    unique (owner_table, owner_id, property_kind, property_key, property_value),
-    check ((property_kind = 'keyword') = (property_key is null))
+    unique (owner_table, owner_id, property_key, property_value)
 );
 create index idx_kb_properties_owner    on kb_properties(owner_table, owner_id) where not is_folded;
 create index idx_kb_properties_value_gin on kb_properties using gin (property_value jsonb_path_ops);
-create index idx_kb_properties_kind_key  on kb_properties(property_kind, property_key) where not is_folded;
+create index idx_kb_properties_key      on kb_properties(property_key) where not is_folded;
 ```
 
-**Reserved facet keys (a documented convention, not DDL):**
+**Reserved keys (a documented convention, not DDL):**
 
 | key | meaning | set by |
 |---|---|---|
 | `doc_type` | the demoted type tag (`"task"`, `"session"`, …) | `temper-workflow` on create |
+| `tag` | a bare salience keyword (the named ex-null state); multiple rows per owner | any surface |
 | `behavior:*` | triage-time behavior signal (Domain B) | triage / authoring |
 | workflow fields (`stage`, `mode`, `effort`, `seq`, …) | typed Domain-A metadata | `temper-workflow` |
 | arbitrary keys | former `open_meta` user metadata | any surface |
 
-### 4. Slug uniqueness drops doctype
+**`kb_resource_manifests` dissolves into `kb_properties`.** Its `managed_meta`/`open_meta` JSONB keys
+backfill as `kb_properties` rows (via genesis events, `intent=migration`, mirroring the
+`edges_as_projection` backfill). `body_hash` already lives on `kb_resource_revisions`;
+`managed_hash`/`open_hash` were frontmatter-tier sync aids and become obsolete under cloud-only — they
+retire with the sync rework, not here.
 
-`kb_resource_homes` keeps the 2026-05-27 `unique (anchor_table, anchor_id, slug)`. With doctype gone
-from the kernel, slug uniqueness is **context-wide and doctype-independent** — a `task` and a `goal`
-named `foo` in one context would collide. Decision: accept context-wide slug uniqueness;
-`temper-workflow` is responsible for choosing unique slugs. (Alternative — fold doctype into the stored
-slug — rejected as leaking Domain-A semantics back into the kernel key.)
+### 4. Slug retirement — UUID is the sole resource identity
+
+`kb_resources.slug` and any homes-level slug are **dropped**. Resolution is already UUID-first
+(`resource_for_uri` casts the trailing segment to UUID before any slug fallback; `kb_resource_uri` emits
+`COALESCE(slug, id::text)`), so this formalizes existing behavior. The human/agent-friendly identifier
+becomes a **render-time decoration** — Notion-style `sluggify(title)-<uuid>` — produced and parsed by
+`temper-workflow`, never stored as a key. (`kb_profiles.slug` / `kb_teams.slug` are *owner sigils*
+`@me` / `+team` and are **out of scope** — left as-is.)
+
+This is a *direction commitment* with a deliberately split blast radius (per the agreed scope): the
+kernel DDL change (drop the columns/constraints) lands here; the `ResourceRef` collapse and the
+CLI/MCP/skill identifier-UX rework are a tracked Domain-A follow-up spec.
+
+### 5. `kb_edges` — smaller than 2026-05-27 implied
+
+The built `kb_resource_edges` is **already** the event-sourced projection shape: it carries `edge_kind`
+(`express|contains|leads_to|near`), `polarity` (`forward|inverse`), `label`, `asserted_by_event_id`,
+`last_event_id`, `is_folded`. The only transformation is **adding source/target polymorphism** plus a
+nullable cognitive-map `scope_id`:
+
+```sql
+alter table kb_resource_edges rename to kb_edges;
+alter table kb_edges
+    add column source_table varchar(64) not null default 'kb_resources'
+        check (source_table in ('kb_resources','kb_scopes')),
+    add column target_table varchar(64) not null default 'kb_resources'
+        check (target_table in ('kb_resources','kb_scopes')),
+    add column scope_id uuid references kb_scopes(id);   -- nullable; cognitive-map-layer edges
+-- widen uq_resource_edge and the source/target indexes to include the *_table discriminators.
+```
+
+Relational frontmatter fields (e.g. a task's `goal`) project to `kb_edges` rows, not `kb_properties`.
+
+### 6. Affected SQL functions (the slug + doctype blast radius)
+
+Dropping slug and demoting doctype to a property forces rewrites of the functions that join
+`kb_doc_types` or read `r.slug`. The spec records the surface; the SQL is plan/implementation work:
+
+- **Slug-bearing:** `fts_search` / `rebuild_resource_search_vector` (drop slug from tsvector weight-A,
+  fall back to `title` alone), `unified_search` / `graph_search` / `graph_subgraph_nodes` /
+  `graph_resource_edges` / the `vault_resources_browse` view (drop the returned `slug` column).
+- **Doctype-bearing:** `graph_subgraph_nodes` / `graph_search` doctype filters and
+  `graph_subgraph_nodes`'s `kb_resource_manifests` stage read become `kb_properties` lookups
+  (`key='doc_type'`, `key='stage'`); the `kb_doc_types` joins disappear.
+- **Addressing:** `kb_resource_uri` / `resource_for_uri` — UUID resolution stays kernel; the
+  human-readable `kb://sigil/context/doctype/slug` *construction* moves to `temper-workflow` (addressing
+  is Domain-A under the neutral-API decision). `kb_doc_types` leaves the kernel entirely.
 
 ## The Command-Base Seam (Crate-Extraction Shape)
 
@@ -212,8 +299,8 @@ spec makes it the **neutral substrate-command base** and adds a decorator tier f
 - `SearchResources` (neutral FTS+vector)
 
 ```rust
-pub enum PropertyKind { Facet, Keyword }
-pub struct PropertyAssertion { pub kind: PropertyKind, pub key: Option<String>, pub value: Value, pub weight: f64 }
+// no PropertyKind enum — every property is a non-null (key, value) pair; a bare tag is key = "tag".
+pub struct PropertyAssertion { pub key: String, pub value: Value, pub weight: f64 }
 pub struct Property { /* row form: + owner, asserted/last event ids, is_folded, … */ }
 ```
 
@@ -252,9 +339,9 @@ fn render_frontmatter(props: &[Property], edges: &[Edge]) -> YamlFrontmatter   /
 Conversions in `temper-workflow` are strictly directional:
 
 - **write:** typed workflow input → `Vec<PropertyAssertion>` + `Vec<EdgeAssertion>`
-  (scalar fields → facets; relational fields like `goal`/links → edges). A thin newtype satisfies the
-  orphan rule (`impl From<&WorkflowFields> for PropertyAssertions`).
-- **read:** facets/edges → a typed view (for `--stage` display etc.) or → YAML (for the vault).
+  (scalar fields → `kb_properties` rows; relational fields like `goal`/links → `kb_edges`). A thin
+  newtype satisfies the orphan rule (`impl From<&WorkflowFields> for PropertyAssertions`).
+- **read:** properties/edges → a typed view (for `--stage` display etc.) or → YAML (for the vault).
 
 Never a tier round-trip. YAML key order is **not** preserved (`kb_properties` is a set) — acceptable
 under "files are derivative projection artifacts."
@@ -267,10 +354,12 @@ under "files are derivative projection artifacts."
 - **No server-side doctype backstop.** The CLAUDE.md "schema-required defaults at create/update" rule
   becomes a `temper-workflow` client-side contract. The symmetric send/receive enforcement collapses to
   send-side only.
-- **URI addressing** (`kb://owner/context/doctype/uuid`) is a `temper-workflow` affordance, reading the
-  `doc_type` facet. The kernel addresses by UUID + anchor.
+- **URI addressing** is a `temper-workflow` affordance: it builds the human-readable
+  `kb://sigil/context/doctype/sluggify(title)-<uuid>` by reading the `doc_type` property and the title.
+  The kernel resolves and addresses purely by UUID + anchor.
 - **Provenance** (system- vs user-set) is answered by the event ledger, not a tier column.
 - **`temper-core` sqlx slimming** is part of this work, not a follow-up.
+- **`resource_mode` is already gone** (`20260404000002`) — no action; noted to correct the record.
 
 ## Out of Scope
 
@@ -279,6 +368,10 @@ under "files are derivative projection artifacts."
 - **Migration phase-ordering / sequencing** (build Limb 1c → extract `temper-substrate` → birth
   `temper-cogmap`) — spine #3, a plan-level decision. This spec defines the *target* shape, not the
   path to it.
+- **Slug-retirement surface rework** — the `ResourceRef::Scoped(owner,context,doctype,slug)` collapse to
+  UUID, the Notion-style `Title-<uuid>` identifier format/parsing, and the fuzzy title-lookup ergonomics
+  across CLI/MCP/skill. This spec commits the *kernel-side* slug drop (§4); the surface UX is a tracked
+  Domain-A follow-up spec, since it touches every command.
 - **Domain-B operational tables** and whether they earn a `cogmap.*` schema namespace.
 
 ## Connections
