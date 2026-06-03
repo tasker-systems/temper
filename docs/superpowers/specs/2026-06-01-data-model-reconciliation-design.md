@@ -374,7 +374,12 @@ under "files are derivative projection artifacts."
 ## Out of Scope
 
 - **Domain-B table design** (telos-as-`kb_properties`-facet, questions-as-resources, regulation-as-
-  resource, `express`/`near` edge semantics) — spine #2, successor spec.
+  resource, `express`/`near` edge semantics) — spine #2, successor spec. **Carve-out (added 2026-06-03):**
+  an access-gated *projection* read cross-map through the kernel access layer is **not** a spine-#2 table —
+  it lives in `temper-substrate`. The test: **does the kernel interpret the content?** No → kernel
+  access-gated projection; Yes → spine-#2 / Domain-B. `kb_map_regions`
+  (`2026-06-02-map-regions-self-materialized-shape-surface-design`) is the first instance — the kernel
+  stores + access-gates regions but never clusters or interprets them.
 - **Migration phase-ordering / sequencing** (build Limb 1c → extract `temper-substrate` → birth
   `temper-cogmap`) — spine #3, a plan-level decision. This spec defines the *target* shape, not the
   path to it.

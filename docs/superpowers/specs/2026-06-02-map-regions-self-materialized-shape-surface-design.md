@@ -1,7 +1,10 @@
 # Map-Regions: The Self-Materialized Shape Surface (`kb_map_regions`)
 
 **Date:** 2026-06-02
-**Status:** Design — in brainstorming, pending review
+**Status:** Design — **reviewed** (2026-06-03). Resolved: **CS-1** (read-API `principal` sum type — §4/OQ-7),
+**A3-1** (all-or-centroid locate + fidelity marker — §5/OQ-5), **A3-2** (kernel carve-out blessed +
+reflected into the data-model spec — §1/OQ-6). No opens remain except plan-level **A3-3** (staleness
+comparator) and the deferred `scope→map` sweep. **Ready for `approved/pending-plan`.**
 **Goal:** `substrate-kernel-to-cognitive-map`, Arc 1 (shared-kernel completion)
 **Spun out of:** [`2026-06-02-access-capability-model-design.md`](2026-06-02-access-capability-model-design.md) §5
 (the "separate retrieval spec" the access model defers to).
@@ -118,6 +121,14 @@ tables → spine #2" deferral, justified because the surface is read cross-map t
 layer and introduces no cognitive-map *semantics* into the kernel (a region is a centroid + salience +
 members; the kernel never interprets what a region *means*).
 
+**Blessed (A3-2), with the neutrality guardrail.** The kernel offers exactly two doors on regions:
+`MaterializeMapShape` (store the agent's output, §7) and the access-gated reads (§4) — **nothing that
+computes or interprets a region.** This is the *same* neutrality test the kernel already passes for edges
+and properties (it stores `edge_kind` without interpreting it). Stated generally and reflected back into
+the data-model spec's crate-topology: **does the kernel interpret the content? No → a kernel access-gated
+projection (here); Yes → spine-#2 / Domain-B.** All region *semantics* — clustering, salience-judgment,
+telos-weighting — stay Domain-B (§7).
+
 ---
 
 ## 2. Table shape (event-sourced, uniform with edges/properties)
@@ -191,12 +202,16 @@ mechanisms that already exist:
 (Confirmed against the confidence inventory, where porosity was already **Drifted #19** — "almost
 certainly insufficient … don't defend the enum." This spec discharges that by removing it.)
 
-Three substrate read functions, shaped to mirror `resources_visible_to` / `edges_visible_to`:
+Three substrate read functions, shaped to mirror `resources_visible_to` / `edges_visible_to`. Each takes
+a **`principal`** — the `Profile | Map` sum type (access spec §4 / CS-1): a `Profile` gates via
+`resources_visible_to` (a *person* reading), a `Map` gates via `resources_accessible_to_map` (an *agent*
+producing, bound to the map's least-privilege DAG-expanded team-intersection, never the keyboard person):
 
 ```
-map_shape_visible_to(map_id, profile)          -> region surface rows, iff profile can read map_id
-locate_in_map_shape(map_id, query, profile)    -> regions ranked by proximity to query (see §5)
-map_region_members(region_id, profile)         -> members filtered through resources_visible_to
+map_shape_visible_to(map_id, principal)        -> region surface rows, iff principal can read map_id
+locate_in_map_shape(map_id, query, principal)  -> regions ranked by proximity, each tagged
+                                                  fidelity ∈ {full, centroid_only} (see §5)
+map_region_members(region_id, principal)       -> members filtered through the principal's read-gate
 ```
 
 `query` in `locate_in_map_shape` is either an **embedding** (the free-text workhorse: an agent embeds its
@@ -216,11 +231,39 @@ computed against the region:
 - **property-overlap** — shared `kb_properties` between the query-concept and the region's members (the
   symmetric salience self-join from the data-model spec; available only when `query` is a concept).
 
-It **degrades gracefully**: a free-text/embedding query uses cosine-to-centroid alone; a concept query
-uses all three. Signals normalize to `[0,1]` and blend by weight; **default equal weights**, optionally
-overridden per-map via `kb_properties` on the map (e.g. `proximity:w_cosine`), so a map can express that
-its telos weights relational structure over surface similarity. To keep an outsider reading *"Y's shape
-as Y computed it"* rather than through their own lens, the locate uses **Y's** weights, not the reader's.
+It **degrades along two independent axes, and the full three-signal blend requires both**:
+
+1. **Query type.** An embedding/free-text query has no concept to relate, so it uses cosine-to-centroid
+   alone; a concept query *can* use all three.
+2. **Member-visibility (the A3-1 privacy gate).** The relational signals (edge-density, property-overlap)
+   are computed *against the region's members*, so they may be computed **only when the principal can read
+   *all* of the region's members**. If any member is outside the principal's read-gate, the locate
+   degrades to **cosine-to-centroid only** — never a partial blend over the visible subset.
+
+Each region in the result is tagged **`fidelity ∈ {full, centroid_only}`** so the caller can distinguish a
+true low score from a blurred degrade.
+
+**Why all-or-centroid, not per-member filtering.** Computing the relational signals over only the members
+a reader happens to see *would* close the leak, but it makes the score **reader-relative**, breaking
+*"reads Y's shape as Y computed it."* All-or-centroid keeps that invariant: full-reach readers all compute
+the identical blend (all members, Y's weights); partial-reach readers all get Y's centroid. And the cut
+lands in exactly the right place — by the access spec §4 intersection invariant (**a map's interior is the
+common ground of its joined teams**), any principal joined to a region's home-map can already read all its
+members, so **own-map reads always get the full blend**, and the degraded branch coincides precisely with
+**cross-map reads** (a delegated agent locating in a *foreign* map's shape), where centroid-only is the
+correct conservative posture — exactly delegation's never-escalate-on-the-interior. No new access
+primitive: the gate is the principal's existing read-gate over the member set.
+
+> **Rejected — per-team materialized cardinality.** Precomputing region proximity/visibility *per team*
+> would not help and would add staleness and management complexity, because the system's two entry points
+> are **not team-shaped**: an **agent** works bound to a *scope-map* (not a team), and a **human** working
+> with agents may belong to *many* teams and scopes at once. Neither entry point is served by a per-team
+> precompute — the read-time principal gate is the only mechanism that fits both.
+
+Signals normalize to `[0,1]` and blend by weight; **default equal weights**, optionally overridden per-map
+via `kb_properties` on the map (e.g. `proximity:w_cosine`), so a map can express that its telos weights
+relational structure over surface similarity. To keep an outsider reading *"Y's shape as Y computed it"*
+rather than through their own lens, the locate uses **Y's** weights, not the reader's.
 
 The exact normalization, the edge-density formula, and the default weight vector are **plan-level**
 (deliberately not pinned here — per the confidence inventory's Drifted #20, field-level protocol detail
@@ -313,6 +356,28 @@ not a new mechanism.
 4. **map↔telos creation ordering** — `kb_maps.telos_resource_id` and the telos-resource's
    home-on-its-own-map are mutually referential. *Lean:* deferred FK + a single creation event batch;
    plan-level.
+5. **`locate_in_map_shape` member-signal leak (A3-1)** — **RESOLVED (§4/§5):** locate returns the full
+   three-signal blend **iff the principal can read *all* of the region's members**, else degrades to
+   **cosine-to-centroid only**, each region tagged `fidelity ∈ {full, centroid_only}`. Closes the probing
+   oracle in both branches; preserves *"Y's shape as Y computed it"* (all-or-centroid, never a
+   reader-relative partial blend); reuses the principal gate (no new primitive). By the access §4
+   intersection invariant the degraded branch coincides exactly with cross-map reads. Per-team materialized
+   cardinality rejected (§5) — neither entry point (map-bound agent / multi-team human) is team-shaped.
+6. **`kb_map_regions` kernel carve-out blessing (A3-2)** — **RESOLVED (§1):** blessed. The kernel stores +
+   access-gates regions (`MaterializeMapShape` + the §4 reads) but never interprets them — the same
+   neutrality test it passes for edges/properties. General test reflected back into the data-model spec's
+   crate-topology: *interpret the content? No → kernel projection; Yes → spine-#2/Domain-B.* All region
+   semantics stay Domain-B.
+7. **Read-API dual parameterization (CS-1)** — **RESOLVED (access spec §4):** the read-API takes a single
+   **`principal`** sum type `Profile | Map`. A `Profile` gates via `resources_visible_to` (person, consumer
+   axis); a `Map` gates via `resources_accessible_to_map` (agent, producer axis = the DAG-expanded
+   least-privilege team-intersection, **closed on empty-join**). The §4 read functions above are updated to
+   `principal`; delegation's never-escalate binds `principal = Map(originating)`, so the producer-map *is*
+   the read parameter. (Bedrock #4's two axes are the two arms of the one sum type, not two simultaneous
+   parameters — an agent reads as its bound map, never as the keyboard person.)
+8. **Staleness comparator cost (A3-3)** — §6's "map's current `last_event_id`" (latest event touching the
+   map's homed concepts/edges/properties) is a computed aggregate, not a column. Pin how it is computed
+   cheaply (denormalized watermark on `kb_maps` updated per homed-object event vs. an on-read aggregate).
 
 ---
 

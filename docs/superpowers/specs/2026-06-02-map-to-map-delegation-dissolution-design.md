@@ -1,7 +1,10 @@
 # Map-to-Map Delegation: A Dissolution (`maps_share_a_team`)
 
 **Date:** 2026-06-02
-**Status:** Design — in brainstorming, pending review
+**Status:** Design — **reviewed** (2026-06-03). The dissolution is sound; **all review opens resolved.**
+**CS-1** (read-API `principal` sum type — access §4; §3 never-escalate binds `principal = Map(originating)`)
+and **A4-1** (§2/§4: `maps_share_a_team` gates *priming* of the blurred frame; the team-intersection gates
+*material* — two gates, not an equivalence) both resolved. Ready for `approved/pending-plan`.
 **Goal:** `substrate-kernel-to-cognitive-map`, Arc 1 (shared-kernel completion)
 **Spun out of:** [`2026-06-02-access-capability-model-design.md`](2026-06-02-access-capability-model-design.md) §5
 (the "scope-to-scope delegation mechanism" deferred to "a separate spec").
@@ -71,11 +74,16 @@ It is:
 - **team-identity-agnostic** — *any* surviving bridge suffices. There is no "the authorizing team," so
   the "which team authorizes this session?" question simply does not arise (§5 of the access model
   worried about it; the answer is that the question was malformed).
-- **equivalent to producer-read reachability** — it is exactly the access spec §4 condition under which
-  an agent working in `map_a` may already producer-read `map_b`'s concepts. So it introduces **no new
-  access *primitive* in spirit**: it is a named, reusable surfacing of `resources_accessible_to_map`'s
-  existing team-bridge logic, with the "evaluated live, never stored" guarantee hung on a single
-  explicit call the launch tooling invokes as its **authz-prior**.
+- **the priming authz-prior — *not* a producer-read equivalence** — it gates **priming**, not material
+  reads, and the two are different conditions. `maps_share_a_team(a,b)` (∃ *one* bridge) is strictly
+  *weaker* than "an agent in `a` may producer-read `b`'s concepts" (= `resources_accessible_to_map(a)`,
+  the access §4 team-**intersection**, visible to *every* team of `a`). The bridge legitimizes the launch
+  tooling **injecting `b`'s *frame*** — its `telos_resource` + *blurred* region surface (§4) — because
+  those are shareable frame artifacts the bridge team can already read; it does **not** authorize reading
+  `b`'s *material*. The agent's every substrate read stays bound to
+  `resources_accessible_to_map(originating)` (§3). So it introduces **no new access primitive**: it is a
+  named, live, identity-agnostic surfacing of the team-bridge existence check the launch tooling invokes
+  as its **authz-prior** — with material access bounded *separately* by the intersection.
 
 (The thin speculative-surface cost of naming a derivable predicate is paid deliberately: the launch gate
 should be one legible call, not an inferred consequence, and this is the natural place to assert the
@@ -113,9 +121,12 @@ A delegated subagent is primed with the target map's:
 - **`kb_map_regions` surface** — via the proximity spec's `map_shape_visible_to` (centroid / salience /
   label / count).
 
-Both reads are authorized by the **originating** map's producer-read — which is exactly what
-`maps_share_a_team(originating, target)` guarantees. The subagent therefore borrows the target's *frame*
-from material the originating map could already see.
+Both priming reads are authorized by **`maps_share_a_team(originating, target)`** — the bridge, checked by
+the launch tooling, which injects the frame (telos + *blurred* surface). This is **not** the originating
+map's full producer-read (the §4 intersection): the bridge is deliberately *weaker* and gates only the
+shareable frame, while the agent's actual *material* reads stay bound to
+`resources_accessible_to_map(originating)`. The subagent therefore borrows the target's *frame* and reasons
+through it over **originating's** visible material — never the target's private interior.
 
 The interior stays protected **automatically**, with no work in this spec: when the primed agent
 dereferences a region *member* of the target's shape, that deref resolves through
@@ -171,6 +182,16 @@ existing ledger.
    the live-not-stored guarantee has a single home.
 2. **Delegated-launch event type** — whether it reuses an existing event type with a payload discriminator
    or earns its own `event_type` row. *Lean:* its own event type, for clean audit querying; plan-level.
+3. **`maps_share_a_team` — priming gate, not producer-read equivalence (A4-1)** — **RESOLVED (§2, §4):**
+   the predicate gates **priming** (the launch tooling injecting target's telos + *blurred* region surface;
+   ∃ one bridge suffices — shareable frame artifacts), **not** material reads. Material stays bound to
+   `resources_accessible_to_map(originating)` = the access §4 team-intersection (strictly stronger). Two
+   gates — bridge-for-frame, intersection-for-material — not one equivalence. No new primitive.
+4. **Read-API dual parameterization (CS-1)** — **RESOLVED (access spec §4 / map-regions OQ-7):** the
+   substrate read-API takes a `principal` sum type `Profile | Map`. §3's never-escalate binds
+   `principal = Map(originating)`, so the producer-map *is* the read parameter and the root-binding has a
+   concrete surface. The §3 transitivity (every descendant read resolves through
+   `resources_accessible_to_map(originating)`) is exactly "the principal never re-binds off the root map."
 
 ---
 

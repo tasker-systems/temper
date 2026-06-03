@@ -1,7 +1,13 @@
 # Access & Capability Model: Decomposed Capabilities, Edge-as-Homed-Object, and the Telos-Scope Read-Grant
 
 **Date:** 2026-06-02
-**Status:** Design — in brainstorming, pending review
+**Status:** Design — **reviewed** (2026-06-03). Sound; **all review opens resolved.** **CS-1** (§4: read-API
+`principal` sum type; `resources_accessible_to_scope` = DAG-expanded least-privilege team-intersection,
+closed on empty-join), **CS-2** (§5 amendment banner), **A2-1** (§6/§4: `temper-system` as teams-DAG root
+content-home + virtual root-membership from `system_access` + symmetric public scope-map), **A2-2** (§1/§2:
+principal-as-write-actor; map-home confers concept read/write/delete; `grant` is teams-RBAC-only — not
+present on concept/edge), **A2-3** (§4: DAG down-only), **A2-4** (§3: edge-gate AND-composition), **A4-1**
+(delegation §2/§4: priming-vs-material gate). **Ready for `approved/pending-plan`.**
 **Goal:** `substrate-kernel-to-cognitive-map`, Arc 1 (shared-kernel completion)
 **Gates:** un-gates the PROVISIONAL `kb_resource_access` / `access_level` DDL in
 [`2026-06-01-data-model-reconciliation-design.md`](2026-06-01-data-model-reconciliation-design.md) §2.
@@ -87,6 +93,18 @@ The "team-shape" (human-authored docs: research, decisions, sessions, tasks/goal
 Committing to the wrapper does **not** prematurely shape-lock the cognitive map — the wrapper is the
 substrate both shapes need.
 
+**How the agent *holds* that authority (resolves A2-2).** The `principal` (§4, CS-1) is the actor on
+**writes** as well as reads. The authority decomposes into two levels, neither a per-concept grant row:
+
+- **Map-as-object** capabilities derive from `kb_team_maps` + the §6 role-ceiling — no bespoke per-map
+  grant: *read M's shape* = any joined-team member; *write / contribute to M* (may launch an authoring
+  agent in M's telos) = member+ ceiling; *manage M* (its team-joins) = owner/maintainer.
+- **Concept-level** `read` / `write` / `delete` are conferred to the agent-principal `Map(M)` by the
+  **map-home itself** — the exact symmetry of "a context-home confers to the owning team," now "a map-home
+  confers to the map's working agent." Producer-bounded: the agent may only reference (wire edges to)
+  nodes `M` can read (§4). There is **no `grant`** at the concept level (§2). Humans hold map-as-object
+  `write` and *launch* the agent; per the paragraph above they never directly author concepts.
+
 ---
 
 ## 2. The capability descriptor (replaces `vault | mutable | immutable`)
@@ -97,18 +115,37 @@ write/delete bits (`watcher` masks them off). Effective permission was `f(access
 computed by special-case SQL (`access_level IN ('vault','mutable') AND role != 'watcher'`). **The
 verbs are the model.**
 
-Replace the enum with an **explicit capability set** — the *same descriptor for every gated object*
-(resources and edges) and *every anchor type*:
+Replace the enum with an **explicit capability set**. `read` / `write` / `delete` apply uniformly to
+*every* gated object and *every* anchor type; `grant` is restricted to objects with **object-local
+reachability** (see the note after the table):
 
 | field                   | meaning                                                            |
 |-------------------------|--------------------------------------------------------------------|
 | `read`                  | reachability — may see the object at all (binary; depth is **not** here) |
 | `write`                 | edit content                                                       |
 | `delete`                | destroy / retract                                                  |
-| `grant`                 | re-share to other anchors / transfer ownership (the orthogonal, security-sensitive verb) |
+| `grant`                 | manage the object's **reachability** — add/remove sharing anchors, transfer ownership (the orthogonal, security-sensitive verb). **Not universal** — present only where reachability is object-local; see below |
 
 **Coherence:** a CHECK enforces `write | delete | grant ⇒ read` (you cannot mutate or re-share what
 you cannot read).
+
+**`grant` is not a universal verb (resolves A2-2).** It manages an object's *reachability*, which is
+object-local only for some kinds — so `read`/`write`/`delete` are universal but `grant` is not:
+
+- **Human docs** (resources homed in a `kb_context`): reachability = the object's `kb_resource_access`
+  anchors. `grant` = the existing **teams-level-RBAC** resource sharing (individual→team, team→team) /
+  ownership transfer. **Present.**
+- **Maps** (`kb_maps` as objects): reachability = `kb_team_maps` joins. `grant` = manage the map's
+  team-joins / exposure (the §6 management tier). **Present** (reinterpreted as join-management).
+- **Concepts** (resources homed in a `kb_map`) **and edges**: reachability is *not* object-local — a
+  concept's reach is inherited from its home-map; an edge is the producer's assertion gated by its own
+  home (§3). There is nothing for an owner to grant, so the **`grant` bit is simply not present** on
+  concept-grants or edge-grants. (DDL realization — omit the column for those anchor/object kinds vs. a
+  CHECK forbidding `grant=true` — is plan-level.) Cross-scope concept availability is achieved by
+  **forward-translation** (a derived concept homed in a broader map + a `derives_from`/`extends` edge, §4)
+  or **consumer-pulled reference** (an edge homed in the consumer's scope-map, gated by read-reach) —
+  both are `write`s, never grants. This is why scope-maps are cheap and safely ephemeral: spinning one up
+  is pure write+reference, with no reachability-grants to set up or forget to tear down (§8).
 
 **`read_resolution` is collapsed.** Reading is binary reachability. The
 data / shape / think-with gradient is **not** a grant field — it falls out *downstream of access*
@@ -147,6 +184,15 @@ The current model leaks this (both endpoints visible ⇒ edge visible). Homing t
 - **endpoint integrity** — you cannot dereference / traverse to a node you cannot see (independent of
   the edge-home check).
 
+**How they compose (A2-4): AND, for traversal.** Both gates are independent and *both* must pass to use an
+edge in a walk. Invert the directors' example to see the second gate alone: a **public** edge
+`onboarding-guide --leads_to--> q3-restructure-memo`, where the memo is homed in a private exec context. A
+public viewer **sees the edge exists** (edge-home public) but the target is **opaque and non-traversable** —
+they cannot dereference the memo or step to it (endpoint integrity). They learn "the guide leads
+*somewhere*," never what. So a graph walk follows an edge only when its home is visible **and** the
+destination endpoint is independently readable; an edge into an unreadable endpoint is a visible-but-dead
+arrow, never a path.
+
 This is **Bedrock #4 applied to edges**: the edge is **produced** in the directors' scope
 (scope-bounded — the agent may only wire edges among nodes *the scope* can read, via §4) and
 **consumed** person-bounded (visible only to those who can see its home). "Scopes home but do not
@@ -160,30 +206,139 @@ joins.
 
 ---
 
-## 4. Team↔scope read-grant (`kb_team_scopes`)
+## 4. Team↔scope read-grant (`kb_team_scopes`) and the producer read-reach
 
-The producer-bound that lets an agent working in scope Y **reference (read)** concepts homed in
-broader shared scopes — and **bounds what it may wire into Y's map to what Y itself can see, never who
-is at the keyboard.** Scope-bounded, **not DAG-expanded** to the individual team memberships of
-whoever triggered the work (Bedrock #4: producer-side access is scope-bounded; consumer-side
-visibility is person-bounded).
+`kb_team_scopes` associates a scope-map with **one-or-more teams** (scopes do **not** "belong to" a
+team). It is the producer-bound that lets an agent working in scope-map Y **reference (read)** concepts
+homed elsewhere — and **bounds what it may wire into Y to what Y itself can see, never who is at the
+keyboard** (Bedrock #4: producer-side access is scope-bounded; consumer-side visibility is
+person-bounded).
 
-This is the single mechanism behind both halves of cross-scope concept reference:
+### The two principals (resolves CS-1)
 
-- **Producer side (concept reuse):** a same-named concept arriving in a specific team's cognitive map
-  as a separate UUID-resource can carry a `derives_from` / `extends` edge to the foundational concept
-  in a broader scope — letting facets act as **taxonomy without forcing a full ontology**, avoiding
-  rebuilding every concept from the ground up. This requires Y's read-grant to the broader scope.
-- **Consumer side (connection privacy):** the resulting edge is homed in Y and gated there (§3), so
-  the *fact* of the reference does not leak to viewers who can see the foundational concept but not Y.
+A substrate read carries **one principal**, a sum type:
 
-`kb_team_scopes` associates scopes with one-or-more teams (scopes do **not** "belong to" teams). The
-producer predicate `resources_accessible_to_scope` is **not** DAG-expanded across team-memberships on
-the producer side.
+- **`Profile(uuid)`** — a *person* reading. Gated by `resources_visible_to` (consumer axis,
+  person-bounded). This is the built path.
+- **`Map(uuid)`** — an *agent producing in a scope-map*. Gated by `resources_accessible_to_scope`
+  (producer axis, map-bounded). The agent **cannot** pass a profile, so "never who is at the keyboard"
+  is **structural**, not a discipline. Any clamp of an agent's *output* to the launching person's
+  visibility is a Domain-B runtime concern, **not** a kernel read-gate.
+
+Both arms gate the **same** read surfaces — raw search (FTS+vector) and graph traversal alike — so an
+agent's search and edge-walks are bounded identically to its direct reads.
+
+### `resources_accessible_to_scope` — the least-privilege team-intersection
+
+```
+resources_accessible_to_scope(resource, M)  ≡  resource ∈   ⋂   vis(T)
+                                                          T ∈ teams(M)
+```
+
+where `vis(T)` is team T's visibility **DAG-expanded down `kb_teams_parents`** (see "down-only" below)
+and `teams(M)` is M's `kb_team_scopes` set.
+
+- **Intersection, not union — and it is *forced*, not a preference.** M's shape (regions, homed edges)
+  is readable by **every** team joined to M (§3, map-regions §4). So if M's agent read a resource only
+  *one* joined team could see and wired it into M, the *other* joined teams would learn it by reading
+  M's shape — a cross-team leak. Intersection is the only bound that closes it: M may incorporate only
+  the **common ground** of its joined teams. Dual invariant: under intersection, **M's interior is
+  exactly the common ground of its joined teams**, so any joined-team member can fully dereference M's
+  whole shape with no dangling unreadable references.
+- **Empty-join ⇒ closed (hard invariant).** `⋂` over the empty set is the *universe* — exactly
+  backwards. `teams(M) = ∅ ⇒ resources_accessible_to_scope(M) = ∅`. The emergent-default scope-map
+  (§8) thus reads nothing shared until joined to ≥1 team — default-closed, by construction.
+- **Single-team join** degenerates correctly to `vis(T)`.
+- **"More teams = narrower reach" is deliberate.** Joining a map to more teams *shrinks* its read-reach
+  to the overlap — the point of a bridge is to operate over common ground. Need more reach → join fewer
+  teams, or spin a sub-map. Do **not** "fix" this into a union; union reopens the leak.
+- **Not the keyboard-person's memberships.** The intersection is over M's *joined teams*, never unioned
+  with the launching person's own team memberships. (This is the original "not DAG-expanded across
+  team-memberships" line, now precise: the **`kb_teams_parents`** DAG expands `vis(T)`; the *person's*
+  membership set does not enter at all.)
+
+### `vis(T)` is DAG-expanded **down-only** (resolves A2-3)
+
+`kb_teams_parents` inherits **down**: a descendant (more specific) team sees its **ancestor**
+(more general / umbrella) team's grants; an ancestor gains **no** visibility into a descendant's
+private material. *"More general should never have expected visibility into the more specific."* A
+shared ancestor's grants therefore survive the intersection and become the bridge's common ground.
+
+> **Worked example — producer-vs-consumer, and intersection-with-DAG.** Teams `epd-team-a` and
+> `epd-team-b` are both children of sibling parents `epd-department` and `org-common`. `map-c` is
+> joined to `{a, b, c}`. Separately `a` is joined to `map-Y`, `b` to `map-Zed`, and the hinge team `c`
+> to **both** `Y` and `Zed`.
+> - A **person** in `c` can read the shapes of `c`, `Y`, and `Zed` — `c` is joined to all three
+>   (consumer / person axis).
+> - An **agent** launched into `map-c` reads as `Map(c)` = `vis(a) ∩ vis(b) ∩ vis(c)`. `Y`'s concepts
+>   are in `vis(a)` and `vis(c)` but **not** `vis(b)` (b isn't joined to `Y`, and inherits no join-to-Y
+>   from its ancestors), so `Y` falls out of the intersection; symmetrically `Zed` falls out via `a`.
+>   **The agent in `map-c` sees neither `Y` nor `Zed`** — the hinge is a hinge for *people*,
+>   deliberately not for the map's agent.
+> - DAG-expansion is what lets `epd-department` / `org-common` grants (present in *both* `vis(a)` and
+>   `vis(b)`) survive the intersection: the bridge reasons over org/department commons while every
+>   initiative- and team-private concept stays out.
+
+### The two halves of cross-scope reference
+
+- **Producer side (concept reuse):** a same-named concept arriving in a team's map as a separate
+  UUID-resource can carry a `derives_from` / `extends` edge to the foundational concept in a broader
+  scope-map — facets as **taxonomy without a forced ontology**. Requires M's read-reach (the
+  intersection above) to that broader material.
+- **Consumer side (connection privacy):** the resulting edge is homed in M and gated there (§3), so the
+  *fact* of the reference does not leak to viewers who can see the foundational concept but not M.
+
+### Boundary of responsibility — what the RBAC model is **not** for
+
+The down-only rule means the access model intentionally has **no upward audit / leadership roll-up.**
+That is a deliberate non-goal, not a gap:
+
+- **Postgres is the persistence layer, and Postgres RBAC is out of our domain.** Admin-level Postgres
+  access *intrinsically* confers system-level read-all of every scope. Compliance / legal / audit
+  ("who said what, where, and what did we write down") and leadership hard-questions-time review are
+  therefore **extra-system-access** questions answered at the database / operations boundary — **not**
+  internal RBAC modeling questions. Building "umbrella team sees all sub-team work" into the teams-DAG
+  would re-implement, badly, an audit capability that already exists one layer down.
+- This does **not** remove the need to **intentionally forward-and-translate** concepts/resources into
+  higher-order / higher-access contexts. That is fully supported — via the producer-side concept-reuse
+  edge above and the shallow-clone north star (§8) — but it is an **explicit authored act** governed by
+  organizational topology, transparency norms, and honesty expectations, **not** an automatic
+  visibility a more-general team is owed by structure.
+
+### The root team and the public scope-map (the universal read-floor)
+
+`temper-system` is the **teams-DAG root** — every team descends from it (§6 repurposes it from access-gate
+to content-home). Two symmetric homes give "system-public" content one uniform mechanism across both axes,
+no new primitive:
+
+- **Resources / contexts** granted to / homed in the root sit in `vis(root)`, hence (down-only
+  inheritance) in *every* `vis(T)`, hence in *every* map's intersection and every person's reach.
+  `general` lives here.
+- **Cognitive-map content** gets the mirror: a **system-default scope-map joined to *only* the root team**
+  — a perfect overlap with "everyone." Its concepts/edges sit in `vis(root)`, so they're universally
+  readable by every agent (via the DAG) and every person (via membership). It homes the truly-public,
+  foundational concepts any team's map may `derives_from`/`extends` (the concept-reuse pattern above, at
+  the public tier). Its own producer-reach is `vis(root)` = exactly the public floor, so its agent can
+  never pull private material into public; authoring it requires root management-tier (`system_access =
+  admin`).
+
+The empty-join rule still holds: a map joined to ≥1 team inherits the root floor via the DAG; a genuinely
+zero-join map reads ∅ (closed) — including no public content.
 
 ---
 
 ## 5. Scope-as-telos-incubation-space and `kb_scope_proximity`
+
+> **⚠ AMENDED by children specs (post-review, 2026-06-03).** Two load-bearing claims below are
+> superseded by specs spun out of this section — read them as historical:
+> - **Porosity is *dropped*, not "reframed."** `2026-06-02-map-regions-self-materialized-shape-surface-design`
+>   §4 retires `kb_scopes.porosity` and the `porosity` enum entirely (visibility = teams:RBAC;
+>   contribution = a `write` check). The "`kb_scopes.porosity` reframes accordingly" line at the end of
+>   this section no longer holds.
+> - **Delegation is *not* "a homed edge."** `2026-06-02-map-to-map-delegation-dissolution-design` §1
+>   rejects any stored delegation object; the mechanism is the live, identity-agnostic predicate
+>   `maps_share_a_team`. The "a homed edge, §3" framing below is superseded.
+> - Throughout, `kb_scope_proximity` → `kb_map_regions` and `scope` → `map` per the map-regions §0 rename.
 
 A scope is **not an enclosure**. It is a concept-incubation space through a telos: all concepts are
 *born of a telos-toward-utility* (a tool-using, ready-to-hand phenomenological framing — no a-priori
@@ -248,16 +403,24 @@ team"* (role). The four role names survive, re-grounded as `(management, ceiling
    (`system_access ∈ none | approved | admin`). The original bug was treating "may use the instance"
    as a kind of resource-membership; the fix **separates the category** even at the cost of the
    "one capability model everywhere" uniformity — the auth gate is genuinely a different layer.
-3. **Bootstrap-content recipient** (membership → reads `general`) — becomes a **default read-grant to
-   approved profiles** (the `general` context is readable when `system_access ≥ approved`), not a
-   side effect of `temper-system` membership.
+3. **Bootstrap-content recipient** (membership → reads `general`) — becomes **read-reachability through a
+   content-root team** (resolves A2-1). `temper-system` retires as the *gate* but is repurposed as the
+   **teams-DAG root content-home**: `general` (and any system-public resource/context) is granted to /
+   homed in it, and—because every team descends from the root (down-only DAG, §4)—its grants are the
+   universal read-floor for **both** people (membership) and agents (present in every map's intersection).
+   An approved profile is a **virtual** member of the root, *derived from* `system_access` with **no stored
+   row** (preserving "set status, not insert membership"): `approved` ⇒ **read-only ceiling** on root
+   content; `admin` ⇒ **management tier** (may author system-public content). The system-access *gate*
+   stays the profile status; the root team is only the content-reachability face of the same status — the
+   two concerns share a source but answer different questions, so this does **not** re-fuse the R11
+   conflation.
 
 `is_system_admin` → `system_access = admin`, not team-owner. `has_system_access` /
 `is_system_admin` read profile status — which **also drops their `gating_team_slug` dependency, an
 item slug-retirement would otherwise have broken.** `kb_join_requests` and `kb_system_settings`
 (`access_mode`, terms) stay; the approval workflow's terminal action becomes *set profile status*
-rather than *insert a `watcher` membership row*. `temper-system` retires as an access mechanism (it
-may survive only as a content home).
+(virtual root-membership follows from it), not *insert a `watcher` membership row*. `temper-system`
+retires as the **access gate** and is repurposed as the **teams-DAG root content-home** (above).
 
 ---
 
@@ -300,12 +463,17 @@ access model stays forward-compatible with it, not to build it now.
   event
 - `kb_team_scopes` (scope↔team association); `kb_teams_parents` (teams DAG)
 - `edges_visible_to(...)` function (same shape as `resources_visible_to`)
-- `resources_accessible_to_scope(...)` producer predicate (scope-bounded, not DAG-expanded)
-- `kb_profiles.system_access` (`none | approved | admin`)
+- `resources_accessible_to_scope(...)` producer predicate (the DAG-expanded least-privilege
+  team-**intersection**, closed on empty-join; *not* unioned with the launching person's memberships)
+- `kb_profiles.system_access` (`none | approved | admin`) — gate *and* virtual root-team ceiling
+- a seeded **system-default scope-map** joined only to the root team (the public cognitive-map home)
 
 **Changed**
 - `kb_team_resources` → subsumed into `kb_resource_access`
 - `has_system_access` / `is_system_admin` → read profile status; drop `gating_team_slug` dependency
+- `resources_visible_to` → resolves virtual root-membership from `system_access` (the universal read-floor)
+- `temper-system` → repurposed from access-gate to **teams-DAG root content-home** (homes `general` +
+  system-public content; every team descends from it)
 - `graph_traverse` / `graph_neighbors` / `graph_resource_edges` → add the edge-home gate alongside the
   existing endpoint joins
 - `team_role` semantics re-grounded as `(management, ceiling)` (enum likely unchanged)
@@ -324,6 +492,33 @@ access model stays forward-compatible with it, not to build it now.
 2. **Edge-home storage** — denormalized home columns on `kb_resource_edges` (query-cheap) vs
    join-through-asserting-event (normalized, no drift). *Lean:* denormalized, projected from the event
    at assertion time.
+3. **General-context default-read mechanism (A2-1)** — **RESOLVED (§6, §4):** no per-profile grant, no
+   `system_default_read` column. `temper-system` becomes the **teams-DAG root content-home**; `general`
+   (and system-public content) is granted to / homed in it; **virtual** root-membership is *derived from*
+   `system_access` (no stored row) — `approved` = read-only ceiling, `admin` = manage. Universal
+   readability falls out of teams-RBAC + down-only DAG for **both** people and agents. A symmetric
+   **system-default scope-map** (joined only to the root) homes truly-public cognitive-map content. The
+   gate stays `profile.system_access`, kept distinct from root-membership (no R11 re-fusion).
+4. **Producer-grantee mechanics (A2-2)** — **RESOLVED (§1, §2):** the `principal` is the actor on *writes*
+   too (completing CS-1). **Map-as-object** caps come from `kb_team_maps` + role-ceiling (read = any
+   joined-team member; write/contribute = member+ ceiling; manage = owner/maintainer). **Concept-level**
+   read/write/delete are conferred to the agent-principal `Map(M)` by the **map-home** (symmetric with
+   context-home-confers), producer-bounded by the §4 intersection. **`grant` is not present** on concept-
+   or edge-grants (§2): cross-scope availability is forward-translation or consumer-pulled reference, both
+   `write`s. Humans never directly author concepts (§1); they hold map-as-object `write` and launch the
+   agent.
+5. **`kb_teams_parents` role (A2-3)** — **RESOLVED (§4):** `vis(T)` is DAG-expanded **down-only**
+   (descendant inherits ancestor/umbrella grants; an ancestor gains no visibility into descendant
+   privates). The producer reach is the **intersection** over M's *joined teams*, never unioned with the
+   launching person's memberships.
+6. **`maps_share_a_team` equivalence — sharpened (A4-1)** — §4 now *defines*
+   `resources_accessible_to_scope` as the DAG-expanded team-**intersection**, which reveals the delegation
+   spec's "`maps_share_a_team` = exactly the producer-read condition" claim is **not exact**:
+   `maps_share_a_team` (∃ *one* shared team) is strictly *weaker* than the intersection (visible to
+   *every* joined team). Resolution direction (settle in the A4-1 dig): `maps_share_a_team` gates
+   **priming** (borrowing the target's telos + *blurred* shape surface — legitimate on a single bridge);
+   the intersection gates **material** (what the primed agent may actually deref — never-escalate). Two
+   gates, not one equivalence.
 
 ---
 
