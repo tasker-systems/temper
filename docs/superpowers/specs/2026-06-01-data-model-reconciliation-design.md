@@ -12,9 +12,9 @@
 > [`2026-06-02-map-regions-self-materialized-shape-surface-design.md`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §0).
 > The built `kb_events.scope_id` producing-anchor column is left named as-built where it's referenced (its
 > rename is a migration-time concern, not a spec-vocabulary one). Two **substantive** reconciliations —
-> *not* rename drift — also surfaced in the same pass and **remain open**: the `kb_resource_access`
-> grant-anchor set vs the resolved access model (see the note in §2) and `resource.body_hash`'s home after
-> manifest dissolution meets the content-block block-merkle (see the note in §3).
+> *not* rename drift — also surfaced in the same pass and are now **both RESOLVED 2026-06-04**: the
+> `kb_resource_access` grant-anchor set (§2 → `('kb_teams','kb_profiles')`) and `resource.body_hash`'s home
+> (§1 → a denormalized column on `kb_resources`).
 
 ## Context
 
@@ -157,6 +157,13 @@ kb_resources (
     id          uuid pk,            -- uuid_generate_v7
     title       text not null,
     origin_uri  text not null,      -- canonical source uri; not unique
+    body_hash   text,               -- DENORMALIZED sync fingerprint (A1, resolved 2026-06-04): a merkle
+                                     --   over the resource's ordered non-folded (block_id, block_body_hash)
+                                     --   tuples (content-block spec). NOT identity — a derived content cache,
+                                     --   recomputed by the block-mutation write path. This is the home for the
+                                     --   resource-level sync hash once kb_resource_manifests dissolves (here)
+                                     --   and kb_resource_revisions retires (content-block); sync_diff_for_device
+                                     --   reads this column instead of kb_resource_manifests.body_hash.
     is_active   boolean not null default true,
     created     timestamptz not null,
     updated     timestamptz not null
@@ -167,6 +174,11 @@ Moves **out** of `kb_resources`:
 - `kb_context_id`, `owner_profile_id`, `originator_profile_id` → `kb_resource_homes` (navigation/anchor)
 - `kb_doc_type_id` → **dropped**; doctype becomes a `kb_properties` row `key='doc_type'` (see §3)
 - `slug` → **dropped entirely** (see §4 — slug retirement)
+
+Moves **in** (A1, resolved 2026-06-04): `body_hash` — the resource-level sync fingerprint. It's a
+deliberate denormalized cache, not identity: a hot-path single-column read for `sync_diff_for_device`,
+chosen over compose-on-read (avoids a per-resource aggregate on the sync path) and over a `kb_properties`
+row (which would conflate a high-churn derived cache with event-projected semantic facets). See §3.
 
 ### 2. `kb_resource_homes` / `kb_resource_access` (the access wrapper)
 
@@ -196,9 +208,9 @@ kb_resource_access (                 -- additive grants beyond the home anchor. 
     id                    uuid pk,
     resource_id           uuid not null references kb_resources(id),
     anchor_table          varchar(64) not null
-                            check (anchor_table in ('kb_contexts','kb_cogmaps','kb_teams','kb_profiles')),
+                            check (anchor_table in ('kb_teams','kb_profiles')),  -- A2, resolved 2026-06-04
     anchor_id             uuid not null,
-    access_level          access_level not null,   -- existing enum: vault | mutable | immutable
+    access_level          access_level not null,   -- PLACEHOLDER — replaced by the access-spec capability descriptor (B3)
     granted_by_profile_id uuid not null references kb_profiles(id),
     granted_at            timestamptz not null default now(),
     unique (resource_id, anchor_table, anchor_id)
@@ -213,17 +225,17 @@ only resource identity is the UUID PK. Teams-DAG (`kb_teams_parents`), `kb_team_
 producer/consumer access functions (`resources_visible_to`, `resources_accessible_to_cogmap`) carry from
 2026-05-27, rewritten against these tables.
 
-> **⚠ Reconciliation item A2 — grant-anchor set vs the resolved access model (added 2026-06-04, coherence
-> pass).** The `kb_resource_access.anchor_table` check above admits `kb_cogmaps` as a grantee
-> anchor. The access/capability spec — which **un-gates** this table — resolved a model where additive
-> grants are **teams-RBAC only** (individual→team, team→team), and **maps do not receive per-resource
-> grants**: a map's read-reach is *computed* (`resources_accessible_to_cogmap` = the DAG-expanded team
-> intersection), and there is explicitly *no `grant` at the concept level*
-> ([`2026-06-02-access-capability-model-design.md`](2026-06-02-access-capability-model-design.md) §2/§4).
-> So the grantee anchors should be `kb_teams` / `kb_profiles` (and possibly `kb_contexts`); `kb_cogmaps` /
-> `kb_cogmaps` as a `kb_resource_access` grantee contradicts the maps-read-via-intersection model. The access
-> spec un-gated the table but never restated the corrected anchor set inline — reconcile when the DDL is
-> written (the access spec carries a reciprocal pointer in its §2).
+> **✓ Reconciliation item A2 — grant-anchor set (RESOLVED 2026-06-04).** The `anchor_table` CHECK above is
+> now **`('kb_teams','kb_profiles')`**. Dropped: `kb_cogmaps` (cogmaps read via the
+> `resources_accessible_to_cogmap` team-**intersection**, never per-resource grants — there is no `grant`
+> at the concept level, access §2/§4) and `kb_contexts` (a context is a navigation *home*, not a grantee —
+> cross-context placement is a re-home, not a grant). Kept: `kb_teams` (team sharing, subsuming the built
+> `kb_team_resources`) and `kb_profiles` (direct individual sharing). **Leak-safety invariant (the thing
+> that makes `kb_profiles` safe):** a profile-anchored grant is **person/consumer-axis only** — it feeds
+> `resources_visible_to(profile)` and **never** enters any team's `vis(T)` or any cogmap's producer
+> intersection, so it cannot be referenced into a cogmap and cannot leak cross-team. This is the
+> generalization of access §4's "the launching person's memberships do not enter"; recorded there. (`access_level`
+> is still the placeholder enum — its replacement by the capability descriptor is item B3, access §2.)
 
 ### 3. `kb_properties` — the canonical structured-meta model (single shape, non-null key)
 
@@ -269,17 +281,18 @@ backfill as `kb_properties` rows (via genesis events, `intent=migration`, mirror
 `managed_hash`/`open_hash` were frontmatter-tier sync aids and become obsolete under cloud-only — they
 retire with the sync rework, not here.
 
-> **⚠ Reconciliation item A1 — `resource.body_hash`'s home after manifest dissolution (added 2026-06-04,
-> coherence pass).** This spec dissolves `kb_resource_manifests` and parks `body_hash` on
-> `kb_resource_revisions`. The sibling
-> [`2026-06-03-content-block-primitive-design.md`](2026-06-03-content-block-primitive-design.md) goes the
-> other way: it **retires `kb_resource_revisions`** (→ `kb_block_revisions` at block grain) and keeps
-> `kb_resource_manifests.body_hash` as the resource-level sync hash, redefined as a **merkle over the
-> ordered `(block_id, block_body_hash)` tuples**. The two specs thus point `body_hash` at **opposite
-> survivors** — after both land, *neither* `kb_resource_manifests` nor `kb_resource_revisions` exists, and
-> the resource-level sync hash `sync_diff_for_device` reads is unowned. Decide its post-both home (a
-> denormalized column on `kb_resources`, a reserved `kb_properties` row, or composed-on-read) when these
-> two specs are sequenced together. Cross-ref: content-block Plan-level Q3.
+> **✓ Reconciliation item A1 — `resource.body_hash`'s home (RESOLVED 2026-06-04).** The conflict was real:
+> this spec dissolves `kb_resource_manifests` (sync's actual source — `sync_diff_for_device` reads
+> `m.body_hash`), while the sibling
+> [`2026-06-03-content-block-primitive-design.md`](2026-06-03-content-block-primitive-design.md) **retires
+> `kb_resource_revisions`** (→ `kb_block_revisions` at block grain). After both land *neither* table
+> exists. **Resolution:** the resource-level sync hash becomes a **denormalized `body_hash` column on
+> `kb_resources`** (§1), a merkle over the ordered non-folded `(block_id, block_body_hash)` tuples
+> (content-block), recomputed by the block-mutation write path. `sync_diff_for_device` reads
+> `kb_resources.body_hash` instead of `kb_resource_manifests.body_hash` — a one-column source swap, no
+> aggregate on the hot path. Chosen over compose-on-read (per-resource aggregate on sync) and a
+> `kb_properties` row (conflates a high-churn derived cache with event-projected semantic facets).
+> Cross-ref: content-block Plan-level Q3.
 
 ### 4. Slug retirement — UUID is the sole resource identity
 

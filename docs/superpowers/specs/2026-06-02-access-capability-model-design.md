@@ -147,13 +147,13 @@ object-local only for some kinds — so `read`/`write`/`delete` are universal bu
   both are `write`s, never grants. This is why cogmaps are cheap and safely ephemeral: spinning one up
   is pure write+reference, with no reachability-grants to set up or forget to tear down (§8).
 
-> **⚠ Reconciliation item A2 — restate the `kb_resource_access` grantee-anchor set (added 2026-06-04,
-> coherence pass).** This spec un-gates the PROVISIONAL `kb_resource_access` DDL in the data-model spec §2
-> but only replaced the *capability vocabulary* (the descriptor, §2 below); it never restated the
-> **grantee-anchor set**. The model resolved here implies grants are teams-RBAC (team/profile anchors) and
-> that **maps read via the team-intersection, not per-resource grants** — so the data-model §2 check that
-> admits `kb_cogmaps` as a `kb_resource_access` anchor is stale. Reconcile the `anchor_table`
-> CHECK to the teams-RBAC anchor set when the DDL is written. (Reciprocal note lives in data-model §2.)
+> **✓ Reconciliation item A2 — `kb_resource_access` grantee-anchor set (RESOLVED 2026-06-04).** The
+> `anchor_table` CHECK is **`('kb_teams','kb_profiles')`** (data-model §2). Dropped `kb_cogmaps` (cogmaps
+> read via the §4 team-intersection, never per-resource grants — no `grant` at the concept level) and
+> `kb_contexts` (a navigation home, not a grantee). Kept `kb_teams` (subsumes built `kb_team_resources`)
+> and `kb_profiles` (direct individual sharing). `kb_profiles`-as-grantee is leak-safe **because** a
+> profile-anchored grant is person/consumer-axis only and never enters the §4 producer intersection — see
+> the invariant added to §4 below. (Reciprocal note in data-model §2.)
 
 **`read_resolution` is collapsed.** Reading is binary reachability. The
 data / shape / think-with gradient is **not** a grant field — it falls out *downstream of access*
@@ -264,6 +264,17 @@ and `teams(M)` is M's `kb_team_cogmaps` set.
   with the launching person's own team memberships. (This is the original "not DAG-expanded across
   team-memberships" line, now precise: the **`kb_teams_parents`** DAG expands `vis(T)`; the *person's*
   membership set does not enter at all.)
+- **`vis(T)` is team-anchored only — profile-grants never enter it (the A2 leak-safety invariant,
+  added 2026-06-04).** `vis(T)` is computed over **team-anchored `kb_resource_access` grants +
+  team-home-confers + DAG-inherited team grants**. It is emphatically **not** the union of T's members'
+  personal visibility. A **profile-anchored** grant (`kb_resource_access` row with
+  `anchor_table='kb_profiles'` — direct "share with `@alice`") is **person/consumer-axis only**: it feeds
+  `resources_visible_to(@alice)` and **never** enters any `vis(T)` or any cogmap's producer intersection.
+  So a profile-granted resource cannot be producer-read by a cogmap agent, cannot be wired into a cogmap,
+  and cannot leak cross-team via the cogmap's shape — which is exactly why admitting `kb_profiles` as a
+  grantee (data-model §2, item A2) is safe. This is the **generalization** of the keyboard-person rule
+  above: just as the launching person's memberships don't widen the producer-read, neither do any
+  member's personal profile-grants.
 
 ### `vis(T)` is DAG-expanded **down-only** (resolves A2-3)
 

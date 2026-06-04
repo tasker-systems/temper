@@ -192,9 +192,14 @@ CREATE INDEX idx_block_provenance_block  ON kb_block_provenance(block_id) WHERE 
 CREATE INDEX idx_block_provenance_source ON kb_block_provenance(source_kind, source_id);
 ```
 
-`kb_resources` is **unchanged**. `kb_resource_manifests.body_hash` is **unchanged** in role; it
+The resource-level sync hash is **unchanged in role** but moves homes (A1, resolved 2026-06-04): it
 becomes a hash over the ordered `(block_id, block_body_hash)` tuples of the resource's non-folded
-blocks — so sync stays a single resource-level hash compare (`sync_diff_for_device` untouched).
+blocks, written to **`kb_resources.body_hash`** (a denormalized column added by the data-model spec §1)
+rather than `kb_resource_manifests.body_hash` — because the data-model spec dissolves
+`kb_resource_manifests` and this spec retires `kb_resource_revisions`, so neither old home survives.
+Sync stays a single resource-level hash compare; `sync_diff_for_device` just reads `kb_resources.body_hash`.
+Otherwise `kb_resources` is structurally untouched by *this* spec (the `body_hash` column is the
+data-model spec's to add).
 
 ---
 
@@ -393,14 +398,14 @@ later if a concrete need forces it.
 2. **`block_chunks_at_revision` + resource wrapper** — reshape `resource_chunks_at_revision` to
    block grain and add a resource-level composer; confirm the dedup replay-guard (most-recent-revision
    `body_hash` check) translates to block grain.
-3. **`resource.body_hash` as a hash over ordered block hashes** — confirm the composition is stable
-   for sync and that `sync_diff_for_device` needs no change. ⚠ **Cross-spec gap A1 (coherence pass
-   2026-06-04):** the "no change — reads `manifests.body_hash`" expectation **collides with** the
-   data-model spec, which *dissolves* `kb_resource_manifests`; meanwhile this spec *retires*
-   `kb_resource_revisions`. After both land neither table survives, so `resource.body_hash`'s home is
-   **unowned** — pin it (denormalized column on `kb_resources` / reserved `kb_properties` row /
-   composed-on-read merkle) when this spec and the data-model spec are sequenced together. See the
-   reciprocal note in [`data-model-reconciliation`](2026-06-01-data-model-reconciliation-design.md) §3.
+3. **`resource.body_hash` as a hash over ordered block hashes** — confirm the merkle composition is
+   stable for sync. ✓ **Cross-spec gap A1 (RESOLVED 2026-06-04):** the resource-level sync hash now lives
+   on a **denormalized `kb_resources.body_hash` column** (data-model spec §1), since the data-model spec
+   dissolves `kb_resource_manifests` and this spec retires `kb_resource_revisions` — neither old home
+   survives. `sync_diff_for_device` reads `kb_resources.body_hash` (a one-column source swap, no
+   aggregate). The remaining plan-level confirmation is only that the block-mutation write path
+   recomputes the merkle correctly. See the reciprocal note in
+   [`data-model-reconciliation`](2026-06-01-data-model-reconciliation-design.md) §3/§1.
 4. **`cargo sqlx prepare --workspace`** cache regen after the new SQL; watch the per-crate
    feature-gated cache caveat (see CLAUDE.md SQL section).
 5. **Crate topology** — where `kb_content_blocks` + the block event family land in the
