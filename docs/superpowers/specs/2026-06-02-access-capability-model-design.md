@@ -522,11 +522,19 @@ access model stays forward-compatible with it, not to build it now.
    event walk.
 3. **General-context default-read mechanism (A2-1)** — **RESOLVED (§6, §4):** no per-profile grant, no
    `system_default_read` column. `temper-system` becomes the **teams-DAG root content-home**; `general`
-   (and system-public content) is granted to / homed in it; **virtual** root-membership is *derived from*
-   `system_access` (no stored row) — `approved` = read-only ceiling, `admin` = manage. Universal
-   readability falls out of teams-RBAC + down-only DAG for **both** people and agents. A symmetric
-   **system-default cogmap** (joined only to the root) homes truly-public cognitive-map content. The
-   gate stays `profile.system_access`, kept distinct from root-membership (no R11 re-fusion).
+   (and system-public content) is granted to / homed in it; `approved` = read-only ceiling, `admin` =
+   manage. Universal readability falls out of teams-RBAC + down-only DAG for **both** people and agents.
+   A symmetric **system-default cogmap** (joined only to the root) homes truly-public cognitive-map content.
+   The gate stays `profile.system_access`, kept distinct from root-membership (no R11 re-fusion).
+   > **↻ REVISED (2026-06-04, schema.sql prep).** Root-membership is **not** virtual / read-time-derived.
+   > It is a **real `kb_team_members` row maintained at approval time**: enabling a profile
+   > (`system_access` → `approved`/`admin`) **auto-joins** the temper-system root (role = `watcher` /
+   > `owner` respectively); `none` removes the join. The access functions then read plain memberships
+   > with **no special-case** for the root slug — `system_access` stays the profile *status* whose
+   > *consequence* is the maintained membership, not a branch in every read. The full overlap of root
+   > membership with the system-default cogmap is thereby **structural**, not re-derived. (Earlier this
+   > item said "*virtual* root-membership *derived from* `system_access`, no stored row" — superseded:
+   > demonstrated as the `sync_system_membership` trigger in the schema.sql artifact.)
 4. **Producer-grantee mechanics (A2-2)** — **RESOLVED (§1, §2):** the `principal` is the actor on *writes*
    too (completing CS-1). **Map-as-object** caps come from `kb_team_cogmaps` + role-ceiling (read = any
    joined-team member; write/contribute = member+ ceiling; manage = owner/maintainer). **Concept-level**
