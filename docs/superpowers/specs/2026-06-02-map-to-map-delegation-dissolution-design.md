@@ -179,9 +179,13 @@ existing ledger.
 
 1. **`cogmaps_share_a_team` implementation** — a standalone SQL function vs. an inlined existence-check
    inside the launch authz path. *Lean:* a named SQL function, so the authz-prior is one legible call and
-   the live-not-stored guarantee has a single home.
+   the live-not-stored guarantee has a single home. — **RESOLVED (2026-06-04, schema.sql prep):** a
+   named SQL function — the predicate is one legible call in the launch authz-prior, and the
+   live-not-stored (∃-one-shared-team, never materialized) guarantee has exactly one home.
 2. **Delegated-launch event type** — whether it reuses an existing event type with a payload discriminator
    or earns its own `event_type` row. *Lean:* its own event type, for clean audit querying; plan-level.
+   — **RESOLVED (2026-06-04, schema.sql prep):** its own `event_type` row (seeded in the artifact),
+   so delegated launches are a clean audit-query filter rather than a payload-discriminator scan.
 3. **`cogmaps_share_a_team` — priming gate, not producer-read equivalence (A4-1)** — **RESOLVED (§2, §4):**
    the predicate gates **priming** (the launch tooling injecting target's telos + *blurred* region surface;
    ∃ one bridge suffices — shareable frame artifacts), **not** material reads. Material stays bound to

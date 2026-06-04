@@ -395,6 +395,13 @@ later if a concrete need forces it.
    (HNSW is `WHERE is_current=true`; a join predicate keeps the index simple but returns folded-block
    chunks for the join to discard — slight recall waste. Setting `is_current=false` on fold is cleaner
    for reads but overloads `is_current`'s "non-current version" meaning.) Decide with the views in hand.
+   — **RESOLVED (2026-06-04, schema.sql prep):** the **join-predicate + partial-index** path, *not*
+   `is_current=false`. The decisive framing: **folding is an act on visibility** — the same category as
+   folding an edge — and is fully *orthogonal* to currency. `is_current` stays a true statement about
+   the chunk (it remains the latest revision whether or not its block is folded); `NOT is_folded` is the
+   separate availability gate. The current views carry both predicates (`is_current AND NOT is_folded`),
+   and the HNSW/vector index is built **partial** on that same combination so no folded-block chunk
+   reaches the join — pure semantics, no recall waste, no overload of `is_current`.
 2. **`block_chunks_at_revision` + resource wrapper** — reshape `resource_chunks_at_revision` to
    block grain and add a resource-level composer; confirm the dedup replay-guard (most-recent-revision
    `body_hash` check) translates to block grain.

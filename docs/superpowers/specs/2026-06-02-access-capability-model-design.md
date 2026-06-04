@@ -508,9 +508,18 @@ access model stays forward-compatible with it, not to build it now.
 
 1. **Descriptor's literal DDL shape** — discrete boolean columns vs a composite type vs a small
    bitmask. *Lean:* explicit boolean columns on `kb_resource_access`, readable directly in SQL.
+   — **RESOLVED (2026-06-04, schema.sql prep):** four boolean columns on `kb_resource_access` —
+   `can_read`, `can_write`, `can_delete`, `can_grant` — with a CHECK enforcing
+   `write | delete | grant ⇒ read` (§2's coherence rule). The verb set is exactly §2's; `contribute`
+   is a role-**ceiling** tier (§6), not a descriptor column. Composite/bitmask rejected: boolean
+   columns read directly in SQL and keep the §6 role-mask intersection a plain per-column AND.
 2. **Edge-home storage** — denormalized home columns on `kb_resource_edges` (query-cheap) vs
    join-through-asserting-event (normalized, no drift). *Lean:* denormalized, projected from the event
-   at assertion time.
+   at assertion time. — **RESOLVED (2026-06-04, schema.sql prep):** denormalized home columns (the
+   home anchor's kind + id) on `kb_resource_edges`, projected from the asserting relationship-event at
+   write time. The event stays the normalized source of truth; the projection is write-once at
+   assertion (no drift surface), and the columns make the graph read-gates a plain join rather than an
+   event walk.
 3. **General-context default-read mechanism (A2-1)** — **RESOLVED (§6, §4):** no per-profile grant, no
    `system_default_read` column. `temper-system` becomes the **teams-DAG root content-home**; `general`
    (and system-public content) is granted to / homed in it; **virtual** root-membership is *derived from*

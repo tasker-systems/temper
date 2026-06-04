@@ -363,13 +363,26 @@ not a new mechanism.
 
 1. **Centroid pooling** — mean-pool of all member chunk embeddings vs. pool-per-concept-then-mean.
    *Lean:* mean over member concepts' pooled embeddings (one vector per concept first).
+   — **RESOLVED (2026-06-04, schema.sql prep):** pool-per-concept-then-mean — each member concept is
+   pooled to one vector first, the centroid is the mean over those. Stops a concept with many chunks
+   from dominating the region's centroid. A `MaterializeCogmapShape` function-body decision, not a
+   column shape.
 2. **Cross-map "nearest region" search** — whether `locate_in_cogmap_shape` over *many* visible maps wants a
    global HNSW on `centroid`, or per-map scan suffices (regions per map are few). *Lean:* per-map scan
    first; add the index only if a cross-map locate path materializes.
+   — **RESOLVED (2026-06-04, schema.sql prep):** per-map scan in the artifact; **no** HNSW on
+   `centroid` yet (regions per map are few). The centroid index is *wanted* and will be taken up as a
+   cross-map locate path materializes — flagged, not built.
 3. **Default weight vector + normalization** for §5 — plan-level; equal weights as the starting point.
+   — **RESOLVED (2026-06-04, schema.sql prep):** equal weights as the function default; the blend is
+   parameterized so a caller can override without a schema change.
 4. **map↔telos creation ordering** — `kb_cogmaps.telos_resource_id` and the telos-resource's
    home-on-its-own-map are mutually referential. *Lean:* deferred FK + a single creation event batch;
-   plan-level.
+   plan-level. — **RESOLVED (2026-06-04, schema.sql prep) — SUPERSEDED by spine #2:** the
+   `cogmap_genesis` **resource-first single-txn** ordering (domain-b spec) inserts the telos resource
+   before the `kb_cogmaps` row, so the `telos_resource_id NOT NULL` FK is satisfied at insert with
+   **no deferred FK**. This lean's deferred-FK path is retired; the constitutive NOT NULL holds in one
+   transaction.
 5. **`locate_in_cogmap_shape` member-signal leak (A3-1)** — **RESOLVED (§4/§5):** locate returns the full
    three-signal blend **iff the principal can read *all* of the region's members**, else degrades to
    **cosine-to-centroid only**, each region tagged `fidelity ∈ {full, centroid_only}`. Closes the probing
@@ -392,6 +405,13 @@ not a new mechanism.
 8. **Staleness comparator cost (A3-3)** — §6's "map's current `last_event_id`" (latest event touching the
    map's homed concepts/edges/properties) is a computed aggregate, not a column. Pin how it is computed
    cheaply (denormalized watermark on `kb_cogmaps` updated per homed-object event vs. an on-read aggregate).
+   — **RESOLVED (2026-06-04, schema.sql prep):** **on-read aggregate** in the artifact (a `MAX(event)`
+   over the map's homed objects), **not** a denormalized watermark. Two reasons: (a) it is
+   correctness-obvious and needs no per-homed-object maintenance trigger, and (b) the artifact exists to
+   *measure* exactly this — a denormalized `last_event_id` watermark on `kb_cogmaps` is the production
+   optimization to reach for *iff* the aggregate proves hot under the scenario queries. Measure first,
+   denormalize on evidence. The stored **materialization watermark** (§6 — the event the shape was last
+   materialized under) is a separate, genuinely-stored column and is unaffected.
 
 ---
 

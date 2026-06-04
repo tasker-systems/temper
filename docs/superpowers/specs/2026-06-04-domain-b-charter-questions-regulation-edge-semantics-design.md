@@ -350,26 +350,49 @@ source); questions/regulation ride the `block_*` and edge projections; no new ev
 
 1. **Reinforce derivation** — precisely which event(s) constitute "reinforcement" of a question-block (any
    `{kind:block}` reference? only confirming triage acts?), and the read that turns the stream into a
-   salience signal.
+   salience signal. — **RESOLVED (2026-06-04, schema.sql prep):** for the artifact's scenarios,
+   reinforcement = **any `{kind:block}` reference into the question-block**; the read aggregates count +
+   recency over that stream into the salience signal. Narrowing to only-confirming-triage-acts is a
+   tuning question left to the black-box producers — the substrate just exposes the reference stream.
 2. **Scar linkage** — does the scar-lesson regulation-resource link back to the folded question-block via
    `kb_block_provenance` (`{kind:block}`) or via an edge? (Lean: provenance — the lesson *came from* scarring
-   that question.)
+   that question.) — **RESOLVED (2026-06-04, schema.sql prep):** **provenance** (`kb_block_provenance`,
+   `{kind:block}`). The lesson *came from* scarring that question — a provenance relation, not a
+   first-class graph edge. Keeps the regulation graph (express/near) clean of lineage bookkeeping.
 3. **doc_type values** — the demoted `kb_properties` `key='doc_type'` values for the charter and for
    regulation concepts (`cogmap_charter` / `cogmap_regulation` / plain `concept`?), and whether render/UI ever
    needs to distinguish a framing-statement block from a question block (if so, that un-defers
-   content-block's `block_kind`; YAGNI until forced).
+   content-block's `block_kind`; YAGNI until forced). — **RESOLVED (2026-06-04, schema.sql prep):**
+   `doc_type` values `cogmap_charter` / `cogmap_regulation` / `concept`. `block_kind` stays **deferred**
+   (YAGNI) — nothing in the artifact's scenarios needs to distinguish a framing-statement block from a
+   question block at the storage layer; block-0-is-telos is positional convention.
 4. **Genesis event naming** — `scope_seeded` vs a `cogmap_*`-prefixed name, consistent with the CS-3 sweep.
+   — **RESOLVED (2026-06-04, schema.sql prep):** **`cogmap_seeded`**, consistent with the CS-3
+   scope→cogmap sweep. Seeded as its own `event_type` row in the artifact.
 5. **`cogmap_genesis` packaging** — one SQL function in the artifact vs. a `temper-cogmap` orchestration over
-   neutral substrate commands (the carve-out seam; spine #3).
+   neutral substrate commands (the carve-out seam; spine #3). — **RESOLVED (2026-06-04, schema.sql
+   prep):** **one SQL function in the artifact** (`cogmap_genesis(...)`). The eventual crate seam
+   (temper-cogmap orchestration over neutral substrate commands) is spine #3's call — not the artifact's
+   problem; the artifact only needs the single-txn seeding to be runnable.
 6. **Artifact read-projections** — which Domain-B reads the `schema.sql` artifact emits to run scenarios:
    `cogmap_charter(cogmap)`, `cogmap_questions(cogmap)` (charter blocks), `cogmap_regulation(cogmap)`
    (`express`-edge traversal). These are *"just compute"* over already-gated data (map-regions' line), needing
-   no new access primitive.
+   no new access primitive. — **RESOLVED (2026-06-04, schema.sql prep):** emit all three —
+   `cogmap_charter(cogmap)`, `cogmap_questions(cogmap)`, `cogmap_regulation(cogmap)` — as read
+   projections over already-gated data. No new access primitive.
 7. **Agent-instance entity launch-metadata home** (§6) — does the launch-metadata (model/platform,
    bound-cogmap reach, persona, priming-telos) ride the entity `name` + launch-event `metadata`, or does it
    un-defer the event-substrate **entity-typology** (`agent | human | integration`)? A cross-spec dependency on
    `2026-05-18-event-substrate-foundations-design`, not a Domain-B table — but Domain-B agents are its first
-   concrete driver, so the cut should be made when this lands.
+   concrete driver, so the cut should be made when this lands. — **RESOLVED (2026-06-04, schema.sql
+   prep) — neither; a third path:** add an **open `metadata jsonb`** column to
+   `event_substrate.entities` (default `'{}'`), **not** a hard `entity_kind` enum/typology. An agent
+   instance populates it with its launch-metadata (model/platform, bound-cogmap reach, persona,
+   priming-telos); an integration-shaped entity populates differently; neither is forced into the
+   other's shape. Rationale: we don't yet know the full capture shape, entities span ephemeral
+   (agent-instance) to long-lived (integration), and consistently-shaped ephemeral metadata may later
+   *promote* to a profile property — a jsonb keeps that flexibility open where a frozen enum would not.
+   The typed-typology cut, if ever earned, is deferred to the event-substrate spec on real evidence.
 
 ## Connections
 
