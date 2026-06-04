@@ -147,6 +147,14 @@ object-local only for some kinds — so `read`/`write`/`delete` are universal bu
   both are `write`s, never grants. This is why scope-maps are cheap and safely ephemeral: spinning one up
   is pure write+reference, with no reachability-grants to set up or forget to tear down (§8).
 
+> **⚠ Reconciliation item A2 — restate the `kb_resource_access` grantee-anchor set (added 2026-06-04,
+> coherence pass).** This spec un-gates the PROVISIONAL `kb_resource_access` DDL in the data-model spec §2
+> but only replaced the *capability vocabulary* (the descriptor, §2 below); it never restated the
+> **grantee-anchor set**. The model resolved here implies grants are teams-RBAC (team/profile anchors) and
+> that **maps read via the team-intersection, not per-resource grants** — so the data-model §2 check that
+> admits `kb_scopes`/`kb_maps` as a `kb_resource_access` anchor is stale. Reconcile the `anchor_table`
+> CHECK to the teams-RBAC anchor set when the DDL is written. (Reciprocal note lives in data-model §2.)
+
 **`read_resolution` is collapsed.** Reading is binary reachability. The
 data / shape / think-with gradient is **not** a grant field — it falls out *downstream of access*
 (§5). This is a deliberate revision of an earlier draft that carried a 4-valued `read_resolution`

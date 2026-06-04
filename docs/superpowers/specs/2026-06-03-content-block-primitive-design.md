@@ -272,6 +272,10 @@ pub struct BlockProvenanceCorrected { pub source: ProvenanceSource, pub scar: St
 - **Correlation discipline:** the `block_created` event id is the block's `correlation_id`; every
   later block event shares it. The projection builder groups by `correlation_id` to compute current
   block state (content head + `is_folded`) — same contract as the edge projection builder.
+  (Naming note, coherence pass 2026-06-04: `kb_content_blocks.genesis_event_id` is this projection's
+  spelling of the correlation-root the sibling projections call `asserted_by_event_id` — `genesis_` is
+  deliberate, naming the block's *birth* event; the role is identical. Left distinct; flagged so the
+  divergence reads as intentional, not drift.)
 - **Addressing vocabulary:** add `kind: 'block'` to the ledger `references` target vocabulary so
   events can carry `{kind:block, value:B}` for "what touched block B" sweeps. **`block` is a
   reference/provenance kind only — never a graph-edge target.** Resource stays the named thing edges
@@ -390,13 +394,22 @@ later if a concrete need forces it.
    block grain and add a resource-level composer; confirm the dedup replay-guard (most-recent-revision
    `body_hash` check) translates to block grain.
 3. **`resource.body_hash` as a hash over ordered block hashes** — confirm the composition is stable
-   for sync and that `sync_diff_for_device` needs no change (expected: none — it reads
-   `manifests.body_hash`, which the write path keeps populated).
+   for sync and that `sync_diff_for_device` needs no change. ⚠ **Cross-spec gap A1 (coherence pass
+   2026-06-04):** the "no change — reads `manifests.body_hash`" expectation **collides with** the
+   data-model spec, which *dissolves* `kb_resource_manifests`; meanwhile this spec *retires*
+   `kb_resource_revisions`. After both land neither table survives, so `resource.body_hash`'s home is
+   **unowned** — pin it (denormalized column on `kb_resources` / reserved `kb_properties` row /
+   composed-on-read merkle) when this spec and the data-model spec are sequenced together. See the
+   reciprocal note in [`data-model-reconciliation`](2026-06-01-data-model-reconciliation-design.md) §3.
 4. **`cargo sqlx prepare --workspace`** cache regen after the new SQL; watch the per-crate
    feature-gated cache caveat (see CLAUDE.md SQL section).
 5. **Crate topology** — where `kb_content_blocks` + the block event family land in the
-   substrate/cogmap split the data-model reconciliation spec is sequencing (expected: substrate
-   kernel — it stores + gates, never interprets block *meaning*, which is the agents' job).
+   substrate/cogmap split the data-model reconciliation spec is sequencing. **This is effectively
+   already decided** by the *"does the kernel interpret the content?"* carve-out test
+   ([`data-model-reconciliation`](2026-06-01-data-model-reconciliation-design.md) §0,
+   [`map-regions`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §1): block storage
+   *stores + gates* but never interprets block *meaning* (the agents' job) → **substrate kernel**,
+   the same answer that landed `kb_map_regions` there. Citing the test rather than re-deriving it.
 
 ---
 

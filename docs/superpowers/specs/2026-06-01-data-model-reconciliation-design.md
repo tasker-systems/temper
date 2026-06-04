@@ -6,6 +6,17 @@
 **Supersedes (framing only):** the in-place migration framing of `2026-05-27-access-wrapper-extraction-and-polymorphic-projection-substrate`
 **Extends:** `2026-06-01-the-shared-kernel-boundary-temper-substrate-beneath-two-domains-workflow-kb-and-cognitive-map`
 
+> **⚠ Vocabulary + cross-spec note (added 2026-06-04, coherence pass).** This spec predates the
+> `scope → map` rename. Read `kb_scopes` / `kb_team_scopes` / `resources_accessible_to_scope` /
+> `kb_edges.scope_id` throughout as `kb_maps` / `kb_team_maps` / `resources_accessible_to_map` /
+> (the polymorphic edge-home) — the canonical record and full substitution table is
+> [`2026-06-02-map-regions-self-materialized-shape-surface-design.md`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §0.
+> The sweep is **deliberately deferred to implementation-planning** (it resolves down with the hard DDL),
+> so the body below is left in the original vocabulary on purpose. Two **substantive** reconciliations —
+> *not* rename drift — also surfaced in the same pass: the `kb_resource_access` grant-anchor set vs the
+> resolved access model (see the note in §2) and `resource.body_hash`'s home after manifest dissolution
+> meets the content-block block-merkle (see the note in §3).
+
 ## Context
 
 The shared-kernel boundary decision (2026-06-01) settled *that* temper becomes a permanent
@@ -203,6 +214,18 @@ only resource identity is the UUID PK. Teams-DAG (`kb_teams_parents`), `kb_team_
 producer/consumer access functions (`resources_visible_to`, `resources_accessible_to_scope`) carry from
 2026-05-27, rewritten against these tables.
 
+> **⚠ Reconciliation item A2 — grant-anchor set vs the resolved access model (added 2026-06-04, coherence
+> pass).** The `kb_resource_access.anchor_table` check above admits `kb_scopes` (→ `kb_maps`) as a grantee
+> anchor. The access/capability spec — which **un-gates** this table — resolved a model where additive
+> grants are **teams-RBAC only** (individual→team, team→team), and **maps do not receive per-resource
+> grants**: a map's read-reach is *computed* (`resources_accessible_to_map` = the DAG-expanded team
+> intersection), and there is explicitly *no `grant` at the concept level*
+> ([`2026-06-02-access-capability-model-design.md`](2026-06-02-access-capability-model-design.md) §2/§4).
+> So the grantee anchors should be `kb_teams` / `kb_profiles` (and possibly `kb_contexts`); `kb_scopes` /
+> `kb_maps` as a `kb_resource_access` grantee contradicts the maps-read-via-intersection model. The access
+> spec un-gated the table but never restated the corrected anchor set inline — reconcile when the DDL is
+> written (the access spec carries a reciprocal pointer in its §2).
+
 ### 3. `kb_properties` — the canonical structured-meta model (single shape, non-null key)
 
 No `property_kind` enum. Every property is a non-null `(key, value)` pair; a bare keyword/tag is named
@@ -247,6 +270,18 @@ backfill as `kb_properties` rows (via genesis events, `intent=migration`, mirror
 `managed_hash`/`open_hash` were frontmatter-tier sync aids and become obsolete under cloud-only — they
 retire with the sync rework, not here.
 
+> **⚠ Reconciliation item A1 — `resource.body_hash`'s home after manifest dissolution (added 2026-06-04,
+> coherence pass).** This spec dissolves `kb_resource_manifests` and parks `body_hash` on
+> `kb_resource_revisions`. The sibling
+> [`2026-06-03-content-block-primitive-design.md`](2026-06-03-content-block-primitive-design.md) goes the
+> other way: it **retires `kb_resource_revisions`** (→ `kb_block_revisions` at block grain) and keeps
+> `kb_resource_manifests.body_hash` as the resource-level sync hash, redefined as a **merkle over the
+> ordered `(block_id, block_body_hash)` tuples**. The two specs thus point `body_hash` at **opposite
+> survivors** — after both land, *neither* `kb_resource_manifests` nor `kb_resource_revisions` exists, and
+> the resource-level sync hash `sync_diff_for_device` reads is unowned. Decide its post-both home (a
+> denormalized column on `kb_resources`, a reserved `kb_properties` row, or composed-on-read) when these
+> two specs are sequenced together. Cross-ref: content-block Plan-level Q3.
+
 ### 4. Slug retirement — UUID is the sole resource identity
 
 `kb_resources.slug` and any homes-level slug are **dropped**. Resolution is already UUID-first
@@ -277,6 +312,13 @@ alter table kb_edges
     add column scope_id uuid references kb_scopes(id);   -- nullable; cognitive-map-layer edges
 -- widen uq_resource_edge and the source/target indexes to include the *_table discriminators.
 ```
+
+> **⚠ Superseded (added 2026-06-04, coherence pass).** The nullable `scope_id` column above is **superseded
+> by the access spec §3 polymorphic edge-home** `(anchor_table, anchor_id)` with `anchor_table ∈
+> ('kb_contexts','kb_maps')`. The `scope_id`/`map_id` column does **not** survive — an edge homes in the
+> same resource-terms as everything else, gated by `edges_visible_to`. (Already recorded in
+> [`map-regions`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §0's edge-home note.)
+> The `source_table`/`target_table` *endpoint* polymorphism is unaffected (rename `kb_scopes` → `kb_maps`).
 
 Relational frontmatter fields (e.g. a task's `goal`) project to `kb_edges` rows, not `kb_properties`.
 
