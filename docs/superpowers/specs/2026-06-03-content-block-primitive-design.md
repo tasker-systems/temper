@@ -409,7 +409,7 @@ later if a concrete need forces it.
    ([`data-model-reconciliation`](2026-06-01-data-model-reconciliation-design.md) §0,
    [`map-regions`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §1): block storage
    *stores + gates* but never interprets block *meaning* (the agents' job) → **substrate kernel**,
-   the same answer that landed `kb_map_regions` there. Citing the test rather than re-deriving it.
+   the same answer that landed `kb_cogmap_regions` there. Citing the test rather than re-deriving it.
 
 ---
 

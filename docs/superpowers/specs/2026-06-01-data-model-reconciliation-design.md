@@ -6,16 +6,15 @@
 **Supersedes (framing only):** the in-place migration framing of `2026-05-27-access-wrapper-extraction-and-polymorphic-projection-substrate`
 **Extends:** `2026-06-01-the-shared-kernel-boundary-temper-substrate-beneath-two-domains-workflow-kb-and-cognitive-map`
 
-> **⚠ Vocabulary + cross-spec note (added 2026-06-04, coherence pass).** This spec predates the
-> `scope → map` rename. Read `kb_scopes` / `kb_team_scopes` / `resources_accessible_to_scope` /
-> `kb_edges.scope_id` throughout as `kb_maps` / `kb_team_maps` / `resources_accessible_to_map` /
-> (the polymorphic edge-home) — the canonical record and full substitution table is
-> [`2026-06-02-map-regions-self-materialized-shape-surface-design.md`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §0.
-> The sweep is **deliberately deferred to implementation-planning** (it resolves down with the hard DDL),
-> so the body below is left in the original vocabulary on purpose. Two **substantive** reconciliations —
-> *not* rename drift — also surfaced in the same pass: the `kb_resource_access` grant-anchor set vs the
-> resolved access model (see the note in §2) and `resource.body_hash`'s home after manifest dissolution
-> meets the content-block block-merkle (see the note in §3).
+> **⚠ Vocabulary + cross-spec note (added 2026-06-04, coherence pass; CS-3 swept the same day).** This
+> spec was written in the `scope` vocabulary; the **CS-3 terminology sweep landed 2026-06-04**, so the body
+> now reads in the settled `kb_cogmaps` / `cogmap_*` vocabulary (canonical record + naming rationale:
+> [`2026-06-02-map-regions-self-materialized-shape-surface-design.md`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §0).
+> The built `kb_events.scope_id` producing-anchor column is left named as-built where it's referenced (its
+> rename is a migration-time concern, not a spec-vocabulary one). Two **substantive** reconciliations —
+> *not* rename drift — also surfaced in the same pass and **remain open**: the `kb_resource_access`
+> grant-anchor set vs the resolved access model (see the note in §2) and `resource.body_hash`'s home after
+> manifest dissolution meets the content-block block-merkle (see the note in §3).
 
 ## Context
 
@@ -34,7 +33,7 @@ It explicitly deferred three things; this spec settles the first, and part of th
 
 - **The access-wrapper (Limb 1c) is unbuilt.** Migrations stop at `20260522100002_edges_as_projection.sql`.
   No `kb_resource_homes`, `kb_resource_access`, polymorphic `kb_edges`/`kb_properties`,
-  `kb_teams_parents`, or `kb_team_scopes` exist. This is a pure design exercise — there is no
+  `kb_teams_parents`, or `kb_team_cogmaps` exist. This is a pure design exercise — there is no
   on-disk schema to reconcile against, only the 2026-05-27 design document.
 - **`operations::Backend` is minimal** — six resource methods (create/show/update/delete/list/search).
   The relationship commands (`AssertRelationship`/`Retype`/`Reweight`/`Fold`) exist as command *structs*
@@ -118,7 +117,7 @@ identity, content, edges, properties, or access → substrate; anything that kno
 | edge | substrate | polymorphic projection |
 | relationship | substrate | edge assert/retype/reweight/fold = the edge command layer |
 | graph | substrate | traversal / neighbors over edges |
-| access | substrate | `resources_visible_to`, `resources_accessible_to_scope`, grants |
+| access | substrate | `resources_visible_to`, `resources_accessible_to_cogmap`, grants |
 | profile | substrate | kernel identity |
 | context | substrate | `kb_contexts` = a kernel anchor type in the access wrapper |
 | **resource** | **SPLITS** | identity/content/homes/access SQL → substrate; typed-field assembly + frontmatter projection → `temper-workflow` |
@@ -148,7 +147,7 @@ identity, content, edges, properties, or access → substrate; anything that kno
   `kb_resource_revisions`, rendered through the `kb_current_chunks` view. There is no `body` column.
 - **Frontmatter** lives in `kb_resource_manifests.{managed_meta, open_meta}` (JSONB) with
   `{body,managed,open}_hash`.
-- **`kb_scopes` already exists** (`id, name, porosity`), and `kb_events` is already the unified
+- **`kb_cogmaps` already exists** (`id, name, porosity`), and `kb_events` is already the unified
   append-only ledger (`event_type_id`→`kb_event_types`, `topic_id`, `scope_id`, `correlation_id`).
 
 ### 1. `kb_resources` slims to identity; anchor/ownership move to homes; doctype + slug leave entirely
@@ -185,7 +184,7 @@ Moves **out** of `kb_resources`:
 kb_resource_homes (                  -- navigation: where a resource lives. one per resource.
     id                    uuid pk,
     resource_id           uuid not null unique references kb_resources(id),
-    anchor_table          varchar(64) not null check (anchor_table in ('kb_contexts','kb_scopes')),
+    anchor_table          varchar(64) not null check (anchor_table in ('kb_contexts','kb_cogmaps')),
     anchor_id             uuid not null,
     originator_profile_id uuid not null references kb_profiles(id),
     owner_profile_id      uuid not null references kb_profiles(id),
@@ -197,7 +196,7 @@ kb_resource_access (                 -- additive grants beyond the home anchor. 
     id                    uuid pk,
     resource_id           uuid not null references kb_resources(id),
     anchor_table          varchar(64) not null
-                            check (anchor_table in ('kb_contexts','kb_scopes','kb_teams','kb_profiles')),
+                            check (anchor_table in ('kb_contexts','kb_cogmaps','kb_teams','kb_profiles')),
     anchor_id             uuid not null,
     access_level          access_level not null,   -- existing enum: vault | mutable | immutable
     granted_by_profile_id uuid not null references kb_profiles(id),
@@ -210,19 +209,19 @@ create index idx_kb_resource_access_resource on kb_resource_access(resource_id);
 
 The home anchor confers implicit `vault` access; `kb_resource_access` extends to additional anchors.
 `kb_resource_homes` has **no `slug`** (slug retired) and therefore no `(anchor, slug)` uniqueness — the
-only resource identity is the UUID PK. Teams-DAG (`kb_teams_parents`), `kb_team_scopes`, and the
-producer/consumer access functions (`resources_visible_to`, `resources_accessible_to_scope`) carry from
+only resource identity is the UUID PK. Teams-DAG (`kb_teams_parents`), `kb_team_cogmaps`, and the
+producer/consumer access functions (`resources_visible_to`, `resources_accessible_to_cogmap`) carry from
 2026-05-27, rewritten against these tables.
 
 > **⚠ Reconciliation item A2 — grant-anchor set vs the resolved access model (added 2026-06-04, coherence
-> pass).** The `kb_resource_access.anchor_table` check above admits `kb_scopes` (→ `kb_maps`) as a grantee
+> pass).** The `kb_resource_access.anchor_table` check above admits `kb_cogmaps` as a grantee
 > anchor. The access/capability spec — which **un-gates** this table — resolved a model where additive
 > grants are **teams-RBAC only** (individual→team, team→team), and **maps do not receive per-resource
-> grants**: a map's read-reach is *computed* (`resources_accessible_to_map` = the DAG-expanded team
+> grants**: a map's read-reach is *computed* (`resources_accessible_to_cogmap` = the DAG-expanded team
 > intersection), and there is explicitly *no `grant` at the concept level*
 > ([`2026-06-02-access-capability-model-design.md`](2026-06-02-access-capability-model-design.md) §2/§4).
-> So the grantee anchors should be `kb_teams` / `kb_profiles` (and possibly `kb_contexts`); `kb_scopes` /
-> `kb_maps` as a `kb_resource_access` grantee contradicts the maps-read-via-intersection model. The access
+> So the grantee anchors should be `kb_teams` / `kb_profiles` (and possibly `kb_contexts`); `kb_cogmaps` /
+> `kb_cogmaps` as a `kb_resource_access` grantee contradicts the maps-read-via-intersection model. The access
 > spec un-gated the table but never restated the corrected anchor set inline — reconcile when the DDL is
 > written (the access spec carries a reciprocal pointer in its §2).
 
@@ -231,14 +230,14 @@ producer/consumer access functions (`resources_visible_to`, `resources_accessibl
 No `property_kind` enum. Every property is a non-null `(key, value)` pair; a bare keyword/tag is named
 explicitly as `key='tag'`. This kills the nullable-in-`UNIQUE` smell (Postgres treats NULLs as distinct,
 so a nullable key never dedups) and preserves the symmetric salience-overlap self-join (one shape, both
-resource-side and scope-side). `is_folded` is the **event-projection soft-retract**, identical to the
+resource-side and cogmap-side). `is_folded` is the **event-projection soft-retract**, identical to the
 built `kb_resource_edges` pattern: a `property_retracted` event folds the row; live reads filter
 `WHERE NOT is_folded`; the row survives for event-history correspondence.
 
 ```sql
 kb_properties (
     id                    uuid pk default uuid_generate_v7(),
-    owner_table           varchar(64) not null check (owner_table in ('kb_resources','kb_scopes')),
+    owner_table           varchar(64) not null check (owner_table in ('kb_resources','kb_cogmaps')),
     owner_id              uuid not null,
     property_key          text not null,
     property_value        jsonb not null,
@@ -306,19 +305,19 @@ nullable cognitive-map `scope_id`:
 alter table kb_resource_edges rename to kb_edges;
 alter table kb_edges
     add column source_table varchar(64) not null default 'kb_resources'
-        check (source_table in ('kb_resources','kb_scopes')),
+        check (source_table in ('kb_resources','kb_cogmaps')),
     add column target_table varchar(64) not null default 'kb_resources'
-        check (target_table in ('kb_resources','kb_scopes')),
-    add column scope_id uuid references kb_scopes(id);   -- nullable; cognitive-map-layer edges
+        check (target_table in ('kb_resources','kb_cogmaps')),
+    add column scope_id uuid references kb_cogmaps(id);   -- nullable; cognitive-map-layer edges
 -- widen uq_resource_edge and the source/target indexes to include the *_table discriminators.
 ```
 
 > **⚠ Superseded (added 2026-06-04, coherence pass).** The nullable `scope_id` column above is **superseded
 > by the access spec §3 polymorphic edge-home** `(anchor_table, anchor_id)` with `anchor_table ∈
-> ('kb_contexts','kb_maps')`. The `scope_id`/`map_id` column does **not** survive — an edge homes in the
+> ('kb_contexts','kb_cogmaps')`. The `scope_id` column does **not** survive — an edge homes in the
 > same resource-terms as everything else, gated by `edges_visible_to`. (Already recorded in
 > [`map-regions`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) §0's edge-home note.)
-> The `source_table`/`target_table` *endpoint* polymorphism is unaffected (rename `kb_scopes` → `kb_maps`).
+> The `source_table`/`target_table` *endpoint* polymorphism is unaffected (endpoints now `('kb_resources','kb_cogmaps')`).
 
 Relational frontmatter fields (e.g. a task's `goal`) project to `kb_edges` rows, not `kb_properties`.
 
@@ -419,7 +418,7 @@ under "files are derivative projection artifacts."
   resource, `express`/`near` edge semantics) — spine #2, successor spec. **Carve-out (added 2026-06-03):**
   an access-gated *projection* read cross-map through the kernel access layer is **not** a spine-#2 table —
   it lives in `temper-substrate`. The test: **does the kernel interpret the content?** No → kernel
-  access-gated projection; Yes → spine-#2 / Domain-B. `kb_map_regions`
+  access-gated projection; Yes → spine-#2 / Domain-B. `kb_cogmap_regions`
   (`2026-06-02-map-regions-self-materialized-shape-surface-design`) is the first instance — the kernel
   stores + access-gates regions but never clusters or interprets them.
 - **Migration phase-ordering / sequencing** (build Limb 1c → extract `temper-substrate` → birth
@@ -432,7 +431,7 @@ under "files are derivative projection artifacts."
 - **Domain-B operational tables** and whether they earn a `cogmap.*` schema namespace.
 - **The access/capability (RBAC) model** — retiring/replacing `access_level` (vault/mutable/immutable),
   resolving its overlap with `team_role`/`watcher`, representing the two orthogonal axes (read/write
-  porosity × resolution-permeability), scope `contains`-hierarchy visibility, and default-safety/scope
+  porosity × resolution-permeability), cogmap `contains`-hierarchy visibility, and default-safety/cogmap
   lifecycle. This is its own foundational sibling spec (`2026-06-02-access-capability-model-design`).
   **This spec's `kb_resource_access`/`access_level` DDL is gated on its outcome** (see §2) — the
   navigation/grant/producer-consumer backbone is stable; the capability vocabulary is not.

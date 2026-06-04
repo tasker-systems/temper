@@ -1,17 +1,17 @@
-# Map-to-Map Delegation: A Dissolution (`maps_share_a_team`)
+# Map-to-Map Delegation: A Dissolution (`cogmaps_share_a_team`)
 
 **Date:** 2026-06-02
 **Status:** Design — **reviewed** (2026-06-03). The dissolution is sound; **all review opens resolved.**
-**CS-1** (read-API `principal` sum type — access §4; §3 never-escalate binds `principal = Map(originating)`)
-and **A4-1** (§2/§4: `maps_share_a_team` gates *priming* of the blurred frame; the team-intersection gates
+**CS-1** (read-API `principal` sum type — access §4; §3 never-escalate binds `principal = Cogmap(originating)`)
+and **A4-1** (§2/§4: `cogmaps_share_a_team` gates *priming* of the blurred frame; the team-intersection gates
 *material* — two gates, not an equivalence) both resolved. Ready for `approved/pending-plan`.
 **Goal:** `substrate-kernel-to-cognitive-map`, Arc 1 (shared-kernel completion)
 **Spun out of:** [`2026-06-02-access-capability-model-design.md`](2026-06-02-access-capability-model-design.md) §5
-(the "scope-to-scope delegation mechanism" deferred to "a separate spec").
+(the "map-to-map delegation mechanism" deferred to "a separate spec").
 **Depends on:** [`2026-06-02-map-regions-self-materialized-shape-surface-design.md`](2026-06-02-map-regions-self-materialized-shape-surface-design.md)
-(priming reads the `kb_map_regions` surface) and that spec's `scope → map` reframe.
+(priming reads the `kb_cogmap_regions` surface) and that spec's `scope → cogmap` reframe.
 
-> **Grounding note.** Written against the built schema (the `kb_scopes`→`kb_maps` entity, the
+> **Grounding note.** Written against the built schema (the `kb_scopes`→`kb_cogmaps` entity, the
 > `kb_team_*` RBAC, the `kb_events` ledger) and the two sibling specs it composes with (access/capability
 > and map-regions). It adds **one substrate function and nothing else** — no tables, no enum, no columns.
 > The bulk of this spec is a *negative result*: the stored delegation object §5 reached for does not
@@ -60,12 +60,12 @@ Provenance does not need the object either (§6).
 
 ---
 
-## 2. Authorization — the live predicate `maps_share_a_team`
+## 2. Authorization — the live predicate `cogmaps_share_a_team`
 
 The one thing this spec adds to the substrate:
 
 ```
-maps_share_a_team(map_a uuid, map_b uuid) -> bool      -- (teams(a) ∩ teams(b)) ≠ ∅, evaluated live
+cogmaps_share_a_team(cogmap_a uuid, cogmap_b uuid) -> bool      -- (teams(a) ∩ teams(b)) ≠ ∅, evaluated live
 ```
 
 It is:
@@ -75,13 +75,13 @@ It is:
   the "which team authorizes this session?" question simply does not arise (§5 of the access model
   worried about it; the answer is that the question was malformed).
 - **the priming authz-prior — *not* a producer-read equivalence** — it gates **priming**, not material
-  reads, and the two are different conditions. `maps_share_a_team(a,b)` (∃ *one* bridge) is strictly
-  *weaker* than "an agent in `a` may producer-read `b`'s concepts" (= `resources_accessible_to_map(a)`,
+  reads, and the two are different conditions. `cogmaps_share_a_team(a,b)` (∃ *one* bridge) is strictly
+  *weaker* than "an agent in `a` may producer-read `b`'s concepts" (= `resources_accessible_to_cogmap(a)`,
   the access §4 team-**intersection**, visible to *every* team of `a`). The bridge legitimizes the launch
   tooling **injecting `b`'s *frame*** — its `telos_resource` + *blurred* region surface (§4) — because
   those are shareable frame artifacts the bridge team can already read; it does **not** authorize reading
   `b`'s *material*. The agent's every substrate read stays bound to
-  `resources_accessible_to_map(originating)` (§3). So it introduces **no new access primitive**: it is a
+  `resources_accessible_to_cogmap(originating)` (§3). So it introduces **no new access primitive**: it is a
   named, live, identity-agnostic surfacing of the team-bridge existence check the launch tooling invokes
   as its **authz-prior** — with material access bounded *separately* by the intersection.
 
@@ -98,10 +98,10 @@ The single real enforcement contract. At **root launch** the agent is bound to i
 nothing more specific). That binding is **immutable for the entire delegation tree**:
 
 - Every descendant subagent, however deeply primed, resolves **all** substrate reads through
-  `resources_accessible_to_map(originating)`. The priming *frame* varies per subagent; the *visibility
+  `resources_accessible_to_cogmap(originating)`. The priming *frame* varies per subagent; the *visibility
   root* never moves.
 - **Transitively:** a subagent primed by `M2` may spawn one primed by `M3` iff
-  `maps_share_a_team(originating, M3)` — the **originating** map is the subject of *every* authz check
+  `cogmaps_share_a_team(originating, M3)` — the **originating** map is the subject of *every* authz check
   and *every* read, never the immediate parent. Binding-to-root, not binding-to-parent, is what makes the
   guarantee hold down an arbitrary chain: visibility can only ever stay equal or shrink-to-implicit,
   **never widen**.
@@ -118,19 +118,19 @@ originating map and the tooling never re-binds it. Hard-enforceable as an **auth
 A delegated subagent is primed with the target map's:
 
 - **`telos_resource`** — read like any resource (map-regions spec §0: the telos *is* a resource).
-- **`kb_map_regions` surface** — via the proximity spec's `map_shape_visible_to` (centroid / salience /
+- **`kb_cogmap_regions` surface** — via the proximity spec's `cogmap_shape_visible_to` (centroid / salience /
   label / count).
 
-Both priming reads are authorized by **`maps_share_a_team(originating, target)`** — the bridge, checked by
+Both priming reads are authorized by **`cogmaps_share_a_team(originating, target)`** — the bridge, checked by
 the launch tooling, which injects the frame (telos + *blurred* surface). This is **not** the originating
 map's full producer-read (the §4 intersection): the bridge is deliberately *weaker* and gates only the
 shareable frame, while the agent's actual *material* reads stay bound to
-`resources_accessible_to_map(originating)`. The subagent therefore borrows the target's *frame* and reasons
+`resources_accessible_to_cogmap(originating)`. The subagent therefore borrows the target's *frame* and reasons
 through it over **originating's** visible material — never the target's private interior.
 
 The interior stays protected **automatically**, with no work in this spec: when the primed agent
 dereferences a region *member* of the target's shape, that deref resolves through
-`resources_accessible_to_map(originating)` (map-regions §3: members are dereferenced through ordinary
+`resources_accessible_to_cogmap(originating)` (map-regions §3: members are dereferenced through ordinary
 resource access, never returned wholesale in the surface). So it sees a member only if the originating
 map already could (e.g. a genuinely shared concept), and **never** a target-private one. The
 surface/interior line in the map-regions spec is what lets never-escalate hold on the interior for free;
@@ -145,7 +145,7 @@ Three things were being conflated when delegation was imagined as a stored, team
 | concept | what it is | role |
 |---|---|---|
 | **telos** | a map's cognitive frame ("whose way of seeing") | the priming material |
-| **team-bridge** | `maps_share_a_team` (RBAC predicate) | the launch authz-prior |
+| **team-bridge** | `cogmaps_share_a_team` (RBAC predicate) | the launch authz-prior |
 | **originating map** | the map the root agent launched in | the immutable visibility root |
 
 The agent **never identifies *as a team***; it works in a *map's telos* with *that map's visibility*.
@@ -167,31 +167,31 @@ re-introducing the stored object §1 rejected.
 ## Substrate / DDL delta
 
 **New**
-- `maps_share_a_team(map_a, map_b) -> bool` — the live team-bridge predicate (the launch authz-prior).
+- `cogmaps_share_a_team(cogmap_a, cogmap_b) -> bool` — the live team-bridge predicate (the launch authz-prior).
 
 **Nothing else.** No tables, no enum, no columns. The never-escalate binding (§3) is a launch-tooling
-property over the existing `resources_accessible_to_map`-parameterized read API; provenance (§6) is the
+property over the existing `resources_accessible_to_cogmap`-parameterized read API; provenance (§6) is the
 existing ledger.
 
 ---
 
 ## Open questions (refine during the plan; not blockers)
 
-1. **`maps_share_a_team` implementation** — a standalone SQL function vs. an inlined existence-check
+1. **`cogmaps_share_a_team` implementation** — a standalone SQL function vs. an inlined existence-check
    inside the launch authz path. *Lean:* a named SQL function, so the authz-prior is one legible call and
    the live-not-stored guarantee has a single home.
 2. **Delegated-launch event type** — whether it reuses an existing event type with a payload discriminator
    or earns its own `event_type` row. *Lean:* its own event type, for clean audit querying; plan-level.
-3. **`maps_share_a_team` — priming gate, not producer-read equivalence (A4-1)** — **RESOLVED (§2, §4):**
+3. **`cogmaps_share_a_team` — priming gate, not producer-read equivalence (A4-1)** — **RESOLVED (§2, §4):**
    the predicate gates **priming** (the launch tooling injecting target's telos + *blurred* region surface;
    ∃ one bridge suffices — shareable frame artifacts), **not** material reads. Material stays bound to
-   `resources_accessible_to_map(originating)` = the access §4 team-intersection (strictly stronger). Two
+   `resources_accessible_to_cogmap(originating)` = the access §4 team-intersection (strictly stronger). Two
    gates — bridge-for-frame, intersection-for-material — not one equivalence. No new primitive.
 4. **Read-API dual parameterization (CS-1)** — **RESOLVED (access spec §4 / map-regions OQ-7):** the
    substrate read-API takes a `principal` sum type `Profile | Map`. §3's never-escalate binds
-   `principal = Map(originating)`, so the producer-map *is* the read parameter and the root-binding has a
+   `principal = Cogmap(originating)`, so the producer-map *is* the read parameter and the root-binding has a
    concrete surface. The §3 transitivity (every descendant read resolves through
-   `resources_accessible_to_map(originating)`) is exactly "the principal never re-binds off the root map."
+   `resources_accessible_to_cogmap(originating)`) is exactly "the principal never re-binds off the root map."
 
 ---
 
@@ -208,7 +208,7 @@ existing ledger.
 **Deferred (in scope elsewhere — the black-box Domain-B think-with runtime):**
 - the **launch tooling** itself, **telos-frame injection** into agent context, the **think-with loop**,
   and **subagent orchestration** — the `temper-llm` / scope-bound-triage-agent track. This spec hands that
-  runtime its **two contracts**: (1) call `maps_share_a_team(originating, target)` as the authz-prior;
+  runtime its **two contracts**: (1) call `cogmaps_share_a_team(originating, target)` as the authz-prior;
   (2) bind every read to the originating map, immutably, for the whole delegation tree.
 
 ---
@@ -216,8 +216,8 @@ existing ledger.
 ## Connections
 
 - **Spun out of:** [`2026-06-02-access-capability-model-design.md`](2026-06-02-access-capability-model-design.md) §5 (the deferred delegation mechanism); **supersedes** its "a homed edge" framing for delegation.
-- **Depends on:** [`2026-06-02-map-regions-self-materialized-shape-surface-design.md`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) (priming reads the `kb_map_regions` surface; the §3 surface/interior line gives never-escalate-on-the-interior for free), and its `scope → map` reframe.
-- **Composes with:** [`2026-06-01-data-model-reconciliation-design.md`](2026-06-01-data-model-reconciliation-design.md) (`resources_accessible_to_map` producer-read, the event ledger, the crate topology — `temper-substrate` owns `maps_share_a_team`; `temper-cogmap` / `temper-llm` consume it).
+- **Depends on:** [`2026-06-02-map-regions-self-materialized-shape-surface-design.md`](2026-06-02-map-regions-self-materialized-shape-surface-design.md) (priming reads the `kb_cogmap_regions` surface; the §3 surface/interior line gives never-escalate-on-the-interior for free), and its `scope → cogmap` reframe.
+- **Composes with:** [`2026-06-01-data-model-reconciliation-design.md`](2026-06-01-data-model-reconciliation-design.md) (`resources_accessible_to_cogmap` producer-read, the event ledger, the crate topology — `temper-substrate` owns `cogmaps_share_a_team`; `temper-cogmap` / `temper-llm` consume it).
 - **Hands contracts to:** the `temper-llm` redesign task (`2026-05-28-redesign-temper-llm-temper-llm-smoke-for-the-scope-bound-triage-agent-workflow`) — the think-with runtime that enforces the two contracts.
 - **Research grounding:** `2026-05-29-resolution-contract-and-the-permeable-scope-surface` (the think-with tier this dissolves), `2026-06-01-seed-skill-scope-portable-vs-bound-awareness-access-bounded` (scope-bound agent launch; awareness-is-access-bounded), `2026-05-31-temper-confidence-inventory` (Bedrock #4 producer/consumer).
 - **Goal:** `substrate-kernel-to-cognitive-map`, Arc 1
