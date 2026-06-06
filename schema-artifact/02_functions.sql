@@ -345,6 +345,21 @@ RETURNS double precision LANGUAGE sql STABLE AS $$
     SELECT avg(1 - (mv.v <=> ctr.c)) FROM member_vec mv, ctr;
 $$;
 
+-- Telos alignment (spec §2c, salience part): cosine of the region centroid to the cogmap's
+-- telos-resource embedding (kb_cogmaps.telos_resource_id). "Importance under the map's telos,"
+-- literal because the telos IS a resource with chunks. NULL iff the telos has no current chunks.
+CREATE FUNCTION cogmap_region_telos_alignment(p_region uuid, p_cogmap uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH telos AS (
+        SELECT avg(ch.embedding) AS v
+        FROM kb_cogmaps c
+        JOIN kb_chunks ch ON ch.resource_id = c.telos_resource_id AND ch.is_current
+        WHERE c.id = p_cogmap
+    ),
+    reg AS (SELECT centroid AS v FROM kb_cogmap_regions WHERE id = p_region)
+    SELECT 1 - (reg.v <=> telos.v) FROM reg, telos WHERE telos.v IS NOT NULL;
+$$;
+
 -- Staleness (A3-3): ON-READ aggregate, not a denormalized watermark. Compares the
 -- stored materialization watermark (kb_cogmaps.shape_materialized_event_id) against
 -- the latest event touching the map's homed regions/edges. Stale reads are allowed

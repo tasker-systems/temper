@@ -54,3 +54,19 @@ BEGIN
   -- centroid of e1,e2 = [0.5,0.5,0,...]; cos(e1,centroid)=cos(e2,centroid)=0.7071; mean=0.7071
   RAISE NOTICE 'content_cohesion=% (EXPECT ~0.7071)', round(cogmap_region_content_cohesion(reg)::numeric, 4);
 END $fx$;
+
+\echo '== T5: telos_alignment = cosine(centroid, telos embedding) =='
+-- NOTE (GD-2 deviation from plan): the plan tested the real seeded onboarding region with a
+-- bound-check accepting NULL, but the seed embeds NO chunks, so that path is always NULL (verified:
+-- 0 embedded telos chunks). A self-contained deterministic fixture proves the function's correctness
+-- unfakeably instead. The fn takes (p_region, p_cogmap) separately, so we reuse the T4 region
+-- (centroid v1) against a fixture cogmap whose telos resource (r_a) carries embedding v1 ⇒ cos=1.0.
+DO $fx5$
+DECLARE reg uuid; r_a uuid; fxmap uuid;
+BEGIN
+  SELECT id INTO reg FROM kb_cogmap_regions WHERE label='fx';
+  SELECT id INTO r_a FROM kb_resources WHERE origin_uri='temper://fx/a';  -- one current chunk, embedding v1=[1,0,...]
+  INSERT INTO kb_cogmaps (name, telos_resource_id) VALUES ('fx-telos-map', r_a) RETURNING id INTO fxmap;
+  -- region centroid = v1; telos (r_a) pooled embedding = v1; cos(v1,v1) = 1.0
+  RAISE NOTICE 'telos_alignment=% (EXPECT ~1.0)', round(cogmap_region_telos_alignment(reg, fxmap)::numeric, 4);
+END $fx5$;
