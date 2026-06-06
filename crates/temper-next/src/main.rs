@@ -1,5 +1,5 @@
 use anyhow::Result;
-use temper_next::{embed::embed_all_blocks, substrate, write::materialize_cogmap};
+use temper_next::{embed::embed_chunks, substrate, write::materialize_cogmap};
 
 /// Harness entry point (spec §1): connect to the `temper_next` artifact, run Job A (embed content
 /// blocks) then Job B (materialize the cogmap's emergent telos-lens regions). Cogmap name is the
@@ -16,7 +16,7 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| "telos-default".to_string());
 
     let pool = substrate::connect().await?;
-    embed_all_blocks(&pool).await?;
+    embed_chunks(&pool).await?;
     let cogmap = substrate::cogmap_by_name(&pool, &name).await?;
     let outcome = materialize_cogmap(&pool, cogmap, &lens).await?;
 

@@ -2,51 +2,43 @@ use anyhow::Result;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-/// Job A (spec §6a): chunk + embed every non-folded block's content, write kb_chunks rows with
-/// 768-dim embeddings. Block content source: Plan 3 authors block text; this reads it from a
-/// `block_text(block_id, body)` source table seeded by Plan 3 T1 (reconcile before running — the
-/// table does not exist when Plan 2 lands, so `tests/embed_job.rs` stays `#[ignore]`d until then).
-pub async fn embed_all_blocks(pool: &PgPool) -> Result<()> {
-    let blocks = sqlx::query(
-        "SELECT b.id AS block_id, b.resource_id, bt.body \
-         FROM kb_content_blocks b JOIN block_text bt ON bt.block_id = b.id \
-         WHERE NOT b.is_folded",
+/// Job A (spec §1 "Job A — embed", §6a): embed every current, non-folded chunk's authored content
+/// and write the 768-dim vector back to `kb_chunks.embedding` (the column the seed leaves empty —
+/// spec line 249). Content lives in `kb_chunk_content` keyed by chunk, per the content-block
+/// primitive (`kb_content_blocks → kb_chunks → kb_chunk_content`); the chunks already exist in the
+/// seed, so this fills their embeddings rather than creating rows. Cosine never enters formation —
+/// these embeddings feed only the downstream SQL readouts (content_cohesion, telos_alignment, …).
+pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
+    let chunks = sqlx::query(
+        "SELECT ch.id AS chunk_id, cc.content \
+         FROM kb_chunks ch \
+         JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
+         JOIN kb_content_blocks b ON b.id = ch.block_id \
+         WHERE ch.is_current AND NOT b.is_folded",
     )
     .fetch_all(pool)
     .await?;
-    for row in blocks {
-        let block_id: Uuid = row.get("block_id");
-        let resource_id: Uuid = row.get("resource_id");
-        let body: String = row.get("body");
-        // submodule call paths (no re-exports in temper-ingest lib.rs).
-        let chunks = temper_ingest::chunk::chunk_markdown(&body);
-        let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
-        if texts.is_empty() {
+    for row in chunks {
+        let chunk_id: Uuid = row.get("chunk_id");
+        let content: String = row.get("content");
+        if content.trim().is_empty() {
             continue;
         }
-        let embeddings = temper_ingest::embed::embed_texts(&texts)?; // 768-dim, l2-normalized
-        for (i, emb) in embeddings.iter().enumerate() {
-            let vec_lit = format!(
-                "[{}]",
-                emb.iter()
-                    .map(|f| f.to_string())
-                    .collect::<Vec<_>>()
-                    .join(",")
-            );
-            sqlx::query(
-                "INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, embedding, is_current) \
-                 VALUES ($1,$2,$3,$4,$5::vector,true) \
-                 ON CONFLICT (block_id, chunk_index, version) DO UPDATE SET embedding = EXCLUDED.embedding",
-            )
-            .bind(block_id)
-            .bind(resource_id)
-            .bind(i as i32)
-            // ChunkData carries a real SHA-256 content_hash; use it (1:1 with embeddings).
-            .bind(chunks[i].content_hash.clone())
+        // submodule call path (no re-exports in temper-ingest lib.rs); bge-768, l2-normalized.
+        let embeddings = temper_ingest::embed::embed_texts(&[content.as_str()])?;
+        let emb = &embeddings[0];
+        let vec_lit = format!(
+            "[{}]",
+            emb.iter()
+                .map(|f| f.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        sqlx::query("UPDATE kb_chunks SET embedding = $1::vector WHERE id = $2")
             .bind(vec_lit)
+            .bind(chunk_id)
             .execute(pool)
             .await?;
-        }
     }
     Ok(())
 }
