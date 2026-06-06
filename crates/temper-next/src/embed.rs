@@ -9,12 +9,16 @@ use uuid::Uuid;
 /// seed, so this fills their embeddings rather than creating rows. Cosine never enters formation —
 /// these embeddings feed only the downstream SQL readouts (content_cohesion, telos_alignment, …).
 pub async fn embed_chunks(pool: &PgPool) -> Result<()> {
+    // Embed only chunks that lack an embedding — embeddings are deterministic for unchanged content, so
+    // re-runs (run_eval invokes the binary several times) skip already-embedded chunks instead of paying
+    // the full ONNX cost again. (Content-mutation re-embed is a content_hash check — deferred to the
+    // scenario-DSL work; this eval's content is immutable once seeded.)
     let chunks = sqlx::query(
         "SELECT ch.id AS chunk_id, cc.content \
          FROM kb_chunks ch \
          JOIN kb_chunk_content cc ON cc.chunk_id = ch.id \
          JOIN kb_content_blocks b ON b.id = ch.block_id \
-         WHERE ch.is_current AND NOT b.is_folded",
+         WHERE ch.is_current AND NOT b.is_folded AND ch.embedding IS NULL",
     )
     .fetch_all(pool)
     .await?;

@@ -35,3 +35,28 @@ async fn lens_name_parameter_binds_the_lens_query() {
         "loading an unknown lens name must error, proving the name binds the query"
     );
 }
+
+// Enforce the "MUST mirror the seeded telos-default row" invariant that affinity.rs only asserts in a
+// comment. Production reads the lens from the DB (substrate::load); Lens::telos_default() is the
+// test-only twin. Without this check, tuning the seed lens silently desyncs the two.
+#[tokio::test]
+async fn seeded_telos_default_lens_mirrors_the_rust_default() {
+    use temper_next::affinity::Lens;
+    let pool = temper_next::substrate::connect().await.unwrap();
+    let cogmap = temper_next::substrate::cogmap_by_name(&pool, "onboarding-cogmap")
+        .await
+        .unwrap();
+    let s = temper_next::substrate::load(&pool, cogmap, "telos-default")
+        .await
+        .unwrap();
+    let d = Lens::telos_default();
+    assert_eq!(s.lens.w_express, d.w_express, "w_express");
+    assert_eq!(s.lens.w_contains, d.w_contains, "w_contains");
+    assert_eq!(s.lens.w_leads_to, d.w_leads_to, "w_leads_to");
+    assert_eq!(s.lens.w_near, d.w_near, "w_near");
+    assert_eq!(s.lens.w_prop, d.w_prop, "w_prop");
+    assert_eq!(s.lens.s_telos, d.s_telos, "s_telos");
+    assert_eq!(s.lens.s_ref, d.s_ref, "s_ref");
+    assert_eq!(s.lens.s_central, d.s_central, "s_central");
+    assert_eq!(s.lens.resolution, d.resolution, "resolution");
+}
