@@ -26,12 +26,13 @@ pub fn cluster<F: Fn(Uuid, Uuid) -> f64>(
                 best = match best {
                     None => Some((i, j, a)),
                     Some((bi, bj, b)) => {
-                        if a > b + EPS {
-                            Some((i, j, a))
-                        } else if (a - b).abs() <= EPS
-                            && tie_key(&clusters[i], &clusters[j])
-                                < tie_key(&clusters[bi], &clusters[bj])
-                        {
+                        // take the new pair if strictly better, OR a tie (within EPS) broken by the
+                        // lexicographically-smaller merged UUID set (stable); else keep the best.
+                        let take_new = a > b + EPS
+                            || ((a - b).abs() <= EPS
+                                && tie_key(&clusters[i], &clusters[j])
+                                    < tie_key(&clusters[bi], &clusters[bj]));
+                        if take_new {
                             Some((i, j, a))
                         } else {
                             Some((bi, bj, b))
