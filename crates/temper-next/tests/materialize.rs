@@ -11,10 +11,10 @@ async fn materialize_is_reproducible_and_populates_readouts() {
     let cogmap = temper_next::substrate::cogmap_by_name(&pool, "onboarding-cogmap")
         .await
         .unwrap();
-    let first = temper_next::write::materialize_cogmap(&pool, cogmap)
+    let first = temper_next::write::materialize_cogmap(&pool, cogmap, "telos-default")
         .await
         .unwrap();
-    let second = temper_next::write::materialize_cogmap(&pool, cogmap)
+    let second = temper_next::write::materialize_cogmap(&pool, cogmap, "telos-default")
         .await
         .unwrap();
     assert_eq!(

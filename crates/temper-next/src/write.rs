@@ -11,8 +11,12 @@ pub struct MaterializeOutcome {
 /// Job B (spec §6a): read substrate -> declared-only affinity -> deterministic clustering ->
 /// fold prior regions + assert new ones + members under ONE materialization event -> populate the
 /// SQL readouts (Plan 1 functions). Cosine never enters formation; it enters only via the readouts.
-pub async fn materialize_cogmap(pool: &PgPool, cogmap: Uuid) -> Result<MaterializeOutcome> {
-    let s = substrate::load(pool, cogmap).await?;
+pub async fn materialize_cogmap(
+    pool: &PgPool,
+    cogmap: Uuid,
+    lens_name: &str,
+) -> Result<MaterializeOutcome> {
+    let s = substrate::load(pool, cogmap, lens_name).await?;
     let aff = |x: Uuid, y: Uuid| affinity(x, y, &s.edges, &s.facets, &s.lens);
     let clusters = cluster(&s.nodes, &aff, s.lens.resolution);
 

@@ -36,7 +36,7 @@ pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<Uuid> {
     Ok(row.get::<Uuid, _>("id"))
 }
 
-pub async fn load(pool: &PgPool, cogmap: Uuid) -> Result<Substrate> {
+pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substrate> {
     // concept-resources homed in the cogmap
     let node_rows = sqlx::query(
         "SELECT resource_id FROM kb_resource_homes WHERE anchor_table='kb_cogmaps' AND anchor_id=$1",
@@ -92,13 +92,16 @@ pub async fn load(pool: &PgPool, cogmap: Uuid) -> Result<Substrate> {
         })
         .collect();
 
-    // the telos-default lens for this cogmap (or the global default)
+    // the named lens for this cogmap (or the global default). The name is bound (Plan 3 Step 0) so
+    // the same producer materializes different lenses (e.g. telos-default vs telos-default-propheavy)
+    // over one substrate — S6f plurality.
     let lr = sqlx::query(
         "SELECT id, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution \
-         FROM kb_cogmap_lenses WHERE name='telos-default' AND (cogmap_id=$1 OR cogmap_id IS NULL) \
+         FROM kb_cogmap_lenses WHERE name=$2 AND (cogmap_id=$1 OR cogmap_id IS NULL) \
          ORDER BY cogmap_id NULLS LAST LIMIT 1",
     )
     .bind(cogmap)
+    .bind(lens_name)
     .fetch_one(pool)
     .await?;
     let lens = Lens {
