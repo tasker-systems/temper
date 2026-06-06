@@ -40,9 +40,23 @@
 > hard verdicts live in `04b` and run post-binary. `04a_plan1_fixture.sql` is self-contained (own fixture
 > cogmap) and untouched.
 
+> ## 🛑 CORRECTION 2026-06-06 (during execution) — `block_text` was wrong; content lives in `kb_chunk_content`
+> A planning subagent introduced a `block_text` eval table as the embed job's prose source, and the
+> RE-GROUNDED pass "verified" it against the shipped `embed.rs` — but **both were wrong**. The
+> content-block primitive (`2026-06-03-content-block-primitive-design.md`) and this spec
+> (`§1 "Job A — embed … write kb_chunks.embedding"`; line 249 *"kb_chunks.embedding: populated by the
+> harness (was empty in seed)"*) settle it: prose lives in **`kb_chunk_content`** keyed by chunk
+> (`kb_content_blocks → kb_chunks → kb_chunk_content`), and Job A **fills `kb_chunks.embedding` on the
+> chunks the seed already creates**. The seed already does this for `b_reg` (`03_seed.sql:206-213`).
+> **Applied:** dropped the `block_text` table (Task 1 obsolete); rewrote `embed.rs` to embed
+> `kb_chunk_content` and `UPDATE kb_chunks.embedding` (`fix(temper-next): embed kb_chunk_content…`);
+> **FIX (C) is moot** (the regulation already carries `kb_chunk_content`). Task 2 below authors each
+> concept as `kb_content_blocks + kb_chunks + kb_chunk_content` (the `b_reg` pattern), **not**
+> `block_text`. Everything else in this plan stands.
+
 **Goal:** Turn the artifact into a falsifiable experiment: author the α/β/bridge/tension/isolate cast with content engineered so declared-structure and cosine-structure **disagree**, run the harness, and assert the S6a–h verdicts — proving regions form from the declared graph (not cosine), with the surface↔relational cohesion split observable.
 
-**Architecture:** Enrich `03_seed.sql` (cast + authored content + facets + edges); add a `block_text` eval table the embed job reads; extend the shipped harness with a lens-name parameter (T4 Step 0, for S6f plurality); add `04b_region_suite.sql` (the S6a–h psql verdicts run *after* the `temper-next` binary materializes). Load order becomes **01 → 02 → 03 → `temper-next` binary → 04b**.
+**Architecture:** Enrich `03_seed.sql` (cast + authored `kb_chunk_content` + facets + edges); the embed job fills `kb_chunks.embedding` from that content (no side table — see CORRECTION); extend the shipped harness with a lens-name parameter (T4 Step 0, for S6f plurality); add `04b_region_suite.sql` (the S6a–h psql verdicts run *after* the `temper-next` binary materializes). Load order becomes **01 → 02 → 03 → `temper-next` binary → 04b**.
 
 **Tech Stack:** SQL/`psql`, the Plan-2 binary, pgvector. Spec §5 (the falsification frame, the 2×2, the cast table, S6a–h).
 
@@ -52,34 +66,22 @@
 
 | File | Responsibility |
 |------|----------------|
-| `schema-artifact/01_schema.sql` | **Modify** — add the `block_text` eval table (block bodies for the embed job) |
-| `schema-artifact/03_seed.sql` | **Modify** — replace the hand-seeded region with the enriched α/β/bridge/tension/isolate cast: concepts, homes, authored block content, facets, declared edges, a second lens for S6f |
+| ~~`schema-artifact/01_schema.sql`~~ | ~~add `block_text`~~ — **OBSOLETE (see CORRECTION):** no schema change; content lives in `kb_chunk_content`. `embed.rs` corrected separately. |
+| `schema-artifact/03_seed.sql` | **Modify** — replace the hand-seeded region with the enriched α/β/bridge/tension/isolate cast: concepts, homes, authored `kb_content_blocks`+`kb_chunks`+`kb_chunk_content`, facets, declared edges, a second lens for S6f |
 | `schema-artifact/04b_region_suite.sql` | **Create** — S6a–h verdict queries over the materialized result |
 | `schema-artifact/run_eval.sh` | **Create** — the full load → binary → suite runner |
 | `crates/temper-next/src/{substrate.rs,main.rs}` | **Modify** (T4 Step 0) — add a lens-name parameter so S6f can materialize `telos-default-propheavy` |
 
 ---
 
-## Task 1: The `block_text` eval table (block-content source for the embed job)
+## Task 1: ~~The `block_text` eval table~~ — OBSOLETE (superseded by the CORRECTION banner)
 
-**Tag:** EXTEND (NEW eval-only table). The artifact's `kb_content_blocks` carries no body; production stores content per the content-block-primitive spec, but the *evaluation* needs prose to embed. A tiny `block_text` keeps that explicit and eval-scoped.
-
-**Files:** Modify `schema-artifact/01_schema.sql`.
-
-- [ ] **Step 1: Add the table** (after `kb_content_blocks`):
-```sql
--- EVAL-ONLY (spec §5b / §6): block bodies the temper-next embed job chunks+embeds. Production stores
--- content per the content-block-primitive spec; this is the artifact's prose source, nothing more.
-CREATE TABLE block_text (
-    block_id UUID PRIMARY KEY REFERENCES kb_content_blocks(id) ON DELETE CASCADE,
-    body     TEXT NOT NULL
-);
-```
-- [ ] **Step 2: Reload + confirm** — `psql "$DB" -q -c '\d temper_next.block_text'` → table exists. Commit:
-```bash
-git add schema-artifact/01_schema.sql
-git commit -m "feat(artifact): block_text eval table (prose source for the embed job, §5b)"
-```
+**Tag:** ~~EXTEND~~ → **VOID.** `block_text` was a mis-grounded invention. The artifact already
+carries prose in `kb_chunk_content` (keyed by chunk), per the content-block primitive, and Job A
+fills `kb_chunks.embedding` on the seed's existing chunks. No schema change is needed. The `embed.rs`
+read/write was corrected in `fix(temper-next): embed kb_chunk_content into kb_chunks (drop
+block_text)`. Proceed to Task 2, authoring content as `kb_content_blocks + kb_chunks +
+kb_chunk_content` (the `b_reg` pattern at `03_seed.sql:206-213`).
 
 ---
 
@@ -96,42 +98,36 @@ git commit -m "feat(artifact): block_text eval table (prose source for the embed
   `asserted_by_event_id`), and the late stale-edge block (`:241-247` — drives S6h). The `reg`/`v_centroid`
   vars become unused; either drop their DECLAREs or leave them (PL/pgSQL tolerates unused vars).
 
-- [ ] **RE-GROUNDED FIX (C): give the existing regulation concept embeddable prose.** `r_regulation`
-  (`temper://reg/pair`, homed in onboarding at `:198-218`) stays a clustered node but currently has NO
-  `block_text` — the embed job's INNER JOIN `kb_content_blocks b JOIN block_text bt` would skip it, leaving
-  its region with a NULL centroid and breaking S6c / `materialize`'s "all regions content_cohesion NOT NULL".
-  Its content block `b_reg` already exists (`:206-208`). Add (inside that nested `BEGIN…END`, after `b_reg`):
-  ```sql
-  INSERT INTO block_text (block_id, body) VALUES (b_reg,
-      'Always pair a newcomer with a maintainer on their first PR. The first contribution should be small '
-   || 'and made alongside someone who knows the code, so confidence is built safely.');
-  ```
-  (Its content reads like α — fine; the regulation is express-edged off the charter, not part of the β/solo
-  discriminating cells.) The existing `kb_chunk`/`kb_chunk_content` rows for `b_reg` (`:209-212`) collide with
-  the embed job's `INSERT … ON CONFLICT (block_id, chunk_index, version) DO UPDATE` and get their `embedding`
-  backfilled — consistent, not a duplicate.
+- [ ] **~~RE-GROUNDED FIX (C)~~ — MOOT.** The regulation `r_regulation` already carries
+  `kb_chunk_content` (`03_seed.sql:206-213`: block `b_reg` → chunk `ch_reg` → content), so the corrected
+  `embed_chunks` embeds it like any other chunk. No `block_text` body to add. (FIX (C) only existed to
+  patch the `block_text` INNER JOIN, which is gone.)
 
 - [ ] **Step 2: Author the cast.** For each concept: a `kb_resources` row, a `kb_resource_homes` row
-  (`anchor_table='kb_cogmaps', anchor_id=c_onboarding`), one `kb_content_blocks` row, a `block_text` row with
-  **genuinely-authored prose**, facets via `kb_properties`, and declared `kb_edges`.
-  **RE-GROUNDED FIX (A):** the example below uses `RETURNING id INTO r_pair` / `… INTO b_tmp` — those targets
-  must be DECLARE'd. Either add `r_pair r_smallest … b_tmp uuid;` to the seed's top `DECLARE` section, or wrap
-  each concept in a nested `DECLARE … BEGIN … END` block (the pattern already used for `b_reg`/`ch_reg` at
-  `:206`). A helper pattern (repeat per concept — DRY via a local loop is fine, but show one fully):
+  (`anchor_table='kb_cogmaps', anchor_id=c_onboarding`), one `kb_content_blocks` row, one `kb_chunks`
+  row, one `kb_chunk_content` row with **genuinely-authored prose**, facets via `kb_properties`, and
+  declared `kb_edges`. Follow the `b_reg` content-block pattern (`:206-213`) exactly.
+  **RE-GROUNDED FIX (A):** the example uses `RETURNING id INTO r_pair` / `b_tmp` / `ch_tmp` — those
+  targets must be DECLARE'd. Wrap each concept in a nested `DECLARE … BEGIN … END` block (the pattern
+  already used for `b_reg`/`ch_reg` at `:206`). A helper pattern (repeat per concept — show one fully):
 
 ```sql
 -- α1: pair-on-first-PR (content: early, small, safe, confident contribution)
-INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: pair-on-first-PR','temper://c/pair') RETURNING id INTO r_pair;
-INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
-    VALUES (r_pair,'kb_cogmaps',c_onboarding,p_dave,p_dave);
-INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
-    VALUES (r_pair,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
-INSERT INTO block_text (block_id, body) VALUES (b_tmp,
-    'Pair on the first pull request. A new engineer''s earliest change should be small and made '
- || 'alongside someone who knows the code, so the first contribution builds confidence safely rather '
- || 'than risking a large unfamiliar change. Small, paired, early — that is how confidence starts.');
-INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
-    VALUES ('kb_resources', r_pair, 'facet', '{"phase":"first-week"}'::jsonb, ev_assert, ev_assert);
+DECLARE r_pair uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+  INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: pair-on-first-PR','temper://c/pair') RETURNING id INTO r_pair;
+  INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+      VALUES (r_pair,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+  INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+      VALUES (r_pair,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+  INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+      VALUES (b_tmp, r_pair, 0, md5('pair')) RETURNING id INTO ch_tmp;
+  INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+      'Pair on the first pull request. A new engineer''s earliest change should be small and made '
+   || 'alongside someone who knows the code, so the first contribution builds confidence safely rather '
+   || 'than risking a large unfamiliar change. Small, paired, early — that is how confidence starts.');
+  INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
+      VALUES ('kb_resources', r_pair, 'facet', '{"phase":"first-week"}'::jsonb, ev_assert, ev_assert);
+END;
 ```
 
 Author the remaining cast with the **same shape**, content tuned to the axis it must land on:
@@ -159,7 +155,7 @@ INSERT INTO kb_cogmap_lenses (cogmap_id, name, selection_kind, w_express, w_cont
 VALUES (c_onboarding,'telos-default-propheavy','homed',1.0,1.0,0.1,0.3, 1.2,0.5,0.3,0.2,0.5, ev_assert);
 ```
 
-- [ ] **Step 4: Reload + confirm clean** — `for f in 01 02 03; …` loads with no error; `SELECT count(*) FROM temper_next.block_text` ≥ 11. Commit:
+- [ ] **Step 4: Reload + confirm clean** — `for f in 01 02 03; …` loads with no error; `SELECT count(*) FROM temper_next.kb_chunk_content` covers the new cast (≥ 11 authored concepts + the pre-existing telos/regulation chunks). Commit:
 ```bash
 git add schema-artifact/03_seed.sql
 git commit -m "feat(artifact): enriched α/β/bridge/tension/isolate cast with authored falsification content (§5a/§5b)"
