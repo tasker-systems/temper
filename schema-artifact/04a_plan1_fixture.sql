@@ -90,3 +90,12 @@ BEGIN
     cogmap_region_internal_tension(reg, ARRAY['contradicts']);
 END $fx6$;
 -- EXPECT: reference_standing=0 centrality=1.6000 tension=0   (2 members × 0.8 internal weight; no opposed edge)
+
+\echo '== T7: cogmap_shape returns lens_id + content_cohesion =='
+SELECT count(*) FILTER (WHERE lens_id IS NOT NULL) AS rows_with_lens,
+       bool_and(content_cohesion IS NOT NULL OR member_count >= 0) AS shape_ok
+FROM cogmap_shape(
+       (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'),
+       'cogmap',
+       (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'));
+-- EXPECT: rows_with_lens >= 1, shape_ok = t

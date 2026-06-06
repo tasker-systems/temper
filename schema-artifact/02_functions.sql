@@ -314,13 +314,16 @@ $$;
 -- The surface tier (centroid, salience, label, member_count) — readable by any
 -- principal who can read the map. Member identities are NEVER returned here
 -- (interior is dereferenced per-member through resources_visible_to).
-CREATE FUNCTION cogmap_shape(p_cogmap uuid, p_principal_kind text, p_principal_id uuid)
-RETURNS TABLE(region_id uuid, salience double precision, label text, member_count int)
+CREATE OR REPLACE FUNCTION cogmap_shape(
+    p_cogmap uuid, p_principal_kind text, p_principal_id uuid, p_lens uuid DEFAULT NULL)
+RETURNS TABLE(region_id uuid, lens_id uuid, salience double precision,
+              content_cohesion double precision, label text, member_count int)
 LANGUAGE sql STABLE AS $$
-    SELECT reg.id, reg.salience, reg.label, reg.member_count
+    SELECT reg.id, reg.lens_id, reg.salience, reg.content_cohesion, reg.label, reg.member_count
     FROM kb_cogmap_regions reg
     WHERE reg.cogmap_id = p_cogmap
       AND NOT reg.is_folded
+      AND (p_lens IS NULL OR reg.lens_id = p_lens)   -- default = all lenses; Plan 3 may default to telos-default
       AND (
         (p_principal_kind = 'profile' AND cogmap_readable_by_profile(p_principal_id, p_cogmap))
         OR (p_principal_kind = 'cogmap' AND p_principal_id = p_cogmap)
