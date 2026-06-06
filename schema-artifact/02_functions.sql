@@ -340,7 +340,8 @@ RETURNS double precision LANGUAGE sql STABLE AS $$
     WITH member_vec AS (   -- one pooled vector per member resource
         SELECT m.member_id, avg(ch.embedding) AS v
         FROM kb_cogmap_region_members m
-        JOIN kb_chunks ch ON ch.resource_id = m.member_id AND ch.is_current
+        JOIN kb_chunks ch        ON ch.resource_id = m.member_id AND ch.is_current
+        JOIN kb_content_blocks b ON b.id = ch.block_id AND NOT b.is_folded  -- vector gate mirrors embed + body-text
         WHERE m.region_id = p_region AND m.member_table = 'kb_resources'
         GROUP BY m.member_id
     ),
@@ -356,7 +357,8 @@ RETURNS double precision LANGUAGE sql STABLE AS $$
     WITH telos AS (
         SELECT avg(ch.embedding) AS v
         FROM kb_cogmaps c
-        JOIN kb_chunks ch ON ch.resource_id = c.telos_resource_id AND ch.is_current
+        JOIN kb_chunks ch        ON ch.resource_id = c.telos_resource_id AND ch.is_current
+        JOIN kb_content_blocks b ON b.id = ch.block_id AND NOT b.is_folded  -- vector gate mirrors embed + body-text
         WHERE c.id = p_cogmap
     ),
     reg AS (SELECT centroid AS v FROM kb_cogmap_regions WHERE id = p_region)

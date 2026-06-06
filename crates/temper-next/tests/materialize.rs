@@ -34,4 +34,17 @@ async fn materialize_is_reproducible_and_populates_readouts() {
         nulls, 0,
         "all live regions have a computed content_cohesion"
     );
+    // readouts must be FINITE, not NaN. (Regression guard: telos_alignment was computed in the same
+    // UPDATE that set centroid, so it read the zero-vector placeholder → cosine NaN → NaN salience.)
+    let nan = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM kb_cogmap_regions WHERE NOT is_folded \
+         AND (salience = 'NaN'::float8 OR telos_alignment = 'NaN'::float8)",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        nan, 0,
+        "no live region may have NaN salience or telos_alignment"
+    );
 }

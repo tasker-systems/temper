@@ -75,14 +75,32 @@ pub async fn materialize_cogmap(
             .execute(&mut *tx)
             .await?;
         }
-        // populate centroid + readouts via the Plan-1 SQL functions + a centroid recompute
+        // Centroid FIRST, in its own statement — Postgres evaluates all SET right-hand sides against the
+        // OLD row, so the telos_alignment readout (which SELECTs the stored centroid) must run in a LATER
+        // statement or it reads the zero placeholder → cosine-vs-zero = NaN → NaN salience. Pool per
+        // concept (avg per member, then mean of members) to match cogmap_region_content_cohesion (OQ-1);
+        // exclude folded blocks so the vector projection agrees with embed + body-text; coalesce a
+        // memberless/unembedded region to the zero placeholder so centroid stays NOT NULL.
+        sqlx::query(
+            "UPDATE kb_cogmap_regions r SET centroid = coalesce(( \
+               SELECT avg(mv) FROM ( \
+                 SELECT avg(ch.embedding) AS mv FROM kb_cogmap_region_members mm \
+                 JOIN kb_chunks ch ON ch.resource_id=mm.member_id AND ch.is_current \
+                 JOIN kb_content_blocks b ON b.id=ch.block_id AND NOT b.is_folded \
+                 WHERE mm.region_id=r.id GROUP BY mm.member_id) per_member \
+             ), $2::vector) WHERE r.id=$1",
+        )
+        .bind(region)
+        .bind(&zero_centroid)
+        .execute(&mut *tx)
+        .await?;
+        // Readouts now read the correct stored centroid. nullif guards the zero-centroid edge (a
+        // memberless/unembedded region → cosine-vs-zero = NaN) so telos_alignment stores NULL, not NaN;
+        // the salience UPDATE below already coalesces NULL telos_alignment to 0.
         sqlx::query(
             "UPDATE kb_cogmap_regions r SET \
-               centroid = (SELECT avg(ch.embedding) FROM kb_cogmap_region_members mm \
-                           JOIN kb_chunks ch ON ch.resource_id=mm.member_id AND ch.is_current \
-                           WHERE mm.region_id=r.id), \
                content_cohesion   = cogmap_region_content_cohesion(r.id), \
-               telos_alignment    = cogmap_region_telos_alignment(r.id, r.cogmap_id), \
+               telos_alignment    = nullif(cogmap_region_telos_alignment(r.id, r.cogmap_id), 'NaN'::double precision), \
                reference_standing = cogmap_region_reference_standing(r.id), \
                centrality         = cogmap_region_centrality(r.id), \
                internal_tension   = cogmap_region_internal_tension(r.id, ARRAY['contradicts']) \
