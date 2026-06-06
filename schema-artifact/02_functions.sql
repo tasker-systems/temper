@@ -327,6 +327,24 @@ LANGUAGE sql STABLE AS $$
       );
 $$;
 
+-- Content cohesion (spec §2c): mean member-to-centroid cosine. A DOWNSTREAM readout over a
+-- formed region (cosine never enters FORMATION — that is Plan 2's declared-only affinity).
+-- Per-concept pooling: each member resource's current chunk embeddings are mean-pooled to one
+-- vector first (pool-per-concept-then-mean, map-regions OQ-1); the region centroid is the mean
+-- of those; cohesion is the mean cosine of each member-vector to the centroid.
+CREATE FUNCTION cogmap_region_content_cohesion(p_region uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH member_vec AS (   -- one pooled vector per member resource
+        SELECT m.member_id, avg(ch.embedding) AS v
+        FROM kb_cogmap_region_members m
+        JOIN kb_chunks ch ON ch.resource_id = m.member_id AND ch.is_current
+        WHERE m.region_id = p_region AND m.member_table = 'kb_resources'
+        GROUP BY m.member_id
+    ),
+    ctr AS (SELECT avg(v) AS c FROM member_vec)
+    SELECT avg(1 - (mv.v <=> ctr.c)) FROM member_vec mv, ctr;
+$$;
+
 -- Staleness (A3-3): ON-READ aggregate, not a denormalized watermark. Compares the
 -- stored materialization watermark (kb_cogmaps.shape_materialized_event_id) against
 -- the latest event touching the map's homed regions/edges. Stale reads are allowed
