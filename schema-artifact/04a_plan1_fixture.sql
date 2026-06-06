@@ -70,3 +70,23 @@ BEGIN
   -- region centroid = v1; telos (r_a) pooled embedding = v1; cos(v1,v1) = 1.0
   RAISE NOTICE 'telos_alignment=% (EXPECT ~1.0)', round(cogmap_region_telos_alignment(reg, fxmap)::numeric, 4);
 END $fx5$;
+
+\echo '== T6: reference_standing / centrality / internal_tension exist and compute =='
+DO $fx6$
+DECLARE r_a uuid; r_b uuid; reg uuid; ev uuid;
+BEGIN
+  SELECT id INTO r_a FROM kb_resources WHERE origin_uri='temper://fx/a';
+  SELECT id INTO r_b FROM kb_resources WHERE origin_uri='temper://fx/b';
+  SELECT id INTO reg FROM kb_cogmap_regions WHERE label='fx';
+  SELECT id INTO ev FROM kb_events ORDER BY occurred_at DESC LIMIT 1;
+  -- a declared leads_to edge A->B, weight 0.8, homed in the fixture cogmap
+  INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label, weight,
+                        home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
+    VALUES ('kb_resources', r_a, 'kb_resources', r_b, 'leads_to', 'depends_on', 0.8,
+            'kb_cogmaps', (SELECT id FROM kb_cogmaps LIMIT 1), ev, ev);
+  RAISE NOTICE 'reference_standing=% centrality=% tension=%',
+    cogmap_region_reference_standing(reg),
+    round(cogmap_region_centrality(reg)::numeric,4),
+    cogmap_region_internal_tension(reg, ARRAY['contradicts']);
+END $fx6$;
+-- EXPECT: reference_standing=0 centrality=1.6000 tension=0   (2 members × 0.8 internal weight; no opposed edge)

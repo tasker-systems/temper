@@ -360,6 +360,55 @@ RETURNS double precision LANGUAGE sql STABLE AS $$
     SELECT 1 - (reg.v <=> telos.v) FROM reg, telos WHERE telos.v IS NOT NULL;
 $$;
 
+-- Reference standing (spec §2c): summed reinforce_count over the member resources' blocks
+-- (a count() over kb_block_provenance, page-04 — derived, never stored). is_corrected excluded.
+CREATE FUNCTION cogmap_region_reference_standing(p_region uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    SELECT coalesce(count(p.*), 0)::double precision
+    FROM kb_cogmap_region_members m
+    JOIN kb_content_blocks b ON b.resource_id = m.member_id AND NOT b.is_folded
+    JOIN kb_block_provenance p ON p.block_id = b.id AND NOT p.is_corrected
+    WHERE m.region_id = p_region AND m.member_table = 'kb_resources';
+$$;
+
+-- Centrality (spec §2c): internal declared-affinity mass × size. Sum of declared edge weights
+-- BOTH of whose endpoints are members of the region, times member_count. Raw (un-lens-weighted);
+-- Plan 2 scales by the lens at materialization. Cosine never enters.
+CREATE FUNCTION cogmap_region_centrality(p_region uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH mem AS (
+        SELECT member_id FROM kb_cogmap_region_members
+        WHERE region_id = p_region AND member_table = 'kb_resources'
+    ),
+    internal AS (
+        SELECT coalesce(sum(e.weight), 0) AS mass
+        FROM kb_edges e
+        WHERE e.source_table='kb_resources' AND e.target_table='kb_resources'
+          AND e.source_id IN (SELECT member_id FROM mem)
+          AND e.target_id IN (SELECT member_id FROM mem)
+          AND NOT e.is_folded
+    )
+    SELECT internal.mass * (SELECT count(*) FROM mem) FROM internal;
+$$;
+
+-- Internal tension (spec §2a/§2c): declared opposition among members — a FEATURE of the region,
+-- never a fracture. Matches a caller-supplied label set (default {'contradicts'}); semantics are
+-- NOT reserved at the kernel — the caller (lens) decides what counts as opposed.
+CREATE FUNCTION cogmap_region_internal_tension(p_region uuid, p_opposed_labels text[])
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH mem AS (
+        SELECT member_id FROM kb_cogmap_region_members
+        WHERE region_id = p_region AND member_table = 'kb_resources'
+    )
+    SELECT coalesce(sum(e.weight), 0)::double precision
+    FROM kb_edges e
+    WHERE e.source_table='kb_resources' AND e.target_table='kb_resources'
+      AND e.source_id IN (SELECT member_id FROM mem)
+      AND e.target_id IN (SELECT member_id FROM mem)
+      AND NOT e.is_folded
+      AND e.label = ANY(p_opposed_labels);
+$$;
+
 -- Staleness (A3-3): ON-READ aggregate, not a denormalized watermark. Compares the
 -- stored materialization watermark (kb_cogmaps.shape_materialized_event_id) against
 -- the latest event touching the map's homed regions/edges. Stale reads are allowed
