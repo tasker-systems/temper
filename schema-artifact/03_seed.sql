@@ -473,11 +473,14 @@ BEGIN
     JOIN kb_resources s ON s.origin_uri = e.src
     JOIN kb_resources t ON t.origin_uri = e.tgt;
 
-    -- a LATER edge event touching the map AFTER materialization ⇒ shape is now stale.
-    -- occurred_at is set explicitly: now() is transaction-stable, so all seed events
-    -- otherwise share one timestamp; real life spreads them across transactions.
+    -- A late edge-touch event on the express edge, at seed time (now()). Regions are produced by the
+    -- temper-next harness AFTER the seed, so the materialization watermark is naturally LATER than this
+    -- seed-time touch ⇒ a fresh map right after materialize. A genuinely-later touch (the S6h edge in
+    -- run_eval) then drives the fresh→stale transition. (Previously future-dated now()+1min to fake
+    -- "after a seed-time materialization", which no longer exists — that dating dominated latest_touch
+    -- and made the staleness signal untestable.)
     INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at)
-        VALUES (et_assert, e_agent, 'kb_cogmaps', c_onboarding, now() + interval '1 minute') RETURNING id INTO ev_late;
+        VALUES (et_assert, e_agent, 'kb_cogmaps', c_onboarding, now()) RETURNING id INTO ev_late;
     UPDATE kb_edges SET last_event_id = ev_late
         WHERE home_anchor_table = 'kb_cogmaps' AND home_anchor_id = c_onboarding AND edge_kind = 'express';
 END;

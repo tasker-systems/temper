@@ -33,28 +33,11 @@ echo "== materialize telos-default (embed + cluster) =="
 DATABASE_URL="$DB" cargo run -q -p temper-next -- onboarding-cogmap >/dev/null
 
 echo "== S6a/S6c/S6d/S6e/S6g (04b suite) =="
-psql "$DB" -q -f schema-artifact/04b_region_suite.sql >/dev/null   # printed verbatim below for humans
-all_pass=$(q "
-  WITH td AS (
-    SELECT res.origin_uri, m.region_id
-    FROM kb_cogmap_region_members m
-    JOIN kb_cogmap_regions r ON r.id=m.region_id AND NOT r.is_folded
-    JOIN kb_cogmap_lenses  l ON l.id=r.lens_id AND l.name='telos-default'
-    JOIN kb_resources    res ON res.id=m.member_id)
-  SELECT ((SELECT count(*) FROM kb_cogmap_regions r JOIN kb_cogmap_lenses l ON l.id=r.lens_id
-             WHERE l.name='telos-default' AND NOT r.is_folded) >= 2)
-     AND (SELECT a.region_id=b.region_id FROM td a, td b
-            WHERE a.origin_uri='temper://c/pair' AND b.origin_uri='temper://c/smallest')
-     AND (SELECT ca.content_cohesion > cb.content_cohesion FROM kb_cogmap_regions ca, kb_cogmap_regions cb
-            WHERE ca.id=(SELECT region_id FROM td WHERE origin_uri='temper://c/pair')
-              AND cb.id=(SELECT region_id FROM td WHERE origin_uri='temper://c/staging'))
-     AND (SELECT count(*)=1 FROM td WHERE region_id=(SELECT region_id FROM td WHERE origin_uri='temper://c/solo'))
-     AND (SELECT (SELECT region_id FROM td WHERE origin_uri='temper://c/checklist')
-                =(SELECT region_id FROM td WHERE origin_uri='temper://c/staging'))
-     AND (SELECT (SELECT region_id FROM td WHERE origin_uri='temper://c/bluegreen')
-                =(SELECT region_id FROM td WHERE origin_uri='temper://c/bigbang'))
-     AND (SELECT (SELECT internal_tension FROM kb_cogmap_regions
-                    WHERE id=(SELECT region_id FROM td WHERE origin_uri='temper://c/bluegreen')) > 0);")
+# 04b prints the human-readable per-verdict diagnostics AND creates the onboarding_s6_verdict view —
+# the single source of truth. We read all_pass from that view (no re-encoding ⇒ printed verdicts and
+# this exit-code gate cannot drift).
+psql "$DB" -q -f schema-artifact/04b_region_suite.sql >/dev/null
+all_pass=$(q "SELECT all_pass FROM onboarding_s6_verdict;")
 check "S6a/c/d/e/g (04b suite all_pass)" "$all_pass" "t"
 
 # membership fingerprint for one lens (md5 over region->member, order-stable)
@@ -91,6 +74,12 @@ delta=$(q "
 check "S6f setup~build merge(td) yet split(propheavy)" "$delta" "t"
 
 echo "== S6h: functorial update + staleness =="
+# Clean baseline: re-materialize so the watermark is current ⇒ the map is FRESH. (The seed's express
+# edge touch is at seed time, earlier than this materialize.) This makes the staleness check below a
+# genuine fresh→stale transition driven by the S6h edge, not a pre-existing stale state.
+DATABASE_URL="$DB" cargo run -q -p temper-next -- onboarding-cogmap >/dev/null
+fresh=$(q "SELECT is_stale FROM cogmap_staleness((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'));")
+check "S6h fresh after materialize (baseline)" "$fresh" "f"
 # solo is a singleton pre-update
 solo_pre=$(q "
   SELECT count(*) FROM kb_cogmap_region_members m
@@ -125,7 +114,7 @@ END \$h\$;"
 
 # the watermark is now behind the new declared touch
 stale=$(q "SELECT is_stale FROM cogmap_staleness((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'));")
-check "S6h stale after new edge event" "$stale" "t"
+check "S6h stale after new edge (fresh->stale transition)" "$stale" "t"
 
 # re-materialize -> the projection updates predictably: solo now co-regions with α
 DATABASE_URL="$DB" cargo run -q -p temper-next -- onboarding-cogmap >/dev/null
