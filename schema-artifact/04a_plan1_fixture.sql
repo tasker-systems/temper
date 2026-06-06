@@ -14,3 +14,10 @@ FROM kb_cogmap_lenses l
 JOIN kb_cogmap_regions r ON r.lens_id = l.id
 WHERE l.name = 'telos-default';
 -- EXPECT: telos-default | homed | t
+
+\echo '== T3: kb_properties accepts an edge owner =='
+SELECT pg_get_constraintdef(oid) LIKE '%kb_edges%' AS edges_allowed
+FROM pg_constraint
+WHERE conrelid='temper_next.kb_properties'::regclass AND contype='c'
+  AND pg_get_constraintdef(oid) LIKE '%owner_table%';
+-- EXPECT: t
