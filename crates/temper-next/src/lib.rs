@@ -7,3 +7,4 @@ pub mod affinity;
 pub mod cluster;
 pub mod embed;
 pub mod substrate;
+pub mod write;
