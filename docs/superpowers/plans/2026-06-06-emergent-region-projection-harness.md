@@ -4,19 +4,42 @@
 >
 > **GROUNDING DISCIPLINE (inject + obey):** `~/.claude/skills/temper/guidance/implementation-grounding.md` — GD-1 cite-or-it's-invention, GD-2 executable grounding (`cargo test`, `psql` verdicts), GD-3 CONFORM/EXTEND/AMEND tags, GD-5 escalate-don't-fabricate.
 
-> ## ⚠️ PROVISIONAL — RE-GROUND AFTER PLAN 1 EXECUTES
-> This plan was written *with high design context* before Plan 1 ran, so its references to Plan-1 artifacts are **forward-references, not verified disk**. Before executing Plan 2, RE-GROUND (GD-2):
-> - `psql … -c '\d temper_next.kb_cogmap_lenses'` and `'\d temper_next.kb_cogmap_regions'` — confirm the lens columns (`w_express…s_central, resolution`) and the region readout columns exist as Plan 1 built them, and reconcile any renamed fields here.
-> - confirm the readout functions exist with the signatures Plan 1 shipped: `cogmap_region_content_cohesion(uuid)`, `cogmap_region_telos_alignment(uuid,uuid)`, `cogmap_region_reference_standing(uuid)`, `cogmap_region_centrality(uuid)`, `cogmap_region_internal_tension(uuid,text[])`.
-> - confirm `crates/temper-ingest` still exposes `embed_texts(&[&str]) -> Result<Vec<Vec<f32>>>`, `chunk_markdown(&str) -> Vec<ChunkData>`, `EMBEDDING_DIM = 768` (verified 2026-06-06; re-confirm in case of drift).
-> - `grep -nA20 '\[workspace\]' Cargo.toml` — find the real `members` list and add `crates/temper-next` to it (root Cargo.toml is the dual workspace+package file; the exact shape was **not** verified at authoring).
-> Treat every "EXTEND/uses Plan 1" claim below as a hypothesis to re-verify, then fix this plan inline before dispatch.
+> ## ✅ RE-GROUNDED 2026-06-06 (post-Plan-1) — READY TO EXECUTE
+> Plan 1 shipped; every forward-reference below was re-verified against disk (GD-2 executable) and the
+> plan corrected inline. Verified facts (quoted from live checks):
+> - **Lens columns** (`\d kb_cogmap_lenses`): `id, cogmap_id, name, selection_kind, w_express, w_contains,
+>   w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id, created` —
+>   match the `Lens` struct in Task 2 **exactly**. Seeded `telos-default` row = `(1, 1, 0.6, 0.3, 0.4,
+>   0.5, 0.3, 0.2, 0.5)` ⇒ mirrors `Lens::telos_default()` value-for-value. ✓
+> - **Region readout columns** present: `centrality, content_cohesion, internal_tension, lens_id,
+>   reference_standing, telos_alignment`. ✓
+> - **Readout fn signatures** (verified): `cogmap_region_content_cohesion(p_region uuid)`,
+>   `cogmap_region_telos_alignment(p_region uuid, p_cogmap uuid)`, `cogmap_region_reference_standing(p_region uuid)`,
+>   `cogmap_region_centrality(p_region uuid)`, `cogmap_region_internal_tension(p_region uuid, p_opposed_labels text[])`.
+>   **No `cogmap_region_salience` function shipped** — Task 6's inline salience blend stays (see T6 fix below). ✓
+> - **temper-ingest API** (no `pub use` re-exports → call via submodules): `temper_ingest::chunk::chunk_markdown(&str) -> Vec<ChunkData>`,
+>   `temper_ingest::embed::embed_texts(&[&str]) -> Result<Vec<Vec<f32>>>`, `temper_ingest::embed::EMBEDDING_DIM = 768`.
+>   `embed` module is gated behind `feature = "embed"`. `ChunkData` carries a real `content_hash` (SHA-256 of content). ✓
+> - **Substrate-read columns**: `kb_resource_homes(resource_id, anchor_table, anchor_id)`; `kb_properties`
+>   HAS a `weight` column + `property_value jsonb`; `kb_chunks.version` defaults to `1` (so the ON CONFLICT
+>   insert needs no explicit version); `edge_kind` enum = `{express, contains, leads_to, near}`. ✓
+> - **Workspace shape**: root `Cargo.toml` `members = ["crates/*", "tests/e2e"]` — a **glob**, so
+>   `crates/temper-next` is auto-included (NO members edit). There is **no `[workspace.dependencies]`** table;
+>   crates pin versions directly. No crate declares `[lib]` — `src/lib.rs` + `src/main.rs` auto-detect as lib+bin.
+>
+> **Six corrections applied inline below** (search for `RE-GROUNDED FIX`): (1) Cargo.toml uses direct
+> version pins + correct sqlx features, drops `pgvector` (Rust never binds a vector type); (2) no members
+> edit (glob); (3) no explicit `[lib]/[[bin]]` split; (4) embed job uses `ChunkData.content_hash` + submodule
+> call paths; (5) centroid placeholder uses an explicit zero-vector literal (the `SELECT … LIMIT 1` was
+> NULL-fragile once Plan 3 removes the hand-seeded region); (6) salience blend wraps `coalesce(telos_alignment, 0)`
+> (it is nullable ⇒ would violate `salience NOT NULL`). **One remaining dependency:** Task 5's `block_text`
+> table is created by **Plan 3 T1** — the embed integration test stays red until Plan 3 lands (flagged at T5).
 
 **Goal:** A production-quality `temper-next` crate (publish=false) that, against the `temper_next` artifact DB, (A) chunks+embeds content blocks via `temper-ingest`, and (B) computes a cogmap's emergent telos-lens regions deterministically — declared-only affinity → average-link agglomerative clustering → write region rows+members and populate the readouts — through one `materialize_cogmap` entry point.
 
 **Architecture:** Thin binary + a clean, unit-tested clustering **core** (`affinity.rs`, `cluster.rs`) written to lift wholesale into `temper-cogmap` later (spec §6b decision b). Runtime `sqlx` against `temper_next` (separate namespace ⇒ no compile-time macros; matches `temper-api/src/services/search_service.rs` runtime `query_as`). Readouts stay in SQL (Plan 1 functions); Rust owns only embed + cluster-membership (spec §6a).
 
-**Tech Stack:** Rust, `sqlx` (runtime, Postgres), `tokio`, `uuid`, `temper-ingest` (embed), `pgvector`. Spec: [`…/2026-06-06-emergent-region-projection-design.md`](../specs/2026-06-06-emergent-region-projection-design.md) §1, §2a, §2b, §6.
+**Tech Stack:** Rust, `sqlx` (runtime, Postgres), `tokio`, `uuid`, `serde_json`, `temper-ingest` (embed). No `pgvector` crate — vectors are written as `'[…]'::vector` string literals and pooled/compared in SQL. Spec: [`…/2026-06-06-emergent-region-projection-design.md`](../specs/2026-06-06-emergent-region-projection-design.md) §1, §2a, §2b, §6.
 
 ---
 
@@ -41,7 +64,7 @@
 
 **Files:** Create `crates/temper-next/Cargo.toml`, `crates/temper-next/src/main.rs`; Modify root `Cargo.toml` (workspace members).
 
-- [ ] **Step 1: Re-ground the workspace shape (GD-1)** — `grep -nA25 '\[workspace\]' Cargo.toml`; note the exact `members = [...]` list. Open `crates/temper-ingest/Cargo.toml` to copy edition/lint conventions.
+- [ ] **Step 1: (re-grounded) workspace shape** — root `Cargo.toml` `members = ["crates/*", "tests/e2e"]` is a glob; `crates/temper-next` is picked up automatically. Edition/conventions: edition `2021`, no per-crate `[lib]` declarations across the workspace.
 
 - [ ] **Step 2: Create the manifest**
 
@@ -55,12 +78,19 @@ publish = false
 
 [dependencies]
 temper-ingest = { path = "../temper-ingest", features = ["embed"] }
-sqlx = { workspace = true, features = ["runtime-tokio", "postgres", "uuid"] }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-uuid = { workspace = true }
-anyhow = { workspace = true }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid = { version = "1", features = ["v7", "serde"] }
+serde_json = "1"
+anyhow = "1"
 ```
-> RE-GROUND: confirm each `workspace = true` dep exists in root `[workspace.dependencies]`; if a crate pins versions directly instead, match the sibling's style.
+> **RE-GROUNDED FIX (1):** there is **no `[workspace.dependencies]`** table — crates pin versions
+> directly (verified: `temper-api` pins `sqlx = { version = "0.8", … }`, `uuid = { version = "1", … }`,
+> `tokio = { version = "1", … }`; `anyhow = "1"` is used elsewhere). Use the same TLS variant the
+> workspace uses — `runtime-tokio-rustls`, NOT bare `runtime-tokio`. Add `json` to sqlx features +
+> `serde_json` (the facet read deserializes `property_value jsonb` into `serde_json::Value`). **No
+> `pgvector` crate** — embeddings are written as a `'[…]'::vector` string literal and pooled/compared
+> in SQL; Rust never binds a vector type, so pgvector is not a dependency.
 
 - [ ] **Step 3: Minimal `main.rs`** so the crate builds:
 ```rust
@@ -69,11 +99,13 @@ fn main() {
 }
 ```
 
-- [ ] **Step 4: Add to workspace members** — edit the `members` list in root `Cargo.toml` to include `"crates/temper-next"`.
+- [ ] **Step 4: (RE-GROUNDED FIX 2) NO workspace-members edit** — `members = ["crates/*", …]` already
+  globs in `crates/temper-next`. Do **not** touch root `Cargo.toml`. (Sanity: `cargo metadata --no-deps
+  | grep temper-next` after creating the manifest confirms the workspace sees it.)
 
 - [ ] **Step 5: Verify build** — `cargo build -p temper-next` → Expected: compiles. Commit:
 ```bash
-git add crates/temper-next/Cargo.toml crates/temper-next/src/main.rs Cargo.toml
+git add crates/temper-next/Cargo.toml crates/temper-next/src/main.rs
 git commit -m "feat(temper-next): scaffold the region-clustering harness crate"
 ```
 
@@ -248,7 +280,12 @@ fn reproducible_byte_identical_on_rerun() {
     assert_eq!(one, two);
 }
 ```
-> Make `affinity` and `cluster` modules `pub` in `lib.rs` (add `src/lib.rs` exposing `pub mod affinity; pub mod cluster;` and a `[lib]`/`[[bin]]` split in Cargo.toml — RE-GROUND against a sibling crate that has both, e.g. check `crates/temper-ingest/Cargo.toml` for the `[lib]` shape).
+> **RE-GROUNDED FIX (3):** add `src/lib.rs` with `pub mod affinity; pub mod cluster;` (plus `pub mod
+> substrate; pub mod embed; pub mod write;` as those land). **No `[lib]`/`[[bin]]` split needed in
+> Cargo.toml** — no crate in the workspace declares `[lib]`; Cargo auto-detects `src/lib.rs` as the lib
+> and `src/main.rs` as the `temper-next` bin. `main.rs` references the lib by crate name
+> (`use temper_next::write::materialize_cogmap;`). Integration tests under `tests/` see only the lib's
+> `pub` surface, which is why these modules must be `pub`.
 
 - [ ] **Step 2: Run to verify it fails** — `cargo test -p temper-next --test cluster_determinism` → Expected: unresolved `cluster`.
 
@@ -347,7 +384,7 @@ async fn loads_homed_concepts_and_edges_for_a_cogmap() {
     // edges/facets may be empty in the sparse seed; structure must load without error.
 }
 ```
-> RE-GROUND (GD-1): before writing the SQL, run `\d temper_next.kb_resource_homes` and confirm the homing columns (`resource_id, anchor_table, anchor_id`) — the load query joins homes to find resources homed in the cogmap.
+> RE-GROUNDED (GD-1): `kb_resource_homes` columns confirmed `(id, resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id, created)` — the load query's `WHERE anchor_table='kb_cogmaps' AND anchor_id=$1` is valid as written.
 
 - [ ] **Step 2: Run to verify it fails** — `cargo test -p temper-next --test substrate_read` → Expected: unresolved `substrate::*`.
 
@@ -428,7 +465,9 @@ fn parse_kind(s: String) -> EdgeKind {
     }
 }
 ```
-> RE-GROUND: add `serde_json` to deps if `property_value` is read as `serde_json::Value`; confirm `kb_properties.property_value` is `jsonb` (verified `01_schema.sql`).
+> RE-GROUNDED: `serde_json` is in the manifest (fix 1) and sqlx has the `json` feature; `kb_properties`
+> has both `property_value jsonb` AND a `weight double precision` column (verified `\d kb_properties`),
+> so the facet read's `SELECT owner_id, property_value, weight` is valid as written.
 
 - [ ] **Step 4: Run to verify it passes** — `cargo test -p temper-next --test substrate_read` (artifact loaded) → Expected: pass.
 - [ ] **Step 5: Commit** — `git commit -am "feat(temper-next): substrate read (homed concepts, declared edges, facets, lens)"`
@@ -454,7 +493,9 @@ async fn embeds_content_blocks_into_chunks() {
     assert!(row > 0, "expected embedded chunks after the embed job");
 }
 ```
-> RE-GROUND: the CURRENT seed authors no block *content* — confirm whether Plan 3 has landed authored content yet. If running before Plan 3, seed a trivial block text first or expect 0 (and skip this assertion until Plan 3).
+> RE-GROUNDED: the current seed authors **no** block content and the `block_text` table does not exist
+> until Plan 3 T1, so this test cannot pass inside Plan 2. Land it `#[ignore]`d (or red-with-comment)
+> and un-gate it in Plan 3 once `block_text` + content are seeded. Do not seed a stand-in here.
 
 - [ ] **Step 2: Run to verify it fails** — `cargo test -p temper-next --test embed_job` → Expected: unresolved `embed::embed_all_blocks`.
 
@@ -478,10 +519,11 @@ pub async fn embed_all_blocks(pool: &PgPool) -> Result<()> {
         let block_id: Uuid = row.get("block_id");
         let resource_id: Uuid = row.get("resource_id");
         let body: String = row.get("body");
-        let chunks = temper_ingest::chunk_markdown(&body);
+        // RE-GROUNDED FIX (4): submodule call paths (no re-exports in temper-ingest lib.rs).
+        let chunks = temper_ingest::chunk::chunk_markdown(&body);
         let texts: Vec<&str> = chunks.iter().map(|c| c.content.as_str()).collect();
         if texts.is_empty() { continue; }
-        let embeddings = temper_ingest::embed_texts(&texts)?; // 768-dim, l2-normalized
+        let embeddings = temper_ingest::embed::embed_texts(&texts)?; // 768-dim, l2-normalized
         for (i, emb) in embeddings.iter().enumerate() {
             let vec_lit = format!("[{}]", emb.iter().map(|f| f.to_string()).collect::<Vec<_>>().join(","));
             sqlx::query(
@@ -489,14 +531,20 @@ pub async fn embed_all_blocks(pool: &PgPool) -> Result<()> {
                  VALUES ($1,$2,$3,$4,$5::vector,true) \
                  ON CONFLICT (block_id, chunk_index, version) DO UPDATE SET embedding = EXCLUDED.embedding")
                 .bind(block_id).bind(resource_id).bind(i as i32)
-                .bind(format!("sha256:{:x}", i)) // placeholder content_hash; RE-GROUND real hashing
+                // RE-GROUNDED FIX (4): ChunkData carries a real SHA-256 content_hash; use it (1:1 with embeddings).
+                .bind(chunks[i].content_hash.clone())
                 .bind(vec_lit).execute(pool).await?;
         }
     }
     Ok(())
 }
 ```
-> **GD-5 flag:** the `block_text` source table and `content_hash` strategy are **assumptions** — Plan 3 owns block-content authoring. If the seed stores block bodies differently, STOP and reconcile, don't invent a shape.
+> **GD-5 flag (re-grounded):** `content_hash` is now resolved — use `ChunkData.content_hash` (fix 4 above).
+> The `block_text(block_id, body)` source table is **created by Plan 3 T1**, not Plan 1, so it does NOT
+> exist when Plan 2 lands. Consequence: write `embed.rs` against this shape, but the `tests/embed_job.rs`
+> integration test **stays red until Plan 3 seeds `block_text` + content** — do not try to make it green
+> inside Plan 2 (and do not invent a stand-in table; that's Plan 3's decision). Either gate the test
+> `#[ignore]` with a note, or land it red-with-explanation; either way, flag it, don't fabricate content.
 
 - [ ] **Step 4/5: Verify + commit** — `cargo test -p temper-next --test embed_job` (after Plan 3 content) → pass; `git commit -am "feat(temper-next): embed job — chunk+embed blocks into kb_chunks (bge-768)"`
 
@@ -560,14 +608,20 @@ pub async fn materialize_cogmap(pool: &PgPool, cogmap: Uuid) -> Result<Materiali
                  WHERE cogmap_id=$2 AND lens_id=$3 AND NOT is_folded")
         .bind(ev).bind(cogmap).bind(s.lens_id).execute(&mut *tx).await?;
 
+    // RE-GROUNDED FIX (5): a zero-vector(768) literal placeholder for the NOT-NULL centroid (overwritten
+    // by the UPDATE below before any readout reads it). The original `SELECT centroid … LIMIT 1` was
+    // NULL-fragile: Plan 3 removes the hand-seeded region, so on a clean run no region exists yet ⇒
+    // the subquery returns NULL ⇒ NOT NULL violation. The zero literal is unconditional.
+    let zero_centroid = format!("[{}]", vec!["0"; temper_ingest::embed::EMBEDDING_DIM].join(","));
     let mut fingerprint_parts: Vec<String> = Vec::new();
     for members in &clusters {
         // centroid computed in SQL after members are inserted; insert a placeholder then UPDATE via readouts.
         let region: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_cogmap_regions \
                (cogmap_id, lens_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id) \
-             VALUES ($1,$2, (SELECT centroid FROM kb_cogmap_regions LIMIT 1), 0.0, NULL, $3, $4, $4) RETURNING id")
+             VALUES ($1,$2, $5::vector, 0.0, NULL, $3, $4, $4) RETURNING id")
             .bind(cogmap).bind(s.lens_id).bind(members.len() as i32).bind(ev)
+            .bind(&zero_centroid)
             .fetch_one(&mut *tx).await?;
         for m in members {
             sqlx::query("INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id) \
@@ -587,10 +641,14 @@ pub async fn materialize_cogmap(pool: &PgPool, cogmap: Uuid) -> Result<Materiali
                internal_tension   = cogmap_region_internal_tension(r.id, ARRAY['contradicts']) \
              WHERE r.id=$1")
             .bind(region).execute(&mut *tx).await?;
-        // salience = lens-weighted blend of the three parts
+        // salience = lens-weighted blend of the three parts.
+        // RE-GROUNDED FIX (6): telos_alignment is NULLABLE (NULL when the telos has no embedded chunks),
+        // and salience is NOT NULL — so `$2*NULL = NULL` would violate the constraint. coalesce to 0.
+        // (reference_standing/centrality are coalesce'd to 0 inside their SQL functions, so only
+        // telos_alignment needs guarding here. No cogmap_region_salience fn shipped in Plan 1 ⇒ inline.)
         sqlx::query(
             "UPDATE kb_cogmap_regions SET salience = \
-               $2*telos_alignment + $3*reference_standing + $4*centrality WHERE id=$1")
+               $2*coalesce(telos_alignment,0) + $3*reference_standing + $4*centrality WHERE id=$1")
             .bind(region).bind(s.lens.s_telos).bind(s.lens.s_ref).bind(s.lens.s_central)
             .execute(&mut *tx).await?;
         let mut ms: Vec<String> = members.iter().map(|m| m.to_string()).collect();
@@ -605,7 +663,13 @@ pub async fn materialize_cogmap(pool: &PgPool, cogmap: Uuid) -> Result<Materiali
     Ok(MaterializeOutcome { regions: clusters.len(), membership_fingerprint: fingerprint_parts.join("|") })
 }
 ```
-> **GD-1/GD-5:** the placeholder-centroid-then-UPDATE dance avoids the `centroid NOT NULL` constraint at insert; RE-GROUND whether a cleaner path (deferred constraint, or computing the centroid in Rust before insert) is preferable once Plan 1's exact column nullability is confirmed. The salience blend duplicates the readout function math — if Plan 1 ships a `cogmap_region_salience` function, call it instead (DRY).
+> **GD-1/GD-5 (re-grounded):** the placeholder-centroid-then-UPDATE dance avoids the `centroid NOT NULL`
+> constraint at insert — now using an unconditional zero-vector literal (fix 5), not a fragile `SELECT …
+> LIMIT 1`. A cleaner path (compute the centroid in Rust from the fetched member embeddings and insert it
+> directly) is a legitimate future simplification, but the placeholder+UPDATE keeps all vector math in SQL,
+> which matches the "readouts stay in SQL" architecture — keep it for now. Plan 1 shipped **no**
+> `cogmap_region_salience` function (verified), so the inline blend stays; it is the one place region math
+> lives in Rust rather than SQL — acceptable because it's a pure lens-weighted sum of already-computed parts.
 
 - [ ] **Step 4: Wire `main.rs`** — connect, `embed_all_blocks`, `materialize_cogmap` for a cogmap named via `args`. (Code: ~15 lines, straightforward.)
 - [ ] **Step 5: Verify + commit** — `cargo test -p temper-next` (artifact + Plan 3 seed) → pass; `git commit -am "feat(temper-next): materialize_cogmap — declared clustering write + SQL readouts"`
@@ -615,10 +679,20 @@ pub async fn materialize_cogmap(pool: &PgPool, cogmap: Uuid) -> Result<Materiali
 ## Self-Review
 
 **1. Spec coverage:** §1 entry point → T6 ✓ · §2a declared affinity → T2 ✓ · §2b deterministic clustering → T3 ✓ · §6a embed (reuse) + cluster-membership-in-Rust + readouts-in-SQL → T4/T5/T6 ✓ · §6b production-quality liftable core (pure `affinity`/`cluster` modules) ✓.
-**2. Placeholder scan:** real code throughout; the explicit *assumptions* (block-content source T5, content_hash, centroid-insert dance) are **flagged GD-5**, not silent placeholders.
+**2. Placeholder scan:** real code throughout. The one remaining *external dependency* — Task 5's
+`block_text` source — is owned by Plan 3 T1 (flagged at T5), not a silent placeholder. `content_hash`
+and the centroid-insert are now resolved (fixes 4 & 5), not assumptions.
 **3. Type consistency:** `Lens`/`Edge`/`Facet`/`EdgeKind` consistent T2↔T3↔T4; `materialize_cogmap`/`embed_all_blocks`/`load`/`connect` consistent T4↔T5↔T6.
-**4. Grounding:** the PROVISIONAL banner + per-task RE-GROUND notes mark every forward-reference to Plan-1/Plan-3 artifacts; verified-now anchors (sqlx pattern, kb_edges, embed API) cited.
+**4. Grounding:** RE-GROUNDED 2026-06-06 against live Plan-1 disk — lens/region columns, all five readout
+fn signatures, temper-ingest submodule API, substrate-read columns, and workspace shape all verified with
+quoted values in the banner; six corrections (fixes 1–6) applied inline. Only forward-ref remaining: Plan 3's
+`block_text` (T5).
 
 ---
 
-**Plan 2 is PROVISIONAL** — re-ground against Plan-1 disk before dispatch (banner). Execution: subagent-driven recommended, with the controller re-verifying each RE-GROUND note as it goes.
+**Plan 2 is RE-GROUNDED and READY TO EXECUTE** (verified against live Plan-1 disk 2026-06-06; six fixes
+applied inline — banner). Execution: this is a 6-task TDD Rust crate with a clean pure-core (`affinity`/
+`cluster`) — a good Variant-B candidate (subagent-driven, orchestrator reviews each commit), or Variant A
+inline given the plan is now concrete. The one known red test is `tests/embed_job.rs` (waits on Plan 3's
+`block_text`); everything else (scaffold, affinity, cluster determinism, substrate read) is green-able
+against the current artifact.
