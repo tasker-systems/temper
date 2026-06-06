@@ -17,8 +17,9 @@ SET search_path = temper_next, public;
 \echo '======== REGION SUITE (telos-default, post-materialize) ========'
 
 -- Concept → region for the telos-default lens only (keyed by origin_uri).
-DROP VIEW IF EXISTS td_member;
-CREATE TEMP VIEW td_member AS
+-- CREATE OR REPLACE (not DROP IF EXISTS) so a re-run in the same psql session is idempotent
+-- without the "view does not exist, skipping" NOTICE on the first run.
+CREATE OR REPLACE TEMP VIEW td_member AS
 SELECT res.origin_uri, m.region_id
 FROM kb_cogmap_region_members m
 JOIN kb_cogmap_regions r ON r.id = m.region_id AND NOT r.is_folded
