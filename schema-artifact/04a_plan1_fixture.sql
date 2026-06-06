@@ -6,3 +6,11 @@ FROM information_schema.columns
 WHERE table_schema='temper_next' AND table_name='kb_cogmap_regions'
   AND column_name IN ('telos_alignment','reference_standing','centrality','content_cohesion','internal_tension');
 -- EXPECT: centrality,content_cohesion,internal_tension,reference_standing,telos_alignment
+
+\echo '== T2: telos-default lens exists and the seeded region points at it =='
+SELECT l.name AS lens_name, l.selection_kind,
+       (r.lens_id = l.id) AS region_linked
+FROM kb_cogmap_lenses l
+JOIN kb_cogmap_regions r ON r.lens_id = l.id
+WHERE l.name = 'telos-default';
+-- EXPECT: telos-default | homed | t

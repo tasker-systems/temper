@@ -417,12 +417,34 @@ CREATE INDEX idx_kb_properties_key       ON kb_properties(property_key) WHERE NO
 
 -- The surface tier. Readable by anyone who can read the map (§4). Same
 -- assert/fold pattern as edges/properties — no new freshness primitive.
+-- Region lenses (spec §3B): a lens IS a declared, stored, IMMUTABLE projection-class
+-- instance. Editing = assert a new row; a region's lens_id pins the exact weight-vector
+-- it was computed under (the reproducibility anchor). Plurality = more rows; same function.
+CREATE TABLE kb_cogmap_lenses (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
+    cogmap_id            UUID REFERENCES kb_cogmaps(id),  -- NULL = global default; non-null = map-specific
+    name                 TEXT NOT NULL,
+    selection_kind       TEXT NOT NULL DEFAULT 'homed',   -- 'homed' (this plan); 'team_visible' later
+    w_express            DOUBLE PRECISION NOT NULL,
+    w_contains           DOUBLE PRECISION NOT NULL,
+    w_leads_to           DOUBLE PRECISION NOT NULL,
+    w_near               DOUBLE PRECISION NOT NULL,
+    w_prop               DOUBLE PRECISION NOT NULL,
+    s_telos              DOUBLE PRECISION NOT NULL,
+    s_ref                DOUBLE PRECISION NOT NULL,
+    s_central            DOUBLE PRECISION NOT NULL,
+    resolution           DOUBLE PRECISION NOT NULL,
+    asserted_by_event_id UUID NOT NULL REFERENCES kb_events(id),
+    created              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- [LEAN→DECISION] centroid pooling (OQ-1): pool-per-concept-then-mean (one vector
 -- per member concept first), computed in MaterializeCogmapShape. No HNSW on
 -- centroid yet (OQ-2: per-map scan; wanted, deferred "as we go").
 CREATE TABLE kb_cogmap_regions (
     id                   UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     cogmap_id            UUID NOT NULL REFERENCES kb_cogmaps(id) ON DELETE CASCADE,
+    lens_id              UUID NOT NULL REFERENCES kb_cogmap_lenses(id),  -- the perspective that produced this region (§3B)
     centroid             vector(768) NOT NULL,
     salience             DOUBLE PRECISION NOT NULL,   -- computed blend, memoized (was agent-assigned; spec §3A)
     telos_alignment      DOUBLE PRECISION,            -- cosine(centroid, telos_resource.embedding)  [salience part]

@@ -54,6 +54,7 @@ DECLARE
     et_assert uuid; et_region uuid;
     -- region
     reg uuid;
+    v_lens uuid;
     v_centroid vector := ('[' || array_to_string(array_fill(0.01::float8, ARRAY[768]), ',') || ']')::vector;
 BEGIN
     SELECT id INTO et_assert FROM kb_event_types WHERE name = 'relationship_asserted';
@@ -219,8 +220,19 @@ BEGIN
     -- ── A materialized region on onboarding-cogmap (shape + staleness) ────
     INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
         VALUES (et_region, e_agent, 'kb_cogmaps', c_onboarding) RETURNING id INTO ev_region;
-    INSERT INTO kb_cogmap_regions (cogmap_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id)
-        VALUES (c_onboarding, v_centroid, 0.9, 'first-week confidence', 1, ev_region, ev_region)
+    -- telos-default lens (spec §5c). Concrete starting defaults; tunable (spec OQ-2).
+    INSERT INTO kb_cogmap_lenses
+        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near,
+         w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)
+    VALUES (c_onboarding, 'telos-default', 'homed', 1.0, 1.0, 0.6, 0.3,
+            0.4, 0.5, 0.3, 0.2, 0.5, ev_region)
+    RETURNING id INTO v_lens;
+    INSERT INTO kb_cogmap_regions
+        (cogmap_id, lens_id, centroid, salience, telos_alignment, reference_standing,
+         centrality, content_cohesion, internal_tension, label, member_count,
+         asserted_by_event_id, last_event_id)
+        VALUES (c_onboarding, v_lens, v_centroid, 0.9, 0.9, 1.0, 0.8, 0.7, 0.0,
+                'first-week confidence', 1, ev_region, ev_region)
         RETURNING id INTO reg;
     INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity)
         VALUES (reg, 'kb_resources', r_regulation, 0.95);
