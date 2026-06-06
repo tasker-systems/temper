@@ -424,7 +424,12 @@ CREATE TABLE kb_cogmap_regions (
     id                   UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     cogmap_id            UUID NOT NULL REFERENCES kb_cogmaps(id) ON DELETE CASCADE,
     centroid             vector(768) NOT NULL,
-    salience             DOUBLE PRECISION NOT NULL,   -- region importance under the map's telos (agent-assigned)
+    salience             DOUBLE PRECISION NOT NULL,   -- computed blend, memoized (was agent-assigned; spec §3A)
+    telos_alignment      DOUBLE PRECISION,            -- cosine(centroid, telos_resource.embedding)  [salience part]
+    reference_standing   DOUBLE PRECISION,            -- aggregate reinforce_count over members        [salience part]
+    centrality           DOUBLE PRECISION,            -- internal declared-affinity density × size      [salience part]
+    content_cohesion     DOUBLE PRECISION,            -- mean member-to-centroid cosine (surface↔relational, §2c)
+    internal_tension     DOUBLE PRECISION,            -- over oppositional-labeled declared edges among members
     label                TEXT,                        -- optional agent-authored region label
     member_count         INT NOT NULL,                -- aggregate; the blur exposed in the surface read
     asserted_by_event_id UUID NOT NULL REFERENCES kb_events(id),
