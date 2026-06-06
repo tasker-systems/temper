@@ -7,13 +7,14 @@ WHERE table_schema='temper_next' AND table_name='kb_cogmap_regions'
   AND column_name IN ('telos_alignment','reference_standing','centrality','content_cohesion','internal_tension');
 -- EXPECT: centrality,content_cohesion,internal_tension,reference_standing,telos_alignment
 
-\echo '== T2: telos-default lens exists and the seeded region points at it =='
-SELECT l.name AS lens_name, l.selection_kind,
-       (r.lens_id = l.id) AS region_linked
+\echo '== T2: telos-default lens exists (selection_kind=homed) =='
+-- Regions are produced by the temper-next harness, not the seed, so at the 01->03 load order there is
+-- no seeded region pointing at the lens. Region<->lens linkage is proven self-contained by the fixture
+-- below (T4-T7) and end-to-end by the harness S6 suite. T2 verifies the Plan-1 substrate fact: the lens.
+SELECT l.name AS lens_name, l.selection_kind
 FROM kb_cogmap_lenses l
-JOIN kb_cogmap_regions r ON r.lens_id = l.id
 WHERE l.name = 'telos-default';
--- EXPECT: telos-default | homed | t
+-- EXPECT: telos-default | homed
 
 \echo '== T3: kb_properties accepts an edge owner =='
 SELECT pg_get_constraintdef(oid) LIKE '%kb_edges%' AS edges_allowed
@@ -91,11 +92,12 @@ BEGIN
 END $fx6$;
 -- EXPECT: reference_standing=0 centrality=1.6000 tension=0   (2 members × 0.8 internal weight; no opposed edge)
 
-\echo '== T7: cogmap_shape returns lens_id + content_cohesion =='
+\echo '== T7: cogmap_shape returns lens_id + content_cohesion (over the self-contained fixture region) =='
+-- Query the fixture region's own cogmap (the onboarding region is harness-produced, absent at 01->03).
 SELECT count(*) FILTER (WHERE lens_id IS NOT NULL) AS rows_with_lens,
        bool_and(content_cohesion IS NOT NULL OR member_count >= 0) AS shape_ok
 FROM cogmap_shape(
-       (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'),
+       (SELECT cogmap_id FROM kb_cogmap_regions WHERE label='fx'),
        'cogmap',
-       (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'));
+       (SELECT cogmap_id FROM kb_cogmap_regions WHERE label='fx'));
 -- EXPECT: rows_with_lens >= 1, shape_ok = t

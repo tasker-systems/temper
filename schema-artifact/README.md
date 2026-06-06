@@ -15,7 +15,7 @@ come *after* this evaluation, better-grounded for it.
 |------|----------|
 | `01_schema.sql` | `CREATE SCHEMA temper_next` + ~7 enums, 24 tables, indexes |
 | `02_functions.sql` | Access-gating functions (the two-principal sum type), `cogmaps_share_a_team`, the `sync_system_membership` trigger, `cogmap_genesis`, the Domain-B read projections |
-| `03_seed.sql` | One coherent worked scenario (the epd-team-a/-b intersection bridge, the directors' private edge, a `cogmap_genesis`-seeded charter + regulation, a materialized region) |
+| `03_seed.sql` | One coherent worked scenario (the epd-team-a/-b intersection bridge, the directors' private edge, a `cogmap_genesis`-seeded charter + regulation, and the emergent-region falsification cast). Regions are **produced by the `temper-next` harness**, not hand-seeded. |
 | `04_scenarios.sql` | Labeled queries that make every load-bearing invariant observable |
 
 ## Load & evaluate
@@ -28,8 +28,14 @@ DB="postgresql://temper:temper@localhost:5437/temper_development"
 for f in 01_schema 02_functions 03_seed; do
   psql "$DB" -v ON_ERROR_STOP=1 -f schema-artifact/$f.sql
 done
-psql "$DB" -f schema-artifact/04_scenarios.sql      # prints the scenario verdicts
+psql "$DB" -f schema-artifact/04_scenarios.sql      # prints the scenario verdicts (S1-S5,S7,S8)
 ```
+
+The **S6 region surface + staleness** lines in `04_scenarios.sql` read regions, which are produced by
+the harness — run `cargo run -p temper-next -- onboarding-cogmap` after the seed to materialize them
+(before `04_scenarios.sql`), or use the end-to-end **`schema-artifact/run_eval.sh`**, which loads,
+materializes, and runs the full S6a–h falsification suite (`04b_region_suite.sql`). The Plan-1 readout
+fixture `04a_plan1_fixture.sql` is self-contained (its own fixture region) and runs after `01->03`.
 
 `01_schema.sql` begins with `DROP SCHEMA IF EXISTS temper_next CASCADE`, so re-running
 from the top is idempotent and never touches `public.*`.
