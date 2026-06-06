@@ -3,7 +3,6 @@
 // kb_chunks.embedding, then materialize clusters the declared graph into ≥2 emergent regions and
 // populates the SQL readouts.
 #[tokio::test]
-#[ignore = "waits on Plan 3 T2: enriched α/β cast (≥2 emergent regions); un-gate with the cast"]
 async fn materialize_is_reproducible_and_populates_readouts() {
     let pool = temper_next::substrate::connect().await.unwrap();
     temper_next::embed::embed_chunks(&pool).await.unwrap();

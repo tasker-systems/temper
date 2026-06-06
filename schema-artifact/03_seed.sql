@@ -52,10 +52,8 @@ DECLARE
     -- events
     ev_assert uuid; ev_region uuid; ev_late uuid;
     et_assert uuid; et_region uuid;
-    -- region
-    reg uuid;
+    -- lens (regions are now produced by the temper-next harness, not hand-seeded)
     v_lens uuid;
-    v_centroid vector := ('[' || array_to_string(array_fill(0.01::float8, ARRAY[768]), ',') || ']')::vector;
 BEGIN
     SELECT id INTO et_assert FROM kb_event_types WHERE name = 'relationship_asserted';
     SELECT id INTO et_region FROM kb_event_types WHERE name = 'region_materialized';
@@ -227,16 +225,253 @@ BEGIN
     VALUES (c_onboarding, 'telos-default', 'homed', 1.0, 1.0, 0.6, 0.3,
             0.4, 0.5, 0.3, 0.2, 0.5, ev_region)
     RETURNING id INTO v_lens;
-    INSERT INTO kb_cogmap_regions
-        (cogmap_id, lens_id, centroid, salience, telos_alignment, reference_standing,
-         centrality, content_cohesion, internal_tension, label, member_count,
-         asserted_by_event_id, last_event_id)
-        VALUES (c_onboarding, v_lens, v_centroid, 0.9, 0.9, 1.0, 0.8, 0.7, 0.0,
-                'first-week confidence', 1, ev_region, ev_region)
-        RETURNING id INTO reg;
-    INSERT INTO kb_cogmap_region_members (region_id, member_table, member_id, affinity)
-        VALUES (reg, 'kb_resources', r_regulation, 0.95);
-    UPDATE kb_cogmaps SET shape_materialized_event_id = ev_region WHERE id = c_onboarding;
+    -- A SECOND lens for S6f (plurality): same selection, but property-dominant + sequence-discounted
+    -- (w_prop high, w_leads_to low). Over the SAME substrate the harness yields a DIFFERENT region set
+    -- (the leads_to-only setup→first-build pair merges under telos-default, splits under prop-heavy).
+    INSERT INTO kb_cogmap_lenses
+        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near,
+         w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)
+    VALUES (c_onboarding, 'telos-default-propheavy', 'homed', 1.0, 1.0, 0.1, 0.3,
+            1.2, 0.5, 0.3, 0.2, 0.5, ev_region);
+
+    -- ════════════════════════════════════════════════════════════════════════
+    -- THE FALSIFICATION CAST (spec §5a/§5b). Content is the INDEPENDENT VARIABLE:
+    -- α genuinely similar; β genuinely divergent; solo near-α in content yet declared-standalone.
+    -- Regions are produced by the temper-next harness; this seeds the DECLARED substrate only.
+    --
+    -- Clustering note (average-link, resolution 0.5; affinity = Σ w_kind·weight + w_prop·facet_overlap):
+    --   • a node joins a cluster only if its AVERAGE affinity to all members ≥ resolution, so a single
+    --     edge cannot pull a node into a large cluster — a SHARED FACET (links every pair) is what binds
+    --     the deployment group, and the edgeless bridge joins via that facet alone (S6e).
+    --   • the deployment facet is authored at weight 1.5 so facet-overlap alone (w_prop 0.4 · 1.5 = 0.6)
+    --     clears resolution. This is declared substrate, not cosine — the falsification stands (§5b).
+    --   • the setup→first-build pair is leads_to-only (no facet): 0.6 under telos-default (merges),
+    --     0.1 under prop-heavy (splits) — the S6f membership delta.
+    -- Helper var bag (declared per concept inside nested blocks, like b_reg/ch_reg above).
+    -- ════════════════════════════════════════════════════════════════════════
+
+    -- ── α: first-week confidence (content authored to be GENUINELY SIMILAR) ──
+    DECLARE r_pair uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: pair-on-first-PR','temper://c/pair') RETURNING id INTO r_pair;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_pair,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_pair,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_pair, 0, md5('temper://c/pair')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Pair on the first pull request. A new engineer''s earliest change should be small and made '
+         || 'alongside someone who knows the code, so the first contribution builds confidence safely '
+         || 'rather than risking a large unfamiliar change. Small, paired, early — that is how confidence starts.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_pair, 'facet', '{"phase":"first-week"}'::jsonb, ev_assert, ev_assert);
+    END;
+    DECLARE r_small uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: smallest-real-change','temper://c/smallest') RETURNING id INTO r_small;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_small,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_small,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_small, 0, md5('temper://c/smallest')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Choose the smallest real change for a newcomer''s first contribution. A tiny, safe, early '
+         || 'pull request builds confidence faster than an ambitious one. Keep the first change small and '
+         || 'paired so confidence grows safely in the first week.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_small, 'facet', '{"phase":"first-week"}'::jsonb, ev_assert, ev_assert);
+    END;
+    DECLARE r_conf uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: early-confidence-signal','temper://c/confidence') RETURNING id INTO r_conf;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_conf,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_conf,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_conf, 0, md5('temper://c/confidence')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Read the early signals of a new engineer''s confidence. In the first week a small, paired '
+         || 'contribution that merges safely is the clearest sign confidence is building. Watch for the '
+         || 'early, small, safe wins that tell you the newcomer is gaining footing.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_conf, 'facet', '{"phase":"first-week"}'::jsonb, ev_assert, ev_assert);
+    END;
+
+    -- ── β: deployment (content authored to be GENUINELY DIVERGENT subtopics) ──
+    -- facet {topic:deployment} at weight 1.5 binds the group; content diverges hard.
+    DECLARE r_stage uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: staging-rollout','temper://c/staging') RETURNING id INTO r_stage;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_stage,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_stage,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_stage, 0, md5('temper://c/staging')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Promote a release through staging environments before production. Each environment — '
+         || 'development, staging, pre-prod — gates the next, and a build is promoted only after it '
+         || 'passes that stage. Staging mirrors production so problems surface before the final promotion.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_stage, 'facet', '{"topic":"deployment"}'::jsonb, 1.5, ev_assert, ev_assert);
+    END;
+    DECLARE r_flags uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: feature-flags','temper://c/flags') RETURNING id INTO r_flags;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_flags,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_flags,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_flags, 0, md5('temper://c/flags')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Gate new functionality behind feature flags. A toggle enables a code path for a percentage '
+         || 'of users, dark-launches it, or turns it off instantly without a redeploy. Flags decouple '
+         || 'deploy from release and let you ramp exposure gradually.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_flags, 'facet', '{"topic":"deployment"}'::jsonb, 1.5, ev_assert, ev_assert);
+    END;
+    DECLARE r_roll uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: rollback-runbook','temper://c/rollback') RETURNING id INTO r_roll;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_roll,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_roll,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_roll, 0, md5('temper://c/rollback')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'When an incident starts, follow the rollback runbook. Revert to the last known-good version, '
+         || 'page the on-call owner, and record the timeline. The runbook lists the exact commands to undo '
+         || 'a bad change and restore the previous release.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_roll, 'facet', '{"topic":"deployment"}'::jsonb, 1.5, ev_assert, ev_assert);
+    END;
+    DECLARE r_onc uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: oncall-handoff','temper://c/oncall') RETURNING id INTO r_onc;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_onc,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_onc,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_onc, 0, md5('temper://c/oncall')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Hand off the on-call pager cleanly at the end of each shift. Summarize open incidents, ongoing '
+         || 'alerts, and escalation contacts so the next responder has full context. A good handoff covers '
+         || 'who to page and what is still unresolved.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_onc, 'facet', '{"topic":"deployment"}'::jsonb, 1.5, ev_assert, ev_assert);
+    END;
+
+    -- ── bridge: facet-only member of β (NO edge — joins via facet_overlap, S6e) ──
+    DECLARE r_check uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: deploy-confidence-checklist','temper://c/checklist') RETURNING id INTO r_check;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_check,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_check,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_check, 0, md5('temper://c/checklist')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'A deployment readiness checklist gathers the pre-release checks into one list: tests green, '
+         || 'migrations reviewed, dashboards ready, rollback plan written. Tick every box before you ship '
+         || 'so the team can deploy with confidence.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_check, 'facet', '{"topic":"deployment"}'::jsonb, 1.5, ev_assert, ev_assert);
+    END;
+
+    -- ── tension: blue-green vs big-bang (near + label 'contradicts' → internal_tension, S6g) ──
+    DECLARE r_bg uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: blue-green','temper://c/bluegreen') RETURNING id INTO r_bg;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_bg,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_bg,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_bg, 0, md5('temper://c/bluegreen')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Blue-green deployment runs two identical production environments. Traffic flows to blue while '
+         || 'green holds the new version; you cut over by switching the router, and switch back instantly '
+         || 'if anything looks wrong. Two environments, one live at a time.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_bg, 'facet', '{"topic":"deployment"}'::jsonb, 1.5, ev_assert, ev_assert);
+    END;
+    DECLARE r_bb uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: big-bang-cutover','temper://c/bigbang') RETURNING id INTO r_bb;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_bb,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_bb,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_bb, 0, md5('temper://c/bigbang')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'A big-bang cutover switches every user to the new system at once. There is a single '
+         || 'coordinated moment when the old version is retired and the new one takes all traffic — no '
+         || 'gradual ramp, no parallel environments, just one decisive switch.');
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_bb, 'facet', '{"topic":"deployment"}'::jsonb, 1.5, ev_assert, ev_assert);
+    END;
+
+    -- ── isolate: content reads like α, but NO facet + NO edge ⇒ cosine WOULD merge, declared does NOT (S6d) ──
+    DECLARE r_solo uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: solo-retro-note','temper://c/solo') RETURNING id INTO r_solo;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_solo,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_solo,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_solo, 0, md5('temper://c/solo')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'A retro note on building confidence: the small, early, paired wins in a newcomer''s first '
+         || 'week are what make them feel safe to contribute. Confidence comes from safe, small, early steps.');
+        -- DELIBERATELY no facet, no edge.
+    END;
+
+    -- ── S6f delta pair: setup → first-build, leads_to ONLY (no facet) ──
+    -- telos-default (w_leads_to 0.6): co-region. prop-heavy (w_leads_to 0.1): two singletons.
+    DECLARE r_setup uuid; r_build uuid; b_tmp uuid; ch_tmp uuid; BEGIN
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: first-day-setup','temper://c/setup') RETURNING id INTO r_setup;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_setup,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_setup,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_setup, 0, md5('temper://c/setup')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'On day one, set up your laptop: install the toolchain, configure access, and get the '
+         || 'development environment running so you can build the project locally.');
+
+        INSERT INTO kb_resources (title, origin_uri) VALUES ('concept: first-build-green','temper://c/firstbuild') RETURNING id INTO r_build;
+        INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+            VALUES (r_build,'kb_cogmaps',c_onboarding,p_dave,p_dave);
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (r_build,0,ev_assert,ev_assert) RETURNING id INTO b_tmp;
+        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+            VALUES (b_tmp, r_build, 0, md5('temper://c/firstbuild')) RETURNING id INTO ch_tmp;
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (ch_tmp,
+            'Once setup is done, get a green build: pull the main branch, run the test suite, and confirm '
+         || 'everything passes locally before you start changing code.');
+
+        INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label,
+                              home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', r_setup, 'kb_resources', r_build, 'leads_to', 'then',
+                    'kb_cogmaps', c_onboarding, ev_assert, ev_assert);
+    END;
+
+    -- ── Declared edges among the cast (the ONLY structure that forms regions) ──
+    INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label,
+                          home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
+    SELECT 'kb_resources', s.id, 'kb_resources', t.id, k::edge_kind, lbl,
+           'kb_cogmaps', c_onboarding, ev_assert, ev_assert
+    FROM (VALUES
+        ('temper://c/pair','temper://c/smallest','near', NULL),       -- α1 ~ α2
+        ('temper://c/pair','temper://c/confidence','near', NULL),     -- α1 ~ α3
+        ('temper://c/smallest','temper://c/pair','near', NULL),       -- α2 ~ α1 (symmetric reinforcement)
+        ('temper://c/confidence','temper://c/pair','express', NULL),  -- α3 → α1
+        ('temper://c/staging','temper://c/flags','leads_to', NULL),   -- β1 → β2
+        ('temper://c/flags','temper://c/rollback','leads_to', NULL),  -- β2 → β3
+        ('temper://c/rollback','temper://c/oncall','leads_to', NULL), -- β3 → β4
+        ('temper://c/bluegreen','temper://c/bigbang','near','contradicts')  -- tension (binds, S6g)
+    ) AS e(src, tgt, k, lbl)
+    JOIN kb_resources s ON s.origin_uri = e.src
+    JOIN kb_resources t ON t.origin_uri = e.tgt;
 
     -- a LATER edge event touching the map AFTER materialization ⇒ shape is now stale.
     -- occurred_at is set explicitly: now() is transaction-stable, so all seed events
