@@ -16,6 +16,11 @@ set -euo pipefail
 DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}"
 cd "$(dirname "$0")/.."
 
+# temper-next's sqlx! macros target the temper_next namespace (not on $DB's default search_path), so
+# compile against the committed crates/temper-next/.sqlx cache. Runtime still connects to $DB below
+# (PGOPTIONS sets the runtime search_path). Regenerate the cache with `cargo make prepare-next`.
+export SQLX_OFFLINE=true
+
 # search_path on the connection so queries need no inline SET (which would print "SET" into captures).
 export PGOPTIONS="-c search_path=temper_next,public"
 q() { psql "$DB" -tAX -c "$1"; }   # terse, unaligned, no psqlrc
