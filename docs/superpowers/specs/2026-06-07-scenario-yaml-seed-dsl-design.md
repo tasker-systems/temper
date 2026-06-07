@@ -458,6 +458,15 @@ Deferred beyond M1 (named in the roadmap):
   runbook (correct — the tests must track the spec). The `load_scenario`/`run_scenario` split already keeps
   them mechanically separable; a later milestone may split them into distinct files once foundational
   instantiation (template only) and testing (template + asserts) have genuinely different consumers.
+- **Create-and-home, NOT re-home (an access-gated future, not a casual add):** `resource_create` bundles
+  creation with homing in one cogmap — correct for scenarios, which co-create concepts in their map. The
+  *only* reason to separate create from associate would be to **re-home** an existing resource into another
+  cogmap (a shallow-copy-with-pointers / share). That is deliberately out of scope and **must not be added
+  without an access reconciliation first**: a cogmap's visibility/RBAC grounds which concept-content is
+  surfaceable in it, and those boundaries are not identical across cogmaps — re-homing across them risks
+  **information leak of concept-content** across access boundaries (the goal's *awareness-is-access-bounded*
+  invariant). If re-homing is ever pursued, the gate is: reconcile `resources_accessible_to_cogmap` /
+  `resources_visible_to` on both sides before any cross-cogmap association, never the homing mechanic alone.
 
 ## Out of scope (M1)
 
@@ -465,4 +474,7 @@ Deferred beyond M1 (named in the roadmap):
 - The full temper-next ↔ temper schema-delta analysis — M4 (this DSL is the enabler, not the deliverable).
 - ts-rs / OpenAPI 3.0 emission — until a consumer exists.
 - Routing writes through temper-api — wrong schema for the artifact; M4.
+- **Re-homing** a resource into another cogmap (share / shallow-copy-with-pointers) — `resource_create`
+  only creates-new-and-homes. Re-homing is access-gated future work (see Forward intentions: information-leak
+  risk across non-identical cogmap visibility boundaries).
 ```
