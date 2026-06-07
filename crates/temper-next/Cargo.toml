@@ -4,6 +4,13 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+# Gates the integration tests that need the `temper_next` artifact LOADED (schema-artifact/*.sql, a
+# separate PG namespace) + a DB + ONNX (bge-768). No CI job enables this — those tests run locally /
+# via schema-artifact/run_eval.sh, after loading the artifact. The pure core tests (affinity, cluster)
+# are ungated and run in CI. Local: `cargo nextest run -p temper-next --features artifact-tests`.
+artifact-tests = []
+
 [dependencies]
 temper-ingest = { path = "../temper-ingest", features = ["embed"] }
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json"] }
