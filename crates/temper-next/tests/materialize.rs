@@ -10,10 +10,19 @@ async fn materialize_is_reproducible_and_populates_readouts() {
     let cogmap = temper_next::substrate::cogmap_by_name(&pool, "onboarding-cogmap")
         .await
         .unwrap();
-    let first = temper_next::write::materialize_cogmap(&pool, cogmap, "telos-default")
+    let emitter: uuid::Uuid = sqlx::query_scalar(
+        "SELECT emitter_entity_id FROM kb_events \
+         WHERE producing_anchor_table='kb_cogmaps' AND producing_anchor_id=$1 \
+         ORDER BY occurred_at ASC LIMIT 1",
+    )
+    .bind(cogmap)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let first = temper_next::write::materialize_cogmap(&pool, cogmap, "telos-default", emitter)
         .await
         .unwrap();
-    let second = temper_next::write::materialize_cogmap(&pool, cogmap, "telos-default")
+    let second = temper_next::write::materialize_cogmap(&pool, cogmap, "telos-default", emitter)
         .await
         .unwrap();
     assert_eq!(

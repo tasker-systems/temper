@@ -60,14 +60,16 @@ pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substr
     .await?;
     let edges = edge_rows
         .iter()
-        .map(|r| Edge {
-            src: r.get("source_id"),
-            tgt: r.get("target_id"),
-            kind: parse_kind(r.get::<String, _>("kind")),
-            weight: r.get("weight"),
-            label: r.get("label"),
+        .map(|r| -> Result<Edge> {
+            Ok(Edge {
+                src: r.get("source_id"),
+                tgt: r.get("target_id"),
+                kind: parse_kind(r.get::<String, _>("kind").as_str())?,
+                weight: r.get("weight"),
+                label: r.get("label"),
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>>>()?;
 
     // facets on those resources (property_key='facet', value jsonb {path:value})
     let facet_rows = sqlx::query(
@@ -80,15 +82,10 @@ pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substr
     .await?;
     let facets = facet_rows
         .iter()
-        .filter_map(|r| {
+        .flat_map(|r| {
             let v: serde_json::Value = r.get("property_value");
-            let (path, value) = v.as_object()?.iter().next()?;
-            Some(Facet {
-                owner: r.get("owner_id"),
-                path: path.clone(),
-                value: value.as_str()?.to_string(),
-                weight: r.get("weight"),
-            })
+            let weight: f64 = r.get("weight");
+            expand_facets(r.get("owner_id"), &v, weight)
         })
         .collect();
 
@@ -124,11 +121,88 @@ pub async fn load(pool: &PgPool, cogmap: Uuid, lens_name: &str) -> Result<Substr
     })
 }
 
-fn parse_kind(s: String) -> EdgeKind {
-    match s.as_str() {
+fn parse_kind(s: &str) -> Result<EdgeKind> {
+    Ok(match s {
         "express" => EdgeKind::Express,
         "contains" => EdgeKind::Contains,
         "leads_to" => EdgeKind::LeadsTo,
-        _ => EdgeKind::Near,
+        "near" => EdgeKind::Near,
+        other => anyhow::bail!("unknown edge_kind from DB: {other:?}"),
+    })
+}
+
+/// Expand one `property_key='facet'` row's JSONB object into the `(path, value)` facet entries the
+/// clustering needs. Multi-key objects yield one entry per key; an array value yields one entry per
+/// element, all sharing the row weight. Non-string scalars are skipped (not part of M1's affinity model).
+fn expand_facets(owner: Uuid, value: &serde_json::Value, weight: f64) -> Vec<Facet> {
+    let Some(obj) = value.as_object() else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for (path, v) in obj {
+        match v {
+            serde_json::Value::String(s) => out.push(Facet {
+                owner,
+                path: path.clone(),
+                value: s.clone(),
+                weight,
+            }),
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if let Some(s) = item.as_str() {
+                        out.push(Facet {
+                            owner,
+                            path: path.clone(),
+                            value: s.to_string(),
+                            weight,
+                        });
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_facets_handles_scalar_multikey_and_array() {
+        let o = Uuid::nil();
+        // single-key scalar (the onboarding seed shape) — unchanged behavior
+        let f = expand_facets(o, &serde_json::json!({ "phase": "first-week" }), 1.0);
+        assert_eq!(f.len(), 1);
+        assert_eq!(
+            (f[0].path.as_str(), f[0].value.as_str()),
+            ("phase", "first-week")
+        );
+        // multi-key
+        assert_eq!(
+            expand_facets(
+                o,
+                &serde_json::json!({ "phase": "first-week", "topic": "deployment" }),
+                1.0
+            )
+            .len(),
+            2
+        );
+        // array value expands per element, sharing row weight
+        let f = expand_facets(
+            o,
+            &serde_json::json!({ "topic": ["deployment", "release"] }),
+            1.5,
+        );
+        assert_eq!(f.len(), 2);
+        assert!(f.iter().all(|x| x.path == "topic" && x.weight == 1.5));
+    }
+
+    #[test]
+    fn parse_kind_is_exhaustive_and_errors_on_unknown() {
+        assert_eq!(parse_kind("near").unwrap(), EdgeKind::Near);
+        assert_eq!(parse_kind("leads_to").unwrap(), EdgeKind::LeadsTo);
+        assert!(parse_kind("sideways").is_err());
     }
 }
