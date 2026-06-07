@@ -103,7 +103,7 @@ The loader writes these tables directly (column shapes confirmed from `03_seed.s
 - `kb_resource_homes(resource_id, anchor_table='kb_cogmaps', anchor_id, originator_profile_id, owner_profile_id)` — homes each concept in the cogmap.
 - `kb_content_blocks(resource_id, seq, genesis_event_id, last_event_id)` + `kb_chunks(block_id, resource_id, chunk_index, content_hash)` + `kb_chunk_content(chunk_id, content)` — the inline prose (embed job fills `kb_chunks.embedding`). `kb_block_revisions(block_id, block_body_hash, chunk_count)` mirrors `cogmap_genesis`.
 - `kb_edges(source_table, source_id, target_table, target_id, edge_kind, label, home_anchor_table='kb_cogmaps', home_anchor_id, asserted_by_event_id, last_event_id)` — declared relationships; `edge_kind ∈ {express, contains, leads_to, near}`.
-- `kb_properties(owner_table='kb_resources', owner_id, property_key='facet', property_value JSONB, weight?, asserted_by_event_id, last_event_id)` — facets, **one row per resource** (multi-key coherent object; see "Facet model" below).
+- `kb_properties(owner_table='kb_resources', owner_id, property_key='facet', property_value JSONB, weight?, asserted_by_event_id, last_event_id)` — facets: **exactly one `property_key='facet'` row per resource** (multi-key coherent object; see "Facet model" below). A resource still has other property rows (e.g. a separate `property_key='doc_type'` row); the one-row rule is scoped per property type, not per resource.
 - `kb_cogmap_lenses(cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)` — lens config.
 - `kb_events(event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at)` — per assertion + the S6h mutation event.
 
@@ -142,9 +142,9 @@ edges:
   - { from: bluegreen, to: bigbang, kind: near, label: contradicts, weight: 1.0 }
   # … ~8 declared edges …
 
-lenses:
+lenses:  # EXACT values from 03_seed.sql:225,234 — prop-heavy is w_leads_to 0.1 / w_prop 1.2 (the S6f split)
   - { name: telos-default,           w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
-  - { name: telos-default-propheavy, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.9, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+  - { name: telos-default-propheavy, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.1, w_near: 0.3, w_prop: 1.2, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
 
 steps:
   - materialize: { lens: telos-default }
@@ -175,7 +175,20 @@ steps:
   - assert: [{ co_region: { lens: telos-default, members: [solo, pair], expect: true } }]  # S6h solo joins α
 ```
 
-The `steps:` sequence is a line-by-line re-expression of `run_eval.sh`.
+The `steps:` sequence is a line-by-line re-expression of `run_eval.sh`. Edges and asserts reference
+resources by local `key:`; the loader builds the `key → Uuid` map as it inserts.
+
+**Full node set (for exact equivalence):** `cogmap_genesis` homes the **telos charter** resource in the
+cogmap, so it is a clustered node too — and `03_seed.sql:197-216` also homes a **regulation** resource
+(`temper://reg/pair`, `doc_type=cogmap_regulation`) with a body and a `telos → regulation` express edge
+(`operationalized_by`). To roundtrip to byte-identical regions the YAML must reproduce **all 15 nodes**
+(telos + regulation + 13 concepts) and **all 10 edges** (the 8-row batch + `setup→firstbuild` +
+`telos→regulation`). The loader therefore seeds an implicit **`telos`** key in the `KeyMap` (resolving to
+`kb_cogmaps.telos_resource_id`) so an edge like
+`{ from: telos, to: regulation, kind: express, label: operationalized_by }` resolves; `regulation` is an
+ordinary `resources:` entry with `doc_type: cogmap_regulation`. The seed's `now()` "late-touch" event
+(`03_seed.sql:482-485`) is **omitted** — the in-process runner sequences all substrate writes before the
+first materialize, so the watermark is naturally latest and the map is fresh without it.
 
 ## Rust struct model (sketch — verify shapes at implementation)
 
@@ -235,11 +248,15 @@ finding `parse_kind` below).
 
 ### Facet model (resolved)
 
-A resource's facets materialize to **exactly one `kb_properties` row** (`property_key='facet'`),
-whose `property_value` is the coherent multi-key JSONB object and whose `weight` column carries the
-row weight (default 1.0). Rationale: facets stay coherent — no risk of inconsistent/half-updated
-facets spread across rows — and array-valued keys (`{ topic: [deployment, release] }`) read as **one
-intentional thing** instead of being ambiguously split into separate rows.
+A resource's facets materialize to **exactly one `kb_properties` row per property type** — the single
+`property_key='facet'` row — whose `property_value` is the coherent multi-key JSONB object and whose
+`weight` column carries the row weight (default 1.0). The one-row rule is scoped to the property type,
+**not** to the resource: a resource still carries other property rows (e.g. its `property_key='doc_type'`
+row, and keyword/other property shapes as they evolve), each its own coherent record. Rationale: within
+a property type, facets stay coherent — no risk of inconsistent/half-updated facets spread across rows,
+and no need to fold/disambiguate multiple facet-style rows for one resource — and array-valued keys
+(`{ topic: [deployment, release] }`) read as **one intentional thing** instead of being ambiguously
+split into separate rows.
 
 The affinity reader expands that one row into the `Facet { owner, path, value, weight }` entries the
 clustering needs: each `(key, value)` pair becomes one `Facet`; an array value
@@ -327,8 +344,9 @@ forces several at their right altitude:
   a test for the placeholder. **Drop in M1** (no-premature-abstraction), unless the facet/opposed-labels
   work below first gives it a real job.
 - **Multi-key facets** (`substrate.rs:73-93`) — the facet parser reads only the FIRST key
-  (`v.as_object()?.iter().next()`). **Fixed in M1** (AMEND): one `kb_properties` row per resource,
-  reader iterates all keys and expands array values into multiple `Facet` entries (see "Facet model").
+  (`v.as_object()?.iter().next()`). **Fixed in M1** (AMEND): exactly one `property_key='facet'` row
+  per resource; reader iterates all keys and expands array values into multiple `Facet` entries
+  (see "Facet model").
 
 Deferred beyond M1 (named in the roadmap):
 - **`internal_tension` opposed-labels lens-configurable** (`write.rs` hardcodes `ARRAY['contradicts']`)
