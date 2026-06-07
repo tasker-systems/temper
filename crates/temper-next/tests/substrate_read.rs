@@ -1,4 +1,4 @@
-#![cfg(feature = "artifact-tests")]
+#![cfg(feature = "artifact-tests-legacy")]
 // tests/substrate_read.rs — requires the temper_next artifact loaded (Plan 1 + seed).
 // RE-GROUND: confirm the seeded cogmap name and member count after Plan 3's enriched seed;
 // until then this asserts against the CURRENT (sparse) seed.

@@ -12,9 +12,19 @@
 
 /// Drop + reload the artifact schema and functions, leaving a clean (un-seeded) `temper_next`.
 pub fn reset_artifact() {
+    load_files(&["01_schema", "02_functions"]);
+}
+
+/// Like [`reset_artifact`] but also loads the hand-written `03_seed.sql` (the legacy SQL-seed path) —
+/// used by the cross-path equivalence test to materialize the SQL-seeded onboarding-cogmap.
+pub fn reset_artifact_with_seed() {
+    load_files(&["01_schema", "02_functions", "03_seed"]);
+}
+
+fn load_files(files: &[&str]) {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    for f in ["01_schema", "02_functions"] {
+    for f in files {
         let path = format!("{root}/schema-artifact/{f}.sql");
         let status = std::process::Command::new("psql")
             .args([url.as_str(), "-q", "-v", "ON_ERROR_STOP=1", "-f", &path])

@@ -666,7 +666,8 @@ Expected: PASS — declarative asserts AND `all_pass = true`.
 - [ ] `cargo make prepare-next` produces no diff (cache current) — commit if it does.
 - [ ] `SQLX_OFFLINE=true cargo build -p temper-next` — offline compile clean.
 - [ ] `cargo nextest run -p temper-next` (ungated) — pass.
-- [ ] artifact + ONNX: `cargo nextest run -p temper-next --features artifact-tests` — pass (load, roundtrip, materialize).
+- [ ] artifact + ONNX, write-path (self-resetting): `cargo nextest run -p temper-next --features artifact-tests` — pass (boot-seed, loader, roundtrip incl. cross-path membership).
+- [ ] artifact + ONNX, legacy read-path (load 01+02+03_seed first): `cargo nextest run -p temper-next --features artifact-tests-legacy` — pass (materialize, substrate_read, embed_job). **Never** combine with the write-path feature in one run (resets vs. seed conflict).
 - [ ] `cargo test -p temper-next --features scenario-schema` — snapshot passes.
 - [ ] `schema-artifact/run_eval.sh` — ALL S6 PASS (SQL path unbroken).
 - [ ] Update `temper-next` CLAUDE.md / artifact README with the `prepare-next` ritual + the new SQL functions (keep-CLAUDE.md-current rule).

@@ -452,6 +452,18 @@ Deferred beyond M1 (named in the roadmap):
 - **M4 (strategic payoff):** temper-next ↔ temper schema-delta analysis; possibly route a subset
   through real write paths (temper-client/temper-api) to test the actual production system.
 
+### The SQL mutation functions vs. the Rust `temper-substrate` kernel (open, working assumption)
+
+A code review raised whether the `02_functions.sql` mutation functions become a *second* write-path
+source of truth competing with the recorded Rust `temper-substrate` command base
+(`research/2026-06-03-data-model-reconciliation`). Working assumption (held open, not yet a decision):
+they do **not** compete — `temper-next` is the namespace where the new data model converges into the
+temper system, and when `temper-substrate` is extracted, **its Rust + sqlx will be the layer that
+*calls* these SQL functions** (the projection mechanics stay in SQL, orchestrated from Rust). So the
+functions are the kernel's projection logic, not throwaway pattern scaffolding. Revisit when
+`temper-substrate` is built; until then treat "reusable write paths" as "the projection mechanics the
+Rust kernel will invoke," not "a parallel Rust reimplementation."
+
 ### Forward intentions (held separate from M1, captured so they aren't lost)
 
 - **Scenarios become self-sufficient:** the end state is *no `03_seed.sql`* — cogmap-scenarios fully seed

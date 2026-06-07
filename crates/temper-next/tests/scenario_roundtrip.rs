@@ -7,8 +7,11 @@
 //!    aggregate over origin_uri) evaluated at the BASELINE state (load + one telos-default materialize,
 //!    before the S6h mutation that retires solo's singleton). Same prose → same embeddings → same
 //!    regions → same verdict.
+//!  - `yaml_and_sql_seed_paths_produce_identical_region_membership`: the STRONG equivalence — diffs the
+//!    actual region partition (canonical, UUID-independent) between the YAML path and the real
+//!    `03_seed.sql` path. The verdict checks tolerate a wide band; this proves byte-equivalent regions.
 //!
-//! Both reset the artifact and are serialized + ONNX-dependent.
+//! All reset the artifact and are serialized + ONNX-dependent.
 mod common;
 
 use temper_next::scenario::{bootseed, loader, model::Scenario, runner};
@@ -82,5 +85,73 @@ async fn baseline_matches_04b_sql_verdict() {
     assert!(
         all_pass,
         "04b onboarding_s6_verdict all_pass must be true at baseline"
+    );
+}
+
+// Canonical, UUID-INDEPENDENT region partition signature for a cogmap at lens telos-default: each
+// region's member origin_uris sorted within the region, regions sorted among themselves, then hashed.
+// Independent of region UUIDs and group order, so it's comparable across seeding paths.
+const PARTITION_SQL: &str = r#"
+SELECT md5(string_agg(grp, '|' ORDER BY grp)) FROM (
+  SELECT string_agg(res.origin_uri, ',' ORDER BY res.origin_uri) AS grp
+  FROM kb_cogmap_region_members m
+  JOIN kb_cogmap_regions r ON r.id = m.region_id AND NOT r.is_folded
+  JOIN kb_cogmap_lenses  l ON l.id = r.lens_id AND l.name = 'telos-default'
+  JOIN kb_resources    res ON res.id = m.member_id
+  WHERE r.cogmap_id = $1
+  GROUP BY m.region_id
+) g
+"#;
+
+// The entity that seeded a cogmap (its genesis/steward emitter) — same honest source main.rs uses.
+async fn genesis_emitter(pool: &sqlx::PgPool, cogmap: uuid::Uuid) -> uuid::Uuid {
+    sqlx::query_scalar(
+        "SELECT emitter_entity_id FROM kb_events \
+         WHERE producing_anchor_table='kb_cogmaps' AND producing_anchor_id=$1 \
+         ORDER BY occurred_at ASC, id ASC LIMIT 1",
+    )
+    .bind(cogmap)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn telos_default_partition(pool: &sqlx::PgPool, cogmap: uuid::Uuid) -> String {
+    sqlx::query_scalar(PARTITION_SQL)
+        .bind(cogmap)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn yaml_and_sql_seed_paths_produce_identical_region_membership() {
+    // SQL-seed path: load 01+02+03_seed, materialize its onboarding-cogmap at the telos-default baseline.
+    common::reset_artifact_with_seed();
+    let pool = substrate::connect().await.unwrap();
+    let sql_cogmap = substrate::cogmap_by_name(&pool, "onboarding-cogmap")
+        .await
+        .unwrap();
+    let sql_emitter = genesis_emitter(&pool, sql_cogmap).await;
+    embed::embed_chunks(&pool).await.unwrap();
+    write::materialize_cogmap(&pool, sql_cogmap, "telos-default", sql_emitter)
+        .await
+        .unwrap();
+    let sig_sql = telos_default_partition(&pool, sql_cogmap).await;
+
+    // YAML path: clean schema, boot-seed, load the YAML, materialize at the same baseline.
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+    let loaded = loader::load_scenario(&pool, &load_yaml()).await.unwrap();
+    embed::embed_chunks(&pool).await.unwrap();
+    write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
+        .await
+        .unwrap();
+    let sig_yaml = telos_default_partition(&pool, loaded.cogmap).await;
+
+    assert_eq!(
+        sig_sql, sig_yaml,
+        "YAML and SQL-seed paths must produce byte-identical region membership (keyed on origin_uri)"
     );
 }

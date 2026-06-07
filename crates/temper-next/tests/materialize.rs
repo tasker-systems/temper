@@ -1,4 +1,4 @@
-#![cfg(feature = "artifact-tests")]
+#![cfg(feature = "artifact-tests-legacy")]
 // tests/materialize.rs — requires the temper_next artifact + the Plan 3 enriched seed + the ONNX
 // runtime (temper-ingest `embed` feature → bge-768). Job A embeds the seeded kb_chunk_content into
 // kb_chunks.embedding, then materialize clusters the declared graph into ≥2 emergent regions and

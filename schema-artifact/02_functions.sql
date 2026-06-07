@@ -603,14 +603,20 @@ $$;
 -- The event anchors to the resource's home cogmap (producing_anchor CHECK forbids kb_resources).
 CREATE FUNCTION facet_set(p_resource uuid, p_values jsonb, p_weight double precision, p_emitter uuid)
 RETURNS void LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_cogmap uuid;
+DECLARE v_et uuid; v_ev uuid; v_anchor_tbl text; v_anchor uuid;
 BEGIN
     SELECT id INTO v_et FROM kb_event_types WHERE name='property_asserted';
     IF v_et IS NULL THEN RAISE EXCEPTION 'event_type property_asserted not seeded'; END IF;
-    SELECT anchor_id INTO v_cogmap FROM kb_resource_homes
-        WHERE resource_id=p_resource AND anchor_table='kb_cogmaps' LIMIT 1;
+    -- Anchor the event to the resource's home (cogmap OR context — both are in the kb_events CHECK set),
+    -- preferring a cogmap home. NEVER hardcode 'kb_cogmaps' with a possibly-NULL id: a context-homed
+    -- resource would violate the (table IS NULL)=(id IS NULL) CHECK and abort the txn.
+    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
+        WHERE resource_id=p_resource ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
+    IF v_anchor IS NULL THEN
+        RAISE EXCEPTION 'facet_set: resource % has no home to anchor the property event', p_resource;
+    END IF;
     INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, 'kb_cogmaps', v_cogmap) RETURNING id INTO v_ev;
+        VALUES (v_et, p_emitter, v_anchor_tbl, v_anchor) RETURNING id INTO v_ev;
     INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
         VALUES ('kb_resources', p_resource, 'facet', p_values, p_weight, v_ev, v_ev);
 END;
