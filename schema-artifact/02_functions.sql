@@ -545,5 +545,103 @@ END;
 $$;
 
 -- ============================================================================
+-- Reusable mutation mechanics (the cogmap_genesis mold): each emits its event AND projects in one
+-- txn. The scenario loader / temper-cogmap lift call these; YAML is the event input source.
+-- ============================================================================
+
+-- Create a resource, home it in a cogmap, give it one content block, optionally stamp a doc_type
+-- property. Emits one `resource_created` event (the projection root). Returns the resource id.
+CREATE FUNCTION resource_create(
+    p_title text, p_origin_uri text, p_home_cogmap uuid, p_owner uuid,
+    p_body text, p_doc_type text, p_emitter uuid
+) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_resource uuid; v_block uuid; v_chunk uuid; v_hash text;
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='resource_created';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type resource_created not seeded'; END IF;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, 'kb_cogmaps', p_home_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_resources (title, origin_uri) VALUES (p_title, p_origin_uri) RETURNING id INTO v_resource;
+    INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+        VALUES (v_resource, 'kb_cogmaps', p_home_cogmap, p_owner, p_owner);
+    v_hash := md5(p_origin_uri);
+    INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+        VALUES (v_resource, 0, v_ev, v_ev) RETURNING id INTO v_block;
+    INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+        VALUES (v_block, v_resource, 0, v_hash) RETURNING id INTO v_chunk;
+    INSERT INTO kb_chunk_content (chunk_id, content) VALUES (v_chunk, p_body);
+    INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count) VALUES (v_block, v_hash, 1);
+    UPDATE kb_resources SET body_hash = md5(v_hash) WHERE id = v_resource;
+    IF p_doc_type IS NOT NULL THEN
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', v_resource, 'doc_type', to_jsonb(p_doc_type), v_ev, v_ev);
+    END IF;
+    RETURN v_resource;
+END;
+$$;
+
+-- Assert a typed edge between two resources, homed in a cogmap. Emits `relationship_asserted`.
+CREATE FUNCTION relationship_assert(
+    p_src uuid, p_tgt uuid, p_kind edge_kind, p_label text, p_weight double precision,
+    p_home_cogmap uuid, p_emitter uuid
+) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_edge uuid;
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='relationship_asserted';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type relationship_asserted not seeded'; END IF;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, 'kb_cogmaps', p_home_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label, weight,
+                          home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
+        VALUES ('kb_resources', p_src, 'kb_resources', p_tgt, p_kind, p_label, p_weight,
+                'kb_cogmaps', p_home_cogmap, v_ev, v_ev) RETURNING id INTO v_edge;
+    RETURN v_edge;
+END;
+$$;
+
+-- Set a resource's facet property as ONE coherent kb_properties row. Emits `property_asserted`.
+-- The event anchors to the resource's home cogmap (producing_anchor CHECK forbids kb_resources).
+CREATE FUNCTION facet_set(p_resource uuid, p_values jsonb, p_weight double precision, p_emitter uuid)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_cogmap uuid;
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='property_asserted';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type property_asserted not seeded'; END IF;
+    SELECT anchor_id INTO v_cogmap FROM kb_resource_homes
+        WHERE resource_id=p_resource AND anchor_table='kb_cogmaps' LIMIT 1;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, 'kb_cogmaps', v_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+        VALUES ('kb_resources', p_resource, 'facet', p_values, p_weight, v_ev, v_ev);
+END;
+$$;
+
+-- Create a lens (global when p_cogmap IS NULL). Emits `lens_created`; a global lens is a system event
+-- with no producing anchor (both NULL — satisfies the both-null-or-both-set CHECK). Returns lens id.
+CREATE FUNCTION lens_create(
+    p_cogmap uuid, p_name text,
+    p_w_express double precision, p_w_contains double precision, p_w_leads_to double precision,
+    p_w_near double precision, p_w_prop double precision,
+    p_s_telos double precision, p_s_ref double precision, p_s_central double precision,
+    p_resolution double precision, p_emitter uuid
+) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_lens uuid; v_anchor_tbl text;
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='lens_created';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type lens_created not seeded'; END IF;
+    v_anchor_tbl := CASE WHEN p_cogmap IS NULL THEN NULL ELSE 'kb_cogmaps' END;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, v_anchor_tbl, p_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_cogmap_lenses
+        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop,
+         s_telos, s_ref, s_central, resolution, asserted_by_event_id)
+    VALUES (p_cogmap, p_name, 'homed', p_w_express, p_w_contains, p_w_leads_to, p_w_near, p_w_prop,
+            p_s_telos, p_s_ref, p_s_central, p_resolution, v_ev)
+    RETURNING id INTO v_lens;
+    RETURN v_lens;
+END;
+$$;
+
+-- ============================================================================
 -- End of 02_functions.sql. Seed → 03_seed.sql; scenarios → 04_scenarios.sql.
 -- ============================================================================
