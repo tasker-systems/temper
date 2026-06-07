@@ -139,6 +139,7 @@ Rust crates use feature flags to gate heavy dependencies:
 - `web-api` — enables utoipa OpenAPI derives (temper-core)
 - `typescript` — enables ts-rs type generation (temper-core)
 - `mcp` — enables schemars JsonSchema derives for MCP tool parameters (temper-core)
+- `artifact-tests` — enables temper-next's integration tests that need the `temper_next` **artifact** loaded (`schema-artifact/*.sql`, a separate PG namespace — NOT the sqlx-migrated schema) plus ONNX. **No CI job enables it** (the standard `--workspace`/`--features test-db` jobs would run them without the artifact and fail), so these run locally / via `schema-artifact/run_eval.sh`: `cargo nextest run -p temper-next --features artifact-tests` after loading the artifact. temper-next's pure core tests (affinity, cluster) are ungated and run in CI.
 
 ## Key Patterns
 

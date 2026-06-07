@@ -314,17 +314,104 @@ $$;
 -- The surface tier (centroid, salience, label, member_count) — readable by any
 -- principal who can read the map. Member identities are NEVER returned here
 -- (interior is dereferenced per-member through resources_visible_to).
-CREATE FUNCTION cogmap_shape(p_cogmap uuid, p_principal_kind text, p_principal_id uuid)
-RETURNS TABLE(region_id uuid, salience double precision, label text, member_count int)
+CREATE OR REPLACE FUNCTION cogmap_shape(
+    p_cogmap uuid, p_principal_kind text, p_principal_id uuid, p_lens uuid DEFAULT NULL)
+RETURNS TABLE(region_id uuid, lens_id uuid, salience double precision,
+              content_cohesion double precision, label text, member_count int)
 LANGUAGE sql STABLE AS $$
-    SELECT reg.id, reg.salience, reg.label, reg.member_count
+    SELECT reg.id, reg.lens_id, reg.salience, reg.content_cohesion, reg.label, reg.member_count
     FROM kb_cogmap_regions reg
     WHERE reg.cogmap_id = p_cogmap
       AND NOT reg.is_folded
+      AND (p_lens IS NULL OR reg.lens_id = p_lens)   -- default = all lenses; Plan 3 may default to telos-default
       AND (
         (p_principal_kind = 'profile' AND cogmap_readable_by_profile(p_principal_id, p_cogmap))
         OR (p_principal_kind = 'cogmap' AND p_principal_id = p_cogmap)
       );
+$$;
+
+-- Content cohesion (spec §2c): mean member-to-centroid cosine. A DOWNSTREAM readout over a
+-- formed region (cosine never enters FORMATION — that is Plan 2's declared-only affinity).
+-- Per-concept pooling: each member resource's current chunk embeddings are mean-pooled to one
+-- vector first (pool-per-concept-then-mean, map-regions OQ-1); the region centroid is the mean
+-- of those; cohesion is the mean cosine of each member-vector to the centroid.
+CREATE FUNCTION cogmap_region_content_cohesion(p_region uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH member_vec AS (   -- one pooled vector per member resource
+        SELECT m.member_id, avg(ch.embedding) AS v
+        FROM kb_cogmap_region_members m
+        JOIN kb_chunks ch        ON ch.resource_id = m.member_id AND ch.is_current
+        JOIN kb_content_blocks b ON b.id = ch.block_id AND NOT b.is_folded  -- vector gate mirrors embed + body-text
+        WHERE m.region_id = p_region AND m.member_table = 'kb_resources'
+        GROUP BY m.member_id
+    ),
+    ctr AS (SELECT avg(v) AS c FROM member_vec)
+    SELECT avg(1 - (mv.v <=> ctr.c)) FROM member_vec mv, ctr;
+$$;
+
+-- Telos alignment (spec §2c, salience part): cosine of the region centroid to the cogmap's
+-- telos-resource embedding (kb_cogmaps.telos_resource_id). "Importance under the map's telos,"
+-- literal because the telos IS a resource with chunks. NULL iff the telos has no current chunks.
+CREATE FUNCTION cogmap_region_telos_alignment(p_region uuid, p_cogmap uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH telos AS (
+        SELECT avg(ch.embedding) AS v
+        FROM kb_cogmaps c
+        JOIN kb_chunks ch        ON ch.resource_id = c.telos_resource_id AND ch.is_current
+        JOIN kb_content_blocks b ON b.id = ch.block_id AND NOT b.is_folded  -- vector gate mirrors embed + body-text
+        WHERE c.id = p_cogmap
+    ),
+    reg AS (SELECT centroid AS v FROM kb_cogmap_regions WHERE id = p_region)
+    SELECT 1 - (reg.v <=> telos.v) FROM reg, telos WHERE telos.v IS NOT NULL;
+$$;
+
+-- Reference standing (spec §2c): summed reinforce_count over the member resources' blocks
+-- (a count() over kb_block_provenance, page-04 — derived, never stored). is_corrected excluded.
+CREATE FUNCTION cogmap_region_reference_standing(p_region uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    SELECT coalesce(count(p.*), 0)::double precision
+    FROM kb_cogmap_region_members m
+    JOIN kb_content_blocks b ON b.resource_id = m.member_id AND NOT b.is_folded
+    JOIN kb_block_provenance p ON p.block_id = b.id AND NOT p.is_corrected
+    WHERE m.region_id = p_region AND m.member_table = 'kb_resources';
+$$;
+
+-- Centrality (spec §2c): internal declared-affinity mass × size. Sum of declared edge weights
+-- BOTH of whose endpoints are members of the region, times member_count. Raw (un-lens-weighted);
+-- Plan 2 scales by the lens at materialization. Cosine never enters.
+CREATE FUNCTION cogmap_region_centrality(p_region uuid)
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH mem AS (
+        SELECT member_id FROM kb_cogmap_region_members
+        WHERE region_id = p_region AND member_table = 'kb_resources'
+    ),
+    internal AS (
+        SELECT coalesce(sum(e.weight), 0) AS mass
+        FROM kb_edges e
+        WHERE e.source_table='kb_resources' AND e.target_table='kb_resources'
+          AND e.source_id IN (SELECT member_id FROM mem)
+          AND e.target_id IN (SELECT member_id FROM mem)
+          AND NOT e.is_folded
+    )
+    SELECT internal.mass * (SELECT count(*) FROM mem) FROM internal;
+$$;
+
+-- Internal tension (spec §2a/§2c): declared opposition among members — a FEATURE of the region,
+-- never a fracture. Matches a caller-supplied label set (default {'contradicts'}); semantics are
+-- NOT reserved at the kernel — the caller (lens) decides what counts as opposed.
+CREATE FUNCTION cogmap_region_internal_tension(p_region uuid, p_opposed_labels text[])
+RETURNS double precision LANGUAGE sql STABLE AS $$
+    WITH mem AS (
+        SELECT member_id FROM kb_cogmap_region_members
+        WHERE region_id = p_region AND member_table = 'kb_resources'
+    )
+    SELECT coalesce(sum(e.weight), 0)::double precision
+    FROM kb_edges e
+    WHERE e.source_table='kb_resources' AND e.target_table='kb_resources'
+      AND e.source_id IN (SELECT member_id FROM mem)
+      AND e.target_id IN (SELECT member_id FROM mem)
+      AND NOT e.is_folded
+      AND e.label = ANY(p_opposed_labels);
 $$;
 
 -- Staleness (A3-3): ON-READ aggregate, not a denormalized watermark. Compares the

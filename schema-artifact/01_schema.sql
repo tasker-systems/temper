@@ -396,7 +396,7 @@ CREATE INDEX idx_kb_edges_home   ON kb_edges(home_anchor_table, home_anchor_id) 
 -- doctype is a row here (key='doc_type'); relational frontmatter projects to edges.
 CREATE TABLE kb_properties (
     id                    UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
-    owner_table           VARCHAR(64) NOT NULL CHECK (owner_table IN ('kb_resources', 'kb_cogmaps')),
+    owner_table           VARCHAR(64) NOT NULL CHECK (owner_table IN ('kb_resources', 'kb_cogmaps', 'kb_edges')),  -- §4a: edges carry facets
     owner_id              UUID NOT NULL,
     property_key          TEXT NOT NULL,
     property_value        JSONB NOT NULL,
@@ -417,14 +417,41 @@ CREATE INDEX idx_kb_properties_key       ON kb_properties(property_key) WHERE NO
 
 -- The surface tier. Readable by anyone who can read the map (§4). Same
 -- assert/fold pattern as edges/properties — no new freshness primitive.
+-- Region lenses (spec §3B): a lens IS a declared, stored, IMMUTABLE projection-class
+-- instance. Editing = assert a new row; a region's lens_id pins the exact weight-vector
+-- it was computed under (the reproducibility anchor). Plurality = more rows; same function.
+CREATE TABLE kb_cogmap_lenses (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
+    cogmap_id            UUID REFERENCES kb_cogmaps(id),  -- NULL = global default; non-null = map-specific
+    name                 TEXT NOT NULL,
+    selection_kind       TEXT NOT NULL DEFAULT 'homed',   -- 'homed' (this plan); 'team_visible' later
+    w_express            DOUBLE PRECISION NOT NULL,
+    w_contains           DOUBLE PRECISION NOT NULL,
+    w_leads_to           DOUBLE PRECISION NOT NULL,
+    w_near               DOUBLE PRECISION NOT NULL,
+    w_prop               DOUBLE PRECISION NOT NULL,
+    s_telos              DOUBLE PRECISION NOT NULL,
+    s_ref                DOUBLE PRECISION NOT NULL,
+    s_central            DOUBLE PRECISION NOT NULL,
+    resolution           DOUBLE PRECISION NOT NULL,
+    asserted_by_event_id UUID NOT NULL REFERENCES kb_events(id),
+    created              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- [LEAN→DECISION] centroid pooling (OQ-1): pool-per-concept-then-mean (one vector
 -- per member concept first), computed in MaterializeCogmapShape. No HNSW on
 -- centroid yet (OQ-2: per-map scan; wanted, deferred "as we go").
 CREATE TABLE kb_cogmap_regions (
     id                   UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     cogmap_id            UUID NOT NULL REFERENCES kb_cogmaps(id) ON DELETE CASCADE,
+    lens_id              UUID NOT NULL REFERENCES kb_cogmap_lenses(id),  -- the perspective that produced this region (§3B)
     centroid             vector(768) NOT NULL,
-    salience             DOUBLE PRECISION NOT NULL,   -- region importance under the map's telos (agent-assigned)
+    salience             DOUBLE PRECISION NOT NULL,   -- computed blend, memoized (was agent-assigned; spec §3A)
+    telos_alignment      DOUBLE PRECISION,            -- cosine(centroid, telos_resource.embedding)  [salience part]
+    reference_standing   DOUBLE PRECISION,            -- aggregate reinforce_count over members        [salience part]
+    centrality           DOUBLE PRECISION,            -- internal declared-affinity density × size      [salience part]
+    content_cohesion     DOUBLE PRECISION,            -- mean member-to-centroid cosine (surface↔relational, §2c)
+    internal_tension     DOUBLE PRECISION,            -- over oppositional-labeled declared edges among members
     label                TEXT,                        -- optional agent-authored region label
     member_count         INT NOT NULL,                -- aggregate; the blur exposed in the surface read
     asserted_by_event_id UUID NOT NULL REFERENCES kb_events(id),
