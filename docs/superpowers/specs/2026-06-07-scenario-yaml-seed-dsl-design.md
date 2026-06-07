@@ -60,6 +60,16 @@ Key shift from `run_eval.sh`: the runner **calls library functions in-process** 
 out to `cargo run -p temper-next`. The whole roundtrip becomes one `artifact-tests`-gated integration
 test — no bash.
 
+**Spec/assertion separability (built in, exploited later).** The `load_scenario` ↔ `run_scenario` split
+is not just a code boundary — it embodies the two roles a scenario file plays. `load_scenario`
+instantiates the **substrate template** (cogmap + telos + resources + edges + lenses — the *cogmap/telos
+specification*); `run_scenario` is `load_scenario` **plus** driving the `steps:` runbook (the *assertion
+specification*). For M1 a single file fuses both, deliberately: the assertions-as-tests must track the
+cogmap/telos shape tightly, so co-locating them keeps them honest. But because `steps:` is a separable
+field, a future **foundational** cogmap (e.g. `system-default`) is *not a special case* — it is the same
+template instantiated via `load_scenario` (+ a materialize) with no `steps:` overlay. This is the seam the
+M2/M3 "retire `03_seed.sql` entirely / foundational-cogmaps-as-templates" work grows along (see roadmap).
+
 ### Grounded reuse points (verified against HEAD, commit f6cff1e)
 
 These are the exact signatures the loader/runner build on — carried into the implementation plan as
@@ -364,9 +374,27 @@ Deferred beyond M1 (named in the roadmap):
   `04b_region_suite.sql` + `run_eval.sh`'s bespoke S6 gate** once the declarative asserts are trusted
   against the SQL verdict; reuse `format_embedding`; affinity memoization if scale demands;
   lens-configurable opposed-labels.
-- **M3:** access scaffold (teams/profiles/grants) in YAML — the S1–S5 world.
+- **M3:** access scaffold (teams/profiles/grants) in YAML — the S1–S5 world — and **the full retirement
+  of `03_seed.sql`**: every entity the seed creates (the access world, the foundational `system-default`
+  cogmap) moves to scenario YAML, so the loader is the *only* seed path. A **foundational cogmap is the
+  same-structure template, not a special case** — `system-default` becomes a scenario file instantiated
+  via `load_scenario` at foundation time (no `steps:` overlay), exactly the spec/assertion seam described
+  in §Architecture. The cogmap/telos *specification* half and the *assertion* half may split into separate
+  files here if foundational instantiation wants the template without a test overlay.
 - **M4 (strategic payoff):** temper-next ↔ temper schema-delta analysis; possibly route a subset
   through real write paths (temper-client/temper-api) to test the actual production system.
+
+### Forward intentions (held separate from M1, captured so they aren't lost)
+
+- **Scenarios become self-sufficient:** the end state is *no `03_seed.sql`* — cogmap-scenarios fully seed
+  what the artifact needs. M1 already demonstrates this for the onboarding cogmap (its roundtrip test loads
+  only `01_schema`+`02_functions`+the YAML, never `03_seed.sql`); M3 finishes the job for the rest.
+- **Foundational = template, not special case:** system-foundational cogmaps run through the same loader
+  as test scenarios. No bespoke foundational SQL.
+- **Spec ⟂ assertion may separate:** today one file fuses the cogmap/telos specification with its assertion
+  runbook (correct — the tests must track the spec). The `load_scenario`/`run_scenario` split already keeps
+  them mechanically separable; a later milestone may split them into distinct files once foundational
+  instantiation (template only) and testing (template + asserts) have genuinely different consumers.
 
 ## Out of scope (M1)
 
