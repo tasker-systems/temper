@@ -1,11 +1,14 @@
 #![cfg(feature = "artifact-tests")]
-// Requires the temper_next artifact (01_schema + 02_functions) loaded. Verifies the system boot-seed
-// (event-type registry + global lenses via lens_create) lands and is idempotent.
+// Resets the temper_next artifact, then verifies the system boot-seed (event-type registry + global
+// lenses via lens_create) lands and is idempotent. Serialized via the temper-next-write test-group.
+mod common;
+
 use temper_next::scenario::bootseed;
 use temper_next::substrate;
 
 #[tokio::test]
 async fn seed_system_seeds_registry_and_global_lenses_idempotently() {
+    common::reset_artifact();
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
     bootseed::seed_system(&pool).await.unwrap(); // idempotent — second run is a no-op
