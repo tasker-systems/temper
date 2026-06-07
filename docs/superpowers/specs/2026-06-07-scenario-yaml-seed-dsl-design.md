@@ -103,7 +103,7 @@ The loader writes these tables directly (column shapes confirmed from `03_seed.s
 - `kb_resource_homes(resource_id, anchor_table='kb_cogmaps', anchor_id, originator_profile_id, owner_profile_id)` — homes each concept in the cogmap.
 - `kb_content_blocks(resource_id, seq, genesis_event_id, last_event_id)` + `kb_chunks(block_id, resource_id, chunk_index, content_hash)` + `kb_chunk_content(chunk_id, content)` — the inline prose (embed job fills `kb_chunks.embedding`). `kb_block_revisions(block_id, block_body_hash, chunk_count)` mirrors `cogmap_genesis`.
 - `kb_edges(source_table, source_id, target_table, target_id, edge_kind, label, home_anchor_table='kb_cogmaps', home_anchor_id, asserted_by_event_id, last_event_id)` — declared relationships; `edge_kind ∈ {express, contains, leads_to, near}`.
-- `kb_properties(owner_table='kb_resources', owner_id, property_key='facet', property_value JSONB, weight?, asserted_by_event_id, last_event_id)` — facets.
+- `kb_properties(owner_table='kb_resources', owner_id, property_key='facet', property_value JSONB, weight?, asserted_by_event_id, last_event_id)` — facets, **one row per resource** (multi-key coherent object; see "Facet model" below).
 - `kb_cogmap_lenses(cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)` — lens config.
 - `kb_events(event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at)` — per assertion + the S6h mutation event.
 
@@ -131,11 +131,11 @@ resources:
     home: cogmap
     doc_type: concept
     body: "Always pair a newcomer with a maintainer on their first PR."
-    facets: [{ phase: first-week }]
+    facets: { values: { phase: first-week } }            # → ONE kb_properties row, weight 1.0
   - key: staging
     origin_uri: "temper://c/staging"
     body: "Deploy to staging before production."
-    facets: [{ topic: deployment, weight: 1.5 }]
+    facets: { values: { topic: deployment }, weight: 1.5 }   # multi-key & array values allowed in `values`
   # … the full 13-concept α/β/bridge/tension/isolate cast …
 
 edges:
@@ -200,8 +200,12 @@ pub struct ResourceDef {
     pub key: String, pub title: Option<String>, pub origin_uri: String,
     pub home: HomeRef,            // `cogmap` for M1
     pub doc_type: Option<String>, pub body: String,
-    pub facets: Vec<FacetDef>,    // see facet decision below
+    pub facets: Option<FacetDef>, // ONE facet row per resource (see facet model below)
 }
+// One kb_properties row per resource: `values` is a multi-key JSONB object whose values
+// may be scalars OR arrays; `weight` (default 1.0) applies to every (path,value) pair the
+// row expands to. A bare map (`facets: { phase: x }`) is sugar for `{ values: {phase: x}, weight: 1.0 }`.
+pub struct FacetDef { pub values: serde_json::Map<String, serde_json::Value>, #[serde(default = "one")] pub weight: f64 }
 pub struct EdgeDef { pub from: String, pub to: String, pub kind: EdgeKind, pub label: Option<String>, pub weight: f64 }
 pub struct LensDef { /* mirrors kb_cogmap_lenses columns; mirrors affinity::Lens fields */ }
 
@@ -228,6 +232,23 @@ pub enum Expectation {
 `EdgeKind` reuses `affinity::EdgeKind` (Express/Contains/LeadsTo/Near). **Deserialization must be
 exhaustive** — an unknown edge kind in YAML is a hard error, not a silent coerce (see deferred CR
 finding `parse_kind` below).
+
+### Facet model (resolved)
+
+A resource's facets materialize to **exactly one `kb_properties` row** (`property_key='facet'`),
+whose `property_value` is the coherent multi-key JSONB object and whose `weight` column carries the
+row weight (default 1.0). Rationale: facets stay coherent — no risk of inconsistent/half-updated
+facets spread across rows — and array-valued keys (`{ topic: [deployment, release] }`) read as **one
+intentional thing** instead of being ambiguously split into separate rows.
+
+The affinity reader expands that one row into the `Facet { owner, path, value, weight }` entries the
+clustering needs: each `(key, value)` pair becomes one `Facet`; an array value
+`{ topic: [deployment, release] }` expands to one `Facet` per element, all sharing the row weight.
+This is an **AMEND** to the current reader `crates/temper-next/src/substrate.rs:73-93`, which today
+reads only the first key (`v.as_object()?.iter().next()`) — the deferred multi-key-facet finding is
+fixed here by *supporting* multi-key, not by restricting to one-key-per-row. (Per-`(path,value)`
+weight differentiation within one resource is a future extension; M1's onboarding cast has at most
+one facet per resource, so row-level weight is sufficient and exact.)
 
 ## Expectation vocabulary → S6 mapping
 
@@ -268,9 +289,17 @@ needs one.
 
 - **Integration test** `crates/temper-next/tests/scenario_roundtrip.rs` (gated `artifact-tests`):
   load `onboarding-cogmap.yaml` → `run_scenario` → all declarative asserts pass → **cross-check**:
-  run the committed `04b_region_suite.sql` verdict view against the YAML-seeded substrate and assert
-  `onboarding_s6_verdict.all_pass = t`. Same prose → same embeddings → byte-identical regions (by
-  `origin_uri`) → same verdict. This is the acceptance criterion's equivalence proof.
+  evaluate the `04b` verdict logic against the YAML-seeded substrate and assert `all_pass = t`. Same
+  prose → same embeddings → byte-identical regions (by `origin_uri`) → same verdict. This is the
+  acceptance criterion's equivalence proof.
+- **Nextest-native cross-check:** the cross-check runs **inside the integration test via `sqlx`**, not
+  by shelling to `psql`/`run_eval.sh` — so the entire proof runs under `cargo nextest`. The simplest
+  faithful encoding is to execute the `04b_region_suite.sql` verdict query (the `WITH td … SELECT …
+  all_pass` body) as one `sqlx::query` and read `all_pass`; it stays an **independent** encoding (a
+  SQL aggregate over `origin_uri`) of the same checks the Rust asserts cover separately, which is the
+  point of running both. **Retire path:** `04b_region_suite.sql` and `run_eval.sh`'s bespoke S6 gate
+  are retired in **M2** once the declarative asserts are trusted against the SQL verdict; during the
+  transition both encodings run side-by-side in this one nextest test.
 - **Unit tests** (ungated): model deserialization (incl. unknown-edge-kind rejection), `key → Uuid`
   resolution, expectation evaluation against a tiny in-memory/fixture shape where feasible.
 - **Schema drift test** (gated `scenario-schema`): snapshot comparison.
@@ -297,9 +326,9 @@ forces several at their right altitude:
 - **`label_factor` dead placeholder** (`affinity.rs`) — `label_factor() -> 1.0` is an unused factor +
   a test for the placeholder. **Drop in M1** (no-premature-abstraction), unless the facet/opposed-labels
   work below first gives it a real job.
-- **Multi-key facets** (`substrate.rs`) — the facet parser reads only the FIRST key of a facet's JSON
-  object. The YAML `facets:` model must **decide** one-facet-per-row (current convention) vs multi-key
-  and align the loader + reader. **Decide in M1** (the facet loader is written here).
+- **Multi-key facets** (`substrate.rs:73-93`) — the facet parser reads only the FIRST key
+  (`v.as_object()?.iter().next()`). **Fixed in M1** (AMEND): one `kb_properties` row per resource,
+  reader iterates all keys and expands array values into multiple `Facet` entries (see "Facet model").
 
 Deferred beyond M1 (named in the roadmap):
 - **`internal_tension` opposed-labels lens-configurable** (`write.rs` hardcodes `ARRAY['contradicts']`)
@@ -313,8 +342,9 @@ Deferred beyond M1 (named in the roadmap):
 
 - **M1 (this spec):** onboarding scenario as YAML, full S6a–h, direct-sqlx loader, in-process runner,
   JsonSchema snapshot, integration test. Folds in the M1 deferred CR findings above.
-- **M2:** generalize — a second (synthetic/minimal) scenario, a dir-driven runner, retire
-  `run_eval.sh`'s bespoke parts; reuse `format_embedding`; affinity memoization if scale demands;
+- **M2:** generalize — a second (synthetic/minimal) scenario, a dir-driven runner, **retire
+  `04b_region_suite.sql` + `run_eval.sh`'s bespoke S6 gate** once the declarative asserts are trusted
+  against the SQL verdict; reuse `format_embedding`; affinity memoization if scale demands;
   lens-configurable opposed-labels.
 - **M3:** access scaffold (teams/profiles/grants) in YAML — the S1–S5 world.
 - **M4 (strategic payoff):** temper-next ↔ temper schema-delta analysis; possibly route a subset
