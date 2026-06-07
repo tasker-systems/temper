@@ -31,6 +31,13 @@ extend = "./tools/cargo-make/main.toml"
 # gitignored; copy from `.env.template` to bootstrap.
 env_files = ["./.env"]
 
+[env]
+# Compile sqlx query! macros against the committed per-crate .sqlx caches, not the live DB — matches CI
+# (which sets SQLX_OFFLINE=true) and is REQUIRED for temper-next, whose macros target the `temper_next`
+# artifact namespace that isn't on the dev DB's default search_path. Compile-time only; runtime DB tests
+# (test-db/test-e2e) still connect normally. `prepare-next` overrides this (it must introspect live).
+SQLX_OFFLINE = "true"
+
 [config]
 default_to_workspace = false
 skip_core_tasks = true
@@ -69,6 +76,7 @@ echo "Run 'cargo make --list-all-steps' for all tasks"
 
 [tasks.prepare-next]
 description = "Regenerate temper-next's per-crate .sqlx cache against the loaded temper_next artifact"
+env = { SQLX_OFFLINE = "false" }   # prepare must introspect the LIVE artifact to build the cache
 script = '''
 # temper-next's sqlx! macros resolve against the temper_next artifact NAMESPACE (not the migrated
 # public schema), so prepare needs the artifact loaded + search_path set. Per-crate (run from the

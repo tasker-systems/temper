@@ -227,7 +227,7 @@ async fn eval_expectation(
             .fetch_one(pool)
             .await?
             .context("cohesion_order: lesser region has null content_cohesion")?;
-            if !(cg > cl) {
+            if cg <= cl {
                 bail!("cohesion_order: {greater}({cg}) not > {lesser}({cl}) (lens {lens})");
             }
         }

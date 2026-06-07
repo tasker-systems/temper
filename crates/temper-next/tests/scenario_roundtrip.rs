@@ -7,6 +7,7 @@
 //!    aggregate over origin_uri) evaluated at the BASELINE state (load + one telos-default materialize,
 //!    before the S6h mutation that retires solo's singleton). Same prose → same embeddings → same
 //!    regions → same verdict.
+//!
 //! Both reset the artifact and are serialized + ONNX-dependent.
 mod common;
 
