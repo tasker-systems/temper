@@ -2,21 +2,31 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Re-express the onboarding-cogmap seed + full S6a–h falsification runbook as declarative YAML consumed by a Rust loader/runner in `temper-next`, roundtrip-validated to byte-identical regions and S6 verdicts as `run_eval.sh`, with JSON Schema emitted from the same structs.
+**Goal:** Re-express the onboarding-cogmap seed + full S6a–h falsification runbook as declarative YAML, driven by **reusable event-sourced SQL functions** (the `cogmap_genesis` mold) and a thin `!`-macro Rust loader/runner in `temper-next`, roundtrip-validated to byte-identical regions + S6 verdicts as `run_eval.sh`, with JSON Schema emitted from the loader structs.
 
-**Architecture:** New `scenario/` module set in `crates/temper-next/src/` — `model.rs` (YAML structs + `Step`/`Expectation` enums), `loader.rs` (direct-sqlx writes to the `temper_next` artifact, reusing the `cogmap_genesis()` SQL fn, returning a `key → Uuid` map), `runner.rs` (executes the ordered step runbook **in-process**, reusing `embed::embed_chunks` + `write::materialize_cogmap`). The whole roundtrip becomes one `artifact-tests`-gated `cargo nextest` integration test — no bash.
+**Architecture:** Two layers. **Layer 1** — mutation mechanics as SQL functions in `02_functions.sql` (`resource_create`, `relationship_assert`, `facet_set`, `lens_create`), each emitting its event + projecting in one txn. **Layer 2** — a thin Rust loader that calls those functions with YAML inputs, a runner that drives the ordered step runbook in-process (reusing `embed_chunks` + `materialize_cogmap`), and a system **boot-seed** (event-type registry + global lenses) seeded separately from scenarios. The whole roundtrip is one `artifact-tests` nextest — no bash.
 
-**Tech Stack:** Rust, `serde`/`serde_yaml`, `sqlx` (Postgres, `temper_next` search path), `schemars` (gated JSON Schema), bge-768 embeddings via `temper-ingest`.
+**Tech Stack:** Rust, `serde`/`serde_yaml`, `sqlx` (`query!`/`query_scalar!` macros for non-vector reusable queries; runtime `query()` retained for pgvector `::vector` queries and test targets), `schemars` (gated), bge-768 embeddings.
 
-**Spec:** `docs/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md` — read it before starting. Load-bearing invariant carried verbatim from the spec: *"Same prose → same embeddings → byte-identical regions (by `origin_uri`) → same verdict."* The fingerprint and verdict are keyed on `origin_uri`, NOT UUID, so they are stable across seed paths.
+**Spec:** `docs/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md` — read it first. Load-bearing invariant (verbatim): *"Same prose → same embeddings → byte-identical regions (by `origin_uri`) → same verdict."* Fingerprint + verdict key on `origin_uri`, not UUID — stable across seed paths.
 
-**Grounding tags** (per `~/.claude/skills/temper/guidance/implementation-grounding.md`): each task is tagged CONFORM (honor an existing constraint), EXTEND (build beyond an affordance, spec-authorized), or AMEND (change an existing thing, disk + spec cited). Treat the plan's quoted `file:line` excerpts as pre-grounded facts; verify anything NOT quoted on disk before use.
+**Grounding tags** (per `~/.claude/skills/temper/guidance/implementation-grounding.md`): CONFORM / EXTEND / AMEND per task. Quoted `file:line` excerpts are pre-grounded; verify anything un-quoted before use. ⚠️ marks a plan/reality check the implementer must resolve on disk.
 
-**Prerequisites for running tests in this plan:**
-- Docker Postgres on port 5437: `cargo make docker-up`.
-- The artifact schema loaded into `temper_next`: `for f in 01_schema 02_functions; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema-artifact/$f.sql; done` (the loader replaces `03_seed.sql`).
-- `artifact-tests` + ONNX runtime for the embed-dependent integration test (the box that runs the Embed CI job). Pure unit tests need neither.
-- `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development`.
+**Verified schema facts (from `01_schema.sql`, do not re-derive):**
+- `kb_events`: `emitter_entity_id UUID NOT NULL`; `producing_anchor_table CHECK IN ('kb_contexts','kb_cogmaps')` (NOT `kb_resources`); `CHECK ((producing_anchor_table IS NULL) = (producing_anchor_id IS NULL))` — so a **system event with no anchor sets both NULL**.
+- `kb_edges`: `weight DOUBLE PRECISION NOT NULL DEFAULT 1.0`; `edge_kind edge_kind NOT NULL`.
+- `kb_cogmap_lenses`: `cogmap_id UUID` nullable (NULL = global default); `selection_kind TEXT NOT NULL DEFAULT 'homed'`.
+- `kb_properties`: `owner_table CHECK IN ('kb_resources','kb_cogmaps','kb_edges')`; `UNIQUE (owner_table, owner_id, property_key, property_value)`.
+
+**Prerequisites for every macro-compiling + DB step:**
+- Docker PG: `cargo make docker-up`.
+- Artifact loaded into `temper_next`: `for f in 01_schema 02_functions; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema-artifact/$f.sql; done`.
+- **Compile-time DB for `!` macros** — export a search-path-scoped URL so the macros resolve `temper_next` tables:
+  ```bash
+  export DATABASE_URL="postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dtemper_next,public"
+  ```
+  (Local online compile checks against the live artifact; CI compiles offline against the committed `crates/temper-next/.sqlx` — stood up in Task 12.)
+- `artifact-tests` + ONNX runtime for embed-dependent integration tests.
 
 ---
 
@@ -24,593 +34,380 @@
 
 | File | Responsibility | Task |
 |------|----------------|------|
-| `crates/temper-next/Cargo.toml` | Add `serde`/`serde_yaml`/gated `schemars` deps + `scenario-schema` feature | 1 |
-| `crates/temper-next/src/lib.rs` | Wire `scenario` module | 1 |
-| `crates/temper-next/src/scenario/mod.rs` | Re-export model/loader/runner | 1 |
-| `crates/temper-next/src/affinity.rs` | `EdgeKind`: add `Deserialize`(snake_case) + gated `JsonSchema`; drop `label_factor` placeholder | 2 |
-| `crates/temper-next/src/substrate.rs` | `parse_kind` exhaustive/erroring; facet reader multi-key/array AMEND | 2, 3 |
-| `crates/temper-next/src/scenario/model.rs` | YAML structs + `Step`/`Expectation` enums | 4 |
-| `crates/temper-next/src/write.rs` | `materialize_cogmap` takes explicit emitter (AMEND) | 5 |
-| `crates/temper-next/src/main.rs` | Pass emitter to `materialize_cogmap` (AMEND caller) | 5 |
-| `crates/temper-next/src/scenario/loader.rs` | World preamble, genesis+telos key, resources, content, facets, edges, lenses; returns `KeyMap` | 6–10 |
-| `crates/temper-next/src/scenario/runner.rs` | Lens validation, step loop, materialize/emit-event/assert, fingerprint cache, expectation eval | 11–13 |
-| `schema-artifact/scenarios/onboarding-cogmap.yaml` | The onboarding scenario, full cast | 14 |
-| `crates/temper-next/tests/scenario_roundtrip.rs` | `artifact-tests` integration test + 04b verdict cross-check via sqlx | 15 |
-| `schema-artifact/scenarios/scenario.schema.json` | Committed JSON Schema snapshot | 16 |
-| `crates/temper-next/tests/scenario_schema.rs` | `scenario-schema` drift test | 16 |
+| `schema-artifact/02_functions.sql` | Add `resource_create`, `relationship_assert`, `facet_set`, `lens_create` (cogmap_genesis mold) | 2–5 |
+| `schema-artifact/seeds/system.yaml` | Canonical boot-seed: event-type registry + global lenses | 6 |
+| `crates/temper-next/Cargo.toml` | deps + `scenario-schema` feature | 1 |
+| `crates/temper-next/src/lib.rs`, `src/scenario/mod.rs` | wire modules | 1 |
+| `crates/temper-next/src/scenario/model.rs` | YAML structs + `Step`/`Expectation` + `BootSeed` | 7 |
+| `crates/temper-next/src/scenario/bootseed.rs` | `seed_system` (system actor + event types + global lenses) | 6 |
+| `crates/temper-next/src/affinity.rs`, `src/substrate.rs` | EdgeKind deser, exhaustive parse_kind, facet reader AMEND, drop label_factor | 8 |
+| `crates/temper-next/src/write.rs`, `src/main.rs` | explicit materialize emitter (AMEND) | 8 |
+| `crates/temper-next/src/scenario/loader.rs` | thin `load_scenario` over the SQL functions | 10 |
+| `crates/temper-next/src/scenario/runner.rs` | validate/materialize/emit/assert + fp cache | 11 |
+| `crates/temper-next/.sqlx`, `Makefile.toml` | committed offline cache + `prepare-next` target | 12 |
+| `schema-artifact/scenarios/onboarding-cogmap.yaml` | the onboarding scenario | 13 |
+| `crates/temper-next/tests/scenario_roundtrip.rs` | roundtrip + 04b verdict cross-check | 14 |
+| `schema-artifact/scenarios/scenario.schema.json`, `tests/scenario_schema.rs` | JSON Schema snapshot + drift test | 15 |
+
+**Execution order (compile dependencies, since task numbers group by theme):** 1 (scaffold) → 2–5 (SQL functions, pure SQL, no Rust deps) → **7 (model)** → **8 (EdgeKind `Deserialize` + fixes)** → **6 (boot-seed — needs `BootSeed` from 7 and `lens_create` from 5)** → 9 (loader) → 10 (loader test) → 11 (runner) → 12 (.sqlx cache, after all macros exist) → 13 (YAML) → 14 (roundtrip) → 15 (schema). If a subagent hits an undefined-type compile error, it's an ordering signal — pull the dependency task forward.
 
 ---
 
 ## Task 1: Scaffold deps + module skeleton
 
-**Tag:** EXTEND (new module; spec §Architecture authorizes `scenario/` in temper-next).
+**Tag:** EXTEND.
 
-**Files:**
-- Modify: `crates/temper-next/Cargo.toml`
-- Modify: `crates/temper-next/src/lib.rs`
-- Create: `crates/temper-next/src/scenario/mod.rs`
-- Create (empty stubs): `crates/temper-next/src/scenario/{model,loader,runner}.rs`
+**Files:** `crates/temper-next/Cargo.toml`, `src/lib.rs`, `src/scenario/{mod,model,bootseed,loader,runner}.rs`
 
-- [ ] **Step 1: Add deps + feature to `Cargo.toml`**
-
-In `[dependencies]` add:
+- [ ] **Step 1: Cargo.toml** — in `[dependencies]` add:
 ```toml
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 schemars = { version = "1", features = ["uuid1"], optional = true }
 ```
-In `[features]` add:
-```toml
-scenario-schema = ["schemars"]
-```
-(Keep the existing `artifact-tests` feature unchanged.)
+in `[features]` add `scenario-schema = ["schemars"]` (keep `artifact-tests`).
 
-- [ ] **Step 2: Create the module stubs**
-
-`crates/temper-next/src/scenario/mod.rs`:
+- [ ] **Step 2: `scenario/mod.rs`:**
 ```rust
+pub mod bootseed;
 pub mod loader;
 pub mod model;
 pub mod runner;
 ```
-Create `model.rs`, `loader.rs`, `runner.rs` as empty files (content added in later tasks).
+Create the four submodule files empty.
 
-- [ ] **Step 3: Wire into `lib.rs`**
+- [ ] **Step 3: `lib.rs`** — add `pub mod scenario;` to the existing `pub mod` list.
 
-Add `pub mod scenario;` alongside the existing `pub mod` lines in `crates/temper-next/src/lib.rs` (current contents: `affinity`, `cluster`, `embed`, `substrate`, `write`).
+- [ ] **Step 4:** `cargo build -p temper-next` — clean.
 
-- [ ] **Step 4: Verify it compiles**
-
-Run: `cargo build -p temper-next`
-Expected: builds clean (empty modules).
-
-- [ ] **Step 5: Commit**
-```bash
-git add crates/temper-next/Cargo.toml crates/temper-next/src/lib.rs crates/temper-next/src/scenario/
-git commit -m "feat(temper-next): scaffold scenario module + serde/serde_yaml/schemars deps"
-```
+- [ ] **Step 5: Commit** — `git commit -am "feat(temper-next): scaffold scenario module + serde/serde_yaml/schemars deps"`
 
 ---
 
-## Task 2: `EdgeKind` deserialization + exhaustive `parse_kind` + drop `label_factor`
+## Task 2: SQL function `resource_create`
 
-**Tag:** AMEND. Disk: `affinity.rs:4-9` (EdgeKind), `affinity.rs:68-70` (`label_factor`), `substrate.rs:127-134` (`parse_kind` with `_ => Near`). Spec: "Deserialization must be exhaustive — an unknown edge kind is a hard error, not a silent coerce"; deferred-CR `parse_kind` and `label_factor`.
+**Tag:** EXTEND (new artifact function; spec §"Layer 1"). Pattern grounded in `cogmap_genesis` (`02_functions.sql:458-540`) and the resource shape `03_seed.sql:255-267`.
 
-**Files:**
-- Modify: `crates/temper-next/src/affinity.rs`
-- Modify: `crates/temper-next/src/substrate.rs:127-134`
+**Files:** `schema-artifact/02_functions.sql`
 
-- [ ] **Step 1: Write failing test for snake_case EdgeKind deserialization**
-
-Add to `crates/temper-next/src/affinity.rs` (in a `#[cfg(test)] mod tests`):
-```rust
-#[test]
-fn edge_kind_deserializes_snake_case_and_rejects_unknown() {
-    assert_eq!(serde_yaml::from_str::<EdgeKind>("leads_to").unwrap(), EdgeKind::LeadsTo);
-    assert_eq!(serde_yaml::from_str::<EdgeKind>("express").unwrap(), EdgeKind::Express);
-    assert!(serde_yaml::from_str::<EdgeKind>("sideways").is_err());
-}
+- [ ] **Step 1: Add the function** (place near `cogmap_genesis`):
+```sql
+-- Reusable: create a resource, home it in a cogmap, give it one content block, optionally stamp a
+-- doc_type property. Emits one `resource_created` event (the projection root). Returns the resource id.
+CREATE FUNCTION resource_create(
+    p_title text, p_origin_uri text, p_home_cogmap uuid, p_owner uuid,
+    p_body text, p_doc_type text, p_emitter uuid
+) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_resource uuid; v_block uuid; v_chunk uuid; v_hash text;
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='resource_created';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type resource_created not seeded'; END IF;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, 'kb_cogmaps', p_home_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_resources (title, origin_uri) VALUES (p_title, p_origin_uri) RETURNING id INTO v_resource;
+    INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
+        VALUES (v_resource, 'kb_cogmaps', p_home_cogmap, p_owner, p_owner);
+    v_hash := md5(p_origin_uri);
+    INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+        VALUES (v_resource, 0, v_ev, v_ev) RETURNING id INTO v_block;
+    INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
+        VALUES (v_block, v_resource, 0, v_hash) RETURNING id INTO v_chunk;
+    INSERT INTO kb_chunk_content (chunk_id, content) VALUES (v_chunk, p_body);
+    INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count) VALUES (v_block, v_hash, 1);
+    UPDATE kb_resources SET body_hash = md5(v_hash) WHERE id = v_resource;
+    IF p_doc_type IS NOT NULL THEN
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
+            VALUES ('kb_resources', v_resource, 'doc_type', to_jsonb(p_doc_type), v_ev, v_ev);
+    END IF;
+    RETURN v_resource;
+END $$;
 ```
 
-- [ ] **Step 2: Run to verify it fails**
-
-Run: `cargo test -p temper-next edge_kind_deserializes -- --nocapture`
-Expected: FAIL — `EdgeKind` does not implement `Deserialize`.
-
-- [ ] **Step 3: Add derives to `EdgeKind`**
-
-Change `affinity.rs:4-9` from:
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum EdgeKind {
-    Express,
-    Contains,
-    LeadsTo,
-    Near,
-}
+- [ ] **Step 2: Smoke-test it** — reload functions + call it under a seeded event type:
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema-artifact/02_functions.sql
+psql "$DATABASE_URL" -c "SET search_path=temper_next,public; \
+  INSERT INTO kb_event_types(name) VALUES('resource_created') ON CONFLICT DO NOTHING;"
 ```
-to:
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum EdgeKind {
-    Express,
-    Contains,
-    LeadsTo,
-    Near,
-}
+⚠️ A full call needs a cogmap + owner profile + emitter entity — defer the live call to the loader test (Task 11). For now confirm the function **loads** without error (the `psql -f` above).
+Expected: `CREATE FUNCTION`, no error.
+
+- [ ] **Step 3: Commit** — `git commit -am "feat(artifact): resource_create SQL function (emit resource_created + project)"`
+
+---
+
+## Task 3: SQL function `relationship_assert`
+
+**Tag:** EXTEND. Grounded in edges `03_seed.sql:459-474`; `kb_edges.weight DEFAULT 1.0`.
+
+**Files:** `schema-artifact/02_functions.sql`
+
+- [ ] **Step 1: Add the function:**
+```sql
+-- Reusable: assert a typed edge between two resources, homed in a cogmap. Emits `relationship_asserted`.
+CREATE FUNCTION relationship_assert(
+    p_src uuid, p_tgt uuid, p_kind edge_kind, p_label text, p_weight double precision,
+    p_home_cogmap uuid, p_emitter uuid
+) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_edge uuid;
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='relationship_asserted';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type relationship_asserted not seeded'; END IF;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, 'kb_cogmaps', p_home_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label, weight,
+                          home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
+        VALUES ('kb_resources', p_src, 'kb_resources', p_tgt, p_kind, p_label, p_weight,
+                'kb_cogmaps', p_home_cogmap, v_ev, v_ev) RETURNING id INTO v_edge;
+    RETURN v_edge;
+END $$;
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [ ] **Step 2:** `psql -f 02_functions.sql` loads clean.
+- [ ] **Step 3: Commit** — `git commit -am "feat(artifact): relationship_assert SQL function"`
 
-Run: `cargo test -p temper-next edge_kind_deserializes`
-Expected: PASS.
+---
 
-- [ ] **Step 5: Make `parse_kind` exhaustive/erroring**
+## Task 4: SQL function `facet_set`
 
-`parse_kind` reads `edge_kind::text` from the DB. Change `substrate.rs:127-134` from:
+**Tag:** EXTEND. ⚠️ The event **must** anchor to the home cogmap — `kb_events.producing_anchor_table` CHECK forbids `kb_resources`. Emits the new `property_asserted` event. One `property_key='facet'` row per resource (spec §"Facet model").
+
+**Files:** `schema-artifact/02_functions.sql`
+
+- [ ] **Step 1: Add the function:**
+```sql
+-- Reusable: set a resource's facet property as ONE coherent kb_properties row. Emits `property_asserted`.
+-- Event anchors to the resource's home cogmap (producing_anchor CHECK forbids kb_resources).
+CREATE FUNCTION facet_set(p_resource uuid, p_values jsonb, p_weight double precision, p_emitter uuid)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_cogmap uuid;
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='property_asserted';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type property_asserted not seeded'; END IF;
+    SELECT anchor_id INTO v_cogmap FROM kb_resource_homes
+        WHERE resource_id=p_resource AND anchor_table='kb_cogmaps' LIMIT 1;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, 'kb_cogmaps', v_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
+        VALUES ('kb_resources', p_resource, 'facet', p_values, p_weight, v_ev, v_ev);
+END $$;
+```
+
+- [ ] **Step 2:** `psql -f 02_functions.sql` loads clean.
+- [ ] **Step 3: Commit** — `git commit -am "feat(artifact): facet_set SQL function (one facet property row per resource)"`
+
+---
+
+## Task 5: SQL function `lens_create`
+
+**Tag:** EXTEND. Global lens ⇒ `cogmap_id IS NULL` and the `lens_created` event has **both anchor columns NULL** (system event). Grounded in lens insert `03_seed.sql:222-235`.
+
+**Files:** `schema-artifact/02_functions.sql`
+
+- [ ] **Step 1: Add the function:**
+```sql
+-- Reusable: create a lens (global when p_cogmap IS NULL). Emits `lens_created`; a global lens is a
+-- system event with no producing anchor (both NULL — satisfies the both-null-or-both-set CHECK).
+CREATE FUNCTION lens_create(
+    p_cogmap uuid, p_name text,
+    p_w_express double precision, p_w_contains double precision, p_w_leads_to double precision,
+    p_w_near double precision, p_w_prop double precision,
+    p_s_telos double precision, p_s_ref double precision, p_s_central double precision,
+    p_resolution double precision, p_emitter uuid
+) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid; v_lens uuid; v_anchor_tbl text; 
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name='lens_created';
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type lens_created not seeded'; END IF;
+    v_anchor_tbl := CASE WHEN p_cogmap IS NULL THEN NULL ELSE 'kb_cogmaps' END;
+    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
+        VALUES (v_et, p_emitter, v_anchor_tbl, p_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_cogmap_lenses
+        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop,
+         s_telos, s_ref, s_central, resolution, asserted_by_event_id)
+    VALUES (p_cogmap, p_name, 'homed', p_w_express, p_w_contains, p_w_leads_to, p_w_near, p_w_prop,
+            p_s_telos, p_s_ref, p_s_central, p_resolution, v_ev)
+    RETURNING id INTO v_lens;
+    RETURN v_lens;
+END $$;
+```
+⚠️ Verify there is no `UNIQUE(cogmap_id, name)` that a re-seed would violate; if there is, make `seed_system` idempotent (Task 6) by guarding on existence. (`grep -n "kb_cogmap_lenses" schema-artifact/01_schema.sql`.)
+
+- [ ] **Step 2:** `psql -f 02_functions.sql` loads clean.
+- [ ] **Step 3: Commit** — `git commit -am "feat(artifact): lens_create SQL function (global system lenses)"`
+
+---
+
+## Task 6: System boot-seed (`system.yaml` + `seed_system`)
+
+**Tag:** EXTEND. Spec §"System boot-seed". Event-type registry grounded in `03_seed.sql:30-37` (+ the two new verbs). Needs a system actor (events require a NOT NULL emitter).
+
+**Files:** `schema-artifact/seeds/system.yaml`, `crates/temper-next/src/scenario/bootseed.rs`, (model: `BootSeed` in Task 7 — define it here if Task 7 not yet done, or stub)
+
+- [ ] **Step 1: `system.yaml`** — the registry + the two global lenses (EXACT values from `03_seed.sql:225,234`):
+```yaml
+event_types:
+  - resource_created
+  - resource_updated
+  - resource_deleted
+  - relationship_asserted
+  - relationship_retracted
+  - relationship_retyped
+  - cogmap_seeded
+  - region_materialized
+  - delegated_launch
+  - property_asserted     # NEW: facet_set
+  - lens_created          # NEW: lens_create
+lenses:
+  - { name: telos-default,           w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+  - { name: telos-default-propheavy, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.1, w_near: 0.3, w_prop: 1.2, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+```
+⚠️ Transcribe the FULL event-type list from `03_seed.sql:30-37` (the snippet above may elide rows). The registry should match what any temper system needs.
+
+- [ ] **Step 2: `seed_system`** — system actor, registry, global lenses. Uses `!` macros (online compile needs the artifact loaded + the search-path URL):
 ```rust
-fn parse_kind(s: String) -> EdgeKind {
-    match s.as_str() {
-        "express" => EdgeKind::Express,
-        "contains" => EdgeKind::Contains,
-        "leads_to" => EdgeKind::LeadsTo,
-        _ => EdgeKind::Near,
+use crate::scenario::model::BootSeed;
+use anyhow::Result;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+pub async fn seed_system(pool: &PgPool) -> Result<()> {
+    let raw = std::fs::read_to_string("../../schema-artifact/seeds/system.yaml")?;
+    let boot: BootSeed = serde_yaml::from_str(&raw)?;
+    // system actor (idempotent upsert)
+    let profile: Uuid = sqlx::query_scalar!(
+        "INSERT INTO kb_profiles (handle, display_name, system_access) VALUES ('system','System','admin') \
+         ON CONFLICT (handle) DO UPDATE SET display_name=EXCLUDED.display_name RETURNING id"
+    ).fetch_one(pool).await?;
+    let emitter: Uuid = sqlx::query_scalar!(
+        "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,'system',$2) \
+         ON CONFLICT (name) DO UPDATE SET profile_id=EXCLUDED.profile_id RETURNING id",
+        profile, serde_json::json!({})
+    ).fetch_one(pool).await?;
+    for et in &boot.event_types {
+        sqlx::query!("INSERT INTO kb_event_types (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", et)
+            .execute(pool).await?;
     }
-}
-```
-to:
-```rust
-fn parse_kind(s: &str) -> anyhow::Result<EdgeKind> {
-    Ok(match s {
-        "express" => EdgeKind::Express,
-        "contains" => EdgeKind::Contains,
-        "leads_to" => EdgeKind::LeadsTo,
-        "near" => EdgeKind::Near,
-        other => anyhow::bail!("unknown edge_kind from DB: {other:?}"),
-    })
-}
-```
-Update the call site at `substrate.rs:66` from `kind: parse_kind(r.get::<String, _>("kind")),` to
-`kind: parse_kind(r.get::<String, _>("kind").as_str())?,` — and because the closure now uses `?`, change
-the `.map(|r| Edge {...}).collect()` (lines 61-70) to a fallible collect:
-```rust
-    let edges = edge_rows
-        .iter()
-        .map(|r| -> anyhow::Result<Edge> {
-            Ok(Edge {
-                src: r.get("source_id"),
-                tgt: r.get("target_id"),
-                kind: parse_kind(r.get::<String, _>("kind").as_str())?,
-                weight: r.get("weight"),
-                label: r.get("label"),
-            })
-        })
-        .collect::<anyhow::Result<Vec<_>>>()?;
-```
-
-- [ ] **Step 6: Drop the `label_factor` dead placeholder**
-
-In `affinity.rs`, remove the `label_factor()` fn (around `affinity.rs:68-70`, body `-> 1.0`) and its
-multiplication in `affinity()` (`affinity.rs:91-99` — remove the `* label_factor(&e.label, lens)` factor
-so the term is `lens.w_kind(e.kind) * e.weight`). Remove any unit test that asserts only the `1.0`
-placeholder. If `lens` becomes unused in a helper after this, fix the warning. (Per spec: drop until a
-lens actually overrides labels.)
-
-- [ ] **Step 7: Run the crate's existing unit tests**
-
-Run: `cargo test -p temper-next`
-Expected: PASS (cluster_determinism + affinity tests; the new edge_kind test). The affinity change is a
-no-op numerically because `label_factor` always returned `1.0`.
-
-- [ ] **Step 8: Commit**
-```bash
-git add crates/temper-next/src/affinity.rs crates/temper-next/src/substrate.rs
-git commit -m "fix(temper-next): exhaustive edge_kind (deser + DB parse), drop label_factor placeholder"
-```
-
----
-
-## Task 3: Facet reader AMEND — multi-key + array expansion
-
-**Tag:** AMEND. Disk: `substrate.rs:73-93` (reads only `v.as_object()?.iter().next()` — first key only). Spec §"Facet model": one `property_key='facet'` row per resource; reader iterates all keys and expands array values into multiple `Facet` entries. Must stay backward-compatible with single-key scalar rows (the onboarding seed shape).
-
-**Files:**
-- Modify: `crates/temper-next/src/substrate.rs:81-93`
-
-- [ ] **Step 1: Write failing unit test for multi-key + array expansion**
-
-Add a pure helper `expand_facets(owner: Uuid, value: &serde_json::Value, weight: f64) -> Vec<Facet>` and
-test it (no DB):
-```rust
-#[test]
-fn expand_facets_handles_scalar_multikey_and_array() {
-    let o = uuid::Uuid::nil();
-    // single-key scalar (the seed shape) — unchanged behavior
-    let v = serde_json::json!({ "phase": "first-week" });
-    let f = expand_facets(o, &v, 1.0);
-    assert_eq!(f.len(), 1);
-    assert_eq!((f[0].path.as_str(), f[0].value.as_str()), ("phase", "first-week"));
-    // multi-key
-    let v = serde_json::json!({ "phase": "first-week", "topic": "deployment" });
-    assert_eq!(expand_facets(o, &v, 1.0).len(), 2);
-    // array value expands per element, sharing row weight
-    let v = serde_json::json!({ "topic": ["deployment", "release"] });
-    let f = expand_facets(o, &v, 1.5);
-    assert_eq!(f.len(), 2);
-    assert!(f.iter().all(|x| x.path == "topic" && x.weight == 1.5));
-}
-```
-
-- [ ] **Step 2: Run to verify it fails**
-
-Run: `cargo test -p temper-next expand_facets`
-Expected: FAIL — `expand_facets` not defined.
-
-- [ ] **Step 3: Implement `expand_facets` and rewire the reader**
-
-Add the helper (module-private) to `substrate.rs`:
-```rust
-fn expand_facets(owner: Uuid, value: &serde_json::Value, weight: f64) -> Vec<Facet> {
-    let Some(obj) = value.as_object() else { return Vec::new() };
-    let mut out = Vec::new();
-    for (path, v) in obj {
-        match v {
-            serde_json::Value::String(s) => out.push(Facet {
-                owner, path: path.clone(), value: s.clone(), weight,
-            }),
-            serde_json::Value::Array(items) => {
-                for item in items {
-                    if let Some(s) = item.as_str() {
-                        out.push(Facet { owner, path: path.clone(), value: s.to_string(), weight });
-                    }
-                }
-            }
-            _ => {} // non-string scalars not used by M1's affinity model
+    for l in &boot.lenses {
+        // global lens: cogmap_id NULL. Guard idempotency (see Task 5 ⚠️).
+        let exists: Option<Uuid> = sqlx::query_scalar!(
+            "SELECT id FROM kb_cogmap_lenses WHERE cogmap_id IS NULL AND name=$1", l.name
+        ).fetch_optional(pool).await?;
+        if exists.is_none() {
+            sqlx::query_scalar!(
+                "SELECT lens_create(NULL,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+                l.name, l.w_express, l.w_contains, l.w_leads_to, l.w_near, l.w_prop,
+                l.s_telos, l.s_ref, l.s_central, l.resolution, emitter
+            ).fetch_one(pool).await?;
         }
     }
-    out
+    Ok(())
 }
 ```
-Replace the facet collection at `substrate.rs:81-93` (the `filter_map` that does `iter().next()`) with:
-```rust
-    let facets = facet_rows
-        .iter()
-        .flat_map(|r| {
-            let v: serde_json::Value = r.get("property_value");
-            let weight: f64 = r.get("weight");
-            expand_facets(r.get("owner_id"), &v, weight)
-        })
-        .collect();
-```
+⚠️ Confirm `kb_profiles.handle` and `kb_entities.name` have UNIQUE constraints for the `ON CONFLICT` targets; if not, adjust to a SELECT-then-INSERT. ⚠️ `query_scalar!` infers nullability — `lens_create` returns `uuid` (non-null); `fetch_one` is fine. ⚠️ Online compile of these macros requires `DATABASE_URL` with the search-path option + artifact loaded (see Prerequisites).
 
-- [ ] **Step 4: Run to verify it passes**
-
-Run: `cargo test -p temper-next expand_facets`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-```bash
-git add crates/temper-next/src/substrate.rs
-git commit -m "fix(temper-next): facet reader supports multi-key + array values (one facet row per resource)"
-```
+- [ ] **Step 3:** `cargo build -p temper-next` (online, artifact loaded) — clean.
+- [ ] **Step 4: Commit** — `git commit -am "feat(temper-next): system boot-seed (event-type registry + global lenses)"`
 
 ---
 
-## Task 4: The scenario model (`model.rs`)
+## Task 7: The scenario model (`model.rs`)
 
-**Tag:** EXTEND. Spec §"Rust struct model" + §"The YAML DSL". Reuses `affinity::EdgeKind` (now `Deserialize`).
+**Tag:** EXTEND. Spec §"Rust struct model". Lenses referenced by name (`uses_lenses`); `BootSeed` distinct.
 
-**Files:**
-- Modify: `crates/temper-next/src/scenario/model.rs`
+**Files:** `crates/temper-next/src/scenario/model.rs`
 
-- [ ] **Step 1: Write failing test that deserializes a minimal scenario**
-
-Add a `#[cfg(test)] mod tests` to `model.rs`:
+- [ ] **Step 1: Failing test** — same as the prior plan's `deserializes_minimal_scenario_with_steps`, but the scenario YAML uses `uses_lenses: [L]` instead of a `lenses:` block, and add a `BootSeed` parse test:
 ```rust
 #[test]
-fn deserializes_minimal_scenario_with_steps() {
-    let yaml = r#"
+fn deserializes_scenario_and_bootseed() {
+    let scenario_yaml = r#"
 name: t
-cogmap:
-  telos: { title: T, statement: S, questions: [q1] }
-  owner: alice
-  emitter: agent#1
-world:
-  profiles: [{ handle: alice, display_name: Alice, system_access: approved }]
-  entities: [{ name: agent#1, profile: alice }]
+cogmap: { telos: { title: T, statement: S, questions: [q1] }, owner: alice, emitter: "agent#1" }
+world: { profiles: [{ handle: alice, display_name: Alice, system_access: approved }], entities: [{ name: "agent#1", profile: alice }] }
 resources:
   - { key: a, origin_uri: "temper://c/a", home: cogmap, body: "hello", facets: { values: { phase: x } } }
   - { key: b, origin_uri: "temper://c/b", home: cogmap, body: "world" }
-edges:
-  - { from: a, to: b, kind: leads_to, weight: 1.0 }
-lenses:
-  - { name: L, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+edges: [{ from: a, to: b, kind: leads_to, weight: 1.0 }]
+uses_lenses: [L]
 steps:
   - materialize: { lens: L }
-  - assert:
-    - { region_count: { lens: L, op: ">=", value: 1 } }
-    - { co_region: { lens: L, members: [a, b], expect: true } }
-  - emit_event:
-      type: relationship_asserted
-      edges: [{ from: b, to: a, kind: express, label: related }]
-  - assert: [{ stale: { expect: true } }]
+  - assert: [{ co_region: { lens: L, members: [a, b], expect: true } }]
 "#;
-    let s: super::Scenario = serde_yaml::from_str(yaml).unwrap();
-    assert_eq!(s.resources.len(), 2);
-    assert_eq!(s.steps.len(), 4);
-    // facet sugar / explicit both deserialize; resource b has no facets
+    let s: super::Scenario = serde_yaml::from_str(scenario_yaml).unwrap();
+    assert_eq!(s.uses_lenses, vec!["L".to_string()]);
     assert!(s.resources[1].facets.is_none());
+
+    let boot: super::BootSeed = serde_yaml::from_str(
+        "event_types: [resource_created, lens_created]\nlenses:\n  - { name: L, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }\n").unwrap();
+    assert_eq!(boot.lenses.len(), 1);
 }
 
 #[test]
 fn rejects_unknown_edge_kind() {
-    let yaml = "from: a\nto: b\nkind: sideways\nweight: 1.0\n";
-    assert!(serde_yaml::from_str::<super::EdgeDef>(yaml).is_err());
+    assert!(serde_yaml::from_str::<super::EdgeDef>("from: a\nto: b\nkind: sideways\nweight: 1.0\n").is_err());
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [ ] **Step 2:** `cargo test -p temper-next deserializes_scenario_and_bootseed` — FAIL (types undefined).
 
-Run: `cargo test -p temper-next deserializes_minimal_scenario`
-Expected: FAIL — types not defined.
+- [ ] **Step 3: Implement the model** — same as the prior plan's `model.rs` (CogmapDef/TelosDef/WorldDef/ProfileDef/EntityDef/ResourceDef/FacetDef/EdgeDef/Step/Expectation/CmpOp), with these deltas:
+  - `Scenario` field `pub uses_lenses: Vec<String>` (NOT `lenses: Vec<LensDef>`).
+  - Add:
+    ```rust
+    #[derive(Debug, Deserialize)]
+    #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+    pub struct BootSeed { pub event_types: Vec<String>, pub lenses: Vec<LensDef> }
 
-- [ ] **Step 3: Implement the model**
-
-Write `crates/temper-next/src/scenario/model.rs`:
-```rust
-use crate::affinity::EdgeKind;
-use serde::Deserialize;
-
-fn one() -> f64 { 1.0 }
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct Scenario {
-    pub name: String,
-    pub cogmap: CogmapDef,
-    pub world: WorldDef,
-    pub resources: Vec<ResourceDef>,
-    #[serde(default)]
-    pub edges: Vec<EdgeDef>,
-    pub lenses: Vec<LensDef>,
-    pub steps: Vec<Step>,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct CogmapDef {
-    pub telos: TelosDef,
-    pub owner: String,    // profile handle (in world.profiles)
-    pub emitter: String,  // entity name (in world.entities)
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct TelosDef {
-    pub title: String,
-    pub statement: String,
-    #[serde(default)]
-    pub questions: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct WorldDef {
-    pub profiles: Vec<ProfileDef>,
-    pub entities: Vec<EntityDef>,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct ProfileDef {
-    pub handle: String,
-    pub display_name: String,
-    pub system_access: String, // 'none' | 'approved' | 'admin'
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct EntityDef {
-    pub name: String,
-    pub profile: String, // profile handle
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct ResourceDef {
-    pub key: String,
-    #[serde(default)]
-    pub title: Option<String>,
-    pub origin_uri: String,
-    #[serde(default = "home_cogmap")]
-    pub home: String, // "cogmap" for M1
-    #[serde(default)]
-    pub doc_type: Option<String>,
-    pub body: String,
-    #[serde(default)]
-    pub facets: Option<FacetDef>,
-}
-fn home_cogmap() -> String { "cogmap".into() }
-
-/// One `property_key='facet'` row per resource. `values` is the coherent multi-key JSONB object
-/// (scalar or array values); `weight` applies to every (path,value) pair it expands to.
-/// A bare map is sugar: `facets: { phase: x }` == `{ values: { phase: x }, weight: 1.0 }`.
-#[derive(Debug, Deserialize)]
-#[serde(untagged)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum FacetDef {
-    Explicit { values: serde_json::Map<String, serde_json::Value>, #[serde(default = "one")] weight: f64 },
-    Bare(serde_json::Map<String, serde_json::Value>),
-}
-impl FacetDef {
-    pub fn values(&self) -> &serde_json::Map<String, serde_json::Value> {
-        match self { FacetDef::Explicit { values, .. } => values, FacetDef::Bare(v) => v }
+    #[derive(Debug, Deserialize)]
+    #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+    pub struct LensDef {
+        pub name: String,
+        pub w_express: f64, pub w_contains: f64, pub w_leads_to: f64, pub w_near: f64, pub w_prop: f64,
+        pub s_telos: f64, pub s_ref: f64, pub s_central: f64, pub resolution: f64,
     }
-    pub fn weight(&self) -> f64 {
-        match self { FacetDef::Explicit { weight, .. } => *weight, FacetDef::Bare(_) => 1.0 }
-    }
-}
+    ```
+  - `EdgeKind` reused from `affinity` (gets `Deserialize` in Task 8 — Task 8 must land before this compiles, OR add the derive here and remove from Task 8). **Sequencing note:** do Task 8's EdgeKind-derive step before this task, or fold it in.
+  - `FacetDef` as the prior plan (untagged Explicit/Bare), with the ⚠️ schemars-untagged fallback note.
 
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct EdgeDef {
-    pub from: String,
-    pub to: String,
-    pub kind: EdgeKind,
-    #[serde(default)]
-    pub label: Option<String>,
-    #[serde(default = "one")]
-    pub weight: f64,
-}
-
-#[derive(Debug, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct LensDef {
-    pub name: String,
-    pub w_express: f64, pub w_contains: f64, pub w_leads_to: f64, pub w_near: f64, pub w_prop: f64,
-    pub s_telos: f64, pub s_ref: f64, pub s_central: f64, pub resolution: f64,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum Step {
-    Materialize { lens: String },
-    EmitEvent { #[serde(rename = "type")] event_type: String, edges: Vec<EdgeDef> },
-    Assert(Vec<Expectation>),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum Expectation {
-    RegionCount { lens: String, op: CmpOp, value: i64 },
-    CoRegion { lens: String, members: Vec<String>, expect: bool },
-    CohesionOrder { lens: String, greater: String, lesser: String },
-    RegionSize { lens: String, member: String, value: i64 },
-    InternalTension { lens: String, member: String, op: CmpOp, value: f64 },
-    Reproducible { lens: String },
-    FingerprintDiffers { lens_a: String, lens_b: String },
-    Stale { expect: bool },
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub enum CmpOp {
-    #[serde(rename = ">=")] Ge,
-    #[serde(rename = ">")] Gt,
-    #[serde(rename = "==")] Eq,
-}
-impl CmpOp {
-    pub fn cmp_f64(self, a: f64, b: f64) -> bool {
-        match self { CmpOp::Ge => a >= b, CmpOp::Gt => a > b, CmpOp::Eq => (a - b).abs() < f64::EPSILON }
-    }
-}
-```
-
-⚠️ **Plan/reality note for the implementer:** `serde(untagged)` on `FacetDef` with `schemars` — verify
-`schemars` 1.x handles the untagged enum cleanly when the `scenario-schema` feature is on (Task 16). If
-it produces an unusable schema, fall back to a single struct `FacetDef { values, weight }` and drop the
-bare-map sugar (the onboarding YAML can always use the explicit form). The sugar is a convenience, not a
-requirement.
-
-- [ ] **Step 4: Run to verify it passes**
-
-Run: `cargo test -p temper-next deserializes_minimal_scenario rejects_unknown_edge_kind`
-Expected: PASS both.
-
-- [ ] **Step 5: Commit**
-```bash
-git add crates/temper-next/src/scenario/model.rs
-git commit -m "feat(temper-next): scenario YAML model (substrate + step/expectation DSL)"
-```
+- [ ] **Step 4:** `cargo test -p temper-next deserializes_scenario_and_bootseed rejects_unknown_edge_kind` — PASS.
+- [ ] **Step 5: Commit** — `git commit -am "feat(temper-next): scenario + bootseed YAML model"`
 
 ---
 
-## Task 5: Explicit emitter in `materialize_cogmap`
+## Task 8: Enabling fixes to existing code
 
-**Tag:** AMEND. Disk: `write.rs:25-33` derives the materialization event's emitter from
-`(SELECT emitter_entity_id FROM kb_events ORDER BY occurred_at DESC LIMIT 1)` — NULL on an empty log
-(NOT NULL violation), arbitrary on `occurred_at` ties. Spec deferred-CR `emitter_entity_id`: pass the
-emitter explicitly. Callers: `main.rs:24` (or thereabouts) and `tests/materialize.rs`.
+**Tag:** AMEND (4 fixes, all spec deferred-CR). Disk: `affinity.rs:4-9,68-70,91-99`; `substrate.rs:73-93,127-134`; `write.rs:14,25-33`; `main.rs`.
 
-**Files:**
-- Modify: `crates/temper-next/src/write.rs:14,25-33`
-- Modify: `crates/temper-next/src/main.rs`
+This is the prior plan's **Tasks 2, 3, 5 combined** — execute those step sequences verbatim:
+- [ ] **EdgeKind** — add `serde::Deserialize` (`rename_all="snake_case"`) + gated `JsonSchema`; test `edge_kind_deserializes_snake_case_and_rejects_unknown`.
+- [ ] **parse_kind** — make exhaustive/erroring (`near` explicit, unknown → `anyhow::bail!`), update the fallible edge collect in `substrate.rs:61-70`.
+- [ ] **label_factor** — remove the `-> 1.0` placeholder + its multiplication in `affinity()` + the placeholder test.
+- [ ] **facet reader AMEND** — add `expand_facets(owner, &Value, weight) -> Vec<Facet>` (scalar + array expansion) and replace the `filter_map`/`iter().next()` at `substrate.rs:81-93` with a `flat_map(expand_facets…)`; test `expand_facets_handles_scalar_multikey_and_array`.
+- [ ] **explicit emitter** — `materialize_cogmap(pool, cogmap, lens, emitter: Uuid)`; bind `$2` emitter in the event INSERT (`write.rs:25-33`); update `main.rs` to resolve the cogmap's **genesis/steward** emitter honestly:
+  ```rust
+  // the entity that seeded this cogmap (the bound steward) — a real referent, not "latest event"
+  let emitter: Uuid = sqlx::query_scalar!(
+      "SELECT emitter_entity_id FROM kb_events \
+       WHERE producing_anchor_table='kb_cogmaps' AND producing_anchor_id=$1 \
+       ORDER BY occurred_at ASC LIMIT 1", cogmap
+  ).fetch_one(&pool).await?;
+  ```
+  and update `tests/materialize.rs` callers to pass an emitter.
 
-- [ ] **Step 1: Change the signature + the INSERT**
+⚠️ **Macro vs runtime:** convert the queries you touch here to `!` macros **except** any `::vector` query. `write.rs`'s centroid/readout UPDATEs and `embed.rs`'s `UPDATE kb_chunks SET embedding=$1::vector` stay **runtime `query()`** (the established pgvector exception — see `search_service`). The emitter SELECT and the edge/facet reads are non-vector → macros.
 
-`write.rs:14` — add an `emitter: Uuid` parameter:
-```rust
-pub async fn materialize_cogmap(
-    pool: &PgPool,
-    cogmap: Uuid,
-    lens_name: &str,
-    emitter: Uuid,
-) -> Result<MaterializeOutcome> {
-```
-`write.rs:25-33` — bind the emitter instead of the subselect:
-```rust
-    let ev: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id) \
-         SELECT (SELECT id FROM kb_event_types WHERE name='region_materialized'), \
-                $2, 'kb_cogmaps', $1 RETURNING id",
-    )
-    .bind(cogmap)
-    .bind(emitter)
-    .fetch_one(&mut *tx)
-    .await?;
-```
-
-- [ ] **Step 2: Update `main.rs` caller**
-
-`main.rs` currently calls `materialize_cogmap(&pool, cogmap, &lens)`. It must now resolve an emitter and
-pass it. Resolve the cogmap's genesis emitter (the entity that seeded it) — simplest robust source:
-```rust
-let emitter: Uuid = sqlx::query_scalar(
-    "SELECT emitter_entity_id FROM kb_events \
-     WHERE producing_anchor_table='kb_cogmaps' AND producing_anchor_id=$1 \
-     ORDER BY occurred_at ASC LIMIT 1",
-)
-.bind(cogmap)
-.fetch_one(&pool)
-.await?;
-```
-Then `materialize_cogmap(&pool, cogmap, &lens, emitter).await?`.
-
-- [ ] **Step 3: Update the existing materialize test caller**
-
-`tests/materialize.rs` calls `materialize_cogmap` twice — add an `emitter` arg. Resolve it the same way
-inside the test (or fetch any seeded entity: `SELECT id FROM kb_entities LIMIT 1`). Keep the test's
-existing assertions (determinism, ≥2 regions, non-null/non-NaN readouts) unchanged.
-
-- [ ] **Step 4: Verify build + existing tests**
-
-Run: `cargo build -p temper-next` then (if you have the artifact + ONNX)
-`cargo nextest run -p temper-next --features artifact-tests materialize`
-Expected: build clean; the materialize test still passes (behavior identical — the loader path always has
-a genesis event, so the resolved emitter equals the previously-derived one).
-
-- [ ] **Step 5: Commit**
-```bash
-git add crates/temper-next/src/write.rs crates/temper-next/src/main.rs crates/temper-next/tests/materialize.rs
-git commit -m "fix(temper-next): pass materialization emitter explicitly (no latest-event derivation)"
-```
+- [ ] **Run + commit** — `cargo test -p temper-next` (+ `--features artifact-tests materialize` if artifact loaded); `git commit -am "fix(temper-next): exhaustive edge_kind, facet multi-key, explicit emitter, drop label_factor"`
 
 ---
 
-## Task 6: Loader — connect, world preamble, `KeyMap`
+## Task 9: Thin loader (`load_scenario` over the SQL functions)
 
-**Tag:** EXTEND. Spec §"World preamble" + §Architecture loader row. Reuses `substrate::connect`.
+**Tag:** EXTEND. The loader **calls the Layer-1 functions** — no direct substrate inserts (except the tiny `world` identity rows). Returns `Loaded { cogmap, emitter, keys }` with implicit `telos`.
 
-**Files:**
-- Modify: `crates/temper-next/src/scenario/loader.rs`
+**Files:** `crates/temper-next/src/scenario/loader.rs`
 
-- [ ] **Step 1: Define `KeyMap` + the world-seeding entry points**
-
-Write the loader's spine in `loader.rs`:
+- [ ] **Step 1: Implement** (all `query_scalar!`, non-vector):
 ```rust
 use crate::scenario::model::*;
 use anyhow::{Context, Result};
@@ -618,779 +415,265 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-/// Local `key:` → resource Uuid, plus the implicit `telos` key (the cogmap charter resource)
-/// and bookkeeping ids the runner needs.
-pub struct Loaded {
-    pub cogmap: Uuid,
-    pub emitter: Uuid,
-    pub keys: HashMap<String, Uuid>, // resource keys incl. "telos"
-}
+pub struct Loaded { pub cogmap: Uuid, pub emitter: Uuid, pub keys: HashMap<String, Uuid> }
 
-/// Idempotently ensure the event-type registry rows the loader/runner emit.
-async fn ensure_event_types(pool: &PgPool) -> Result<()> {
-    for name in ["cogmap_seeded", "relationship_asserted", "region_materialized"] {
-        sqlx::query("INSERT INTO kb_event_types (name) VALUES ($1) ON CONFLICT (name) DO NOTHING")
-            .bind(name).execute(pool).await?;
-    }
-    Ok(())
-}
-
-async fn seed_world(pool: &PgPool, world: &WorldDef) -> Result<(HashMap<String, Uuid>, HashMap<String, Uuid>)> {
-    let mut profiles = HashMap::new();
-    for p in &world.profiles {
-        let id: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_profiles (handle, display_name, system_access) VALUES ($1,$2,$3) RETURNING id",
-        ).bind(&p.handle).bind(&p.display_name).bind(&p.system_access).fetch_one(pool).await?;
-        profiles.insert(p.handle.clone(), id);
-    }
-    let mut entities = HashMap::new();
-    for e in &world.entities {
-        let pid = profiles.get(&e.profile).with_context(|| format!("entity {} references unknown profile {}", e.name, e.profile))?;
-        let id: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,$2,'{}'::jsonb) RETURNING id",
-        ).bind(pid).bind(&e.name).fetch_one(pool).await?;
-        entities.insert(e.name.clone(), id);
-    }
-    Ok((profiles, entities))
-}
-```
-
-⚠️ **Plan/reality note:** `system_access` is a Postgres enum in the artifact (`01_schema.sql`,
-`{none, approved, admin}`). Binding a `&str` to an enum column may need a cast. If the insert errors on
-type, change the VALUES to `$3::system_access` (confirm the enum's type name via
-`grep -n "system_access" schema-artifact/01_schema.sql`). Same pattern applies anywhere a Rust string
-binds to a PG enum column.
-
-- [ ] **Step 2: Build check**
-
-Run: `cargo build -p temper-next`
-Expected: clean (functions unused yet — allow dead_code or wire in Task 7).
-
-- [ ] **Step 3: Commit**
-```bash
-git add crates/temper-next/src/scenario/loader.rs
-git commit -m "feat(temper-next): scenario loader — connect, event-type registry, world preamble"
-```
-
----
-
-## Task 7: Loader — cogmap genesis + implicit `telos` key
-
-**Tag:** CONFORM. Disk: `02_functions.sql:458` `cogmap_genesis(...)` signature; it homes the telos resource
-and stamps `doc_type=cogmap_charter`. Spec §"Full node set": loader seeds an implicit `telos` key.
-
-**Files:**
-- Modify: `crates/temper-next/src/scenario/loader.rs`
-
-- [ ] **Step 1: Implement genesis + telos-key resolution**
-
-Add to `loader.rs`:
-```rust
-async fn seed_cogmap(pool: &PgPool, c: &CogmapDef, owner: Uuid, emitter: Uuid) -> Result<(Uuid, Uuid)> {
-    // cogmap_genesis(p_name, p_telos_title, p_telos_statement, p_questions[], p_owner_profile, p_emitter_entity, p_origin_uri DEFAULT)
-    let cogmap: Uuid = sqlx::query_scalar(
-        "SELECT cogmap_genesis($1,$2,$3,$4,$5,$6)",
-    )
-    .bind("PLACEHOLDER_NAME") // replaced below
-    .bind(&c.telos.title)
-    .bind(&c.telos.statement)
-    .bind(&c.telos.questions)
-    .bind(owner)
-    .bind(emitter)
-    .fetch_one(pool).await?;
-    let telos: Uuid = sqlx::query_scalar("SELECT telos_resource_id FROM kb_cogmaps WHERE id=$1")
-        .bind(cogmap).fetch_one(pool).await?;
-    Ok((cogmap, telos))
-}
-```
-⚠️ The cogmap **name** comes from `Scenario.name`, not `CogmapDef`. Thread `scenario.name` into this fn
-(add a `name: &str` param and bind it as `$1`). Remove the placeholder. `p_questions` binds as a Rust
-`&[String]` / `&Vec<String>` → PG `text[]` (sqlx maps `Vec<String>` to `text[]`).
-
-- [ ] **Step 2: Build check**
-
-Run: `cargo build -p temper-next`
-Expected: clean.
-
-- [ ] **Step 3: Commit**
-```bash
-git add crates/temper-next/src/scenario/loader.rs
-git commit -m "feat(temper-next): loader cogmap_genesis + implicit telos key"
-```
-
----
-
-## Task 8: Loader — resources + content blocks/chunks
-
-**Tag:** CONFORM. Disk: `03_seed.sql:255-265` (resource → home → content_block → chunk → chunk_content
-pattern) and `02_functions.sql:497-518` (genesis block/chunk shape). Content hash mirrors the seed:
-`md5(origin_uri)` for concept chunks.
-
-**Files:**
-- Modify: `crates/temper-next/src/scenario/loader.rs`
-
-- [ ] **Step 1: Implement resource insertion returning keys**
-
-```rust
-async fn seed_resources(
-    pool: &PgPool, cogmap: Uuid, owner: Uuid, genesis_ev: Uuid, resources: &[ResourceDef],
-) -> Result<HashMap<String, Uuid>> {
-    let mut keys = HashMap::new();
-    for r in resources {
-        let title = r.title.clone().unwrap_or_else(|| r.key.clone());
-        let rid: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_resources (title, origin_uri) VALUES ($1,$2) RETURNING id",
-        ).bind(&title).bind(&r.origin_uri).fetch_one(pool).await?;
-        sqlx::query(
-            "INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id) \
-             VALUES ($1,'kb_cogmaps',$2,$3,$3)",
-        ).bind(rid).bind(cogmap).bind(owner).execute(pool).await?;
-        // one content block + chunk + content (chunk_index 0, content_hash = md5(origin_uri) per seed)
-        let block: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id) \
-             VALUES ($1,0,$2,$2) RETURNING id",
-        ).bind(rid).bind(genesis_ev).fetch_one(pool).await?;
-        let chunk: Uuid = sqlx::query_scalar(
-            "INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash) \
-             VALUES ($1,$2,0,md5($3)) RETURNING id",
-        ).bind(block).bind(rid).bind(&r.origin_uri).fetch_one(pool).await?;
-        sqlx::query("INSERT INTO kb_chunk_content (chunk_id, content) VALUES ($1,$2)")
-            .bind(chunk).bind(&r.body).execute(pool).await?;
-        if let Some(dt) = &r.doc_type {
-            sqlx::query(
-                "INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id) \
-                 VALUES ('kb_resources',$1,'doc_type',to_jsonb($2::text),$3,$3)",
-            ).bind(rid).bind(dt).bind(genesis_ev).execute(pool).await?;
-        }
-        keys.insert(r.key.clone(), rid);
-    }
-    Ok(keys)
-}
-```
-⚠️ **Plan/reality note:** the loader needs a "genesis/assert" event id to stamp `asserted_by_event_id`/
-`last_event_id`/`genesis_event_id` on the substrate rows (the seed uses `ev_assert`). `cogmap_genesis`
-creates its own internal event but does not return it. Create one `relationship_asserted` event up front
-(producing anchor = the cogmap) and thread its id as `genesis_ev` through resources/facets/edges — mirror
-`03_seed.sql`'s single `ev_assert` used across the cast. Resolve where this event is created in Task 9's
-orchestrator (`load_scenario`).
-
-- [ ] **Step 2: Build check** — `cargo build -p temper-next`. Expected: clean.
-
-- [ ] **Step 3: Commit**
-```bash
-git add crates/temper-next/src/scenario/loader.rs
-git commit -m "feat(temper-next): loader resources + content blocks/chunks"
-```
-
----
-
-## Task 9: Loader — facets, edges, lenses + `load_scenario` orchestrator
-
-**Tag:** CONFORM/EXTEND. Disk: facet row shape `03_seed.sql:266-267,314-315` (note the weighted variant
-has the `weight` column); edges `03_seed.sql:459-474`; lenses `03_seed.sql:222-235`. Facet write is the
-one-row-per-property-type model (spec §"Facet model").
-
-**Files:**
-- Modify: `crates/temper-next/src/scenario/loader.rs`
-
-- [ ] **Step 1: Facets — one `property_key='facet'` row per resource**
-
-```rust
-async fn seed_facets(pool: &PgPool, keys: &HashMap<String, Uuid>, ev: Uuid, resources: &[ResourceDef]) -> Result<()> {
-    for r in resources {
-        let Some(f) = &r.facets else { continue };
-        let rid = keys[&r.key];
-        let value = serde_json::Value::Object(f.values().clone());
-        sqlx::query(
-            "INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id) \
-             VALUES ('kb_resources',$1,'facet',$2,$3,$4,$4)",
-        ).bind(rid).bind(value).bind(f.weight()).bind(ev).execute(pool).await?;
-    }
-    Ok(())
-}
-```
-
-- [ ] **Step 2: Edges — resolve `from`/`to` via the KeyMap (incl. `telos`)**
-
-```rust
-async fn seed_edges(pool: &PgPool, cogmap: Uuid, keys: &HashMap<String, Uuid>, ev: Uuid, edges: &[EdgeDef]) -> Result<()> {
-    for e in edges {
-        let src = keys.get(&e.from).with_context(|| format!("edge from unknown key {}", e.from))?;
-        let tgt = keys.get(&e.to).with_context(|| format!("edge to unknown key {}", e.to))?;
-        let kind = edge_kind_sql(e.kind); // "express" | "contains" | "leads_to" | "near"
-        sqlx::query(
-            "INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label, \
-                                   home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
-             VALUES ('kb_resources',$1,'kb_resources',$2,$3::edge_kind,$4,'kb_cogmaps',$5,$6,$6)",
-        ).bind(src).bind(tgt).bind(kind).bind(&e.label).bind(cogmap).bind(ev).execute(pool).await?;
-    }
-    Ok(())
-}
-
-fn edge_kind_sql(k: crate::affinity::EdgeKind) -> &'static str {
+pub(crate) fn edge_kind_sql(k: crate::affinity::EdgeKind) -> &'static str {
     use crate::affinity::EdgeKind::*;
     match k { Express => "express", Contains => "contains", LeadsTo => "leads_to", Near => "near" }
 }
-```
-⚠️ Confirm the enum type name is `edge_kind` via `grep -n "edge_kind" schema-artifact/01_schema.sql`.
 
-- [ ] **Step 3: Lenses**
-
-```rust
-async fn seed_lenses(pool: &PgPool, cogmap: Uuid, ev: Uuid, lenses: &[LensDef]) -> Result<()> {
-    for l in lenses {
-        sqlx::query(
-            "INSERT INTO kb_cogmap_lenses \
-               (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id) \
-             VALUES ($1,$2,'homed',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-        ).bind(cogmap).bind(&l.name)
-         .bind(l.w_express).bind(l.w_contains).bind(l.w_leads_to).bind(l.w_near).bind(l.w_prop)
-         .bind(l.s_telos).bind(l.s_ref).bind(l.s_central).bind(l.resolution).bind(ev)
-         .execute(pool).await?;
-    }
-    Ok(())
-}
-```
-
-- [ ] **Step 4: The `load_scenario` orchestrator**
-
-```rust
 pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
-    ensure_event_types(pool).await?;
-    let (profiles, entities) = seed_world(pool, &s.world).await?;
+    // world identity rows (tiny — direct, not event-projected for M1)
+    let mut profiles = HashMap::new();
+    for p in &s.world.profiles {
+        let id: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_profiles (handle, display_name, system_access) VALUES ($1,$2,$3) RETURNING id",
+            p.handle, p.display_name, p.system_access
+        ).fetch_one(pool).await?;
+        profiles.insert(p.handle.clone(), id);
+    }
+    let mut entities = HashMap::new();
+    for e in &s.world.entities {
+        let pid = profiles.get(&e.profile).with_context(|| format!("entity {} → unknown profile {}", e.name, e.profile))?;
+        let id: Uuid = sqlx::query_scalar!(
+            "INSERT INTO kb_entities (profile_id, name, metadata) VALUES ($1,$2,$3) RETURNING id",
+            pid, e.name, serde_json::json!({})
+        ).fetch_one(pool).await?;
+        entities.insert(e.name.clone(), id);
+    }
     let owner = *profiles.get(&s.cogmap.owner).context("cogmap.owner not in world.profiles")?;
     let emitter = *entities.get(&s.cogmap.emitter).context("cogmap.emitter not in world.entities")?;
-    let (cogmap, telos) = seed_cogmap(pool, &s.name, &s.cogmap, owner, emitter).await?;
-    // one assertion event threaded through the substrate rows (mirrors 03_seed.sql's ev_assert)
-    let ev: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at) \
-         SELECT id, $2, 'kb_cogmaps', $1, now() FROM kb_event_types WHERE name='relationship_asserted' RETURNING id",
-    ).bind(cogmap).bind(emitter).fetch_one(pool).await?;
-    let mut keys = seed_resources(pool, cogmap, owner, ev, &s.resources).await?;
-    keys.insert("telos".into(), telos);
-    seed_facets(pool, &keys, ev, &s.resources).await?;
-    seed_edges(pool, cogmap, &keys, ev, &s.edges).await?;
-    seed_lenses(pool, cogmap, ev, &s.lenses).await?;
+
+    // genesis (existing fn) → cogmap + telos
+    let cogmap: Uuid = sqlx::query_scalar!(
+        "SELECT cogmap_genesis($1,$2,$3,$4,$5,$6)",
+        s.name, s.cogmap.telos.title, s.cogmap.telos.statement, &s.cogmap.telos.questions, owner, emitter
+    ).fetch_one(pool).await?.context("cogmap_genesis returned null")?;
+    let telos: Uuid = sqlx::query_scalar!("SELECT telos_resource_id FROM kb_cogmaps WHERE id=$1", cogmap)
+        .fetch_one(pool).await?;
+
+    let mut keys = HashMap::new();
+    keys.insert("telos".to_string(), telos);
+    for r in &s.resources {
+        let title = r.title.clone().unwrap_or_else(|| r.key.clone());
+        let rid: Uuid = sqlx::query_scalar!(
+            "SELECT resource_create($1,$2,$3,$4,$5,$6,$7)",
+            title, r.origin_uri, cogmap, owner, r.body, r.doc_type, emitter
+        ).fetch_one(pool).await?.context("resource_create returned null")?;
+        keys.insert(r.key.clone(), rid);
+        if let Some(f) = &r.facets {
+            let values = serde_json::Value::Object(f.values().clone());
+            sqlx::query!("SELECT facet_set($1,$2,$3,$4)", rid, values, f.weight(), emitter)
+                .execute(pool).await?;
+        }
+    }
+    for e in &s.edges {
+        let src = *keys.get(&e.from).with_context(|| format!("edge from unknown key {}", e.from))?;
+        let tgt = *keys.get(&e.to).with_context(|| format!("edge to unknown key {}", e.to))?;
+        sqlx::query!(
+            "SELECT relationship_assert($1,$2,$3::edge_kind,$4,$5,$6,$7)",
+            src, tgt, edge_kind_sql(e.kind), e.label, e.weight, cogmap, emitter
+        ).execute(pool).await?;
+    }
     Ok(Loaded { cogmap, emitter, keys })
 }
 ```
-(Adjust `seed_cogmap`'s signature to `(pool, name, cogmap_def, owner, emitter)` per Task 7's note.)
+⚠️ `cogmap_genesis`/`resource_create` return `uuid`; sqlx infers `Option<Uuid>` for function-call SELECTs → hence `.context("…null")?`. ⚠️ `&s.cogmap.telos.questions` binds `&Vec<String>` → `text[]`; confirm sqlx accepts the slice form in the macro (use `&s.cogmap.telos.questions[..]` if needed). ⚠️ `$3::edge_kind` cast on a `&str` — the macro needs the enum type known; if it complains, pass the kind as the PG enum via a small newtype or keep this one as runtime `query()`.
 
-- [ ] **Step 5: Build check** — `cargo build -p temper-next`. Expected: clean.
-
-- [ ] **Step 6: Commit**
-```bash
-git add crates/temper-next/src/scenario/loader.rs
-git commit -m "feat(temper-next): loader facets/edges/lenses + load_scenario orchestrator"
-```
+- [ ] **Step 2:** `cargo build -p temper-next` (online) — clean.
+- [ ] **Step 3: Commit** — `git commit -am "feat(temper-next): thin load_scenario over resource_create/relationship_assert/facet_set"`
 
 ---
 
-## Task 10: Loader integration test — substrate writes load + read back
+## Task 10: Loader integration test
 
-**Tag:** EXTEND (test). Verifies the loader produces a substrate `substrate::load` can read.
+**Tag:** EXTEND (test). Mirrors the prior plan's Task 10, but boot-seed first.
 
-**Files:**
-- Create: `crates/temper-next/tests/scenario_load.rs` (gated `artifact-tests`)
+**Files:** `crates/temper-next/tests/scenario_load.rs` (`artifact-tests`), `tests/fixtures/minimal_scenario.yaml`
 
-- [ ] **Step 1: Write the test**
-
+- [ ] **Step 1: Test** — reset `temper_next`, `seed_system`, then `load_scenario`, then read back via `substrate::load`:
 ```rust
 #![cfg(feature = "artifact-tests")]
-use temper_next::scenario::{loader, model::Scenario};
+use temper_next::scenario::{bootseed, loader, model::Scenario};
 use temper_next::substrate;
 
 #[tokio::test]
-async fn loads_a_minimal_scenario_into_readable_substrate() {
+async fn loads_minimal_scenario_into_readable_substrate() {
     let pool = substrate::connect().await.unwrap();
-    let yaml = std::fs::read_to_string("tests/fixtures/minimal_scenario.yaml").unwrap();
-    let s: Scenario = serde_yaml::from_str(&yaml).unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+    let s: Scenario = serde_yaml::from_str(&std::fs::read_to_string("tests/fixtures/minimal_scenario.yaml").unwrap()).unwrap();
     let loaded = loader::load_scenario(&pool, &s).await.unwrap();
-    // the telos key is present and resolves
     assert!(loaded.keys.contains_key("telos"));
-    // substrate::load sees the homed nodes (telos + the scenario's resources)
-    let sub = substrate::load(&pool, loaded.cogmap, "L").await.unwrap();
-    assert!(sub.nodes.len() >= s.resources.len() + 1); // +1 telos
+    let sub = substrate::load(&pool, loaded.cogmap, "telos-default").await.unwrap();
+    assert!(sub.nodes.len() >= s.resources.len() + 1); // +telos
     assert!(!sub.edges.is_empty());
 }
 ```
-Create `crates/temper-next/tests/fixtures/minimal_scenario.yaml` from the Task 4 test YAML (give it a
-lens named `L`, 2 resources `a`/`b`, one edge). **Run against a freshly (re)loaded `01_schema`+`02_functions`
-into a clean `temper_next`** — the loader does not reset the namespace.
+The fixture uses `uses_lenses: [telos-default]` (a boot-seeded global lens) so `substrate::load(...,"telos-default")` resolves the global lens.
+⚠️ **Isolation:** these tests share the `temper_next` namespace. Add a reset helper (drop+reload `01_schema`+`02_functions`, or `TRUNCATE` the kb_* tables) in a serialized setup. Confirm the pattern `tests/materialize.rs` relies on before inventing one — the existing artifact-tests assume a pre-loaded seed; this suite must own its setup.
 
-⚠️ **Plan/reality note:** tests sharing a DB namespace collide. Either (a) run this file's tests serially
-with a fresh schema reload in a setup step, or (b) follow the existing temper-next test convention — check
-how `tests/materialize.rs` isolates (it currently assumes the seed is loaded). Simplest for M1: a small
-helper that `TRUNCATE`s or re-creates the `temper_next` schema before load. Confirm the pattern the other
-`artifact-tests` use before inventing one.
-
-- [ ] **Step 2: Run** (needs artifact + ONNX not required here — no embed):
-
-Run: `cargo nextest run -p temper-next --features artifact-tests loads_a_minimal_scenario`
-Expected: PASS.
-
-- [ ] **Step 3: Commit**
-```bash
-git add crates/temper-next/tests/scenario_load.rs crates/temper-next/tests/fixtures/minimal_scenario.yaml
-git commit -m "test(temper-next): loader writes a readable substrate (artifact-tests)"
-```
+- [ ] **Step 2:** `cargo nextest run -p temper-next --features artifact-tests loads_minimal_scenario` — PASS.
+- [ ] **Step 3: Commit** — `git commit -am "test(temper-next): boot-seed + load_scenario produce a readable substrate"`
 
 ---
 
-## Task 11: Runner — lens validation, materialize step, fingerprint cache
+## Task 11: Runner — validate, materialize, emit, assert
 
-**Tag:** EXTEND. Spec §"Runner execution semantics". Reuses `embed::embed_chunks`, `write::materialize_cogmap`.
+**Tag:** EXTEND. Spec §"Runner execution semantics". Combine the prior plan's Tasks 11–13 (runner spine + emit_event + expectation eval), with these deltas under the new architecture:
+- `emit_event` calls `relationship_assert` (the SQL function), not a raw insert:
+  ```rust
+  async fn emit_event(pool: &PgPool, loaded: &Loaded, _event_type: &str, edges: &[EdgeDef]) -> Result<()> {
+      for e in edges {
+          let src = *loaded.keys.get(&e.from).with_context(|| format!("emit edge from unknown key {}", e.from))?;
+          let tgt = *loaded.keys.get(&e.to).with_context(|| format!("emit edge to unknown key {}", e.to))?;
+          sqlx::query!("SELECT relationship_assert($1,$2,$3::edge_kind,$4,$5,$6,$7)",
+              src, tgt, crate::scenario::loader::edge_kind_sql(e.kind), e.label, e.weight, loaded.cogmap, loaded.emitter)
+              .execute(pool).await?;
+      }
+      Ok(())
+  }
+  ```
+  (Each `relationship_assert` emits its own `relationship_asserted` event with the explicit emitter — the S6h mutation. The `event_type` field is informational for M1.)
+- Lens validation checks against **boot-seeded + scenario** lenses: validate every lens named in `steps`/`uses_lenses` exists in `kb_cogmap_lenses` (global or this cogmap) via a query, OR against `s.uses_lenses` for the static check plus a DB existence check at first materialize.
+- Expectation eval queries are all **non-vector reads → `query!`/`query_scalar!` macros** (region membership, `content_cohesion`, `internal_tension`, `cogmap_staleness`). Use the prior plan's `eval_expectation` bodies, converted from runtime `query()`+`.get()` to macros. `region_of`, `region_count`, `region_size`, `cohesion_order`, `internal_tension`, `reproducible`/`fingerprint_differs` (runner fp cache), `stale` — exactly as the prior plan, macro-ized.
+- `materialize` step: `embed::embed_chunks(pool).await?` then `write::materialize_cogmap(pool, loaded.cogmap, lens, loaded.emitter).await?`; maintain `fps`/`prev_fps` per lens (reproducible compares them).
 
-**Files:**
-- Modify: `crates/temper-next/src/scenario/runner.rs`
-
-- [ ] **Step 1: Runner spine + fingerprint helper + materialize**
-
-```rust
-use crate::scenario::loader::{self, Loaded};
-use crate::scenario::model::*;
-use crate::{embed, write};
-use anyhow::{bail, Context, Result};
-use sqlx::{PgPool, Row};
-use std::collections::HashMap;
-
-pub async fn run_scenario(pool: &PgPool, s: &Scenario) -> Result<()> {
-    let loaded = loader::load_scenario(pool, s).await?;
-    validate_lens_names(s)?;
-    let mut fps: HashMap<String, String> = HashMap::new(); // lens → last fingerprint
-    let mut prev_fps: HashMap<String, String> = HashMap::new(); // lens → fingerprint BEFORE last materialize
-    for (i, step) in s.steps.iter().enumerate() {
-        match step {
-            Step::Materialize { lens } => {
-                embed::embed_chunks(pool).await?;
-                let out = write::materialize_cogmap(pool, loaded.cogmap, lens, loaded.emitter).await
-                    .with_context(|| format!("step {i}: materialize {lens}"))?;
-                if let Some(old) = fps.insert(lens.clone(), out.membership_fingerprint.clone()) {
-                    prev_fps.insert(lens.clone(), old);
-                }
-            }
-            Step::EmitEvent { event_type, edges } => {
-                emit_event(pool, &loaded, event_type, edges).await
-                    .with_context(|| format!("step {i}: emit_event {event_type}"))?;
-            }
-            Step::Assert(exps) => {
-                for e in exps {
-                    eval_expectation(pool, &loaded, e, &fps, &prev_fps).await
-                        .with_context(|| format!("step {i}: assertion failed"))?;
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn validate_lens_names(s: &Scenario) -> Result<()> {
-    let declared: std::collections::HashSet<&str> = s.lenses.iter().map(|l| l.name.as_str()).collect();
-    let mut check = |name: &str| -> Result<()> {
-        if !declared.contains(name) { bail!("scenario references undeclared lens {name:?}"); }
-        Ok(())
-    };
-    for step in &s.steps {
-        match step {
-            Step::Materialize { lens } => check(lens)?,
-            Step::Assert(exps) => for e in exps { for l in expectation_lenses(e) { check(l)?; } },
-            Step::EmitEvent { .. } => {}
-        }
-    }
-    Ok(())
-}
-
-fn expectation_lenses(e: &Expectation) -> Vec<&str> {
-    match e {
-        Expectation::RegionCount { lens, .. } | Expectation::CoRegion { lens, .. }
-        | Expectation::CohesionOrder { lens, .. } | Expectation::RegionSize { lens, .. }
-        | Expectation::InternalTension { lens, .. } | Expectation::Reproducible { lens } => vec![lens.as_str()],
-        Expectation::FingerprintDiffers { lens_a, lens_b } => vec![lens_a.as_str(), lens_b.as_str()],
-        Expectation::Stale { .. } => vec![],
-    }
-}
-```
-
-⚠️ **Reproducible semantics:** `reproducible{lens}` must compare the fingerprint of the **two most recent
-materializes of that lens**. The cache above stores current in `fps` and the pre-current in `prev_fps`,
-updated only on Materialize. So `reproducible` passes iff `fps[lens] == prev_fps[lens]`. This matches
-`run_eval.sh` S6b (materialize → A, materialize → B, assert A==B).
-
-- [ ] **Step 2: Build check** — `cargo build -p temper-next` (emit_event/eval_expectation stubs added next; add `todo!()` temporarily or implement in Tasks 12–13 before building). Expected: clean once 12–13 land.
-
-- [ ] **Step 3: Commit** (after 12–13 compile; or commit a `todo!()` skeleton now)
-```bash
-git add crates/temper-next/src/scenario/runner.rs
-git commit -m "feat(temper-next): scenario runner spine — lens validation, materialize, fp cache"
-```
+- [ ] **Step 1:** Implement `run_scenario`, `validate_lens_names`, `emit_event`, `eval_expectation` per the above + the prior plan's bodies.
+- [ ] **Step 2:** `cargo build -p temper-next && cargo test -p temper-next` — clean + unit tests pass.
+- [ ] **Step 3: Commit** — `git commit -am "feat(temper-next): scenario runner (validate/materialize/emit/assert, S6a-h)"`
 
 ---
 
-## Task 12: Runner — `emit_event` step (explicit emitter)
+## Task 12: Stand up `.sqlx` offline cache + `prepare-next`
 
-**Tag:** CONFORM. Disk: `run_eval.sh:97-113` (the S6h `relationship_asserted` event + express edges).
-Emitter passed explicitly (Task 5 rationale).
+**Tag:** EXTEND (infra). Spec §"`!`-macro prepare ritual".
 
-**Files:**
-- Modify: `crates/temper-next/src/scenario/runner.rs`
+**Files:** `crates/temper-next/.sqlx/` (generated), `Makefile.toml`
 
-- [ ] **Step 1: Implement `emit_event`**
-
-```rust
-async fn emit_event(pool: &PgPool, loaded: &Loaded, event_type: &str, edges: &[EdgeDef]) -> Result<()> {
-    let ev: uuid::Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at) \
-         SELECT id, $2, 'kb_cogmaps', $1, now() FROM kb_event_types WHERE name=$3 RETURNING id",
-    ).bind(loaded.cogmap).bind(loaded.emitter).bind(event_type).fetch_one(pool).await?;
-    for e in edges {
-        let src = loaded.keys.get(&e.from).with_context(|| format!("emit_event edge from unknown key {}", e.from))?;
-        let tgt = loaded.keys.get(&e.to).with_context(|| format!("emit_event edge to unknown key {}", e.to))?;
-        let kind = crate::scenario::loader::edge_kind_sql(e.kind); // make this fn pub(crate) in loader
-        sqlx::query(
-            "INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label, \
-                                   home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id) \
-             VALUES ('kb_resources',$1,'kb_resources',$2,$3::edge_kind,$4,'kb_cogmaps',$5,$6,$6)",
-        ).bind(src).bind(tgt).bind(kind).bind(&e.label).bind(loaded.cogmap).bind(ev).execute(pool).await?;
-    }
-    Ok(())
-}
+- [ ] **Step 1: Add the cargo-make task** to `Makefile.toml`:
+```toml
+[tasks.prepare-next]
+description = "Regenerate temper-next's per-crate .sqlx cache against the loaded temper_next artifact"
+script = '''
+for f in 01_schema 02_functions; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema-artifact/$f.sql; done
+DATABASE_URL="${DATABASE_URL}?options=-csearch_path%3Dtemper_next,public" cargo sqlx prepare -p temper-next
+'''
 ```
-(Promote `edge_kind_sql` in `loader.rs` to `pub(crate)`.)
+⚠️ If `DATABASE_URL` already has query params, merge rather than append `?`. Confirm the exact cargo-make script syntax against existing tasks in `Makefile.toml`.
 
-- [ ] **Step 2: Build check** — `cargo build -p temper-next`. Expected: clean (once Task 13 lands).
-
-- [ ] **Step 3: Commit**
+- [ ] **Step 2: Generate + commit the cache:**
 ```bash
-git add crates/temper-next/src/scenario/runner.rs crates/temper-next/src/scenario/loader.rs
-git commit -m "feat(temper-next): runner emit_event step (mutation events + edges)"
+cargo make prepare-next
+git add crates/temper-next/.sqlx
 ```
+- [ ] **Step 3: Verify offline build** — `SQLX_OFFLINE=true cargo build -p temper-next` — clean (compiles against the committed cache).
+- [ ] **Step 4: Commit** — `git commit -am "build(temper-next): per-crate .sqlx offline cache + prepare-next task"`
 
 ---
 
-## Task 13: Runner — expectation evaluation
+## Task 13: Author `onboarding-cogmap.yaml`
 
-**Tag:** CONFORM. Each variant maps to an S6 query (spec §"Expectation vocabulary → S6 mapping").
-Queries are keyed on `origin_uri` and the lens name, mirroring `run_eval.sh` / `04b_region_suite.sql`.
+**Tag:** CONFORM. Transcribe verbatim from `03_seed.sql` (executable grounding). Identical to the prior plan's Task 14 cast table, with **two changes**: (a) no `lenses:` block — use `uses_lenses: [telos-default, telos-default-propheavy]`; (b) the boot-seed must be loaded before this scenario runs.
 
-**Files:**
-- Modify: `crates/temper-next/src/scenario/runner.rs`
+**Files:** `schema-artifact/scenarios/onboarding-cogmap.yaml`
 
-- [ ] **Step 1: Implement `eval_expectation` + helpers**
+- [ ] **Step 1: Author the YAML** — use the cast table from the spec / prior plan:
+  - Genesis (`03_seed.sql:183-193`): name `onboarding-cogmap`; telos title `Onboarding charter`; statement `Help a new EPD engineer reach first-merge confidence in week one.`; the 3 questions (lines 188-190).
+  - World: profile `{ handle: dave, display_name: Dave, system_access: approved }`, entity `{ name: onboarding-agent#1, profile: dave }`.
+  - 14 resources (telos implicit): `regulation` (`temper://reg/pair`, doc_type `cogmap_regulation`, body line 210, no facet) + the 13 concepts with origin_uris/prose/facets per the table below (prose copied **byte-for-byte** from the cited lines):
 
-Member resolution goes key → `origin_uri` → region. Build a reverse map (key → origin_uri) from the
-scenario once, OR query the resource's `origin_uri` by the resolved id from `loaded.keys`. Simplest:
-resolve key → uuid via `loaded.keys`, then query region by member id.
+  | key | origin_uri | facet | body lines |
+  |-----|-----------|-------|-----------|
+  | pair | temper://c/pair | `{ values: { phase: first-week } }` | 263-265 |
+  | smallest | temper://c/smallest | `{ values: { phase: first-week } }` | 278-280 |
+  | confidence | temper://c/confidence | `{ values: { phase: first-week } }` | 293-295 |
+  | staging | temper://c/staging | `{ values: { topic: deployment }, weight: 1.5 }` | 311-313 |
+  | flags | temper://c/flags | `{ values: { topic: deployment }, weight: 1.5 }` | 326-328 |
+  | rollback | temper://c/rollback | `{ values: { topic: deployment }, weight: 1.5 }` | 341-343 |
+  | oncall | temper://c/oncall | `{ values: { topic: deployment }, weight: 1.5 }` | 356-358 |
+  | checklist | temper://c/checklist | `{ values: { topic: deployment }, weight: 1.5 }` | 373-375 |
+  | bluegreen | temper://c/bluegreen | `{ values: { topic: deployment }, weight: 1.5 }` | 390-392 |
+  | bigbang | temper://c/bigbang | `{ values: { topic: deployment }, weight: 1.5 }` | 405-407 |
+  | solo | temper://c/solo | none | 422-423 |
+  | setup | temper://c/setup | none | 438-439 |
+  | firstbuild | temper://c/firstbuild | none | 449-450 |
 
-```rust
-async fn region_of(pool: &PgPool, cogmap: uuid::Uuid, lens: &str, member_id: uuid::Uuid) -> Result<Option<uuid::Uuid>> {
-    let row = sqlx::query(
-        "SELECT m.region_id FROM kb_cogmap_region_members m \
-         JOIN kb_cogmap_regions r ON r.id=m.region_id AND NOT r.is_folded \
-         JOIN kb_cogmap_lenses l ON l.id=r.lens_id AND l.name=$2 \
-         WHERE r.cogmap_id=$1 AND m.member_id=$3",
-    ).bind(cogmap).bind(lens).bind(member_id).fetch_optional(pool).await?;
-    Ok(row.map(|r| r.get::<uuid::Uuid, _>("region_id")))
-}
+  - 10 edges: `{telos→regulation, express, operationalized_by}` (line 214-216); `{setup→firstbuild, leads_to, then}` (line 454); the 8 from lines 464-471 (pair→smallest near, pair→confidence near, smallest→pair near, confidence→pair express, staging→flags leads_to, flags→rollback leads_to, rollback→oncall leads_to, bluegreen→bigbang near label contradicts). All weight 1.0.
+  - `uses_lenses: [telos-default, telos-default-propheavy]`.
+  - `steps:` — the full S6a–h runbook from the spec §"The YAML DSL".
 
-async fn eval_expectation(
-    pool: &PgPool, loaded: &Loaded, e: &Expectation,
-    fps: &HashMap<String, String>, prev_fps: &HashMap<String, String>,
-) -> Result<()> {
-    let key = |k: &str| -> Result<uuid::Uuid> { loaded.keys.get(k).copied().with_context(|| format!("unknown member key {k}")) };
-    match e {
-        Expectation::RegionCount { lens, op, value } => {
-            let n: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM kb_cogmap_regions r JOIN kb_cogmap_lenses l ON l.id=r.lens_id \
-                 WHERE r.cogmap_id=$1 AND l.name=$2 AND NOT r.is_folded",
-            ).bind(loaded.cogmap).bind(lens).fetch_one(pool).await?;
-            if !op.cmp_f64(n as f64, *value as f64) { bail!("region_count {n} !{op:?} {value} for lens {lens}"); }
-        }
-        Expectation::CoRegion { lens, members, expect } => {
-            let mut regions = Vec::new();
-            for m in members { regions.push(region_of(pool, loaded.cogmap, lens, key(m)?).await?); }
-            let all_same = regions.windows(2).all(|w| w[0].is_some() && w[0] == w[1]);
-            if all_same != *expect { bail!("co_region {members:?} expected {expect}, got regions {regions:?} (lens {lens})"); }
-        }
-        Expectation::RegionSize { lens, member, value } => {
-            let region = region_of(pool, loaded.cogmap, lens, key(member)?).await?.context("member has no region")?;
-            let n: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_cogmap_region_members WHERE region_id=$1")
-                .bind(region).fetch_one(pool).await?;
-            if n != *value { bail!("region_size of {member} = {n}, expected {value} (lens {lens})"); }
-        }
-        Expectation::CohesionOrder { lens, greater, lesser } => {
-            let rg = region_of(pool, loaded.cogmap, lens, key(greater)?).await?.context("greater has no region")?;
-            let rl = region_of(pool, loaded.cogmap, lens, key(lesser)?).await?.context("lesser has no region")?;
-            let cg: f64 = sqlx::query_scalar("SELECT content_cohesion FROM kb_cogmap_regions WHERE id=$1").bind(rg).fetch_one(pool).await?;
-            let cl: f64 = sqlx::query_scalar("SELECT content_cohesion FROM kb_cogmap_regions WHERE id=$1").bind(rl).fetch_one(pool).await?;
-            if !(cg > cl) { bail!("cohesion_order: {greater}({cg}) !> {lesser}({cl}) (lens {lens})"); }
-        }
-        Expectation::InternalTension { lens, member, op, value } => {
-            let region = region_of(pool, loaded.cogmap, lens, key(member)?).await?.context("member has no region")?;
-            let t: f64 = sqlx::query_scalar("SELECT internal_tension FROM kb_cogmap_regions WHERE id=$1").bind(region).fetch_one(pool).await?;
-            if !op.cmp_f64(t, *value) { bail!("internal_tension of {member} = {t} !{op:?} {value} (lens {lens})"); }
-        }
-        Expectation::Reproducible { lens } => {
-            let now = fps.get(lens).context("reproducible: lens never materialized")?;
-            let before = prev_fps.get(lens).context("reproducible: lens materialized only once")?;
-            if now != before { bail!("reproducible: lens {lens} fingerprints differ ({before} vs {now})"); }
-        }
-        Expectation::FingerprintDiffers { lens_a, lens_b } => {
-            let a = fps.get(lens_a).context("fingerprint_differs: lens_a not materialized")?;
-            let b = fps.get(lens_b).context("fingerprint_differs: lens_b not materialized")?;
-            if a == b { bail!("fingerprint_differs: {lens_a} and {lens_b} are identical"); }
-        }
-        Expectation::Stale { expect } => {
-            let is_stale: bool = sqlx::query_scalar("SELECT is_stale FROM cogmap_staleness($1)")
-                .bind(loaded.cogmap).fetch_one(pool).await?;
-            if is_stale != *expect { bail!("stale = {is_stale}, expected {expect}"); }
-        }
-    }
-    Ok(())
-}
-```
-
-⚠️ **Plan/reality note:** the runner's `membership_fingerprint` (from `MaterializeOutcome`) must equal
-`run_eval.sh`'s `fp()` (md5 over `origin_uri` ordered by `r.id, origin_uri`) for `reproducible`/
-`fingerprint_differs` to mean the same thing. Verify `write.rs`'s fingerprint construction matches that
-ordering; if it differs, the `reproducible`/`differs` checks still work *internally* (they compare runner
-fingerprints to each other), so exact equality with `run_eval.sh` is not required — but note the
-divergence. Do NOT change `write.rs`'s fingerprint to match unless a test needs it.
-
-- [ ] **Step 2: Build + run the model/unit tests** — `cargo build -p temper-next && cargo test -p temper-next`. Expected: clean + unit tests pass.
-
-- [ ] **Step 3: Commit**
-```bash
-git add crates/temper-next/src/scenario/runner.rs
-git commit -m "feat(temper-next): runner expectation evaluation (S6a-h vocabulary)"
-```
+- [ ] **Step 2: Parse test** (ungated): assert `resources.len()==14`, `edges.len()==10`, `uses_lenses.len()==2`.
+  Run: `cargo test -p temper-next onboarding_yaml_parses` — PASS.
+- [ ] **Step 3: Commit** — `git commit -am "feat(scenarios): onboarding-cogmap.yaml (15-node cast, lenses by reference)"`
 
 ---
 
-## Task 14: Author `onboarding-cogmap.yaml`
+## Task 14: Roundtrip integration test + 04b verdict cross-check
 
-**Tag:** CONFORM. Transcribe the exact cast from `03_seed.sql` — this is executable grounding: every
-value must match the seed or the regions/verdict diverge.
+**Tag:** EXTEND (test). The acceptance gate. Same as the prior plan's Task 15, with `seed_system` first.
 
-**Files:**
-- Create: `schema-artifact/scenarios/onboarding-cogmap.yaml`
+**Files:** `crates/temper-next/tests/scenario_roundtrip.rs` (`artifact-tests`)
 
-- [ ] **Step 1: Author the YAML — transcribe verbatim from `03_seed.sql`**
-
-Authoritative source values (do not paraphrase the prose — copy it byte-for-byte from the cited lines):
-- **Genesis** (`03_seed.sql:183-193`): name `onboarding-cogmap`; telos title `Onboarding charter`;
-  statement `Help a new EPD engineer reach first-merge confidence in week one.`; questions =
-  the 3 at lines 188-190.
-- **World:** one profile (owner) + one entity (emitter). The seed's owner is `p_dave`; emitter is
-  `onboarding-agent#1` (`03_seed.sql:100-102`). Declare: profile `{ handle: dave, display_name: Dave, system_access: approved }`, entity `{ name: onboarding-agent#1, profile: dave }`. (The exact handle/display values don't affect regions — only owner/emitter wiring does.)
-- **Resources (15 total):** `telos` is implicit (genesis). Author the other 14:
-  - `regulation` — origin_uri `temper://reg/pair`, doc_type `cogmap_regulation`, body line 210, NO facet.
-  - 13 concepts — keys/origin_uris/prose/facets from `03_seed.sql:255-450`:
-    | key | origin_uri | facet | body lines |
-    |-----|-----------|-------|-----------|
-    | pair | temper://c/pair | `{ phase: first-week }` (w 1.0) | 263-265 |
-    | smallest | temper://c/smallest | `{ phase: first-week }` | 278-280 |
-    | confidence | temper://c/confidence | `{ phase: first-week }` | 293-295 |
-    | staging | temper://c/staging | `{ topic: deployment }` weight 1.5 | 311-313 |
-    | flags | temper://c/flags | `{ topic: deployment }` weight 1.5 | 326-328 |
-    | rollback | temper://c/rollback | `{ topic: deployment }` weight 1.5 | 341-343 |
-    | oncall | temper://c/oncall | `{ topic: deployment }` weight 1.5 | 356-358 |
-    | checklist | temper://c/checklist | `{ topic: deployment }` weight 1.5 | 373-375 |
-    | bluegreen | temper://c/bluegreen | `{ topic: deployment }` weight 1.5 | 390-392 |
-    | bigbang | temper://c/bigbang | `{ topic: deployment }` weight 1.5 | 405-407 |
-    | solo | temper://c/solo | NONE | 422-423 |
-    | setup | temper://c/setup | NONE | 438-439 |
-    | firstbuild | temper://c/firstbuild | NONE | 449-450 |
-- **Edges (10 total):**
-  - `{ from: telos, to: regulation, kind: express, label: operationalized_by }` (line 214-216)
-  - `{ from: setup, to: firstbuild, kind: leads_to, label: then }` (line 454)
-  - the 8 from `03_seed.sql:464-471`: pair→smallest (near), pair→confidence (near), smallest→pair (near),
-    confidence→pair (express), staging→flags (leads_to), flags→rollback (leads_to), rollback→oncall (leads_to),
-    bluegreen→bigbang (near, label contradicts). All weight 1.0 (default).
-- **Lenses (2):** EXACT values from `03_seed.sql:225,234` — telos-default
-  (`w_express 1.0, w_contains 1.0, w_leads_to 0.6, w_near 0.3, w_prop 0.4, s_telos 0.5, s_ref 0.3, s_central 0.2, resolution 0.5`)
-  and telos-default-propheavy (`… w_leads_to 0.1, w_prop 1.2 …`, rest identical).
-- **Steps:** the full S6a–h runbook from the spec §"The YAML DSL" `steps:` block (already grounded in `run_eval.sh`).
-
-⚠️ Facet weight: the `{ phase: first-week }` facets have **no** weight in the seed (default 1.0) — use
-`facets: { values: { phase: first-week } }`. The `{ topic: deployment }` facets are **weight 1.5** —
-use `facets: { values: { topic: deployment }, weight: 1.5 }`.
-
-- [ ] **Step 2: Validate it deserializes** (pure, no DB)
-
-Add a unit test in `model.rs` (or a small `tests/onboarding_parses.rs`, ungated):
-```rust
-#[test]
-fn onboarding_yaml_parses() {
-    let y = std::fs::read_to_string("../../schema-artifact/scenarios/onboarding-cogmap.yaml").unwrap();
-    let s: temper_next::scenario::model::Scenario = serde_yaml::from_str(&y).unwrap();
-    assert_eq!(s.resources.len(), 14); // telos is implicit
-    assert_eq!(s.edges.len(), 10);
-    assert_eq!(s.lenses.len(), 2);
-}
-```
-⚠️ Confirm the relative path from the test's CWD (cargo runs tests with CWD = crate dir
-`crates/temper-next`), so `../../schema-artifact/...`. Adjust if needed.
-
-Run: `cargo test -p temper-next onboarding_yaml_parses`
-Expected: PASS.
-
-- [ ] **Step 3: Commit**
-```bash
-git add schema-artifact/scenarios/onboarding-cogmap.yaml crates/temper-next/
-git commit -m "feat(scenarios): onboarding-cogmap.yaml — full 15-node cast transcribed from 03_seed.sql"
-```
-
----
-
-## Task 15: Integration test — roundtrip + 04b verdict cross-check (nextest-native)
-
-**Tag:** EXTEND (test). Spec §"Testing & equivalence proof". The acceptance gate.
-
-**Files:**
-- Create: `crates/temper-next/tests/scenario_roundtrip.rs` (gated `artifact-tests`)
-
-- [ ] **Step 1: Write the roundtrip test**
-
+- [ ] **Step 1: Test:**
 ```rust
 #![cfg(feature = "artifact-tests")]
-use temper_next::scenario::{model::Scenario, runner};
+use temper_next::scenario::{bootseed, model::Scenario, runner};
 use temper_next::substrate;
 
 #[tokio::test]
 async fn onboarding_scenario_roundtrips_to_s6_verdict() {
-    // Precondition: temper_next has 01_schema + 02_functions loaded and is otherwise empty
-    // (reset helper — mirror the isolation pattern the other artifact-tests use).
     let pool = substrate::connect().await.unwrap();
-    let yaml = std::fs::read_to_string("../../schema-artifact/scenarios/onboarding-cogmap.yaml").unwrap();
-    let s: Scenario = serde_yaml::from_str(&yaml).unwrap();
-
-    // 1) the declarative asserts (S6a-h) — run_scenario returns Err on any failed expectation
+    // reset temper_next, then boot-seed (event types + global lenses), then run.
+    bootseed::seed_system(&pool).await.unwrap();
+    let s: Scenario = serde_yaml::from_str(
+        &std::fs::read_to_string("../../schema-artifact/scenarios/onboarding-cogmap.yaml").unwrap()).unwrap();
     runner::run_scenario(&pool, &s).await.expect("declarative S6a-h asserts pass");
-
-    // 2) independent cross-check: the 04b verdict logic, evaluated via sqlx (no psql/bash).
-    //    Same checks, different encoding (SQL aggregate over origin_uri).
     let all_pass: bool = sqlx::query_scalar(VERDICT_SQL).fetch_one(&pool).await.unwrap();
     assert!(all_pass, "04b onboarding_s6_verdict all_pass must be true");
 }
-
-// The WITH td … SELECT … all_pass body of 04b_region_suite.sql, inlined as one query.
-// Transcribe verbatim from schema-artifact/04b_region_suite.sql (the `v AS (...) SELECT ... all_pass`).
-const VERDICT_SQL: &str = r#"
-WITH td AS (
-  SELECT res.origin_uri, m.region_id
-  FROM kb_cogmap_region_members m
-  JOIN kb_cogmap_regions r ON r.id = m.region_id AND NOT r.is_folded
-  JOIN kb_cogmap_lenses  l ON l.id = r.lens_id AND l.name = 'telos-default'
-  JOIN kb_resources    res ON res.id = m.member_id
-)
-SELECT (
-  (SELECT count(*) FROM kb_cogmap_regions r JOIN kb_cogmap_lenses l ON l.id=r.lens_id
-     WHERE l.name='telos-default' AND NOT r.is_folded) >= 2
-  AND (SELECT a.region_id = b.region_id FROM td a, td b
-         WHERE a.origin_uri='temper://c/pair' AND b.origin_uri='temper://c/smallest')
-  AND (SELECT ca.content_cohesion > cb.content_cohesion FROM kb_cogmap_regions ca, kb_cogmap_regions cb
-         WHERE ca.id=(SELECT region_id FROM td WHERE origin_uri='temper://c/pair')
-           AND cb.id=(SELECT region_id FROM td WHERE origin_uri='temper://c/staging'))
-  AND (SELECT count(*)=1 FROM td WHERE region_id=(SELECT region_id FROM td WHERE origin_uri='temper://c/solo'))
-  AND (SELECT (SELECT region_id FROM td WHERE origin_uri='temper://c/checklist')
-            = (SELECT region_id FROM td WHERE origin_uri='temper://c/staging'))
-  AND (SELECT (SELECT region_id FROM td WHERE origin_uri='temper://c/bluegreen')
-            = (SELECT region_id FROM td WHERE origin_uri='temper://c/bigbang')
-       AND (SELECT internal_tension FROM kb_cogmap_regions
-              WHERE id=(SELECT region_id FROM td WHERE origin_uri='temper://c/bluegreen')) > 0)
-) AS all_pass
-"#;
+const VERDICT_SQL: &str = r#"…"#; // transcribe the `v AS (...) SELECT ... all_pass` body from 04b_region_suite.sql VERBATIM
 ```
-⚠️ **Transcribe `VERDICT_SQL` from the real file** (`04b_region_suite.sql`, the `v AS (...)` block) rather
-than trusting the sketch above — keep it byte-faithful to the committed view so the cross-check is the
-genuine S6a/c/d/e/g verdict. (S6b/f/h are covered by the declarative asserts in step 1.)
+(`VERDICT_SQL` is a **runtime** query in a test target — no macro/cache. Transcribe it byte-faithfully from `04b_region_suite.sql`.)
 
-- [ ] **Step 2: Run the full roundtrip** (needs artifact schema + ONNX runtime):
-
-Setup then run:
+- [ ] **Step 2: Run** (artifact + ONNX):
 ```bash
 for f in 01_schema 02_functions; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema-artifact/$f.sql; done
 cargo nextest run -p temper-next --features artifact-tests onboarding_scenario_roundtrips
 ```
-Expected: PASS — both the declarative asserts and `all_pass = true`.
+Expected: PASS — declarative asserts AND `all_pass = true`.
 
-- [ ] **Step 3: Cross-validate against `run_eval.sh`** (manual confidence check during transition):
-
-Run `schema-artifact/run_eval.sh` (SQL-seed path) and confirm it still prints ALL S6 PASS. The two seed
-paths (SQL and YAML) should both pass the same verdict — that is the equivalence the spec calls for.
-
-- [ ] **Step 4: Commit**
-```bash
-git add crates/temper-next/tests/scenario_roundtrip.rs
-git commit -m "test(temper-next): onboarding YAML roundtrips to S6 verdict (nextest-native cross-check)"
-```
+- [ ] **Step 3: Equivalence confidence check** — run `schema-artifact/run_eval.sh` (SQL-seed path) and confirm it still prints ALL S6 PASS. Both seed paths pass the same verdict.
+- [ ] **Step 4: Commit** — `git commit -am "test(temper-next): onboarding YAML roundtrips to S6 verdict (nextest-native)"`
 
 ---
 
-## Task 16: Schema emission + drift snapshot
+## Task 15: Schema emission + drift snapshot
 
-**Tag:** EXTEND. Spec §"Schema emission".
+**Tag:** EXTEND. Same as the prior plan's Task 16.
 
-**Files:**
-- Create: `crates/temper-next/tests/scenario_schema.rs` (gated `scenario-schema`)
-- Create: `schema-artifact/scenarios/scenario.schema.json`
+**Files:** `crates/temper-next/tests/scenario_schema.rs` (`scenario-schema`), `schema-artifact/scenarios/scenario.schema.json`
 
-- [ ] **Step 1: Write the drift test**
-
-```rust
-#![cfg(feature = "scenario-schema")]
-use temper_next::scenario::model::Scenario;
-
-#[test]
-fn scenario_json_schema_matches_snapshot() {
-    let schema = schemars::schema_for!(Scenario);
-    let rendered = serde_json::to_string_pretty(&schema).unwrap() + "\n";
-    let path = "../../schema-artifact/scenarios/scenario.schema.json";
-    if std::env::var("UPDATE_SCHEMA").is_ok() {
-        std::fs::write(path, &rendered).unwrap();
-    }
-    let committed = std::fs::read_to_string(path).unwrap_or_default();
-    assert_eq!(rendered, committed, "scenario schema drifted — re-run with UPDATE_SCHEMA=1 to refresh");
-}
-```
-
-- [ ] **Step 2: Generate the snapshot**
-
-Run: `UPDATE_SCHEMA=1 cargo test -p temper-next --features scenario-schema scenario_json_schema_matches_snapshot`
-Expected: writes `scenario.schema.json`, test passes.
-
-⚠️ If `schemars` rejects the `#[serde(untagged)]` `FacetDef` or the `CmpOp` rename, apply the Task 4
-fallback (struct `FacetDef`) and regenerate.
-
-- [ ] **Step 3: Verify drift detection**
-
-Run (no UPDATE): `cargo test -p temper-next --features scenario-schema scenario_json_schema_matches_snapshot`
-Expected: PASS against the committed snapshot.
-
-- [ ] **Step 4: Commit**
-```bash
-git add crates/temper-next/tests/scenario_schema.rs schema-artifact/scenarios/scenario.schema.json
-git commit -m "feat(temper-next): emit + snapshot-test scenario JSON Schema (scenario-schema feature)"
-```
+- [ ] **Step 1:** drift test emitting `schemars::schema_for!(Scenario)` vs the committed snapshot (`UPDATE_SCHEMA=1` refreshes). Body identical to the prior plan's Task 16.
+- [ ] **Step 2:** `UPDATE_SCHEMA=1 cargo test -p temper-next --features scenario-schema scenario_json_schema_matches_snapshot` — writes the snapshot, passes. ⚠️ If `schemars` rejects the untagged `FacetDef`/`CmpOp` rename, apply the Task 7 struct fallback and regenerate.
+- [ ] **Step 3:** no-UPDATE run — PASS against committed snapshot.
+- [ ] **Step 4: Commit** — `git commit -am "feat(temper-next): emit + snapshot-test scenario JSON Schema"`
 
 ---
 
-## Final verification (end-of-plan, run inline in the controller session)
+## Final verification (run inline in the controller session)
 
-- [ ] `cargo make check` (fmt + clippy + machete + TS) — clean.
-- [ ] `cargo nextest run -p temper-next` (ungated unit tests) — pass.
-- [ ] With artifact schema loaded + ONNX: `cargo nextest run -p temper-next --features artifact-tests` — pass (loader, roundtrip, materialize).
-- [ ] `cargo test -p temper-next --features scenario-schema` — schema snapshot passes.
-- [ ] `schema-artifact/run_eval.sh` still prints ALL S6 PASS (SQL-seed path unbroken).
-- [ ] Update `temper-next`'s CLAUDE.md note if the `scenario-schema` feature changes the artifact-tests story (per the keep-CLAUDE.md-current rule).
+- [ ] `cargo make check` — clean (fmt/clippy/machete/TS).
+- [ ] `cargo make prepare-next` produces no diff (cache current) — commit if it does.
+- [ ] `SQLX_OFFLINE=true cargo build -p temper-next` — offline compile clean.
+- [ ] `cargo nextest run -p temper-next` (ungated) — pass.
+- [ ] artifact + ONNX: `cargo nextest run -p temper-next --features artifact-tests` — pass (load, roundtrip, materialize).
+- [ ] `cargo test -p temper-next --features scenario-schema` — snapshot passes.
+- [ ] `schema-artifact/run_eval.sh` — ALL S6 PASS (SQL path unbroken).
+- [ ] Update `temper-next` CLAUDE.md / artifact README with the `prepare-next` ritual + the new SQL functions (keep-CLAUDE.md-current rule).
 
 ## Self-review notes (spec coverage)
 
-- Write path (direct sqlx) → Tasks 6–10. Full runbook S6a–h → Tasks 11–14 (steps), Task 15 (gate).
-- References by local `key` + implicit `telos` → Tasks 7, 9, 13.
-- Facet model (one row per property type, multi-key, array) → Tasks 3, 9.
-- Deferred CR findings folded into M1: `parse_kind` (T2), `label_factor` (T2), multi-key facets (T3),
-  explicit emitter (T5), lens-name validation (T11). Deferred-beyond-M1 (opposed-labels, format_embedding,
-  affinity memo) are NOT in this plan by design.
-- Schema emission + drift → Task 16. Equivalence proof (nextest-native 04b cross-check) → Task 15.
-- Out of scope (access scaffold, ts-rs/OpenAPI, temper-api routing) → not present, correct.
+- Mutation mechanics as SQL functions → Tasks 2–5; boot-seed (event types + global lenses) → Task 6; `!`-macros + per-crate `.sqlx` → Tasks 6/8/9/11 (macros) + Task 12 (cache); pgvector runtime exception honored (Task 8).
+- Thin loader over functions → Task 9; runner full S6a–h → Task 11; onboarding YAML (lenses by reference) → Task 13; nextest-native equivalence → Task 14; JSON Schema drift → Task 15.
+- Deferred CR folded into M1: parse_kind, label_factor, facet multi-key, explicit emitter, lens-name validation (Tasks 8, 11).
+- Out of scope (full 03_seed retirement, access scaffold, ts-rs/OpenAPI, temper-api routing) → absent, correct.

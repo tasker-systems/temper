@@ -41,24 +41,48 @@ case derisks later generalization.
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | **References** | Local stable `key:` ids (not JSON-Schema `$ref`) | Closed document — simpler, clearer. Edges/asserts reference resources by `key`; the loader builds `key → Uuid` as it inserts. |
-| **Write path** | Direct sqlx against `temper_next`, reusing `cogmap_genesis()` | Same approach `write.rs`/`embed.rs` already use; whole roundtrip becomes one Rust integration test; types stay typed end-to-end. (Routing through temper-api targets the *production* schema, not the artifact — deferred to M4.) |
+| **Write path / mechanics** | **Reusable SQL functions** in `02_functions.sql` (the `cogmap_genesis` mold): each emits its event **and** projects in one txn. The Rust loader is a thin caller passing YAML inputs. | The seed's create/associate work is *reusable* substrate, not throwaway. `02_functions.sql` has no mutation functions yet except `cogmap_genesis` — finishing that pattern (`resource_create`, `relationship_assert`, `facet_set`, `lens_create`) gives the temper-cogmap lift real write paths driven by events, with the YAML as the event input source. (Routing through temper-api targets the *production* schema — deferred to M4.) |
+| **SQL checking** | `sqlx::query!`/`query_scalar!`/`query_as!` **macros** for temper-next's reusable (non-test) code; per-crate `crates/temper-next/.sqlx` prepared against the loaded `temper_next` artifact | Compile-time shape safety for code we rely on (CLAUDE.md SQL rule). Thin `SELECT fn(...)` callers over the SQL functions are trivial to cache; runtime `.get()` shape-drift is eliminated. Tests keep runtime `query()` (sqlx can't cache test-target queries). |
+| **System boot-seed** | A canonical boot-seed (event-type registry + **global system lenses**) seeded **separately** from scenario seeds | Splits "any temper system needs this" from "this test scenario needs this." Event types already live inline at `03_seed.sql:30-37`; lenses (`telos-default`/`-propheavy`) become global (`cogmap_id IS NULL`) via `lens_created`. Scenarios reference lenses by name, not by re-declaring weights. |
 | **Scenario shape** | Substrate + **ordered step runbook** (materialize / emit-event / assert) | `run_eval.sh` is not flat load-then-assert; S6h mutates mid-run and re-materializes. Full parity requires modeling the sequence. |
-| **Placement** | `crates/temper-next/src/scenario/` + `schema-artifact/scenarios/*.yaml` | Keeps artifact-scenario concepts inside the artifact boundary; temper-core stays the production shared-types crate. Extract to a shared crate only if/when M4 needs it. |
+| **Placement** | `crates/temper-next/src/scenario/` + `schema-artifact/scenarios/*.yaml` + boot-seed at `schema-artifact/seeds/` | Keeps artifact-scenario concepts inside the artifact boundary; temper-core stays the production shared-types crate. Extract to a shared crate only if/when M4 needs it. |
 | **Schema emission** | `schemars::JsonSchema` (gated feature), snapshot-tested for drift | Proves the same structs that load the config define the wire shape. ts-rs/OpenAPI deferred until a consumer exists (YAGNI). |
 
 ## Architecture
 
-Three new units in `crates/temper-next/src/scenario/`, plus reuse of the existing materialize path.
+Two layers: **reusable mutation mechanics as SQL functions** in the artifact, and a **thin Rust
+loader/runner** in `crates/temper-next/src/scenario/` that calls them with YAML inputs.
+
+### Layer 1 — mutation mechanics (SQL functions in `02_functions.sql`)
+
+Each follows the `cogmap_genesis` precedent: one txn, emit the event, project the rows, return the id.
+The Rust side never inserts substrate tables directly — it calls these. This is the event-sourced shape
+the temper-cogmap lift reuses: *an event is fired; a reusable function projects it.*
+
+| Function | Event emitted | Projects | New event type? |
+|----------|---------------|----------|-----------------|
+| `resource_create(title, origin_uri, home_cogmap, owner, body, doc_type, emitter)` | `resource_created` | `kb_resources` + home + `kb_content_blocks`/`kb_chunks`/`kb_chunk_content` + `kb_block_revisions` + optional `doc_type` property; backfills `body_hash` | no (exists) |
+| `relationship_assert(src, tgt, kind, label, weight, home_cogmap, emitter)` | `relationship_asserted` | `kb_edges` | no (exists) |
+| `facet_set(resource, values_jsonb, weight, emitter)` | `property_asserted` | the single `property_key='facet'` `kb_properties` row | **yes** (`property_asserted`) |
+| `lens_create(cogmap_or_null, name, weights…, emitter)` | `lens_created` | `kb_cogmap_lenses` (global when `cogmap_or_null IS NULL`) | **yes** (`lens_created`) |
+| `cogmap_genesis(…)` (exists, `02_functions.sql:458`) | `cogmap_seeded` | telos charter + cogmap + home | — |
+
+`region_materialize` stays Rust (`write::materialize_cogmap`) — it is clustering output, not a simple
+projection — but emits `region_materialized` with an **explicit** emitter (no latest-event derivation).
+
+### Layer 2 — Rust units (`crates/temper-next/src/scenario/`)
 
 | Unit | Responsibility | Reuses |
 |------|----------------|--------|
-| `scenario/model.rs` | YAML structs + `Step`/`Expectation` enums. Derive `serde::Deserialize` + gated `schemars::JsonSchema`. | — |
-| `scenario/loader.rs` | `load_scenario(pool, &Scenario) -> Result<KeyMap>` — direct sqlx writes to `temper_next`; calls `cogmap_genesis()` for the charter; inserts world/resources/content/edges/facets/lenses; returns `key → Uuid`. | `cogmap_genesis()` SQL fn |
-| `scenario/runner.rs` | `run_scenario(pool, &Scenario) -> Result<()>` — executes steps **in order**, in-process; materialize steps call lib fns; emit-event steps insert events+edges; assert steps evaluate expectations; keeps a per-lens fingerprint cache. | `embed::embed_chunks`, `write::materialize_cogmap`, `substrate::load` |
+| `scenario/model.rs` | YAML structs + `Step`/`Expectation` enums. `serde::Deserialize` + gated `schemars::JsonSchema`. Lenses referenced by **name** (system-seeded), not redeclared. | — |
+| `scenario/bootseed.rs` | `seed_system(pool)` — loads the canonical boot-seed (event-type registry + global system lenses via `lens_create`). Idempotent. Separate from any scenario. | `lens_create` SQL fn |
+| `scenario/loader.rs` | `load_scenario(pool, &Scenario) -> Result<Loaded>` — thin: calls `cogmap_genesis` then `resource_create`/`facet_set`/`relationship_assert` per YAML element; builds `key → Uuid` (incl. implicit `telos`). All via `query_scalar!`. | the Layer-1 SQL fns |
+| `scenario/runner.rs` | `run_scenario(pool, &Scenario)` — executes steps **in order**, in-process; materialize → `embed_chunks` + `materialize_cogmap`; emit-event → `relationship_assert`; assert → expectation eval; per-lens fingerprint cache; up-front lens-name validation. | `embed::embed_chunks`, `write::materialize_cogmap` |
 
-Key shift from `run_eval.sh`: the runner **calls library functions in-process** rather than shelling
+Key shift from `run_eval.sh`: the runner **calls library/SQL functions in-process** rather than shelling
 out to `cargo run -p temper-next`. The whole roundtrip becomes one `artifact-tests`-gated integration
-test — no bash.
+test — no bash. The Rust mutation/read queries use `sqlx::query!`/`query_scalar!`/`query_as!` macros
+(per-crate `.sqlx` prepared against the loaded `temper_next` artifact); test-target queries stay runtime.
 
 **Spec/assertion separability (built in, exploited later).** The `load_scenario` ↔ `run_scenario` split
 is not just a code boundary — it embodies the two roles a scenario file plays. `load_scenario`
@@ -102,20 +126,32 @@ pre-grounded facts:
   `onboarding_s6_verdict` (single source of truth, keys on `origin_uri`); M1 reuses it as an
   independent equivalence check.
 
-### Table write targets (verified against `schema-artifact/01_schema.sql` and `03_seed.sql`)
+### Table write targets (owned by the Layer-1 SQL functions)
 
-The loader writes these tables directly (column shapes confirmed from `03_seed.sql` inserts):
+The **SQL functions** own these inserts (column shapes confirmed from `03_seed.sql`). The Rust loader
+does not touch these tables directly — it calls the functions. Listed so the function bodies are grounded:
 
-- `kb_event_types(name UNIQUE)` — minimal registry preamble (idempotent).
-- `kb_profiles(handle, display_name, system_access)` — declared `world.profiles`.
-- `kb_entities(profile_id, name, metadata)` — declared `world.entities`; the emitter actor.
-- `kb_resources(title, origin_uri)` then `body_hash` backfill — concept resources.
-- `kb_resource_homes(resource_id, anchor_table='kb_cogmaps', anchor_id, originator_profile_id, owner_profile_id)` — homes each concept in the cogmap.
-- `kb_content_blocks(resource_id, seq, genesis_event_id, last_event_id)` + `kb_chunks(block_id, resource_id, chunk_index, content_hash)` + `kb_chunk_content(chunk_id, content)` — the inline prose (embed job fills `kb_chunks.embedding`). `kb_block_revisions(block_id, block_body_hash, chunk_count)` mirrors `cogmap_genesis`.
-- `kb_edges(source_table, source_id, target_table, target_id, edge_kind, label, home_anchor_table='kb_cogmaps', home_anchor_id, asserted_by_event_id, last_event_id)` — declared relationships; `edge_kind ∈ {express, contains, leads_to, near}`.
-- `kb_properties(owner_table='kb_resources', owner_id, property_key='facet', property_value JSONB, weight?, asserted_by_event_id, last_event_id)` — facets: **exactly one `property_key='facet'` row per resource** (multi-key coherent object; see "Facet model" below). A resource still has other property rows (e.g. a separate `property_key='doc_type'` row); the one-row rule is scoped per property type, not per resource.
-- `kb_cogmap_lenses(cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)` — lens config.
-- `kb_events(event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at)` — per assertion + the S6h mutation event.
+- `kb_event_types(name UNIQUE)` — seeded by the **boot-seed**, not per scenario.
+- `kb_profiles(handle, display_name, system_access)` / `kb_entities(profile_id, name, metadata)` — the scenario `world` (loader seeds these directly; they are tiny identity rows, not event-projected substrate for M1).
+- `resource_create` → `kb_resources(title, origin_uri)` + `body_hash` backfill; `kb_resource_homes(resource_id, anchor_table='kb_cogmaps', anchor_id, originator_profile_id, owner_profile_id)`; `kb_content_blocks(resource_id, seq, genesis_event_id, last_event_id)` + `kb_chunks(block_id, resource_id, chunk_index, content_hash)` + `kb_chunk_content(chunk_id, content)` + `kb_block_revisions(block_id, block_body_hash, chunk_count)`; optional `doc_type` property.
+- `relationship_assert` → `kb_edges(source_table, source_id, target_table, target_id, edge_kind, label, weight, home_anchor_table='kb_cogmaps', home_anchor_id, asserted_by_event_id, last_event_id)`; `edge_kind ∈ {express, contains, leads_to, near}`.
+- `facet_set` → `kb_properties(owner_table='kb_resources', owner_id, property_key='facet', property_value JSONB, weight, asserted_by_event_id, last_event_id)` — **exactly one `property_key='facet'` row per resource** (multi-key coherent object; see "Facet model"). The one-row rule is scoped per property type, not per resource.
+- `lens_create` → `kb_cogmap_lenses(cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)`; `cogmap_id` NULL ⇒ global system lens.
+- `kb_events(event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at)` — every function emits one; plus the runner's S6h mutation event.
+
+### `!`-macro prepare ritual (new infra)
+
+`temper-next` is the first artifact-schema crate to use `sqlx::query!` macros. To compile under
+`SQLX_OFFLINE=true` (CI), commit a per-crate cache at `crates/temper-next/.sqlx`, regenerated whenever its
+SQL changes:
+```bash
+# artifact must be loaded into the temper_next namespace first
+for f in 01_schema 02_functions; do psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f schema-artifact/$f.sql; done
+DATABASE_URL="postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dtemper_next,public" \
+  cargo sqlx prepare -p temper-next   # per-crate, NOT --workspace (workspace prepare clobbers per-crate caches)
+```
+Add a `cargo make prepare-next` task for this. The Embed CI job (which loads the artifact + has ONNX) is
+the natural place to verify the cache is current; other jobs compile offline against the committed cache.
 
 ## The YAML DSL (onboarding scenario)
 
@@ -152,9 +188,7 @@ edges:
   - { from: bluegreen, to: bigbang, kind: near, label: contradicts, weight: 1.0 }
   # … ~8 declared edges …
 
-lenses:  # EXACT values from 03_seed.sql:225,234 — prop-heavy is w_leads_to 0.1 / w_prop 1.2 (the S6f split)
-  - { name: telos-default,           w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
-  - { name: telos-default-propheavy, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.1, w_near: 0.3, w_prop: 1.2, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+uses_lenses: [telos-default, telos-default-propheavy]   # referenced by name; defined in the system boot-seed (below)
 
 steps:
   - materialize: { lens: telos-default }
@@ -186,7 +220,24 @@ steps:
 ```
 
 The `steps:` sequence is a line-by-line re-expression of `run_eval.sh`. Edges and asserts reference
-resources by local `key:`; the loader builds the `key → Uuid` map as it inserts.
+resources by local `key:`; the loader builds the `key → Uuid` map as it inserts. The scenario no longer
+declares lens weights — it names the lenses it uses; `uses_lenses` drives up-front validation that those
+lenses exist (system-seeded).
+
+**System boot-seed** (`schema-artifact/seeds/system.yaml`) — loaded once, before any scenario, by
+`seed_system`. The split: this is what *any* temper system needs; the scenario is what *this test* needs.
+```yaml
+event_types:   # the registry currently inline at 03_seed.sql:30-37, plus the two new verbs
+  - resource_created
+  - relationship_asserted
+  - region_materialized
+  - property_asserted     # NEW — facet_set emits this
+  - lens_created          # NEW — lens_create emits this
+  # … the rest of the existing registry …
+lenses:        # global system lenses (cogmap_id NULL), created via lens_create; EXACT values from 03_seed.sql:225,234
+  - { name: telos-default,           w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+  - { name: telos-default-propheavy, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.1, w_near: 0.3, w_prop: 1.2, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+```
 
 **Full node set (for exact equivalence):** `cogmap_genesis` homes the **telos charter** resource in the
 cogmap, so it is a clustered node too — and `03_seed.sql:197-216` also homes a **regulation** resource
@@ -211,9 +262,12 @@ pub struct Scenario {
     pub world: WorldDef,
     pub resources: Vec<ResourceDef>,
     pub edges: Vec<EdgeDef>,
-    pub lenses: Vec<LensDef>,
+    pub uses_lenses: Vec<String>,   // names of system lenses; validated up front
     pub steps: Vec<Step>,
 }
+
+// Boot-seed model (schema-artifact/seeds/system.yaml), loaded by seed_system — distinct from Scenario.
+pub struct BootSeed { pub event_types: Vec<String>, pub lenses: Vec<LensDef> }
 
 pub struct CogmapDef { pub telos: TelosDef, pub owner: String, pub emitter: String }
 pub struct TelosDef  { pub title: String, pub statement: String, pub questions: Vec<String> }
@@ -333,10 +387,17 @@ needs one.
 
 ## Acceptance (M1)
 
-- [ ] The onboarding scenario as YAML roundtrips to the same regions + S6 verdicts as `run_eval.sh`
-      (cross-checked via `onboarding_s6_verdict.all_pass = t`).
-- [ ] A Rust loader reads the YAML, writes the substrate, runs the harness in-process, and asserts
-      the declarative expectations as an `artifact-tests` integration test.
+- [ ] Reusable mutation SQL functions (`resource_create`, `relationship_assert`, `facet_set`,
+      `lens_create`) exist in `02_functions.sql` in the `cogmap_genesis` mold (emit event + project),
+      with the two new event types (`property_asserted`, `lens_created`).
+- [ ] A canonical system boot-seed (`schema-artifact/seeds/system.yaml`) carries the event-type registry
+      + global system lenses; `seed_system` loads it, separately from any scenario.
+- [ ] The onboarding scenario as YAML roundtrips to the same regions + S6 verdicts as `run_eval.sh`,
+      cross-checked via the `04b` verdict logic run through sqlx inside a nextest integration test.
+- [ ] A thin Rust loader reads the YAML and calls the SQL functions; the runner drives the step runbook
+      in-process and asserts the declarative expectations as an `artifact-tests` integration test.
+- [ ] temper-next's reusable (non-test) queries use `sqlx::query!`/`query_scalar!`/`query_as!` with a
+      committed `crates/temper-next/.sqlx` cache; `cargo make prepare-next` regenerates it.
 - [ ] `JsonSchema` is emitted from the loader structs and snapshot-tested for drift.
 
 ## Deferred code-review findings folded into M1
@@ -368,8 +429,10 @@ Deferred beyond M1 (named in the roadmap):
 
 ## Milestone roadmap (recorded under `substrate-kernel-to-cognitive-map`)
 
-- **M1 (this spec):** onboarding scenario as YAML, full S6a–h, direct-sqlx loader, in-process runner,
-  JsonSchema snapshot, integration test. Folds in the M1 deferred CR findings above.
+- **M1 (this spec):** reusable mutation SQL functions (`resource_create`/`relationship_assert`/`facet_set`/
+  `lens_create`) + system boot-seed (event types + global lenses); thin `!`-macro Rust loader/runner;
+  onboarding scenario as YAML, full S6a–h; JsonSchema snapshot; nextest-native integration test. Folds in
+  the M1 deferred CR findings above.
 - **M2:** generalize — a second (synthetic/minimal) scenario, a dir-driven runner, **retire
   `04b_region_suite.sql` + `run_eval.sh`'s bespoke S6 gate** once the declarative asserts are trusted
   against the SQL verdict; reuse `format_embedding`; affinity memoization if scale demands;
