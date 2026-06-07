@@ -190,33 +190,37 @@ edges:
 
 uses_lenses: [telos-default, telos-default-propheavy]   # referenced by name; defined in the system boot-seed (below)
 
+# Steps + expectations are INTERNALLY tagged (`do:` / `check:`) — serde_yaml 0.9 rejects the
+# externally-tagged single-key-map form (it demands `!Variant` tags).
 steps:
-  - materialize: { lens: telos-default }
-  - assert:                                            # S6a, S6c, S6d, S6e, S6g
-    - { region_count:     { lens: telos-default, op: ">=", value: 2 } }
-    - { co_region:        { lens: telos-default, members: [pair, smallest], expect: true } }
-    - { cohesion_order:   { lens: telos-default, greater: pair, lesser: staging } }
-    - { region_size:      { lens: telos-default, member: solo, value: 1 } }
-    - { co_region:        { lens: telos-default, members: [checklist, staging], expect: true } }
-    - { internal_tension: { lens: telos-default, member: bluegreen, op: ">", value: 0 } }
-  - materialize: { lens: telos-default }
-  - assert: [{ reproducible: { lens: telos-default } }]                          # S6b
-  - materialize: { lens: telos-default-propheavy }
-  - assert:                                                                       # S6f
-    - { fingerprint_differs: { lens_a: telos-default, lens_b: telos-default-propheavy } }
-    - { co_region: { lens: telos-default,           members: [setup, firstbuild], expect: true } }
-    - { co_region: { lens: telos-default-propheavy, members: [setup, firstbuild], expect: false } }
-  - materialize: { lens: telos-default }
-  - assert: [{ stale: { expect: false } }]                                        # S6h baseline
-  - emit_event:                                                                   # S6h mutation
-      type: relationship_asserted
-      edges:
-        - { from: solo, to: pair,       kind: express, label: related }
-        - { from: solo, to: smallest,   kind: express, label: related }
-        - { from: solo, to: confidence, kind: express, label: related }
-  - assert: [{ stale: { expect: true } }]                                         # S6h fresh→stale
-  - materialize: { lens: telos-default }
-  - assert: [{ co_region: { lens: telos-default, members: [solo, pair], expect: true } }]  # S6h solo joins α
+  - { do: materialize, lens: telos-default }
+  - do: assert                                          # S6a, S6c, S6d, S6e, S6g
+    checks:
+      - { check: region_count,     lens: telos-default, op: ">=", value: 2 }
+      - { check: co_region,        lens: telos-default, members: [pair, smallest], expect: true }
+      - { check: cohesion_order,   lens: telos-default, greater: pair, lesser: staging }
+      - { check: region_size,      lens: telos-default, member: solo, value: 1 }
+      - { check: co_region,        lens: telos-default, members: [checklist, staging], expect: true }
+      - { check: internal_tension, lens: telos-default, member: bluegreen, op: ">", value: 0 }
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: reproducible, lens: telos-default }] }        # S6b
+  - { do: materialize, lens: telos-default-propheavy }
+  - do: assert                                                                     # S6f
+    checks:
+      - { check: fingerprint_differs, lens_a: telos-default, lens_b: telos-default-propheavy }
+      - { check: co_region, lens: telos-default,           members: [setup, firstbuild], expect: true }
+      - { check: co_region, lens: telos-default-propheavy, members: [setup, firstbuild], expect: false }
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: stale, expect: false }] }                      # S6h baseline
+  - do: emit_event                                                                 # S6h mutation
+    type: relationship_asserted
+    edges:
+      - { from: solo, to: pair,       kind: express, label: related }
+      - { from: solo, to: smallest,   kind: express, label: related }
+      - { from: solo, to: confidence, kind: express, label: related }
+  - { do: assert, checks: [{ check: stale, expect: true }] }                       # S6h fresh→stale
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: co_region, lens: telos-default, members: [solo, pair], expect: true }] }  # S6h solo joins α
 ```
 
 The `steps:` sequence is a line-by-line re-expression of `run_eval.sh`. Edges and asserts reference
@@ -286,14 +290,15 @@ pub struct FacetDef { pub values: serde_json::Map<String, serde_json::Value>, #[
 pub struct EdgeDef { pub from: String, pub to: String, pub kind: EdgeKind, pub label: Option<String>, pub weight: f64 }
 pub struct LensDef { /* mirrors kb_cogmap_lenses columns; mirrors affinity::Lens fields */ }
 
-#[serde(rename_all = "snake_case")]
+// INTERNALLY tagged (serde_yaml 0.9 rejects externally-tagged single-key-map enums).
+#[serde(tag = "do", rename_all = "snake_case")]
 pub enum Step {
     Materialize { lens: String },
     EmitEvent   { #[serde(rename = "type")] event_type: String, edges: Vec<EdgeDef> },
-    Assert(Vec<Expectation>),
+    Assert { checks: Vec<Expectation> },   // struct variant (internal tagging can't wrap a bare Vec)
 }
 
-#[serde(rename_all = "snake_case")]
+#[serde(tag = "check", rename_all = "snake_case")]
 pub enum Expectation {
     RegionCount     { lens: String, op: CmpOp, value: i64 },
     CoRegion        { lens: String, members: Vec<String>, expect: bool },
