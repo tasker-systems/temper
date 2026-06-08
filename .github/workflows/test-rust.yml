@@ -94,7 +94,9 @@ jobs:
         # cloud_update_chunk_dedupe_skips_unchanged) are `test-embed`-gated
         # at the source level, so they don't compile (and can't run) without
         # the feature — no runtime exclusion needed here.
-        run: cargo nextest run --workspace --features test-db --locked --no-fail-fast
+        # temper-next is excluded: its sqlx! macros target the temper_next artifact namespace, not the
+        # migrated public schema this job validates against; it is compiled+tested offline in unit-tests.
+        run: cargo nextest run --workspace --exclude temper-next --features test-db --locked --no-fail-fast
 
   test-rust-embed:
     name: Embed & MCP Round-Trip Tests
@@ -234,7 +236,8 @@ jobs:
         # Mirrors the integration-tests job's tier so the baseline reflects
         # unit + DB integration + e2e. No ONNX: instrumentation only compiles
         # the embed feature, it never initializes ort at runtime here.
-        run: cargo llvm-cov nextest --workspace --features test-db --locked --no-fail-fast --lcov --output-path lcov.info
+        # temper-next excluded (temper_next-namespace sqlx! macros; offline-validated in unit-tests).
+        run: cargo llvm-cov nextest --workspace --exclude temper-next --features test-db --locked --no-fail-fast --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
