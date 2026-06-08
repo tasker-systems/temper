@@ -432,25 +432,70 @@ Deferred beyond M1 (named in the roadmap):
 - **Affinity memoization** (`cluster.rs` recomputes pairwise affinity per merge) — scale concern, not
   at eval size (M2+/production lift).
 
-## Milestone roadmap (recorded under `substrate-kernel-to-cognitive-map`)
+## Roadmap — sequenced deliverables (under the `substrate-kernel-to-cognitive-map` goal)
 
-- **M1 (this spec):** reusable mutation SQL functions (`resource_create`/`relationship_assert`/`facet_set`/
-  `lens_create`) + system boot-seed (event types + global lenses); thin `!`-macro Rust loader/runner;
-  onboarding scenario as YAML, full S6a–h; JsonSchema snapshot; nextest-native integration test. Folds in
-  the M1 deferred CR findings above.
-- **M2:** generalize — a second (synthetic/minimal) scenario, a dir-driven runner, **retire
-  `04b_region_suite.sql` + `run_eval.sh`'s bespoke S6 gate** once the declarative asserts are trusted
-  against the SQL verdict; reuse `format_embedding`; affinity memoization if scale demands;
-  lens-configurable opposed-labels.
-- **M3:** access scaffold (teams/profiles/grants) in YAML — the S1–S5 world — and **the full retirement
-  of `03_seed.sql`**: every entity the seed creates (the access world, the foundational `system-default`
-  cogmap) moves to scenario YAML, so the loader is the *only* seed path. A **foundational cogmap is the
-  same-structure template, not a special case** — `system-default` becomes a scenario file instantiated
-  via `load_scenario` at foundation time (no `steps:` overlay), exactly the spec/assertion seam described
-  in §Architecture. The cogmap/telos *specification* half and the *assertion* half may split into separate
-  files here if foundational instantiation wants the template without a test overlay.
-- **M4 (strategic payoff):** temper-next ↔ temper schema-delta analysis; possibly route a subset
-  through real write paths (temper-client/temper-api) to test the actual production system.
+> The prior `M1/M2/…` numbering was sequence-shorthand, not real deliverables — named concretely below.
+>
+> **Done (the work this spec implemented):** reusable mutation SQL functions
+> (`resource_create`/`relationship_assert`/`facet_set`/`lens_create`) + system boot-seed; thin `!`-macro
+> loader/runner; the onboarding scenario as YAML; full S6a–h roundtrip + the cross-path membership proof;
+> JsonSchema snapshot. **What it proved:** the deterministic-agglomerative clustering works and is
+> path-independent, and region formation is falsifiable in both directions (the right things cluster, the
+> isolate/bridge cases behave, lens inputs materially re-shape regions). **What it did NOT exercise:** the
+> data model at production richness — content is toy-trivial, every resource collapses to one
+> content-block / one chunk, and the telos charter's `questions` are flat strings standing in for a
+> structure we actually intend. The forward work fixes the foundation before building on it.
+
+**1 — Content-block/chunk correctness foundation (first; everything else is suspect on an uncertain
+foundation).** Make temper-next's resource/content creation **provably correct for the production shape**,
+borrowing patterns/code from the live temper crates. The nesting M1 flattened: edges → **resources** →
+(seq-bound) **content_blocks** (the full representation of a resource) → (multiple, current-aggregated by
+seq) **chunks** → **chunk_content**. `resource_create`/`cogmap_genesis` write only the degenerate
+one-block/one-chunk case; production already carries the multiply-belonging chunk pattern. Clustering
+relies on declared edges + properties (cosine only for within-region coherence + search), so the content
+substrate underneath must be correct, not approximate. Deliverable: a content model + creation path
+supporting **multi-paragraph, multi-content-block, multi-chunk-per-block** resources, reviewed against
+production temper for shape-parity.
+
+**2 — Event-firing-and-transaction parity.** In production temper the **event is primary**: it is fired in
+code and the ledger-write persists *in one transaction with* the resource/edge materialization (the
+`temper-events` ↔ `temper-api` services contract). Ground against how those crates fire-and-transact,
+define the canonical pattern, **establish the event types used for seeding**, and clarify temper-next's
+event-and-transaction mechanics to match — applied consistently in **seeding, scenario creation, and
+tests**, not just the materialize path. Event-as-primary is the heart of the system; seeding that doesn't
+fire events the way production does is a parity gap, not a shortcut. (M1's SQL functions emit-then-project
+in one txn, but the firing is buried in plpgsql and the seeding/test code doesn't consciously mirror the
+production pattern.)
+
+**3 — Seed/telos cognitive-map data-shape design (rigorous; gates the richer scenarios).** The current DSL
+is a good-enough approximation chosen to prove coherence — now design the real **data shape** of a
+seed-telos-driven cognitive map (format incidental: YAML now, could be JSON/TOML). Most pointedly, the
+**telos charter is content-blocks, not flat fields**: the statement, **questions-with-context (why each
+matters)**, and **framing statements that situate the telos in a neighborhood of related ideas** (its
+perspective/topology) — all as evolvable content-blocks, not a `questions: [string]` primitive. Resources
+become content-block sets. Designed, not improvised.
+
+**4 — Richer, reviewable scenarios + retire the SQL scenarios + finish the `!`-macro sweep.** More than one
+scenario-on-disk, with **non-trivial content where correctness isn't pre-rigged** (toy prose makes
+clustering correctness indeterminate). A dir-driven runner. Retire
+`03_seed.sql`/`04_scenarios.sql`/`04b_region_suite.sql`/`run_eval.sh`'s bespoke S6 once the declarative
+path is trusted. Complete the `!`-macro conversion of temper-next's remaining non-vector queries
+(`substrate.rs` reads, `write.rs` non-vector, `embed.rs:16`, `main.rs:23`; the two pgvector queries stay
+runtime — the `search_service` exception). Loose ends: `format_embedding` reuse, lens-configurable
+opposed-labels, affinity memoization if scale demands.
+
+**5 — Access scaffold.** Team-visibility-**intersection** as the RBAC access pattern, making the
+`Profile(Uuid) | Map(Uuid)` "from where is visibility determined" question tractable — the answer turns on
+whether the entity-profile is a **human-proxied agent** or an **agent-as-steward**. Teams/profiles/grants
+in the scenario world; the foundational `system-default` cogmap as a same-structure template (no `steps:`
+overlay). Honor the re-homing access-gate (below) before any create/associate split.
+
+**6 — temper-next ↔ temper convergence (the strategic payoff — its own body of work).** Converging the new
+data model into the temper system is a **migration / dual-write / release-parity** effort — NOT a
+loader-with-two-backends or a free "run the same YAML against both." The convergence items — typed-UUID
+newtypes (not bare `Uuid`), record-set returns (not bare uuids, to spare downstream re-fetch), and the
+event-mechanics parity from deliverable 2 — are the *substance* of this delta: temper-next must be mature
+on those axes, or the delta reads as pattern-noise instead of a real model-delta.
 
 ### The SQL mutation functions vs. the Rust `temper-substrate` kernel (open, working assumption)
 
@@ -467,8 +512,9 @@ Rust kernel will invoke," not "a parallel Rust reimplementation."
 ### Forward intentions (held separate from M1, captured so they aren't lost)
 
 - **Scenarios become self-sufficient:** the end state is *no `03_seed.sql`* — cogmap-scenarios fully seed
-  what the artifact needs. M1 already demonstrates this for the onboarding cogmap (its roundtrip test loads
-  only `01_schema`+`02_functions`+the YAML, never `03_seed.sql`); M3 finishes the job for the rest.
+  what the artifact needs. The completed work already demonstrates this for the onboarding cogmap (its
+  roundtrip test loads only `01_schema`+`02_functions`+the YAML, never `03_seed.sql`); deliverables 4–5
+  finish the job for the access world + foundational cogmap.
 - **Foundational = template, not special case:** system-foundational cogmaps run through the same loader
   as test scenarios. No bespoke foundational SQL.
 - **Spec ⟂ assertion may separate:** today one file fuses the cogmap/telos specification with its assertion
