@@ -4,7 +4,9 @@
 //! against the materialized regions. A per-lens fingerprint cache backs the `reproducible` /
 //! `fingerprint_differs` checks. Any failed expectation aborts with a descriptive error.
 
-use crate::scenario::loader::{self, edge_kind_sql, Loaded};
+use crate::events::{fire, SeedAction};
+use crate::ids::{CogmapId, EntityId};
+use crate::scenario::loader::{self, Loaded};
 use crate::scenario::model::*;
 use crate::{embed, write};
 use anyhow::{bail, Context, Result};
@@ -98,28 +100,33 @@ fn expectation_lenses(e: &Expectation) -> Vec<&str> {
 }
 
 async fn emit_event(pool: &PgPool, loaded: &Loaded, edges: &[EdgeDef]) -> Result<()> {
+    let mut tx = pool.begin().await?;
     for e in edges {
-        let src = *loaded
+        let src = (*loaded
             .keys
             .get(&e.from)
-            .with_context(|| format!("emit_event edge from unknown key {}", e.from))?;
-        let tgt = *loaded
+            .with_context(|| format!("emit_event edge from unknown key {}", e.from))?)
+        .into();
+        let tgt = (*loaded
             .keys
             .get(&e.to)
-            .with_context(|| format!("emit_event edge to unknown key {}", e.to))?;
-        sqlx::query!(
-            "SELECT relationship_assert($1,$2,$3::edge_kind,$4,$5,$6,$7)",
-            src,
-            tgt,
-            edge_kind_sql(e.kind) as _,
-            e.label,
-            e.weight,
-            loaded.cogmap,
-            loaded.emitter,
+            .with_context(|| format!("emit_event edge to unknown key {}", e.to))?)
+        .into();
+        fire(
+            &mut tx,
+            SeedAction::RelationshipAssert {
+                src,
+                tgt,
+                kind: e.kind,
+                label: e.label.as_deref(),
+                weight: e.weight,
+                home: CogmapId::from(loaded.cogmap),
+                emitter: EntityId::from(loaded.emitter),
+            },
         )
-        .fetch_one(pool)
         .await?;
     }
+    tx.commit().await?;
     Ok(())
 }
 

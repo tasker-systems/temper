@@ -8,10 +8,13 @@ cogmap:
   telos:
     title: "Onboarding charter"
     statement: "Help a new EPD engineer reach first-merge confidence in week one."
+    # Questions-with-context (domain-B §1): block-1..n. Context is left empty here so the charter prose
+    # stays verbatim-equal to 03_seed.sql's (the cross-path membership proof keys on shared prose); the
+    # rich question-with-context + framing path is exercised by the cogmap_genesis_charter artifact test.
     questions:
-      - "What does this person already know that transfers?"
-      - "What is the smallest real change that builds confidence?"
-      - "Where are the sharp edges that scar newcomers?"
+      - { question: "What does this person already know that transfers?" }
+      - { question: "What is the smallest real change that builds confidence?" }
+      - { question: "Where are the sharp edges that scar newcomers?" }
   owner: dave
   emitter: "onboarding-agent#1"
 

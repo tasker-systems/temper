@@ -14,5 +14,5 @@ fail-fast = false
 temper-next-write = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(temper-next) & binary(/^bootseed$|^scenario_load$|^scenario_roundtrip$|^content_multichunk$/)'
+filter = 'package(temper-next) & binary(/^bootseed$|^scenario_load$|^scenario_roundtrip$|^content_multichunk$|^cogmap_genesis_charter$/)'
 test-group = 'temper-next-write'

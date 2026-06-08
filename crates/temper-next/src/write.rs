@@ -1,3 +1,5 @@
+use crate::events::{fire, SeedAction};
+use crate::ids::{CogmapId, EntityId};
 use crate::{affinity::affinity, cluster::cluster, substrate};
 use anyhow::Result;
 use sqlx::PgPool;
@@ -22,18 +24,19 @@ pub async fn materialize_cogmap(
     let clusters = cluster(&s.nodes, &aff, s.lens.resolution);
 
     let mut tx = pool.begin().await?;
-    // one materialization event (correlation root). The emitter is passed explicitly (the actor on
-    // whose behalf materialization runs) — never derived from "latest event", which is NULL on an
-    // empty log and arbitrary on occurred_at ties.
-    let ev: Uuid = sqlx::query_scalar(
-        "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id) \
-         SELECT (SELECT id FROM kb_event_types WHERE name='region_materialized'), \
-                $2, 'kb_cogmaps', $1 RETURNING id",
+    // one materialization event (correlation root), fired through the single events surface. The emitter
+    // is passed explicitly (the actor on whose behalf materialization runs) — never derived from "latest
+    // event", which is NULL on an empty log and arbitrary on occurred_at ties.
+    let ev: Uuid = fire(
+        &mut tx,
+        SeedAction::Materialize {
+            cogmap: CogmapId::from(cogmap),
+            emitter: EntityId::from(emitter),
+        },
     )
-    .bind(cogmap)
-    .bind(emitter)
-    .fetch_one(&mut *tx)
-    .await?;
+    .await?
+    .materialize_event()?
+    .uuid();
     // fold prior live regions for this lens
     sqlx::query(
         "UPDATE kb_cogmap_regions SET is_folded=true, last_event_id=$1 \

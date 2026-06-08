@@ -2,6 +2,8 @@
 //! system lenses), separately from any scenario. Idempotent. The global lenses are created via the
 //! reusable `lens_create` function, attributed to a canonical `system` actor.
 
+use crate::events::{fire, SeedAction};
+use crate::ids::EntityId;
 use crate::scenario::model::BootSeed;
 use anyhow::Result;
 use sqlx::PgPool;
@@ -57,22 +59,17 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
         .fetch_optional(pool)
         .await?;
         if exists.is_none() {
-            sqlx::query_scalar!(
-                "SELECT lens_create(NULL,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
-                l.name,
-                l.w_express,
-                l.w_contains,
-                l.w_leads_to,
-                l.w_near,
-                l.w_prop,
-                l.s_telos,
-                l.s_ref,
-                l.s_central,
-                l.resolution,
-                emitter
+            let mut tx = pool.begin().await?;
+            fire(
+                &mut tx,
+                SeedAction::LensCreate {
+                    cogmap: None,
+                    lens: l,
+                    emitter: EntityId::from(emitter),
+                },
             )
-            .fetch_one(pool)
             .await?;
+            tx.commit().await?;
         }
     }
     Ok(())

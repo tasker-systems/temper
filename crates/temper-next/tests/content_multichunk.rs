@@ -37,15 +37,18 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting() {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = seed_actor(&pool).await;
 
-    // a home cogmap via the unchanged genesis function (resource_create homes into it)
-    let cogmap: Uuid = sqlx::query_scalar(
-        "SELECT cogmap_genesis('home','Charter','seed statement', ARRAY['q?'], $1, $2)",
-    )
-    .bind(owner)
-    .bind(emitter)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    // a home cogmap via the genesis function (resource_create homes into it). The charter is now a
+    // Rust-prepared block→chunk JSONB, like any resource body.
+    let charter = content::prepare_blocks(&["seed statement"]).unwrap();
+    let charter_json = serde_json::to_value(&charter).unwrap();
+    let cogmap: Uuid =
+        sqlx::query_scalar("SELECT cogmap_id FROM cogmap_genesis('home','Charter',$1,$2,$3)")
+            .bind(charter_json)
+            .bind(owner)
+            .bind(emitter)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
 
     // three blocks: short / LONG (multi-chunk) / short. The long block exceeds one ~1785-char window.
     let short_a = "A short framing note about first-week confidence.";
