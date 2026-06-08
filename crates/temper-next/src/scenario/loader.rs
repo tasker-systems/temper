@@ -87,13 +87,18 @@ pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
 
     for r in &s.resources {
         let title = r.title.clone().unwrap_or_else(|| r.key.clone());
+        // An ordinary resource's body is one content-block (content-block §"Write path"); it chunks +
+        // embeds Rust-side (sha256 + bge-768), and resource_create persists the block→chunk nesting.
+        // A multi-paragraph body that exceeds one 510-token window arrives as a multi-chunk block.
+        let blocks = crate::content::prepare_blocks(&[r.body.as_str()])?;
+        let blocks_json = serde_json::to_value(&blocks)?;
         let rid = sqlx::query_scalar!(
             "SELECT resource_create($1,$2,$3,$4,$5,$6,$7)",
             title,
             r.origin_uri,
             cogmap,
             owner,
-            r.body,
+            blocks_json,
             r.doc_type,
             emitter,
         )

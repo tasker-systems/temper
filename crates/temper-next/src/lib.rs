@@ -5,7 +5,9 @@
 //! a downstream SQL readout (Plan 1 functions).
 pub mod affinity;
 pub mod cluster;
+pub mod content;
 pub mod embed;
+pub mod ids;
 pub mod scenario;
 pub mod substrate;
 pub mod write;

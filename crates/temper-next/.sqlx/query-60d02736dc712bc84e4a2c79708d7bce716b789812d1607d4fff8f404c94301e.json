@@ -15,7 +15,7 @@
         "Text",
         "Uuid",
         "Uuid",
-        "Text",
+        "Jsonb",
         "Text",
         "Uuid"
       ]

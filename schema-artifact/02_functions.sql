@@ -549,13 +549,29 @@ $$;
 -- txn. The scenario loader / temper-cogmap lift call these; YAML is the event input source.
 -- ============================================================================
 
--- Create a resource, home it in a cogmap, give it one content block, optionally stamp a doc_type
--- property. Emits one `resource_created` event (the projection root). Returns the resource id.
+-- Create a resource, home it in a cogmap, give it its content as the real nesting (blocks ⊃ chunks ⊃
+-- chunk_content), optionally stamp a doc_type property. Emits one `resource_created` event (the
+-- projection root). Returns the resource id.
+--
+-- p_blocks is the Rust-prepared content (crates/temper-next/src/content.rs `Vec<PreparedBlock>`,
+-- serialized): an ordered array of
+--     { "seq": int, "chunks": [ { "chunk_index": int, "content_hash": text, "content": text,
+--                                 "embedding": [f32; 768] | null } ] }
+-- Chunking + sha256 hashing + bge-768 embedding all happen Rust-side (borrowing temper-ingest), exactly
+-- as production chunks in code and persists a chunk-set in SQL. This function ONLY persists: it iterates
+-- blocks→chunks, writes kb_content_blocks / kb_chunks (with the inline embedding) / kb_chunk_content,
+-- derives each block_body_hash as the sha256 merkle over its ordered chunk hashes, and the resource
+-- body_hash as the sha256 merkle over the ordered block hashes. Blocks carry NO prose (β) — text lives
+-- only in kb_chunk_content. A block whose prose exceeded one 510-token window arrives as >1 chunk.
 CREATE FUNCTION resource_create(
     p_title text, p_origin_uri text, p_home_cogmap uuid, p_owner uuid,
-    p_body text, p_doc_type text, p_emitter uuid
+    p_blocks jsonb, p_doc_type text, p_emitter uuid
 ) RETURNS uuid LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_resource uuid; v_block uuid; v_chunk uuid; v_hash text;
+DECLARE
+    v_et uuid; v_ev uuid; v_resource uuid; v_block uuid; v_chunk uuid;
+    v_block_json jsonb; v_chunk_json jsonb; v_emb jsonb;
+    v_block_hash text; v_chunk_hashes text; v_chunk_count int;
+    v_resource_hashes text := '';
 BEGIN
     SELECT id INTO v_et FROM kb_event_types WHERE name='resource_created';
     IF v_et IS NULL THEN RAISE EXCEPTION 'event_type resource_created not seeded'; END IF;
@@ -564,14 +580,36 @@ BEGIN
     INSERT INTO kb_resources (title, origin_uri) VALUES (p_title, p_origin_uri) RETURNING id INTO v_resource;
     INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
         VALUES (v_resource, 'kb_cogmaps', p_home_cogmap, p_owner, p_owner);
-    v_hash := md5(p_origin_uri);
-    INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
-        VALUES (v_resource, 0, v_ev, v_ev) RETURNING id INTO v_block;
-    INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
-        VALUES (v_block, v_resource, 0, v_hash) RETURNING id INTO v_chunk;
-    INSERT INTO kb_chunk_content (chunk_id, content) VALUES (v_chunk, p_body);
-    INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count) VALUES (v_block, v_hash, 1);
-    UPDATE kb_resources SET body_hash = md5(v_hash) WHERE id = v_resource;
+
+    -- blocks ⊃ chunks, in array order (already seq-ordered Rust-side; the block's own seq is authoritative).
+    FOR v_block_json IN SELECT jsonb_array_elements(p_blocks) LOOP
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (v_resource, (v_block_json->>'seq')::int, v_ev, v_ev) RETURNING id INTO v_block;
+        v_chunk_hashes := '';
+        v_chunk_count := 0;
+        FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
+            v_emb := v_chunk_json->'embedding';
+            INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, embedding)
+                VALUES (v_block, v_resource, (v_chunk_json->>'chunk_index')::int,
+                        v_chunk_json->>'content_hash',
+                        CASE WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null'
+                             THEN NULL ELSE (v_emb::text)::vector END)
+                RETURNING id INTO v_chunk;
+            INSERT INTO kb_chunk_content (chunk_id, content)
+                VALUES (v_chunk, v_chunk_json->>'content');
+            v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
+            v_chunk_count := v_chunk_count + 1;
+        END LOOP;
+        -- block_body_hash = sha256 merkle over the ordered chunk hashes (retires md5).
+        v_block_hash := encode(sha256(convert_to(v_chunk_hashes, 'UTF8')), 'hex');
+        INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count)
+            VALUES (v_block, v_block_hash, v_chunk_count);
+        v_resource_hashes := v_resource_hashes || v_block_hash;
+    END LOOP;
+
+    -- resource body_hash = sha256 merkle over the ordered block hashes.
+    UPDATE kb_resources SET body_hash = encode(sha256(convert_to(v_resource_hashes, 'UTF8')), 'hex')
+        WHERE id = v_resource;
     IF p_doc_type IS NOT NULL THEN
         INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
             VALUES ('kb_resources', v_resource, 'doc_type', to_jsonb(p_doc_type), v_ev, v_ev);

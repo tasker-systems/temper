@@ -1,0 +1,142 @@
+//! Content prepare path — borrow production's chunk/embed machinery, apply it **per content-block**.
+//!
+//! Deliverable-1 of the scenario-DSL roadmap (content-block/chunk correctness). The temper-next write
+//! functions used to write the degenerate one-chunk-per-block case with an `md5()` placeholder hash and
+//! no embedding (chunks were embedded later by a separate job). Here we instead chunk each block's prose
+//! with `temper_ingest::chunk::chunk_markdown` (heading-delimited, 510-token windows, **sha256** content
+//! hashes) and embed every chunk **inline** with `temper_ingest::embed::embed_texts` (bge-base-en-v1.5,
+//! 768-dim). The result is a `Vec<PreparedBlock>` the SQL functions persist verbatim.
+//!
+//! Split of responsibility (mirrors production: chunking is Rust-side, SQL only persists):
+//!   - Rust (here): prose -> blocks -> chunks, each with its sha256 `content_hash` + bge-768 embedding.
+//!   - SQL (`resource_create`/`cogmap_genesis`): insert the rows; derive `block_body_hash` /
+//!     `kb_resources.body_hash` with Postgres's built-in `sha256()` over the chunk/block hashes.
+
+use anyhow::{Context, Result};
+use serde::Serialize;
+
+/// One embedding window of a block's prose, ready to persist. `content_hash` is the chunker's lowercase
+/// hex sha256 of `content.trim()`; `embedding` is the l2-normalized bge-768 vector.
+#[derive(Debug, Clone, Serialize)]
+pub struct PreparedChunk {
+    pub chunk_index: i32,
+    pub content_hash: String,
+    pub content: String,
+    pub embedding: Vec<f32>,
+}
+
+/// One content-block (seq-ordered within its resource) and its ordered chunks. Blocks carry **no**
+/// prose of their own (content-block-primitive β) — text lives only in the chunks.
+#[derive(Debug, Clone, Serialize)]
+pub struct PreparedBlock {
+    pub seq: i32,
+    pub chunks: Vec<PreparedChunk>,
+}
+
+/// Pure chunk plan for one block's prose — chunking + hashing only, **no** embedding (so it is
+/// ONNX-free and unit-testable). Each entry is `(chunk_index, content_hash, content)` straight from the
+/// production chunker.
+fn plan_chunks(prose: &str) -> Vec<(i32, String, String)> {
+    temper_ingest::chunk::chunk_markdown(prose)
+        .into_iter()
+        .map(|c| (c.chunk_index as i32, c.content_hash, c.content))
+        .collect()
+}
+
+/// Prepare one block: chunk its prose, then embed every chunk in a single batched ONNX call.
+pub fn prepare_block(seq: i32, prose: &str) -> Result<PreparedBlock> {
+    let planned = plan_chunks(prose);
+    let texts: Vec<&str> = planned
+        .iter()
+        .map(|(_, _, content)| content.as_str())
+        .collect();
+    // Empty prose ⇒ no chunks ⇒ no embedding call (embed_texts on an empty slice is wasteful/undefined).
+    let embeddings = if texts.is_empty() {
+        Vec::new()
+    } else {
+        temper_ingest::embed::embed_texts(&texts).context("embed_texts (bge-768) failed")?
+    };
+    let chunks = planned
+        .into_iter()
+        .zip(embeddings)
+        .map(
+            |((chunk_index, content_hash, content), embedding)| PreparedChunk {
+                chunk_index,
+                content_hash,
+                content,
+                embedding,
+            },
+        )
+        .collect();
+    Ok(PreparedBlock { seq, chunks })
+}
+
+/// Prepare an ordered run of blocks (`seq` = position). The charter passes
+/// `[telos_statement, question_1, …, framing_1, …]`; an ordinary resource passes its single body as one
+/// block. A block whose prose exceeds one 510-token window yields >1 chunk — real multi-chunk-per-block.
+pub fn prepare_blocks(proses: &[&str]) -> Result<Vec<PreparedBlock>> {
+    proses
+        .iter()
+        .enumerate()
+        .map(|(i, prose)| prepare_block(i as i32, prose))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // A short, single-paragraph block stays one chunk; its hash is the chunker's sha256 (64 hex chars).
+    #[test]
+    fn short_prose_is_one_chunk_with_sha256_hash() {
+        let planned = plan_chunks("A short onboarding note about first-week confidence.");
+        assert_eq!(planned.len(), 1, "short prose must be a single chunk");
+        let (idx, hash, content) = &planned[0];
+        assert_eq!(*idx, 0);
+        assert_eq!(hash.len(), 64, "sha256 hex is 64 chars");
+        assert!(hash.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert!(content.contains("first-week"));
+    }
+
+    // A block well past one 510-token (~1785-char) window splits into multiple chunks with sequential
+    // indices — the multi-chunk-per-block path the degenerate seed never exercised.
+    #[test]
+    fn long_prose_splits_into_multiple_sequential_chunks() {
+        // ~30 sentences of ~80 chars each ≈ 2400+ chars, comfortably over MAX_CHARS (~1785), as separate
+        // paragraphs so the chunker has split points.
+        let para =
+            "This paragraph explains one facet of reaching first-merge confidence in onboarding week one.\n\n";
+        let prose = para.repeat(30);
+        let planned = plan_chunks(&prose);
+        assert!(
+            planned.len() > 1,
+            "long prose must split into >1 chunk, got {}",
+            planned.len()
+        );
+        for (i, (idx, hash, _)) in planned.iter().enumerate() {
+            assert_eq!(*idx, i as i32, "chunk_index must be sequential 0..n");
+            assert_eq!(hash.len(), 64);
+        }
+    }
+
+    // Blocks serialize to the JSONB shape the SQL functions consume (array of {seq, chunks:[…]}).
+    #[test]
+    fn prepared_block_serializes_to_expected_jsonb_shape() {
+        let block = PreparedBlock {
+            seq: 2,
+            chunks: vec![PreparedChunk {
+                chunk_index: 0,
+                content_hash: "ab".repeat(32),
+                content: "hi".into(),
+                embedding: vec![0.1, 0.2, 0.3],
+            }],
+        };
+        let v = serde_json::to_value([&block]).unwrap();
+        assert_eq!(v[0]["seq"], 2);
+        assert_eq!(v[0]["chunks"][0]["chunk_index"], 0);
+        assert_eq!(v[0]["chunks"][0]["content"], "hi");
+        // embedding is a JSON array (exact f32 values drift in JSON; the SQL `::vector` cast consumes
+        // the array verbatim — shape is what matters here).
+        assert_eq!(v[0]["chunks"][0]["embedding"].as_array().unwrap().len(), 3);
+    }
+}
