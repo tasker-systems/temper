@@ -1,0 +1,34 @@
+# System boot-seed — what ANY temper system needs, distinct from test-scenario seeds.
+# Loaded once by temper_next::scenario::bootseed::seed_system before any scenario.
+#
+# event_types: the ledger registry (mirrors 03_seed.sql:30-37) + lens_created (NEW — emitted by the
+#   lens_create function; property_asserted already exists in the registry, used by facet_set).
+# lenses: the canonical system lenses, created as GLOBAL (cogmap_id NULL) via lens_create. Scenarios
+#   reference these by name (uses_lenses) rather than re-declaring weights. EXACT values from
+#   03_seed.sql:225 (telos-default) and :234 (telos-default-propheavy, the S6f prop-heavy split).
+event_types:
+  - resource_created
+  - resource_updated
+  - resource_deleted
+  - relationship_asserted
+  - relationship_retracted
+  - relationship_retyped
+  - relationship_reweighted
+  - relationship_folded
+  - property_asserted
+  - property_retracted
+  - property_reweighted
+  - property_folded
+  - block_created
+  - block_mutated
+  - block_folded
+  - block_provenance_corrected
+  - grant_created
+  - grant_revoked
+  - cogmap_seeded
+  - region_materialized
+  - delegated_launch
+  - lens_created
+lenses:
+  - { name: telos-default,           w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }
+  - { name: telos-default-propheavy, w_express: 1.0, w_contains: 1.0, w_leads_to: 0.1, w_near: 0.3, w_prop: 1.2, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }

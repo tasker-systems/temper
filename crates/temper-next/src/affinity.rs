@@ -1,6 +1,8 @@
 use uuid::Uuid;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub enum EdgeKind {
     Express,
     Contains,
@@ -64,13 +66,6 @@ impl Lens {
     }
 }
 
-/// Declared `contradicts`/`reinforces` etc. are NOT reserved (spec §2a): default factor 1.0.
-/// A lens MAY override specific labels explicitly later; the telos-default treats every label as
-/// ordinary positive relatedness — contradiction BINDS (shared frame), never separates.
-fn label_factor(_label: &Option<String>, _lens: &Lens) -> f64 {
-    1.0
-}
-
 /// min-weighted overlap over shared (path,value) facet pairs (spec §4b). Declared only — never cosine.
 fn facet_overlap(a: Uuid, b: Uuid, facets: &[Facet]) -> f64 {
     let fa: Vec<&Facet> = facets.iter().filter(|f| f.owner == a).collect();
@@ -89,11 +84,13 @@ fn facet_overlap(a: Uuid, b: Uuid, facets: &[Facet]) -> f64 {
 /// Declared-only symmetric affinity (spec §2a). Cosine is ABSENT — it enters only as a downstream
 /// readout (Plan 1 SQL), never here.
 pub fn affinity(a: Uuid, b: Uuid, edges: &[Edge], facets: &[Facet], lens: &Lens) -> f64 {
+    // Labels are not reserved (spec §2a): every label is ordinary positive relatedness, so
+    // contradiction BINDS (shared frame), never separates. No label factor until a lens overrides.
     let edge_sum: f64 = edges
         .iter()
         .filter(|e| (e.src == a && e.tgt == b) || (e.src == b && e.tgt == a))
         .filter(|e| !e.weight.is_nan())
-        .map(|e| lens.w_kind(e.kind) * e.weight * label_factor(&e.label, lens))
+        .map(|e| lens.w_kind(e.kind) * e.weight)
         .sum();
     edge_sum + lens.w_prop * facet_overlap(a, b, facets)
 }
@@ -164,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn label_factor_defaults_to_one_no_reserved_words() {
+    fn contradiction_label_binds_not_separates() {
         let (a, b) = ids();
         let lens = Lens {
             w_near: 1.0,
@@ -177,7 +174,20 @@ mod tests {
             weight: 1.0,
             label: Some("contradicts".into()),
         }];
-        // contradiction BINDS: label_factor('contradicts') == 1.0 (no reserved literal)
+        // contradiction BINDS: a labelled edge contributes its full kind-weighted affinity (no label factor)
         assert!((affinity(a, b, &edges, &[], &lens) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn edge_kind_deserializes_snake_case_and_rejects_unknown() {
+        assert_eq!(
+            serde_yaml::from_str::<EdgeKind>("leads_to").unwrap(),
+            EdgeKind::LeadsTo
+        );
+        assert_eq!(
+            serde_yaml::from_str::<EdgeKind>("express").unwrap(),
+            EdgeKind::Express
+        );
+        assert!(serde_yaml::from_str::<EdgeKind>("sideways").is_err());
     }
 }

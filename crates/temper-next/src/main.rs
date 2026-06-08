@@ -18,7 +18,17 @@ async fn main() -> Result<()> {
     let pool = substrate::connect().await?;
     embed_chunks(&pool).await?;
     let cogmap = substrate::cogmap_by_name(&pool, &name).await?;
-    let outcome = materialize_cogmap(&pool, cogmap, &lens).await?;
+    // Materialization is attributed to the entity that seeded this cogmap (its bound steward) — a real
+    // referent, not "latest event". The genesis (`cogmap_seeded`) event is the earliest map-anchored one.
+    let emitter: uuid::Uuid = sqlx::query_scalar(
+        "SELECT emitter_entity_id FROM kb_events \
+         WHERE producing_anchor_table='kb_cogmaps' AND producing_anchor_id=$1 \
+         ORDER BY occurred_at ASC LIMIT 1",
+    )
+    .bind(cogmap)
+    .fetch_one(&pool)
+    .await?;
+    let outcome = materialize_cogmap(&pool, cogmap, &lens, emitter).await?;
 
     println!(
         "materialized {} region(s) for '{}' (lens '{}')\nmembership: {}",

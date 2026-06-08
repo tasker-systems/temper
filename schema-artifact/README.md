@@ -14,9 +14,19 @@ come *after* this evaluation, better-grounded for it.
 | File | Contents |
 |------|----------|
 | `01_schema.sql` | `CREATE SCHEMA temper_next` + ~7 enums, 24 tables, indexes |
-| `02_functions.sql` | Access-gating functions (the two-principal sum type), `cogmaps_share_a_team`, the `sync_system_membership` trigger, `cogmap_genesis`, the Domain-B read projections |
+| `02_functions.sql` | Access-gating functions (the two-principal sum type), `cogmaps_share_a_team`, the `sync_system_membership` trigger, `cogmap_genesis`, the Domain-B read projections, and the **reusable mutation functions** (`resource_create`/`relationship_assert`/`facet_set`/`lens_create` — each emits its event + projects in one txn, the `cogmap_genesis` mold) |
 | `03_seed.sql` | One coherent worked scenario (the epd-team-a/-b intersection bridge, the directors' private edge, a `cogmap_genesis`-seeded charter + regulation, and the emergent-region falsification cast). Regions are **produced by the `temper-next` harness**, not hand-seeded. |
 | `04_scenarios.sql` | Labeled queries that make every load-bearing invariant observable |
+| `seeds/system.yaml` | System boot-seed (event-type registry + global lenses) — what any temper system needs, loaded by `temper-next::scenario::bootseed::seed_system` |
+| `scenarios/onboarding-cogmap.yaml` | The onboarding-cogmap as a **declarative scenario** (substrate + S6a–h runbook), the YAML re-expression of `03_seed.sql`'s onboarding cast; roundtrip-validated by `temper-next/tests/scenario_roundtrip.rs` |
+
+### Declarative scenarios (temper-next)
+
+`scenarios/*.yaml` are the seed/scenario DSL consumed by `temper-next` (`src/scenario/`): a thin Rust
+loader calls the `02_functions.sql` mutation functions with YAML inputs, and a runner drives the ordered
+`steps` runbook (materialize / emit-event / assert) **in-process** — the same S6a–h falsification that
+`run_eval.sh` runs via SQL + bash, now as one `cargo nextest` test. `scenario.schema.json` is the JSON
+Schema emitted from the loader structs. See `docs/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md`.
 
 ## Load & evaluate
 

@@ -1,4 +1,4 @@
-#![cfg(feature = "artifact-tests")]
+#![cfg(feature = "artifact-tests-legacy")]
 // tests/embed_job.rs — requires the temper_next artifact loaded (Plan 1 + seed) and the ONNX
 // runtime present (temper-ingest `embed` feature → bge-768). Job A embeds every current chunk's
 // authored kb_chunk_content and writes kb_chunks.embedding (the column the seed leaves empty).

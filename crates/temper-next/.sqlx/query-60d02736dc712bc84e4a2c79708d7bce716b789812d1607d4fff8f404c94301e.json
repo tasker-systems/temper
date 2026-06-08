@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT resource_create($1,$2,$3,$4,$5,$6,$7)",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_create",
+        "type_info": "Uuid"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text",
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "60d02736dc712bc84e4a2c79708d7bce716b789812d1607d4fff8f404c94301e"
+}

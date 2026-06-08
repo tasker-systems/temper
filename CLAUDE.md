@@ -139,7 +139,16 @@ Rust crates use feature flags to gate heavy dependencies:
 - `web-api` — enables utoipa OpenAPI derives (temper-core)
 - `typescript` — enables ts-rs type generation (temper-core)
 - `mcp` — enables schemars JsonSchema derives for MCP tool parameters (temper-core)
-- `artifact-tests` — enables temper-next's integration tests that need the `temper_next` **artifact** loaded (`schema-artifact/*.sql`, a separate PG namespace — NOT the sqlx-migrated schema) plus ONNX. **No CI job enables it** (the standard `--workspace`/`--features test-db` jobs would run them without the artifact and fail), so these run locally / via `schema-artifact/run_eval.sh`: `cargo nextest run -p temper-next --features artifact-tests` after loading the artifact. temper-next's pure core tests (affinity, cluster) are ungated and run in CI.
+- `artifact-tests` — enables temper-next's **scenario write-path** integration tests (`bootseed`/`scenario_load`/`scenario_roundtrip`) that need the `temper_next` **artifact** (`schema-artifact/01_schema.sql`+`02_functions.sql`, a separate PG namespace — NOT the sqlx-migrated schema) plus ONNX. Each test OWNS the namespace (resets it to a clean 01+02 then seeds), serialized via the `temper-next-write` nextest group. **No CI job enables it**; run locally: `cargo nextest run -p temper-next --features artifact-tests`. temper-next's pure core tests (affinity, cluster) are ungated and run in CI.
+- `artifact-tests-legacy` — the **legacy read-path** tests (`materialize`/`substrate_read`/`embed_job`) that instead need `03_seed.sql` loaded and do NOT reset. Kept on a SEPARATE feature so they can never co-run with the self-resetting write-path tests (a reset's `DROP SCHEMA` would pull the seed out from under them). Run after loading 01+02+03_seed: `cargo nextest run -p temper-next --features artifact-tests-legacy`. M2 retires this path.
+- `scenario-schema` — enables `schemars::JsonSchema` derives on the scenario YAML model (temper-next) for the JSON-Schema snapshot test (`tests/scenario_schema.rs`).
+
+### temper-next sqlx macros target the `temper_next` namespace (offline cache)
+
+temper-next is the only crate whose `sqlx::query!` macros resolve against the `temper_next` artifact namespace (not the dev DB's default `public` search_path). Consequences:
+- It carries a per-crate `crates/temper-next/.sqlx` cache. Regenerate it after changing temper-next SQL (or the artifact functions it calls) with **`cargo make prepare-next`** (loads the artifact, prepares with `search_path=temper_next`). Per-crate — never `cargo sqlx prepare --workspace` (clobbers per-crate caches).
+- All `cargo make` tasks set `SQLX_OFFLINE=true` (matches CI; the dev DB can't validate temper_next queries live). Raw `cargo` against other crates still validates live. pgvector `::vector` queries stay runtime `query()` (the `search_service` exception) — macros are for non-vector queries.
+- The **scenario write-path** artifact tests (`bootseed`, `scenario_load`, `scenario_roundtrip`) OWN the namespace: each resets it to a clean `01_schema`+`02_functions` then seeds, so they're serialized via the `temper-next-write` nextest test-group and run **separately** from the legacy read-path tests (`materialize`/`substrate_read`/`embed_job`), which instead need `03_seed.sql` loaded. Declarative seeds/scenarios live in `schema-artifact/seeds/` + `schema-artifact/scenarios/`; the reusable mutation functions (`resource_create`/`relationship_assert`/`facet_set`/`lens_create`) live in `02_functions.sql`.
 
 ## Key Patterns
 
