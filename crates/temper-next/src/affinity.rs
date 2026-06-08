@@ -10,6 +10,18 @@ pub enum EdgeKind {
     Near,
 }
 
+impl EdgeKind {
+    /// The `edge_kind` SQL enum label (bound with a `::edge_kind` cast at the query edge).
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            EdgeKind::Express => "express",
+            EdgeKind::Contains => "contains",
+            EdgeKind::LeadsTo => "leads_to",
+            EdgeKind::Near => "near",
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Edge {
     pub src: Uuid,

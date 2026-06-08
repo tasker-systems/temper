@@ -180,17 +180,33 @@ BEGIN
                 'sprint-rituals→formalization', 'kb_cogmaps', c_directors, ev_assert, ev_assert);
 
     -- ── Genesis: seed onboarding-cogmap via the single-txn function ───────
-    c_onboarding := cogmap_genesis(
-        p_name            => 'onboarding-cogmap',
-        p_telos_title     => 'Onboarding charter',
-        p_telos_statement => 'Help a new EPD engineer reach first-merge confidence in week one.',
-        p_questions       => ARRAY[
-            'What does this person already know that transfers?',
-            'What is the smallest real change that builds confidence?',
-            'Where are the sharp edges that scar newcomers?'
-        ],
-        p_owner_profile   => p_dave,
-        p_emitter_entity  => e_agent);
+    -- The telos charter is real content-blocks. This pure-SQL seed can't chunk/embed Rust-side, so it
+    -- builds a single-chunk-per-block charter JSONB (block-0 statement, blocks 1..3 questions; sha256
+    -- content hashes, NULL embedding — embed_chunks backfills it later, same as the concept resources
+    -- below). Region membership keys on declared affinity, not chunk hashes/embeddings, so this stays
+    -- byte-equivalent to the YAML path's regions (the cross-path proof). Prose is verbatim shared with
+    -- schema-artifact/scenarios/onboarding-cogmap.yaml.
+    DECLARE v_charter jsonb; BEGIN
+        v_charter := (
+            SELECT jsonb_agg(jsonb_build_object(
+                'seq', ord,
+                'chunks', jsonb_build_array(jsonb_build_object(
+                    'chunk_index', 0,
+                    'content_hash', encode(sha256(convert_to(txt, 'UTF8')), 'hex'),
+                    'content', txt,
+                    'embedding', NULL
+                ))
+            ) ORDER BY ord)
+            FROM (VALUES
+                (0, 'Help a new EPD engineer reach first-merge confidence in week one.'),
+                (1, 'What does this person already know that transfers?'),
+                (2, 'What is the smallest real change that builds confidence?'),
+                (3, 'Where are the sharp edges that scar newcomers?')
+            ) AS t(ord, txt)
+        );
+        SELECT cogmap_id INTO c_onboarding
+        FROM cogmap_genesis('onboarding-cogmap', 'Onboarding charter', v_charter, p_dave, e_agent);
+    END;
     INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES (c_onboarding, t_orgcommon);
 
     -- ── Regulation: an express-edged concept-resource off the charter ─────

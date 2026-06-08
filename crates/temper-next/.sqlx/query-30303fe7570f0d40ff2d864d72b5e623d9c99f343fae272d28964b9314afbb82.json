@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT lens_create(NULL,$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+  "query": "SELECT lens_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
   "describe": {
     "columns": [
       {
@@ -11,6 +11,7 @@
     ],
     "parameters": {
       "Left": [
+        "Uuid",
         "Text",
         "Float8",
         "Float8",
@@ -28,5 +29,5 @@
       null
     ]
   },
-  "hash": "6f91951f37ed3ab8489a2dde1ee4759509fcea8fd59b6f522f4de9ec06b7eb40"
+  "hash": "30303fe7570f0d40ff2d864d72b5e623d9c99f343fae272d28964b9314afbb82"
 }

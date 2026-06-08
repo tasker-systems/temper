@@ -9,7 +9,7 @@ use temper_next::substrate;
 const MINIMAL: &str = r#"
 name: minimal-load-test
 cogmap:
-  telos: { title: "Min", statement: "A tiny telos.", questions: ["why?"] }
+  telos: { title: "Min", statement: "A tiny telos.", questions: [{ question: "why?" }] }
   owner: alice
   emitter: "agent#1"
 world:

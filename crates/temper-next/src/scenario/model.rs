@@ -50,13 +50,48 @@ pub struct CogmapDef {
     pub emitter: String,
 }
 
+/// The telos charter as real content-blocks (domain-B §1, content-block-primitive β): block-0 is the
+/// `statement`, blocks 1..n are the `questions` (each `question + "\n\n" + context`), then `framing`
+/// blocks situate the telos. Distinguished by `seq` positionally — no `block_kind` column. The loader
+/// turns this into an ordered prose list for `content::prepare_blocks`.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct TelosDef {
     pub title: String,
     pub statement: String,
     #[serde(default)]
-    pub questions: Vec<String>,
+    pub questions: Vec<QuestionDef>,
+    #[serde(default)]
+    pub framing: Vec<String>,
+}
+
+impl TelosDef {
+    /// The charter flattened to its ordered block prose for `content::prepare_blocks`: block-0 is the
+    /// statement, then each question (`question + "\n\n" + context`, or just the question when context
+    /// is empty), then the framing blocks. Positional by index — `seq` is assigned downstream.
+    pub fn block_proses(&self) -> Vec<String> {
+        let mut proses = Vec::with_capacity(1 + self.questions.len() + self.framing.len());
+        proses.push(self.statement.clone());
+        for q in &self.questions {
+            if q.context.is_empty() {
+                proses.push(q.question.clone());
+            } else {
+                proses.push(format!("{}\n\n{}", q.question, q.context));
+            }
+        }
+        proses.extend(self.framing.iter().cloned());
+        proses
+    }
+}
+
+/// A guiding question with its situating context. `context` defaults empty so a bare
+/// `{ question: ... }` is valid; a rich question-with-context naturally chunks into >1 window.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct QuestionDef {
+    pub question: String,
+    #[serde(default)]
+    pub context: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -248,7 +283,7 @@ mod tests {
     fn deserializes_scenario_and_bootseed() {
         let scenario_yaml = r#"
 name: t
-cogmap: { telos: { title: T, statement: S, questions: [q1] }, owner: alice, emitter: "agent#1" }
+cogmap: { telos: { title: T, statement: S, questions: [{ question: q1 }] }, owner: alice, emitter: "agent#1" }
 world: { profiles: [{ handle: alice, display_name: Alice, system_access: approved }], entities: [{ name: "agent#1", profile: alice }] }
 resources:
   - { key: a, origin_uri: "temper://c/a", home: cogmap, body: "hello", facets: { values: { phase: x } } }
@@ -278,6 +313,61 @@ steps:
         .unwrap();
         assert_eq!(boot.lenses.len(), 1);
         assert_eq!(boot.event_types.len(), 2);
+    }
+
+    #[test]
+    fn telos_deserializes_questions_with_context_and_framing() {
+        // The charter is real content-blocks: block-0 statement, blocks 1..n questions-with-context,
+        // framing blocks. `context` defaults empty so a bare `{ question: ... }` is valid.
+        let telos: TelosDef = serde_yaml::from_str(
+            r#"
+title: T
+statement: "The telos statement, possibly multi-paragraph."
+questions:
+  - { question: "What transfers?", context: "Surface prior knowledge that maps onto this codebase." }
+  - { question: "Smallest real change?" }
+framing:
+  - "This map situates first-week onboarding."
+"#,
+        )
+        .unwrap();
+        assert_eq!(telos.questions.len(), 2);
+        assert_eq!(telos.questions[0].question, "What transfers?");
+        assert!(telos.questions[0].context.contains("prior knowledge"));
+        assert_eq!(telos.questions[1].context, ""); // defaulted
+        assert_eq!(
+            telos.framing,
+            vec!["This map situates first-week onboarding."]
+        );
+    }
+
+    #[test]
+    fn telos_block_proses_orders_statement_questions_framing() {
+        let telos = TelosDef {
+            title: "T".into(),
+            statement: "The statement.".into(),
+            questions: vec![
+                QuestionDef {
+                    question: "Q1?".into(),
+                    context: "C1.".into(),
+                },
+                QuestionDef {
+                    question: "Q2?".into(),
+                    context: String::new(),
+                },
+            ],
+            framing: vec!["Framing one.".into()],
+        };
+        let proses = telos.block_proses();
+        assert_eq!(
+            proses,
+            vec![
+                "The statement.".to_string(),
+                "Q1?\n\nC1.".to_string(), // question + context joined
+                "Q2?".to_string(),        // empty context ⇒ bare question, no trailing separator
+                "Framing one.".to_string(),
+            ]
+        );
     }
 
     #[test]

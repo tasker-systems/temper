@@ -7,6 +7,7 @@ pub mod affinity;
 pub mod cluster;
 pub mod content;
 pub mod embed;
+pub mod events;
 pub mod ids;
 pub mod scenario;
 pub mod substrate;

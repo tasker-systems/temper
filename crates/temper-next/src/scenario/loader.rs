@@ -1,9 +1,11 @@
-//! Thin scenario loader: instantiates a scenario's substrate by calling the reusable mutation SQL
-//! functions (`cogmap_genesis`, `resource_create`, `facet_set`, `relationship_assert`). The Rust side
-//! never inserts substrate tables directly — it threads YAML inputs into the functions and records the
-//! `key → Uuid` map (including the implicit `telos` key) the runner needs.
+//! Thin scenario loader: instantiates a scenario's substrate by firing the reusable seeding mutations
+//! through the single `events::fire` surface (`cogmap_genesis`/`resource_create`/`facet_set`/
+//! `relationship_assert`). The Rust side never inserts substrate tables directly — it threads YAML inputs
+//! into `SeedAction`s and records the `key → Uuid` map (including the implicit `telos` key) the runner
+//! needs. The whole load runs in one transaction so a scenario is instantiated atomically.
 
-use crate::affinity::EdgeKind;
+use crate::events::{fire, SeedAction};
+use crate::ids::{EntityId, ProfileId};
 use crate::scenario::model::*;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -16,16 +18,9 @@ pub struct Loaded {
     pub keys: HashMap<String, Uuid>,
 }
 
-pub(crate) fn edge_kind_sql(k: EdgeKind) -> &'static str {
-    match k {
-        EdgeKind::Express => "express",
-        EdgeKind::Contains => "contains",
-        EdgeKind::LeadsTo => "leads_to",
-        EdgeKind::Near => "near",
-    }
-}
-
 pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
+    let mut tx = pool.begin().await?;
+
     // world identity rows (tiny — direct, not event-projected for M1)
     let mut profiles: HashMap<String, Uuid> = HashMap::new();
     for p in &s.world.profiles {
@@ -36,7 +31,7 @@ pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
             p.display_name,
             p.system_access as _,
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
         profiles.insert(p.handle.clone(), id);
     }
@@ -50,40 +45,44 @@ pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
             pid,
             e.name,
         )
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
         entities.insert(e.name.clone(), id);
     }
 
-    let owner = *profiles
-        .get(&s.cogmap.owner)
-        .context("cogmap.owner not in world.profiles")?;
-    let emitter = *entities
-        .get(&s.cogmap.emitter)
-        .context("cogmap.emitter not in world.entities")?;
+    let owner = ProfileId::from(
+        *profiles
+            .get(&s.cogmap.owner)
+            .context("cogmap.owner not in world.profiles")?,
+    );
+    let emitter = EntityId::from(
+        *entities
+            .get(&s.cogmap.emitter)
+            .context("cogmap.emitter not in world.entities")?,
+    );
 
-    // genesis (existing fn) → cogmap + telos charter resource
-    let cogmap = sqlx::query_scalar!(
-        "SELECT cogmap_genesis($1,$2,$3,$4,$5,$6)",
-        s.name,
-        s.cogmap.telos.title,
-        s.cogmap.telos.statement,
-        &s.cogmap.telos.questions,
-        owner,
-        emitter,
+    // genesis → cogmap + telos charter resource. The charter is real content-blocks (block-0 statement,
+    // blocks 1..n questions-with-context, then framing), chunked + embedded Rust-side exactly like an
+    // ordinary resource body; cogmap_genesis persists the block→chunk nesting and returns BOTH ids, so
+    // the loader no longer re-fetches telos_resource_id.
+    let charter_proses = s.cogmap.telos.block_proses();
+    let charter_refs: Vec<&str> = charter_proses.iter().map(String::as_str).collect();
+    let charter_blocks = crate::content::prepare_blocks(&charter_refs)?;
+    let (cogmap, telos) = fire(
+        &mut tx,
+        SeedAction::CogmapGenesis {
+            name: &s.name,
+            telos_title: &s.cogmap.telos.title,
+            charter: &charter_blocks,
+            owner,
+            emitter,
+        },
     )
-    .fetch_one(pool)
     .await?
-    .context("cogmap_genesis returned null")?;
-    let telos = sqlx::query_scalar!(
-        "SELECT telos_resource_id FROM kb_cogmaps WHERE id=$1",
-        cogmap
-    )
-    .fetch_one(pool)
-    .await?;
+    .cogmap_genesis()?;
 
     let mut keys: HashMap<String, Uuid> = HashMap::new();
-    keys.insert("telos".to_string(), telos);
+    keys.insert("telos".to_string(), telos.uuid());
 
     for r in &s.resources {
         let title = r.title.clone().unwrap_or_else(|| r.key.clone());
@@ -91,60 +90,66 @@ pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
         // embeds Rust-side (sha256 + bge-768), and resource_create persists the block→chunk nesting.
         // A multi-paragraph body that exceeds one 510-token window arrives as a multi-chunk block.
         let blocks = crate::content::prepare_blocks(&[r.body.as_str()])?;
-        let blocks_json = serde_json::to_value(&blocks)?;
-        let rid = sqlx::query_scalar!(
-            "SELECT resource_create($1,$2,$3,$4,$5,$6,$7)",
-            title,
-            r.origin_uri,
-            cogmap,
-            owner,
-            blocks_json,
-            r.doc_type,
-            emitter,
+        let rid = fire(
+            &mut tx,
+            SeedAction::ResourceCreate {
+                title: &title,
+                origin_uri: &r.origin_uri,
+                home: cogmap,
+                owner,
+                blocks: &blocks,
+                doc_type: r.doc_type.as_deref(),
+                emitter,
+            },
         )
-        .fetch_one(pool)
         .await?
-        .context("resource_create returned null")?;
-        keys.insert(r.key.clone(), rid);
+        .resource()?;
+        keys.insert(r.key.clone(), rid.uuid());
 
         if let Some(f) = &r.facets {
             let values = serde_json::Value::Object(f.values().clone());
-            sqlx::query!(
-                "SELECT facet_set($1,$2,$3,$4)",
-                rid,
-                values,
-                f.weight(),
-                emitter,
+            fire(
+                &mut tx,
+                SeedAction::FacetSet {
+                    resource: rid,
+                    values: &values,
+                    weight: f.weight(),
+                    emitter,
+                },
             )
-            .fetch_one(pool)
             .await?;
         }
     }
 
     for e in &s.edges {
-        let src = *keys
+        let src = (*keys
             .get(&e.from)
-            .with_context(|| format!("edge from unknown key {}", e.from))?;
-        let tgt = *keys
+            .with_context(|| format!("edge from unknown key {}", e.from))?)
+        .into();
+        let tgt = (*keys
             .get(&e.to)
-            .with_context(|| format!("edge to unknown key {}", e.to))?;
-        sqlx::query!(
-            "SELECT relationship_assert($1,$2,$3::edge_kind,$4,$5,$6,$7)",
-            src,
-            tgt,
-            edge_kind_sql(e.kind) as _,
-            e.label,
-            e.weight,
-            cogmap,
-            emitter,
+            .with_context(|| format!("edge to unknown key {}", e.to))?)
+        .into();
+        fire(
+            &mut tx,
+            SeedAction::RelationshipAssert {
+                src,
+                tgt,
+                kind: e.kind,
+                label: e.label.as_deref(),
+                weight: e.weight,
+                home: cogmap,
+                emitter,
+            },
         )
-        .fetch_one(pool)
         .await?;
     }
 
+    tx.commit().await?;
+
     Ok(Loaded {
-        cogmap,
-        emitter,
+        cogmap: cogmap.uuid(),
+        emitter: emitter.uuid(),
         keys,
     })
 }

@@ -444,37 +444,85 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ============================================================================
+-- Shared block→chunk persist (the content-block-primitive write path). Both resource_create and
+-- cogmap_genesis hand it the Rust-prepared blocks JSONB (crates/temper-next/src/content.rs
+-- `Vec<PreparedBlock>`, serialized): an ordered array of
+--   { "seq": int, "chunks": [ { "chunk_index": int, "content_hash": text, "content": text,
+--                               "embedding": [f32; 768] | null } ] }
+-- Chunking + sha256 hashing + bge-768 embedding all happen Rust-side (borrowing temper-ingest), exactly
+-- as production chunks in code and persists a chunk-set in SQL. This ONLY persists: it iterates
+-- blocks→chunks, writes kb_content_blocks / kb_chunks (with the inline embedding) / kb_chunk_content,
+-- derives each block_body_hash as the sha256 merkle over its ordered chunk hashes, and the resource
+-- body_hash as the sha256 merkle over the ordered block hashes. Blocks carry NO prose (β) — text lives
+-- only in kb_chunk_content. A block whose prose exceeded one 510-token window arrives as >1 chunk.
+-- p_event owns the blocks (genesis_event_id/last_event_id) — the resource_created OR cogmap_seeded event.
+CREATE FUNCTION _persist_resource_blocks(p_resource uuid, p_event uuid, p_blocks jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+    v_block uuid; v_chunk uuid;
+    v_block_json jsonb; v_chunk_json jsonb; v_emb jsonb;
+    v_block_hash text; v_chunk_hashes text; v_chunk_count int;
+    v_resource_hashes text := '';
+BEGIN
+    -- blocks ⊃ chunks, in array order (already seq-ordered Rust-side; the block's own seq is authoritative).
+    FOR v_block_json IN SELECT jsonb_array_elements(p_blocks) LOOP
+        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
+            VALUES (p_resource, (v_block_json->>'seq')::int, p_event, p_event) RETURNING id INTO v_block;
+        v_chunk_hashes := '';
+        v_chunk_count := 0;
+        FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
+            v_emb := v_chunk_json->'embedding';
+            INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, embedding)
+                VALUES (v_block, p_resource, (v_chunk_json->>'chunk_index')::int,
+                        v_chunk_json->>'content_hash',
+                        CASE WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null'
+                             THEN NULL ELSE (v_emb::text)::vector END)
+                RETURNING id INTO v_chunk;
+            INSERT INTO kb_chunk_content (chunk_id, content)
+                VALUES (v_chunk, v_chunk_json->>'content');
+            v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
+            v_chunk_count := v_chunk_count + 1;
+        END LOOP;
+        -- block_body_hash = sha256 merkle over the ordered chunk hashes (retires md5).
+        v_block_hash := encode(sha256(convert_to(v_chunk_hashes, 'UTF8')), 'hex');
+        INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count)
+            VALUES (v_block, v_block_hash, v_chunk_count);
+        v_resource_hashes := v_resource_hashes || v_block_hash;
+    END LOOP;
+    -- resource body_hash = sha256 merkle over the ordered block hashes.
+    UPDATE kb_resources SET body_hash = encode(sha256(convert_to(v_resource_hashes, 'UTF8')), 'hex')
+        WHERE id = p_resource;
+END;
+$$;
+
+-- ============================================================================
 -- COGMAP GENESIS — single-transaction, resource-first seeding (Domain-B §5)
 -- ============================================================================
 
 -- Seeds a new cogmap atomically. Resource-first ordering: the telos resource +
 -- its blocks are created BEFORE the kb_cogmaps row, so telos_resource_id NOT NULL
 -- holds at insert with no deferred FK (map-regions OQ-4, superseded by spine #2).
+-- The telos charter is real content-blocks (content-block-primitive β), Rust-prepared exactly like an
+-- ordinary resource body and persisted via the shared _persist_resource_blocks path:
 --   block-0   = the telos statement (purpose + thin-who)
---   block-1.. = the guiding questions
--- Emits a single `cogmap_seeded` event (the genesis correlation root).
+--   block-1.. = the guiding questions (question + context) then the framing blocks
+-- p_charter_blocks is the same Vec<PreparedBlock> JSONB resource_create takes (chunked + sha256-hashed +
+-- bge-768-embedded Rust-side). Emits a single `cogmap_seeded` event (the genesis correlation root).
 -- doc_type property 'cogmap_charter' is stamped on the telos resource.
--- Returns the new cogmap id.
+-- Returns the new cogmap id AND its telos resource id (sparing the caller a re-fetch).
 CREATE FUNCTION cogmap_genesis(
     p_name            text,
     p_telos_title     text,
-    p_telos_statement text,
-    p_questions       text[],
+    p_charter_blocks  jsonb,
     p_owner_profile   uuid,
     p_emitter_entity  uuid,
     p_origin_uri      text DEFAULT 'temper://genesis'
-) RETURNS uuid LANGUAGE plpgsql AS $$
+) RETURNS TABLE(cogmap_id uuid, telos_resource_id uuid) LANGUAGE plpgsql AS $$
 DECLARE
     v_event_type   uuid;
     v_event        uuid;
     v_resource     uuid;
     v_cogmap       uuid;
-    v_block        uuid;
-    v_chunk        uuid;
-    v_seq          int := 0;
-    v_q            text;
-    v_block_hash   text;
-    v_hashes       text := '';
 BEGIN
     SELECT id INTO v_event_type FROM kb_event_types WHERE name = 'cogmap_seeded';
     IF v_event_type IS NULL THEN
@@ -493,33 +541,10 @@ BEGIN
     VALUES (p_telos_title, p_origin_uri)
     RETURNING id INTO v_resource;
 
-    -- 2a. block-0 = telos statement
-    INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
-    VALUES (v_resource, 0, v_event, v_event) RETURNING id INTO v_block;
-    INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
-    VALUES (v_block, v_resource, 0, md5(p_telos_statement)) RETURNING id INTO v_chunk;
-    INSERT INTO kb_chunk_content (chunk_id, content) VALUES (v_chunk, p_telos_statement);
-    v_block_hash := md5(p_telos_statement);
-    INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count)
-    VALUES (v_block, v_block_hash, 1);
-    v_hashes := v_hashes || v_block_hash;
-
-    -- 2b. blocks 1..n = guiding questions
-    FOREACH v_q IN ARRAY COALESCE(p_questions, ARRAY[]::text[]) LOOP
-        v_seq := v_seq + 1;
-        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
-        VALUES (v_resource, v_seq, v_event, v_event) RETURNING id INTO v_block;
-        INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash)
-        VALUES (v_block, v_resource, 0, md5(v_q)) RETURNING id INTO v_chunk;
-        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (v_chunk, v_q);
-        v_block_hash := md5(v_q);
-        INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count)
-        VALUES (v_block, v_block_hash, 1);
-        v_hashes := v_hashes || v_block_hash;
-    END LOOP;
-
-    -- 2c. denormalized resource body_hash = merkle over ordered block hashes
-    UPDATE kb_resources SET body_hash = md5(v_hashes) WHERE id = v_resource;
+    -- 2a. the charter as real content-blocks — same block→chunk persist path resource_create uses
+    --     (statement, questions-with-context, framing; positional by seq, no block_kind). The genesis
+    --     event owns the blocks; body_hash is the sha256 merkle the helper derives.
+    PERFORM _persist_resource_blocks(v_resource, v_event, p_charter_blocks);
 
     -- 3. the cogmap row (telos_resource_id NOT NULL satisfied — resource exists)
     INSERT INTO kb_cogmaps (name, telos_resource_id)
@@ -540,7 +565,9 @@ BEGIN
        SET producing_anchor_table = 'kb_cogmaps', producing_anchor_id = v_cogmap
      WHERE id = v_event;
 
-    RETURN v_cogmap;
+    cogmap_id := v_cogmap;
+    telos_resource_id := v_resource;
+    RETURN NEXT;
 END;
 $$;
 
@@ -550,28 +577,15 @@ $$;
 -- ============================================================================
 
 -- Create a resource, home it in a cogmap, give it its content as the real nesting (blocks ⊃ chunks ⊃
--- chunk_content), optionally stamp a doc_type property. Emits one `resource_created` event (the
--- projection root). Returns the resource id.
---
--- p_blocks is the Rust-prepared content (crates/temper-next/src/content.rs `Vec<PreparedBlock>`,
--- serialized): an ordered array of
---     { "seq": int, "chunks": [ { "chunk_index": int, "content_hash": text, "content": text,
---                                 "embedding": [f32; 768] | null } ] }
--- Chunking + sha256 hashing + bge-768 embedding all happen Rust-side (borrowing temper-ingest), exactly
--- as production chunks in code and persists a chunk-set in SQL. This function ONLY persists: it iterates
--- blocks→chunks, writes kb_content_blocks / kb_chunks (with the inline embedding) / kb_chunk_content,
--- derives each block_body_hash as the sha256 merkle over its ordered chunk hashes, and the resource
--- body_hash as the sha256 merkle over the ordered block hashes. Blocks carry NO prose (β) — text lives
--- only in kb_chunk_content. A block whose prose exceeded one 510-token window arrives as >1 chunk.
+-- chunk_content) via the shared _persist_resource_blocks path, optionally stamp a doc_type property.
+-- Emits one `resource_created` event (the projection root). Returns the resource id.
+-- p_blocks is the Rust-prepared content JSONB documented on _persist_resource_blocks above.
 CREATE FUNCTION resource_create(
     p_title text, p_origin_uri text, p_home_cogmap uuid, p_owner uuid,
     p_blocks jsonb, p_doc_type text, p_emitter uuid
 ) RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE
-    v_et uuid; v_ev uuid; v_resource uuid; v_block uuid; v_chunk uuid;
-    v_block_json jsonb; v_chunk_json jsonb; v_emb jsonb;
-    v_block_hash text; v_chunk_hashes text; v_chunk_count int;
-    v_resource_hashes text := '';
+    v_et uuid; v_ev uuid; v_resource uuid;
 BEGIN
     SELECT id INTO v_et FROM kb_event_types WHERE name='resource_created';
     IF v_et IS NULL THEN RAISE EXCEPTION 'event_type resource_created not seeded'; END IF;
@@ -581,35 +595,9 @@ BEGIN
     INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
         VALUES (v_resource, 'kb_cogmaps', p_home_cogmap, p_owner, p_owner);
 
-    -- blocks ⊃ chunks, in array order (already seq-ordered Rust-side; the block's own seq is authoritative).
-    FOR v_block_json IN SELECT jsonb_array_elements(p_blocks) LOOP
-        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
-            VALUES (v_resource, (v_block_json->>'seq')::int, v_ev, v_ev) RETURNING id INTO v_block;
-        v_chunk_hashes := '';
-        v_chunk_count := 0;
-        FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
-            v_emb := v_chunk_json->'embedding';
-            INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, embedding)
-                VALUES (v_block, v_resource, (v_chunk_json->>'chunk_index')::int,
-                        v_chunk_json->>'content_hash',
-                        CASE WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null'
-                             THEN NULL ELSE (v_emb::text)::vector END)
-                RETURNING id INTO v_chunk;
-            INSERT INTO kb_chunk_content (chunk_id, content)
-                VALUES (v_chunk, v_chunk_json->>'content');
-            v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
-            v_chunk_count := v_chunk_count + 1;
-        END LOOP;
-        -- block_body_hash = sha256 merkle over the ordered chunk hashes (retires md5).
-        v_block_hash := encode(sha256(convert_to(v_chunk_hashes, 'UTF8')), 'hex');
-        INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count)
-            VALUES (v_block, v_block_hash, v_chunk_count);
-        v_resource_hashes := v_resource_hashes || v_block_hash;
-    END LOOP;
+    -- blocks ⊃ chunks via the shared persist path (also sets body_hash = sha256 merkle over block hashes).
+    PERFORM _persist_resource_blocks(v_resource, v_ev, p_blocks);
 
-    -- resource body_hash = sha256 merkle over the ordered block hashes.
-    UPDATE kb_resources SET body_hash = encode(sha256(convert_to(v_resource_hashes, 'UTF8')), 'hex')
-        WHERE id = v_resource;
     IF p_doc_type IS NOT NULL THEN
         INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
             VALUES ('kb_resources', v_resource, 'doc_type', to_jsonb(p_doc_type), v_ev, v_ev);
