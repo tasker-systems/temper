@@ -396,7 +396,7 @@ CREATE INDEX idx_kb_edges_home   ON kb_edges(home_anchor_table, home_anchor_id) 
 -- doctype is a row here (key='doc_type'); relational frontmatter projects to edges.
 CREATE TABLE kb_properties (
     id                    UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
-    owner_table           VARCHAR(64) NOT NULL CHECK (owner_table IN ('kb_resources', 'kb_cogmaps', 'kb_edges')),  -- §4a: edges carry facets
+    owner_table           VARCHAR(64) NOT NULL CHECK (owner_table IN ('kb_resources', 'kb_cogmaps', 'kb_edges', 'kb_content_blocks')),  -- §4a edges carry facets; D3 blocks carry block_role
     owner_id              UUID NOT NULL,
     property_key          TEXT NOT NULL,
     property_value        JSONB NOT NULL,

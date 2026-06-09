@@ -26,10 +26,14 @@ pub struct PreparedChunk {
 }
 
 /// One content-block (seq-ordered within its resource) and its ordered chunks. Blocks carry **no**
-/// prose of their own (content-block-primitive β) — text lives only in the chunks.
+/// prose of their own (content-block-primitive β) — text lives only in the chunks. `role` is the
+/// block's `block_role` (`"statement"`/`"question"`/`"framing"` for a charter; `None` for an ordinary
+/// resource body); when present the persist path stamps it as a `block_role` property. Serialized as
+/// `null` when `None`.
 #[derive(Debug, Clone, Serialize)]
 pub struct PreparedBlock {
     pub seq: i32,
+    pub role: Option<String>,
     pub chunks: Vec<PreparedChunk>,
 }
 
@@ -44,7 +48,7 @@ fn plan_chunks(prose: &str) -> Vec<(i32, String, String)> {
 }
 
 /// Prepare one block: chunk its prose, then embed every chunk in a single batched ONNX call.
-pub fn prepare_block(seq: i32, prose: &str) -> Result<PreparedBlock> {
+pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<PreparedBlock> {
     let planned = plan_chunks(prose);
     let texts: Vec<&str> = planned
         .iter()
@@ -68,17 +72,22 @@ pub fn prepare_block(seq: i32, prose: &str) -> Result<PreparedBlock> {
             },
         )
         .collect();
-    Ok(PreparedBlock { seq, chunks })
+    Ok(PreparedBlock {
+        seq,
+        role: role.map(str::to_owned),
+        chunks,
+    })
 }
 
-/// Prepare an ordered run of blocks (`seq` = position). The charter passes
-/// `[telos_statement, question_1, …, framing_1, …]`; an ordinary resource passes its single body as one
-/// block. A block whose prose exceeds one 510-token window yields >1 chunk — real multi-chunk-per-block.
-pub fn prepare_blocks(proses: &[&str]) -> Result<Vec<PreparedBlock>> {
-    proses
+/// Prepare an ordered run of blocks (`seq` = position). Each spec is `(role, prose)`: the charter
+/// passes `[(Some("statement"), …), (Some("question"), …), …, (Some("framing"), …)]`; an ordinary
+/// resource passes its single body as one roleless block `[(None, body)]`. A block whose prose exceeds
+/// one 510-token window yields >1 chunk — real multi-chunk-per-block.
+pub fn prepare_blocks(specs: &[(Option<&str>, &str)]) -> Result<Vec<PreparedBlock>> {
+    specs
         .iter()
         .enumerate()
-        .map(|(i, prose)| prepare_block(i as i32, prose))
+        .map(|(i, (role, prose))| prepare_block(i as i32, *role, prose))
         .collect()
 }
 
@@ -124,6 +133,7 @@ mod tests {
     fn prepared_block_serializes_to_expected_jsonb_shape() {
         let block = PreparedBlock {
             seq: 2,
+            role: Some("question".into()),
             chunks: vec![PreparedChunk {
                 chunk_index: 0,
                 content_hash: "ab".repeat(32),
@@ -133,6 +143,7 @@ mod tests {
         };
         let v = serde_json::to_value([&block]).unwrap();
         assert_eq!(v[0]["seq"], 2);
+        assert_eq!(v[0]["role"], "question");
         assert_eq!(v[0]["chunks"][0]["chunk_index"], 0);
         assert_eq!(v[0]["chunks"][0]["content"], "hi");
         // embedding is a JSON array (exact f32 values drift in JSON; the SQL `::vector` cast consumes

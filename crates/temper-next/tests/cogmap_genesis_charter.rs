@@ -5,7 +5,7 @@
 //! multi-chunk-per-block, with sha256 hashes + inline bge-768 embeddings, and returns BOTH the cogmap id
 //! and its telos resource id (sparing the loader a re-fetch).
 //!
-//! Chunking + embedding happen Rust-side via `TelosDef::block_proses` + `content::prepare_blocks`
+//! Chunking + embedding happen Rust-side via `TelosDef::block_specs` + `content::prepare_blocks`
 //! (borrowing temper-ingest); the SQL function only persists. Resets the artifact, ONNX-dependent,
 //! serialized via the temper-next-write group.
 mod common;
@@ -62,8 +62,11 @@ async fn cogmap_genesis_persists_multi_block_multi_chunk_charter() {
     };
 
     // Rust-side: flatten → chunk → embed, exactly as the loader does.
-    let proses = telos.block_proses();
-    let refs: Vec<&str> = proses.iter().map(String::as_str).collect();
+    let specs = telos.block_specs();
+    let refs: Vec<(Option<&str>, &str)> = specs
+        .iter()
+        .map(|(role, prose)| (Some(*role), prose.as_str()))
+        .collect();
     let blocks = content::prepare_blocks(&refs).unwrap();
     assert_eq!(
         blocks.len(),
