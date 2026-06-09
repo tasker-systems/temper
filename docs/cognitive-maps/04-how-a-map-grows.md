@@ -55,7 +55,7 @@ Each maps to a mechanism already in the kernel. None is a special "learning" tab
 The act that surprised us most is **modify**, specifically reinforcement — because there's
 nothing to bump. There is no weight column on a question that an agent increments when the
 question proves useful. A question's standing is *read from the reference stream*: the
-count and recency of provenance accretions into its block. `cogmap_questions` returns a
+count and recency of provenance accretions into its block. `resource_blocks` returns a
 `reinforce_count`, and that number is a `count(...)` over `kb_block_provenance`, not a
 stored field.
 
@@ -99,8 +99,9 @@ sharp edges that scar newcomers?"* — is the map asking, in advance, for exactl
 > that feeds regulation.
 > **Honest basis —** `kb_block_provenance` (`accretion_seq`, `is_corrected`, `source_kind`)
 > and the `is_folded` gates on `kb_content_blocks` / `kb_edges` in
-> [`01_schema.sql`](../../schema-artifact/01_schema.sql); the `cogmap_charter` /
-> `cogmap_questions` / `cogmap_regulation` reads the agent loads, in
+> [`01_schema.sql`](../../schema-artifact/01_schema.sql); the reads the agent loads —
+> `resource_body_text` and `resource_blocks` (via `cogmap_telos`) for the charter and its
+> questions, plus `cogmap_regulation` — in
 > [`02_functions.sql`](../../schema-artifact/02_functions.sql); the five learning-acts are
 > canonical from the research doc *2026-05-29 resolution-contract* (its permeable-surface
 > tiers are superseded — do not draw them).

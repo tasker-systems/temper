@@ -95,8 +95,9 @@ gets written — sometimes the hard way.
 > data is a map*, not every column.
 > **Honest basis —** the tables named above in
 > [`01_schema.sql`](../../schema-artifact/01_schema.sql); the exact rows in
-> [`03_seed.sql`](../../schema-artifact/03_seed.sql); the read projections
-> `cogmap_charter` / `cogmap_questions` / `cogmap_regulation` in
+> [`03_seed.sql`](../../schema-artifact/03_seed.sql); the reads — `resource_body_text`
+> for the charter body and `resource_blocks` for its question blocks, both resolved through
+> `cogmap_telos`, plus `cogmap_regulation` — in
 > [`02_functions.sql`](../../schema-artifact/02_functions.sql), demonstrated by scenario
 > **S4**.
 > **Fidelity —** illustrative. Real table names and real row values, but *not*

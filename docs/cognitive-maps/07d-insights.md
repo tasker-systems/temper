@@ -68,7 +68,7 @@ thought, not administration; the two don't bleed into each other.
 > **Honest basis —** the threading is real: `kb_events.correlation_id`, `emitter_entity_id` (the
 > agent and the integration are both entities), and the open `metadata jsonb` that can carry an
 > agent's reasoning, in [`01_schema.sql`](../../schema-artifact/01_schema.sql); the reinforcement
-> effect is the provenance accretion behind `cogmap_questions`' `reinforce_count`
+> effect is the provenance accretion behind `resource_blocks`' `reinforce_count`
 > ([`02_functions.sql`](../../schema-artifact/02_functions.sql)). The **cross-system query and the
 > assembled provenance graph are proposed** — the columns exist to support them; the analytics
 > layer that reads them does not yet, and *what* a given organization queries from it is its own

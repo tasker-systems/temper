@@ -129,8 +129,9 @@
   {#snippet honestBasis()}
     the tables named above — <code>kb_resources</code>, <code>kb_content_blocks</code>,
     <code>kb_chunks</code>, <code>kb_cogmaps</code>, <code>kb_edges</code>,
-    <code>kb_properties</code>; the read projections <code>cogmap_charter()</code> /
-    <code>cogmap_questions()</code> / <code>cogmap_regulation()</code>, demonstrated by scenario
+    <code>kb_properties</code>; the reads — <code>resource_body_text</code> for the charter
+    body and <code>resource_blocks</code> for its question blocks, both resolved through
+    <code>cogmap_telos</code>, plus <code>cogmap_regulation</code> — demonstrated by scenario
     <strong>S4</strong>.
   {/snippet}
 </VizFigure>

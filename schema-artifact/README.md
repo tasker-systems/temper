@@ -59,7 +59,8 @@ from the top is idempotent and never touches `public.*`.
   (a profile grant is in *neither* map — profile grants never enter a `vis(T)`).
 - **S3 Edge-home protection** — a private edge between two *public* concepts is invisible to anyone
   who can't read its home cogmap, even though both endpoints are readable.
-- **S4 Domain-B projections** — `cogmap_charter` / `cogmap_questions` / `cogmap_regulation`, with
+- **S4 Domain-B projections** — the charter body and question blocks via `resource_body_text` /
+  `resource_blocks` (resolved through `cogmap_telos`), plus `cogmap_regulation`, with
   the principal gate (a profile that can't read the map gets an empty charter).
 - **S5 Delegation priming** — `cogmaps_share_a_team` (the live ∃-one-shared-team predicate).
 - **S6 Shape + staleness** — the region surface (member identities never exposed) and the **on-read**
