@@ -39,7 +39,7 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting() {
 
     // a home cogmap via the genesis function (resource_create homes into it). The charter is now a
     // Rust-prepared block→chunk JSONB, like any resource body.
-    let charter = content::prepare_blocks(&["seed statement"]).unwrap();
+    let charter = content::prepare_blocks(&[(None, "seed statement")]).unwrap();
     let charter_json = serde_json::to_value(&charter).unwrap();
     let cogmap: Uuid =
         sqlx::query_scalar("SELECT cogmap_id FROM cogmap_genesis('home','Charter',$1,$2,$3)")
@@ -56,7 +56,9 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting() {
         "This paragraph explains one facet of reaching first-merge confidence in onboarding week one.\n\n";
     let long = para.repeat(30); // ~2700 chars ⇒ splits into >1 chunk
     let short_b = "A closing note on sharp edges that scar newcomers.";
-    let blocks = content::prepare_blocks(&[short_a, long.as_str(), short_b]).unwrap();
+    let blocks =
+        content::prepare_blocks(&[(None, short_a), (None, long.as_str()), (None, short_b)])
+            .unwrap();
 
     // sanity on the prepared shape: 3 blocks, middle one multi-chunk
     assert_eq!(blocks.len(), 3, "three content blocks prepared");

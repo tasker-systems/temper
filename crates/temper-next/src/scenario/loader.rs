@@ -65,8 +65,11 @@ pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
     // blocks 1..n questions-with-context, then framing), chunked + embedded Rust-side exactly like an
     // ordinary resource body; cogmap_genesis persists the block→chunk nesting and returns BOTH ids, so
     // the loader no longer re-fetches telos_resource_id.
-    let charter_proses = s.cogmap.telos.block_proses();
-    let charter_refs: Vec<&str> = charter_proses.iter().map(String::as_str).collect();
+    let charter_specs = s.cogmap.telos.block_specs();
+    let charter_refs: Vec<(Option<&str>, &str)> = charter_specs
+        .iter()
+        .map(|(role, prose)| (Some(*role), prose.as_str()))
+        .collect();
     let charter_blocks = crate::content::prepare_blocks(&charter_refs)?;
     let (cogmap, telos) = fire(
         &mut tx,
@@ -89,7 +92,7 @@ pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
         // An ordinary resource's body is one content-block (content-block §"Write path"); it chunks +
         // embeds Rust-side (sha256 + bge-768), and resource_create persists the block→chunk nesting.
         // A multi-paragraph body that exceeds one 510-token window arrives as a multi-chunk block.
-        let blocks = crate::content::prepare_blocks(&[r.body.as_str()])?;
+        let blocks = crate::content::prepare_blocks(&[(None, r.body.as_str())])?;
         let rid = fire(
             &mut tx,
             SeedAction::ResourceCreate {

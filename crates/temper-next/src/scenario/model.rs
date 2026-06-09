@@ -52,7 +52,8 @@ pub struct CogmapDef {
 
 /// The telos charter as real content-blocks (domain-B §1, content-block-primitive β): block-0 is the
 /// `statement`, blocks 1..n are the `questions` (each `question + "\n\n" + context`), then `framing`
-/// blocks situate the telos. Distinguished by `seq` positionally — no `block_kind` column. The loader
+/// blocks situate the telos. Each block's kind is stamped as a `block_role` property
+/// (`statement`/`question`/`framing`) by the persist path — see `block_specs`. The loader
 /// turns this into an ordered prose list for `content::prepare_blocks`.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -66,21 +67,26 @@ pub struct TelosDef {
 }
 
 impl TelosDef {
-    /// The charter flattened to its ordered block prose for `content::prepare_blocks`: block-0 is the
-    /// statement, then each question (`question + "\n\n" + context`, or just the question when context
-    /// is empty), then the framing blocks. Positional by index — `seq` is assigned downstream.
-    pub fn block_proses(&self) -> Vec<String> {
-        let mut proses = Vec::with_capacity(1 + self.questions.len() + self.framing.len());
-        proses.push(self.statement.clone());
+    /// The charter flattened to its ordered `(role, prose)` block specs for
+    /// `content::prepare_blocks`: block-0 is the statement (role `"statement"`), then each question
+    /// (role `"question"`, `question + "\n\n" + context`, or just the question when context is empty),
+    /// then the framing blocks (role `"framing"`). Positional by index — `seq` is assigned downstream;
+    /// `role` is the `block_role` property the persist path stamps so reads distinguish the kinds.
+    pub fn block_specs(&self) -> Vec<(&'static str, String)> {
+        let mut specs = Vec::with_capacity(1 + self.questions.len() + self.framing.len());
+        specs.push(("statement", self.statement.clone()));
         for q in &self.questions {
-            if q.context.is_empty() {
-                proses.push(q.question.clone());
+            let prose = if q.context.is_empty() {
+                q.question.clone()
             } else {
-                proses.push(format!("{}\n\n{}", q.question, q.context));
-            }
+                format!("{}\n\n{}", q.question, q.context)
+            };
+            specs.push(("question", prose));
         }
-        proses.extend(self.framing.iter().cloned());
-        proses
+        for f in &self.framing {
+            specs.push(("framing", f.clone()));
+        }
+        specs
     }
 }
 
@@ -342,7 +348,7 @@ framing:
     }
 
     #[test]
-    fn telos_block_proses_orders_statement_questions_framing() {
+    fn telos_block_specs_tags_statement_questions_framing() {
         let telos = TelosDef {
             title: "T".into(),
             statement: "The statement.".into(),
@@ -358,14 +364,14 @@ framing:
             ],
             framing: vec!["Framing one.".into()],
         };
-        let proses = telos.block_proses();
+        let specs = telos.block_specs();
         assert_eq!(
-            proses,
+            specs,
             vec![
-                "The statement.".to_string(),
-                "Q1?\n\nC1.".to_string(), // question + context joined
-                "Q2?".to_string(),        // empty context ⇒ bare question, no trailing separator
-                "Framing one.".to_string(),
+                ("statement", "The statement.".to_string()),
+                ("question", "Q1?\n\nC1.".to_string()), // question + context joined
+                ("question", "Q2?".to_string()),        // empty context ⇒ bare question
+                ("framing", "Framing one.".to_string()),
             ]
         );
     }
