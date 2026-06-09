@@ -269,6 +269,10 @@ $$;
 -- per-resource-type concept, but a property-filtered block read is universal (design §2, §4).
 -- reinforce_count is a provenance-ATTRIBUTION accretion count (a reinforcement proxy), not a modeled
 -- block-level trajectory (design §5).
+-- ASSUMES single-label roles (design §3.2): exactly one non-folded block_role row per block, so the
+-- role LEFT JOIN is 1:1 and reinforce_count's provenance fan-out is accurate. The weighted-multi-role
+-- seam (design §3.4) would emit a row per role AND multiply reinforce_count — when that opens, pre-
+-- aggregate kb_block_provenance in a subquery before the role join.
 CREATE FUNCTION resource_blocks(
     p_resource uuid, p_principal_kind text, p_principal_id uuid, p_role text DEFAULT NULL
 ) RETURNS TABLE(seq int, block_id uuid, body_text text, role text,
