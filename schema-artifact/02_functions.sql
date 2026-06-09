@@ -262,34 +262,41 @@ $$;
 -- DOMAIN-B READ PROJECTIONS (conventions over kernel; access-gated reads)
 -- ============================================================================
 
--- The telos-charter resource of a cogmap, IF readable by the principal.
-CREATE FUNCTION cogmap_charter(p_cogmap uuid, p_principal_kind text, p_principal_id uuid)
-RETURNS TABLE(resource_id uuid, title text, body_text text) LANGUAGE sql STABLE AS $$
-    SELECT r.id, r.title, resource_body_text(r.id)
-    FROM kb_cogmaps c
-    JOIN kb_resources r ON r.id = c.telos_resource_id
-    WHERE c.id = p_cogmap
-      AND r.id IN (SELECT resource_id FROM resources_readable_by(p_principal_kind, p_principal_id));
+-- Generic per-resource block projection (D3): a resource's non-folded blocks with assembled body
+-- text, their block_role, and the provenance-attribution signal. Access-gated via resources_readable_by.
+-- p_role NULL ⇒ all blocks; otherwise only blocks whose block_role property equals p_role. The
+-- questions / framing / statement reads are all THIS function with a role filter — "kind" is not a
+-- per-resource-type concept, but a property-filtered block read is universal (design §2, §4).
+-- reinforce_count is a provenance-ATTRIBUTION accretion count (a reinforcement proxy), not a modeled
+-- block-level trajectory (design §5).
+CREATE FUNCTION resource_blocks(
+    p_resource uuid, p_principal_kind text, p_principal_id uuid, p_role text DEFAULT NULL
+) RETURNS TABLE(seq int, block_id uuid, body_text text, role text,
+                reinforce_count bigint, last_reinforced_at timestamptz) LANGUAGE sql STABLE AS $$
+    SELECT b.seq, b.id, block_body_text(b.id),
+           rp.property_value #>> '{}',
+           count(pr.id) FILTER (WHERE NOT pr.is_corrected),
+           max(pr.created) FILTER (WHERE NOT pr.is_corrected)
+    FROM kb_content_blocks b
+    LEFT JOIN kb_properties rp
+           ON rp.owner_table = 'kb_content_blocks' AND rp.owner_id = b.id
+          AND rp.property_key = 'block_role' AND NOT rp.is_folded
+    LEFT JOIN kb_block_provenance pr ON pr.block_id = b.id
+    WHERE b.resource_id = p_resource AND NOT b.is_folded
+      AND p_resource IN (SELECT resource_id FROM resources_readable_by(p_principal_kind, p_principal_id))
+      AND (p_role IS NULL OR rp.property_value #>> '{}' = p_role)
+    GROUP BY b.seq, b.id, rp.property_value
+    ORDER BY b.seq;
 $$;
 
--- The charter's guiding questions: blocks seq>=1 (block-0 is the telos statement).
--- Reinforcement signal (Domain-B PQ-1): the artifact's proxy is the count + recency
--- of {kind:block} provenance accretions into the question-block — "the substrate
--- exposes the reference stream; narrowing to confirming-acts is black-box tuning."
-CREATE FUNCTION cogmap_questions(p_cogmap uuid, p_principal_kind text, p_principal_id uuid)
-RETURNS TABLE(seq int, block_id uuid, body_text text,
-              reinforce_count bigint, last_reinforced_at timestamptz) LANGUAGE sql STABLE AS $$
-    SELECT b.seq, b.id, block_body_text(b.id),
-           count(p.id) FILTER (WHERE NOT p.is_corrected),
-           max(p.created) FILTER (WHERE NOT p.is_corrected)
-    FROM kb_cogmaps c
-    JOIN kb_resources r          ON r.id = c.telos_resource_id
-    JOIN kb_content_blocks b     ON b.resource_id = r.id AND b.seq >= 1 AND NOT b.is_folded
-    LEFT JOIN kb_block_provenance p ON p.block_id = b.id
-    WHERE c.id = p_cogmap
-      AND r.id IN (SELECT resource_id FROM resources_readable_by(p_principal_kind, p_principal_id))
-    GROUP BY b.seq, b.id
-    ORDER BY b.seq;
+-- The one genuinely cogmap-specific read (D3): resolve a cogmap to its telos-charter resource id (the
+-- kb_cogmaps.telos_resource_id FK). Everything else is generic resource-level — resource_body_text for
+-- the charter body, resource_blocks(telos, …, p_role) for questions/framing. Retires
+-- cogmap_charter/cogmap_questions. (cogmap_regulation is a graph-edge read — left untouched; it may be
+-- demoted when the regulation/edge-semantics deliverable lands.)
+CREATE FUNCTION cogmap_telos(p_cogmap uuid)
+RETURNS uuid LANGUAGE sql STABLE AS $$
+    SELECT telos_resource_id FROM kb_cogmaps WHERE id = p_cogmap;
 $$;
 
 -- Regulation: the open set of concept-resources the charter `express`-edges to
@@ -468,6 +475,15 @@ BEGIN
     FOR v_block_json IN SELECT jsonb_array_elements(p_blocks) LOOP
         INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
             VALUES (p_resource, (v_block_json->>'seq')::int, p_event, p_event) RETURNING id INTO v_block;
+        -- D3: stamp the block's role (statement/question/framing) as a block_role property when the
+        -- block JSONB carries one. Open string value (no enum); single-label per block. The pair
+        -- (owner_table='kb_content_blocks', property_key='block_role') double-segregates it from the
+        -- resource-facet lens math (which filters owner_table='kb_resources' AND property_key='facet').
+        IF v_block_json ? 'role' AND jsonb_typeof(v_block_json->'role') = 'string' THEN
+            INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value,
+                                       asserted_by_event_id, last_event_id)
+            VALUES ('kb_content_blocks', v_block, 'block_role', v_block_json->'role', p_event, p_event);
+        END IF;
         v_chunk_hashes := '';
         v_chunk_count := 0;
         FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
