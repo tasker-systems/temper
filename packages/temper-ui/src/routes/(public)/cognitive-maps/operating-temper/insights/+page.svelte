@@ -111,7 +111,7 @@
     the threading is real: <code>kb_events.correlation_id</code>,
     <code>emitter_entity_id</code>, and the open <code>metadata jsonb</code> that
     can carry an agent's reasoning; the reinforcement effect is the provenance
-    accretion behind <code>cogmap_questions</code>' <code>reinforce_count</code>.
+    accretion behind <code>resource_blocks</code>' <code>reinforce_count</code>.
     The <strong>cross-system query and the assembled provenance graph are
     proposed</strong> — the columns exist to support them; the analytics layer
     that reads them does not yet. Draw the chain as real, the dashboard around it

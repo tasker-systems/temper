@@ -13,7 +13,7 @@
    * nodes); the analytics DASHBOARD reading it is proposed (dashed, faint).
    *
    * Honest basis: kb_events.correlation_id + emitter_entity_id thread the chain;
-   * the open metadata jsonb carries the agent's reasoning; cogmap_questions'
+   * the open metadata jsonb carries the agent's reasoning; resource_blocks'
    * reinforce_count is the provenance accretion. The cross-system query and the
    * assembled provenance graph are proposed.
    *

@@ -49,9 +49,10 @@
     <code>kb_block_provenance</code> (<code>accretion_seq</code>,
     <code>is_corrected</code>, <code>source_kind</code>) and the
     <code>is_folded</code> gates on <code>kb_content_blocks</code> /
-    <code>kb_edges</code>; the <code>cogmap_charter</code> /
-    <code>cogmap_questions</code> / <code>cogmap_regulation</code> reads the agent
-    loads. The five learning-acts are canonical from the
+    <code>kb_edges</code>; the reads the agent loads —
+    <code>resource_body_text</code> and <code>resource_blocks</code> (via
+    <code>cogmap_telos</code>) for the charter and its questions, plus
+    <code>cogmap_regulation</code>. The five learning-acts are canonical from the
     <em>2026-05-29 resolution-contract</em>.
   {/snippet}
 </VizFigure>
@@ -121,7 +122,7 @@
     reinforcement — because there's nothing to bump. There is no weight column on
     a question that an agent increments when the question proves useful. A
     question's standing is <em>read from the reference stream</em>: the count and
-    recency of provenance accretions into its block. <code>cogmap_questions</code>
+    recency of provenance accretions into its block. <code>resource_blocks</code>
     returns a <code>reinforce_count</code>, and that number is a
     <code>count(...)</code> over <code>kb_block_provenance</code>, not a stored
     field.

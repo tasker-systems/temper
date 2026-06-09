@@ -74,8 +74,8 @@
   <g font-family="var(--font-mono)" font-size="7.5" letter-spacing="0.5">
     <rect x="206" y="92" width="138" height="46" rx="3" fill="rgba(255,255,255,0.02)" stroke="var(--rule)" stroke-width="0.75" />
     <text x="275" y="84" text-anchor="middle" fill="rgba(255,255,255,0.4)" letter-spacing="1.5">WHAT IT READS</text>
-    <text x="216" y="110" fill="var(--temper-blue)">cogmap_charter</text>
-    <text x="216" y="123" fill="var(--temper-blue)">cogmap_questions</text>
+    <text x="216" y="110" fill="var(--temper-blue)">resource_body_text</text>
+    <text x="216" y="123" fill="var(--temper-blue)">resource_blocks</text>
     <text x="216" y="136" fill="var(--temper-blue)">cogmap_regulation</text>
   </g>
   <line x1="275" y1="156" x2="275" y2="140" stroke="rgba(126,184,218,0.45)" stroke-width="0.75" marker-end="url(#{id}-arrow-dim)" />
