@@ -190,6 +190,7 @@ BEGIN
         v_charter := (
             SELECT jsonb_agg(jsonb_build_object(
                 'seq', ord,
+                'role', CASE WHEN ord = 0 THEN 'statement' ELSE 'question' END,
                 'chunks', jsonb_build_array(jsonb_build_object(
                     'chunk_index', 0,
                     'content_hash', encode(sha256(convert_to(txt, 'UTF8')), 'hex'),

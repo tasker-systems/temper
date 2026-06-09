@@ -58,15 +58,16 @@ ORDER BY p.handle;
 
 \echo ''
 \echo '════════ S4. DOMAIN-B PROJECTIONS — charter / questions / regulation ════════'
-\echo '-- cogmap_charter(onboarding) as the bound agent (Cogmap principal):'
-SELECT title, body_text
-FROM cogmap_charter((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'),
-                    'cogmap', (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'));
+\echo '-- charter body (onboarding) via the generic resource read:'
+SELECT r.title, resource_body_text(r.id) AS body_text
+FROM kb_resources r
+WHERE r.id = cogmap_telos((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'));
 
-\echo '-- cogmap_questions(onboarding): the 3 guiding questions (blocks seq>=1), with the reinforce signal:'
+\echo '-- guiding questions (onboarding): role=question blocks, with the provenance-attribution signal:'
 SELECT seq, body_text, reinforce_count
-FROM cogmap_questions((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'),
-                      'cogmap', (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'))
+FROM resource_blocks(
+        cogmap_telos((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap')),
+        'cogmap', (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'), 'question')
 ORDER BY seq;
 
 \echo '-- cogmap_regulation(onboarding): the express-edged regulation concept(s):'
@@ -74,10 +75,11 @@ SELECT title, edge_label, body_text
 FROM cogmap_regulation((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'),
                        'cogmap', (SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'));
 
-\echo '-- gating: nomad (cannot read the map) gets an EMPTY charter:'
+\echo '-- gating: nomad (cannot read the map) gets ZERO charter blocks:'
 SELECT count(*) AS nomad_charter_rows
-FROM cogmap_charter((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap'),
-                    'profile', (SELECT id FROM kb_profiles WHERE handle='nomad'));
+FROM resource_blocks(
+        cogmap_telos((SELECT id FROM kb_cogmaps WHERE name='onboarding-cogmap')),
+        'profile', (SELECT id FROM kb_profiles WHERE handle='nomad'), NULL);
 
 \echo ''
 \echo '════════ S5. DELEGATION PRIMING — cogmaps_share_a_team ════════'
