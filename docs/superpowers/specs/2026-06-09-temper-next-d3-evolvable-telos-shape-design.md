@@ -50,6 +50,14 @@ The telos-charter is **just a `kb_resources` vertex**. Its content-blocks are an
 exactly what makes blocks addressable, attributable, and event-sourced-mutable while staying
 non-findable.
 
+A `kb_resources` record is the relationship-vertex *because* it is the atom that is **self-sufficient
+for its content** — it stands within a graph of situating relationships, but its content makes sense on
+its own. A content-block is **not** self-sufficient: a framing statement, or a question-and-context (in
+the telos-charter sense — same principle for any resource type), does not "make sense" without the rest
+of the resource it participates in. So a block earns addressability and attribution — its change-state
+is traceable through its chunks and events — **without** earning findability. This is the load-bearing
+asymmetry behind §5 (the block level captures *attribution*, not *trajectory*).
+
 Because **every** `kb_resources` participates in content-blocks as its fundamental unit, anything that
 distinguishes blocks must be expressible *generically over any resource*. A `block_kind` enum column
 fails this test on two counts:
@@ -166,8 +174,10 @@ So:
 - **Generic primitive (new):** `resource_blocks(p_resource, p_principal_kind, p_principal_id, p_role
   DEFAULT NULL)` → `(seq, block_id, body_text, role, reinforce_count, last_reinforced_at)`.
   Access-gated via `resources_readable_by` (`02_functions.sql:155`), `role` joined from the
-  `block_role` property, `reinforce_count` aggregated from `kb_block_provenance`. `p_role=NULL` → all
-  blocks; `p_role='question'` → questions; `p_role='framing'` → framing. **Works for any resource.**
+  `block_role` property, `reinforce_count` aggregated from `kb_block_provenance` (a
+  provenance-*attribution* accretion count usable as a reinforcement proxy — see §5, not a modeled
+  block-level trajectory). `p_role=NULL` → all blocks; `p_role='question'` → questions;
+  `p_role='framing'` → framing. **Works for any resource.**
   Generality is **role-param only** for now (a fully general `p_key/p_value` addressing primitive is
   deferred until mutation-addressing needs it).
 - **Full body:** already `resource_body_text` — nothing new.
@@ -193,19 +203,45 @@ leaves it untouched.**
 
 ---
 
-## 5. Trajectory-bearing questions — formalize existing mechanics, invent nothing
+## 5. What the content-block level captures (attribution) — and what it does *not* (trajectory)
 
-The mechanics already exist in the schema; D3 documents the mapping and ensures the generic read
-composes with them.
+The task motivates D3 with "trajectory-bearing questions (reinforced / decayed / superseded-with-scar)."
+D3 makes the *practicable* part real, but the **"why" must not enshrine a block-level trajectory
+model** — the content-block level does **not** carry distinct trajectory-notation, and pinning one here
+would proscribe future work incorrectly.
 
-| question act | mechanism | tag | cite |
-|---|---|---|---|
-| **reinforce** ("kept being right") | `count(kb_block_provenance) FILTER (WHERE NOT is_corrected)` — derivable-not-denormalized; rides on `resource_blocks` | CONFORM | `02_functions.sql:281-283`; `01_schema.sql:346-358` |
-| **decay** ("stopped mattering") | `block_folded` → `is_folded=true`; generic reads exclude folded blocks | CONFORM | `01_schema.sql:291`; `02_functions.sql:250` |
-| **supersede-with-scar** ("was the *wrong* question") | fold the block **+** scar (`kb_block_provenance.is_corrected=true`) | partial | `01_schema.sql:353` |
+### 5.1 The principle (resolving to §2's self-sufficient atom)
 
-The **lesson-to-regulation** half of supersede-with-scar (a regulation concept-resource whose
-provenance references the folded question-block) is domain-B §3/§4 = **forward seam**, not D3.
+Because a content-block is **not** self-sufficient (a framing statement or question-and-context does not
+"make sense" without the rest of its resource), its purpose is narrower and sharper than the resource's:
+to be a **projection-of-change-state through its chunks and event-sourcing**, so that *which event and
+external system contributed, and in what order* is **attributable** — when we ask "where did this
+statement in this concept come from?", we can find and reference it.
+
+### 5.2 What D3 captures at the block level — attribution, not trajectory
+
+- **Attribution** — `kb_block_provenance` (`source_kind`, `source_id`, `accretion_seq`, `is_corrected`,
+  `01_schema.sql:346-358`): which event/external-system shaped the block, in what order. The generic
+  `resource_blocks` read may surface an accretion count (the artifact's `reinforce_count`) — a
+  **provenance-attribution signal**, usable as a reinforcement *proxy*, **not** a modeled block-level
+  trajectory. **CONFORM** (`02_functions.sql:281-283`).
+- **Fold** — `is_folded` is a **soft-delete / visibility** mechanism (`01_schema.sql:291`); generic
+  reads exclude folded blocks (`resource_body_text` `02_functions.sql:250`). Fold is **not** "decay."
+  **CONFORM.**
+
+### 5.3 Resource/edge-level trajectory is richer and is *not* modeled in D3
+
+Carrying these forward as block mechanics would be wrong:
+
+- **Decay** is not a block fold. At the resource level it is the **degree of drift between cosine
+  similarity and `kb_properties`** as they produce cogmap region clustering and coherence measures — a
+  region/coherence phenomenon, not a per-block flag.
+- **Reinforcement** is lightly modeled today and is legitimately **an edge-level relational marker
+  and/or an event from provenance — both** are acceptable; it is not block-intrinsic.
+- **Supersede-with-scar's** lesson-to-regulation half stays a **forward seam** (domain-B §3/§4).
+
+D3's job here is therefore only: keep folded blocks out of reads, and make per-block **attribution**
+available on the generic read. It does **not** define the cogmap's trajectory model.
 
 ---
 
