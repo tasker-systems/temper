@@ -20,7 +20,8 @@
 
 use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
-use crate::ids::{CogmapId, EntityId, EventId, LensId, ProfileId, ResourceId};
+use crate::ids::{CogmapId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId, ResourceId};
+use crate::payloads;
 use crate::scenario::model::LensDef;
 use anyhow::{Context, Result};
 use uuid::Uuid;
@@ -124,9 +125,8 @@ pub enum Fired {
         telos_resource: ResourceId,
     },
     Resource(ResourceId),
-    /// The asserted edge id (no `EdgeId` newtype yet — edges aren't threaded as typed ids).
-    Relationship(Uuid),
-    Facet,
+    Relationship(EdgeId),
+    Facet(PropertyId),
     Lens(LensId),
     Materialize(EventId),
 }
@@ -229,20 +229,25 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             home,
             emitter,
         } => {
-            let id = sqlx::query_scalar!(
-                "SELECT relationship_assert($1,$2,$3::edge_kind,$4,$5,$6,$7)",
-                src.uuid(),
-                tgt.uuid(),
-                kind.as_sql() as _,
-                label,
+            let payload = payloads::RelationshipAsserted {
+                edge_id: EdgeId::from(Uuid::now_v7()),
+                source: payloads::AnchorRef::resource(src),
+                target: payloads::AnchorRef::resource(tgt),
+                edge_kind: kind,
+                polarity: payloads::EdgePolarity::Forward,
+                label: label.map(str::to_owned),
                 weight,
-                home.uuid(),
+                home: payloads::AnchorRef::cogmap(home),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT relationship_assert($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
             .await?
             .context("relationship_assert returned null")?;
-            Ok(Fired::Relationship(id))
+            Ok(Fired::Relationship(EdgeId::from(id)))
         }
 
         SeedAction::FacetSet {
@@ -251,16 +256,22 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             weight,
             emitter,
         } => {
-            sqlx::query!(
-                "SELECT facet_set($1,$2,$3,$4)",
-                resource.uuid(),
-                values,
+            let payload = payloads::PropertyAsserted {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::resource(resource),
+                property_key: "facet".into(),
+                value: values.clone(),
                 weight,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT facet_set($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
-            .await?;
-            Ok(Fired::Facet)
+            .await?
+            .context("facet_set returned null")?;
+            Ok(Fired::Facet(PropertyId::from(id)))
         }
 
         SeedAction::LensCreate {
@@ -268,19 +279,28 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             lens,
             emitter,
         } => {
+            let payload = payloads::LensCreated {
+                lens_id: LensId::from(Uuid::now_v7()),
+                cogmap_id: cogmap,
+                name: lens.name.clone(),
+                selection_kind: "homed".into(),
+                weights: payloads::LensWeights {
+                    express: lens.w_express,
+                    contains: lens.w_contains,
+                    leads_to: lens.w_leads_to,
+                    near: lens.w_near,
+                    prop: lens.w_prop,
+                },
+                salience: payloads::SalienceWeights {
+                    telos: lens.s_telos,
+                    reference: lens.s_ref,
+                    central: lens.s_central,
+                },
+                resolution: lens.resolution,
+            };
             let id = sqlx::query_scalar!(
-                "SELECT lens_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-                cogmap.map(CogmapId::uuid),
-                lens.name,
-                lens.w_express,
-                lens.w_contains,
-                lens.w_leads_to,
-                lens.w_near,
-                lens.w_prop,
-                lens.s_telos,
-                lens.s_ref,
-                lens.s_central,
-                lens.resolution,
+                "SELECT lens_create($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)

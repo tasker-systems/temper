@@ -626,71 +626,139 @@ BEGIN
 END;
 $$;
 
--- Assert a typed edge between two resources, homed in a cogmap. Emits `relationship_asserted`.
-CREATE FUNCTION relationship_assert(
-    p_src uuid, p_tgt uuid, p_kind edge_kind, p_label text, p_weight double precision,
-    p_home_cogmap uuid, p_emitter uuid
+-- ============================================================================
+-- THE ONE EVENT WRITER (payload-first design §5). Every mutation function appends through here;
+-- it is also the foreign-event door: an external/webhook event is _event_append with no projection
+-- half. Root-event convention: correlation_id = the event's own id when no correlation is supplied
+-- (computed up front — the ledger is append-only, no post-hoc UPDATE).
+-- ============================================================================
+CREATE FUNCTION _event_append(
+    p_type_name text, p_emitter uuid, p_anchor_table text, p_anchor_id uuid,
+    p_payload jsonb,
+    p_references jsonb DEFAULT '[]'::jsonb,
+    p_correlation uuid DEFAULT NULL,
+    p_payload_version int DEFAULT 1
 ) RETURNS uuid LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_edge uuid;
+DECLARE v_et uuid; v_ev uuid := uuid_generate_v7();
 BEGIN
-    SELECT id INTO v_et FROM kb_event_types WHERE name='relationship_asserted';
-    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type relationship_asserted not seeded'; END IF;
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, 'kb_cogmaps', p_home_cogmap) RETURNING id INTO v_ev;
-    INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label, weight,
-                          home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
-        VALUES ('kb_resources', p_src, 'kb_resources', p_tgt, p_kind, p_label, p_weight,
-                'kb_cogmaps', p_home_cogmap, v_ev, v_ev) RETURNING id INTO v_edge;
+    SELECT id INTO v_et FROM kb_event_types WHERE name = p_type_name;
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type % not seeded', p_type_name; END IF;
+    INSERT INTO kb_events (id, event_type_id, emitter_entity_id,
+                           producing_anchor_table, producing_anchor_id,
+                           payload, "references", payload_version, correlation_id)
+    VALUES (v_ev, v_et, p_emitter, p_anchor_table, p_anchor_id,
+            p_payload, p_references, p_payload_version, COALESCE(p_correlation, v_ev));
+    RETURN v_ev;
+END;
+$$;
+
+-- ── relationship_asserted ────────────────────────────────────────────────────
+-- Projection half: reads ONLY the payload (RelationshipAsserted, payloads.rs). Projected timestamps
+-- come from the event's occurred_at, never now() (replay-stable by construction).
+CREATE FUNCTION _project_relationship_asserted(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
+    INSERT INTO kb_edges (id, source_table, source_id, target_table, target_id,
+                          edge_kind, polarity, label, weight,
+                          home_anchor_table, home_anchor_id,
+                          asserted_by_event_id, last_event_id, created)
+    VALUES (v_edge,
+            p_payload#>>'{source,table}', (p_payload#>>'{source,id}')::uuid,
+            p_payload#>>'{target,table}', (p_payload#>>'{target,id}')::uuid,
+            (p_payload->>'edge_kind')::edge_kind,
+            COALESCE(p_payload->>'polarity', 'forward')::edge_polarity,
+            p_payload->>'label',
+            (p_payload->>'weight')::double precision,
+            p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid,
+            p_event, p_event, v_occurred);
     RETURN v_edge;
 END;
 $$;
 
--- Set a resource's facet property as ONE coherent kb_properties row. Emits `property_asserted`.
--- The event anchors to the resource's home cogmap (producing_anchor CHECK forbids kb_resources).
-CREATE FUNCTION facet_set(p_resource uuid, p_values jsonb, p_weight double precision, p_emitter uuid)
-RETURNS void LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_anchor_tbl text; v_anchor uuid;
+-- Assert a typed edge, homed per the payload. Emits `relationship_asserted` + projects, one txn.
+CREATE FUNCTION relationship_assert(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid;
 BEGIN
-    SELECT id INTO v_et FROM kb_event_types WHERE name='property_asserted';
-    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type property_asserted not seeded'; END IF;
-    -- Anchor the event to the resource's home (cogmap OR context — both are in the kb_events CHECK set),
-    -- preferring a cogmap home. NEVER hardcode 'kb_cogmaps' with a possibly-NULL id: a context-homed
-    -- resource would violate the (table IS NULL)=(id IS NULL) CHECK and abort the txn.
-    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
-        WHERE resource_id=p_resource ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
-    IF v_anchor IS NULL THEN
-        RAISE EXCEPTION 'facet_set: resource % has no home to anchor the property event', p_resource;
-    END IF;
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, v_anchor_tbl, v_anchor) RETURNING id INTO v_ev;
-    INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
-        VALUES ('kb_resources', p_resource, 'facet', p_values, p_weight, v_ev, v_ev);
+    v_ev := _event_append('relationship_asserted', p_emitter,
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+    RETURN _project_relationship_asserted(v_ev, p_payload);
 END;
 $$;
 
--- Create a lens (global when p_cogmap IS NULL). Emits `lens_created`; a global lens is a system event
--- with no producing anchor (both NULL — satisfies the both-null-or-both-set CHECK). Returns lens id.
-CREATE FUNCTION lens_create(
-    p_cogmap uuid, p_name text,
-    p_w_express double precision, p_w_contains double precision, p_w_leads_to double precision,
-    p_w_near double precision, p_w_prop double precision,
-    p_s_telos double precision, p_s_ref double precision, p_s_central double precision,
-    p_resolution double precision, p_emitter uuid
-) RETURNS uuid LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_lens uuid; v_anchor_tbl text;
+-- ── property_asserted ────────────────────────────────────────────────────────
+CREATE FUNCTION _project_property_asserted(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_prop uuid := (p_payload->>'property_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
 BEGIN
-    SELECT id INTO v_et FROM kb_event_types WHERE name='lens_created';
-    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type lens_created not seeded'; END IF;
-    v_anchor_tbl := CASE WHEN p_cogmap IS NULL THEN NULL ELSE 'kb_cogmaps' END;
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, v_anchor_tbl, p_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value, weight,
+                               asserted_by_event_id, last_event_id, created)
+    VALUES (v_prop,
+            p_payload#>>'{owner,table}', (p_payload#>>'{owner,id}')::uuid,
+            p_payload->>'property_key', p_payload->'value',
+            (p_payload->>'weight')::double precision,
+            p_event, p_event, v_occurred);
+    RETURN v_prop;
+END;
+$$;
+
+-- Set a property per the payload. Emits `property_asserted`. The producing anchor is an ENVELOPE
+-- concern derived from the owner resource's home (cogmap OR context — both in the kb_events CHECK
+-- set), preferring a cogmap home — never payload data. A homeless resource is an error.
+CREATE FUNCTION facet_set(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_anchor_tbl text; v_anchor uuid;
+        v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
+BEGIN
+    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
+        WHERE resource_id = v_owner ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
+    IF v_anchor IS NULL THEN
+        RAISE EXCEPTION 'facet_set: resource % has no home to anchor the property event', v_owner;
+    END IF;
+    v_ev := _event_append('property_asserted', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    RETURN _project_property_asserted(v_ev, p_payload);
+END;
+$$;
+
+-- ── lens_created ─────────────────────────────────────────────────────────────
+CREATE FUNCTION _project_lens_created(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_lens uuid := (p_payload->>'lens_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
     INSERT INTO kb_cogmap_lenses
-        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop,
-         s_telos, s_ref, s_central, resolution, asserted_by_event_id)
-    VALUES (p_cogmap, p_name, 'homed', p_w_express, p_w_contains, p_w_leads_to, p_w_near, p_w_prop,
-            p_s_telos, p_s_ref, p_s_central, p_resolution, v_ev)
-    RETURNING id INTO v_lens;
+        (id, cogmap_id, name, selection_kind,
+         w_express, w_contains, w_leads_to, w_near, w_prop,
+         s_telos, s_ref, s_central, resolution, asserted_by_event_id, created)
+    VALUES (v_lens,
+            (p_payload->>'cogmap_id')::uuid,             -- NULL for a global lens
+            p_payload->>'name', p_payload->>'selection_kind',
+            (p_payload#>>'{weights,express}')::double precision,
+            (p_payload#>>'{weights,contains}')::double precision,
+            (p_payload#>>'{weights,leads_to}')::double precision,
+            (p_payload#>>'{weights,near}')::double precision,
+            (p_payload#>>'{weights,prop}')::double precision,
+            (p_payload#>>'{salience,telos}')::double precision,
+            (p_payload#>>'{salience,ref}')::double precision,
+            (p_payload#>>'{salience,central}')::double precision,
+            (p_payload->>'resolution')::double precision,
+            p_event, v_occurred);
     RETURN v_lens;
+END;
+$$;
+
+-- Create a lens (global when payload.cogmap_id is absent/null — a system event with no producing
+-- anchor, both NULL satisfying the both-null-or-both-set CHECK). Returns the lens id.
+CREATE FUNCTION lens_create(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_anchor_tbl text;
+BEGIN
+    v_anchor_tbl := CASE WHEN p_payload->>'cogmap_id' IS NULL THEN NULL ELSE 'kb_cogmaps' END;
+    v_ev := _event_append('lens_created', p_emitter, v_anchor_tbl, (p_payload->>'cogmap_id')::uuid, p_payload);
+    RETURN _project_lens_created(v_ev, p_payload);
 END;
 $$;
 
