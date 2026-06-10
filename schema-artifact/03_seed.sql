@@ -31,10 +31,11 @@ INSERT INTO kb_event_types (name) VALUES
     ('resource_created'), ('resource_updated'), ('resource_deleted'),
     ('relationship_asserted'), ('relationship_retracted'), ('relationship_retyped'),
     ('relationship_reweighted'), ('relationship_folded'),
+    ('relationship_decayed'), ('relationship_corrected'),
     ('property_asserted'), ('property_retracted'), ('property_reweighted'), ('property_folded'),
     ('block_created'), ('block_mutated'), ('block_folded'), ('block_provenance_corrected'),
     ('grant_created'), ('grant_revoked'),
-    ('cogmap_seeded'), ('region_materialized'), ('delegated_launch');
+    ('cogmap_seeded'), ('region_materialized'), ('delegated_launch'), ('lens_created');
 
 DO $seed$
 DECLARE
@@ -50,13 +51,16 @@ DECLARE
     r_public_telos uuid; r_common uuid; r_a_private uuid; r_profile_shared uuid;
     r_concept_sprint uuid; r_concept_formal uuid; r_regulation uuid;
     -- events
-    ev_assert uuid; ev_region uuid; ev_late uuid;
-    et_assert uuid; et_region uuid;
-    -- lens (regions are now produced by the temper-next harness, not hand-seeded)
-    v_lens uuid;
+    ev_assert uuid; ev_lens1 uuid; ev_lens2 uuid; ev_late uuid;
+    et_assert uuid; et_lens uuid; et_reweight uuid;
+    -- edges that get payload-referenced (identity-as-input — payloads carry ids)
+    v_dir_edge uuid; v_express_edge uuid;
+    -- lenses (regions are produced by the temper-next harness, not hand-seeded)
+    v_lens uuid; v_lens2 uuid;
 BEGIN
-    SELECT id INTO et_assert FROM kb_event_types WHERE name = 'relationship_asserted';
-    SELECT id INTO et_region FROM kb_event_types WHERE name = 'region_materialized';
+    SELECT id INTO et_assert   FROM kb_event_types WHERE name = 'relationship_asserted';
+    SELECT id INTO et_lens     FROM kb_event_types WHERE name = 'lens_created';
+    SELECT id INTO et_reweight FROM kb_event_types WHERE name = 'relationship_reweighted';
 
     -- ── Teams + DAG (created FIRST so the root exists when profiles enable) ──
     INSERT INTO kb_teams (slug, name) VALUES ('temper-system', 'Temper System') RETURNING id INTO t_root;
@@ -172,11 +176,22 @@ BEGIN
     -- ── The directors' PRIVATE edge between two PUBLIC concepts ───────────
     -- Homed in directors-map ⇒ invisible to anyone who can't read that map,
     -- even though both endpoints are public (the edge-home protection, access §3).
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, correlation_id)
-        VALUES (et_assert, e_carol, 'kb_cogmaps', c_directors, uuid_generate_v7()) RETURNING id INTO ev_assert;
-    INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label,
+    -- Payload-first: the event carries the conformant RelationshipAsserted payload (edge id
+    -- pre-generated — identity-as-input); root convention: correlation_id = own id.
+    v_dir_edge := uuid_generate_v7();
+    ev_assert  := uuid_generate_v7();
+    INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table,
+                           producing_anchor_id, correlation_id, payload)
+        VALUES (ev_assert, et_assert, e_carol, 'kb_cogmaps', c_directors, ev_assert,
+                jsonb_build_object(
+                    'edge_id', v_dir_edge,
+                    'source', jsonb_build_object('table','kb_resources','id',r_concept_sprint),
+                    'target', jsonb_build_object('table','kb_resources','id',r_concept_formal),
+                    'edge_kind','leads_to','label','sprint-rituals→formalization','weight',1.0,
+                    'home', jsonb_build_object('table','kb_cogmaps','id',c_directors)));
+    INSERT INTO kb_edges (id, source_table, source_id, target_table, target_id, edge_kind, label,
                           home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
-        VALUES ('kb_resources', r_concept_sprint, 'kb_resources', r_concept_formal, 'leads_to',
+        VALUES (v_dir_edge, 'kb_resources', r_concept_sprint, 'kb_resources', r_concept_formal, 'leads_to',
                 'sprint-rituals→formalization', 'kb_cogmaps', c_directors, ev_assert, ev_assert);
 
     -- ── Genesis: seed onboarding-cogmap via the single-txn function ───────
@@ -247,26 +262,47 @@ BEGIN
                           home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
         VALUES ('kb_resources', (SELECT telos_resource_id FROM kb_cogmaps WHERE id = c_onboarding),
                 'kb_resources', r_regulation, 'express', 'operationalized_by',
-                'kb_cogmaps', c_onboarding, ev_assert, ev_assert);
+                'kb_cogmaps', c_onboarding, ev_assert, ev_assert)
+        RETURNING id INTO v_express_edge;  -- referenced by the late edge-touch payload below
 
-    -- ── A materialized region on onboarding-cogmap (shape + staleness) ────
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (et_region, e_agent, 'kb_cogmaps', c_onboarding) RETURNING id INTO ev_region;
-    -- telos-default lens (spec §5c). Concrete starting defaults; tunable (spec OQ-2).
+    -- ── The two lenses (each its own honest lens_created event, payload-first) ────
+    -- telos-default (spec §5c, concrete starting defaults; tunable) and the S6f prop-heavy split
+    -- (property-dominant + sequence-discounted: the leads_to-only setup→first-build pair merges
+    -- under telos-default, splits under prop-heavy). Lens ids pre-generated; payloads conformant
+    -- with the LensCreated schema (payload spec §3).
+    v_lens   := uuid_generate_v7();
+    ev_lens1 := uuid_generate_v7();
+    INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table,
+                           producing_anchor_id, correlation_id, payload)
+        VALUES (ev_lens1, et_lens, e_agent, 'kb_cogmaps', c_onboarding, ev_lens1,
+                jsonb_build_object(
+                    'lens_id', v_lens, 'cogmap_id', c_onboarding,
+                    'name','telos-default','selection_kind','homed',
+                    'weights', jsonb_build_object('express',1.0,'contains',1.0,'leads_to',0.6,'near',0.3,'prop',0.4),
+                    'salience', jsonb_build_object('telos',0.5,'ref',0.3,'central',0.2),
+                    'resolution', 0.5));
     INSERT INTO kb_cogmap_lenses
-        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near,
+        (id, cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near,
          w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)
-    VALUES (c_onboarding, 'telos-default', 'homed', 1.0, 1.0, 0.6, 0.3,
-            0.4, 0.5, 0.3, 0.2, 0.5, ev_region)
-    RETURNING id INTO v_lens;
-    -- A SECOND lens for S6f (plurality): same selection, but property-dominant + sequence-discounted
-    -- (w_prop high, w_leads_to low). Over the SAME substrate the harness yields a DIFFERENT region set
-    -- (the leads_to-only setup→first-build pair merges under telos-default, splits under prop-heavy).
+    VALUES (v_lens, c_onboarding, 'telos-default', 'homed', 1.0, 1.0, 0.6, 0.3,
+            0.4, 0.5, 0.3, 0.2, 0.5, ev_lens1);
+
+    v_lens2  := uuid_generate_v7();
+    ev_lens2 := uuid_generate_v7();
+    INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table,
+                           producing_anchor_id, correlation_id, payload)
+        VALUES (ev_lens2, et_lens, e_agent, 'kb_cogmaps', c_onboarding, ev_lens2,
+                jsonb_build_object(
+                    'lens_id', v_lens2, 'cogmap_id', c_onboarding,
+                    'name','telos-default-propheavy','selection_kind','homed',
+                    'weights', jsonb_build_object('express',1.0,'contains',1.0,'leads_to',0.1,'near',0.3,'prop',1.2),
+                    'salience', jsonb_build_object('telos',0.5,'ref',0.3,'central',0.2),
+                    'resolution', 0.5));
     INSERT INTO kb_cogmap_lenses
-        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near,
+        (id, cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near,
          w_prop, s_telos, s_ref, s_central, resolution, asserted_by_event_id)
-    VALUES (c_onboarding, 'telos-default-propheavy', 'homed', 1.0, 1.0, 0.1, 0.3,
-            1.2, 0.5, 0.3, 0.2, 0.5, ev_region);
+    VALUES (v_lens2, c_onboarding, 'telos-default-propheavy', 'homed', 1.0, 1.0, 0.1, 0.3,
+            1.2, 0.5, 0.3, 0.2, 0.5, ev_lens2);
 
     -- ════════════════════════════════════════════════════════════════════════
     -- THE FALSIFICATION CAST (spec §5a/§5b). Content is the INDEPENDENT VARIABLE:
@@ -513,8 +549,13 @@ BEGIN
     -- run_eval) then drives the fresh→stale transition. (Previously future-dated now()+1min to fake
     -- "after a seed-time materialization", which no longer exists — that dating dominated latest_touch
     -- and made the staleness signal untestable.)
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id, occurred_at)
-        VALUES (et_assert, e_agent, 'kb_cogmaps', c_onboarding, now()) RETURNING id INTO ev_late;
+    -- Semantically a TOUCH, not an assert — typed relationship_reweighted with a conformant
+    -- payload referencing the regulation express edge (identity-as-input).
+    ev_late := uuid_generate_v7();
+    INSERT INTO kb_events (id, event_type_id, emitter_entity_id, producing_anchor_table,
+                           producing_anchor_id, correlation_id, occurred_at, payload)
+        VALUES (ev_late, et_reweight, e_agent, 'kb_cogmaps', c_onboarding, ev_late, now(),
+                jsonb_build_object('edge_id', v_express_edge, 'weight', 1.0));
     UPDATE kb_edges SET last_event_id = ev_late
         WHERE home_anchor_table = 'kb_cogmaps' AND home_anchor_id = c_onboarding AND edge_kind = 'express';
 END;

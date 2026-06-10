@@ -392,6 +392,52 @@ pub const TYPED_EVENT_NAMES: [&str; 15] = [
     "block_provenance_corrected",
 ];
 
+/// Proof obligation 1 (payload spec §7.1): every event on the ledger whose type is typed here must
+/// deserialize into its struct. Catches drift from ANY write path — Rust, hand-SQL, foreign.
+pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    let rows = sqlx::query!(
+        "SELECT et.name AS type_name, e.id, e.payload \
+           FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+          ORDER BY e.id"
+    )
+    .fetch_all(pool)
+    .await?;
+    for r in rows {
+        let res: anyhow::Result<()> = (|| {
+            match r.type_name.as_str() {
+                "cogmap_seeded" => {
+                    serde_json::from_value::<CogmapSeeded>(r.payload.clone())?;
+                }
+                "resource_created" => {
+                    serde_json::from_value::<ResourceCreated>(r.payload.clone())?;
+                }
+                "relationship_asserted" => {
+                    serde_json::from_value::<RelationshipAsserted>(r.payload.clone())?;
+                }
+                "property_asserted" => {
+                    serde_json::from_value::<PropertyAsserted>(r.payload.clone())?;
+                }
+                "lens_created" => {
+                    serde_json::from_value::<LensCreated>(r.payload.clone())?;
+                }
+                "region_materialized" => {
+                    serde_json::from_value::<RegionMaterialized>(r.payload.clone())?;
+                }
+                _ => {}
+            }
+            Ok(())
+        })();
+        if let Err(e) = res {
+            anyhow::bail!(
+                "event {} ({}) payload fails roundtrip: {e}",
+                r.id,
+                r.type_name
+            );
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
