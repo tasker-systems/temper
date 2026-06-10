@@ -10,6 +10,7 @@ pub mod embed;
 pub mod events;
 pub mod ids;
 pub mod payloads;
+pub mod replay;
 pub mod scenario;
 pub mod substrate;
 pub mod write;
