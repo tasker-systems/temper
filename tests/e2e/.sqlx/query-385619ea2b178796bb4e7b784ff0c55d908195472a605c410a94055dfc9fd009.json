@@ -1,0 +1,12 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "TRUNCATE kb_resource_edges",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": []
+  },
+  "hash": "385619ea2b178796bb4e7b784ff0c55d908195472a605c410a94055dfc9fd009"
+}

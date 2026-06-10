@@ -87,6 +87,27 @@ cd crates/temper-next
 DATABASE_URL="${DB}?options=-csearch_path%3Dtemper_next,public" cargo sqlx prepare
 '''
 
+[tasks.prepare-api]
+description = "Regenerate temper-api's per-crate .sqlx cache (--all-targets: includes test-target queries)"
+env = { SQLX_OFFLINE = "false" }   # prepare must introspect the live dev DB to build the cache
+script = '''
+# Per-crate (run from the crate dir) — NOT `--workspace`, which clobbers per-crate caches.
+# `--all-targets` captures test-target macro queries (relationship_*_test), which the offline
+# clippy sweep in `cargo make check` compiles but plain `cargo sqlx prepare` misses.
+cd crates/temper-api
+cargo sqlx prepare -- --all-targets --all-features
+'''
+
+[tasks.prepare-e2e]
+description = "Regenerate temper-e2e's per-crate .sqlx cache (--all-targets: test-target queries)"
+env = { SQLX_OFFLINE = "false" }   # prepare must introspect the live dev DB to build the cache
+script = '''
+# The e2e crate's macro queries all live in test targets, so `--all-targets` is what makes
+# this cache non-empty. Per-crate — never `--workspace` (clobbers per-crate caches).
+cd tests/e2e
+cargo sqlx prepare -- --all-targets --all-features
+'''
+
 [tasks.seed]
 description = "Seed local dev database with UI preview data. Pass email: cargo make seed you@example.com"
 script = '''

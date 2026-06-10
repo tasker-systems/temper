@@ -1,0 +1,60 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT resource_id,\n               kb_uri AS \"kb_uri!\",\n               body_hash AS \"body_hash!\",\n               managed_hash AS \"managed_hash!\",\n               open_hash AS \"open_hash!\",\n               updated,\n               diff_type AS \"diff_type!\"\n          FROM sync_diff_for_device($1, $2::text[], $3::jsonb)\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "resource_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "kb_uri!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "body_hash!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "managed_hash!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 4,
+        "name": "open_hash!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 6,
+        "name": "diff_type!",
+        "type_info": "Varchar"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "TextArray",
+        "Jsonb"
+      ]
+    },
+    "nullable": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "96e8b2c1caa9adf3bcd2aa26e01c99657644751c9339c42f7bb3105c67db3cd5"
+}

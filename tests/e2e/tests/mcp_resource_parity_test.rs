@@ -6,15 +6,17 @@ use temper_api::services::{context_service, doc_type_service, ingest_service, re
 use temper_core::types::ids::{ProfileId, ResourceId};
 
 /// Helper: resolve profile ID from e2e test user.
+///
+/// Runtime query: test-target macros aren't cached by `cargo sqlx prepare`
+/// (the test-fixture convention).
 async fn resolve_test_profile(pool: &sqlx::PgPool) -> ProfileId {
-    ProfileId::from(
-        sqlx::query_scalar!(
-            "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
-        )
-        .fetch_one(pool)
-        .await
-        .expect("profile lookup"),
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
     )
+    .fetch_one(pool)
+    .await
+    .expect("profile lookup");
+    ProfileId::from(id)
 }
 
 /// Helper: SHA256 hex digest of content.

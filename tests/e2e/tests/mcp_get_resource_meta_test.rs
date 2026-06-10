@@ -22,15 +22,16 @@ fn sha2_hex(content: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Runtime query: test-target macros aren't cached by `cargo sqlx prepare`
+/// (the test-fixture convention).
 async fn resolve_test_profile(pool: &sqlx::PgPool) -> ProfileId {
-    ProfileId::from(
-        sqlx::query_scalar!(
-            "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
-        )
-        .fetch_one(pool)
-        .await
-        .expect("profile lookup"),
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
     )
+    .fetch_one(pool)
+    .await
+    .expect("profile lookup");
+    ProfileId::from(id)
 }
 
 /// Seed a resource with managed + open meta and return its row.
