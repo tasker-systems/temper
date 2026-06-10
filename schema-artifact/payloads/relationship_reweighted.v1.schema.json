@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelationshipReweighted",
+  "type": "object",
+  "properties": {
+    "edge_id": {
+      "$ref": "#/$defs/EdgeId"
+    },
+    "weight": {
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "required": [
+    "edge_id",
+    "weight"
+  ],
+  "$defs": {
+    "EdgeId": {
+      "description": "A `kb_edges` row (a declared relationship assertion).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

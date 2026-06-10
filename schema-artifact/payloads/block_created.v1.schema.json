@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlockCreated",
+  "type": "object",
+  "properties": {
+    "block_id": {
+      "$ref": "#/$defs/BlockId"
+    },
+    "resource_id": {
+      "$ref": "#/$defs/ResourceId"
+    },
+    "seq": {
+      "type": "integer",
+      "format": "int32"
+    }
+  },
+  "required": [
+    "block_id",
+    "resource_id",
+    "seq"
+  ],
+  "$defs": {
+    "BlockId": {
+      "description": "A `kb_content_blocks` row (a resource's addressable interior unit).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "ResourceId": {
+      "description": "A `kb_resources` row (the named, edge-connected, findable unit).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

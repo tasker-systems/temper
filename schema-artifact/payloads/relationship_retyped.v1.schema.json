@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelationshipRetyped",
+  "description": "Mirrors production `temper-core/src/types/relationship_events.rs` + `edge_id` (identity-as-input).",
+  "type": "object",
+  "properties": {
+    "edge_id": {
+      "$ref": "#/$defs/EdgeId"
+    },
+    "edge_kind": {
+      "$ref": "#/$defs/EdgeKind"
+    },
+    "polarity": {
+      "$ref": "#/$defs/EdgePolarity"
+    }
+  },
+  "required": [
+    "edge_id",
+    "edge_kind",
+    "polarity"
+  ],
+  "$defs": {
+    "EdgeId": {
+      "description": "A `kb_edges` row (a declared relationship assertion).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "EdgeKind": {
+      "type": "string",
+      "enum": [
+        "express",
+        "contains",
+        "leads_to",
+        "near"
+      ]
+    },
+    "EdgePolarity": {
+      "description": "kb_edges.polarity. The projection's only non-parameter column today — carried explicitly so the\npayload covers every projected column (spec §9 column-coverage obligation).",
+      "type": "string",
+      "enum": [
+        "forward",
+        "inverse"
+      ]
+    }
+  }
+}

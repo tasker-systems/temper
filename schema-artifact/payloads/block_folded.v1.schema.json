@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlockFolded",
+  "type": "object",
+  "properties": {
+    "block_id": {
+      "$ref": "#/$defs/BlockId"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "block_id"
+  ],
+  "$defs": {
+    "BlockId": {
+      "description": "A `kb_content_blocks` row (a resource's addressable interior unit).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

@@ -15,6 +15,8 @@ event_types:
   - relationship_retyped
   - relationship_reweighted
   - relationship_folded
+  - relationship_decayed
+  - relationship_corrected
   - property_asserted
   - property_retracted
   - property_reweighted

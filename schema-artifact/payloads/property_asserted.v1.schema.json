@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PropertyAsserted",
+  "type": "object",
+  "properties": {
+    "property_id": {
+      "$ref": "#/$defs/PropertyId"
+    },
+    "owner": {
+      "$ref": "#/$defs/AnchorRef"
+    },
+    "property_key": {
+      "type": "string"
+    },
+    "value": true,
+    "weight": {
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "required": [
+    "property_id",
+    "owner",
+    "property_key",
+    "value",
+    "weight"
+  ],
+  "$defs": {
+    "PropertyId": {
+      "description": "A `kb_properties` row (a facet/doc_type/block_role assertion).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "AnchorRef": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles"
+      ]
+    }
+  }
+}

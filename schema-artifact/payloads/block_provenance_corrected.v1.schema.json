@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "BlockProvenanceCorrected",
+  "type": "object",
+  "properties": {
+    "block_id": {
+      "$ref": "#/$defs/BlockId"
+    },
+    "source": {
+      "$ref": "#/$defs/ProvenanceSource"
+    },
+    "scar": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "block_id",
+    "source",
+    "scar"
+  ],
+  "$defs": {
+    "BlockId": {
+      "description": "A `kb_content_blocks` row (a resource's addressable interior unit).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "ProvenanceSource": {
+      "description": "Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "event"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "resource"
+            },
+            "value": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "required": [
+            "kind",
+            "value"
+          ]
+        }
+      ]
+    }
+  }
+}
