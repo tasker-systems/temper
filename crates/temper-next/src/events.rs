@@ -171,13 +171,22 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             owner,
             emitter,
         } => {
-            let charter_json = serde_json::to_value(charter)?;
+            let payload = payloads::CogmapSeeded {
+                cogmap_id: CogmapId::from(Uuid::now_v7()),
+                name: name.to_owned(),
+                owner_profile_id: owner,
+                telos: payloads::TelosManifest {
+                    resource_id: ResourceId::from(Uuid::now_v7()),
+                    title: telos_title.to_owned(),
+                    origin_uri: "temper://genesis".into(),
+                    blocks: charter.iter().map(payloads::BlockManifest::from).collect(),
+                },
+            };
+            let sidecar = serde_json::to_value(payloads::content_sidecar(charter))?;
             let row = sqlx::query!(
-                "SELECT cogmap_id, telos_resource_id FROM cogmap_genesis($1,$2,$3,$4,$5)",
-                name,
-                telos_title,
-                charter_json,
-                owner.uuid(),
+                "SELECT cogmap_id, telos_resource_id FROM cogmap_genesis($1,$2,$3)",
+                serde_json::to_value(&payload)?,
+                sidecar,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
@@ -203,15 +212,20 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             doc_type,
             emitter,
         } => {
-            let blocks_json = serde_json::to_value(blocks)?;
+            let payload = payloads::ResourceCreated {
+                resource_id: ResourceId::from(Uuid::now_v7()),
+                title: title.to_owned(),
+                origin_uri: origin_uri.to_owned(),
+                home: payloads::AnchorRef::cogmap(home),
+                owner_profile_id: owner,
+                doc_type: doc_type.map(str::to_owned),
+                blocks: blocks.iter().map(payloads::BlockManifest::from).collect(),
+            };
+            let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
             let id = sqlx::query_scalar!(
-                "SELECT resource_create($1,$2,$3,$4,$5,$6,$7)",
-                title,
-                origin_uri,
-                home.uuid(),
-                owner.uuid(),
-                blocks_json,
-                doc_type,
+                "SELECT resource_create($1,$2,$3)",
+                serde_json::to_value(&payload)?,
+                sidecar,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)

@@ -180,33 +180,50 @@ BEGIN
                 'sprint-rituals→formalization', 'kb_cogmaps', c_directors, ev_assert, ev_assert);
 
     -- ── Genesis: seed onboarding-cogmap via the single-txn function ───────
-    -- The telos charter is real content-blocks. This pure-SQL seed can't chunk/embed Rust-side, so it
-    -- builds a single-chunk-per-block charter JSONB (block-0 statement, blocks 1..3 questions; sha256
-    -- content hashes, NULL embedding — embed_chunks backfills it later, same as the concept resources
-    -- below). Region membership keys on declared affinity, not chunk hashes/embeddings, so this stays
-    -- byte-equivalent to the YAML path's regions (the cross-path proof). Prose is verbatim shared with
+    -- Payload-first: this pure-SQL seed builds the BlockManifest payload (pre-generated ids + sha256
+    -- hashes, NO prose — identity-as-input) and the content sidecar (prose, NULL embedding —
+    -- embed_chunks backfills later, same as the concept resources below) from the same rows. Region
+    -- membership keys on declared affinity, not chunk hashes/embeddings, so this stays byte-equivalent
+    -- to the YAML path's regions (the cross-path proof). Prose is verbatim shared with
     -- schema-artifact/scenarios/onboarding-cogmap.yaml.
-    DECLARE v_charter jsonb; BEGIN
-        v_charter := (
-            SELECT jsonb_agg(jsonb_build_object(
-                'seq', ord,
-                'role', CASE WHEN ord = 0 THEN 'statement' ELSE 'question' END,
-                'chunks', jsonb_build_array(jsonb_build_object(
-                    'chunk_index', 0,
-                    'content_hash', encode(sha256(convert_to(txt, 'UTF8')), 'hex'),
-                    'content', txt,
-                    'embedding', NULL
-                ))
-            ) ORDER BY ord)
+    DECLARE v_manifests jsonb; v_content jsonb;
+            v_cg uuid := uuid_generate_v7(); v_telos uuid := uuid_generate_v7();
+    BEGIN
+        WITH rows AS (
+            SELECT ord, txt, uuid_generate_v7() AS block_id, uuid_generate_v7() AS chunk_id
             FROM (VALUES
                 (0, 'Help a new EPD engineer reach first-merge confidence in week one.'),
                 (1, 'What does this person already know that transfers?'),
                 (2, 'What is the smallest real change that builds confidence?'),
                 (3, 'Where are the sharp edges that scar newcomers?')
             ) AS t(ord, txt)
-        );
-        SELECT cogmap_id INTO c_onboarding
-        FROM cogmap_genesis('onboarding-cogmap', 'Onboarding charter', v_charter, p_dave, e_agent);
+        )
+        SELECT
+            jsonb_agg(jsonb_build_object(
+                'block_id', block_id,
+                'seq', ord,
+                'role', CASE WHEN ord = 0 THEN 'statement' ELSE 'question' END,
+                'chunks', jsonb_build_array(jsonb_build_object(
+                    'chunk_id', chunk_id,
+                    'chunk_index', 0,
+                    'content_hash', encode(sha256(convert_to(txt, 'UTF8')), 'hex')
+                ))
+            ) ORDER BY ord),
+            jsonb_object_agg(chunk_id::text, jsonb_build_object('content', txt, 'embedding', NULL))
+        INTO v_manifests, v_content
+        FROM rows;
+
+        SELECT g.cogmap_id INTO c_onboarding FROM cogmap_genesis(
+            jsonb_build_object(
+                'cogmap_id', v_cg,
+                'name', 'onboarding-cogmap',
+                'owner_profile_id', p_dave,
+                'telos', jsonb_build_object(
+                    'resource_id', v_telos,
+                    'title', 'Onboarding charter',
+                    'origin_uri', 'temper://genesis',
+                    'blocks', v_manifests)),
+            v_content, e_agent) g;
     END;
     INSERT INTO kb_team_cogmaps (cogmap_id, team_id) VALUES (c_onboarding, t_orgcommon);
 

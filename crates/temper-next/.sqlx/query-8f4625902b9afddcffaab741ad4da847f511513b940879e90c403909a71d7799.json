@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT cogmap_id, telos_resource_id FROM cogmap_genesis($1,$2,$3,$4,$5)",
+  "query": "SELECT cogmap_id, telos_resource_id FROM cogmap_genesis($1,$2,$3)",
   "describe": {
     "columns": [
       {
@@ -16,10 +16,8 @@
     ],
     "parameters": {
       "Left": [
-        "Text",
-        "Text",
         "Jsonb",
-        "Uuid",
+        "Jsonb",
         "Uuid"
       ]
     },
@@ -28,5 +26,5 @@
       null
     ]
   },
-  "hash": "8ce202bd5a28815eb07a943b591b0bda574933969c4e916326f48def17652f9d"
+  "hash": "8f4625902b9afddcffaab741ad4da847f511513b940879e90c403909a71d7799"
 }
