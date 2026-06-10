@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub enum EdgeKind {

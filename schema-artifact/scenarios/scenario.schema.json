@@ -69,7 +69,7 @@
       ]
     },
     "TelosDef": {
-      "description": "The telos charter as real content-blocks (domain-B §1, content-block-primitive β): block-0 is the\n`statement`, blocks 1..n are the `questions` (each `question + \"\\n\\n\" + context`), then `framing`\nblocks situate the telos. Distinguished by `seq` positionally — no `block_kind` column. The loader\nturns this into an ordered prose list for `content::prepare_blocks`.",
+      "description": "The telos charter as real content-blocks (domain-B §1, content-block-primitive β): block-0 is the\n`statement`, blocks 1..n are the `questions` (each `question + \"\\n\\n\" + context`), then `framing`\nblocks situate the telos. Each block's kind is stamped as a `block_role` property\n(`statement`/`question`/`framing`) by the persist path — see `block_specs`. The loader\nturns this into an ordered prose list for `content::prepare_blocks`.",
       "type": "object",
       "properties": {
         "title": {
