@@ -237,9 +237,16 @@ CREATE INDEX idx_kb_resource_access_resource ON kb_resource_access(resource_id);
 -- ============================================================================
 
 CREATE TABLE kb_event_types (
-    id       UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
-    name     TEXT NOT NULL UNIQUE,
-    created  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id              UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
+    name            TEXT NOT NULL UNIQUE,
+    -- The published contract: current JSON-Schema for this type's payload (NULL =
+    -- unregistered/permissive — foreign/webhook types may stay NULL). Stamped by the
+    -- boot-seed from the committed schema-artifact/payloads/*.schema.json snapshots.
+    payload_schema  JSONB,
+    -- First-class version declaration. Evolution: additive-only within a version;
+    -- a breaking change bumps this and registers the new schema.
+    schema_version  INT NOT NULL DEFAULT 1,
+    created         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- The unified ledger. DELTA vs. public.kb_events: the built ledger emits via
@@ -260,6 +267,13 @@ CREATE TABLE kb_events (
     producing_anchor_table VARCHAR(64) CHECK (producing_anchor_table IN ('kb_contexts', 'kb_cogmaps')),
     producing_anchor_id    UUID,
     correlation_id         UUID,                              -- groups a multi-event act (e.g. a block's stream)
+    -- Typed, per-event-type, replay-sufficient (payload-first design, 2026-06-09 spec §1/§3).
+    -- The projection halves (_project_*) read ONLY this.
+    payload                JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Typed provenance pointers: [{rel: supersedes|derived_from|touches, target:{kind,id}}]
+    "references"           JSONB NOT NULL DEFAULT '[]'::jsonb,
+    -- Which registered schema version this row's payload conforms to.
+    payload_version        INT   NOT NULL DEFAULT 1,
     metadata               JSONB NOT NULL DEFAULT '{}'::jsonb,
     occurred_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     created                TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -269,6 +283,7 @@ CREATE TABLE kb_events (
 CREATE INDEX idx_kb_events_emitter     ON kb_events(emitter_entity_id, occurred_at DESC);
 CREATE INDEX idx_kb_events_type        ON kb_events(event_type_id);
 CREATE INDEX idx_kb_events_correlation ON kb_events(correlation_id);
+CREATE INDEX idx_kb_events_references  ON kb_events USING GIN ("references" jsonb_path_ops);
 
 -- Deferred FK from kb_cogmaps to the ledger (table created after kb_cogmaps).
 ALTER TABLE kb_cogmaps
