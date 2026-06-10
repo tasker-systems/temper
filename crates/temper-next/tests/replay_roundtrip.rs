@@ -25,7 +25,10 @@ async fn replay_reproduces_projections_byte_identically() {
 
     let scenario: Scenario =
         serde_yaml::from_str(&std::fs::read_to_string(ONBOARDING).unwrap()).unwrap();
-    runner::run_scenario(&pool, &scenario).await.unwrap();
+    let base_dir = std::path::Path::new(ONBOARDING).parent().unwrap();
+    runner::run_scenario(&pool, &scenario, base_dir)
+        .await
+        .unwrap();
 
     // capture: projections (the diff baseline), inputs + sidecars (the replay substrate), and the
     // recorded materialization acts (the region re-proof targets)

@@ -1,8 +1,10 @@
-//! Scenario runner: loads a scenario's substrate, then executes the ordered `steps` runbook in-process
-//! (materialize / emit-event / assert). Materialize reuses `embed_chunks` + `materialize_cogmap`;
-//! emit-event calls the reusable `relationship_assert` function; assert evaluates each expectation
-//! against the materialized regions. A per-lens fingerprint cache backs the `reproducible` /
-//! `fingerprint_differs` checks. Any failed expectation aborts with a descriptive error.
+//! Scenario runner: resolves the scenario's seed (referenced or embedded), loads its substrate
+//! through the same `loader::load_seed` path a standalone seed uses, then executes the ordered
+//! `steps` runbook in-process (materialize / emit-event / assert). Materialize reuses
+//! `embed_chunks` and `materialize_cogmap`; emit-event calls the reusable `relationship_assert`
+//! function; assert evaluates each expectation against the materialized regions. A per-lens
+//! fingerprint cache backs the `reproducible` / `fingerprint_differs` checks. Any failed
+//! expectation aborts with a descriptive error.
 
 use crate::events::{fire, SeedAction};
 use crate::ids::{CogmapId, EntityId};
@@ -12,11 +14,14 @@ use crate::{embed, write};
 use anyhow::{bail, Context, Result};
 use sqlx::PgPool;
 use std::collections::{HashMap, HashSet};
+use std::path::Path;
 use uuid::Uuid;
 
-pub async fn run_scenario(pool: &PgPool, s: &Scenario) -> Result<()> {
-    let loaded = loader::load_scenario(pool, s).await?;
-    validate_lenses(pool, &loaded, s).await?;
+/// `base_dir` anchors a `seed:` path reference — pass the scenario file's directory.
+pub async fn run_scenario(pool: &PgPool, s: &Scenario, base_dir: &Path) -> Result<()> {
+    let seed = s.resolve_seed(base_dir)?;
+    let loaded = loader::load_seed(pool, &seed).await?;
+    validate_lenses(pool, &loaded, &seed, &s.steps).await?;
 
     // per-lens fingerprints: `current` is the latest materialize; `previous` is the one before it.
     let mut current: HashMap<String, String> = HashMap::new();
@@ -50,11 +55,17 @@ pub async fn run_scenario(pool: &PgPool, s: &Scenario) -> Result<()> {
     Ok(())
 }
 
-/// Every lens named in `uses_lenses` / `steps` must exist (global or homed in this cogmap) up front —
-/// a mistyped lens fails with a friendly error instead of an opaque RowNotFound mid-run.
-async fn validate_lenses(pool: &PgPool, loaded: &Loaded, s: &Scenario) -> Result<()> {
-    let mut names: HashSet<&str> = s.uses_lenses.iter().map(String::as_str).collect();
-    for step in &s.steps {
+/// Every lens named in the seed's `uses_lenses` / the scenario's `steps` must exist (global or homed
+/// in this cogmap) up front — a mistyped lens fails with a friendly error instead of an opaque
+/// RowNotFound mid-run.
+async fn validate_lenses(
+    pool: &PgPool,
+    loaded: &Loaded,
+    seed: &Seed,
+    steps: &[Step],
+) -> Result<()> {
+    let mut names: HashSet<&str> = seed.uses_lenses.iter().map(String::as_str).collect();
+    for step in steps {
         match step {
             Step::Materialize { lens } => {
                 names.insert(lens);

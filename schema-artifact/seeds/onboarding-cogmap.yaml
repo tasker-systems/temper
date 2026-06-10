@@ -1,0 +1,122 @@
+# The onboarding-cogmap seed — the template this foundational cogmap is born from: telos charter,
+# world, the 13-concept α/β/bridge/tension/isolate cast, edges, and the lenses it uses. Template-only:
+# the S6 runbook lives in scenarios/onboarding-cogmap.yaml, which references this file.
+# Prose is transcribed VERBATIM from 03_seed.sql (cited lines) — it is the independent variable, so the
+# embeddings (and therefore the regions + S6 verdict) must match the SQL-seed path byte-for-byte.
+name: onboarding-cogmap
+
+cogmap:
+  telos:
+    title: "Onboarding charter"
+    statement: "Help a new EPD engineer reach first-merge confidence in week one."
+    # Questions-with-context (domain-B §1): block-1..n. Context is left empty here so the charter prose
+    # stays verbatim-equal to 03_seed.sql's (the cross-path membership proof keys on shared prose); the
+    # rich question-with-context + framing path is exercised by the cogmap_genesis_charter artifact test.
+    questions:
+      - { question: "What does this person already know that transfers?" }
+      - { question: "What is the smallest real change that builds confidence?" }
+      - { question: "Where are the sharp edges that scar newcomers?" }
+  owner: dave
+  emitter: "onboarding-agent#1"
+
+world:
+  profiles:
+    - { handle: dave, display_name: Dave, system_access: approved }
+  entities:
+    - { name: "onboarding-agent#1", profile: dave }
+
+resources:
+  # regulation — express-edged off the charter (03_seed.sql:197-216)
+  - key: regulation
+    title: "regulation: pair on the first PR"
+    origin_uri: "temper://reg/pair"
+    doc_type: cogmap_regulation
+    body: "Always pair a newcomer with a maintainer on their first PR."
+
+  # α — first-week confidence (genuinely similar content); facet {phase: first-week}
+  - key: pair
+    title: "concept: pair-on-first-PR"
+    origin_uri: "temper://c/pair"
+    facets: { values: { phase: first-week } }
+    body: "Pair on the first pull request. A new engineer's earliest change should be small and made alongside someone who knows the code, so the first contribution builds confidence safely rather than risking a large unfamiliar change. Small, paired, early — that is how confidence starts."
+  - key: smallest
+    title: "concept: smallest-real-change"
+    origin_uri: "temper://c/smallest"
+    facets: { values: { phase: first-week } }
+    body: "Choose the smallest real change for a newcomer's first contribution. A tiny, safe, early pull request builds confidence faster than an ambitious one. Keep the first change small and paired so confidence grows safely in the first week."
+  - key: confidence
+    title: "concept: early-confidence-signal"
+    origin_uri: "temper://c/confidence"
+    facets: { values: { phase: first-week } }
+    body: "Read the early signals of a new engineer's confidence. In the first week a small, paired contribution that merges safely is the clearest sign confidence is building. Watch for the early, small, safe wins that tell you the newcomer is gaining footing."
+
+  # β — deployment (genuinely divergent subtopics); facet {topic: deployment} weight 1.5 binds the group
+  - key: staging
+    title: "concept: staging-rollout"
+    origin_uri: "temper://c/staging"
+    facets: { values: { topic: deployment }, weight: 1.5 }
+    body: "Promote a release through staging environments before production. Each environment — development, staging, pre-prod — gates the next, and a build is promoted only after it passes that stage. Staging mirrors production so problems surface before the final promotion."
+  - key: flags
+    title: "concept: feature-flags"
+    origin_uri: "temper://c/flags"
+    facets: { values: { topic: deployment }, weight: 1.5 }
+    body: "Gate new functionality behind feature flags. A toggle enables a code path for a percentage of users, dark-launches it, or turns it off instantly without a redeploy. Flags decouple deploy from release and let you ramp exposure gradually."
+  - key: rollback
+    title: "concept: rollback-runbook"
+    origin_uri: "temper://c/rollback"
+    facets: { values: { topic: deployment }, weight: 1.5 }
+    body: "When an incident starts, follow the rollback runbook. Revert to the last known-good version, page the on-call owner, and record the timeline. The runbook lists the exact commands to undo a bad change and restore the previous release."
+  - key: oncall
+    title: "concept: oncall-handoff"
+    origin_uri: "temper://c/oncall"
+    facets: { values: { topic: deployment }, weight: 1.5 }
+    body: "Hand off the on-call pager cleanly at the end of each shift. Summarize open incidents, ongoing alerts, and escalation contacts so the next responder has full context. A good handoff covers who to page and what is still unresolved."
+
+  # bridge — facet-only member of β (NO edge — joins via facet_overlap, S6e)
+  - key: checklist
+    title: "concept: deploy-confidence-checklist"
+    origin_uri: "temper://c/checklist"
+    facets: { values: { topic: deployment }, weight: 1.5 }
+    body: "A deployment readiness checklist gathers the pre-release checks into one list: tests green, migrations reviewed, dashboards ready, rollback plan written. Tick every box before you ship so the team can deploy with confidence."
+
+  # tension — blue-green vs big-bang (near + label 'contradicts' → internal_tension, S6g)
+  - key: bluegreen
+    title: "concept: blue-green"
+    origin_uri: "temper://c/bluegreen"
+    facets: { values: { topic: deployment }, weight: 1.5 }
+    body: "Blue-green deployment runs two identical production environments. Traffic flows to blue while green holds the new version; you cut over by switching the router, and switch back instantly if anything looks wrong. Two environments, one live at a time."
+  - key: bigbang
+    title: "concept: big-bang-cutover"
+    origin_uri: "temper://c/bigbang"
+    facets: { values: { topic: deployment }, weight: 1.5 }
+    body: "A big-bang cutover switches every user to the new system at once. There is a single coordinated moment when the old version is retired and the new one takes all traffic — no gradual ramp, no parallel environments, just one decisive switch."
+
+  # isolate — content reads like α, but NO facet + NO edge ⇒ cosine WOULD merge, declared does NOT (S6d)
+  - key: solo
+    title: "concept: solo-retro-note"
+    origin_uri: "temper://c/solo"
+    body: "A retro note on building confidence: the small, early, paired wins in a newcomer's first week are what make them feel safe to contribute. Confidence comes from safe, small, early steps."
+
+  # S6f delta pair — setup → first-build, leads_to ONLY (no facet)
+  - key: setup
+    title: "concept: first-day-setup"
+    origin_uri: "temper://c/setup"
+    body: "On day one, set up your laptop: install the toolchain, configure access, and get the development environment running so you can build the project locally."
+  - key: firstbuild
+    title: "concept: first-build-green"
+    origin_uri: "temper://c/firstbuild"
+    body: "Once setup is done, get a green build: pull the main branch, run the test suite, and confirm everything passes locally before you start changing code."
+
+edges:
+  - { from: telos, to: regulation, kind: express, label: operationalized_by }
+  - { from: setup, to: firstbuild, kind: leads_to, label: then }
+  - { from: pair, to: smallest, kind: near }            # α1 ~ α2
+  - { from: pair, to: confidence, kind: near }           # α1 ~ α3
+  - { from: smallest, to: pair, kind: near }             # α2 ~ α1 (symmetric reinforcement)
+  - { from: confidence, to: pair, kind: express }        # α3 → α1
+  - { from: staging, to: flags, kind: leads_to }         # β1 → β2
+  - { from: flags, to: rollback, kind: leads_to }        # β2 → β3
+  - { from: rollback, to: oncall, kind: leads_to }       # β3 → β4
+  - { from: bluegreen, to: bigbang, kind: near, label: contradicts }  # tension (binds, S6g)
+
+uses_lenses: [telos-default, telos-default-propheavy]

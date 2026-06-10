@@ -14,16 +14,29 @@
 //! All reset the artifact and are serialized + ONNX-dependent.
 mod common;
 
-use temper_next::scenario::{bootseed, loader, model::Scenario, runner};
+use std::path::Path;
+use temper_next::scenario::{bootseed, loader, model::Scenario, model::Seed, runner};
 use temper_next::{embed, substrate, write};
 
-const ONBOARDING: &str = concat!(
+const ONBOARDING_SCENARIO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../schema-artifact/scenarios/onboarding-cogmap.yaml"
 );
+const ONBOARDING_SEED: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../schema-artifact/seeds/onboarding-cogmap.yaml"
+);
 
-fn load_yaml() -> Scenario {
-    serde_yaml::from_str(&std::fs::read_to_string(ONBOARDING).unwrap()).unwrap()
+fn scenario_base_dir() -> &'static Path {
+    Path::new(ONBOARDING_SCENARIO).parent().unwrap()
+}
+
+fn load_scenario_yaml() -> Scenario {
+    serde_yaml::from_str(&std::fs::read_to_string(ONBOARDING_SCENARIO).unwrap()).unwrap()
+}
+
+fn load_seed_yaml() -> Seed {
+    serde_yaml::from_str(&std::fs::read_to_string(ONBOARDING_SEED).unwrap()).unwrap()
 }
 
 #[tokio::test]
@@ -31,7 +44,7 @@ async fn passes_full_s6_runbook() {
     common::reset_artifact();
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
-    runner::run_scenario(&pool, &load_yaml())
+    runner::run_scenario(&pool, &load_scenario_yaml(), scenario_base_dir())
         .await
         .expect("declarative S6a-h asserts pass");
 
@@ -75,9 +88,9 @@ async fn baseline_matches_04b_sql_verdict() {
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
 
-    // baseline only: load the substrate + ONE telos-default materialize (no S6h mutation), exactly the
+    // baseline only: load the SEED + ONE telos-default materialize (no S6h mutation), exactly the
     // state run_eval.sh evaluates 04b against.
-    let loaded = loader::load_scenario(&pool, &load_yaml()).await.unwrap();
+    let loaded = loader::load_seed(&pool, &load_seed_yaml()).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
     write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
         .await
@@ -93,21 +106,6 @@ async fn baseline_matches_04b_sql_verdict() {
     );
 }
 
-// Canonical, UUID-INDEPENDENT region partition signature for a cogmap at lens telos-default: each
-// region's member origin_uris sorted within the region, regions sorted among themselves, then hashed.
-// Independent of region UUIDs and group order, so it's comparable across seeding paths.
-const PARTITION_SQL: &str = r#"
-SELECT md5(string_agg(grp, '|' ORDER BY grp)) FROM (
-  SELECT string_agg(res.origin_uri, ',' ORDER BY res.origin_uri) AS grp
-  FROM kb_cogmap_region_members m
-  JOIN kb_cogmap_regions r ON r.id = m.region_id AND NOT r.is_folded
-  JOIN kb_cogmap_lenses  l ON l.id = r.lens_id AND l.name = 'telos-default'
-  JOIN kb_resources    res ON res.id = m.member_id
-  WHERE r.cogmap_id = $1
-  GROUP BY m.region_id
-) g
-"#;
-
 // The entity that seeded a cogmap (its genesis/steward emitter) — same honest source main.rs uses.
 async fn genesis_emitter(pool: &sqlx::PgPool, cogmap: uuid::Uuid) -> uuid::Uuid {
     sqlx::query_scalar(
@@ -119,14 +117,6 @@ async fn genesis_emitter(pool: &sqlx::PgPool, cogmap: uuid::Uuid) -> uuid::Uuid 
     .fetch_one(pool)
     .await
     .unwrap()
-}
-
-async fn telos_default_partition(pool: &sqlx::PgPool, cogmap: uuid::Uuid) -> String {
-    sqlx::query_scalar(PARTITION_SQL)
-        .bind(cogmap)
-        .fetch_one(pool)
-        .await
-        .unwrap()
 }
 
 #[tokio::test]
@@ -142,23 +132,23 @@ async fn yaml_and_sql_seed_paths_produce_identical_region_membership() {
     write::materialize_cogmap(&pool, sql_cogmap, "telos-default", sql_emitter)
         .await
         .unwrap();
-    let sig_sql = telos_default_partition(&pool, sql_cogmap).await;
+    let sig_sql = common::telos_default_partition(&pool, sql_cogmap).await;
 
     // proof obligation 1 over the HAND-SQL seed path: 03_seed's payloads conform too
     temper_next::payloads::verify_ledger_roundtrip(&pool)
         .await
         .expect("hand-SQL seed payload roundtrip");
 
-    // YAML path: clean schema, boot-seed, load the YAML, materialize at the same baseline.
+    // YAML path: clean schema, boot-seed, load the SEED, materialize at the same baseline.
     common::reset_artifact();
     let pool = substrate::connect().await.unwrap();
     bootseed::seed_system(&pool).await.unwrap();
-    let loaded = loader::load_scenario(&pool, &load_yaml()).await.unwrap();
+    let loaded = loader::load_seed(&pool, &load_seed_yaml()).await.unwrap();
     embed::embed_chunks(&pool).await.unwrap();
     write::materialize_cogmap(&pool, loaded.cogmap, "telos-default", loaded.emitter)
         .await
         .unwrap();
-    let sig_yaml = telos_default_partition(&pool, loaded.cogmap).await;
+    let sig_yaml = common::telos_default_partition(&pool, loaded.cogmap).await;
 
     assert_eq!(
         sig_sql, sig_yaml,

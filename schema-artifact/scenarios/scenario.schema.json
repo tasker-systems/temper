@@ -1,35 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Scenario",
+  "description": "The scenario document (`schema-artifact/scenarios/*.yaml`): a seed reference (or embed) plus the\nordered `steps` runbook.",
   "type": "object",
   "properties": {
     "name": {
       "type": "string"
     },
-    "cogmap": {
-      "$ref": "#/$defs/CogmapDef"
-    },
-    "world": {
-      "$ref": "#/$defs/WorldDef"
-    },
-    "resources": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/ResourceDef"
-      }
-    },
-    "edges": {
-      "type": "array",
-      "items": {
-        "$ref": "#/$defs/EdgeDef"
-      }
-    },
-    "uses_lenses": {
-      "description": "Names of (system-seeded) lenses this scenario uses; validated up front.",
-      "type": "array",
-      "items": {
-        "type": "string"
-      }
+    "seed": {
+      "$ref": "#/$defs/SeedRef"
     },
     "steps": {
       "type": "array",
@@ -40,13 +19,62 @@
   },
   "required": [
     "name",
-    "cogmap",
-    "world",
-    "resources",
-    "uses_lenses",
+    "seed",
     "steps"
   ],
   "$defs": {
+    "SeedRef": {
+      "description": "`seed:` is either a path to a seed document (resolved relative to the scenario file's directory)\nor the seed embedded inline. Untagged: a YAML string is a reference, a map is an embed.",
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "$ref": "#/$defs/Seed"
+        }
+      ]
+    },
+    "Seed": {
+      "description": "The seed document (`schema-artifact/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap\nis born from. `name` is the cogmap name `cogmap_genesis` registers.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "cogmap": {
+          "$ref": "#/$defs/CogmapDef"
+        },
+        "world": {
+          "$ref": "#/$defs/WorldDef"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ResourceDef"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EdgeDef"
+          }
+        },
+        "uses_lenses": {
+          "description": "Names of (system-seeded) lenses this seed's cogmap uses; validated up front.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "cogmap",
+        "world",
+        "resources",
+        "uses_lenses"
+      ]
+    },
     "CogmapDef": {
       "type": "object",
       "properties": {
