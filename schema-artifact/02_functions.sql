@@ -750,6 +750,29 @@ BEGIN
 END;
 $$;
 
+-- ── region_materialized ──────────────────────────────────────────────────────
+-- Region ROWS are second-order derived compute (clustering output) and stay Rust-side; the
+-- projection half records only the act's bookkeeping: the materialization watermark on the cogmap.
+-- Replay proof for regions = replay substrate → re-run materialize → fingerprint matches the payload.
+CREATE FUNCTION _project_region_materialized(p_event uuid, p_payload jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE kb_cogmaps SET shape_materialized_event_id = p_event
+     WHERE id = (p_payload->>'cogmap_id')::uuid;
+END;
+$$;
+
+CREATE FUNCTION region_materialize(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid;
+BEGIN
+    v_ev := _event_append('region_materialized', p_emitter,
+                          'kb_cogmaps', (p_payload->>'cogmap_id')::uuid, p_payload);
+    PERFORM _project_region_materialized(v_ev, p_payload);
+    RETURN v_ev;
+END;
+$$;
+
 -- ============================================================================
 -- End of 02_functions.sql. Seed → 03_seed.sql; scenarios → 04_scenarios.sql.
 -- ============================================================================

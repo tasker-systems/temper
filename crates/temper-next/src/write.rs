@@ -1,7 +1,7 @@
 use crate::events::{fire, SeedAction};
-use crate::ids::{CogmapId, EntityId};
+use crate::ids::{CogmapId, EntityId, EventId, LensId, RegionId};
 use crate::{affinity::affinity, cluster::cluster, substrate};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -23,14 +23,41 @@ pub async fn materialize_cogmap(
     let aff = |x: Uuid, y: Uuid| affinity(x, y, &s.edges, &s.facets, &s.lens);
     let clusters = cluster(&s.nodes, &aff, s.lens.resolution);
 
+    // fingerprint + region ids BEFORE the event (payload-first): the region_materialized payload
+    // records the act's full identity — lens, watermark, membership fingerprint, region ids.
+    let mut fingerprint_parts: Vec<String> = clusters
+        .iter()
+        .map(|members| {
+            let mut ms: Vec<String> = members.iter().map(|m| m.to_string()).collect();
+            ms.sort();
+            ms.join("+")
+        })
+        .collect();
+    fingerprint_parts.sort();
+    let fingerprint = fingerprint_parts.join("|");
+    let region_ids: Vec<RegionId> = clusters
+        .iter()
+        .map(|_| RegionId::from(Uuid::now_v7()))
+        .collect();
+
     let mut tx = pool.begin().await?;
+    // the substrate point-in-time this projection saw (uuidv7 — time-ordered; no max(uuid) in PG)
+    let watermark: Uuid = sqlx::query_scalar!("SELECT id FROM kb_events ORDER BY id DESC LIMIT 1")
+        .fetch_optional(&mut *tx)
+        .await?
+        .context("materialize on an empty ledger (no events)")?;
     // one materialization event (correlation root), fired through the single events surface. The emitter
     // is passed explicitly (the actor on whose behalf materialization runs) — never derived from "latest
-    // event", which is NULL on an empty log and arbitrary on occurred_at ties.
+    // event", which is NULL on an empty log and arbitrary on occurred_at ties. The projection half
+    // (_project_region_materialized) records the watermark on the cogmap.
     let ev: Uuid = fire(
         &mut tx,
         SeedAction::Materialize {
             cogmap: CogmapId::from(cogmap),
+            lens: LensId::from(s.lens_id),
+            watermark: EventId::from(watermark),
+            membership_fingerprint: &fingerprint,
+            region_ids: &region_ids,
             emitter: EntityId::from(emitter),
         },
     )
@@ -56,19 +83,20 @@ pub async fn materialize_cogmap(
         "[{}]",
         vec!["0"; temper_ingest::embed::EMBEDDING_DIM].join(",")
     );
-    let mut fingerprint_parts: Vec<String> = Vec::new();
-    for members in &clusters {
+    for (members, region_id) in clusters.iter().zip(&region_ids) {
         // centroid computed in SQL after members are inserted; insert a placeholder then UPDATE.
+        // The region id is pre-generated (identity-as-input) — it is already recorded in the payload.
         let region: Uuid = sqlx::query_scalar(
             "INSERT INTO kb_cogmap_regions \
-               (cogmap_id, lens_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id) \
-             VALUES ($1,$2, $5::vector, 0.0, NULL, $3, $4, $4) RETURNING id",
+               (id, cogmap_id, lens_id, centroid, salience, label, member_count, asserted_by_event_id, last_event_id) \
+             VALUES ($6, $1,$2, $5::vector, 0.0, NULL, $3, $4, $4) RETURNING id",
         )
         .bind(cogmap)
         .bind(s.lens_id)
         .bind(members.len() as i32)
         .bind(ev)
         .bind(&zero_centroid)
+        .bind(region_id.uuid())
         .fetch_one(&mut *tx)
         .await?;
         for m in members {
@@ -130,20 +158,13 @@ pub async fn materialize_cogmap(
         .bind(s.lens.s_central)
         .execute(&mut *tx)
         .await?;
-        let mut ms: Vec<String> = members.iter().map(|m| m.to_string()).collect();
-        ms.sort();
-        fingerprint_parts.push(ms.join("+"));
     }
-    sqlx::query("UPDATE kb_cogmaps SET shape_materialized_event_id=$1 WHERE id=$2")
-        .bind(ev)
-        .bind(cogmap)
-        .execute(&mut *tx)
-        .await?;
+    // (the materialization watermark on kb_cogmaps is set by _project_region_materialized — the
+    // event's projection half — not here.)
     tx.commit().await?;
 
-    fingerprint_parts.sort();
     Ok(MaterializeOutcome {
         regions: clusters.len(),
-        membership_fingerprint: fingerprint_parts.join("|"),
+        membership_fingerprint: fingerprint,
     })
 }

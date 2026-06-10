@@ -20,7 +20,9 @@
 
 use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
-use crate::ids::{CogmapId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId, ResourceId};
+use crate::ids::{
+    CogmapId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId, RegionId, ResourceId,
+};
 use crate::payloads;
 use crate::scenario::model::LensDef;
 use anyhow::{Context, Result};
@@ -98,6 +100,11 @@ pub enum SeedAction<'a> {
     },
     Materialize {
         cogmap: CogmapId,
+        lens: LensId,
+        /// Max event id over the substrate at load time — the point-in-time the projection saw.
+        watermark: EventId,
+        membership_fingerprint: &'a str,
+        region_ids: &'a [RegionId],
         emitter: EntityId,
     },
 }
@@ -323,20 +330,34 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             Ok(Fired::Lens(id.into()))
         }
 
-        SeedAction::Materialize { cogmap, emitter } => {
-            // No SQL function: the materialization event is a raw INSERT (reconciled out of write.rs).
+        SeedAction::Materialize {
+            cogmap,
+            lens,
+            watermark,
+            membership_fingerprint,
+            region_ids,
+            emitter,
+        } => {
             // The emitter is the actor on whose behalf materialization runs — passed explicitly, never
-            // derived from "latest event" (NULL on an empty log, arbitrary on occurred_at ties).
+            // derived from "latest event" (NULL on an empty log, arbitrary on occurred_at ties). The
+            // payload records the act's full identity (lens, watermark, fingerprint, region ids);
+            // region ROWS stay Rust-side derived compute (write.rs).
+            let payload = payloads::RegionMaterialized {
+                cogmap_id: cogmap,
+                lens_id: lens,
+                watermark_event_id: watermark,
+                membership_fingerprint: membership_fingerprint.to_owned(),
+                region_ids: region_ids.to_vec(),
+            };
             let id = sqlx::query_scalar!(
-                "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id) \
-                 SELECT (SELECT id FROM kb_event_types WHERE name=$2), $3, 'kb_cogmaps', $1 RETURNING id",
-                cogmap.uuid(),
-                EventKind::RegionMaterialized.as_canonical_name(),
+                "SELECT region_materialize($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
-            .await?;
-            Ok(Fired::Materialize(id.into()))
+            .await?
+            .context("region_materialize returned null")?;
+            Ok(Fired::Materialize(EventId::from(id)))
         }
     }
 }
@@ -366,6 +387,10 @@ mod tests {
         assert_eq!(
             SeedAction::Materialize {
                 cogmap: CogmapId::from(Uuid::nil()),
+                lens: LensId::from(Uuid::nil()),
+                watermark: EventId::from(Uuid::nil()),
+                membership_fingerprint: "",
+                region_ids: &[],
                 emitter,
             }
             .event_type()
