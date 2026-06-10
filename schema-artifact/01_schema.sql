@@ -285,6 +285,19 @@ CREATE INDEX idx_kb_events_type        ON kb_events(event_type_id);
 CREATE INDEX idx_kb_events_correlation ON kb_events(correlation_id);
 CREATE INDEX idx_kb_events_references  ON kb_events USING GIN ("references" jsonb_path_ops);
 
+-- Append-only enforcement (parity with production 20260522000001): supersession and correction are
+-- themselves events; the ledger row is final. Safe to add now — no mutation function UPDATEs
+-- kb_events anymore (identity-as-input made the genesis anchor known up front).
+CREATE FUNCTION kb_events_append_only() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+    RAISE EXCEPTION 'event ledger is append-only';
+END;
+$$;
+CREATE TRIGGER kb_events_append_only
+    BEFORE UPDATE OR DELETE ON kb_events
+    FOR EACH ROW EXECUTE FUNCTION kb_events_append_only();
+
 -- Deferred FK from kb_cogmaps to the ledger (table created after kb_cogmaps).
 ALTER TABLE kb_cogmaps
     ADD CONSTRAINT fk_kb_cogmaps_shape_event
