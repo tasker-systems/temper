@@ -32,15 +32,17 @@ fn fake_chunk(index: u32, header: &str, content: &str) -> temper_core::types::in
 }
 
 /// Helper: resolve the e2e test profile from the database.
+///
+/// Runtime query: test-target macros aren't cached by `cargo sqlx prepare`
+/// (the test-fixture convention).
 async fn resolve_test_profile(pool: &sqlx::PgPool) -> ProfileId {
-    ProfileId::from(
-        sqlx::query_scalar!(
-            "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
-        )
-        .fetch_one(pool)
-        .await
-        .expect("profile lookup"),
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "SELECT id FROM kb_profiles WHERE id IN (SELECT profile_id FROM kb_profile_auth_links WHERE auth_provider_user_id = 'e2e-test-user') LIMIT 1"
     )
+    .fetch_one(pool)
+    .await
+    .expect("profile lookup");
+    ProfileId::from(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -172,14 +174,13 @@ async fn mcp_create_resource_schema_validation_surfaces_structured_error(pool: s
     );
 
     // Verify no resource was created
-    let count: i64 = sqlx::query_scalar!(
+    let count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_resources WHERE slug = 'validation-test-task' AND owner_profile_id = $1",
-        *profile_id,
     )
+    .bind(*profile_id)
     .fetch_one(&pool)
     .await
-    .expect("count query")
-    .unwrap_or(0);
+    .expect("count query");
     assert_eq!(
         count, 0,
         "no resource should be created after validation failure"

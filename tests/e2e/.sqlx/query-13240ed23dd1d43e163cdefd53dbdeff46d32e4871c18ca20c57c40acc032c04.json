@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT count(*) FROM kb_events WHERE resource_id = $1 AND event_type_id = (SELECT id FROM kb_event_types WHERE name = 'resource_created')",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "count",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "13240ed23dd1d43e163cdefd53dbdeff46d32e4871c18ca20c57c40acc032c04"
+}

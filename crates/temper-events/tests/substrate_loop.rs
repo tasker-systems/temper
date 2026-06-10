@@ -56,12 +56,13 @@ async fn append_writes_to_ledger(pool: PgPool) {
     assert_eq!(event.emitter_profile_id, SYSTEM_PROFILE_ID);
     assert_eq!(event.payload, payload);
 
-    let row_count: i64 =
-        sqlx::query_scalar!("SELECT count(*) FROM kb_events WHERE id = $1", write.id,)
-            .fetch_one(&pool)
-            .await
-            .unwrap()
-            .unwrap_or(0);
+    // Runtime query: test-target macros can't be cached by `cargo sqlx prepare`
+    // (the test-fixture convention).
+    let row_count: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events WHERE id = $1")
+        .bind(write.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(row_count, 1);
 }
 
@@ -233,13 +234,10 @@ async fn correlation_id_groups_fan_out(pool: PgPool) {
         .unwrap();
     }
 
-    let count: i64 = sqlx::query_scalar!(
-        "SELECT count(*) FROM kb_events WHERE correlation_id = $1",
-        created.correlation_id,
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap()
-    .unwrap_or(0);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_events WHERE correlation_id = $1")
+        .bind(created.correlation_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
     assert_eq!(count, 3, "root + 2 mutations share one correlation_id");
 }
