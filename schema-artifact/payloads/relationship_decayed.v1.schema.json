@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelationshipDecayed",
+  "type": "object",
+  "properties": {
+    "edge_id": {
+      "$ref": "#/$defs/EdgeId"
+    },
+    "factor": {
+      "description": "Multiplicative decay factor applied to the edge weight (0.0..1.0) — production's shape.",
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "required": [
+    "edge_id",
+    "factor"
+  ],
+  "$defs": {
+    "EdgeId": {
+      "description": "A `kb_edges` row (a declared relationship assertion).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

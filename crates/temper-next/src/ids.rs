@@ -16,6 +16,7 @@ macro_rules! id_newtype {
             Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord,
             serde::Serialize, serde::Deserialize, sqlx::Type,
         )]
+        #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
         #[sqlx(transparent)]
         pub struct $name(pub Uuid);
 
@@ -73,6 +74,22 @@ id_newtype!(
 id_newtype!(
     /// A `kb_cogmap_lenses` row.
     LensId
+);
+id_newtype!(
+    /// A `kb_chunks` row (one embedding window of a block's prose).
+    ChunkId
+);
+id_newtype!(
+    /// A `kb_edges` row (a declared relationship assertion).
+    EdgeId
+);
+id_newtype!(
+    /// A `kb_properties` row (a facet/doc_type/block_role assertion).
+    PropertyId
+);
+id_newtype!(
+    /// A `kb_cogmap_regions` row (one materialized region).
+    RegionId
 );
 
 #[cfg(test)]

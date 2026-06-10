@@ -41,10 +41,27 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
         .await?,
     };
 
+    // Registry rows + their published contract: stamp payload_schema/schema_version from the
+    // committed schema-artifact/payloads/<name>.v1.schema.json snapshots (payload spec §6 — repo,
+    // registry, and Rust types are one chain; the snapshot test pins repo==types, this pins
+    // registry==repo). A name with no snapshot (foreign/not-yet-typed) stays NULL = unregistered/
+    // permissive.
+    let payloads_dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../schema-artifact/payloads"
+    );
     for et in &boot.event_types {
+        let schema: Option<serde_json::Value> =
+            std::fs::read_to_string(format!("{payloads_dir}/{et}.v1.schema.json"))
+                .ok()
+                .map(|s| serde_json::from_str(&s))
+                .transpose()?;
         sqlx::query!(
-            "INSERT INTO kb_event_types (name) VALUES ($1) ON CONFLICT (name) DO NOTHING",
-            et
+            "INSERT INTO kb_event_types (name, payload_schema, schema_version) VALUES ($1, $2, 1) \
+             ON CONFLICT (name) DO UPDATE SET payload_schema = EXCLUDED.payload_schema, \
+                                              schema_version = EXCLUDED.schema_version",
+            et,
+            schema as Option<serde_json::Value>,
         )
         .execute(pool)
         .await?;

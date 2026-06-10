@@ -40,3 +40,34 @@ async fn seed_system_seeds_registry_and_global_lenses_idempotently() {
     .unwrap();
     assert_eq!(sys_lens_events, 2, "two system-scope lens_created events");
 }
+
+#[tokio::test]
+async fn bootseed_publishes_payload_schemas() {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+
+    // exactly the 15 typed names carry a published schema (registry == committed snapshots)
+    let stamped: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_event_types WHERE payload_schema IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        stamped,
+        temper_next::payloads::TYPED_EVENT_NAMES.len() as i64,
+        "exactly the typed names carry a published schema"
+    );
+
+    // an untyped name stays NULL = unregistered/permissive (the foreign-event posture)
+    let permissive: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT payload_schema FROM kb_event_types WHERE name = 'delegated_launch'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        permissive.is_none(),
+        "untyped names stay NULL (unregistered/permissive)"
+    );
+}

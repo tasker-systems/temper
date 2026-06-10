@@ -7,6 +7,8 @@
 //! function only persists. Resets the artifact, ONNX-dependent, serialized via the temper-next-write group.
 mod common;
 
+use temper_next::events::{fire, SeedAction};
+use temper_next::ids::{CogmapId, EntityId, ProfileId};
 use temper_next::scenario::bootseed;
 use temper_next::{content, substrate};
 use uuid::Uuid;
@@ -37,18 +39,24 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting() {
     bootseed::seed_system(&pool).await.unwrap();
     let (owner, emitter) = seed_actor(&pool).await;
 
-    // a home cogmap via the genesis function (resource_create homes into it). The charter is now a
-    // Rust-prepared block→chunk JSONB, like any resource body.
+    // a home cogmap via the genesis function (resource_create homes into it), through the single
+    // firing surface (payload-first).
     let charter = content::prepare_blocks(&[(None, "seed statement")]).unwrap();
-    let charter_json = serde_json::to_value(&charter).unwrap();
-    let cogmap: Uuid =
-        sqlx::query_scalar("SELECT cogmap_id FROM cogmap_genesis('home','Charter',$1,$2,$3)")
-            .bind(charter_json)
-            .bind(owner)
-            .bind(emitter)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let mut conn = pool.acquire().await.unwrap();
+    let (cogmap, _telos) = fire(
+        &mut conn,
+        SeedAction::CogmapGenesis {
+            name: "home",
+            telos_title: "Charter",
+            charter: &charter,
+            owner: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+        },
+    )
+    .await
+    .unwrap()
+    .cogmap_genesis()
+    .unwrap();
 
     // three blocks: short / LONG (multi-chunk) / short. The long block exceeds one ~1785-char window.
     let short_a = "A short framing note about first-week confidence.";
@@ -71,17 +79,24 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting() {
     assert_eq!(blocks[2].chunks.len(), 1);
     let total_chunks: usize = blocks.iter().map(|b| b.chunks.len()).sum();
 
-    let blocks_json = serde_json::to_value(&blocks).unwrap();
-    let resource: Uuid = sqlx::query_scalar(
-        "SELECT resource_create('Onboarding doc','temper://c/multi',$1,$2,$3,'concept',$4)",
+    let resource = fire(
+        &mut conn,
+        SeedAction::ResourceCreate {
+            title: "Onboarding doc",
+            origin_uri: "temper://c/multi",
+            home: CogmapId::from(cogmap.uuid()),
+            owner: ProfileId::from(owner),
+            blocks: &blocks,
+            doc_type: Some("concept"),
+            emitter: EntityId::from(emitter),
+        },
     )
-    .bind(cogmap)
-    .bind(owner)
-    .bind(blocks_json)
-    .bind(emitter)
-    .fetch_one(&pool)
     .await
+    .unwrap()
+    .resource()
     .unwrap();
+    let resource: Uuid = resource.uuid();
+    drop(conn);
 
     // exactly three content blocks, with the declared seqs 0,1,2
     let block_seqs: Vec<i32> =

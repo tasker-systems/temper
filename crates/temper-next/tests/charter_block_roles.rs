@@ -5,6 +5,8 @@
 //! temper-next-write group.
 mod common;
 
+use temper_next::events::{fire, SeedAction};
+use temper_next::ids::{EntityId, ProfileId};
 use temper_next::scenario::bootseed;
 use temper_next::scenario::model::{QuestionDef, TelosDef};
 use temper_next::{content, substrate};
@@ -58,18 +60,26 @@ async fn framing_never_projects_as_a_question() {
         .map(|(role, prose)| (Some(*role), prose.as_str()))
         .collect();
     let blocks = content::prepare_blocks(&refs).unwrap();
-    let charter_json = serde_json::to_value(&blocks).unwrap();
 
-    let (cogmap, telos_resource): (Uuid, Uuid) =
-        sqlx::query_as("SELECT cogmap_id, telos_resource_id FROM cogmap_genesis($1,$2,$3,$4,$5)")
-            .bind("onboarding-cogmap")
-            .bind("Onboarding charter")
-            .bind(charter_json)
-            .bind(owner)
-            .bind(emitter)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    // genesis through the single firing surface (payload-first: fire builds the CogmapSeeded
+    // payload + content sidecar and pre-generates the ids).
+    let mut conn = pool.acquire().await.unwrap();
+    let (cogmap, telos_resource) = fire(
+        &mut conn,
+        SeedAction::CogmapGenesis {
+            name: "onboarding-cogmap",
+            telos_title: "Onboarding charter",
+            charter: &blocks,
+            owner: ProfileId::from(owner),
+            emitter: EntityId::from(emitter),
+        },
+    )
+    .await
+    .unwrap()
+    .cogmap_genesis()
+    .unwrap();
+    let (cogmap, telos_resource): (Uuid, Uuid) = (cogmap.uuid(), telos_resource.uuid());
+    drop(conn);
 
     // every block carries a block_role property, in seq order: statement, question, question, framing
     let roles: Vec<String> = sqlx::query_scalar(

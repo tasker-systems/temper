@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "LensCreated",
+  "type": "object",
+  "properties": {
+    "lens_id": {
+      "$ref": "#/$defs/LensId"
+    },
+    "cogmap_id": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/CogmapId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "name": {
+      "type": "string"
+    },
+    "selection_kind": {
+      "type": "string"
+    },
+    "weights": {
+      "$ref": "#/$defs/LensWeights"
+    },
+    "salience": {
+      "$ref": "#/$defs/SalienceWeights"
+    },
+    "resolution": {
+      "type": "number",
+      "format": "double"
+    }
+  },
+  "required": [
+    "lens_id",
+    "name",
+    "selection_kind",
+    "weights",
+    "salience",
+    "resolution"
+  ],
+  "$defs": {
+    "LensId": {
+      "description": "A `kb_cogmap_lenses` row.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "CogmapId": {
+      "description": "A `kb_cogmaps` row.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "LensWeights": {
+      "type": "object",
+      "properties": {
+        "express": {
+          "type": "number",
+          "format": "double"
+        },
+        "contains": {
+          "type": "number",
+          "format": "double"
+        },
+        "leads_to": {
+          "type": "number",
+          "format": "double"
+        },
+        "near": {
+          "type": "number",
+          "format": "double"
+        },
+        "prop": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "express",
+        "contains",
+        "leads_to",
+        "near",
+        "prop"
+      ]
+    },
+    "SalienceWeights": {
+      "type": "object",
+      "properties": {
+        "telos": {
+          "type": "number",
+          "format": "double"
+        },
+        "ref": {
+          "type": "number",
+          "format": "double"
+        },
+        "central": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "telos",
+        "ref",
+        "central"
+      ]
+    }
+  }
+}

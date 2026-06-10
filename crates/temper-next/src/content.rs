@@ -12,13 +12,18 @@
 //!   - SQL (`resource_create`/`cogmap_genesis`): insert the rows; derive `block_body_hash` /
 //!     `kb_resources.body_hash` with Postgres's built-in `sha256()` over the chunk/block hashes.
 
+use crate::ids::{BlockId, ChunkId};
 use anyhow::{Context, Result};
 use serde::Serialize;
+use uuid::Uuid;
 
 /// One embedding window of a block's prose, ready to persist. `content_hash` is the chunker's lowercase
 /// hex sha256 of `content.trim()`; `embedding` is the l2-normalized bge-768 vector.
 #[derive(Debug, Clone, Serialize)]
 pub struct PreparedChunk {
+    /// Pre-generated chunk identity (identity-as-input, payload spec §2): carried into the payload
+    /// manifest AND used by the SQL projection as the kb_chunks.id, so replay reproduces row ids.
+    pub chunk_id: ChunkId,
     pub chunk_index: i32,
     pub content_hash: String,
     pub content: String,
@@ -32,6 +37,8 @@ pub struct PreparedChunk {
 /// `null` when `None`.
 #[derive(Debug, Clone, Serialize)]
 pub struct PreparedBlock {
+    /// Pre-generated block identity (identity-as-input) — see `PreparedChunk::chunk_id`.
+    pub block_id: BlockId,
     pub seq: i32,
     pub role: Option<String>,
     pub chunks: Vec<PreparedChunk>,
@@ -65,6 +72,7 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
         .zip(embeddings)
         .map(
             |((chunk_index, content_hash, content), embedding)| PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
                 chunk_index,
                 content_hash,
                 content,
@@ -73,6 +81,7 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
         )
         .collect();
     Ok(PreparedBlock {
+        block_id: BlockId::from(Uuid::now_v7()),
         seq,
         role: role.map(str::to_owned),
         chunks,
@@ -128,13 +137,15 @@ mod tests {
         }
     }
 
-    // Blocks serialize to the JSONB shape the SQL functions consume (array of {seq, chunks:[…]}).
+    // Blocks serialize to the JSONB shape the SQL functions consume (array of {block_id, seq, chunks:[…]}).
     #[test]
     fn prepared_block_serializes_to_expected_jsonb_shape() {
         let block = PreparedBlock {
+            block_id: BlockId::from(Uuid::now_v7()),
             seq: 2,
             role: Some("question".into()),
             chunks: vec![PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
                 chunk_index: 0,
                 content_hash: "ab".repeat(32),
                 content: "hi".into(),
@@ -144,6 +155,9 @@ mod tests {
         let v = serde_json::to_value([&block]).unwrap();
         assert_eq!(v[0]["seq"], 2);
         assert_eq!(v[0]["role"], "question");
+        // identity-as-input: pre-generated ids ride the JSONB into the SQL projection
+        assert!(v[0]["block_id"].is_string());
+        assert!(v[0]["chunks"][0]["chunk_id"].is_string());
         assert_eq!(v[0]["chunks"][0]["chunk_index"], 0);
         assert_eq!(v[0]["chunks"][0]["content"], "hi");
         // embedding is a JSON array (exact f32 values drift in JSON; the SQL `::vector` cast consumes

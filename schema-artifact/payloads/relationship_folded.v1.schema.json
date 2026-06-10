@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelationshipFolded",
+  "type": "object",
+  "properties": {
+    "edge_id": {
+      "$ref": "#/$defs/EdgeId"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "edge_id"
+  ],
+  "$defs": {
+    "EdgeId": {
+      "description": "A `kb_edges` row (a declared relationship assertion).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

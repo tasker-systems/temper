@@ -20,7 +20,10 @@
 
 use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
-use crate::ids::{CogmapId, EntityId, EventId, LensId, ProfileId, ResourceId};
+use crate::ids::{
+    CogmapId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId, RegionId, ResourceId,
+};
+use crate::payloads;
 use crate::scenario::model::LensDef;
 use anyhow::{Context, Result};
 use uuid::Uuid;
@@ -97,6 +100,11 @@ pub enum SeedAction<'a> {
     },
     Materialize {
         cogmap: CogmapId,
+        lens: LensId,
+        /// Max event id over the substrate at load time — the point-in-time the projection saw.
+        watermark: EventId,
+        membership_fingerprint: &'a str,
+        region_ids: &'a [RegionId],
         emitter: EntityId,
     },
 }
@@ -124,9 +132,8 @@ pub enum Fired {
         telos_resource: ResourceId,
     },
     Resource(ResourceId),
-    /// The asserted edge id (no `EdgeId` newtype yet — edges aren't threaded as typed ids).
-    Relationship(Uuid),
-    Facet,
+    Relationship(EdgeId),
+    Facet(PropertyId),
     Lens(LensId),
     Materialize(EventId),
 }
@@ -171,13 +178,22 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             owner,
             emitter,
         } => {
-            let charter_json = serde_json::to_value(charter)?;
+            let payload = payloads::CogmapSeeded {
+                cogmap_id: CogmapId::from(Uuid::now_v7()),
+                name: name.to_owned(),
+                owner_profile_id: owner,
+                telos: payloads::TelosManifest {
+                    resource_id: ResourceId::from(Uuid::now_v7()),
+                    title: telos_title.to_owned(),
+                    origin_uri: "temper://genesis".into(),
+                    blocks: charter.iter().map(payloads::BlockManifest::from).collect(),
+                },
+            };
+            let sidecar = serde_json::to_value(payloads::content_sidecar(charter))?;
             let row = sqlx::query!(
-                "SELECT cogmap_id, telos_resource_id FROM cogmap_genesis($1,$2,$3,$4,$5)",
-                name,
-                telos_title,
-                charter_json,
-                owner.uuid(),
+                "SELECT cogmap_id, telos_resource_id FROM cogmap_genesis($1,$2,$3)",
+                serde_json::to_value(&payload)?,
+                sidecar,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
@@ -203,15 +219,20 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             doc_type,
             emitter,
         } => {
-            let blocks_json = serde_json::to_value(blocks)?;
+            let payload = payloads::ResourceCreated {
+                resource_id: ResourceId::from(Uuid::now_v7()),
+                title: title.to_owned(),
+                origin_uri: origin_uri.to_owned(),
+                home: payloads::AnchorRef::cogmap(home),
+                owner_profile_id: owner,
+                doc_type: doc_type.map(str::to_owned),
+                blocks: blocks.iter().map(payloads::BlockManifest::from).collect(),
+            };
+            let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
             let id = sqlx::query_scalar!(
-                "SELECT resource_create($1,$2,$3,$4,$5,$6,$7)",
-                title,
-                origin_uri,
-                home.uuid(),
-                owner.uuid(),
-                blocks_json,
-                doc_type,
+                "SELECT resource_create($1,$2,$3)",
+                serde_json::to_value(&payload)?,
+                sidecar,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
@@ -229,20 +250,25 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             home,
             emitter,
         } => {
-            let id = sqlx::query_scalar!(
-                "SELECT relationship_assert($1,$2,$3::edge_kind,$4,$5,$6,$7)",
-                src.uuid(),
-                tgt.uuid(),
-                kind.as_sql() as _,
-                label,
+            let payload = payloads::RelationshipAsserted {
+                edge_id: EdgeId::from(Uuid::now_v7()),
+                source: payloads::AnchorRef::resource(src),
+                target: payloads::AnchorRef::resource(tgt),
+                edge_kind: kind,
+                polarity: payloads::EdgePolarity::Forward,
+                label: label.map(str::to_owned),
                 weight,
-                home.uuid(),
+                home: payloads::AnchorRef::cogmap(home),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT relationship_assert($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
             .await?
             .context("relationship_assert returned null")?;
-            Ok(Fired::Relationship(id))
+            Ok(Fired::Relationship(EdgeId::from(id)))
         }
 
         SeedAction::FacetSet {
@@ -251,16 +277,22 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             weight,
             emitter,
         } => {
-            sqlx::query!(
-                "SELECT facet_set($1,$2,$3,$4)",
-                resource.uuid(),
-                values,
+            let payload = payloads::PropertyAsserted {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::resource(resource),
+                property_key: "facet".into(),
+                value: values.clone(),
                 weight,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT facet_set($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
-            .await?;
-            Ok(Fired::Facet)
+            .await?
+            .context("facet_set returned null")?;
+            Ok(Fired::Facet(PropertyId::from(id)))
         }
 
         SeedAction::LensCreate {
@@ -268,19 +300,28 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             lens,
             emitter,
         } => {
+            let payload = payloads::LensCreated {
+                lens_id: LensId::from(Uuid::now_v7()),
+                cogmap_id: cogmap,
+                name: lens.name.clone(),
+                selection_kind: "homed".into(),
+                weights: payloads::LensWeights {
+                    express: lens.w_express,
+                    contains: lens.w_contains,
+                    leads_to: lens.w_leads_to,
+                    near: lens.w_near,
+                    prop: lens.w_prop,
+                },
+                salience: payloads::SalienceWeights {
+                    telos: lens.s_telos,
+                    reference: lens.s_ref,
+                    central: lens.s_central,
+                },
+                resolution: lens.resolution,
+            };
             let id = sqlx::query_scalar!(
-                "SELECT lens_create($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
-                cogmap.map(CogmapId::uuid),
-                lens.name,
-                lens.w_express,
-                lens.w_contains,
-                lens.w_leads_to,
-                lens.w_near,
-                lens.w_prop,
-                lens.s_telos,
-                lens.s_ref,
-                lens.s_central,
-                lens.resolution,
+                "SELECT lens_create($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
@@ -289,20 +330,34 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             Ok(Fired::Lens(id.into()))
         }
 
-        SeedAction::Materialize { cogmap, emitter } => {
-            // No SQL function: the materialization event is a raw INSERT (reconciled out of write.rs).
+        SeedAction::Materialize {
+            cogmap,
+            lens,
+            watermark,
+            membership_fingerprint,
+            region_ids,
+            emitter,
+        } => {
             // The emitter is the actor on whose behalf materialization runs — passed explicitly, never
-            // derived from "latest event" (NULL on an empty log, arbitrary on occurred_at ties).
+            // derived from "latest event" (NULL on an empty log, arbitrary on occurred_at ties). The
+            // payload records the act's full identity (lens, watermark, fingerprint, region ids);
+            // region ROWS stay Rust-side derived compute (write.rs).
+            let payload = payloads::RegionMaterialized {
+                cogmap_id: cogmap,
+                lens_id: lens,
+                watermark_event_id: watermark,
+                membership_fingerprint: membership_fingerprint.to_owned(),
+                region_ids: region_ids.to_vec(),
+            };
             let id = sqlx::query_scalar!(
-                "INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id) \
-                 SELECT (SELECT id FROM kb_event_types WHERE name=$2), $3, 'kb_cogmaps', $1 RETURNING id",
-                cogmap.uuid(),
-                EventKind::RegionMaterialized.as_canonical_name(),
+                "SELECT region_materialize($1,$2)",
+                serde_json::to_value(&payload)?,
                 emitter.uuid(),
             )
             .fetch_one(&mut *conn)
-            .await?;
-            Ok(Fired::Materialize(id.into()))
+            .await?
+            .context("region_materialize returned null")?;
+            Ok(Fired::Materialize(EventId::from(id)))
         }
     }
 }
@@ -332,6 +387,10 @@ mod tests {
         assert_eq!(
             SeedAction::Materialize {
                 cogmap: CogmapId::from(Uuid::nil()),
+                lens: LensId::from(Uuid::nil()),
+                watermark: EventId::from(Uuid::nil()),
+                membership_fingerprint: "",
+                region_ids: &[],
                 emitter,
             }
             .event_type()

@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RelationshipAsserted",
+  "type": "object",
+  "properties": {
+    "edge_id": {
+      "$ref": "#/$defs/EdgeId"
+    },
+    "source": {
+      "$ref": "#/$defs/AnchorRef"
+    },
+    "target": {
+      "$ref": "#/$defs/AnchorRef"
+    },
+    "edge_kind": {
+      "$ref": "#/$defs/EdgeKind"
+    },
+    "polarity": {
+      "$ref": "#/$defs/EdgePolarity",
+      "default": "forward"
+    },
+    "label": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "weight": {
+      "type": "number",
+      "format": "double"
+    },
+    "home": {
+      "$ref": "#/$defs/AnchorRef"
+    }
+  },
+  "required": [
+    "edge_id",
+    "source",
+    "target",
+    "edge_kind",
+    "weight",
+    "home"
+  ],
+  "$defs": {
+    "EdgeId": {
+      "description": "A `kb_edges` row (a declared relationship assertion).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "AnchorRef": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles"
+      ]
+    },
+    "EdgeKind": {
+      "type": "string",
+      "enum": [
+        "express",
+        "contains",
+        "leads_to",
+        "near"
+      ]
+    },
+    "EdgePolarity": {
+      "description": "kb_edges.polarity. The projection's only non-parameter column today — carried explicitly so the\npayload covers every projected column (spec §9 column-coverage obligation).",
+      "type": "string",
+      "enum": [
+        "forward",
+        "inverse"
+      ]
+    }
+  }
+}

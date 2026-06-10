@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RegionMaterialized",
+  "type": "object",
+  "properties": {
+    "cogmap_id": {
+      "$ref": "#/$defs/CogmapId"
+    },
+    "lens_id": {
+      "$ref": "#/$defs/LensId"
+    },
+    "watermark_event_id": {
+      "description": "Max event id over the substrate at load time — the point-in-time the projection saw.",
+      "$ref": "#/$defs/EventId"
+    },
+    "membership_fingerprint": {
+      "description": "The per-lens membership signature (sorted member-uuid join). Doubles as the drift-detection\ndecision's persisted fingerprint artifact.",
+      "type": "string"
+    },
+    "region_ids": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RegionId"
+      }
+    }
+  },
+  "required": [
+    "cogmap_id",
+    "lens_id",
+    "watermark_event_id",
+    "membership_fingerprint",
+    "region_ids"
+  ],
+  "$defs": {
+    "CogmapId": {
+      "description": "A `kb_cogmaps` row.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "LensId": {
+      "description": "A `kb_cogmap_lenses` row.",
+      "type": "string",
+      "format": "uuid"
+    },
+    "EventId": {
+      "description": "A `kb_events` row (a ledger event).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "RegionId": {
+      "description": "A `kb_cogmap_regions` row (one materialized region).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

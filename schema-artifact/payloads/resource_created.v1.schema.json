@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ResourceCreated",
+  "type": "object",
+  "properties": {
+    "resource_id": {
+      "$ref": "#/$defs/ResourceId"
+    },
+    "title": {
+      "type": "string"
+    },
+    "origin_uri": {
+      "type": "string"
+    },
+    "home": {
+      "$ref": "#/$defs/AnchorRef"
+    },
+    "owner_profile_id": {
+      "$ref": "#/$defs/ProfileId"
+    },
+    "doc_type": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/BlockManifest"
+      }
+    }
+  },
+  "required": [
+    "resource_id",
+    "title",
+    "origin_uri",
+    "home",
+    "owner_profile_id",
+    "blocks"
+  ],
+  "$defs": {
+    "ResourceId": {
+      "description": "A `kb_resources` row (the named, edge-connected, findable unit).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "AnchorRef": {
+      "type": "object",
+      "properties": {
+        "table": {
+          "$ref": "#/$defs/AnchorTable"
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "required": [
+        "table",
+        "id"
+      ]
+    },
+    "AnchorTable": {
+      "description": "A polymorphic anchor/endpoint reference. Serializes table names exactly as the DDL spells them.",
+      "type": "string",
+      "enum": [
+        "kb_contexts",
+        "kb_cogmaps",
+        "kb_resources",
+        "kb_edges",
+        "kb_content_blocks",
+        "kb_teams",
+        "kb_profiles"
+      ]
+    },
+    "ProfileId": {
+      "description": "A `kb_profiles` row (the owner/actor principal).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "BlockManifest": {
+      "description": "One block's manifest. `block_body_hash` deliberately absent — it is sha256(ordered chunk hashes),\nderived in the projector (the derived-state rule applied to the spec's own §3 sketch).",
+      "type": "object",
+      "properties": {
+        "block_id": {
+          "$ref": "#/$defs/BlockId"
+        },
+        "seq": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "role": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "chunks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChunkManifest"
+          }
+        }
+      },
+      "required": [
+        "block_id",
+        "seq",
+        "chunks"
+      ]
+    },
+    "BlockId": {
+      "description": "A `kb_content_blocks` row (a resource's addressable interior unit).",
+      "type": "string",
+      "format": "uuid"
+    },
+    "ChunkManifest": {
+      "description": "Content-addressed chunk reference: structure + hash, NEVER prose (CAS rule, spec §0.1).",
+      "type": "object",
+      "properties": {
+        "chunk_id": {
+          "$ref": "#/$defs/ChunkId"
+        },
+        "chunk_index": {
+          "type": "integer",
+          "format": "int32"
+        },
+        "content_hash": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "chunk_id",
+        "chunk_index",
+        "content_hash"
+      ]
+    },
+    "ChunkId": {
+      "description": "A `kb_chunks` row (one embedding window of a block's prose).",
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

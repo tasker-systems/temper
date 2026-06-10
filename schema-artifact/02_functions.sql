@@ -455,62 +455,69 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ============================================================================
--- Shared block→chunk persist (the content-block-primitive write path). Both resource_create and
--- cogmap_genesis hand it the Rust-prepared blocks JSONB (crates/temper-next/src/content.rs
--- `Vec<PreparedBlock>`, serialized): an ordered array of
---   { "seq": int, "chunks": [ { "chunk_index": int, "content_hash": text, "content": text,
---                               "embedding": [f32; 768] | null } ] }
--- Chunking + sha256 hashing + bge-768 embedding all happen Rust-side (borrowing temper-ingest), exactly
--- as production chunks in code and persists a chunk-set in SQL. This ONLY persists: it iterates
--- blocks→chunks, writes kb_content_blocks / kb_chunks (with the inline embedding) / kb_chunk_content,
--- derives each block_body_hash as the sha256 merkle over its ordered chunk hashes, and the resource
--- body_hash as the sha256 merkle over the ordered block hashes. Blocks carry NO prose (β) — text lives
--- only in kb_chunk_content. A block whose prose exceeded one 510-token window arrives as >1 chunk.
--- p_event owns the blocks (genesis_event_id/last_event_id) — the resource_created OR cogmap_seeded event.
-CREATE FUNCTION _persist_resource_blocks(p_resource uuid, p_event uuid, p_blocks jsonb)
+-- Shared block→chunk PROJECTOR (the content-block write path, payload-first). p_manifests is the
+-- payload's BlockManifest array — pre-generated ids + seqs + roles + sha256 content hashes, NO prose
+-- (the CAS rule: prose lives once in kb_chunk_content). p_content is the sidecar
+--   { "<chunk_id>": { "content": text, "embedding": [f32;768] | "[...]" | null } }
+-- persisted to kb_chunk_content / kb_chunks.embedding, never written to the ledger. Structural truth
+-- comes ONLY from the manifests: a manifest chunk missing from the sidecar is an exception; sidecar
+-- extras are ignored. Projected timestamps come from the owning event's occurred_at (replay-stable).
+-- block_body_hash / resource body_hash stay DERIVED (sha256 merkles over the carried chunk hashes).
+-- Blocks carry NO prose (β); a block whose prose exceeded one 510-token window arrives as >1 chunk.
+-- The block_role property pair (owner_table='kb_content_blocks', property_key='block_role')
+-- double-segregates roles from the resource-facet lens math (D3 guard-rail).
+CREATE FUNCTION _project_blocks(p_resource uuid, p_event uuid, p_manifests jsonb, p_content jsonb)
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_block uuid; v_chunk uuid;
-    v_block_json jsonb; v_chunk_json jsonb; v_emb jsonb;
+    v_block_json jsonb; v_chunk_json jsonb; v_side jsonb; v_emb jsonb;
     v_block_hash text; v_chunk_hashes text; v_chunk_count int;
     v_resource_hashes text := '';
+    v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
 BEGIN
     -- blocks ⊃ chunks, in array order (already seq-ordered Rust-side; the block's own seq is authoritative).
-    FOR v_block_json IN SELECT jsonb_array_elements(p_blocks) LOOP
-        INSERT INTO kb_content_blocks (resource_id, seq, genesis_event_id, last_event_id)
-            VALUES (p_resource, (v_block_json->>'seq')::int, p_event, p_event) RETURNING id INTO v_block;
-        -- D3: stamp the block's role (statement/question/framing) as a block_role property when the
-        -- block JSONB carries one. Open string value (no enum); single-label per block. The pair
-        -- (owner_table='kb_content_blocks', property_key='block_role') double-segregates it from the
-        -- resource-facet lens math (which filters owner_table='kb_resources' AND property_key='facet').
+    FOR v_block_json IN SELECT jsonb_array_elements(p_manifests) LOOP
+        v_block := (v_block_json->>'block_id')::uuid;
+        INSERT INTO kb_content_blocks (id, resource_id, seq, genesis_event_id, last_event_id, created)
+            VALUES (v_block, p_resource, (v_block_json->>'seq')::int, p_event, p_event, v_occurred);
         IF v_block_json ? 'role' AND jsonb_typeof(v_block_json->'role') = 'string' THEN
             INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value,
-                                       asserted_by_event_id, last_event_id)
-            VALUES ('kb_content_blocks', v_block, 'block_role', v_block_json->'role', p_event, p_event);
+                                       asserted_by_event_id, last_event_id, created)
+            VALUES ('kb_content_blocks', v_block, 'block_role', v_block_json->'role',
+                    p_event, p_event, v_occurred);
         END IF;
         v_chunk_hashes := '';
         v_chunk_count := 0;
         FOR v_chunk_json IN SELECT jsonb_array_elements(v_block_json->'chunks') LOOP
-            v_emb := v_chunk_json->'embedding';
-            INSERT INTO kb_chunks (block_id, resource_id, chunk_index, content_hash, embedding)
-                VALUES (v_block, p_resource, (v_chunk_json->>'chunk_index')::int,
+            v_chunk := (v_chunk_json->>'chunk_id')::uuid;
+            v_side := p_content->(v_chunk_json->>'chunk_id');
+            IF v_side IS NULL THEN
+                RAISE EXCEPTION '_project_blocks: content sidecar missing chunk %', v_chunk;
+            END IF;
+            v_emb := v_side->'embedding';
+            INSERT INTO kb_chunks (id, block_id, resource_id, chunk_index, content_hash, embedding, created)
+                VALUES (v_chunk, v_block, p_resource, (v_chunk_json->>'chunk_index')::int,
                         v_chunk_json->>'content_hash',
-                        CASE WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null'
-                             THEN NULL ELSE (v_emb::text)::vector END)
-                RETURNING id INTO v_chunk;
+                        CASE
+                            WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null' THEN NULL
+                            WHEN jsonb_typeof(v_emb) = 'string' THEN (v_emb #>> '{}')::vector  -- replay: pgvector text
+                            ELSE (v_emb::text)::vector                                          -- fire: JSON array
+                        END,
+                        v_occurred);
             INSERT INTO kb_chunk_content (chunk_id, content)
-                VALUES (v_chunk, v_chunk_json->>'content');
+                VALUES (v_chunk, v_side->>'content');
             v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
             v_chunk_count := v_chunk_count + 1;
         END LOOP;
-        -- block_body_hash = sha256 merkle over the ordered chunk hashes (retires md5).
+        -- block_body_hash = sha256 merkle over the ordered chunk hashes (derived, never payload).
         v_block_hash := encode(sha256(convert_to(v_chunk_hashes, 'UTF8')), 'hex');
-        INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count)
-            VALUES (v_block, v_block_hash, v_chunk_count);
+        INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count, created)
+            VALUES (v_block, v_block_hash, v_chunk_count, v_occurred);
         v_resource_hashes := v_resource_hashes || v_block_hash;
     END LOOP;
     -- resource body_hash = sha256 merkle over the ordered block hashes.
-    UPDATE kb_resources SET body_hash = encode(sha256(convert_to(v_resource_hashes, 'UTF8')), 'hex')
+    UPDATE kb_resources SET body_hash = encode(sha256(convert_to(v_resource_hashes, 'UTF8')), 'hex'),
+                            updated = v_occurred
         WHERE id = p_resource;
 END;
 $$;
@@ -519,74 +526,48 @@ $$;
 -- COGMAP GENESIS — single-transaction, resource-first seeding (Domain-B §5)
 -- ============================================================================
 
--- Seeds a new cogmap atomically. Resource-first ordering: the telos resource +
--- its blocks are created BEFORE the kb_cogmaps row, so telos_resource_id NOT NULL
--- holds at insert with no deferred FK (map-regions OQ-4, superseded by spine #2).
--- The telos charter is real content-blocks (content-block-primitive β), Rust-prepared exactly like an
--- ordinary resource body and persisted via the shared _persist_resource_blocks path:
---   block-0   = the telos statement (purpose + thin-who)
---   block-1.. = the guiding questions (question + context) then the framing blocks
--- p_charter_blocks is the same Vec<PreparedBlock> JSONB resource_create takes (chunked + sha256-hashed +
--- bge-768-embedded Rust-side). Emits a single `cogmap_seeded` event (the genesis correlation root).
+-- Seeds a new cogmap atomically, payload-first. Identity-as-input: cogmap/resource/block/chunk ids
+-- all arrive in the payload (CogmapSeeded, payloads.rs), so the producing anchor is known UP FRONT —
+-- the old post-hoc backfill UPDATE on kb_events is gone (the ledger is append-only). Resource-first
+-- ordering preserved: the telos resource + its blocks are created BEFORE the kb_cogmaps row, so
+-- telos_resource_id NOT NULL holds at insert with no deferred FK.
+-- The telos charter is real content-blocks (block-0 statement, blocks 1..n questions-with-context,
+-- then framing), projected via the shared _project_blocks path with the p_content sidecar.
+-- Emits a single `cogmap_seeded` event (the genesis correlation root; correlation_id = its own id).
 -- doc_type property 'cogmap_charter' is stamped on the telos resource.
--- Returns the new cogmap id AND its telos resource id (sparing the caller a re-fetch).
-CREATE FUNCTION cogmap_genesis(
-    p_name            text,
-    p_telos_title     text,
-    p_charter_blocks  jsonb,
-    p_owner_profile   uuid,
-    p_emitter_entity  uuid,
-    p_origin_uri      text DEFAULT 'temper://genesis'
-) RETURNS TABLE(cogmap_id uuid, telos_resource_id uuid) LANGUAGE plpgsql AS $$
-DECLARE
-    v_event_type   uuid;
-    v_event        uuid;
-    v_resource     uuid;
-    v_cogmap       uuid;
+CREATE FUNCTION _project_cogmap_seeded(p_event uuid, p_payload jsonb, p_content jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+        v_cogmap   uuid := (p_payload->>'cogmap_id')::uuid;
+        v_resource uuid := (p_payload#>>'{telos,resource_id}')::uuid;
+        v_owner    uuid := (p_payload->>'owner_profile_id')::uuid;
 BEGIN
-    SELECT id INTO v_event_type FROM kb_event_types WHERE name = 'cogmap_seeded';
-    IF v_event_type IS NULL THEN
-        RAISE EXCEPTION 'event_type cogmap_seeded not seeded';
-    END IF;
-
-    -- 1. genesis event (the correlation root). producing anchor unknown until the
-    --    cogmap exists, so it is backfilled after the cogmap row is created.
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, correlation_id, metadata)
-    VALUES (v_event_type, p_emitter_entity, uuid_generate_v7(),
-            jsonb_build_object('genesis', 'cogmap', 'name', p_name))
-    RETURNING id INTO v_event;
-
-    -- 2. telos resource (resource-FIRST — exists before the cogmap row)
-    INSERT INTO kb_resources (title, origin_uri)
-    VALUES (p_telos_title, p_origin_uri)
-    RETURNING id INTO v_resource;
-
-    -- 2a. the charter as real content-blocks — same block→chunk persist path resource_create uses
-    --     (statement, questions-with-context, framing; positional by seq, no block_kind). The genesis
-    --     event owns the blocks; body_hash is the sha256 merkle the helper derives.
-    PERFORM _persist_resource_blocks(v_resource, v_event, p_charter_blocks);
-
-    -- 3. the cogmap row (telos_resource_id NOT NULL satisfied — resource exists)
-    INSERT INTO kb_cogmaps (name, telos_resource_id)
-    VALUES (p_name, v_resource) RETURNING id INTO v_cogmap;
-
-    -- 4. home the telos resource IN the cogmap (map-home; charter is the map's hub)
+    -- telos resource FIRST (telos_resource_id NOT NULL holds at the cogmap insert)
+    INSERT INTO kb_resources (id, title, origin_uri, created, updated)
+        VALUES (v_resource, p_payload#>>'{telos,title}', p_payload#>>'{telos,origin_uri}',
+                v_occurred, v_occurred);
+    PERFORM _project_blocks(v_resource, p_event, p_payload#>'{telos,blocks}', p_content);
+    INSERT INTO kb_cogmaps (id, name, telos_resource_id, created)
+        VALUES (v_cogmap, p_payload->>'name', v_resource, v_occurred);
     INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id,
-                                   originator_profile_id, owner_profile_id)
-    VALUES (v_resource, 'kb_cogmaps', v_cogmap, p_owner_profile, p_owner_profile);
-
-    -- 5. doc_type = cogmap_charter (demoted doctype-as-property)
+                                   originator_profile_id, owner_profile_id, created)
+        VALUES (v_resource, 'kb_cogmaps', v_cogmap, v_owner, v_owner, v_occurred);
     INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value,
-                              asserted_by_event_id, last_event_id)
-    VALUES ('kb_resources', v_resource, 'doc_type', '"cogmap_charter"'::jsonb, v_event, v_event);
+                               asserted_by_event_id, last_event_id, created)
+        VALUES ('kb_resources', v_resource, 'doc_type', '"cogmap_charter"'::jsonb,
+                p_event, p_event, v_occurred);
+END;
+$$;
 
-    -- 6. backfill the event's producing anchor now that the cogmap exists
-    UPDATE kb_events
-       SET producing_anchor_table = 'kb_cogmaps', producing_anchor_id = v_cogmap
-     WHERE id = v_event;
-
-    cogmap_id := v_cogmap;
-    telos_resource_id := v_resource;
+CREATE FUNCTION cogmap_genesis(p_payload jsonb, p_content jsonb, p_emitter uuid)
+RETURNS TABLE(cogmap_id uuid, telos_resource_id uuid) LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid;
+BEGIN
+    v_ev := _event_append('cogmap_seeded', p_emitter,
+                          'kb_cogmaps', (p_payload->>'cogmap_id')::uuid, p_payload);
+    PERFORM _project_cogmap_seeded(v_ev, p_payload, p_content);
+    cogmap_id := (p_payload->>'cogmap_id')::uuid;
+    telos_resource_id := (p_payload#>>'{telos,resource_id}')::uuid;
     RETURN NEXT;
 END;
 $$;
@@ -596,101 +577,199 @@ $$;
 -- txn. The scenario loader / temper-cogmap lift call these; YAML is the event input source.
 -- ============================================================================
 
--- Create a resource, home it in a cogmap, give it its content as the real nesting (blocks ⊃ chunks ⊃
--- chunk_content) via the shared _persist_resource_blocks path, optionally stamp a doc_type property.
+-- Create a resource (payload-first; ResourceCreated, payloads.rs): identity from the payload, home
+-- per the payload's polymorphic anchor, content as the real nesting (blocks ⊃ chunks ⊃ chunk_content)
+-- via the shared _project_blocks path with the p_content sidecar, optional doc_type property.
 -- Emits one `resource_created` event (the projection root). Returns the resource id.
--- p_blocks is the Rust-prepared content JSONB documented on _persist_resource_blocks above.
-CREATE FUNCTION resource_create(
-    p_title text, p_origin_uri text, p_home_cogmap uuid, p_owner uuid,
-    p_blocks jsonb, p_doc_type text, p_emitter uuid
-) RETURNS uuid LANGUAGE plpgsql AS $$
-DECLARE
-    v_et uuid; v_ev uuid; v_resource uuid;
+CREATE FUNCTION _project_resource_created(p_event uuid, p_payload jsonb, p_content jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+        v_resource uuid := (p_payload->>'resource_id')::uuid;
+        v_owner    uuid := (p_payload->>'owner_profile_id')::uuid;
 BEGIN
-    SELECT id INTO v_et FROM kb_event_types WHERE name='resource_created';
-    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type resource_created not seeded'; END IF;
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, 'kb_cogmaps', p_home_cogmap) RETURNING id INTO v_ev;
-    INSERT INTO kb_resources (title, origin_uri) VALUES (p_title, p_origin_uri) RETURNING id INTO v_resource;
-    INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id, originator_profile_id, owner_profile_id)
-        VALUES (v_resource, 'kb_cogmaps', p_home_cogmap, p_owner, p_owner);
-
-    -- blocks ⊃ chunks via the shared persist path (also sets body_hash = sha256 merkle over block hashes).
-    PERFORM _persist_resource_blocks(v_resource, v_ev, p_blocks);
-
-    IF p_doc_type IS NOT NULL THEN
-        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, asserted_by_event_id, last_event_id)
-            VALUES ('kb_resources', v_resource, 'doc_type', to_jsonb(p_doc_type), v_ev, v_ev);
+    INSERT INTO kb_resources (id, title, origin_uri, created, updated)
+        VALUES (v_resource, p_payload->>'title', p_payload->>'origin_uri', v_occurred, v_occurred);
+    INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id,
+                                   originator_profile_id, owner_profile_id, created)
+        VALUES (v_resource, p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid,
+                v_owner, v_owner, v_occurred);
+    PERFORM _project_blocks(v_resource, p_event, p_payload->'blocks', p_content);
+    IF p_payload->>'doc_type' IS NOT NULL THEN
+        INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value,
+                                   asserted_by_event_id, last_event_id, created)
+            VALUES ('kb_resources', v_resource, 'doc_type', p_payload->'doc_type',
+                    p_event, p_event, v_occurred);
     END IF;
     RETURN v_resource;
 END;
 $$;
 
--- Assert a typed edge between two resources, homed in a cogmap. Emits `relationship_asserted`.
-CREATE FUNCTION relationship_assert(
-    p_src uuid, p_tgt uuid, p_kind edge_kind, p_label text, p_weight double precision,
-    p_home_cogmap uuid, p_emitter uuid
-) RETURNS uuid LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_edge uuid;
+CREATE FUNCTION resource_create(p_payload jsonb, p_content jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid;
 BEGIN
-    SELECT id INTO v_et FROM kb_event_types WHERE name='relationship_asserted';
-    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type relationship_asserted not seeded'; END IF;
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, 'kb_cogmaps', p_home_cogmap) RETURNING id INTO v_ev;
-    INSERT INTO kb_edges (source_table, source_id, target_table, target_id, edge_kind, label, weight,
-                          home_anchor_table, home_anchor_id, asserted_by_event_id, last_event_id)
-        VALUES ('kb_resources', p_src, 'kb_resources', p_tgt, p_kind, p_label, p_weight,
-                'kb_cogmaps', p_home_cogmap, v_ev, v_ev) RETURNING id INTO v_edge;
+    v_ev := _event_append('resource_created', p_emitter,
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+    RETURN _project_resource_created(v_ev, p_payload, p_content);
+END;
+$$;
+
+-- ============================================================================
+-- THE ONE EVENT WRITER (payload-first design §5). Every mutation function appends through here;
+-- it is also the foreign-event door: an external/webhook event is _event_append with no projection
+-- half. Root-event convention: correlation_id = the event's own id when no correlation is supplied
+-- (computed up front — the ledger is append-only, no post-hoc UPDATE).
+-- ============================================================================
+CREATE FUNCTION _event_append(
+    p_type_name text, p_emitter uuid, p_anchor_table text, p_anchor_id uuid,
+    p_payload jsonb,
+    p_references jsonb DEFAULT '[]'::jsonb,
+    p_correlation uuid DEFAULT NULL,
+    p_payload_version int DEFAULT 1
+) RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_et uuid; v_ev uuid := uuid_generate_v7();
+BEGIN
+    SELECT id INTO v_et FROM kb_event_types WHERE name = p_type_name;
+    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type % not seeded', p_type_name; END IF;
+    INSERT INTO kb_events (id, event_type_id, emitter_entity_id,
+                           producing_anchor_table, producing_anchor_id,
+                           payload, "references", payload_version, correlation_id)
+    VALUES (v_ev, v_et, p_emitter, p_anchor_table, p_anchor_id,
+            p_payload, p_references, p_payload_version, COALESCE(p_correlation, v_ev));
+    RETURN v_ev;
+END;
+$$;
+
+-- ── relationship_asserted ────────────────────────────────────────────────────
+-- Projection half: reads ONLY the payload (RelationshipAsserted, payloads.rs). Projected timestamps
+-- come from the event's occurred_at, never now() (replay-stable by construction).
+CREATE FUNCTION _project_relationship_asserted(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
+    INSERT INTO kb_edges (id, source_table, source_id, target_table, target_id,
+                          edge_kind, polarity, label, weight,
+                          home_anchor_table, home_anchor_id,
+                          asserted_by_event_id, last_event_id, created)
+    VALUES (v_edge,
+            p_payload#>>'{source,table}', (p_payload#>>'{source,id}')::uuid,
+            p_payload#>>'{target,table}', (p_payload#>>'{target,id}')::uuid,
+            (p_payload->>'edge_kind')::edge_kind,
+            COALESCE(p_payload->>'polarity', 'forward')::edge_polarity,
+            p_payload->>'label',
+            (p_payload->>'weight')::double precision,
+            p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid,
+            p_event, p_event, v_occurred);
     RETURN v_edge;
 END;
 $$;
 
--- Set a resource's facet property as ONE coherent kb_properties row. Emits `property_asserted`.
--- The event anchors to the resource's home cogmap (producing_anchor CHECK forbids kb_resources).
-CREATE FUNCTION facet_set(p_resource uuid, p_values jsonb, p_weight double precision, p_emitter uuid)
-RETURNS void LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_anchor_tbl text; v_anchor uuid;
+-- Assert a typed edge, homed per the payload. Emits `relationship_asserted` + projects, one txn.
+CREATE FUNCTION relationship_assert(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid;
 BEGIN
-    SELECT id INTO v_et FROM kb_event_types WHERE name='property_asserted';
-    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type property_asserted not seeded'; END IF;
-    -- Anchor the event to the resource's home (cogmap OR context — both are in the kb_events CHECK set),
-    -- preferring a cogmap home. NEVER hardcode 'kb_cogmaps' with a possibly-NULL id: a context-homed
-    -- resource would violate the (table IS NULL)=(id IS NULL) CHECK and abort the txn.
-    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
-        WHERE resource_id=p_resource ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
-    IF v_anchor IS NULL THEN
-        RAISE EXCEPTION 'facet_set: resource % has no home to anchor the property event', p_resource;
-    END IF;
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, v_anchor_tbl, v_anchor) RETURNING id INTO v_ev;
-    INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value, weight, asserted_by_event_id, last_event_id)
-        VALUES ('kb_resources', p_resource, 'facet', p_values, p_weight, v_ev, v_ev);
+    v_ev := _event_append('relationship_asserted', p_emitter,
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+    RETURN _project_relationship_asserted(v_ev, p_payload);
 END;
 $$;
 
--- Create a lens (global when p_cogmap IS NULL). Emits `lens_created`; a global lens is a system event
--- with no producing anchor (both NULL — satisfies the both-null-or-both-set CHECK). Returns lens id.
-CREATE FUNCTION lens_create(
-    p_cogmap uuid, p_name text,
-    p_w_express double precision, p_w_contains double precision, p_w_leads_to double precision,
-    p_w_near double precision, p_w_prop double precision,
-    p_s_telos double precision, p_s_ref double precision, p_s_central double precision,
-    p_resolution double precision, p_emitter uuid
-) RETURNS uuid LANGUAGE plpgsql AS $$
-DECLARE v_et uuid; v_ev uuid; v_lens uuid; v_anchor_tbl text;
+-- ── property_asserted ────────────────────────────────────────────────────────
+CREATE FUNCTION _project_property_asserted(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_prop uuid := (p_payload->>'property_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
 BEGIN
-    SELECT id INTO v_et FROM kb_event_types WHERE name='lens_created';
-    IF v_et IS NULL THEN RAISE EXCEPTION 'event_type lens_created not seeded'; END IF;
-    v_anchor_tbl := CASE WHEN p_cogmap IS NULL THEN NULL ELSE 'kb_cogmaps' END;
-    INSERT INTO kb_events (event_type_id, emitter_entity_id, producing_anchor_table, producing_anchor_id)
-        VALUES (v_et, p_emitter, v_anchor_tbl, p_cogmap) RETURNING id INTO v_ev;
+    INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value, weight,
+                               asserted_by_event_id, last_event_id, created)
+    VALUES (v_prop,
+            p_payload#>>'{owner,table}', (p_payload#>>'{owner,id}')::uuid,
+            p_payload->>'property_key', p_payload->'value',
+            (p_payload->>'weight')::double precision,
+            p_event, p_event, v_occurred);
+    RETURN v_prop;
+END;
+$$;
+
+-- Set a property per the payload. Emits `property_asserted`. The producing anchor is an ENVELOPE
+-- concern derived from the owner resource's home (cogmap OR context — both in the kb_events CHECK
+-- set), preferring a cogmap home — never payload data. A homeless resource is an error.
+CREATE FUNCTION facet_set(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_anchor_tbl text; v_anchor uuid;
+        v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
+BEGIN
+    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
+        WHERE resource_id = v_owner ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
+    IF v_anchor IS NULL THEN
+        RAISE EXCEPTION 'facet_set: resource % has no home to anchor the property event', v_owner;
+    END IF;
+    v_ev := _event_append('property_asserted', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    RETURN _project_property_asserted(v_ev, p_payload);
+END;
+$$;
+
+-- ── lens_created ─────────────────────────────────────────────────────────────
+CREATE FUNCTION _project_lens_created(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_lens uuid := (p_payload->>'lens_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
     INSERT INTO kb_cogmap_lenses
-        (cogmap_id, name, selection_kind, w_express, w_contains, w_leads_to, w_near, w_prop,
-         s_telos, s_ref, s_central, resolution, asserted_by_event_id)
-    VALUES (p_cogmap, p_name, 'homed', p_w_express, p_w_contains, p_w_leads_to, p_w_near, p_w_prop,
-            p_s_telos, p_s_ref, p_s_central, p_resolution, v_ev)
-    RETURNING id INTO v_lens;
+        (id, cogmap_id, name, selection_kind,
+         w_express, w_contains, w_leads_to, w_near, w_prop,
+         s_telos, s_ref, s_central, resolution, asserted_by_event_id, created)
+    VALUES (v_lens,
+            (p_payload->>'cogmap_id')::uuid,             -- NULL for a global lens
+            p_payload->>'name', p_payload->>'selection_kind',
+            (p_payload#>>'{weights,express}')::double precision,
+            (p_payload#>>'{weights,contains}')::double precision,
+            (p_payload#>>'{weights,leads_to}')::double precision,
+            (p_payload#>>'{weights,near}')::double precision,
+            (p_payload#>>'{weights,prop}')::double precision,
+            (p_payload#>>'{salience,telos}')::double precision,
+            (p_payload#>>'{salience,ref}')::double precision,
+            (p_payload#>>'{salience,central}')::double precision,
+            (p_payload->>'resolution')::double precision,
+            p_event, v_occurred);
     RETURN v_lens;
+END;
+$$;
+
+-- Create a lens (global when payload.cogmap_id is absent/null — a system event with no producing
+-- anchor, both NULL satisfying the both-null-or-both-set CHECK). Returns the lens id.
+CREATE FUNCTION lens_create(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_anchor_tbl text;
+BEGIN
+    v_anchor_tbl := CASE WHEN p_payload->>'cogmap_id' IS NULL THEN NULL ELSE 'kb_cogmaps' END;
+    v_ev := _event_append('lens_created', p_emitter, v_anchor_tbl, (p_payload->>'cogmap_id')::uuid, p_payload);
+    RETURN _project_lens_created(v_ev, p_payload);
+END;
+$$;
+
+-- ── region_materialized ──────────────────────────────────────────────────────
+-- Region ROWS are second-order derived compute (clustering output) and stay Rust-side; the
+-- projection half records only the act's bookkeeping: the materialization watermark on the cogmap.
+-- Replay proof for regions = replay substrate → re-run materialize → fingerprint matches the payload.
+CREATE FUNCTION _project_region_materialized(p_event uuid, p_payload jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    UPDATE kb_cogmaps SET shape_materialized_event_id = p_event
+     WHERE id = (p_payload->>'cogmap_id')::uuid;
+END;
+$$;
+
+CREATE FUNCTION region_materialize(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid;
+BEGIN
+    v_ev := _event_append('region_materialized', p_emitter,
+                          'kb_cogmaps', (p_payload->>'cogmap_id')::uuid, p_payload);
+    PERFORM _project_region_materialized(v_ev, p_payload);
+    RETURN v_ev;
 END;
 $$;
 

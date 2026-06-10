@@ -34,6 +34,11 @@ async fn passes_full_s6_runbook() {
     runner::run_scenario(&pool, &load_yaml())
         .await
         .expect("declarative S6a-h asserts pass");
+
+    // proof obligation 1: every fired event's payload deserializes into its typed struct
+    temper_next::payloads::verify_ledger_roundtrip(&pool)
+        .await
+        .expect("ledger payload roundtrip");
 }
 
 // The `v AS (...)` body of 04b_region_suite.sql, inlined as one query (S6a/c/d/e/g — the BASELINE
@@ -138,6 +143,11 @@ async fn yaml_and_sql_seed_paths_produce_identical_region_membership() {
         .await
         .unwrap();
     let sig_sql = telos_default_partition(&pool, sql_cogmap).await;
+
+    // proof obligation 1 over the HAND-SQL seed path: 03_seed's payloads conform too
+    temper_next::payloads::verify_ledger_roundtrip(&pool)
+        .await
+        .expect("hand-SQL seed payload roundtrip");
 
     // YAML path: clean schema, boot-seed, load the YAML, materialize at the same baseline.
     common::reset_artifact();
