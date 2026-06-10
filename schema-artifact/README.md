@@ -18,15 +18,22 @@ come *after* this evaluation, better-grounded for it.
 | `03_seed.sql` | One coherent worked scenario (the epd-team-a/-b intersection bridge, the directors' private edge, a `cogmap_genesis`-seeded charter + regulation, and the emergent-region falsification cast). Regions are **produced by the `temper-next` harness**, not hand-seeded. |
 | `04_scenarios.sql` | Labeled queries that make every load-bearing invariant observable |
 | `seeds/system.yaml` | System boot-seed (event-type registry + global lenses) — what any temper system needs, loaded by `temper-next::scenario::bootseed::seed_system` |
-| `scenarios/onboarding-cogmap.yaml` | The onboarding-cogmap as a **declarative scenario** (substrate + S6a–h runbook), the YAML re-expression of `03_seed.sql`'s onboarding cast; roundtrip-validated by `temper-next/tests/scenario_roundtrip.rs` |
+| `seeds/onboarding-cogmap.yaml` | The onboarding-cogmap **seed** — the template this foundational cogmap is born from (telos charter, world, resources, edges, lens refs); the YAML re-expression of `03_seed.sql`'s onboarding cast. `seed.schema.json` is its emitted JSON Schema |
+| `scenarios/onboarding-cogmap.yaml` | The onboarding-cogmap **scenario** — references the seed and adds the S6a–h `steps` runbook; roundtrip-validated by `temper-next/tests/scenario_roundtrip.rs`. `scenario.schema.json` is its emitted JSON Schema |
 
-### Declarative scenarios (temper-next)
+### Declarative seeds + scenarios (temper-next)
 
-`scenarios/*.yaml` are the seed/scenario DSL consumed by `temper-next` (`src/scenario/`): a thin Rust
-loader calls the `02_functions.sql` mutation functions with YAML inputs, and a runner drives the ordered
-`steps` runbook (materialize / emit-event / assert) **in-process** — the same S6a–h falsification that
-`run_eval.sh` runs via SQL + bash, now as one `cargo nextest` test. `scenario.schema.json` is the JSON
-Schema emitted from the loader structs. See `docs/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md`.
+Two document kinds, consumed by `temper-next` (`src/scenario/`). A **seed** (`seeds/*.yaml`) is the
+substrate template a foundational cogmap is born from — cogmap (telos charter), world, resources,
+edges, lens refs; a thin Rust loader (`load_seed`) calls the `02_functions.sql` mutation functions
+with its inputs. A **scenario** (`scenarios/*.yaml`) references a seed by path (or embeds one inline)
+and adds the ordered `steps` runbook (materialize / emit-event / assert), driven by the runner
+**in-process** — the same S6a–h falsification that `run_eval.sh` runs via SQL + bash, now as one
+`cargo nextest` test. Loading a seed standalone and loading it through a scenario are the same code
+path, pinned by `tests/seed_load_path_equivalence.rs`; the charter prose roundtrips byte-exactly
+through role-filtered reads, pinned by `tests/charter_yaml_roundtrip.rs`. Both schemas are emitted
+from the loader structs and snapshot-tested.
+See `docs/superpowers/specs/2026-06-07-scenario-yaml-seed-dsl-design.md`.
 
 ## Load & evaluate
 

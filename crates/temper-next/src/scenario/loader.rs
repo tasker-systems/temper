@@ -1,8 +1,13 @@
-//! Thin scenario loader: instantiates a scenario's substrate by firing the reusable seeding mutations
+//! Thin seed loader: instantiates a seed's substrate by firing the reusable seeding mutations
 //! through the single `events::fire` surface (`cogmap_genesis`/`resource_create`/`facet_set`/
 //! `relationship_assert`). The Rust side never inserts substrate tables directly — it threads YAML inputs
 //! into `SeedAction`s and records the `key → Uuid` map (including the implicit `telos` key) the runner
-//! needs. The whole load runs in one transaction so a scenario is instantiated atomically.
+//! needs. The whole load runs in one transaction so a seed is instantiated atomically.
+//!
+//! The loader consumes a `Seed` — the template document a foundational cogmap is born from. A
+//! scenario reaches here through `runner::run_scenario`, which resolves its seed reference first;
+//! loading a seed standalone and loading it through a scenario are the same code path by
+//! construction (the load-path equivalence proof pins this).
 
 use crate::events::{fire, SeedAction};
 use crate::ids::{EntityId, ProfileId};
@@ -18,7 +23,7 @@ pub struct Loaded {
     pub keys: HashMap<String, Uuid>,
 }
 
-pub async fn load_scenario(pool: &PgPool, s: &Scenario) -> Result<Loaded> {
+pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
     let mut tx = pool.begin().await?;
 
     // world identity rows (tiny — direct, not event-projected for M1)

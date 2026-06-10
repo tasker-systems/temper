@@ -1,13 +1,18 @@
-//! Declarative YAML model for scenarios + the system boot-seed.
+//! Declarative YAML model for seeds, scenarios, and the system boot-seed.
 //!
-//! A `Scenario` is a substrate template (`cogmap`/`world`/`resources`/`edges`) plus an ordered
-//! `steps` runbook (materialize / emit-event / assert) — the *cogmap specification* fused with the
-//! *assertion specification*. Lenses are referenced by name (`uses_lenses`); their weights live in the
-//! system `BootSeed`. The same structs derive `schemars::JsonSchema` (gated) so the wire schema and the
-//! loader read one source of truth.
+//! A `Seed` is the substrate template a foundational cogmap is born from — the *cogmap
+//! specification*: cogmap (telos charter), `world`, `resources`, `edges`, and the names of the
+//! (system-seeded) lenses it uses. Template-only: no runbook. A `Scenario` is the *assertion
+//! specification*: it references a seed by path (or embeds one inline) and adds the ordered `steps`
+//! runbook (materialize / emit-event / assert). Lenses are referenced by name; their weights live in
+//! the system `BootSeed`. The same structs derive `schemars::JsonSchema` (gated) so the wire schemas
+//! and the loader read one source of truth.
 
 use crate::affinity::EdgeKind;
+use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::borrow::Cow;
+use std::path::Path;
 
 fn one() -> f64 {
     1.0
@@ -17,18 +22,57 @@ fn home_cogmap() -> String {
     "cogmap".into()
 }
 
-#[derive(Debug, Deserialize)]
+/// The seed document (`schema-artifact/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap
+/// is born from. `name` is the cogmap name `cogmap_genesis` registers.
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
-pub struct Scenario {
+pub struct Seed {
     pub name: String,
     pub cogmap: CogmapDef,
     pub world: WorldDef,
     pub resources: Vec<ResourceDef>,
     #[serde(default)]
     pub edges: Vec<EdgeDef>,
-    /// Names of (system-seeded) lenses this scenario uses; validated up front.
+    /// Names of (system-seeded) lenses this seed's cogmap uses; validated up front.
     pub uses_lenses: Vec<String>,
+}
+
+/// The scenario document (`schema-artifact/scenarios/*.yaml`): a seed reference (or embed) plus the
+/// ordered `steps` runbook.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct Scenario {
+    pub name: String,
+    pub seed: SeedRef,
     pub steps: Vec<Step>,
+}
+
+/// `seed:` is either a path to a seed document (resolved relative to the scenario file's directory)
+/// or the seed embedded inline. Untagged: a YAML string is a reference, a map is an embed.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub enum SeedRef {
+    Path(String),
+    Inline(Box<Seed>),
+}
+
+impl Scenario {
+    /// Resolve the seed document: parse the referenced file (against `base_dir`, the scenario
+    /// file's directory) or borrow the embedded one.
+    pub fn resolve_seed(&self, base_dir: &Path) -> Result<Cow<'_, Seed>> {
+        match &self.seed {
+            SeedRef::Inline(seed) => Ok(Cow::Borrowed(seed.as_ref())),
+            SeedRef::Path(rel) => {
+                let path = base_dir.join(rel);
+                let text = std::fs::read_to_string(&path)
+                    .with_context(|| format!("reading seed {}", path.display()))?;
+                let seed = serde_yaml::from_str(&text)
+                    .with_context(|| format!("parsing seed {}", path.display()))?;
+                Ok(Cow::Owned(seed))
+            }
+        }
+    }
 }
 
 /// The system boot-seed (`schema-artifact/seeds/system.yaml`): what any temper system needs, distinct
@@ -40,7 +84,7 @@ pub struct BootSeed {
     pub lenses: Vec<LensDef>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct CogmapDef {
     pub telos: TelosDef,
@@ -55,7 +99,7 @@ pub struct CogmapDef {
 /// blocks situate the telos. Each block's kind is stamped as a `block_role` property
 /// (`statement`/`question`/`framing`) by the persist path — see `block_specs`. The loader
 /// turns this into an ordered prose list for `content::prepare_blocks`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct TelosDef {
     pub title: String,
@@ -92,7 +136,7 @@ impl TelosDef {
 
 /// A guiding question with its situating context. `context` defaults empty so a bare
 /// `{ question: ... }` is valid; a rich question-with-context naturally chunks into >1 window.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct QuestionDef {
     pub question: String,
@@ -100,14 +144,14 @@ pub struct QuestionDef {
     pub context: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct WorldDef {
     pub profiles: Vec<ProfileDef>,
     pub entities: Vec<EntityDef>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ProfileDef {
     pub handle: String,
@@ -116,7 +160,7 @@ pub struct ProfileDef {
     pub system_access: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct EntityDef {
     pub name: String,
@@ -124,7 +168,7 @@ pub struct EntityDef {
     pub profile: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ResourceDef {
     /// local stable id — edges/asserts reference this
@@ -144,7 +188,7 @@ pub struct ResourceDef {
 /// One `property_key='facet'` row per resource. `values` is the coherent multi-key JSONB object
 /// (scalar or array values); `weight` applies to every `(path,value)` pair it expands to. A bare map
 /// is sugar: `facets: { phase: x }` == `{ values: { phase: x }, weight: 1.0 }`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub enum FacetDef {
@@ -171,7 +215,7 @@ impl FacetDef {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct EdgeDef {
     pub from: String,
@@ -285,9 +329,7 @@ impl CmpOp {
 mod tests {
     use super::*;
 
-    #[test]
-    fn deserializes_scenario_and_bootseed() {
-        let scenario_yaml = r#"
+    const SEED_YAML: &str = r#"
 name: t
 cogmap: { telos: { title: T, statement: S, questions: [{ question: q1 }] }, owner: alice, emitter: "agent#1" }
 world: { profiles: [{ handle: alice, display_name: Alice, system_access: approved }], entities: [{ name: "agent#1", profile: alice }] }
@@ -296,6 +338,9 @@ resources:
   - { key: b, origin_uri: "temper://c/b", home: cogmap, body: "world" }
 edges: [{ from: a, to: b, kind: leads_to, weight: 1.0 }]
 uses_lenses: [L]
+"#;
+
+    const STEPS_YAML: &str = r#"
 steps:
   - { do: materialize, lens: L }
   - do: assert
@@ -306,10 +351,12 @@ steps:
     checks:
       - { check: stale, expect: true }
 "#;
-        let s: Scenario = serde_yaml::from_str(scenario_yaml).unwrap();
+
+    #[test]
+    fn deserializes_seed_and_bootseed() {
+        let s: Seed = serde_yaml::from_str(SEED_YAML).unwrap();
         assert_eq!(s.uses_lenses, vec!["L".to_string()]);
         assert_eq!(s.resources.len(), 2);
-        assert_eq!(s.steps.len(), 4);
         assert!(s.resources[1].facets.is_none());
         assert_eq!(s.resources[0].facets.as_ref().unwrap().weight(), 1.0);
 
@@ -319,6 +366,50 @@ steps:
         .unwrap();
         assert_eq!(boot.lenses.len(), 1);
         assert_eq!(boot.event_types.len(), 2);
+    }
+
+    #[test]
+    fn scenario_embeds_a_seed_inline() {
+        // `seed:` as a map ⇒ the seed embedded inline; resolve_seed borrows it.
+        let yaml = format!(
+            "name: inline-test\nseed:\n{}\n{STEPS_YAML}",
+            SEED_YAML
+                .trim()
+                .lines()
+                .map(|l| format!("  {l}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        let s: Scenario = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(s.steps.len(), 4);
+        let seed = s.resolve_seed(Path::new("/nonexistent")).unwrap();
+        assert_eq!(seed.name, "t");
+        assert_eq!(seed.resources.len(), 2);
+    }
+
+    #[test]
+    fn scenario_references_a_seed_file() {
+        // `seed:` as a string ⇒ a path resolved against the scenario file's directory.
+        let dir = std::env::temp_dir().join(format!("seed-ref-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("t.seed.yaml"), SEED_YAML).unwrap();
+
+        let yaml = format!("name: ref-test\nseed: t.seed.yaml\n{STEPS_YAML}");
+        let s: Scenario = serde_yaml::from_str(&yaml).unwrap();
+        assert!(matches!(s.seed, SeedRef::Path(_)));
+        let seed = s.resolve_seed(&dir).unwrap();
+        assert_eq!(seed.name, "t");
+        assert_eq!(seed.edges.len(), 1);
+
+        let missing = Scenario {
+            name: "x".into(),
+            seed: SeedRef::Path("nope.yaml".into()),
+            steps: vec![],
+        };
+        let err = missing.resolve_seed(&dir).unwrap_err().to_string();
+        assert!(err.contains("nope.yaml"), "error names the path: {err}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

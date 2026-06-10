@@ -33,3 +33,28 @@ fn load_files(files: &[&str]) {
         assert!(status.success(), "psql -f {f}.sql failed during reset");
     }
 }
+
+/// Canonical, UUID-INDEPENDENT region partition signature for a cogmap at lens `telos-default`:
+/// each region's member origin_uris sorted within the region, regions sorted among themselves, then
+/// hashed. Independent of region/member UUIDs and group order, so it is comparable across seeding
+/// paths and across separate instantiations of the same seed (identity-as-input regenerates UUIDs
+/// per load, so `membership_fingerprint` is only comparable within one instantiation).
+const PARTITION_SQL: &str = r#"
+SELECT md5(string_agg(grp, '|' ORDER BY grp)) FROM (
+  SELECT string_agg(res.origin_uri, ',' ORDER BY res.origin_uri) AS grp
+  FROM kb_cogmap_region_members m
+  JOIN kb_cogmap_regions r ON r.id = m.region_id AND NOT r.is_folded
+  JOIN kb_cogmap_lenses  l ON l.id = r.lens_id AND l.name = 'telos-default'
+  JOIN kb_resources    res ON res.id = m.member_id
+  WHERE r.cogmap_id = $1
+  GROUP BY m.region_id
+) g
+"#;
+
+pub async fn telos_default_partition(pool: &sqlx::PgPool, cogmap: uuid::Uuid) -> String {
+    sqlx::query_scalar(PARTITION_SQL)
+        .bind(cogmap)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}

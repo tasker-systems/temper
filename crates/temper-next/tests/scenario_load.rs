@@ -1,9 +1,9 @@
 #![cfg(feature = "artifact-tests")]
-//! Loader integration test: boot-seed + load a minimal scenario, then confirm `substrate::load` reads
+//! Loader integration test: boot-seed + load a minimal seed, then confirm `substrate::load` reads
 //! the homed nodes + edges back. Resets the artifact first (owns the namespace; serialized).
 mod common;
 
-use temper_next::scenario::{loader, model::Scenario};
+use temper_next::scenario::{loader, model::Seed};
 use temper_next::substrate;
 
 const MINIMAL: &str = r#"
@@ -22,19 +22,18 @@ edges:
   - { from: a, to: b, kind: leads_to, label: then, weight: 1.0 }
   - { from: telos, to: a, kind: express, label: operationalized_by }
 uses_lenses: [telos-default]
-steps: []
 "#;
 
 #[tokio::test]
-async fn loads_minimal_scenario_into_readable_substrate() {
+async fn loads_minimal_seed_into_readable_substrate() {
     common::reset_artifact();
     let pool = substrate::connect().await.unwrap();
     temper_next::scenario::bootseed::seed_system(&pool)
         .await
         .unwrap();
 
-    let s: Scenario = serde_yaml::from_str(MINIMAL).unwrap();
-    let loaded = loader::load_scenario(&pool, &s).await.unwrap();
+    let s: Seed = serde_yaml::from_str(MINIMAL).unwrap();
+    let loaded = loader::load_seed(&pool, &s).await.unwrap();
 
     // the implicit telos key resolves, and edges can reference it
     assert!(loaded.keys.contains_key("telos"));
