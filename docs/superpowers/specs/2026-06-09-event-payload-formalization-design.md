@@ -226,6 +226,34 @@ schema_version  INT NOT NULL DEFAULT 1
 - After SQL changes: `cargo make prepare-next` (per-crate `.sqlx`, `temper_next` search_path); never workspace-wide prepare.
 - The `region_materialized` raw INSERT in `crates/temper-next/src/write.rs` moves onto `_event_append` + `_project_region_materialized` like the rest (it already shares the `fire()` surface).
 
+## 10. Amendments discovered at plan/build time (2026-06-09/10)
+
+1. **Masked-surrogate replay diff** (§7.2 refined): ids are payload-carried for every *referenced*
+   row; `kb_resource_homes` / `kb_properties` / `kb_block_revisions` surrogate ids carry no inbound
+   references and are masked in the replay diff (natural-key ordered). No information escapes
+   through them; manifests stay lean.
+2. **Projected timestamps come from the event** (§5 extended): `_project_*` sets `created`/`updated`
+   from the event's `occurred_at` — replay-stable by construction, and semantically truer (a
+   projection's timestamp IS the event time).
+3. **`BlockManifest` omits `block_body_hash`** (§3 refined): a derived merkle, recomputed by the
+   projector — the §3 exclusion rule applied to the spec's own sketch.
+4. **`_project_region_materialized` projects only the watermark** (§5 narrowed): region rows are
+   second-order derived compute and stay Rust-side; their replay proof is re-materialization
+   matching the payload's recorded membership fingerprint. Build-time refinement: the re-proof
+   applies only to lenses whose recorded watermark is still current — a lens with
+   formation-affecting events after its watermark is *legitimately stale* (the drift-detection
+   concept surfacing in the proof) and is skipped, with at least one fresh lens required.
+5. **The replay proof is harness-level per scenario** (§7.2 refined), not an in-YAML expectation —
+   it resets the namespace, which cannot happen mid-scenario.
+6. **Content sidecar** (§5 extended): content-bearing functions take `(p_payload, p_content,
+   p_emitter)`; the sidecar is `{chunk_id: {content, embedding}}`, persisted to the CAS, never on
+   the ledger; the projector trusts only the payload's manifests and errors on a missing sidecar
+   entry.
+7. **The roundtrip verifier caught real non-conformance on first contact** (§7.1 vindicated): the
+   legacy `03_seed.sql` carried three raw events with empty payloads — one was retyped to its honest
+   semantics (`relationship_reweighted` for an edge-touch), one became two honest `lens_created`
+   events, one gained its real `RelationshipAsserted` payload.
+
 ## Connections
 
 - Goal: `substrate-kernel-to-cognitive-map` (temper context) — workstream 3.

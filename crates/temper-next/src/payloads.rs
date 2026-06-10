@@ -530,7 +530,7 @@ mod tests {
                 embedding: vec![1.0, 2.0],
             }],
         };
-        let side = content_sidecar(&[b.clone()]);
+        let side = content_sidecar(std::slice::from_ref(&b));
         let entry = side.get(&b.chunks[0].chunk_id.to_string()).unwrap();
         assert_eq!(entry.content, "the prose");
         assert!(matches!(entry.embedding, Some(EmbeddingRepr::Vector(_))));
