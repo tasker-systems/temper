@@ -175,11 +175,12 @@ These rules apply to all code in this repository. Subagents and implementation p
 
 ## SQL Query Checking
 
-Production SQL queries use `sqlx::query!()` / `sqlx::query_as!()` / `sqlx::query_scalar!()` macros for compile-time verification against the actual schema. Exceptions: the `unified_search` query in `search_service.rs` uses runtime `query_as` due to pgvector `::vector` type cast incompatibility, and test fixtures use runtime `sqlx::query()` because `cargo sqlx prepare` cannot cache queries from test targets.
+Production SQL queries use `sqlx::query!()` / `sqlx::query_as!()` / `sqlx::query_scalar!()` macros for compile-time verification against the actual schema. Exception: the `unified_search` query in `search_service.rs` uses runtime `query_as` due to pgvector `::vector` type cast incompatibility. Trivial test-fixture lookups may use runtime `sqlx::query()`; substantive test queries keep macros, cached per-crate (below).
 
-- **Local dev:** Set `DATABASE_URL` — macros check against the live database
-- **CI builds:** `SQLX_OFFLINE=true` with committed `.sqlx/` cache (no database needed for compilation)
-- **After changing any SQL:** Regenerate cache with `cargo sqlx prepare --workspace -- --all-features`
+- **Local dev:** Set `DATABASE_URL` — macros check against the live database. Note `cargo make` tasks force `SQLX_OFFLINE=true`, so `cargo make check` is the honest local probe of the committed caches.
+- **CI builds:** `SQLX_OFFLINE=true` with committed `.sqlx/` cache for test jobs; the `code-quality` clippy job compiles against a **live** DB, so it will NOT catch a missing cache entry — only offline `cargo make check` does.
+- **After changing any SQL:** Regenerate the workspace cache with `cargo sqlx prepare --workspace -- --all-features`
+- **Test-target macro queries** (e.g. temper-api's `relationship_*_test`, the e2e suite) are NOT captured by the workspace ritual — plain `cargo sqlx prepare` skips test targets. They live in per-crate caches regenerated with `--all-targets`: `cargo make prepare-api` (`crates/temper-api/.sqlx`) and `cargo make prepare-e2e` (`tests/e2e/.sqlx`), alongside `cargo make prepare-next` for temper-next. Run the matching task after changing test SQL or schema it touches.
 - **Tests always run against a real database** (Docker Postgres locally, CI database in GitHub Actions)
 
 ## Environment
