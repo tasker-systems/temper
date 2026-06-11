@@ -676,6 +676,38 @@ BEGIN
 END;
 $$;
 
+-- ── relationship_folded ──────────────────────────────────────────────────────
+-- Projection half: flips an edge's visibility (is_folded), reads ONLY the payload
+-- (RelationshipFolded, payloads.rs). is_folded is the read gate every shape read honors.
+CREATE FUNCTION _project_relationship_folded(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+BEGIN
+    UPDATE kb_edges SET is_folded = true, last_event_id = p_event WHERE id = v_edge;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'relationship_fold: edge % not found', v_edge;
+    END IF;
+    RETURN v_edge;
+END;
+$$;
+
+-- Fold a declared edge (retire the relationship). The producing anchor is an ENVELOPE concern read
+-- from the edge's own home (never payload data) — the same discipline as facet_set.
+CREATE FUNCTION relationship_fold(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_edge uuid := (p_payload->>'edge_id')::uuid;
+        v_home_tbl text; v_home uuid;
+BEGIN
+    SELECT home_anchor_table, home_anchor_id INTO v_home_tbl, v_home
+        FROM kb_edges WHERE id = v_edge;
+    IF v_home IS NULL THEN
+        RAISE EXCEPTION 'relationship_fold: edge % not found', v_edge;
+    END IF;
+    v_ev := _event_append('relationship_folded', p_emitter, v_home_tbl, v_home, p_payload);
+    RETURN _project_relationship_folded(v_ev, p_payload);
+END;
+$$;
+
 -- ── property_asserted ────────────────────────────────────────────────────────
 CREATE FUNCTION _project_property_asserted(p_event uuid, p_payload jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $$

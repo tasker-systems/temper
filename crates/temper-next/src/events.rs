@@ -40,6 +40,7 @@ pub enum EventKind {
     PropertyAsserted,
     LensCreated,
     RegionMaterialized,
+    RelationshipFolded,
 }
 
 impl EventKind {
@@ -52,6 +53,7 @@ impl EventKind {
             EventKind::PropertyAsserted => "property_asserted",
             EventKind::LensCreated => "lens_created",
             EventKind::RegionMaterialized => "region_materialized",
+            EventKind::RelationshipFolded => "relationship_folded",
         }
     }
 }
@@ -107,6 +109,11 @@ pub enum SeedAction<'a> {
         region_ids: &'a [RegionId],
         emitter: EntityId,
     },
+    RelationshipFold {
+        edge: EdgeId,
+        reason: Option<&'a str>,
+        emitter: EntityId,
+    },
 }
 
 impl SeedAction<'_> {
@@ -119,6 +126,7 @@ impl SeedAction<'_> {
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
+            SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
         }
     }
 }
@@ -359,6 +367,26 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             .context("region_materialize returned null")?;
             Ok(Fired::Materialize(EventId::from(id)))
         }
+
+        SeedAction::RelationshipFold {
+            edge,
+            reason,
+            emitter,
+        } => {
+            let payload = payloads::RelationshipFolded {
+                edge_id: edge,
+                reason: reason.map(str::to_owned),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT relationship_fold($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("relationship_fold returned null")?;
+            Ok(Fired::Relationship(EdgeId::from(id)))
+        }
     }
 }
 
@@ -396,6 +424,16 @@ mod tests {
             .event_type()
             .as_canonical_name(),
             "region_materialized"
+        );
+        assert_eq!(
+            SeedAction::RelationshipFold {
+                edge: crate::ids::EdgeId::from(Uuid::nil()),
+                reason: None,
+                emitter,
+            }
+            .event_type()
+            .as_canonical_name(),
+            "relationship_folded"
         );
     }
 }
