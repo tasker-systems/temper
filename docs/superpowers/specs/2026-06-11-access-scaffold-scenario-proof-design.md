@@ -215,10 +215,13 @@ resolve:
    plan-level).
 
 These are "tiny identity rows, direct, not event-projected" — the convention `loader.rs` already
-documents for world rows. The access proofs touch **no embeddings** and run **no `materialize`**:
-genesis writes NULL-embedding chunks exactly as `03_seed` does, and the gate functions read
-homes/grants/teams, never chunk vectors. The loader returns a `Loaded` map of `key → Uuid` (profiles
-by handle, resources by key, cogmaps by name, teams by slug, edges by label) for the check-evaluator.
+documents for world rows. The **access checks** read no embeddings and run **no `materialize`** — the
+gate functions read homes/grants/teams, never chunk vectors. The one place embeddings enter is the
+onboarding charter: the Rust `cogmap_genesis` path embeds its telos blocks inline via
+`content::prepare_blocks` (bge-768), exactly like any resource body. That is fine — the test sits in
+the `temper-next-write` group, which already provisions ONNX (§4); we do not hand-roll NULL-embedding
+blocks. The loader returns a `Loaded`-style map of `key → Uuid` (profiles by handle, resources by key,
+cogmaps by name, teams by slug, edges by label) for the check-evaluator.
 
 ## 4. Runner and wiring
 
@@ -230,7 +233,7 @@ by handle, resources by key, cogmaps by name, teams by slug, edges by label) for
   `schema-artifact/scenarios/onboarding-cogmap.yaml` seed, as `03_seed` does.)
 - **Test:** `crates/temper-next/tests/access_scenario.rs`, gated `#![cfg(feature = "artifact-tests")]`,
   assigned to the **`temper-next-write`** nextest group (it owns and resets the `temper_next`
-  namespace to a clean `01`+`02` then loads). Runs locally via
+  namespace to a clean `01`+`02` then loads, and already provisions ONNX). Runs locally via
   `cargo nextest run -p temper-next --features artifact-tests`; no CI job enables it (matches the
   existing write-path tests).
 - **JSON-Schema snapshot:** derive `schemars::JsonSchema` (gated on `scenario-schema`) on
