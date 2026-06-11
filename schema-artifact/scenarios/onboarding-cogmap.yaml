@@ -27,12 +27,9 @@ steps:
       - { check: co_region, lens: telos-default-propheavy, members: [setup, firstbuild], expect: false }
   - { do: materialize, lens: telos-default }
   - { do: assert, checks: [{ check: stale, expect: false }] }                      # S6h baseline
-  - do: emit_event                                                                 # S6h mutation
-    type: relationship_asserted
-    edges:
-      - { from: solo, to: pair,       kind: express, label: related }
-      - { from: solo, to: smallest,   kind: express, label: related }
-      - { from: solo, to: confidence, kind: express, label: related }
+  - { do: assert_edge, from: solo, to: pair,       kind: express, label: related }   # S6h mutation
+  - { do: assert_edge, from: solo, to: smallest,   kind: express, label: related }
+  - { do: assert_edge, from: solo, to: confidence, kind: express, label: related }
   - { do: assert, checks: [{ check: stale, expect: true }] }                       # S6h fresh→stale
   - { do: materialize, lens: telos-default }
   - { do: assert, checks: [{ check: co_region, lens: telos-default, members: [solo, pair], expect: true }] }  # S6h solo joins α

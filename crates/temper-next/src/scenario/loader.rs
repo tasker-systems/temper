@@ -20,6 +20,7 @@ use uuid::Uuid;
 pub struct Loaded {
     pub cogmap: Uuid,
     pub emitter: Uuid,
+    pub owner: Uuid,
     pub keys: HashMap<String, Uuid>,
 }
 
@@ -158,6 +159,7 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
     Ok(Loaded {
         cogmap: cogmap.uuid(),
         emitter: emitter.uuid(),
+        owner: owner.uuid(),
         keys,
     })
 }
