@@ -34,7 +34,7 @@ The approved spec (`docs/superpowers/specs/2026-06-11-scenario-steps-over-corpus
 | `crates/temper-next/tests/corpus_growth.rs` | D3 acceptance | Create (Tasks 9–10) |
 | `.config/nextest.toml` | serialized write-group membership | Add new test binaries (Tasks 5, 8, 9) |
 
-**Verification preamble (read once):** All `cargo make` tasks force `SQLX_OFFLINE=true`. After ANY change to `schema-artifact/*.sql` or temper-next SQL, regenerate the per-crate cache with `cargo make prepare-next` before `cargo make check`. The artifact tests need ONNX + a live Docker Postgres on port 5437 (`cargo make docker-up`); they run only under `--features artifact-tests` and are serialized by the `temper-next-write` nextest group.
+**Verification preamble (read once):** All `cargo make` tasks force `SQLX_OFFLINE=true`. After ANY change to `schema-artifact/*.sql` or temper-next SQL, regenerate the per-crate cache with `cargo make prepare-next` before `cargo make check`. The artifact tests need ONNX + a live Docker Postgres on port 5437 (`cargo make docker-up`); they run only under `--features artifact-tests` and are serialized by the `temper-next-write` nextest group. **Focused temper-next test runs must be prefixed with `SQLX_OFFLINE=true`** — temper-next's `!`-macros target the `temper_next` namespace, so a bare `cargo nextest run -p temper-next ...` validates them against the dev DB's `public` search_path and ~52 unrelated macros fail to infer (use `SQLX_OFFLINE=true cargo nextest run -p temper-next ...`, matching CI).
 
 ---
 
