@@ -6,6 +6,7 @@
 //! substrate (event-type registry + global lenses) separately from any seed; `loader` instantiates a
 //! seed's substrate by calling the reusable mutation SQL functions; `runner` resolves a scenario's
 //! seed, loads it through the same path, and drives the runbook in-process.
+pub mod access;
 pub mod bootseed;
 pub mod loader;
 pub mod model;
