@@ -40,6 +40,19 @@ The approved spec (`docs/superpowers/specs/2026-06-11-scenario-steps-over-corpus
 
 # Deliverable 1 — Step vocabulary + the `relationship_fold` mutation
 
+> **D1 execution order (compile-coherent units).** The tasks below are written topically, but they
+> must be *implemented* in compile-coherent bundles so each commit leaves a green tree:
+> 1. **Tasks 2 + 3 together** (events.rs additions + the `relationship_fold` SQL + `prepare-next`).
+>    Purely additive — the tree stays green. Verify with the events unit test + `cargo make check`.
+> 2. **Tasks 1 + 4 together** (the `Step` restructure + the runner/loader update + onboarding YAML).
+>    Removing `EmitEvent` breaks `runner.rs` until Task 4 lands, so they are one unit; this is why
+>    Task 1's "run the model tests" step only passes once Task 4 is in the same commit/bundle. Verify
+>    with the model unit tests + `cargo make check`.
+> 3. **Task 5** (D1 acceptance, needs a live DB + ONNX).
+> 4. **Task 6** (schema snapshot regen).
+>
+> Dispatch one implementer per bundle, in this order.
+
 ## Task 1: Restructure the `Step` enum
 
 **Files:**
