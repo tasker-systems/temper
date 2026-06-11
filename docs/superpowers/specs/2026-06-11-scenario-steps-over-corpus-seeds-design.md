@@ -121,12 +121,18 @@ mirroring the `SeedAction` surface 1:1:
 ### D2 — Smoke runbooks, all four charters
 
 One scenario per charter (`schema-artifact/scenarios/{charter}-smoke.yaml`), referencing the existing
-seed. Each: `materialize` under the charter's default lens, assert a sensible region shape
-(`region_count >= N`), assert `reproducible` (second materialize, identical fingerprint), and where a
-second lens exists assert `fingerprint_differs` (lens sensitivity). These prove the model holds across
-the *diverse* corpus — the confidence-gate purpose — cheaply, using the unchanged
-`materialize`/`assert` vocabulary. Because the charters are charter-only, smoke runbooks operate over
-the telos blocks alone; `region_count` thresholds are calibrated against an initial run, not guessed.
+seed. Region *members* are the resources homed in the cogmap (`substrate::load` selects
+`kb_resource_homes` for the cogmap, the telos resource included). A charter-only seed therefore has a
+single node — the telos — and materializes to a degenerate one-region partition, against which
+`region_count`, `reproducible`, and `fingerprint_differs` are all vacuous. So a smoke runbook seeds a
+**small** amount of concept material (3–4 `create_resource` steps, lightly faceted/linked) — enough
+for a non-degenerate shape — then `materialize` under one system lens and assert `region_count >= 2`
+and `reproducible` (second materialize, identical fingerprint), and `materialize` under the second
+system lens (`telos-default-propheavy`) and assert `fingerprint_differs` (lens sensitivity). The
+**seed** stays charter-only by design; the **scenario** supplies the material as a runbook — exactly
+what the seed/scenario split is for. Thresholds are calibrated against an initial run, not guessed.
+This dogfoods the D1 `create_resource` vocabulary across all four charters and proves the model holds
+across the *diverse* corpus — the confidence-gate purpose.
 
 ### D3 — Growth/drift runbooks: storyteller + learning-maths
 
