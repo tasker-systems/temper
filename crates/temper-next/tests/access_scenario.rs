@@ -55,3 +55,14 @@ async fn loads_topology_row_counts() {
     .unwrap();
     assert_eq!(nomad_teams, 0);
 }
+
+#[tokio::test]
+async fn proves_all_access_invariants() {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+
+    access::run_access_scenario(&pool, &load_access_yaml())
+        .await
+        .expect("all S1-S5 access checks pass");
+}
