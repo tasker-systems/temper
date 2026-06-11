@@ -14,6 +14,10 @@ const SEED_SNAPSHOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../schema-artifact/seeds/seed.schema.json"
 );
+const ACCESS_SCENARIO_SNAPSHOT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../schema-artifact/access-scenarios/access-scenario.schema.json"
+);
 
 fn assert_snapshot(rendered: &str, snapshot: &str, kind: &str) {
     if std::env::var("UPDATE_SCHEMA").is_ok() {
@@ -38,4 +42,11 @@ fn seed_json_schema_matches_snapshot() {
     let schema = schemars::schema_for!(Seed);
     let rendered = serde_json::to_string_pretty(&schema).unwrap() + "\n";
     assert_snapshot(&rendered, SEED_SNAPSHOT, "seed");
+}
+
+#[test]
+fn access_scenario_json_schema_matches_snapshot() {
+    let schema = schemars::schema_for!(temper_next::scenario::access::model::AccessScenario);
+    let rendered = serde_json::to_string_pretty(&schema).unwrap() + "\n";
+    assert_snapshot(&rendered, ACCESS_SCENARIO_SNAPSHOT, "access-scenario");
 }
