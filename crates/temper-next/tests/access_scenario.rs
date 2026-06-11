@@ -66,3 +66,46 @@ async fn proves_all_access_invariants() {
         .await
         .expect("all S1-S5 access checks pass");
 }
+
+#[tokio::test]
+async fn s8_capability_check_rejects_write_without_read() {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+
+    // Minimal anchors. 'none' avoids the root-join trigger (no temper-system team in a bare reset).
+    let pid: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name, system_access) \
+         VALUES ('s8user','S8','none') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let rid: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_resources (title, origin_uri) VALUES ('s8','temper://s8') RETURNING id",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+
+    // can_write=true with can_read=false must be rejected by the coherence CHECK.
+    let res = sqlx::query(
+        "INSERT INTO kb_resource_access \
+         (resource_id, anchor_table, anchor_id, can_read, can_write, granted_by_profile_id) \
+         VALUES ($1,'kb_profiles',$2,false,true,$2)",
+    )
+    .bind(rid)
+    .bind(pid)
+    .execute(&pool)
+    .await;
+
+    let err = res.expect_err("write-without-read grant must be rejected");
+    let is_check_violation = matches!(
+        &err,
+        sqlx::Error::Database(e) if e.code().as_deref() == Some("23514")
+    );
+    assert!(
+        is_check_violation,
+        "expected check_violation (23514), got {err:?}"
+    );
+}
