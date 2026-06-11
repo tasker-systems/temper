@@ -240,4 +240,26 @@ checks:
             }
         ));
     }
+
+    #[test]
+    fn epd_bridge_fixture_deserializes() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../schema-artifact/access-scenarios/epd-bridge-access.yaml"
+        );
+        let s: AccessScenario =
+            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(s.name, "epd-bridge-access");
+        assert_eq!(s.world.profiles.len(), 6);
+        assert_eq!(s.world.teams.len(), 6);
+        assert_eq!(s.world.cogmaps.len(), 5);
+        assert_eq!(s.world.resources.len(), 5);
+        assert_eq!(s.world.edges.len(), 1);
+        assert_eq!(s.checks.len(), 16);
+        // exactly one genesis cogmap (the onboarding charter)
+        assert_eq!(
+            s.world.cogmaps.iter().filter(|c| c.telos.is_some()).count(),
+            1
+        );
+    }
 }
