@@ -2,6 +2,7 @@
   import type { Component } from 'svelte';
   import RegionFieldDiagram from '$lib/components/cognitive-maps/diagrams/RegionFieldDiagram.svelte';
   import LedgerSpineDiagram from '$lib/components/cognitive-maps/diagrams/LedgerSpineDiagram.svelte';
+  import LedgerProjectionSpiral from '$lib/components/cognitive-maps/diagrams/LedgerProjectionSpiral.svelte';
   import ResourceBlockERD from '$lib/components/cognitive-maps/diagrams/ResourceBlockERD.svelte';
   import LearningActsDiagram from '$lib/components/cognitive-maps/diagrams/LearningActsDiagram.svelte';
   import ShapeBoundaryDiagram from '$lib/components/cognitive-maps/diagrams/ShapeBoundaryDiagram.svelte';
@@ -108,6 +109,23 @@
 </section>
 
 <div class="set-page">
+  <section class="lead">
+    <div class="lead-head">
+      <span class="lead-label t-label">Start here · the whole argument in motion</span>
+      <p class="lead-note">
+        One image carries the value proposition; the rest of the set elaborates its
+        parts. The append-only event ledger sits at the base, and the cognitive map
+        materializes out of it in event order — scrub it, or replay. Regions forming,
+        typed edges, lineage risers, the late flip to <em>stale</em>: everything the
+        plates below show precisely is already here, derived from the events and
+        nothing else. Start with this; then walk the readings.
+      </p>
+    </div>
+    <div class="lead-canvas">
+      <LedgerProjectionSpiral id="set-lead-spiral" />
+    </div>
+  </section>
+
   <section class="band">
     <div class="band-head">
       <span class="band-label t-label">Shown from the schema</span>
@@ -170,6 +188,37 @@
     max-width: 1040px;
     margin: 0 auto;
     padding: 1rem 2.5rem 0;
+  }
+
+  .lead { margin-bottom: 3.75rem; }
+  .lead-head {
+    border-top: 1px solid var(--rule);
+    padding-top: 1.25rem;
+    margin-bottom: 1.5rem;
+  }
+  .lead-label {
+    display: block;
+    margin-bottom: 0.75rem;
+    color: var(--temper-blue);
+  }
+  .lead-note {
+    margin: 0;
+    font-family: var(--font-serif);
+    font-size: 1.05rem;
+    line-height: 1.62;
+    color: var(--chalk);
+    max-width: 44em;
+  }
+  .lead-note em {
+    font-style: italic;
+    color: var(--parchment);
+  }
+  .lead-canvas {
+    margin: 1.75rem auto 0;
+    max-width: 760px;
+    padding: 1.5rem 1.5rem 1.1rem;
+    background: var(--obsidian-3);
+    border: 1px solid var(--rule);
   }
 
   .band { margin-bottom: 3.5rem; }
