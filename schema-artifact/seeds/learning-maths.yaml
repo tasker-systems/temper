@@ -1,0 +1,46 @@
+# The learning-maths charter — corpus entry 4 (charter-bootstrapping design §4).
+# The corpus's first PERSONAL-PRACTICE map: a personal learning practice — not a bounded engineering
+# initiative (charter 1), not a foundational-context system (charters 2–3). Pete studies mathematics
+# for thinking about information topological spaces — category theory / Seven Sketches the current
+# spine, but genuinely broad — to ground the temper work. The destination broadened during
+# elaboration: "sheaves" was the original telos; temper-next having proven the working shape viable in
+# real SQL/Rust, the durable anchor became "illuminates information topological spaces." Authored
+# through the charter-bootstrapping elaboration session as the cross-model pilot (Opus 4.8, frozen
+# skill text), 2026-06-11. Charter-only at birth.
+name: learning-maths
+
+cogmap:
+  telos:
+    title: "Learning-maths study charter"
+    statement: "Hold the orientation of Pete's study of mathematics for thinking about information topological spaces — category theory and Seven Sketches as the current spine, sheaves the original destination, but genuinely open to wherever the broad space leads (differential geometry, Riemannian manifolds) so long as it still illuminates those spaces — under the discipline that the mathematics adjudicates temper's semantic model and never decorates it, and that borrowed concepts are walked back where they stop landing with specificity, as the map Pete (the learner) and Claude (the tutor) orient their study sessions by, in service of Pete's fluency: pursued not as an end in itself but grounded in applying the mathematics to the temper work."
+    questions:
+      - question: "Does this use the mathematics to test a claim about temper, or to decorate one — and where a concept is borrowed as a guiding reference, are we honest about where it stops landing with specificity?"
+        context: "The constitutive discipline: the model generates the question and the mathematics answers it, or refuses. The mathematics adjudicates temper's semantic model and never decorates it. Borrowing a concept provisionally and then intentionally walking it back where it no longer lands is part of honest adjudication, not a failure; the thing to guard against is a claim about temper the mathematics cannot support, asserted as though it could. Awareness is the requirement — a borrowed-then-retracted concept is fine as long as the walk-back is named."
+      - question: "Can this be used correctly somewhere else yet — especially back in the temper work — or has it only been read?"
+        context: "The aim is rigorous application, not comprehension. Reading a section is necessary but never sufficient; the test of fluency is using the language and concepts correctly in another context. Comprehension mistaken for fluency is the quiet failure — the section feels understood, but nothing can yet be built or adjudicated with it."
+      - question: "Is this correspondence between temper and the mathematics earned, or is it still a candidate held open?"
+        context: "The governing hypotheses — the substrate as a presheaf, translation as its cohomological obstruction, perspectives and resources as a C/C^op duality — are candidates under test, not conclusions. A correspondence stays provisional, usable as a guiding reference, until it is earned or broken. Since temper-next proved the working shape viable in real SQL and Rust, 'is it literally a sheaf' is a less load-bearing guard than it once was; what remains crucial is not asserting a correspondence as settled before it has earned the claim."
+      - question: "Does this detour illuminate something substantive about information topological spaces — or has it stopped being evocative?"
+        context: "The bound on a detour is not its subject. The name is learning-maths and the space is genuinely broad — a drift from category theory into differential geometry or Riemannian manifolds is welcome if it still guides thinking about information topological spaces, the kind of space temper's cognitive maps are. The failure is a detour that no longer illustrates or drives insight there: motion without illumination."
+    framing:
+      - "This map elaborates from the learning-maths corpus — the section engagement-traces of Fong & Spivak's Seven Sketches, the working sessions, and the concept tier — held in the learning-maths context. Those resources are the inbound events this map triages: a section engaged, a concept that stabilized, a correspondence proposed or walked back."
+      - "The adjudication this map performs lands outside it: the claims under test live in temper's semantic model — temperkb.io/theory's commitments and the temper foundational and convergence maps. A correspondence between the mathematics and temper points out of this map toward those; this map holds the mathematics and the live state of each correspondence, not the temper model itself."
+      - "The current spine is category theory through sheaves (Seven Sketches), the original destination. The map is open to the broader mathematical space — differential geometry, Riemannian manifolds, wherever insight leads — bounded not by subject but by whether the material illuminates information topological spaces, the kind of space temper's cognitive maps are."
+      - "Building this map with temper's own affordances is itself an application of its telos: the corpus's prerequisite graph read as a preorder, the concept tier as a functor or profunctor over the sections, the three retrieval affordances as projections of one object set. Turning the mathematics on the map's own structure is the adjudicate- and illuminate-questions applied to the corpus."
+      - "The study proceeds section by section: develop, iterate, consolidate, pressure. Resources are engagement-traces, not transcriptions, and the source PDF stays the authority for diagrams and precise math. A shape earns its place on the map when it consolidates and survives pressure — that threshold, not first contact, is when an inbound event becomes map-worthy."
+  owner: pete
+  emitter: "learning-maths-agent#1"
+
+world:
+  profiles:
+    - { handle: pete, display_name: Pete, system_access: approved }
+  entities:
+    - { name: "learning-maths-agent#1", profile: pete }
+
+# Charter-only at birth (guidance: seeded content masks the charter's own signal). The learning-maths
+# corpus already exists in its own vault context, but this map's domain resources accrete as the
+# charter recruits them from real study work — the before/after of that recruitment is part of the
+# dogfood.
+resources: []
+
+uses_lenses: [telos-default]

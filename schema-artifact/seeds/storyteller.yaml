@@ -1,0 +1,43 @@
+# The storyteller charter — corpus entry 3 (charter-bootstrapping design §4).
+# The corpus's first NON-ENGINEERING shape: storyteller as a creative system, a foundational-context
+# map guarding one tension axis between two failure poles (overdetermined: characters have no agency;
+# underdetermined: nothing guides a move-toward-action). Authored through the charter-bootstrapping
+# elaboration session, 2026-06-10. Charter-only at birth.
+name: storyteller
+
+cogmap:
+  telos:
+    title: "Storyteller foundational charter"
+    statement: "Hold storyteller's constitutive design commitments — narrative gravity over branching trees, character-as-tensor, imperfect information as generative principle, the separation of story structure from story experience, mindedness and respect — and the creative material they govern, as the map Pete's and Claude's ideation orients by and the grounding context the named agent personas draw on when inhabiting their roles, in service of thinking about how to tell stories, and how to build systems that help us and others tell them."
+    questions:
+      - question: "Does this give a character — or the designer, an agent persona, or the player — a reason to move, or does it script the move?"
+        context: "The axis this map guards: overdetermined and the characters have no agency; underdetermined and nothing guides a move-toward-action. The player is another force-as-vector-over-time through the field of relationships and world realities, not an exception to it."
+      - question: "When agency stalls, which layer of the cascade is missing — subjectivity, situation, world-order, or the mechanisms by which relationships are made and unmade?"
+        context: "The lived failure this map exists to prevent: scenes, characters, and aesthetic register proved out quickly and then went nowhere — no telos, no situation, no affordances. Agency implies the cascade of how a character and their social and economic-political orders came to be. This cascade is one route through the question; agents working here are free to follow others that emerge."
+      - question: "Is this a commitment any storyteller work routes by, or depth that belongs to the concern that owns it — tome, the lore layer, the narrator?"
+        context: "The foundational map is a routing layer: it holds landmarks and the way to find depth, not the depth itself."
+      - question: "Does this hold across genres, or is it one genre's expression of something constitutive?"
+        context: "Economics, politics, religion, magic, the supernatural are shaped by genre and aesthetic register. The map holds the invariant; worlds hold the expression."
+      - question: "Can the agent personas inhabit this within their values?"
+        context: "Conflict arises from genuine tensions between characters with different values, information, and needs — never from forcing an agent into a role that violates its nature. A live gate on what enters the map, not a preamble."
+    framing:
+      - "This map holds storyteller as a creative system — the constitutive commitments and the creative material they govern. The storyteller knowledge-base context and the repository record hold the work itself; this map holds what that work means and routes by."
+      - "World generation — tome, the lore layer, the grammar-to-vocabulary tier — is where the underdetermined pole is being answered: agency requires worlds with economics, politics, histories of micro- and macro-struggle, material production and reproduction, religion, magic, power expressed along social webs. This map holds why that cascade exists; the world-building concerns hold its depth."
+      - "The named agent personas — narrator, storykeeper, character agents — read this map as grounding context when inhabiting their roles. It is written to be read by them, not only about them."
+      - "Named agent personas are the system's working minds, each a concept to elaborate in its own right: storykeeper and narrator first, and world agents that keep actions consistent with the world's nature and arbitrate its mechanics — a fireball attempted in a detective-noir story is not stopped; it lands as arm-waving the world reads as madness."
+      - "The system exists to help us and others tell stories; the map's terms stay translatable beyond its authors."
+  owner: pete
+  emitter: "storyteller-agent#1"
+
+world:
+  profiles:
+    - { handle: pete, display_name: Pete, system_access: approved }
+  entities:
+    - { name: "storyteller-agent#1", profile: pete }
+
+# Charter-only at birth (guidance: seeded content masks the charter's own signal). The creative
+# material — commitments-as-concepts, persona concepts, world invariants — accretes from real
+# storyteller work; the before/after is part of the dogfood.
+resources: []
+
+uses_lenses: [telos-default]

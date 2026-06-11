@@ -1,0 +1,42 @@
+# The temper-convergence charter — corpus entry 1 (charter-bootstrapping design §4).
+# A smaller-concern map: the bounded initiative converging temper onto the temper-next substrate
+# (goal workstream 6). Authored through the charter-bootstrapping elaboration session, 2026-06-10.
+# Charter-only at birth, deliberately: seeded content would mask the signal of whether the charter
+# itself recruits the right material as the work runs.
+name: temper-convergence
+
+cogmap:
+  telos:
+    title: "Temper convergence charter"
+    statement: "Converge temper onto the temper-next substrate without carrying forward assumptions and usage patterns that no longer truly make sense, and without washing out the workflow-simplicity temper has today — in service of Pete's and Claude's working attention on the migration. The same map carries the story of temper-next in terms a larger org would recognize, with temperkb.io as one of its simplest true deployment shapes."
+    questions:
+      - question: "Does this change an adjudicated delta, assumption, or sequencing dependency the convergence is being built against?"
+        context: "The adjudication spec resolves the named deltas — edge taxonomy 8→4 with label remap, access tri-state to capability booleans, owned-context policy, slug retirement, ledger merge to entity/anchor. Work in flight builds on those calls, and a moved call invalidates silently."
+      - question: "Is this carrying forward a temper assumption or usage pattern that temper-next makes unnecessary?"
+        context: "The first failure mode is building around legacy shapes that exist only because the old system lacked the event ledger, content blocks, or lenses."
+      - question: "Where temper's tooling patterns are extended, is this leveraging temper-next affordances — or re-implementing old behavior on the new substrate?"
+        context: "The temper-workflow sense: the workflow/KB domain should gain from the substrate, not merely survive the move."
+      - question: "Would the everyday temper workflow still feel as light after this lands?"
+        context: "Convergence must not wash out today's workflow-simplicity. If a step makes the simple case heavier, that is signal, not cost."
+      - question: "Does this change how the temper-next story reads for a larger org — and does temperkb.io remain one of its simplest true deployment shapes?"
+        context: "The map serves narrative coherence alongside migration correctness; temperkb.io is the existence proof that the range includes near-minimal."
+    framing:
+      - "This map coordinates with the access-scaffold work: adjudicated access deltas land there first, and leak-safety invariants gate every cutover step that touches sharing."
+      - "The schema artifact stays design-master: production migrations are expressed from the artifact, never the artifact from production."
+      - "Migration is replay: backfill happens by genesis-event synthesis with per-resource hash parity — never by table copy."
+      - "Cutover runs one surface at a time — api, then cli/mcp, then ui — behind a parity-read harness, with only a short dual-write window; crate extraction comes last, against a stable schema."
+      - "This map is about converging the existing workflow/KB product; new cognitive-map capability is not its concern except where convergence forecloses it."
+  owner: pete
+  emitter: "convergence-agent#1"
+
+world:
+  profiles:
+    - { handle: pete, display_name: Pete, system_access: approved }
+  entities:
+    - { name: "convergence-agent#1", profile: pete }
+
+# Charter-only at birth — no domain resources, no edges. Resources accrete as artifacts of real
+# convergence work; the before/after is part of the dogfood.
+resources: []
+
+uses_lenses: [telos-default]

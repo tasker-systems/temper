@@ -1,0 +1,42 @@
+# The temper-foundational charter — corpus entry 2 (charter-bootstrapping design §4).
+# The corpus's first FOUNDATIONAL-CONTEXT-SYSTEM map: temper the project, held as a routing layer —
+# landmarks, shared terminology, translation bedrock — between its two failure poles (saturation:
+# salience-under-this-telos washes out; sparsity: no common referents, nothing to promote into).
+# Authored through the charter-bootstrapping elaboration session, 2026-06-10. Charter-only at birth.
+name: temper-foundational
+
+cogmap:
+  telos:
+    title: "Temper foundational charter"
+    statement: "Hold temper's landmarks — the major ideas, settled commitments, shared terminology, and tools that make work on temper translatable — as the routing layer every temper session orients by and the more-specific temper maps relate to and promote into, in service of Pete's and Claude's shared language across sessions and concerns."
+    questions:
+      - question: "Is this a landmark any temper session needs to route by — or elaboration that belongs in a more specific map?"
+        context: "The foundational map is a routing layer; a concept's depth usually lives in the specific map that owns it, while this map holds the landmark and the way to find it. Everything falling through to be elaborated here is the saturation pole."
+      - question: "If this lands here, does it sharpen salience under this charter's telos, or wash it out?"
+        context: "At the foundational level everything seems relevant; if everything deforms the topology, telos-as-perspective is lost and nothing matters. Richness is expected — region-projections carry findability — but every addition must keep salience-under-this-telos differentiable. Salience is never a universal measure."
+      - question: "Is a concept recurring across temper's specific maps and concerns — ready to promote into shared terminology here?"
+        context: "The sparsity pole — no common referents, nothing to promote into. Promotion of recurring concepts is what keeps the bedrock alive rather than ossified."
+      - question: "When two sessions or maps use different words for the same thing, what is the shared term — and does this map hold it, or hold the way to reach it?"
+        context: "The ubiquitous-language sense, as domain-driven design uses it: the map is a translation bedrock, or at least the path to one."
+      - question: "Does this change a settled commitment or mode of working that other maps and sessions assume?"
+        context: "Settled commitments — agent-first, cloud-only, event-as-primary, the substrate boundary — are landmarks too; when one moves, every map routing through it needs to know."
+    framing:
+      - "This map is self-referential: temper mapped in temper's own substrate. It also prototypes, at higher resolution, the starter-seed sense of 'what is this system and how does it work' that any temper installation will need."
+      - "More specific temper maps — temper-convergence and those that follow — relate to and promote into this map: it holds landmarks and translation, they hold depth."
+      - "Findability inside a rich foundation is carried by region-projections under this charter's lenses, not by keeping the map small."
+      - "This map relies on the temper knowledge base (goals, tasks, sessions, specs) and the tasker-systems/temper repository as the records of work; it holds what those records mean — the landmarks and shared terms — not their contents."
+      - "Modes of working are landmarks here: spec-then-build, session continuity through temper itself, agent-first surfaces, human-gated promotion of lessons and terms."
+  owner: pete
+  emitter: "foundational-agent#1"
+
+world:
+  profiles:
+    - { handle: pete, display_name: Pete, system_access: approved }
+  entities:
+    - { name: "foundational-agent#1", profile: pete }
+
+# Charter-only at birth (guidance: seeded content masks the charter's own signal). Landmarks accrete
+# by promotion from real work and the specific maps — that growth is the routing layer forming.
+resources: []
+
+uses_lenses: [telos-default]
