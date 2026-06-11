@@ -24,9 +24,9 @@ world:
     - { name: onboarding-agent, profile: dave }    # emits the onboarding genesis
   teams:
     - { slug: temper-system,  name: Temper System }
-    - { slug: org-common,     name: Org Common }
-    - { slug: epd-department, name: EPD Department }
-    - { slug: directors,      name: Directors }
+    - { slug: org-common,     name: Org Common,     parents: [temper-system] }
+    - { slug: epd-department, name: EPD Department, parents: [temper-system] }
+    - { slug: directors,      name: Directors,      parents: [temper-system] }
     - { slug: epd-team-a,     name: EPD Team A, parents: [epd-department, org-common] }
     - { slug: epd-team-b,     name: EPD Team B, parents: [epd-department, org-common] }
   memberships:
@@ -91,12 +91,16 @@ checks:
   - { check: producer_reach, cogmap: side-map,   resource: r_a_private,      expect: true  }
   - { check: producer_reach, cogmap: bridge-map, resource: r_a_private,      expect: false }  # narrows
   - { check: producer_reach, cogmap: bridge-map, resource: r_common,         expect: true  }  # common ground
+  - { check: producer_reach, cogmap: bridge-map, resource: concept_sprint,   expect: true  }  # public floor reaches the bridge (locks the root-DAG edges)
   - { check: producer_reach, cogmap: bridge-map, resource: r_profile_shared, expect: false }  # profile grant never enters vis(T)
+  - { check: producer_reach, cogmap: side-map,   resource: r_profile_shared, expect: false }  # leak-safe even in the grantee's own team's map
   # S3 - edge-home protection
   - { check: edge_visible_to, profile: carol, edge: "sprint-rituals->formalization", expect: true  }
   - { check: edge_visible_to, profile: alice, edge: "sprint-rituals->formalization", expect: false }
   - { check: edge_visible_to, profile: nomad, edge: "sprint-rituals->formalization", expect: false }
-  # S4 - charter-block gating
+  # S4 - charter-block gating (positive anchors the negative: dave owns the telos, sees all 4 blocks;
+  #       nomad cannot read the map => 0. Without the positive, expect_count:0 could pass vacuously.)
+  - { check: charter_blocks_visible, cogmap: onboarding-cogmap, profile: dave,  expect_count: 4 }
   - { check: charter_blocks_visible, cogmap: onboarding-cogmap, profile: nomad, expect_count: 0 }
   # S5 - delegation priming
   - { check: cogmaps_share_team, a: bridge-map, b: side-map,      expect: true  }

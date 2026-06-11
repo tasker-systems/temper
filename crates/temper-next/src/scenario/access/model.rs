@@ -255,7 +255,7 @@ checks:
         assert_eq!(s.world.cogmaps.len(), 5);
         assert_eq!(s.world.resources.len(), 5);
         assert_eq!(s.world.edges.len(), 1);
-        assert_eq!(s.checks.len(), 16);
+        assert_eq!(s.checks.len(), 19);
         // exactly one genesis cogmap (the onboarding charter)
         assert_eq!(
             s.world.cogmaps.iter().filter(|c| c.telos.is_some()).count(),
