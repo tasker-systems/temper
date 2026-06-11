@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<!--
+  Ledger Projection Spiral — framework-agnostic REFERENCE artifact.
+
+  This is the v2 "whole-map-materializing" build, captured here as a standalone,
+  browser-openable mockup so it can be SEEN rendering (interaction + the scrub
+  replay) before it is ported to a declarative Svelte component under
+  packages/temper-ui/src/lib/components/cognitive-maps/diagrams/.
+
+  PORT TARGET: LedgerProjectionSpiral.svelte (sits beside LedgerSpineDiagram.svelte).
+  This file uses inline hex + script-driven DOM mutation deliberately, to be
+  zero-dependency. The Svelte port replaces both: tokens via var(--…), the event
+  cast + per-step geometry via $state/$derived, rows/risers via {#each}, the
+  scrubber as a bound <input>, and id-namespaced <defs> per the house pattern.
+
+  Honest basis (every visual claim traces to schema/functions in schema-artifact/):
+    - base plane            -> kb_events, append-only, occurred_at left->right
+    - row labels            -> the kb_event_types registry (03_seed.sql)
+    - risers + their labels -> lineage columns the projection-half stamps:
+                              genesis_event_id (resources/cogmap),
+                              asserted_by_event_id (edges),
+                              shape_materialized_event_id (region watermark)
+    - dash = edge_kind      -> enum {express, contains, leads_to, near} (01_schema.sql)
+    - opacity = recency     -> last_event_id age (newer = harder)
+    - region glow, fogged   -> kb_cogmap_regions + cogmap_shape() withholds member ids
+    - alpha converged / beta loose -> alpha bound by near+express content affinity; beta by a
+                              shared facet (weight 1.5), not content — the 03_seed falsification cast
+    - solo isolate          -> solo-retro-note: no facet, no edge; cosine WOULD merge,
+                              declared does NOT (the S6d falsification)
+    - ghost + STALE flip    -> final relationship_reweighted advances last_event_id past
+                              shape_materialized_event_id -> cogmap_staleness() reports stale
+
+  Palette mapping for the port (app.css :root):
+    #7eb8da -> --temper-blue        (telos/alpha nodes, risers, spine)
+    #82c99a -> --graph-session      (beta / deployment region + nodes)
+    #d48ac7 -> --graph-concept      (the express edge e5)
+    #0a0a0f -> --obsidian           (node fills)
+    parchment #e8e4df -> --parchment ; muted whites -> --chalk/--graphite
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ledger projection spiral — reference</title>
+<style>
+  body{margin:0;background:#0a0a0f;color:#e8e4df;font-family:"JetBrains Mono",monospace;padding:24px;}
+  .wrap{max-width:760px;margin:0 auto;}
+  .controls{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 12px;font-size:13px;color:rgba(255,255,255,0.65);}
+  button{font-family:inherit;background:rgba(126,184,218,0.08);color:#7eb8da;border:1px solid rgba(126,184,218,0.3);
+         border-radius:6px;padding:6px 12px;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}
+  button:hover{background:rgba(126,184,218,0.16);}
+  input[type=range]{flex:1;min-width:150px;accent-color:#7eb8da;}
+  #evlabel{min-width:150px;text-align:right;font-size:11px;color:#7eb8da;}
+  svg{display:block;width:100%;height:auto;}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="controls">
+  <button id="playbtn" onclick="togglePlay()" aria-label="Replay projection"><span id="playlabel">&#9654; Replay</span></button>
+  <input type="range" id="scrub" min="0" max="12" value="12" step="1" oninput="setStep(+this.value)" aria-label="Ledger time">
+  <span id="evlabel">all events</span>
+</div>
+
+<svg width="100%" viewBox="0 0 680 640" role="img">
+<title>The event ledger spiraling upward into a cognitive map</title>
+<desc>An append-only ledger at the base; events spiral upward into a rotating graph of resource-nodes and typed edges that gain opacity with recency; two region glows converge while an isolate stays separate and a superseded node ghosts behind.</desc>
+<defs>
+  <marker id="up" viewBox="0 0 10 10" refX="5" refY="2" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse">
+    <path d="M0,8 L5,1 L10,8" fill="none" stroke="#7eb8da" stroke-width="1.3"/>
+  </marker>
+  <radialGradient id="glowA" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="rgba(126,184,218,0.36)"/>
+    <stop offset="55%" stop-color="rgba(126,184,218,0.13)"/>
+    <stop offset="100%" stop-color="rgba(126,184,218,0)"/>
+  </radialGradient>
+  <radialGradient id="glowB" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="rgba(130,201,154,0.26)"/>
+    <stop offset="60%" stop-color="rgba(130,201,154,0.08)"/>
+    <stop offset="100%" stop-color="rgba(130,201,154,0)"/>
+  </radialGradient>
+  <radialGradient id="weather" cx="50%" cy="50%" r="50%">
+    <stop offset="0%" stop-color="rgba(126,184,218,0.05)"/>
+    <stop offset="100%" stop-color="rgba(126,184,218,0)"/>
+  </radialGradient>
+  <filter id="fog" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3.6"/></filter>
+</defs>
+
+<rect x="0" y="0" width="680" height="640" fill="transparent"/>
+
+<text x="40" y="30" font-family="monospace" font-size="10.5" letter-spacing="2" fill="rgba(255,255,255,0.4)">PROJECTION &#183; MATERIALIZED AT READ TIME &#183; THE GRAPH SPIRALS AS THE LEDGER GROWS</text>
+
+<g id="weatherwash" opacity="0"><ellipse cx="340" cy="230" rx="300" ry="170" fill="url(#weather)"/></g>
+
+<g id="regionA" opacity="0">
+  <ellipse cx="250" cy="232" rx="132" ry="104" fill="url(#glowA)"/>
+  <text x="250" y="132" text-anchor="middle" font-family="Georgia,serif" font-size="14" fill="#e8e4df">&#8220;first-week confidence&#8221;</text>
+  <text x="250" y="149" text-anchor="middle" font-family="monospace" font-size="8.5" letter-spacing="0.5" fill="rgba(255,255,255,0.5)">converged &#183; salience high &#183; cohesion tight &#183; &#8776;3 fogged</text>
+</g>
+<g id="regionB" opacity="0">
+  <ellipse cx="468" cy="250" rx="116" ry="94" fill="url(#glowB)"/>
+  <text x="468" y="160" text-anchor="middle" font-family="Georgia,serif" font-size="13" fill="rgba(232,228,223,0.9)">&#8220;deployment&#8221;</text>
+  <text x="468" y="176" text-anchor="middle" font-family="monospace" font-size="8" letter-spacing="0.5" fill="rgba(255,255,255,0.42)">forming &#183; bound by facet, not content</text>
+</g>
+
+<g id="fogA" opacity="0" filter="url(#fog)" fill="#7eb8da">
+  <circle cx="214" cy="220" r="5.5" opacity="0.85"/>
+  <circle cx="276" cy="206" r="5" opacity="0.8"/>
+  <circle cx="252" cy="256" r="5.5" opacity="0.82"/>
+</g>
+<g id="fogB" opacity="0" filter="url(#fog)" fill="#82c99a">
+  <circle cx="442" cy="238" r="4.5" opacity="0.7"/>
+  <circle cx="494" cy="252" r="4.5" opacity="0.68"/>
+  <circle cx="466" cy="282" r="4" opacity="0.62"/>
+  <circle cx="470" cy="222" r="4" opacity="0.6"/>
+</g>
+
+<g id="graph">
+  <g id="edge-e1" opacity="0"><line x1="232" y1="214" x2="276" y2="206" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="2 4"/></g>
+  <g id="edge-e2" opacity="0"><line x1="252" y1="256" x2="232" y2="214" stroke="#7eb8da" stroke-width="1.4"/></g>
+  <g id="edge-e3" opacity="0"><line x1="442" y1="238" x2="494" y2="252" stroke="#82c99a" stroke-width="1.3" stroke-dasharray="7 4"/></g>
+  <g id="edge-e4" opacity="0"><line x1="494" y1="252" x2="470" y2="284" stroke="#82c99a" stroke-width="1.3" stroke-dasharray="7 4"/></g>
+  <g id="edge-e5" opacity="0"><line x1="318" y1="330" x2="252" y2="256" stroke="#d48ac7" stroke-width="1.3" stroke-dasharray="1 4"/></g>
+
+  <g id="node-telos" opacity="0">
+    <circle cx="318" cy="330" r="9" fill="#0a0a0f" stroke="#7eb8da" stroke-width="2.2"/>
+    <text x="318" y="352" text-anchor="middle" fill="#e8e4df" font-family="Georgia,serif" font-size="11">telos charter</text>
+    <text x="318" y="313" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="monospace" font-size="8">genesis_event_id</text>
+  </g>
+  <g id="node-a1" opacity="0">
+    <circle cx="232" cy="214" r="7" fill="#0a0a0f" stroke="#7eb8da" stroke-width="1.7"/>
+    <text x="232" y="197" text-anchor="middle" fill="#e8e4df" font-family="Georgia,serif" font-size="10">pair-on-first-PR</text>
+  </g>
+  <g id="node-a2" opacity="0">
+    <circle cx="276" cy="206" r="6.5" fill="#0a0a0f" stroke="#7eb8da" stroke-width="1.5"/>
+  </g>
+  <g id="node-b1" opacity="0">
+    <circle cx="442" cy="238" r="6.5" fill="#0a0a0f" stroke="#82c99a" stroke-width="1.5"/>
+    <text x="442" y="221" text-anchor="middle" fill="rgba(232,228,223,0.85)" font-family="Georgia,serif" font-size="9.5">staging</text>
+  </g>
+  <g id="node-b2" opacity="0">
+    <circle cx="494" cy="252" r="6" fill="#0a0a0f" stroke="#82c99a" stroke-width="1.4"/>
+  </g>
+  <g id="node-b3" opacity="0">
+    <circle cx="470" cy="284" r="6" fill="#0a0a0f" stroke="#82c99a" stroke-width="1.4"/>
+  </g>
+
+  <g id="node-reg-ghost" opacity="0">
+    <circle cx="372" cy="300" r="6.5" fill="none" stroke="rgba(126,184,218,0.3)" stroke-width="1.2" stroke-dasharray="2 2"/>
+  </g>
+  <g id="node-reg" opacity="0">
+    <circle cx="360" cy="312" r="7" fill="#0a0a0f" stroke="#7eb8da" stroke-width="1.6"/>
+    <text x="360" y="333" text-anchor="middle" fill="#e8e4df" font-family="Georgia,serif" font-size="9.5">regulation</text>
+  </g>
+
+  <g id="node-solo" opacity="0">
+    <circle cx="582" cy="330" r="6" fill="#0a0a0f" stroke="rgba(255,255,255,0.35)" stroke-width="1.3"/>
+    <text x="582" y="312" text-anchor="middle" fill="rgba(255,255,255,0.55)" font-family="Georgia,serif" font-size="9.5">solo-retro</text>
+    <text x="582" y="349" text-anchor="middle" fill="rgba(255,255,255,0.4)" font-family="monospace" font-size="7.5">no facet &#183; no edge</text>
+  </g>
+</g>
+
+<g id="risers" stroke="#7eb8da" fill="none"></g>
+
+<g id="plane">
+  <polygon points="118,388 562,388 632,520 48,520" fill="rgba(126,184,218,0.045)" stroke="rgba(126,184,218,0.22)" stroke-width="1"/>
+</g>
+
+<g id="rows" font-family="monospace" font-size="8"></g>
+
+<g id="axis">
+  <line x1="48" y1="536" x2="600" y2="536" stroke="#7eb8da" stroke-width="1.5"/>
+  <polygon points="612,536 598,531 598,541" fill="#7eb8da"/>
+  <text x="612" y="554" text-anchor="end" font-family="monospace" font-size="8" letter-spacing="1.5" fill="rgba(255,255,255,0.42)">time &#8594;</text>
+  <text x="48" y="572" font-family="monospace" font-size="11" letter-spacing="0.5" fill="#7eb8da">kb_events</text>
+  <text x="48" y="587" font-family="Georgia,serif" font-size="11" font-style="italic" fill="#e8e4df">the source of truth &#8212; append-only</text>
+  <text x="48" y="606" font-family="monospace" font-size="7.5" fill="rgba(255,255,255,0.38)">emitter_entity_id &#183; event_type_id &#183; payload &#183; producing_anchor_* &#183; occurred_at</text>
+</g>
+
+<g id="legend" font-family="monospace" font-size="8" opacity="0.92">
+  <line x1="486" y1="600" x2="506" y2="600" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="1 4"/>
+  <text x="512" y="603" fill="rgba(255,255,255,0.5)">express</text>
+  <line x1="486" y1="612" x2="506" y2="612" stroke="#7eb8da" stroke-width="1.4"/>
+  <text x="512" y="615" fill="rgba(255,255,255,0.5)">contains</text>
+  <line x1="560" y1="600" x2="580" y2="600" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="7 4"/>
+  <text x="586" y="603" fill="rgba(255,255,255,0.5)">leads_to</text>
+  <line x1="560" y1="612" x2="580" y2="612" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="2 4"/>
+  <text x="586" y="615" fill="rgba(255,255,255,0.5)">near</text>
+  <circle cx="491" cy="624" r="4" fill="none" stroke="rgba(126,184,218,0.3)" stroke-width="1.1" stroke-dasharray="2 2"/>
+  <text x="512" y="627" fill="rgba(255,255,255,0.5)">folded / superseded</text>
+  <text x="586" y="589" fill="rgba(255,255,255,0.42)">opacity = recency</text>
+</g>
+</svg>
+</div>
+
+<script>
+const EVENTS = [
+  {t:"cogmap_seeded", lin:"genesis_event_id", show:["node-telos"], riser:"node-telos"},
+  {t:"resource_created", lin:"genesis_event_id", show:["node-a1"], riser:"node-a1"},
+  {t:"resource_created", lin:"genesis_event_id", show:["node-a2"], riser:"node-a2"},
+  {t:"relationship_asserted", lin:"asserted_by_event_id · near", show:["edge-e1"]},
+  {t:"relationship_asserted", lin:"asserted_by_event_id · express", show:["edge-e2","edge-e5"]},
+  {t:"resource_created", lin:"genesis_event_id", show:["node-reg-ghost"], riser:"node-reg-ghost"},
+  {t:"resource_created", lin:"genesis_event_id", show:["node-b1"], riser:"node-b1", weather:true},
+  {t:"resource_created", lin:"genesis_event_id", show:["node-b2","node-b3"], riser:"node-b2"},
+  {t:"relationship_asserted", lin:"asserted_by_event_id · leads_to", show:["edge-e3","edge-e4"]},
+  {t:"resource_created", lin:"genesis_event_id · isolate", show:["node-solo"], riser:"node-solo"},
+  {t:"region_materialized", lin:"shape_materialized_event_id", regionA:true},
+  {t:"region_materialized", lin:"shape_materialized_event_id", regionB:true},
+  {t:"relationship_reweighted", lin:"last_event_id -> STALE", supersede:true},
+];
+
+const rowG = document.getElementById('rows');
+const riserG = document.getElementById('risers');
+const PLANE_Y0=398, PLANE_DY=10.6;
+function rowGeo(i){
+  const y = PLANE_Y0 + i*PLANE_DY;
+  const x = 60 + i*4;
+  const w = 150 + i*26;
+  return {x,y,w, cx: x + w/2, cy: y-2};
+}
+EVENTS.forEach((e,i)=>{
+  const g=rowGeo(i);
+  const grp = document.createElementNS('http://www.w3.org/2000/svg','g');
+  grp.setAttribute('id','row-'+i); grp.setAttribute('opacity','0');
+  const bar=document.createElementNS('http://www.w3.org/2000/svg','rect');
+  bar.setAttribute('x',g.x); bar.setAttribute('y',g.y-8);
+  bar.setAttribute('width',g.w); bar.setAttribute('height',11); bar.setAttribute('rx','2');
+  bar.setAttribute('fill','rgba(126,184,218,0.08)');
+  bar.setAttribute('stroke','rgba(126,184,218,0.25)'); bar.setAttribute('stroke-width','0.7');
+  grp.appendChild(bar);
+  const tx=document.createElementNS('http://www.w3.org/2000/svg','text');
+  tx.setAttribute('x',g.x+6); tx.setAttribute('y',g.y+1);
+  tx.setAttribute('fill','rgba(126,184,218,0.92)'); tx.setAttribute('font-size','8');
+  tx.textContent=e.t;
+  grp.appendChild(tx);
+  rowG.appendChild(grp);
+  const tick=document.createElementNS('http://www.w3.org/2000/svg','line');
+  const txp = 56 + i*42;
+  tick.setAttribute('x1',txp); tick.setAttribute('y1',530);
+  tick.setAttribute('x2',txp); tick.setAttribute('y2',542);
+  tick.setAttribute('stroke','#7eb8da'); tick.setAttribute('stroke-width','1.4');
+  document.getElementById('axis').appendChild(tick);
+});
+
+function nodeAnchor(id){
+  const el=document.getElementById(id); if(!el) return null;
+  const c=el.querySelector('circle'); if(!c) return null;
+  return { x:+c.getAttribute('cx'), y:+c.getAttribute('cy')+ (+c.getAttribute('r')) };
+}
+
+function setStep(n){
+  EVENTS.forEach((e,i)=>{
+    const on = i < n;
+    const recency = (i+1)/EVENTS.length;
+    const row=document.getElementById('row-'+i);
+    if(row) row.setAttribute('opacity', on? String(0.5+0.5*recency):'0');
+    (e.show||[]).forEach(sid=>{
+      const el=document.getElementById(sid); if(!el) return;
+      el.setAttribute('opacity', on? String(0.4+0.6*recency):'0');
+    });
+  });
+  const idxA=EVENTS.findIndex(e=>e.regionA);
+  const idxB=EVENTS.findIndex(e=>e.regionB);
+  const regAon = idxA>=0 && idxA < n;
+  const regBon = idxB>=0 && idxB < n;
+  document.getElementById('regionA').setAttribute('opacity', regAon?'1':'0');
+  document.getElementById('fogA').setAttribute('opacity', regAon?'0.5':'0');
+  document.getElementById('regionB').setAttribute('opacity', regBon?'0.85':'0');
+  document.getElementById('fogB').setAttribute('opacity', regBon?'0.45':'0');
+  const wIdx=EVENTS.findIndex(e=>e.weather);
+  document.getElementById('weatherwash').setAttribute('opacity', (wIdx>=0 && wIdx<n)?'1':'0');
+
+  const supIdx=EVENTS.findIndex(e=>e.supersede);
+  const superseded = supIdx>=0 && supIdx<n;
+  document.getElementById('node-reg-ghost').setAttribute('opacity', (n>5)? (superseded?'0.6':'0.25') : '0');
+  document.getElementById('node-reg').setAttribute('opacity', superseded?'1':'0');
+
+  riserG.innerHTML='';
+  for(let i=0;i<n && i<EVENTS.length;i++){
+    const e=EVENTS[i];
+    if(e.riser){
+      const a=nodeAnchor(e.riser); if(!a) continue;
+      const g=rowGeo(i);
+      const ln=document.createElementNS('http://www.w3.org/2000/svg','line');
+      ln.setAttribute('x1',g.cx); ln.setAttribute('y1',g.cy);
+      ln.setAttribute('x2',a.x); ln.setAttribute('y2',a.y);
+      ln.setAttribute('stroke','#7eb8da'); ln.setAttribute('stroke-width','0.7');
+      ln.setAttribute('opacity', String(0.12+0.3*((i+1)/EVENTS.length)));
+      ln.setAttribute('marker-end','url(#up)');
+      riserG.appendChild(ln);
+    }
+  }
+  const lab=document.getElementById('evlabel');
+  if(n===0) lab.textContent='empty ledger';
+  else if(n>=EVENTS.length) lab.textContent='all '+EVENTS.length+' events · stale';
+  else lab.textContent=(n)+' · '+EVENTS[n-1].lin;
+}
+
+let playing=false, timer=null;
+function togglePlay(){
+  const lbl=document.getElementById('playlabel');
+  if(playing){ clearInterval(timer); playing=false; lbl.textContent='\u25B6 Replay'; return; }
+  let cur=(+document.getElementById('scrub').value>=EVENTS.length)?0:+document.getElementById('scrub').value;
+  playing=true; lbl.textContent='\u275A\u275A Pause';
+  document.getElementById('scrub').value=cur; setStep(cur);
+  timer=setInterval(()=>{
+    cur++; document.getElementById('scrub').value=cur; setStep(cur);
+    if(cur>=EVENTS.length){ clearInterval(timer); playing=false; lbl.textContent='\u25B6 Replay'; }
+  }, 680);
+}
+setStep(12);
+</script>
+</body>
+</html>

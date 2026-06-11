@@ -1,7 +1,7 @@
 <script lang="ts">
   import Section from '$lib/components/landing/Section.svelte';
   import VizFigure from '$lib/components/VizFigure.svelte';
-  import LedgerSpineDiagram from '$lib/components/cognitive-maps/diagrams/LedgerSpineDiagram.svelte';
+  import LedgerProjectionSpiral from '$lib/components/cognitive-maps/diagrams/LedgerProjectionSpiral.svelte';
 </script>
 
 <svelte:head>
@@ -142,24 +142,27 @@
 
 <VizFigure placement="HERO" fidelity="conceptual">
   {#snippet diagram()}
-    <LedgerSpineDiagram id="cm-ledger" />
+    <LedgerProjectionSpiral id="cm-projection-spiral" />
   {/snippet}
   {#snippet shows()}
-    the event ledger (<code>kb_events</code>) drawn as a single <strong>append-only spine</strong>
-    down the page, with <strong>projections</strong> branching off it: resources, content blocks,
-    edges, properties, and cogmap-regions, each connected back to the spine by its
-    <code>asserted_by</code> / <code>last_event</code> lineage. Above the spine, the kernel shown as
-    <strong>convention-agnostic</strong>: the same ledger + entities + resources underlie
-    <em>both</em> Temper's workflow / knowledge-base patterns <em>and</em> the cognitive map, with
-    neither baked into the schema. The reader should come away with: one source of truth at the
-    bottom, everything else hanging off it.
+    the onboarding map <strong>materialized in time</strong>: scrub (or replay) the
+    append-only ledger event-by-event and watch the graph rise off it — resource-nodes on their
+    <code>genesis_event_id</code> risers, typed edges on <code>asserted_by_event_id</code>, the two
+    region glows materializing under <code>shape_materialized_event_id</code> with their members
+    fogged. The α region converges tight on genuine content affinity; β forms looser, bound by a
+    shared facet; the <em>solo-retro</em> isolate never joins. The final
+    <code>relationship_reweighted</code> advances <code>last_event_id</code> past the region's
+    materialization and the readout flips <strong>STALE</strong> — the honest face of "the present is
+    materialized, not replayed."
   {/snippet}
   {#snippet honestBasis()}
-    <code>kb_events</code> (<code>emitter_entity_id</code>, <code>event_type_id</code>,
-    <code>producing_anchor_*</code>, <code>correlation_id</code>); the lineage columns
-    (<code>asserted_by_event_id</code> / <code>last_event_id</code> / <code>genesis_event_id</code>)
-    on <code>kb_resources</code>, <code>kb_edges</code>, <code>kb_properties</code>,
-    <code>kb_cogmap_regions</code>, <code>kb_content_blocks</code>.
+    <code>kb_events</code> (<code>occurred_at</code>, append-only via
+    <code>kb_events_append_only()</code>); the <code>kb_event_types</code> registry; lineage columns
+    <code>genesis_event_id</code> / <code>asserted_by_event_id</code> /
+    <code>shape_materialized_event_id</code> / <code>last_event_id</code>; the
+    <code>edge_kind</code> enum (<code>express</code>, <code>contains</code>, <code>leads_to</code>,
+    <code>near</code>); <code>cogmap_shape()</code> (salience / label / count, members withheld) and
+    <code>cogmap_staleness()</code>. The cast is the worked scenario in <code>03_seed.sql</code>.
   {/snippet}
 </VizFigure>
 
