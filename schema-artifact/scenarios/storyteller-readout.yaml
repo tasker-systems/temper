@@ -1,0 +1,37 @@
+# Readout-drift runbook over the storyteller charter. Two personas form a stable 2-member region; one
+# persona's prose is then REVISED (a content-only change — new chunk embeddings, no edge or facet
+# change). Region membership is untouched (affinity is declared-only, so content is invisible to
+# formation), so `lens_drift` reports `readout`, not `structural`. Re-materializing must move that
+# region's readouts (centroid → content_cohesion / telos_alignment / salience).
+#
+# This is the deliverable-2 proof in YAML (drift_tier checks) AND the fixture the incremental ≡ full
+# readout equivalence test drives in both modes: in incremental mode the persona component is REUSED
+# (membership unchanged) but must have its readouts refreshed over fixed membership to match a full
+# recompute — the slice-2 reuse gap this slice closes.
+name: storyteller-readout
+seed: ../seeds/storyteller.yaml
+steps:
+  # Two personas (shared layer:persona + a near edge) form one stable region; a lone commitment forms
+  # its own singleton component.
+  - { do: create_resource, key: narrator,    origin_uri: "temper://storyteller/narrator",    body: "The narrator persona: renders the experience, holds tone and pacing, never scripts a character's move." , facets: { values: { layer: persona } } }
+  - { do: create_resource, key: storykeeper, origin_uri: "temper://storyteller/storykeeper", body: "The storykeeper persona: holds narrative gravity and the situation so characters have reasons to move." , facets: { values: { layer: persona } } }
+  - { do: create_resource, key: gravity,     origin_uri: "temper://storyteller/narrative-gravity", body: "Commitment: narrative gravity over branching trees — pull toward situation, not a menu of scripted options." , facets: { values: { layer: commitment } } }
+  - { do: assert_edge, from: narrator, to: storykeeper, kind: near, label: collaborates }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: drift_tier, lens: telos-default, tier: fresh }
+      - { check: co_region, lens: telos-default, members: [narrator, storykeeper], expect: true }
+  # Revise narrator's prose — a content-only change that shifts the persona region's embedding far. No
+  # edge, no facet: membership is unchanged, so this is a readout-tier drift, not structural.
+  - { do: revise, resource: narrator, body: "The narrator persona, radically re-scoped: now a forensic accountant cataloguing quarterly depreciation schedules and tax-loss carryforwards across fiscal jurisdictions." }
+  - do: assert
+    checks:
+      - { check: drift_tier, lens: telos-default, tier: readout }
+      - { check: co_region, lens: telos-default, members: [narrator, storykeeper], expect: true }
+  # Re-materialize: full recomputes every readout; incremental reuses the persona component's membership
+  # AND region ids but re-runs its readouts over fixed membership (the refresh tier).
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: drift_tier, lens: telos-default, tier: fresh }

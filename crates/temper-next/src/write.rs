@@ -187,7 +187,7 @@ pub async fn incremental_materialize_cogmap(
         .iter()
         .filter(|c| changed_keys.contains(&c.members))
         .collect();
-    let stale_prior: Vec<Uuid> = diff.stale;
+    let stale_prior: Vec<Uuid> = diff.stale.clone();
 
     // membership fingerprint + region count are over the FULL current clustering (reused + changed),
     // identical to what a full pass at this watermark computes.
@@ -245,6 +245,46 @@ pub async fn incremental_materialize_cogmap(
             .await?;
         }
     }
+
+    // Readout-refresh (drift §1, slice 3b): reused components keep their membership AND their region
+    // ids, but a content revision since the prior materialize moved a member's embedding — so a region
+    // CONTAINING that member has stale readouts. Re-run the readouts over the moved region's fixed
+    // membership (no re-cluster, no new region ids) so incremental matches a full recompute. Scoped to
+    // the reused regions whose own members moved: a moved member shifts only its region's centroid, so
+    // refreshing the others would re-introduce, one layer up, the over-trigger the per-component
+    // decomposition removed — while still matching full (an untouched region's stored readouts already
+    // equal a recompute). `priors` is non-empty here (the empty case returned early to a full pass).
+    let prior_watermark = last_materialize_watermark(&mut tx, cogmap, s.lens_id, ev).await?;
+    let touched_resources = match prior_watermark {
+        Some(w) => crate::replay::content_touched_resources_since(pool, cogmap, w).await?,
+        None => Vec::new(),
+    };
+    if !touched_resources.is_empty() {
+        // one query for the reused regions that actually contain a moved member (not every reused
+        // region, and not N per-component round-trips).
+        let region_ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT r.id FROM kb_cogmap_regions r \
+             JOIN kb_cogmap_region_members m ON m.region_id = r.id \
+             WHERE r.component_id = ANY($1) AND NOT r.is_folded \
+               AND m.member_table = 'kb_resources' AND m.member_id = ANY($2)",
+        )
+        .bind(&diff.unchanged)
+        .bind(&touched_resources)
+        .fetch_all(&mut *tx)
+        .await?;
+        for rid in &region_ids {
+            populate_readouts(&mut tx, *rid, &s.lens, &zero).await?;
+        }
+        // one batched last_event_id stamp for every refreshed region (same `ev` for all).
+        if !region_ids.is_empty() {
+            sqlx::query("UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id = ANY($2)")
+                .bind(ev)
+                .bind(&region_ids)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
     tx.commit().await?;
 
     Ok(MaterializeOutcome {
@@ -261,6 +301,32 @@ async fn current_watermark(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Re
         .fetch_optional(&mut **tx)
         .await?
         .context("materialize on an empty ledger (no events)")
+}
+
+/// The event id of the most recent region_materialized act for (cogmap, lens) BEFORE `current_ev`
+/// (this pass's own act, already appended) — the point-in-time the reused regions' readouts were last
+/// computed against. Excluding `current_ev` explicitly (`e.id < $3`) states the intent directly rather
+/// than relying on "my own event is the single latest" (an `OFFSET 1` would silently return the wrong
+/// watermark under a second act in the same txn or a concurrent materialize). `None` only if this is
+/// the very first materialize, where incremental never reaches the readout-refresh path.
+async fn last_materialize_watermark(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    cogmap: Uuid,
+    lens_id: Uuid,
+    current_ev: Uuid,
+) -> Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+         WHERE et.name='region_materialized' \
+           AND (e.payload->>'cogmap_id')::uuid=$1 AND (e.payload->>'lens_id')::uuid=$2 \
+           AND e.id < $3 \
+         ORDER BY e.id DESC LIMIT 1",
+    )
+    .bind(cogmap)
+    .bind(lens_id)
+    .bind(current_ev)
+    .fetch_optional(&mut **tx)
+    .await?)
 }
 
 async fn fold_live_regions(
@@ -387,6 +453,20 @@ async fn assert_region(
         .execute(&mut *tx)
         .await?;
     }
+    populate_readouts(tx, region, lens, zero_centroid).await
+}
+
+/// Re-derive a region's SQL readouts over its CURRENT members + embeddings: centroid (mean of
+/// per-member pooled chunk vectors), then content_cohesion / telos_alignment / reference_standing /
+/// centrality / internal_tension, then lens-weighted salience. Idempotent over fixed membership — the
+/// readout-refresh tier (drift §1) calls this on reused components whose content moved; `assert_region`
+/// calls it on a freshly-asserted region. Membership must already be inserted.
+async fn populate_readouts(
+    tx: &mut PgConnection,
+    region: Uuid,
+    lens: &Lens,
+    zero_centroid: &str,
+) -> Result<()> {
     // Centroid FIRST, in its own statement — Postgres evaluates all SET right-hand sides against the
     // OLD row, so the telos_alignment readout (which SELECTs the stored centroid) must run in a LATER
     // statement or it reads the zero placeholder → cosine-vs-zero = NaN → NaN salience. Pool per

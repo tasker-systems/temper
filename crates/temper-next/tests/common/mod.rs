@@ -58,3 +58,30 @@ pub async fn telos_default_partition(pool: &sqlx::PgPool, cogmap: uuid::Uuid) ->
         .await
         .unwrap()
 }
+
+/// Like [`telos_default_partition`] but folds each region's READOUT values into the signature
+/// (content_cohesion, salience, member_count), so it distinguishes a stale-readout reuse from a fresh
+/// recompute. UUID-independent (keyed by sorted member origin_uris); floats rounded to 6 places to
+/// absorb text-formatting noise (identical SQL over identical embeddings is already bit-stable).
+const READOUT_SIG_SQL: &str = r#"
+SELECT md5(string_agg(sig, '|' ORDER BY sig)) FROM (
+  SELECT string_agg(res.origin_uri, ',' ORDER BY res.origin_uri)
+         || ':' || coalesce(round(r.content_cohesion::numeric, 6)::text, 'null')
+         || ',' || coalesce(round(r.salience::numeric, 6)::text, 'null')
+         || ',' || r.member_count::text AS sig
+  FROM kb_cogmap_region_members m
+  JOIN kb_cogmap_regions r ON r.id = m.region_id AND NOT r.is_folded
+  JOIN kb_cogmap_lenses  l ON l.id = r.lens_id AND l.name = 'telos-default'
+  JOIN kb_resources    res ON res.id = m.member_id
+  WHERE r.cogmap_id = $1
+  GROUP BY r.id, r.content_cohesion, r.salience, r.member_count
+) g
+"#;
+
+pub async fn telos_default_readout_signature(pool: &sqlx::PgPool, cogmap: uuid::Uuid) -> String {
+    sqlx::query_scalar(READOUT_SIG_SQL)
+        .bind(cogmap)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}

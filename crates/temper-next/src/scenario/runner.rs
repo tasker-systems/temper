@@ -136,7 +136,8 @@ fn expectation_lenses(e: &Expectation) -> Vec<&str> {
         | Expectation::CohesionOrder { lens, .. }
         | Expectation::RegionSize { lens, .. }
         | Expectation::InternalTension { lens, .. }
-        | Expectation::Reproducible { lens } => vec![lens.as_str()],
+        | Expectation::Reproducible { lens }
+        | Expectation::DriftTier { lens, .. } => vec![lens.as_str()],
         Expectation::FingerprintDiffers { lens_a, lens_b } => {
             vec![lens_a.as_str(), lens_b.as_str()]
         }
@@ -271,6 +272,40 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                 SeedAction::RelationshipFold {
                     edge: crate::ids::EdgeId::from(edge_id),
                     reason: reason.as_deref(),
+                    emitter: EntityId::from(loaded.emitter),
+                },
+            )
+            .await?;
+        }
+        Step::Revise { resource, body } => {
+            let rid = lookup(&loaded.keys, resource)?;
+            // resolve the resource's single non-folded body block (concept resources have exactly one).
+            let block_ids: Vec<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM kb_content_blocks WHERE resource_id=$1 AND NOT is_folded ORDER BY seq",
+            )
+            .bind(rid)
+            .fetch_all(&mut *tx)
+            .await?;
+            let block_id = match block_ids.as_slice() {
+                [one] => *one,
+                [] => bail!("revise: resource {resource} has no live block"),
+                _ => bail!(
+                    "revise: resource {resource} has >1 block (multi-block revise unsupported)"
+                ),
+            };
+            // re-chunk + re-embed the new body inline (payload-first, like create_resource).
+            let prepared = crate::content::prepare_block(0, None, body)?;
+            // An empty/whitespace body chunks to nothing; revising to it would supersede the block's
+            // chunks and insert none, silently dropping the member from its centroid (block_mutate also
+            // guards this — refuse early with a clear message, matching the CLI's no-empty-body rule).
+            if prepared.chunks.is_empty() {
+                bail!("revise: resource {resource} body has no content (empty/whitespace) — refusing to write a contentless block");
+            }
+            fire(
+                &mut tx,
+                SeedAction::BlockMutate {
+                    block: crate::ids::BlockId::from(block_id),
+                    chunks: &prepared.chunks,
                     emitter: EntityId::from(loaded.emitter),
                 },
             )
@@ -442,6 +477,17 @@ async fn eval_expectation(
                     .context("cogmap_staleness returned null")?;
             if is_stale != *expect {
                 bail!("stale = {is_stale}, expected {expect}");
+            }
+        }
+        Expectation::DriftTier { lens, tier } => {
+            let (got, _diff) = crate::drift::lens_drift(pool, loaded.cogmap, lens).await?;
+            let want = match tier {
+                DriftTierName::Fresh => crate::drift::DriftTier::Fresh,
+                DriftTierName::Readout => crate::drift::DriftTier::Readout,
+                DriftTierName::Structural => crate::drift::DriftTier::Structural,
+            };
+            if got != want {
+                bail!("drift_tier: expected {want:?}, got {got:?} (lens {lens})");
             }
         }
     }

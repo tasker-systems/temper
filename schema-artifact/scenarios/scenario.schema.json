@@ -461,6 +461,27 @@
           ]
         },
         {
+          "description": "Revise a concept resource's body prose (a content-only mutation: new chunk embeddings, no edge\nor facet change). Fires `block_mutated` on the resource's single body block. `resource` is a key.",
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "string"
+            },
+            "body": {
+              "type": "string"
+            },
+            "do": {
+              "type": "string",
+              "const": "revise"
+            }
+          },
+          "required": [
+            "do",
+            "resource",
+            "body"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "lens": {
@@ -681,6 +702,26 @@
             "check",
             "expect"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "lens": {
+              "type": "string"
+            },
+            "tier": {
+              "$ref": "#/$defs/DriftTierName"
+            },
+            "check": {
+              "type": "string",
+              "const": "drift_tier"
+            }
+          },
+          "required": [
+            "check",
+            "lens",
+            "tier"
+          ]
         }
       ]
     },
@@ -690,6 +731,15 @@
         ">=",
         ">",
         "=="
+      ]
+    },
+    "DriftTierName": {
+      "description": "The drift tier names as they appear in scenario YAML (`check: drift_tier, tier: readout`).",
+      "type": "string",
+      "enum": [
+        "fresh",
+        "readout",
+        "structural"
       ]
     }
   }

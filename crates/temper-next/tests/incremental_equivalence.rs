@@ -101,3 +101,110 @@ async fn incremental_actually_reuses_the_untouched_component() {
 async fn learning_maths_growth_incremental_equals_full() {
     assert_incremental_equals_full("learning-maths-growth.yaml").await
 }
+
+/// Run a scenario end-to-end in the given mode against a freshly reset namespace, verify the ledger
+/// roundtrips, and return the final telos-default READOUT signature (membership + readout values).
+async fn run_readout_scenario(file: &str, mode: MaterializeMode) -> String {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+    let path = format!(
+        "{}/../../schema-artifact/scenarios/{file}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let scenario: Scenario =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let base = Path::new(&path).parent().unwrap();
+    runner::run_scenario_with(&pool, &scenario, base, mode)
+        .await
+        .unwrap_or_else(|e| panic!("{file} ({mode:?}) failed: {e:#}"));
+    temper_next::payloads::verify_ledger_roundtrip(&pool)
+        .await
+        .expect("ledger roundtrip");
+    let cogmaps: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM kb_cogmaps")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(cogmaps.len(), 1);
+    common::telos_default_readout_signature(&pool, cogmaps[0]).await
+}
+
+/// Slice 3b acceptance: after a body REVISION (a readout-only change), incremental materialization
+/// must produce the same readout values as a full recompute — it may reuse a component's membership
+/// AND region ids, but it must re-run that region's readouts over the moved embedding, not serve the
+/// stale ones. A regression here means incremental served a reused region's pre-revision readouts.
+#[tokio::test]
+async fn readout_refresh_incremental_equals_full() {
+    let full = run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Full).await;
+    let incremental =
+        run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Incremental).await;
+    assert_eq!(
+        full, incremental,
+        "after a body revision, incremental readouts must match a full recompute (not reuse stale readouts)"
+    );
+}
+
+/// Byte-identical readouts (above) are necessary but not sufficient: refreshing EVERY reused region's
+/// readouts on any content touch — not just the region whose member actually moved — produces the same
+/// values while reintroducing, one layer up, the over-trigger the component decomposition removed. This
+/// pins the SCOPE. storyteller-readout has two reused components: the persona region (narrator +
+/// storykeeper) and the lone commitment singleton (gravity). Only narrator's prose is revised, so under
+/// incremental the second materialize must touch ONLY the persona region's readouts — the commitment
+/// region keeps the FIRST materialize as its `last_event_id` (never re-stamped). A blanket refresh
+/// would advance both regions' `last_event_id` to the second materialize.
+#[tokio::test]
+async fn readout_refresh_is_scoped_to_the_region_whose_member_moved() {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+    let path = format!(
+        "{}/../../schema-artifact/scenarios/storyteller-readout.yaml",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let scenario: Scenario =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let base = Path::new(&path).parent().unwrap();
+    runner::run_scenario_with(&pool, &scenario, base, MaterializeMode::Incremental)
+        .await
+        .unwrap();
+
+    // last_event_id != asserted_by_event_id ⇔ the region's readouts were refreshed after it was first
+    // asserted. The narrator-bearing region must have been refreshed; the gravity-only region must not.
+    async fn region_was_refreshed(pool: &sqlx::PgPool, member_origin_uri: &str) -> bool {
+        sqlx::query_scalar::<_, bool>(
+            "SELECT r.last_event_id <> r.asserted_by_event_id \
+             FROM kb_cogmap_regions r \
+             JOIN kb_cogmap_lenses l ON l.id=r.lens_id AND l.name='telos-default' \
+             JOIN kb_cogmap_region_members m ON m.region_id=r.id \
+             JOIN kb_resources res ON res.id=m.member_id \
+             WHERE NOT r.is_folded AND res.origin_uri=$1",
+        )
+        .bind(member_origin_uri)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    assert!(
+        region_was_refreshed(&pool, "temper://storyteller/narrator").await,
+        "the persona region (narrator's prose moved) must have its readouts refreshed at the 2nd materialize"
+    );
+    assert!(
+        !region_was_refreshed(&pool, "temper://storyteller/narrative-gravity").await,
+        "the commitment region (no member moved) must NOT be re-stamped — readout-refresh must scope to \
+         the touched region, not blanket-refresh every reused region"
+    );
+
+    // sanity: distinct last_event_ids across the live regions ⇒ the two regions are on different acts.
+    let distinct: i64 = sqlx::query_scalar(
+        "SELECT count(DISTINCT r.last_event_id) FROM kb_cogmap_regions r \
+         JOIN kb_cogmap_lenses l ON l.id=r.lens_id AND l.name='telos-default' WHERE NOT r.is_folded",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        distinct, 2,
+        "the touched and untouched regions must sit on distinct materialize acts"
+    );
+}

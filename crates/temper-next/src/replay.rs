@@ -47,7 +47,10 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
     ),
     (
         "kb_block_revisions",
-        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id') ORDER BY t.block_id, t.block_body_hash), '[]'::jsonb) FROM kb_block_revisions t",
+        // include `created` (the event occurred_at — replay-stable) in the mask order: a block revised
+        // back to a prior body produces two revisions with the SAME (block_id, block_body_hash), and
+        // ordering on that pair alone is a tie whose jsonb_agg order can differ fire-vs-replay.
+        "SELECT coalesce(jsonb_agg((to_jsonb(t) - 'id') ORDER BY t.block_id, t.block_body_hash, t.created), '[]'::jsonb) FROM kb_block_revisions t",
     ),
     (
         "kb_properties",
@@ -117,7 +120,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
     let rows = sqlx::query(
         "SELECT e.id, et.name, e.payload \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          WHERE et.name IN ('cogmap_seeded','resource_created') ORDER BY e.id",
+          WHERE et.name IN ('cogmap_seeded','resource_created','block_mutated') ORDER BY e.id",
     )
     .fetch_all(pool)
     .await?;
@@ -125,10 +128,16 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
         let event_id: Uuid = r.get(0);
         let name: String = r.get(1);
         let payload: serde_json::Value = r.get(2);
-        let manifests = if name == "cogmap_seeded" {
-            payload.pointer("/telos/blocks").cloned()
-        } else {
-            payload.get("blocks").cloned()
+        let manifests = match name.as_str() {
+            "cogmap_seeded" => payload.pointer("/telos/blocks").cloned(),
+            "resource_created" => payload.get("blocks").cloned(),
+            // block_mutated carries a flat `chunks` array (one block); wrap it as a single
+            // pseudo-block so the chunk-extraction loop below stays uniform.
+            "block_mutated" => payload
+                .get("chunks")
+                .cloned()
+                .map(|chunks| serde_json::json!([{ "chunks": chunks }])),
+            _ => None,
         }
         .context("content-bearing payload missing blocks")?;
         let mut side = serde_json::Map::new();
@@ -216,6 +225,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
+            "block_mutated" => {
+                let side = snap.sidecars.get(&id).context("missing sidecar")?;
+                sqlx::query("SELECT _project_block_mutated($1,$2,$3)")
+                    .bind(id)
+                    .bind(&payload)
+                    .bind(side)
+                    .execute(pool)
+                    .await?;
+            }
             "relationship_asserted" => {
                 sqlx::query("SELECT _project_relationship_asserted($1,$2)")
                     .bind(id)
@@ -271,23 +289,88 @@ pub async fn recorded_materializations(pool: &PgPool) -> Result<Vec<(Uuid, Uuid,
         .collect())
 }
 
-/// True iff a FORMATION-affecting event (declared edges/facets/content — the region-formation
-/// inputs) touched the cogmap after the given watermark. A recorded fingerprint is only re-provable
-/// when this is false — otherwise the recorded act is legitimately stale relative to the substrate
-/// (the drift-detection concept), and re-materialization is expected to differ.
-pub async fn formation_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uuid) -> Result<bool> {
+/// The CONTENT events: a member's prose moved (new chunk embeddings) without changing any
+/// membership input — the readout-only formation inputs (drift §1). `block_created`/`block_folded`
+/// are listed forward-compatibly (no mutation fires them yet); when they land they are already a
+/// content touch. The readout-refresh gate and the formation gate share this set so they can never
+/// disagree on "what is a content touch" (the bug they'd otherwise drift into).
+const CONTENT_EVENTS: &[&str] = &["block_mutated", "block_created", "block_folded"];
+
+/// The STRUCTURAL events: they change a region-formation input that lives in the component
+/// fingerprint (membership / edges / facets), so they drive re-clustering, not a readout refresh.
+const STRUCTURAL_EVENTS: &[&str] = &[
+    "resource_created",
+    "cogmap_seeded",
+    "relationship_asserted",
+    "relationship_retyped",
+    "relationship_reweighted",
+    "relationship_folded",
+    "relationship_decayed",
+    "relationship_corrected",
+    "property_asserted",
+];
+
+/// Did any event whose type is in `names` touch this cogmap after `watermark`? The shared body behind
+/// the formation and content gates — the anchor-scoping predicate is load-bearing and easy to get
+/// wrong, so it lives in exactly one place.
+async fn touched_since(
+    pool: &PgPool,
+    cogmap: Uuid,
+    watermark: Uuid,
+    names: &[&str],
+) -> Result<bool> {
     Ok(sqlx::query_scalar(
         "SELECT EXISTS ( \
             SELECT 1 FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
              WHERE e.id > $2 \
                AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
-               AND et.name IN ('resource_created','cogmap_seeded', \
-                               'relationship_asserted','relationship_retyped','relationship_reweighted', \
-                               'relationship_folded','relationship_decayed','relationship_corrected', \
-                               'property_asserted','block_created','block_mutated','block_folded'))",
+               AND et.name = ANY($3))",
     )
     .bind(cogmap)
     .bind(watermark)
+    .bind(names)
     .fetch_one(pool)
+    .await?)
+}
+
+/// True iff a FORMATION-affecting event (structural ∪ content — the region-formation inputs) touched
+/// the cogmap after the given watermark. A recorded fingerprint is only re-provable when this is
+/// false — otherwise the recorded act is legitimately stale relative to the substrate (the
+/// drift-detection concept), and re-materialization is expected to differ.
+pub async fn formation_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uuid) -> Result<bool> {
+    let names: Vec<&str> = STRUCTURAL_EVENTS
+        .iter()
+        .chain(CONTENT_EVENTS)
+        .copied()
+        .collect();
+    touched_since(pool, cogmap, watermark, &names).await
+}
+
+/// The RESOURCES whose content moved on this cogmap after `watermark` (distinct) — the members behind
+/// each CONTENT event (a block-body revision / add / fold, the readout-only formation inputs), resolved
+/// block → owning resource. Incremental materialization refreshes a reused region's readouts only when
+/// one of THESE is among its members: a moved member shifts only its own region's centroid, so a
+/// content touch that landed in one component must not re-derive another component's readouts (the
+/// over-trigger the per-component decomposition removed, kept removed one layer up). Shares the
+/// `CONTENT_EVENTS` set + anchor-scoping with [`formation_touched_since`] so the gates can never
+/// disagree on "what is a content touch". Empty ⇒ no readout-refresh work this pass.
+pub async fn content_touched_resources_since(
+    pool: &PgPool,
+    cogmap: Uuid,
+    watermark: Uuid,
+) -> Result<Vec<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT DISTINCT b.resource_id \
+           FROM kb_events e \
+           JOIN kb_event_types et ON et.id = e.event_type_id \
+           JOIN kb_content_blocks b ON b.id = (e.payload->>'block_id')::uuid \
+          WHERE e.id > $2 \
+            AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
+            AND et.name = ANY($3)",
+    )
+    .bind(cogmap)
+    .bind(watermark)
+    .bind(CONTENT_EVENTS)
+    .fetch_all(pool)
     .await?)
 }
