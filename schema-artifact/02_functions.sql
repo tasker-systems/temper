@@ -76,6 +76,38 @@ CREATE TRIGGER trg_sync_system_membership
     AFTER INSERT OR UPDATE OF system_access ON kb_profiles
     FOR EACH ROW EXECUTE FUNCTION sync_system_membership();
 
+-- NEW (WS6 adjudication §2): the default personal team — a loopback self-reference
+-- so a solo profile's maps read their own contexts through the SAME intersection
+-- mechanics (share context → personal team; join map → personal team). No
+-- visibility-model special case. Idempotent by slug: replay restores kb_teams
+-- BEFORE kb_profiles, so the trigger's insert no-ops against restored rows and
+-- the original team ids survive (mirrors the kb_team_members tolerance).
+CREATE FUNCTION sync_personal_team()
+RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    v_team uuid;
+    v_root uuid;
+BEGIN
+    INSERT INTO kb_teams (slug, name)
+    VALUES ('personal-' || NEW.handle, NEW.display_name || ' (personal)')
+    ON CONFLICT (slug) DO NOTHING;
+    SELECT id INTO v_team FROM kb_teams WHERE slug = 'personal-' || NEW.handle;
+    INSERT INTO kb_team_members (team_id, profile_id, role)
+    VALUES (v_team, NEW.id, 'owner'::team_role)
+    ON CONFLICT (team_id, profile_id) DO NOTHING;
+    SELECT id INTO v_root FROM kb_teams WHERE slug = 'temper-system';
+    IF v_root IS NOT NULL THEN
+        INSERT INTO kb_teams_parents (child_id, parent_id)
+        VALUES (v_team, v_root)
+        ON CONFLICT DO NOTHING;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+CREATE TRIGGER trg_sync_personal_team
+    AFTER INSERT ON kb_profiles
+    FOR EACH ROW EXECUTE FUNCTION sync_personal_team();
+
 -- ============================================================================
 -- CONSUMER AXIS — resources_visible_to(profile)
 -- ============================================================================

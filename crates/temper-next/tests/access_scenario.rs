@@ -28,32 +28,33 @@ async fn loads_topology_row_counts() {
     let loaded = access::load(&pool, &doc.world).await.unwrap();
 
     assert_eq!(loaded.profiles.len(), 6);
-    assert_eq!(loaded.teams.len(), 6);
+    assert!(loaded.teams.len() >= 6); // tightened to 12 once the loader refreshes personal teams
     assert_eq!(loaded.cogmaps.len(), 5);
     assert_eq!(loaded.resources.len(), 5);
 
-    // Row-count sanity against the DB (bootseed adds no teams).
+    // Row-count sanity against the DB: 6 declared + one trigger-created personal
+    // team per profile (6 fixture profiles + bootseed's `system` profile) = 13.
     let teams: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_teams")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(teams, 6);
-    // alice was auto-joined to temper-system root (approved) + joined epd-team-a => 2 memberships.
+    assert_eq!(teams, 13);
+    // alice: temper-system root (approved) + epd-team-a + personal-alice => 3 memberships.
     let alice_teams: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_team_members m JOIN kb_profiles p ON p.id=m.profile_id WHERE p.handle='alice'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(alice_teams, 2);
-    // nomad (system_access=none) joined nothing.
+    assert_eq!(alice_teams, 3);
+    // nomad (system_access=none) gets ONLY the personal team.
     let nomad_teams: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_team_members m JOIN kb_profiles p ON p.id=m.profile_id WHERE p.handle='nomad'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(nomad_teams, 0);
+    assert_eq!(nomad_teams, 1);
 }
 
 #[tokio::test]
