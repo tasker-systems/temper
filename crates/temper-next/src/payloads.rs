@@ -97,6 +97,16 @@ pub struct BlockManifest {
     pub chunks: Vec<ChunkManifest>,
 }
 
+impl From<&crate::content::PreparedChunk> for ChunkManifest {
+    fn from(c: &crate::content::PreparedChunk) -> Self {
+        ChunkManifest {
+            chunk_id: c.chunk_id,
+            chunk_index: c.chunk_index,
+            content_hash: c.content_hash.clone(),
+        }
+    }
+}
+
 impl From<&PreparedBlock> for BlockManifest {
     fn from(b: &PreparedBlock) -> Self {
         BlockManifest {

@@ -19,9 +19,10 @@
 //! the canonical names only.
 
 use crate::affinity::EdgeKind;
-use crate::content::PreparedBlock;
+use crate::content::{PreparedBlock, PreparedChunk};
 use crate::ids::{
-    CogmapId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId, RegionId, ResourceId,
+    BlockId, CogmapId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId, RegionId,
+    ResourceId,
 };
 use crate::payloads;
 use crate::scenario::model::LensDef;
@@ -41,6 +42,7 @@ pub enum EventKind {
     LensCreated,
     RegionMaterialized,
     RelationshipFolded,
+    BlockMutated,
 }
 
 impl EventKind {
@@ -54,6 +56,7 @@ impl EventKind {
             EventKind::LensCreated => "lens_created",
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
+            EventKind::BlockMutated => "block_mutated",
         }
     }
 }
@@ -114,6 +117,12 @@ pub enum SeedAction<'a> {
         reason: Option<&'a str>,
         emitter: EntityId,
     },
+    BlockMutate {
+        block: BlockId,
+        /// The revised body as a single prepared block's worth of chunks (re-embedded inline).
+        chunks: &'a [PreparedChunk],
+        emitter: EntityId,
+    },
 }
 
 impl SeedAction<'_> {
@@ -127,6 +136,7 @@ impl SeedAction<'_> {
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
+            SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
         }
     }
 }
@@ -144,6 +154,7 @@ pub enum Fired {
     Facet(PropertyId),
     Lens(LensId),
     Materialize(EventId),
+    Block(BlockId),
 }
 
 impl Fired {
@@ -171,6 +182,14 @@ impl Fired {
         match self {
             Fired::Materialize(id) => Ok(id),
             other => anyhow::bail!("expected Fired::Materialize, got {other:?}"),
+        }
+    }
+
+    /// Extract the block id a `BlockMutate` fire produced.
+    pub fn block(self) -> Result<BlockId> {
+        match self {
+            Fired::Block(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Block, got {other:?}"),
         }
     }
 }
@@ -387,6 +406,38 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             .context("relationship_fold returned null")?;
             Ok(Fired::Relationship(EdgeId::from(id)))
         }
+
+        SeedAction::BlockMutate {
+            block,
+            chunks,
+            emitter,
+        } => {
+            let payload = payloads::BlockMutated {
+                block_id: block,
+                chunks: chunks.iter().map(payloads::ChunkManifest::from).collect(),
+                incorporated: Vec::new(), // body-revision only; provenance accretion deferred
+            };
+            let mut sidecar = std::collections::HashMap::new();
+            for c in chunks {
+                sidecar.insert(
+                    c.chunk_id.to_string(),
+                    payloads::ChunkContent {
+                        content: c.content.clone(),
+                        embedding: Some(payloads::EmbeddingRepr::Vector(c.embedding.clone())),
+                    },
+                );
+            }
+            let id = sqlx::query_scalar!(
+                "SELECT block_mutate($1,$2,$3)",
+                serde_json::to_value(&payload)?,
+                serde_json::to_value(&sidecar)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("block_mutate returned null")?;
+            Ok(Fired::Block(BlockId::from(id)))
+        }
     }
 }
 
@@ -434,6 +485,17 @@ mod tests {
             .event_type()
             .as_canonical_name(),
             "relationship_folded"
+        );
+        let chunks: Vec<PreparedChunk> = Vec::new();
+        assert_eq!(
+            SeedAction::BlockMutate {
+                block: BlockId::from(Uuid::nil()),
+                chunks: &chunks,
+                emitter,
+            }
+            .event_type()
+            .as_canonical_name(),
+            "block_mutated"
         );
     }
 }
