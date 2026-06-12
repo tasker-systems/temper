@@ -316,7 +316,27 @@ artifact's silence on graph reads was a gap, not a rejection.
   columns (title-only weight-A; doctype filters become property lookups — data-model §6).
 - URI/addressing construction → **temper-workflow** (already settled).
 
-**Open residue.** None.
+**Migration-time floor (binding).** No functionality regression at cutover: today's FTS, vector
+search, and graph reads carry, rebuilt against the new schema in the homes above. Cutover does
+not wait on the successor design below.
+
+**Named successor design unit — the agent information-access read surface.** The current
+read tooling is query-shaped (terms, cosine, label filters); the converged substrate makes reads
+**positional** — standing at resources already acquired, a region, or a charter question and
+asking what's near, what coheres, where the boundaries are, what to trust. This is the
+projection-class lineage taken up rigorously (research pair
+`2026-05-23-projection-classes-as-functions-*`, temper context: orientation, recall, wayfinding,
+recognition, composition, boundary-sensing, translation, trust-calibration as family-level
+attention shapes; a projection-class is a function of substrate × position × lens × intent).
+Inputs enumerated so none silently drop: neighborhood traversal from acquired
+resources/engaged concepts; properties-as-salience at **both resource and edge grain**; regions
+and lenses as retrieval surfaces; coherence/salience evaluation along traversal; tsvector +
+pgvector as components of these functions, not the whole surface. Constraint inherited from the
+carve-out test: the kernel serves structure and access-gated projections — interpretation stays
+above it. This design unit is its own spec, after (or alongside) cutover — never settled by
+migration-time implementation choice.
+
+**Open residue.** The successor design unit above (tracked, not optional).
 
 ## §D — Deployment adjudication
 
@@ -354,6 +374,7 @@ write path that can itself diverge — the exact failure being guarded against.
 - The migration plan's task-level decomposition (the successor plan, via writing-plans).
 - `kb_team_contexts` DDL + scenario proofs (artifact amendment, lands access-scaffold-first per §2).
 - Surface UX quality work (search ergonomics, command redesign) beyond the §5 contract.
+- The agent information-access read-surface design (§9's named successor unit — its own spec).
 - Crate-extraction internals (the data-model spec's topology stands; execution is post-cutover).
 - The WS5 remainders (Lance-Williams perf; finding-4 watermark index rides into the migration
   schema work where natural).
