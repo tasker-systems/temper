@@ -187,7 +187,7 @@ pub async fn incremental_materialize_cogmap(
         .iter()
         .filter(|c| changed_keys.contains(&c.members))
         .collect();
-    let stale_prior: Vec<Uuid> = diff.stale;
+    let stale_prior: Vec<Uuid> = diff.stale.clone();
 
     // membership fingerprint + region count are over the FULL current clustering (reused + changed),
     // identical to what a full pass at this watermark computes.
@@ -245,6 +245,37 @@ pub async fn incremental_materialize_cogmap(
             .await?;
         }
     }
+
+    // Readout-refresh (drift §1, slice 3b): reused components keep their membership AND their region
+    // ids, but a content revision since the prior materialize moved a member's embedding — so their
+    // stored readouts are stale. Re-run the readouts over the reused regions' fixed membership (no
+    // re-cluster, no new region ids) so incremental matches a full recompute. Gated on a CONTENT touch
+    // so a purely-structural pass does no redundant readout work on the reused side. `priors` is
+    // non-empty here (the empty case returned early to a full pass), so a prior materialize exists.
+    let prior_watermark = last_materialize_watermark(&mut tx, cogmap, s.lens_id).await?;
+    let content_touched = match prior_watermark {
+        Some(w) => crate::replay::content_touched_since(pool, cogmap, w).await?,
+        None => false,
+    };
+    if content_touched {
+        for prior_id in &diff.unchanged {
+            let region_ids: Vec<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM kb_cogmap_regions WHERE component_id=$1 AND NOT is_folded",
+            )
+            .bind(*prior_id)
+            .fetch_all(&mut *tx)
+            .await?;
+            for rid in region_ids {
+                populate_readouts(&mut tx, rid, &s.lens, &zero).await?;
+                sqlx::query("UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id=$2")
+                    .bind(ev)
+                    .bind(rid)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
+    }
+
     tx.commit().await?;
 
     Ok(MaterializeOutcome {
@@ -261,6 +292,27 @@ async fn current_watermark(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Re
         .fetch_optional(&mut **tx)
         .await?
         .context("materialize on an empty ledger (no events)")
+}
+
+/// The event id of the most recent region_materialized act for (cogmap, lens) BEFORE this transaction's
+/// own act — the point-in-time the reused regions' readouts were last computed against. This pass's act
+/// is already appended (the latest), so `OFFSET 1` skips it to the prior projection. `None` only if this
+/// is the very first materialize (no prior), where incremental never reaches the readout-refresh path.
+async fn last_materialize_watermark(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    cogmap: Uuid,
+    lens_id: Uuid,
+) -> Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+         WHERE et.name='region_materialized' \
+           AND (e.payload->>'cogmap_id')::uuid=$1 AND (e.payload->>'lens_id')::uuid=$2 \
+         ORDER BY e.id DESC OFFSET 1 LIMIT 1",
+    )
+    .bind(cogmap)
+    .bind(lens_id)
+    .fetch_optional(&mut **tx)
+    .await?)
 }
 
 async fn fold_live_regions(
@@ -387,6 +439,20 @@ async fn assert_region(
         .execute(&mut *tx)
         .await?;
     }
+    populate_readouts(tx, region, lens, zero_centroid).await
+}
+
+/// Re-derive a region's SQL readouts over its CURRENT members + embeddings: centroid (mean of
+/// per-member pooled chunk vectors), then content_cohesion / telos_alignment / reference_standing /
+/// centrality / internal_tension, then lens-weighted salience. Idempotent over fixed membership — the
+/// readout-refresh tier (drift §1) calls this on reused components whose content moved; `assert_region`
+/// calls it on a freshly-asserted region. Membership must already be inserted.
+async fn populate_readouts(
+    tx: &mut PgConnection,
+    region: Uuid,
+    lens: &Lens,
+    zero_centroid: &str,
+) -> Result<()> {
     // Centroid FIRST, in its own statement — Postgres evaluates all SET right-hand sides against the
     // OLD row, so the telos_alignment readout (which SELECTs the stored centroid) must run in a LATER
     // statement or it reads the zero placeholder → cosine-vs-zero = NaN → NaN salience. Pool per
