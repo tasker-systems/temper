@@ -288,6 +288,12 @@ pub enum Step {
         #[serde(default)]
         reason: Option<String>,
     },
+    /// Revise a concept resource's body prose (a content-only mutation: new chunk embeddings, no edge
+    /// or facet change). Fires `block_mutated` on the resource's single body block. `resource` is a key.
+    Revise {
+        resource: String,
+        body: String,
+    },
     Materialize {
         lens: String,
     },
@@ -337,6 +343,20 @@ pub enum Expectation {
     Stale {
         expect: bool,
     },
+    DriftTier {
+        lens: String,
+        tier: DriftTierName,
+    },
+}
+
+/// The drift tier names as they appear in scenario YAML (`check: drift_tier, tier: readout`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub enum DriftTierName {
+    Fresh,
+    Readout,
+    Structural,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
