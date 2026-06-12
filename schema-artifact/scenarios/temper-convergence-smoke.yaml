@@ -1,0 +1,25 @@
+# Smoke runbook over the temper-convergence charter: seed two adjudicated deltas and a sequencing
+# dependency, prove the map materializes into a non-degenerate, reproducible, lens-sensitive shape.
+# The seed stays charter-only; this scenario supplies the material.
+#
+# Structure (see storyteller-smoke header): the two deltas are a BOUND pair (shared `layer:delta`
+# facet + `near` = 0.7, stable under both lenses → co-region assertion). The adjudication→migration
+# sequencing is a LENS-SENSITIVE pair (`leads_to` only: 0.6 default / 0.1 propheavy → partition flips).
+name: temper-convergence-smoke
+seed: ../seeds/temper-convergence.yaml
+steps:
+  - { do: create_resource, key: edge_delta,   origin_uri: "temper://convergence/edge-taxonomy-delta", body: "Adjudicated delta: collapse the eight edge kinds to four (express, contains, leads_to, near) and remap the lost distinctions onto edge labels. Work in flight builds on this call." , facets: { values: { layer: delta } } }
+  - { do: create_resource, key: access_delta, origin_uri: "temper://convergence/access-capability-delta", body: "Adjudicated delta: replace the access tri-state (none/approved/admin) with capability booleans (can_read, can_write). The leak-safety invariants gate every cutover step that touches sharing." , facets: { values: { layer: delta } } }
+  - { do: create_resource, key: adjudication, origin_uri: "temper://convergence/adjudication-spec", body: "The adjudication spec resolves the decision-required deltas before any production migration is expressed from the artifact." }
+  - { do: create_resource, key: migration,    origin_uri: "temper://convergence/production-migration", body: "Production migration by genesis-event synthesis — backfill as replay with per-resource hash parity, one surface cut over at a time behind a parity-read harness." }
+  - { do: assert_edge, from: edge_delta, to: access_delta, kind: near, label: co-adjudicated }
+  - { do: assert_edge, from: adjudication, to: migration, kind: leads_to, label: sequences }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: region_count, lens: telos-default, op: ">=", value: 2 }
+      - { check: co_region, lens: telos-default, members: [edge_delta, access_delta], expect: true }
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: reproducible, lens: telos-default }] }
+  - { do: materialize, lens: telos-default-propheavy }
+  - { do: assert, checks: [{ check: fingerprint_differs, lens_a: telos-default, lens_b: telos-default-propheavy }] }

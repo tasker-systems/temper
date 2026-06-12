@@ -313,8 +313,153 @@
       ]
     },
     "Step": {
-      "description": "Internally tagged by `do:` — serde_yaml 0.9 rejects the externally-tagged single-key-map form\n(it wants `!Variant` tags), so the runbook discriminates on a `do` field.",
+      "description": "Internally tagged by `do:` — serde_yaml 0.9 rejects the externally-tagged single-key-map form\n(it wants `!Variant` tags), so the runbook discriminates on a `do` field. Each mutation variant\nmirrors a `SeedAction` (events.rs) 1:1; `materialize`/`assert` drive + check the projection.",
       "oneOf": [
+        {
+          "description": "Add a concept resource to the map mid-runbook (one content-block body, optional facets). Its\n`key` joins the runner's key map for later steps. Home is always the scenario cogmap.",
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "origin_uri": {
+              "type": "string"
+            },
+            "doc_type": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "body": {
+              "type": "string"
+            },
+            "facets": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FacetDef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "do": {
+              "type": "string",
+              "const": "create_resource"
+            }
+          },
+          "required": [
+            "do",
+            "key",
+            "origin_uri",
+            "body"
+          ]
+        },
+        {
+          "description": "Set a resource's `facet` property (re-facet / re-weight). `resource` is a key.",
+          "type": "object",
+          "properties": {
+            "resource": {
+              "type": "string"
+            },
+            "values": {
+              "type": "object",
+              "additionalProperties": true
+            },
+            "weight": {
+              "type": "number",
+              "format": "double",
+              "default": 1.0
+            },
+            "do": {
+              "type": "string",
+              "const": "set_facet"
+            }
+          },
+          "required": [
+            "do",
+            "resource",
+            "values"
+          ]
+        },
+        {
+          "description": "Assert a typed edge between two keyed resources (replaces the old special-cased `emit_event`).",
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EdgeKind"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "weight": {
+              "type": "number",
+              "format": "double",
+              "default": 1.0
+            },
+            "do": {
+              "type": "string",
+              "const": "assert_edge"
+            }
+          },
+          "required": [
+            "do",
+            "from",
+            "to",
+            "kind"
+          ]
+        },
+        {
+          "description": "Fold the live edge at `{from,to,kind}` coordinates (retire a relationship). The runner resolves\nthe non-folded edge to its id, then fires `relationship_fold`.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/EdgeKind"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
+            "do": {
+              "type": "string",
+              "const": "fold_edge"
+            }
+          },
+          "required": [
+            "do",
+            "from",
+            "to",
+            "kind"
+          ]
+        },
         {
           "type": "object",
           "properties": {
@@ -329,29 +474,6 @@
           "required": [
             "do",
             "lens"
-          ]
-        },
-        {
-          "type": "object",
-          "properties": {
-            "type": {
-              "type": "string"
-            },
-            "edges": {
-              "type": "array",
-              "items": {
-                "$ref": "#/$defs/EdgeDef"
-              }
-            },
-            "do": {
-              "type": "string",
-              "const": "emit_event"
-            }
-          },
-          "required": [
-            "do",
-            "type",
-            "edges"
           ]
         },
         {

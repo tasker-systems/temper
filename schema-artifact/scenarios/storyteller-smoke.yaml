@@ -1,0 +1,27 @@
+# Smoke runbook over the storyteller charter: seed a little creative material (two personas + two
+# commitments), prove the map materializes into a non-degenerate, reproducible, lens-sensitive shape.
+# The seed stays charter-only; this scenario supplies the material (seed/scenario split).
+#
+# Structure (declared-only affinity, resolution 0.5): the two personas are a BOUND pair — a shared
+# `layer:persona` facet (w_prop 0.4) plus a `near` edge (0.3) = 0.7, above resolution under BOTH
+# system lenses, so they always co-region (the stable assertion). The two commitments are a
+# LENS-SENSITIVE pair — a `leads_to` edge only (0.6 under telos-default → merged; 0.1 under
+# telos-default-propheavy → split), so the partition differs across lenses (fingerprint_differs).
+name: storyteller-smoke
+seed: ../seeds/storyteller.yaml
+steps:
+  - { do: create_resource, key: narrator,    origin_uri: "temper://storyteller/narrator",    body: "The narrator persona: renders the experience of the story, holds tone and pacing, and never scripts a character's move — it shows the move the situation already made inevitable." , facets: { values: { layer: persona } } }
+  - { do: create_resource, key: storykeeper, origin_uri: "temper://storyteller/storykeeper", body: "The storykeeper persona: holds narrative gravity and the situation, keeping the world's affordances live so characters always have a reason to move toward action." , facets: { values: { layer: persona } } }
+  - { do: create_resource, key: gravity,      origin_uri: "temper://storyteller/narrative-gravity",  body: "Commitment: narrative gravity over branching trees — the design pulls toward situation and consequence, not a menu of scripted options." }
+  - { do: create_resource, key: imperfect_info, origin_uri: "temper://storyteller/imperfect-information", body: "Commitment: imperfect information as a generative principle — what a character cannot see is what gives the next move its charge." }
+  - { do: assert_edge, from: narrator, to: storykeeper, kind: near, label: collaborates }
+  - { do: assert_edge, from: gravity, to: imperfect_info, kind: leads_to, label: motivates }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: region_count, lens: telos-default, op: ">=", value: 2 }
+      - { check: co_region, lens: telos-default, members: [narrator, storykeeper], expect: true }
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: reproducible, lens: telos-default }] }
+  - { do: materialize, lens: telos-default-propheavy }
+  - { do: assert, checks: [{ check: fingerprint_differs, lens_a: telos-default, lens_b: telos-default-propheavy }] }

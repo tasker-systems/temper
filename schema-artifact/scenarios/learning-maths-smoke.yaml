@@ -1,0 +1,25 @@
+# Smoke runbook over the learning-maths charter: seed two category-theory concepts and a
+# correspondence-to-detour line, prove the map materializes into a non-degenerate, reproducible,
+# lens-sensitive shape. The seed stays charter-only; this scenario supplies the material.
+#
+# Structure (see storyteller-smoke header): the two core concepts are a BOUND pair (shared
+# `topic:category-theory` facet + `near` = 0.7, stable under both lenses → co-region assertion). The
+# correspondence→detour line is a LENS-SENSITIVE pair (`leads_to` only → partition flips by lens).
+name: learning-maths-smoke
+seed: ../seeds/learning-maths.yaml
+steps:
+  - { do: create_resource, key: preorders,  origin_uri: "temper://maths/ss1-preorders",  body: "Seven Sketches section 1 engagement-trace: preorders and monotone maps — order as the first sketch of structure, a set with a reflexive transitive relation." , facets: { values: { topic: category-theory } } }
+  - { do: create_resource, key: adjunction, origin_uri: "temper://maths/adjunction",      body: "Stabilized concept: Galois connections and adjunctions between preorders — the paired monotone maps the early sections build toward, the best approximation from each side." , facets: { values: { topic: category-theory } } }
+  - { do: create_resource, key: presheaf,   origin_uri: "temper://maths/substrate-as-presheaf", body: "Candidate correspondence under test: the temper substrate read as a presheaf, with translation as its cohomological obstruction. Held open as a guiding reference, not yet earned." }
+  - { do: create_resource, key: manifolds,  origin_uri: "temper://maths/riemannian-detour", body: "A detour into Riemannian manifolds and local-to-global structure — welcome so long as it still illuminates information topological spaces, the kind of space temper's cognitive maps are." }
+  - { do: assert_edge, from: preorders, to: adjunction, kind: near, label: same-tier }
+  - { do: assert_edge, from: presheaf, to: manifolds, kind: leads_to, label: opens-onto }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: region_count, lens: telos-default, op: ">=", value: 2 }
+      - { check: co_region, lens: telos-default, members: [preorders, adjunction], expect: true }
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: reproducible, lens: telos-default }] }
+  - { do: materialize, lens: telos-default-propheavy }
+  - { do: assert, checks: [{ check: fingerprint_differs, lens_a: telos-default, lens_b: telos-default-propheavy }] }

@@ -243,18 +243,53 @@ pub struct LensDef {
 }
 
 /// Internally tagged by `do:` — serde_yaml 0.9 rejects the externally-tagged single-key-map form
-/// (it wants `!Variant` tags), so the runbook discriminates on a `do` field.
+/// (it wants `!Variant` tags), so the runbook discriminates on a `do` field. Each mutation variant
+/// mirrors a `SeedAction` (events.rs) 1:1; `materialize`/`assert` drive + check the projection.
 #[derive(Debug, Deserialize)]
 #[serde(tag = "do", rename_all = "snake_case")]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub enum Step {
+    /// Add a concept resource to the map mid-runbook (one content-block body, optional facets). Its
+    /// `key` joins the runner's key map for later steps. Home is always the scenario cogmap.
+    CreateResource {
+        key: String,
+        #[serde(default)]
+        title: Option<String>,
+        origin_uri: String,
+        #[serde(default)]
+        doc_type: Option<String>,
+        body: String,
+        #[serde(default)]
+        facets: Option<FacetDef>,
+    },
+    /// Set a resource's `facet` property (re-facet / re-weight). `resource` is a key.
+    SetFacet {
+        resource: String,
+        values: serde_json::Map<String, serde_json::Value>,
+        #[serde(default = "one")]
+        weight: f64,
+    },
+    /// Assert a typed edge between two keyed resources (replaces the old special-cased `emit_event`).
+    AssertEdge {
+        from: String,
+        to: String,
+        kind: EdgeKind,
+        #[serde(default)]
+        label: Option<String>,
+        #[serde(default = "one")]
+        weight: f64,
+    },
+    /// Fold the live edge at `{from,to,kind}` coordinates (retire a relationship). The runner resolves
+    /// the non-folded edge to its id, then fires `relationship_fold`.
+    FoldEdge {
+        from: String,
+        to: String,
+        kind: EdgeKind,
+        #[serde(default)]
+        reason: Option<String>,
+    },
     Materialize {
         lens: String,
-    },
-    EmitEvent {
-        #[serde(rename = "type")]
-        event_type: String,
-        edges: Vec<EdgeDef>,
     },
     Assert {
         checks: Vec<Expectation>,
@@ -342,11 +377,14 @@ uses_lenses: [L]
 
     const STEPS_YAML: &str = r#"
 steps:
+  - { do: create_resource, key: c, origin_uri: "temper://c/c", body: "a third concept" }
+  - { do: set_facet, resource: c, values: { phase: x }, weight: 1.5 }
   - { do: materialize, lens: L }
   - do: assert
     checks:
       - { check: co_region, lens: L, members: [a, b], expect: true }
-  - { do: emit_event, type: relationship_asserted, edges: [{ from: b, to: a, kind: express, label: related }] }
+  - { do: assert_edge, from: b, to: a, kind: express, label: related }
+  - { do: fold_edge, from: a, to: b, kind: leads_to, reason: "superseded" }
   - do: assert
     checks:
       - { check: stale, expect: true }
@@ -381,7 +419,7 @@ steps:
                 .join("\n"),
         );
         let s: Scenario = serde_yaml::from_str(&yaml).unwrap();
-        assert_eq!(s.steps.len(), 4);
+        assert_eq!(s.steps.len(), 7);
         let seed = s.resolve_seed(Path::new("/nonexistent")).unwrap();
         assert_eq!(seed.name, "t");
         assert_eq!(seed.resources.len(), 2);

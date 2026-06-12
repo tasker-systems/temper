@@ -1,13 +1,14 @@
 //! Scenario runner: resolves the scenario's seed (referenced or embedded), loads its substrate
 //! through the same `loader::load_seed` path a standalone seed uses, then executes the ordered
-//! `steps` runbook in-process (materialize / emit-event / assert). Materialize reuses
-//! `embed_chunks` and `materialize_cogmap`; emit-event calls the reusable `relationship_assert`
-//! function; assert evaluates each expectation against the materialized regions. A per-lens
+//! `steps` runbook in-process (materialize / mutation / assert). Materialize reuses
+//! `embed_chunks` and `materialize_cogmap`; the mutation steps (create_resource / set_facet /
+//! assert_edge / fold_edge) each fire their matching `SeedAction`; assert evaluates each
+//! expectation against the materialized regions. A per-lens
 //! fingerprint cache backs the `reproducible` / `fingerprint_differs` checks. Any failed
 //! expectation aborts with a descriptive error.
 
 use crate::events::{fire, SeedAction};
-use crate::ids::{CogmapId, EntityId};
+use crate::ids::{CogmapId, EntityId, ProfileId, ResourceId};
 use crate::scenario::loader::{self, Loaded};
 use crate::scenario::model::*;
 use crate::{embed, write};
@@ -20,7 +21,7 @@ use uuid::Uuid;
 /// `base_dir` anchors a `seed:` path reference — pass the scenario file's directory.
 pub async fn run_scenario(pool: &PgPool, s: &Scenario, base_dir: &Path) -> Result<()> {
     let seed = s.resolve_seed(base_dir)?;
-    let loaded = loader::load_seed(pool, &seed).await?;
+    let mut loaded = loader::load_seed(pool, &seed).await?;
     validate_lenses(pool, &loaded, &seed, &s.steps).await?;
 
     // per-lens fingerprints: `current` is the latest materialize; `previous` is the one before it.
@@ -38,17 +39,17 @@ pub async fn run_scenario(pool: &PgPool, s: &Scenario, base_dir: &Path) -> Resul
                     previous.insert(lens.clone(), prev);
                 }
             }
-            Step::EmitEvent { event_type, edges } => {
-                emit_event(pool, &loaded, edges)
-                    .await
-                    .with_context(|| format!("step {i}: emit_event {event_type}"))?;
-            }
             Step::Assert { checks } => {
                 for c in checks {
                     eval_expectation(pool, &loaded, c, &current, &previous)
                         .await
                         .with_context(|| format!("step {i}: assertion failed"))?;
                 }
+            }
+            mutation => {
+                apply_mutation(pool, &mut loaded, mutation)
+                    .await
+                    .with_context(|| format!("step {i}: mutation failed"))?;
             }
         }
     }
@@ -77,7 +78,7 @@ async fn validate_lenses(
                     }
                 }
             }
-            Step::EmitEvent { .. } => {}
+            _ => {}
         }
     }
     for name in names {
@@ -110,32 +111,141 @@ fn expectation_lenses(e: &Expectation) -> Vec<&str> {
     }
 }
 
-async fn emit_event(pool: &PgPool, loaded: &Loaded, edges: &[EdgeDef]) -> Result<()> {
+/// Resolve a runbook key to its resource UUID. A free function (not a closure over `loaded`) so the
+/// create_resource arm can take `&mut loaded.keys` to insert without a borrow conflict.
+fn lookup(keys: &HashMap<String, Uuid>, k: &str) -> Result<Uuid> {
+    keys.get(k)
+        .copied()
+        .with_context(|| format!("mutation references unknown key {k}"))
+}
+
+/// Apply one mutation step (create_resource / set_facet / assert_edge / fold_edge) by firing the
+/// matching SeedAction in its own transaction. create_resource registers the new key in `loaded.keys`.
+async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Result<()> {
     let mut tx = pool.begin().await?;
-    for e in edges {
-        let src = (*loaded
-            .keys
-            .get(&e.from)
-            .with_context(|| format!("emit_event edge from unknown key {}", e.from))?)
-        .into();
-        let tgt = (*loaded
-            .keys
-            .get(&e.to)
-            .with_context(|| format!("emit_event edge to unknown key {}", e.to))?)
-        .into();
-        fire(
-            &mut tx,
-            SeedAction::RelationshipAssert {
-                src,
-                tgt,
-                kind: e.kind,
-                label: e.label.as_deref(),
-                weight: e.weight,
-                home: CogmapId::from(loaded.cogmap),
-                emitter: EntityId::from(loaded.emitter),
-            },
-        )
-        .await?;
+    match step {
+        Step::CreateResource {
+            key: rkey,
+            title,
+            origin_uri,
+            doc_type,
+            body,
+            facets,
+        } => {
+            let display = title.clone().unwrap_or_else(|| rkey.clone());
+            let blocks = crate::content::prepare_blocks(&[(None, body.as_str())])?;
+            let rid = fire(
+                &mut tx,
+                SeedAction::ResourceCreate {
+                    title: &display,
+                    origin_uri,
+                    home: CogmapId::from(loaded.cogmap),
+                    owner: ProfileId::from(loaded.owner),
+                    blocks: &blocks,
+                    doc_type: doc_type.as_deref(),
+                    emitter: EntityId::from(loaded.emitter),
+                },
+            )
+            .await?
+            .resource()?;
+            if let Some(f) = facets {
+                let values = serde_json::Value::Object(f.values().clone());
+                fire(
+                    &mut tx,
+                    SeedAction::FacetSet {
+                        resource: rid,
+                        values: &values,
+                        weight: f.weight(),
+                        emitter: EntityId::from(loaded.emitter),
+                    },
+                )
+                .await?;
+            }
+            tx.commit().await?;
+            loaded.keys.insert(rkey.clone(), rid.uuid());
+            return Ok(());
+        }
+        Step::SetFacet {
+            resource,
+            values,
+            weight,
+        } => {
+            let rid = ResourceId::from(lookup(&loaded.keys, resource)?);
+            let v = serde_json::Value::Object(values.clone());
+            fire(
+                &mut tx,
+                SeedAction::FacetSet {
+                    resource: rid,
+                    values: &v,
+                    weight: *weight,
+                    emitter: EntityId::from(loaded.emitter),
+                },
+            )
+            .await?;
+        }
+        Step::AssertEdge {
+            from,
+            to,
+            kind,
+            label,
+            weight,
+        } => {
+            fire(
+                &mut tx,
+                SeedAction::RelationshipAssert {
+                    src: ResourceId::from(lookup(&loaded.keys, from)?),
+                    tgt: ResourceId::from(lookup(&loaded.keys, to)?),
+                    kind: *kind,
+                    label: label.as_deref(),
+                    weight: *weight,
+                    home: CogmapId::from(loaded.cogmap),
+                    emitter: EntityId::from(loaded.emitter),
+                },
+            )
+            .await?;
+        }
+        Step::FoldEdge {
+            from,
+            to,
+            kind,
+            reason,
+        } => {
+            let src = lookup(&loaded.keys, from)?;
+            let tgt = lookup(&loaded.keys, to)?;
+            // Runtime query (not a !-macro): the live-edge resolution + ambiguity guard is dynamic
+            // intent (the per-crate macro-cache exception). query_scalar returns the id column directly.
+            let edge_ids: Vec<Uuid> = sqlx::query_scalar(
+                "SELECT id FROM kb_edges \
+                 WHERE source_table='kb_resources' AND source_id=$1 \
+                   AND target_table='kb_resources' AND target_id=$2 \
+                   AND edge_kind=$3::edge_kind \
+                   AND home_anchor_table='kb_cogmaps' AND home_anchor_id=$4 \
+                   AND NOT is_folded",
+            )
+            .bind(src)
+            .bind(tgt)
+            .bind(kind.as_sql())
+            .bind(loaded.cogmap)
+            .fetch_all(&mut *tx)
+            .await?;
+            let edge_id = match edge_ids.as_slice() {
+                [one] => *one,
+                [] => bail!("fold_edge: no live edge {from}-[{kind:?}]->{to}"),
+                _ => bail!("fold_edge: ambiguous — >1 live edge {from}-[{kind:?}]->{to}"),
+            };
+            fire(
+                &mut tx,
+                SeedAction::RelationshipFold {
+                    edge: crate::ids::EdgeId::from(edge_id),
+                    reason: reason.as_deref(),
+                    emitter: EntityId::from(loaded.emitter),
+                },
+            )
+            .await?;
+        }
+        Step::Materialize { .. } | Step::Assert { .. } => {
+            unreachable!("materialize/assert handled in run_scenario")
+        }
     }
     tx.commit().await?;
     Ok(())
