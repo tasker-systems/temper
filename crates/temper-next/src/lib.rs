@@ -8,6 +8,7 @@ pub mod cluster;
 pub mod content;
 pub mod embed;
 pub mod events;
+pub mod fingerprint;
 pub mod ids;
 pub mod payloads;
 pub mod replay;
