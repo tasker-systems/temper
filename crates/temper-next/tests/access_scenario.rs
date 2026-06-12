@@ -18,6 +18,15 @@ fn load_access_yaml() -> AccessScenario {
     serde_yaml::from_str(&std::fs::read_to_string(ACCESS_SCENARIO).unwrap()).unwrap()
 }
 
+const CONTEXT_SHARE_SCENARIO: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../schema-artifact/access-scenarios/context-share-access.yaml"
+);
+
+fn load_context_share_yaml() -> AccessScenario {
+    serde_yaml::from_str(&std::fs::read_to_string(CONTEXT_SHARE_SCENARIO).unwrap()).unwrap()
+}
+
 #[tokio::test]
 async fn loads_topology_row_counts() {
     common::reset_artifact();
@@ -68,6 +77,17 @@ async fn proves_all_access_invariants() {
     access::run_access_scenario(&pool, &load_access_yaml())
         .await
         .expect("all S1-S5 access checks pass");
+}
+
+#[tokio::test]
+async fn proves_context_share_invariants() {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+
+    access::run_access_scenario(&pool, &load_context_share_yaml())
+        .await
+        .expect("all context-share leak-safety checks pass");
 }
 
 #[tokio::test]
