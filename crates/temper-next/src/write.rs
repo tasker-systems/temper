@@ -3,12 +3,13 @@ use crate::ids::{CogmapId, EntityId, EventId, LensId, RegionId};
 use crate::{
     affinity::{affinity, Lens},
     cluster::{agglomerate, connected_components},
+    drift,
     fingerprint::component_fingerprint,
     substrate::{self, Substrate},
 };
 use anyhow::{Context, Result};
 use sqlx::{PgConnection, PgPool};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 pub struct MaterializeOutcome {
@@ -167,35 +168,26 @@ pub async fn incremental_materialize_cogmap(
     let s = substrate::load(pool, cogmap, lens_name).await?;
     let comps = cluster_components(&s);
 
-    let priors = live_components(pool, cogmap, s.lens_id).await?;
+    let priors = drift::live_components(pool, cogmap, s.lens_id).await?;
     if priors.is_empty() {
         // nothing to diff against — the first materialize for this lens is a full pass.
         return materialize_cogmap(pool, cogmap, lens_name, emitter).await;
     }
 
-    // a current component is UNCHANGED iff a live prior has the identical member set AND fingerprint
-    // (both members lists are ascending-sorted ⇒ Vec equality is set equality). Components are a
-    // disjoint partition, so member sets are unique within each side and the match is unambiguous.
-    let prior_by_key: HashMap<(Vec<Uuid>, String), Uuid> = priors
+    // the same fingerprint comparison drift detection uses: which components are reused untouched,
+    // which member-sets must be re-clustered, which priors are stale. Member-sets are unique within
+    // the partition, so map the changed member-sets back to their `ComponentWork` (for the clusters).
+    let current_fps: Vec<(Vec<Uuid>, String)> = comps
         .iter()
-        .map(|(id, members, fp)| ((members.clone(), fp.clone()), *id))
+        .map(|c| (c.members.clone(), c.fingerprint.clone()))
         .collect();
-    let mut matched_prior: HashSet<Uuid> = HashSet::new();
-    let mut changed: Vec<&ComponentWork> = Vec::new();
-    for c in &comps {
-        match prior_by_key.get(&(c.members.clone(), c.fingerprint.clone())) {
-            Some(pid) => {
-                matched_prior.insert(*pid);
-            }
-            None => changed.push(c),
-        }
-    }
-    // priors no current component matched are stale: their inputs changed, split, or merged away.
-    let stale_prior: Vec<Uuid> = priors
+    let diff = drift::classify(&current_fps, &priors);
+    let changed_keys: HashSet<&Vec<Uuid>> = diff.changed.iter().collect();
+    let changed: Vec<&ComponentWork> = comps
         .iter()
-        .map(|(id, _, _)| *id)
-        .filter(|id| !matched_prior.contains(id))
+        .filter(|c| changed_keys.contains(&c.members))
         .collect();
+    let stale_prior: Vec<Uuid> = diff.stale;
 
     // membership fingerprint + region count are over the FULL current clustering (reused + changed),
     // identical to what a full pass at this watermark computes.
@@ -269,34 +261,6 @@ async fn current_watermark(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Re
         .fetch_optional(&mut **tx)
         .await?
         .context("materialize on an empty ledger (no events)")
-}
-
-/// Live (non-folded) components for this lens: (id, sorted member ids, fingerprint) — the diff basis
-/// for incremental materialization.
-async fn live_components(
-    pool: &PgPool,
-    cogmap: Uuid,
-    lens_id: Uuid,
-) -> Result<Vec<(Uuid, Vec<Uuid>, String)>> {
-    use sqlx::Row;
-    let rows = sqlx::query(
-        "SELECT id, member_ids, fingerprint FROM kb_cogmap_components \
-         WHERE cogmap_id=$1 AND lens_id=$2 AND NOT is_folded",
-    )
-    .bind(cogmap)
-    .bind(lens_id)
-    .fetch_all(pool)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(|r| {
-            (
-                r.get::<Uuid, _>("id"),
-                r.get::<Vec<Uuid>, _>("member_ids"),
-                r.get::<String, _>("fingerprint"),
-            )
-        })
-        .collect())
 }
 
 async fn fold_live_regions(

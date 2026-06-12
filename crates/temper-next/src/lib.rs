@@ -6,6 +6,7 @@
 pub mod affinity;
 pub mod cluster;
 pub mod content;
+pub mod drift;
 pub mod embed;
 pub mod events;
 pub mod fingerprint;
