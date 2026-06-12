@@ -252,27 +252,29 @@ pub async fn incremental_materialize_cogmap(
     // re-cluster, no new region ids) so incremental matches a full recompute. Gated on a CONTENT touch
     // so a purely-structural pass does no redundant readout work on the reused side. `priors` is
     // non-empty here (the empty case returned early to a full pass), so a prior materialize exists.
-    let prior_watermark = last_materialize_watermark(&mut tx, cogmap, s.lens_id).await?;
+    let prior_watermark = last_materialize_watermark(&mut tx, cogmap, s.lens_id, ev).await?;
     let content_touched = match prior_watermark {
         Some(w) => crate::replay::content_touched_since(pool, cogmap, w).await?,
         None => false,
     };
     if content_touched {
-        for prior_id in &diff.unchanged {
-            let region_ids: Vec<Uuid> = sqlx::query_scalar(
-                "SELECT id FROM kb_cogmap_regions WHERE component_id=$1 AND NOT is_folded",
-            )
-            .bind(*prior_id)
-            .fetch_all(&mut *tx)
-            .await?;
-            for rid in region_ids {
-                populate_readouts(&mut tx, rid, &s.lens, &zero).await?;
-                sqlx::query("UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id=$2")
-                    .bind(ev)
-                    .bind(rid)
-                    .execute(&mut *tx)
-                    .await?;
-            }
+        // one query for every reused component's live regions (not N per-component round-trips).
+        let region_ids: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM kb_cogmap_regions WHERE component_id = ANY($1) AND NOT is_folded",
+        )
+        .bind(&diff.unchanged)
+        .fetch_all(&mut *tx)
+        .await?;
+        for rid in &region_ids {
+            populate_readouts(&mut tx, *rid, &s.lens, &zero).await?;
+        }
+        // one batched last_event_id stamp for every refreshed region (same `ev` for all).
+        if !region_ids.is_empty() {
+            sqlx::query("UPDATE kb_cogmap_regions SET last_event_id=$1 WHERE id = ANY($2)")
+                .bind(ev)
+                .bind(&region_ids)
+                .execute(&mut *tx)
+                .await?;
         }
     }
 
@@ -294,23 +296,28 @@ async fn current_watermark(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Re
         .context("materialize on an empty ledger (no events)")
 }
 
-/// The event id of the most recent region_materialized act for (cogmap, lens) BEFORE this transaction's
-/// own act — the point-in-time the reused regions' readouts were last computed against. This pass's act
-/// is already appended (the latest), so `OFFSET 1` skips it to the prior projection. `None` only if this
-/// is the very first materialize (no prior), where incremental never reaches the readout-refresh path.
+/// The event id of the most recent region_materialized act for (cogmap, lens) BEFORE `current_ev`
+/// (this pass's own act, already appended) — the point-in-time the reused regions' readouts were last
+/// computed against. Excluding `current_ev` explicitly (`e.id < $3`) states the intent directly rather
+/// than relying on "my own event is the single latest" (an `OFFSET 1` would silently return the wrong
+/// watermark under a second act in the same txn or a concurrent materialize). `None` only if this is
+/// the very first materialize, where incremental never reaches the readout-refresh path.
 async fn last_materialize_watermark(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     cogmap: Uuid,
     lens_id: Uuid,
+    current_ev: Uuid,
 ) -> Result<Option<Uuid>> {
     Ok(sqlx::query_scalar(
         "SELECT e.id FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
          WHERE et.name='region_materialized' \
            AND (e.payload->>'cogmap_id')::uuid=$1 AND (e.payload->>'lens_id')::uuid=$2 \
-         ORDER BY e.id DESC OFFSET 1 LIMIT 1",
+           AND e.id < $3 \
+         ORDER BY e.id DESC LIMIT 1",
     )
     .bind(cogmap)
     .bind(lens_id)
+    .bind(current_ev)
     .fetch_optional(&mut **tx)
     .await?)
 }
