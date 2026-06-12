@@ -743,6 +743,97 @@ BEGIN
 END;
 $$;
 
+-- ── block_mutated (content revision) ─────────────────────────────────────────
+-- Projection half (BlockMutated, payloads.rs): supersede the block's current chunks, insert the new
+-- revision's chunks (re-embedded inline, carried in the sidecar like resource_created), record the
+-- revision, bump the block's last_event_id, recompute the resource body_hash merkle. Block-body content
+-- is NOT a region-formation input (affinity is declared-only) — this moves a member's embedding, which
+-- the downstream SQL readouts (centroid → content_cohesion/telos_alignment) read, without touching any
+-- component's membership inputs. Resource body_hash is recomputed from CURRENT visible chunk hashes
+-- (ordered by block seq then chunk_index) — a pure function of visible state, so replay reproduces it.
+CREATE FUNCTION _project_block_mutated(p_event uuid, p_payload jsonb, p_content jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+        v_block    uuid := (p_payload->>'block_id')::uuid;
+        v_resource uuid;
+        v_next_ver int;
+        v_chunk_json jsonb; v_chunk uuid; v_side jsonb; v_emb jsonb;
+        v_chunk_hashes text := ''; v_chunk_count int := 0; v_block_hash text;
+        v_resource_hashes text;
+BEGIN
+    SELECT resource_id INTO v_resource FROM kb_content_blocks WHERE id = v_block;
+    IF v_resource IS NULL THEN
+        RAISE EXCEPTION '_project_block_mutated: block % not found', v_block;
+    END IF;
+    -- supersede the prior revision's chunks (is_current is the chunk-currency flag; the rows stay for CAS)
+    UPDATE kb_chunks SET is_current = false WHERE block_id = v_block AND is_current;
+    SELECT coalesce(max(version), 0) + 1 INTO v_next_ver FROM kb_chunks WHERE block_id = v_block;
+    FOR v_chunk_json IN SELECT jsonb_array_elements(p_payload->'chunks') LOOP
+        v_chunk := (v_chunk_json->>'chunk_id')::uuid;
+        v_side  := p_content->(v_chunk_json->>'chunk_id');
+        IF v_side IS NULL THEN
+            RAISE EXCEPTION '_project_block_mutated: content sidecar missing chunk %', v_chunk;
+        END IF;
+        v_emb := v_side->'embedding';
+        INSERT INTO kb_chunks (id, block_id, resource_id, chunk_index, version, content_hash,
+                               embedding, is_current, created)
+            VALUES (v_chunk, v_block, v_resource, (v_chunk_json->>'chunk_index')::int, v_next_ver,
+                    v_chunk_json->>'content_hash',
+                    CASE
+                        WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null' THEN NULL
+                        WHEN jsonb_typeof(v_emb) = 'string' THEN (v_emb #>> '{}')::vector  -- replay: pgvector text
+                        ELSE (v_emb::text)::vector                                          -- fire: JSON array
+                    END,
+                    true, v_occurred);
+        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (v_chunk, v_side->>'content');
+        v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
+        v_chunk_count := v_chunk_count + 1;
+    END LOOP;
+    v_block_hash := encode(sha256(convert_to(v_chunk_hashes, 'UTF8')), 'hex');
+    INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count, created)
+        VALUES (v_block, v_block_hash, v_chunk_count, v_occurred);
+    UPDATE kb_content_blocks SET last_event_id = p_event WHERE id = v_block;
+    -- resource body_hash = sha256 merkle over each non-folded block's (sha256 of its is_current chunk
+    -- hashes, in chunk_index order), blocks in seq order — recomputed from current visible state.
+    SELECT string_agg(bh, '' ORDER BY seq) INTO v_resource_hashes FROM (
+        SELECT b.seq,
+               encode(sha256(convert_to(string_agg(ch.content_hash, '' ORDER BY ch.chunk_index), 'UTF8')),
+                      'hex') AS bh
+        FROM kb_content_blocks b
+        JOIN kb_chunks ch ON ch.block_id = b.id AND ch.is_current
+        WHERE b.resource_id = v_resource AND NOT b.is_folded
+        GROUP BY b.seq
+    ) per_block;
+    UPDATE kb_resources
+        SET body_hash = encode(sha256(convert_to(coalesce(v_resource_hashes, ''), 'UTF8')), 'hex'),
+            updated = v_occurred
+        WHERE id = v_resource;
+    RETURN v_block;
+END;
+$$;
+
+-- Mutate a block's content (revise its prose). The producing anchor is an ENVELOPE concern derived
+-- from the block's resource home (prefer a cogmap home — same discipline as facet_set), never payload
+-- data. Emits `block_mutated` + projects, one txn.
+CREATE FUNCTION block_mutate(p_payload jsonb, p_content jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_block uuid := (p_payload->>'block_id')::uuid;
+        v_resource uuid; v_anchor_tbl text; v_anchor uuid;
+BEGIN
+    SELECT resource_id INTO v_resource FROM kb_content_blocks WHERE id = v_block;
+    IF v_resource IS NULL THEN
+        RAISE EXCEPTION 'block_mutate: block % not found', v_block;
+    END IF;
+    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
+        WHERE resource_id = v_resource ORDER BY (anchor_table = 'kb_cogmaps') DESC LIMIT 1;
+    IF v_anchor IS NULL THEN
+        RAISE EXCEPTION 'block_mutate: resource % has no home to anchor the event', v_resource;
+    END IF;
+    v_ev := _event_append('block_mutated', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    RETURN _project_block_mutated(v_ev, p_payload, p_content);
+END;
+$$;
+
 -- ── lens_created ─────────────────────────────────────────────────────────────
 CREATE FUNCTION _project_lens_created(p_event uuid, p_payload jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $$
