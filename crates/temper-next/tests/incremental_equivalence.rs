@@ -101,3 +101,45 @@ async fn incremental_actually_reuses_the_untouched_component() {
 async fn learning_maths_growth_incremental_equals_full() {
     assert_incremental_equals_full("learning-maths-growth.yaml").await
 }
+
+/// Run a scenario end-to-end in the given mode against a freshly reset namespace, verify the ledger
+/// roundtrips, and return the final telos-default READOUT signature (membership + readout values).
+async fn run_readout_scenario(file: &str, mode: MaterializeMode) -> String {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+    let path = format!(
+        "{}/../../schema-artifact/scenarios/{file}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let scenario: Scenario =
+        serde_yaml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let base = Path::new(&path).parent().unwrap();
+    runner::run_scenario_with(&pool, &scenario, base, mode)
+        .await
+        .unwrap_or_else(|e| panic!("{file} ({mode:?}) failed: {e:#}"));
+    temper_next::payloads::verify_ledger_roundtrip(&pool)
+        .await
+        .expect("ledger roundtrip");
+    let cogmaps: Vec<uuid::Uuid> = sqlx::query_scalar("SELECT id FROM kb_cogmaps")
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+    assert_eq!(cogmaps.len(), 1);
+    common::telos_default_readout_signature(&pool, cogmaps[0]).await
+}
+
+/// Slice 3b acceptance: after a body REVISION (a readout-only change), incremental materialization
+/// must produce the same readout values as a full recompute — it may reuse a component's membership
+/// AND region ids, but it must re-run that region's readouts over the moved embedding, not serve the
+/// stale ones. A regression here means incremental served a reused region's pre-revision readouts.
+#[tokio::test]
+async fn readout_refresh_incremental_equals_full() {
+    let full = run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Full).await;
+    let incremental =
+        run_readout_scenario("storyteller-readout.yaml", MaterializeMode::Incremental).await;
+    assert_eq!(
+        full, incremental,
+        "after a body revision, incremental readouts must match a full recompute (not reuse stale readouts)"
+    );
+}
