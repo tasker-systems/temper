@@ -24,7 +24,7 @@ cogmap:
       - "This map coordinates with the access-scaffold work: adjudicated access deltas land there first, and leak-safety invariants gate every cutover step that touches sharing."
       - "The schema artifact stays design-master: production migrations are expressed from the artifact, never the artifact from production."
       - "Migration is replay: backfill happens by genesis-event synthesis with per-resource hash parity — never by table copy."
-      - "Cutover runs one surface at a time — api, then cli/mcp, then ui — behind a parity-read harness, with only a short dual-write window; crate extraction comes last, against a stable schema."
+      - "Cutover is a single rehearsed hard cut: surfaces are ported in order (api, then cli/mcp, then ui) against a re-synthesizable rehearsal substrate behind a parity-read harness, with no dual-write window; crate extraction comes last, against a stable schema."
       - "This map is about converging the existing workflow/KB product; new cognitive-map capability is not its concern except where convergence forecloses it."
   owner: pete
   emitter: "convergence-agent#1"
