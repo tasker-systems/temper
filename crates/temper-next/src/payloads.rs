@@ -423,6 +423,11 @@ pub async fn verify_ledger_roundtrip(pool: &sqlx::PgPool) -> anyhow::Result<()> 
                 "region_materialized" => {
                     serde_json::from_value::<RegionMaterialized>(r.payload.clone())?;
                 }
+                "relationship_folded" => {
+                    serde_json::from_value::<RelationshipFolded>(r.payload.clone())?;
+                }
+                // Unlisted types (e.g. taxonomy entries no write path emits yet) are intentionally
+                // not roundtripped here; add an arm when a write path begins emitting one.
                 _ => {}
             }
             Ok(())
