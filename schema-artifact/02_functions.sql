@@ -113,8 +113,9 @@ CREATE TRIGGER trg_sync_personal_team
 -- ============================================================================
 
 -- A person reads a resource if they own/originated it, hold a direct
--- profile-anchored grant, or hold a team-anchored grant on any team they reach
--- (an effective team or one of its ancestors — grants inherit down). The
+-- profile-anchored grant, hold a team-anchored grant on any team they reach
+-- (an effective team or one of its ancestors — grants inherit down), or the
+-- resource homes in a context shared to a reachable team (WS6 §2). The
 -- temper-system root floor falls out: every team descends from root, so a root
 -- grant lands in every person's ancestor set.
 CREATE FUNCTION resources_visible_to(p_profile uuid)
@@ -135,23 +136,38 @@ RETURNS TABLE(resource_id uuid) LANGUAGE sql STABLE AS $$
     -- team-anchored grant on a reachable (self-or-ancestor) team
     SELECT ra.resource_id FROM kb_resource_access ra
      JOIN reachable_teams rt ON ra.anchor_id = rt.team_id
-     WHERE ra.anchor_table = 'kb_teams' AND ra.can_read;
+     WHERE ra.anchor_table = 'kb_teams' AND ra.can_read
+    UNION
+    -- context-share: resources homed in a context shared to a reachable team (WS6 §2)
+    SELECT h.resource_id
+    FROM kb_team_contexts tc
+    JOIN reachable_teams rt ON tc.team_id = rt.team_id
+    JOIN kb_resource_homes h
+      ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id;
 $$;
 
 -- ============================================================================
 -- PRODUCER AXIS — resources_accessible_to_cogmap(M) = ⋂ vis(T) over teams(M)
 -- ============================================================================
 
--- vis(T): team T's visibility. TEAM-anchored grants on T or its ancestors only.
--- Profile-anchored grants NEVER enter vis(T) — the A2 leak-safety invariant
--- (access §4): a person-grant cannot be referenced into a cogmap or leak
--- cross-team, which is what makes admitting kb_profiles as a grantee safe.
+-- vis(T): team T's visibility. TEAM-anchored grants on T or its ancestors, plus
+-- resources homed in contexts SHARED to T or its ancestors (WS6 adjudication §2 —
+-- context-shares are grant-like and inherit DOWN identically). Profile-anchored
+-- grants NEVER enter vis(T) — the A2 leak-safety invariant (access §4): a
+-- person-grant cannot be referenced into a cogmap or leak cross-team, which is
+-- what makes admitting kb_profiles as a grantee safe.
 CREATE FUNCTION vis_team(p_team uuid)
 RETURNS TABLE(resource_id uuid) LANGUAGE sql STABLE AS $$
     SELECT DISTINCT ra.resource_id
     FROM team_ancestors(p_team) a
     JOIN kb_resource_access ra
-      ON ra.anchor_table = 'kb_teams' AND ra.anchor_id = a.team_id AND ra.can_read;
+      ON ra.anchor_table = 'kb_teams' AND ra.anchor_id = a.team_id AND ra.can_read
+    UNION
+    SELECT h.resource_id
+    FROM team_ancestors(p_team) a
+    JOIN kb_team_contexts tc ON tc.team_id = a.team_id
+    JOIN kb_resource_homes h
+      ON h.anchor_table = 'kb_contexts' AND h.anchor_id = tc.context_id;
 $$;
 
 -- The least-privilege team-INTERSECTION (access §4). An agent producing in M may
@@ -211,14 +227,20 @@ $$;
 
 -- Can a Profile read a polymorphic anchor (an edge/region home)?
 --   cogmap  → cogmap_readable_by_profile
---   context → treated as readable (Domain-A workspaces; the gating scenario that
---             matters is the cogmap-homed private edge). A real impl would gate
---             context-home by context membership; simplified here for the artifact.
+--   context → ∃ a context-share on a reachable (self-or-ancestor) team (WS6 §2 —
+--             replaces the pre-amendment 'always true' simplification; a
+--             context-homed edge is gated exactly like the context's resources).
 CREATE FUNCTION anchor_readable_by_profile(p_profile uuid, p_anchor_table text, p_anchor_id uuid)
 RETURNS boolean LANGUAGE sql STABLE AS $$
     SELECT CASE p_anchor_table
         WHEN 'kb_cogmaps'  THEN cogmap_readable_by_profile(p_profile, p_anchor_id)
-        WHEN 'kb_contexts' THEN true
+        WHEN 'kb_contexts' THEN EXISTS (
+            SELECT 1
+            FROM profile_effective_teams(p_profile) e
+            CROSS JOIN LATERAL team_ancestors(e.team_id) a
+            JOIN kb_team_contexts tc ON tc.team_id = a.team_id
+            WHERE tc.context_id = p_anchor_id
+        )
         ELSE false
     END;
 $$;
