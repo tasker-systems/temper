@@ -117,7 +117,7 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
     let rows = sqlx::query(
         "SELECT e.id, et.name, e.payload \
            FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
-          WHERE et.name IN ('cogmap_seeded','resource_created') ORDER BY e.id",
+          WHERE et.name IN ('cogmap_seeded','resource_created','block_mutated') ORDER BY e.id",
     )
     .fetch_all(pool)
     .await?;
@@ -125,10 +125,16 @@ pub async fn snapshot(pool: &PgPool) -> Result<LedgerSnapshot> {
         let event_id: Uuid = r.get(0);
         let name: String = r.get(1);
         let payload: serde_json::Value = r.get(2);
-        let manifests = if name == "cogmap_seeded" {
-            payload.pointer("/telos/blocks").cloned()
-        } else {
-            payload.get("blocks").cloned()
+        let manifests = match name.as_str() {
+            "cogmap_seeded" => payload.pointer("/telos/blocks").cloned(),
+            "resource_created" => payload.get("blocks").cloned(),
+            // block_mutated carries a flat `chunks` array (one block); wrap it as a single
+            // pseudo-block so the chunk-extraction loop below stays uniform.
+            "block_mutated" => payload
+                .get("chunks")
+                .cloned()
+                .map(|chunks| serde_json::json!([{ "chunks": chunks }])),
+            _ => None,
         }
         .context("content-bearing payload missing blocks")?;
         let mut side = serde_json::Map::new();
@@ -216,6 +222,15 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
+            "block_mutated" => {
+                let side = snap.sidecars.get(&id).context("missing sidecar")?;
+                sqlx::query("SELECT _project_block_mutated($1,$2,$3)")
+                    .bind(id)
+                    .bind(&payload)
+                    .bind(side)
+                    .execute(pool)
+                    .await?;
+            }
             "relationship_asserted" => {
                 sqlx::query("SELECT _project_relationship_asserted($1,$2)")
                     .bind(id)
@@ -285,6 +300,24 @@ pub async fn formation_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uui
                                'relationship_asserted','relationship_retyped','relationship_reweighted', \
                                'relationship_folded','relationship_decayed','relationship_corrected', \
                                'property_asserted','block_created','block_mutated','block_folded'))",
+    )
+    .bind(cogmap)
+    .bind(watermark)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// True iff a CONTENT event (a block-body revision — the readout-only formation input) touched the
+/// cogmap after `watermark`. Distinct from [`formation_touched_since`] (which includes edge/facet
+/// structural events): incremental materialization re-runs readouts over reused components only when
+/// THIS is true, so a purely-structural change does no redundant readout work on the reused side.
+pub async fn content_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uuid) -> Result<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM kb_events e JOIN kb_event_types et ON et.id = e.event_type_id \
+             WHERE e.id > $2 \
+               AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
+               AND et.name IN ('block_mutated'))",
     )
     .bind(cogmap)
     .bind(watermark)
