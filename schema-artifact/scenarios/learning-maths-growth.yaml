@@ -1,0 +1,33 @@
+# Growth/drift runbook over the learning-maths charter. The charter names its own inbound events: a
+# section engaged, a concept stabilized, a correspondence proposed — or WALKED BACK (the fold). The
+# walk-back is constitutive: "borrowed concepts are walked back where they stop landing with
+# specificity." Material arrives, a correspondence edge folds, and the concept regroups onto a detour.
+#
+# Affinity is declared-only (edges + facet overlap), clustered by average-link >= resolution 0.5.
+# The three category-theory concepts share `topic:category-theory` (w_prop 0.4) so they bind as a
+# neighborhood; the presheaf↔adjunction correspondence is an `express` edge (1.0) on top. When that
+# edge folds, presheaf's remaining tie to the cluster is facet-only (0.4 < 0.5) so it drifts out, then
+# an `express` edge to the differential-geometry detour (1.0) regroups it.
+name: learning-maths-growth
+seed: ../seeds/learning-maths.yaml
+steps:
+  # Stage 1 — early sections + a stabilized concept form the category-theory neighborhood.
+  - { do: create_resource, key: preorders,  origin_uri: "temper://maths/ss1-preorders",  body: "Seven Sketches section 1: preorders and monotone maps — order as the first sketch of structure." , facets: { values: { topic: category-theory } } }
+  - { do: create_resource, key: adjunction, origin_uri: "temper://maths/adjunction",      body: "The stabilized concept the early sections build toward: Galois connections / adjunctions between preorders — best approximation from each side." , facets: { values: { topic: category-theory } } }
+  - { do: assert_edge, from: preorders, to: adjunction, kind: near, label: same-tier }
+  # Stage 2 — a correspondence to the temper substrate is proposed, leaning on the adjunction.
+  - { do: create_resource, key: presheaf, origin_uri: "temper://maths/substrate-as-presheaf", body: "Candidate correspondence: the temper substrate read as a presheaf; translation as its cohomological obstruction. Held open, under test." , facets: { values: { topic: category-theory } } }
+  - { do: assert_edge, from: presheaf, to: adjunction, kind: express, label: leans-on }
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: co_region, lens: telos-default, members: [presheaf, adjunction], expect: true }] }
+  # Stage 3 — the correspondence stops landing with specificity and is WALKED BACK (the edge folds).
+  - { do: fold_edge, from: presheaf, to: adjunction, kind: express, reason: "walked back — the presheaf reading stopped landing with specificity once temper-next proved the shape in real SQL" }
+  - { do: assert, checks: [{ check: stale, expect: true }] }
+  # A differential-geometry detour arrives and the walked-back idea opens onto it.
+  - { do: create_resource, key: manifolds, origin_uri: "temper://maths/riemannian-detour", body: "A detour into Riemannian manifolds and local-to-global structure — welcome so long as it still illuminates information topological spaces." , facets: { values: { topic: differential-geometry } } }
+  - { do: assert_edge, from: presheaf, to: manifolds, kind: express, label: opens-onto }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: co_region, lens: telos-default, members: [presheaf, adjunction], expect: false }  # the fold separated them
+      - { check: co_region, lens: telos-default, members: [presheaf, manifolds], expect: true }    # regrouped onto the detour

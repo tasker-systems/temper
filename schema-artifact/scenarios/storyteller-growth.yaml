@@ -1,0 +1,38 @@
+# Growth/drift runbook over the storyteller charter (the corpus's non-engineering shape). Personas
+# and constitutive commitments accrete; an early commitment is superseded, its edge folds, and a new
+# commitment binds in while the superseded one drifts off — the map re-materializes with a regrouped
+# neighborhood.
+#
+# Affinity is declared-only (edges + facet overlap), clustered by average-link >= resolution 0.5. The
+# two personas are a stable region (shared `layer:persona` + near = 0.7). The commitments share
+# `layer:commitment`; a `near` edge (0.3 + 0.4 = 0.7) binds gravity↔branching until it folds. After
+# the fold, branching's only tie is facet-only (0.4 < 0.5) so it drifts off; a new `near` edge binds
+# character-as-tensor to gravity. Personas are never edge-linked to commitments, so the two
+# neighborhoods stay distinct (no average-link dilution across them).
+name: storyteller-growth
+seed: ../seeds/storyteller.yaml
+steps:
+  # Stage 1 — a persona pair and a commitment pair form two stable neighborhoods.
+  - { do: create_resource, key: narrator,    origin_uri: "temper://storyteller/narrator",    body: "The narrator persona: renders the experience, holds tone and pacing, never scripts a character's move." , facets: { values: { layer: persona } } }
+  - { do: create_resource, key: storykeeper, origin_uri: "temper://storyteller/storykeeper", body: "The storykeeper persona: holds narrative gravity and the situation so characters have reasons to move." , facets: { values: { layer: persona } } }
+  - { do: create_resource, key: gravity,     origin_uri: "temper://storyteller/narrative-gravity", body: "Commitment: narrative gravity over branching trees — pull toward situation, not a menu of scripted options." , facets: { values: { layer: commitment } } }
+  - { do: create_resource, key: branching,   origin_uri: "temper://storyteller/branching-choices", body: "Early commitment: explicit branching choice-menus give the player agency. Under tension with narrative gravity." , facets: { values: { layer: commitment } } }
+  - { do: assert_edge, from: narrator, to: storykeeper, kind: near, label: collaborates }
+  - { do: assert_edge, from: gravity, to: branching, kind: near, label: contends-with }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: region_count, lens: telos-default, op: ">=", value: 2 }
+      - { check: co_region, lens: telos-default, members: [gravity, branching], expect: true }
+      - { check: co_region, lens: telos-default, members: [narrator, storykeeper], expect: true }
+  # Stage 2 — branching is superseded by character-as-tensor; the contends-with edge folds.
+  - { do: fold_edge, from: gravity, to: branching, kind: near, reason: "superseded — branching menus lose to character-as-tensor agency" }
+  - { do: assert, checks: [{ check: stale, expect: true }] }
+  - { do: create_resource, key: tensor, origin_uri: "temper://storyteller/character-as-tensor", body: "Commitment: character-as-tensor — agency as a force-over-time through the field of relationships, not a choice menu." , facets: { values: { layer: commitment } } }
+  - { do: assert_edge, from: tensor, to: gravity, kind: near, label: enacts }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: co_region, lens: telos-default, members: [tensor, gravity], expect: true }      # the new commitment binds in
+      - { check: co_region, lens: telos-default, members: [branching, gravity], expect: false }   # the folded edge let branching drift off
+      - { check: co_region, lens: telos-default, members: [narrator, storykeeper], expect: true } # the persona region is untouched
