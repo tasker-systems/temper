@@ -14,8 +14,8 @@
 use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
 use crate::ids::{
-    BlockId, ChunkId, CogmapId, EdgeId, EventId, LensId, ProfileId, PropertyId, RegionId,
-    ResourceId,
+    BlockId, ChunkId, CogmapId, ContextId, EdgeId, EventId, LensId, ProfileId, PropertyId,
+    RegionId, ResourceId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -60,6 +60,12 @@ impl AnchorRef {
     pub fn cogmap(id: CogmapId) -> Self {
         AnchorRef {
             table: AnchorTable::Cogmaps,
+            id: id.uuid(),
+        }
+    }
+    pub fn context(id: ContextId) -> Self {
+        AnchorRef {
+            table: AnchorTable::Contexts,
             id: id.uuid(),
         }
     }

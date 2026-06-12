@@ -9,8 +9,8 @@
 //! join enabled profiles to the `temper-system` root by slug.
 
 use crate::content;
-use crate::events::{fire, SeedAction};
-use crate::ids::{CogmapId, EntityId, ProfileId, ResourceId};
+use crate::events::{fire, EdgeHome, SeedAction};
+use crate::ids::{CogmapId, ContextId, EntityId, ProfileId, ResourceId};
 use crate::scenario::access::model::*;
 use anyhow::{Context, Result};
 use sqlx::PgPool;
@@ -20,7 +20,8 @@ use uuid::Uuid;
 /// Resolved identity maps for the check-evaluator (edges are resolved by label at eval time).
 pub struct LoadedAccess {
     pub profiles: HashMap<String, Uuid>,  // handle -> id
-    pub teams: HashMap<String, Uuid>,     // slug -> id
+    pub teams: HashMap<String, Uuid>,     // slug -> id (incl. trigger-created personal teams)
+    pub contexts: HashMap<String, Uuid>,  // name -> id
     pub cogmaps: HashMap<String, Uuid>,   // name -> id
     pub resources: HashMap<String, Uuid>, // key -> id
 }
@@ -103,6 +104,42 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .execute(&mut *tx)
         .await?;
     }
+    // 5b. Contexts — real kb_contexts rows, referents for named homes and shares.
+    let mut contexts: HashMap<String, Uuid> = HashMap::new();
+    for c in &world.contexts {
+        let id = sqlx::query_scalar!(
+            "INSERT INTO kb_contexts (name) VALUES ($1) RETURNING id",
+            c.name,
+        )
+        .fetch_one(&mut *tx)
+        .await?;
+        contexts.insert(c.name.clone(), id);
+    }
+    // 5c. Refresh the team map from the DB — profile inserts trigger personal teams
+    //     (personal-<handle>) that world.teams never declares.
+    for row in sqlx::query!("SELECT slug, id FROM kb_teams")
+        .fetch_all(&mut *tx)
+        .await?
+    {
+        teams.entry(row.slug).or_insert(row.id);
+    }
+    // 5d. Context shares (kb_team_contexts) — the team's vis-reach includes the context.
+    for s in &world.context_shares {
+        let cid = contexts
+            .get(&s.context)
+            .with_context(|| format!("share references unknown context {}", s.context))?;
+        let tid = teams
+            .get(&s.team)
+            .with_context(|| format!("share references unknown team {}", s.team))?;
+        sqlx::query!(
+            "INSERT INTO kb_team_contexts (context_id, team_id) VALUES ($1,$2)",
+            cid,
+            tid,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
     // 6. A single home-less placeholder telos resource for the bare producer maps
     //    (kb_cogmaps.telos_resource_id is NOT NULL; bare maps carry no charter — mirrors 03_seed's
     //    shared public telos). Genesis maps create their own telos.
@@ -195,7 +232,16 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                     format!("resource {} homes in unknown cogmap {}", r.key, name)
                 })?,
             ),
-            HomeDef::Context {} => ("kb_contexts", Uuid::now_v7()),
+            HomeDef::Context { name } => (
+                "kb_contexts",
+                match name {
+                    Some(n) => *contexts.get(n).with_context(|| {
+                        format!("resource {} homes in unknown context {}", r.key, n)
+                    })?,
+                    // anonymous unshared workspace anchor (pre-amendment form)
+                    None => Uuid::now_v7(),
+                },
+            ),
         };
         sqlx::query!(
             "INSERT INTO kb_resource_homes \
@@ -254,11 +300,18 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                 .get(&e.to)
                 .with_context(|| format!("edge to unknown key {}", e.to))?,
         );
-        let home = CogmapId::from(
-            *cogmaps
-                .get(&e.home)
-                .with_context(|| format!("edge homes in unknown cogmap {}", e.home))?,
-        );
+        let home = match &e.home {
+            EdgeHomeDef::Cogmap { name } => EdgeHome::Cogmap(CogmapId::from(
+                *cogmaps
+                    .get(name)
+                    .with_context(|| format!("edge homes in unknown cogmap {}", name))?,
+            )),
+            EdgeHomeDef::Context { name } => EdgeHome::Context(ContextId::from(
+                *contexts
+                    .get(name)
+                    .with_context(|| format!("edge homes in unknown context {}", name))?,
+            )),
+        };
         let emitter = EntityId::from(
             *entities
                 .get(&e.emitter)
@@ -283,6 +336,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
     Ok(LoadedAccess {
         profiles,
         teams,
+        contexts,
         cogmaps,
         resources,
     })

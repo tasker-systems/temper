@@ -51,6 +51,18 @@
             "$ref": "#/$defs/MembershipDef"
           }
         },
+        "contexts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextDef"
+          }
+        },
+        "context_shares": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextShareDef"
+          }
+        },
         "cogmaps": {
           "type": "array",
           "items": {
@@ -155,6 +167,34 @@
         "team",
         "profile",
         "role"
+      ]
+    },
+    "ContextDef": {
+      "description": "A named context — a real `kb_contexts` row, the referent for named homes and shares.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "ContextShareDef": {
+      "description": "A context-share (`kb_team_contexts`): the team's vis-reach includes the context's\nresources and context-homed edges (WS6 adjudication §2). `team` may name a\ntrigger-created personal team (`personal-<handle>`) — the loader refreshes its\nteam map from the DB after profiles load.",
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "context",
+        "team"
       ]
     },
     "AccessCogmapDef": {
@@ -280,7 +320,7 @@
       ]
     },
     "HomeDef": {
-      "description": "The resource home anchor. `{ anchor: cogmap, name: <cogmap> }` or `{ anchor: context }` (a synthetic\ncontext anchor — the artifact has no `kb_contexts` table; the anchor is a generated uuid with no FK).",
+      "description": "The resource home anchor. `{ anchor: cogmap, name: <cogmap> }`, `{ anchor: context, name: <context> }`\n(a real `kb_contexts` row from `world.contexts` — shareable via `context_shares`), or the anonymous\n`{ anchor: context }` (a synthetic generated-uuid anchor with no row — an unshared workspace).",
       "oneOf": [
         {
           "type": "object",
@@ -301,6 +341,13 @@
         {
           "type": "object",
           "properties": {
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "default": null
+            },
             "anchor": {
               "type": "string",
               "const": "context"
@@ -403,7 +450,7 @@
           "default": 1.0
         },
         "home": {
-          "type": "string"
+          "$ref": "#/$defs/EdgeHomeDef"
         },
         "emitter": {
           "type": "string"
@@ -424,6 +471,43 @@
         "contains",
         "leads_to",
         "near"
+      ]
+    },
+    "EdgeHomeDef": {
+      "description": "An edge home anchor — `{ anchor: cogmap, name: .. }` or `{ anchor: context, name: .. }` (a named\ncontext from `world.contexts`; context-homed edges gate by context-share, WS6 adjudication §2).",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "anchor": {
+              "type": "string",
+              "const": "cogmap"
+            }
+          },
+          "required": [
+            "anchor",
+            "name"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "anchor": {
+              "type": "string",
+              "const": "context"
+            }
+          },
+          "required": [
+            "anchor",
+            "name"
+          ]
+        }
       ]
     },
     "AccessCheck": {

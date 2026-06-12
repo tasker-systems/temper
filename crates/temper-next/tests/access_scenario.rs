@@ -28,7 +28,9 @@ async fn loads_topology_row_counts() {
     let loaded = access::load(&pool, &doc.world).await.unwrap();
 
     assert_eq!(loaded.profiles.len(), 6);
-    assert!(loaded.teams.len() >= 6); // tightened to 12 once the loader refreshes personal teams
+    // 6 declared + the loader's DB refresh picks up the 7 trigger-created personal
+    // teams (6 fixture profiles + bootseed's `system` profile).
+    assert_eq!(loaded.teams.len(), 13);
     assert_eq!(loaded.cogmaps.len(), 5);
     assert_eq!(loaded.resources.len(), 5);
 

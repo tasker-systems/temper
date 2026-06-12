@@ -30,6 +30,10 @@ pub struct AccessWorld {
     pub teams: Vec<TeamDef>,
     #[serde(default)]
     pub memberships: Vec<MembershipDef>,
+    #[serde(default)]
+    pub contexts: Vec<ContextDef>,
+    #[serde(default)]
+    pub context_shares: Vec<ContextShareDef>,
     pub cogmaps: Vec<AccessCogmapDef>,
     pub resources: Vec<AccessResourceDef>,
     #[serde(default)]
@@ -54,6 +58,24 @@ pub struct MembershipDef {
     pub team: String,    // slug
     pub profile: String, // handle
     pub role: String,    // team_role: owner | maintainer | member | watcher
+}
+
+/// A named context — a real `kb_contexts` row, the referent for named homes and shares.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ContextDef {
+    pub name: String,
+}
+
+/// A context-share (`kb_team_contexts`): the team's vis-reach includes the context's
+/// resources and context-homed edges (WS6 adjudication §2). `team` may name a
+/// trigger-created personal team (`personal-<handle>`) — the loader refreshes its
+/// team map from the DB after profiles load.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ContextShareDef {
+    pub context: String, // name in world.contexts
+    pub team: String,    // slug (declared or trigger-created)
 }
 
 /// A cogmap. Bare producer maps carry only `name` + `teams`. A `telos` (charter) makes it a genesis
@@ -85,14 +107,20 @@ pub struct AccessResourceDef {
     pub grants: Vec<GrantDef>,
 }
 
-/// The resource home anchor. `{ anchor: cogmap, name: <cogmap> }` or `{ anchor: context }` (a synthetic
-/// context anchor — the artifact has no `kb_contexts` table; the anchor is a generated uuid with no FK).
+/// The resource home anchor. `{ anchor: cogmap, name: <cogmap> }`, `{ anchor: context, name: <context> }`
+/// (a real `kb_contexts` row from `world.contexts` — shareable via `context_shares`), or the anonymous
+/// `{ anchor: context }` (a synthetic generated-uuid anchor with no row — an unshared workspace).
 #[derive(Debug, Deserialize)]
 #[serde(tag = "anchor", rename_all = "snake_case")]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub enum HomeDef {
-    Cogmap { name: String },
-    Context {},
+    Cogmap {
+        name: String,
+    },
+    Context {
+        #[serde(default)]
+        name: Option<String>,
+    },
 }
 
 /// A capability grant (`kb_resource_access`). `to` is a team or profile anchor. Caps default false; the
@@ -132,8 +160,18 @@ pub struct AccessEdgeDef {
     pub label: Option<String>,
     #[serde(default = "one")]
     pub weight: f64,
-    pub home: String,    // cogmap name
-    pub emitter: String, // entity name
+    pub home: EdgeHomeDef, // cogmap or context home anchor
+    pub emitter: String,   // entity name
+}
+
+/// An edge home anchor — `{ anchor: cogmap, name: .. }` or `{ anchor: context, name: .. }` (a named
+/// context from `world.contexts`; context-homed edges gate by context-share, WS6 adjudication §2).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "anchor", rename_all = "snake_case")]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub enum EdgeHomeDef {
+    Cogmap { name: String },
+    Context { name: String },
 }
 
 /// One access assertion. Internally tagged by `check:` (same serde_yaml constraint as the charter
@@ -187,6 +225,10 @@ world:
     - { slug: epd-team-a, name: Team A, parents: [temper-system] }
   memberships:
     - { team: epd-team-a, profile: alice, role: member }
+  contexts:
+    - { name: research }
+  context_shares:
+    - { context: research, team: epd-team-a }
   cogmaps:
     - { name: side-map, teams: [epd-team-a] }
     - name: onb
@@ -199,10 +241,10 @@ world:
         home: { anchor: cogmap, name: side-map }, owner: alice,
         grants: [{ to: { anchor: team, slug: temper-system }, can_read: true }] }
     - { key: d, title: "doc: d", origin_uri: "temper://d",
-        home: { anchor: context }, owner: alice,
+        home: { anchor: context, name: research }, owner: alice,
         grants: [{ to: { anchor: profile, handle: alice }, can_read: true }] }
   edges:
-    - { from: c, to: d, kind: leads_to, label: "c->d", home: side-map, emitter: carol-agent }
+    - { from: c, to: d, kind: leads_to, label: "c->d", home: { anchor: cogmap, name: side-map }, emitter: carol-agent }
 checks:
   - { check: visible_to, profile: alice, resource: c, expect: true }
   - { check: producer_reach, cogmap: side-map, resource: c, expect: true }
@@ -219,14 +261,23 @@ checks:
         assert_eq!(s.world.cogmaps.len(), 2);
         assert!(s.world.cogmaps[0].telos.is_none());
         assert!(s.world.cogmaps[1].telos.is_some());
+        assert_eq!(s.world.contexts.len(), 1);
+        assert_eq!(s.world.context_shares.len(), 1);
         assert_eq!(s.world.resources.len(), 2);
         assert!(matches!(s.world.resources[0].home, HomeDef::Cogmap { .. }));
-        assert!(matches!(s.world.resources[1].home, HomeDef::Context {}));
+        assert!(matches!(
+            &s.world.resources[1].home,
+            HomeDef::Context { name: Some(n) } if n == "research"
+        ));
         assert!(matches!(
             s.world.resources[1].grants[0].to,
             GrantAnchor::Profile { .. }
         ));
         assert_eq!(s.world.edges.len(), 1);
+        assert!(matches!(
+            &s.world.edges[0].home,
+            EdgeHomeDef::Cogmap { name } if name == "side-map"
+        ));
         assert_eq!(s.checks.len(), 5);
         assert!(matches!(
             s.checks[0],

@@ -56,6 +56,10 @@ id_newtype!(
     CogmapId
 );
 id_newtype!(
+    /// A `kb_contexts` row (the Domain-A navigation/share anchor).
+    ContextId
+);
+id_newtype!(
     /// A `kb_content_blocks` row (a resource's addressable interior unit).
     BlockId
 );
