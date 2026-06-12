@@ -418,15 +418,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 incorporated: Vec::new(), // body-revision only; provenance accretion deferred
             };
             let mut sidecar = std::collections::HashMap::new();
-            for c in chunks {
-                sidecar.insert(
-                    c.chunk_id.to_string(),
-                    payloads::ChunkContent {
-                        content: c.content.clone(),
-                        embedding: Some(payloads::EmbeddingRepr::Vector(c.embedding.clone())),
-                    },
-                );
-            }
+            payloads::content_sidecar_chunks(&mut sidecar, chunks);
             let id = sqlx::query_scalar!(
                 "SELECT block_mutate($1,$2,$3)",
                 serde_json::to_value(&payload)?,

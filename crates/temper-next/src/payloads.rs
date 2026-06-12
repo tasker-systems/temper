@@ -153,20 +153,31 @@ pub struct ChunkContent {
     pub embedding: Option<EmbeddingRepr>,
 }
 
+/// Insert one run of prepared chunks into a `{chunk_id: {content, embedding}}` sidecar map (keyed by
+/// chunk id string — JSONB object keys are strings). The single place that maps a `PreparedChunk` to
+/// its sidecar entry, shared by the block-iterating [`content_sidecar`] (create paths) and the
+/// `block_mutated` fire arm (revise path) so the two can never disagree on the entry shape.
+pub fn content_sidecar_chunks(
+    map: &mut HashMap<String, ChunkContent>,
+    chunks: &[crate::content::PreparedChunk],
+) {
+    for c in chunks {
+        map.insert(
+            c.chunk_id.to_string(),
+            ChunkContent {
+                content: c.content.clone(),
+                embedding: Some(EmbeddingRepr::Vector(c.embedding.clone())),
+            },
+        );
+    }
+}
+
 /// Build the `{chunk_id: {content, embedding}}` sidecar `cogmap_genesis`/`resource_create` take as
-/// `p_content`. Keyed by chunk id string (JSONB object keys are strings).
+/// `p_content`, over an ordered run of blocks.
 pub fn content_sidecar(blocks: &[PreparedBlock]) -> HashMap<String, ChunkContent> {
     let mut map = HashMap::new();
     for b in blocks {
-        for c in &b.chunks {
-            map.insert(
-                c.chunk_id.to_string(),
-                ChunkContent {
-                    content: c.content.clone(),
-                    embedding: Some(EmbeddingRepr::Vector(c.embedding.clone())),
-                },
-            );
-        }
+        content_sidecar_chunks(&mut map, &b.chunks);
     }
     map
 }

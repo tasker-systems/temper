@@ -455,6 +455,56 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ============================================================================
+-- Shared chunk-row writer: one persisted chunk (kb_chunks row + its kb_chunk_content prose), used by
+-- BOTH the create projector (_project_blocks) and the revise projector (_project_block_mutated) so the
+-- fragile fire-vs-replay embedding CASE lives in exactly one place. p_emb is the sidecar's
+-- `embedding` jsonb: SQL/JSON-null ⇒ NULL vector; a JSON string ⇒ pgvector text (replay path); a JSON
+-- array ⇒ fire path. version / is_current are explicit so the create path (v1, current) and the revise
+-- path (next version, current) share the writer without relying on column defaults.
+CREATE FUNCTION _insert_chunk(p_chunk uuid, p_block uuid, p_resource uuid, p_chunk_index int,
+                              p_version int, p_content_hash text, p_emb jsonb, p_is_current boolean,
+                              p_content text, p_occurred timestamptz)
+RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+    INSERT INTO kb_chunks (id, block_id, resource_id, chunk_index, version, content_hash,
+                           embedding, is_current, created)
+        VALUES (p_chunk, p_block, p_resource, p_chunk_index, p_version, p_content_hash,
+                CASE
+                    WHEN p_emb IS NULL OR jsonb_typeof(p_emb) = 'null' THEN NULL
+                    WHEN jsonb_typeof(p_emb) = 'string' THEN (p_emb #>> '{}')::vector  -- replay: pgvector text
+                    ELSE (p_emb::text)::vector                                          -- fire: JSON array
+                END,
+                p_is_current, p_occurred);
+    INSERT INTO kb_chunk_content (chunk_id, content) VALUES (p_chunk, p_content);
+END;
+$$;
+
+-- Shared resource body_hash recompute: sha256 merkle over each non-folded block's (sha256 of its
+-- is_current chunk hashes in chunk_index order), blocks in seq order — a pure function of the resource's
+-- CURRENT visible state. Both projectors call this after writing their chunks: at create every block is
+-- fresh + current (so it equals the array-order concatenation), at revise it reflects the superseded
+-- chunks. Replay-stable: identical visible state ⇒ identical hash, with `updated` carried from the event.
+CREATE FUNCTION _recompute_resource_body_hash(p_resource uuid, p_occurred timestamptz)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_resource_hashes text;
+BEGIN
+    SELECT string_agg(bh, '' ORDER BY seq) INTO v_resource_hashes FROM (
+        SELECT b.seq,
+               encode(sha256(convert_to(string_agg(ch.content_hash, '' ORDER BY ch.chunk_index), 'UTF8')),
+                      'hex') AS bh
+        FROM kb_content_blocks b
+        JOIN kb_chunks ch ON ch.block_id = b.id AND ch.is_current
+        WHERE b.resource_id = p_resource AND NOT b.is_folded
+        GROUP BY b.seq
+    ) per_block;
+    UPDATE kb_resources
+        SET body_hash = encode(sha256(convert_to(coalesce(v_resource_hashes, ''), 'UTF8')), 'hex'),
+            updated = p_occurred
+        WHERE id = p_resource;
+END;
+$$;
+
+-- ============================================================================
 -- Shared block→chunk PROJECTOR (the content-block write path, payload-first). p_manifests is the
 -- payload's BlockManifest array — pre-generated ids + seqs + roles + sha256 content hashes, NO prose
 -- (the CAS rule: prose lives once in kb_chunk_content). p_content is the sidecar
@@ -470,9 +520,8 @@ CREATE FUNCTION _project_blocks(p_resource uuid, p_event uuid, p_manifests jsonb
 RETURNS void LANGUAGE plpgsql AS $$
 DECLARE
     v_block uuid; v_chunk uuid;
-    v_block_json jsonb; v_chunk_json jsonb; v_side jsonb; v_emb jsonb;
+    v_block_json jsonb; v_chunk_json jsonb; v_side jsonb;
     v_block_hash text; v_chunk_hashes text; v_chunk_count int;
-    v_resource_hashes text := '';
     v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
 BEGIN
     -- blocks ⊃ chunks, in array order (already seq-ordered Rust-side; the block's own seq is authoritative).
@@ -494,18 +543,10 @@ BEGIN
             IF v_side IS NULL THEN
                 RAISE EXCEPTION '_project_blocks: content sidecar missing chunk %', v_chunk;
             END IF;
-            v_emb := v_side->'embedding';
-            INSERT INTO kb_chunks (id, block_id, resource_id, chunk_index, content_hash, embedding, created)
-                VALUES (v_chunk, v_block, p_resource, (v_chunk_json->>'chunk_index')::int,
-                        v_chunk_json->>'content_hash',
-                        CASE
-                            WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null' THEN NULL
-                            WHEN jsonb_typeof(v_emb) = 'string' THEN (v_emb #>> '{}')::vector  -- replay: pgvector text
-                            ELSE (v_emb::text)::vector                                          -- fire: JSON array
-                        END,
-                        v_occurred);
-            INSERT INTO kb_chunk_content (chunk_id, content)
-                VALUES (v_chunk, v_side->>'content');
+            -- create path: every chunk is version 1 + current (the column defaults, stated explicitly here).
+            PERFORM _insert_chunk(v_chunk, v_block, p_resource, (v_chunk_json->>'chunk_index')::int,
+                                  1, v_chunk_json->>'content_hash', v_side->'embedding', true,
+                                  v_side->>'content', v_occurred);
             v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
             v_chunk_count := v_chunk_count + 1;
         END LOOP;
@@ -513,12 +554,9 @@ BEGIN
         v_block_hash := encode(sha256(convert_to(v_chunk_hashes, 'UTF8')), 'hex');
         INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count, created)
             VALUES (v_block, v_block_hash, v_chunk_count, v_occurred);
-        v_resource_hashes := v_resource_hashes || v_block_hash;
     END LOOP;
-    -- resource body_hash = sha256 merkle over the ordered block hashes.
-    UPDATE kb_resources SET body_hash = encode(sha256(convert_to(v_resource_hashes, 'UTF8')), 'hex'),
-                            updated = v_occurred
-        WHERE id = p_resource;
+    -- resource body_hash = merkle over current visible state (= the array-order concatenation at create).
+    PERFORM _recompute_resource_body_hash(p_resource, v_occurred);
 END;
 $$;
 
@@ -757,9 +795,8 @@ DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = 
         v_block    uuid := (p_payload->>'block_id')::uuid;
         v_resource uuid;
         v_next_ver int;
-        v_chunk_json jsonb; v_chunk uuid; v_side jsonb; v_emb jsonb;
+        v_chunk_json jsonb; v_chunk uuid; v_side jsonb;
         v_chunk_hashes text := ''; v_chunk_count int := 0; v_block_hash text;
-        v_resource_hashes text;
 BEGIN
     SELECT resource_id INTO v_resource FROM kb_content_blocks WHERE id = v_block;
     IF v_resource IS NULL THEN
@@ -774,18 +811,10 @@ BEGIN
         IF v_side IS NULL THEN
             RAISE EXCEPTION '_project_block_mutated: content sidecar missing chunk %', v_chunk;
         END IF;
-        v_emb := v_side->'embedding';
-        INSERT INTO kb_chunks (id, block_id, resource_id, chunk_index, version, content_hash,
-                               embedding, is_current, created)
-            VALUES (v_chunk, v_block, v_resource, (v_chunk_json->>'chunk_index')::int, v_next_ver,
-                    v_chunk_json->>'content_hash',
-                    CASE
-                        WHEN v_emb IS NULL OR jsonb_typeof(v_emb) = 'null' THEN NULL
-                        WHEN jsonb_typeof(v_emb) = 'string' THEN (v_emb #>> '{}')::vector  -- replay: pgvector text
-                        ELSE (v_emb::text)::vector                                          -- fire: JSON array
-                    END,
-                    true, v_occurred);
-        INSERT INTO kb_chunk_content (chunk_id, content) VALUES (v_chunk, v_side->>'content');
+        -- revise path: supersedes the prior chunks, so the new run carries v_next_ver + is_current.
+        PERFORM _insert_chunk(v_chunk, v_block, v_resource, (v_chunk_json->>'chunk_index')::int,
+                              v_next_ver, v_chunk_json->>'content_hash', v_side->'embedding', true,
+                              v_side->>'content', v_occurred);
         v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
         v_chunk_count := v_chunk_count + 1;
     END LOOP;
@@ -793,21 +822,8 @@ BEGIN
     INSERT INTO kb_block_revisions (block_id, block_body_hash, chunk_count, created)
         VALUES (v_block, v_block_hash, v_chunk_count, v_occurred);
     UPDATE kb_content_blocks SET last_event_id = p_event WHERE id = v_block;
-    -- resource body_hash = sha256 merkle over each non-folded block's (sha256 of its is_current chunk
-    -- hashes, in chunk_index order), blocks in seq order — recomputed from current visible state.
-    SELECT string_agg(bh, '' ORDER BY seq) INTO v_resource_hashes FROM (
-        SELECT b.seq,
-               encode(sha256(convert_to(string_agg(ch.content_hash, '' ORDER BY ch.chunk_index), 'UTF8')),
-                      'hex') AS bh
-        FROM kb_content_blocks b
-        JOIN kb_chunks ch ON ch.block_id = b.id AND ch.is_current
-        WHERE b.resource_id = v_resource AND NOT b.is_folded
-        GROUP BY b.seq
-    ) per_block;
-    UPDATE kb_resources
-        SET body_hash = encode(sha256(convert_to(coalesce(v_resource_hashes, ''), 'UTF8')), 'hex'),
-            updated = v_occurred
-        WHERE id = v_resource;
+    -- resource body_hash recomputed from current visible state (the now-superseded chunks excluded).
+    PERFORM _recompute_resource_body_hash(v_resource, v_occurred);
     RETURN v_block;
 END;
 $$;
@@ -823,6 +839,12 @@ BEGIN
     SELECT resource_id INTO v_resource FROM kb_content_blocks WHERE id = v_block;
     IF v_resource IS NULL THEN
         RAISE EXCEPTION 'block_mutate: block % not found', v_block;
+    END IF;
+    -- An empty chunk set would supersede the block's current chunks and insert none, silently dropping
+    -- the member from its region centroid and diverging body_hash from create-path semantics (which has
+    -- no empty-body block). Reject before appending an event — a revise must carry content.
+    IF p_payload->'chunks' IS NULL OR jsonb_array_length(p_payload->'chunks') = 0 THEN
+        RAISE EXCEPTION 'block_mutate: empty chunk set for block % (a revise with no content would drop the block)', v_block;
     END IF;
     SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
         WHERE resource_id = v_resource ORDER BY (anchor_table = 'kb_cogmaps') DESC LIMIT 1;

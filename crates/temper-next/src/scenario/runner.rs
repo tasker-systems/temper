@@ -295,6 +295,12 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
             };
             // re-chunk + re-embed the new body inline (payload-first, like create_resource).
             let prepared = crate::content::prepare_block(0, None, body)?;
+            // An empty/whitespace body chunks to nothing; revising to it would supersede the block's
+            // chunks and insert none, silently dropping the member from its centroid (block_mutate also
+            // guards this — refuse early with a clear message, matching the CLI's no-empty-body rule).
+            if prepared.chunks.is_empty() {
+                bail!("revise: resource {resource} body has no content (empty/whitespace) — refusing to write a contentless block");
+            }
             fire(
                 &mut tx,
                 SeedAction::BlockMutate {

@@ -346,10 +346,31 @@ pub async fn formation_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uui
     touched_since(pool, cogmap, watermark, &names).await
 }
 
-/// True iff a CONTENT event (a block-body revision / add / fold — the readout-only formation inputs)
-/// touched the cogmap after `watermark`. Incremental materialization re-runs readouts over reused
-/// components only when THIS is true, so a purely-structural change does no redundant readout work on
-/// the reused side. Shares the `CONTENT_EVENTS` set with [`formation_touched_since`] so they agree.
-pub async fn content_touched_since(pool: &PgPool, cogmap: Uuid, watermark: Uuid) -> Result<bool> {
-    touched_since(pool, cogmap, watermark, CONTENT_EVENTS).await
+/// The RESOURCES whose content moved on this cogmap after `watermark` (distinct) — the members behind
+/// each CONTENT event (a block-body revision / add / fold, the readout-only formation inputs), resolved
+/// block → owning resource. Incremental materialization refreshes a reused region's readouts only when
+/// one of THESE is among its members: a moved member shifts only its own region's centroid, so a
+/// content touch that landed in one component must not re-derive another component's readouts (the
+/// over-trigger the per-component decomposition removed, kept removed one layer up). Shares the
+/// `CONTENT_EVENTS` set + anchor-scoping with [`formation_touched_since`] so the gates can never
+/// disagree on "what is a content touch". Empty ⇒ no readout-refresh work this pass.
+pub async fn content_touched_resources_since(
+    pool: &PgPool,
+    cogmap: Uuid,
+    watermark: Uuid,
+) -> Result<Vec<Uuid>> {
+    Ok(sqlx::query_scalar(
+        "SELECT DISTINCT b.resource_id \
+           FROM kb_events e \
+           JOIN kb_event_types et ON et.id = e.event_type_id \
+           JOIN kb_content_blocks b ON b.id = (e.payload->>'block_id')::uuid \
+          WHERE e.id > $2 \
+            AND e.producing_anchor_table = 'kb_cogmaps' AND e.producing_anchor_id = $1 \
+            AND et.name = ANY($3)",
+    )
+    .bind(cogmap)
+    .bind(watermark)
+    .bind(CONTENT_EVENTS)
+    .fetch_all(pool)
+    .await?)
 }

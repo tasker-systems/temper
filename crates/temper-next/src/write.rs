@@ -247,22 +247,29 @@ pub async fn incremental_materialize_cogmap(
     }
 
     // Readout-refresh (drift §1, slice 3b): reused components keep their membership AND their region
-    // ids, but a content revision since the prior materialize moved a member's embedding — so their
-    // stored readouts are stale. Re-run the readouts over the reused regions' fixed membership (no
-    // re-cluster, no new region ids) so incremental matches a full recompute. Gated on a CONTENT touch
-    // so a purely-structural pass does no redundant readout work on the reused side. `priors` is
-    // non-empty here (the empty case returned early to a full pass), so a prior materialize exists.
+    // ids, but a content revision since the prior materialize moved a member's embedding — so a region
+    // CONTAINING that member has stale readouts. Re-run the readouts over the moved region's fixed
+    // membership (no re-cluster, no new region ids) so incremental matches a full recompute. Scoped to
+    // the reused regions whose own members moved: a moved member shifts only its region's centroid, so
+    // refreshing the others would re-introduce, one layer up, the over-trigger the per-component
+    // decomposition removed — while still matching full (an untouched region's stored readouts already
+    // equal a recompute). `priors` is non-empty here (the empty case returned early to a full pass).
     let prior_watermark = last_materialize_watermark(&mut tx, cogmap, s.lens_id, ev).await?;
-    let content_touched = match prior_watermark {
-        Some(w) => crate::replay::content_touched_since(pool, cogmap, w).await?,
-        None => false,
+    let touched_resources = match prior_watermark {
+        Some(w) => crate::replay::content_touched_resources_since(pool, cogmap, w).await?,
+        None => Vec::new(),
     };
-    if content_touched {
-        // one query for every reused component's live regions (not N per-component round-trips).
+    if !touched_resources.is_empty() {
+        // one query for the reused regions that actually contain a moved member (not every reused
+        // region, and not N per-component round-trips).
         let region_ids: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM kb_cogmap_regions WHERE component_id = ANY($1) AND NOT is_folded",
+            "SELECT DISTINCT r.id FROM kb_cogmap_regions r \
+             JOIN kb_cogmap_region_members m ON m.region_id = r.id \
+             WHERE r.component_id = ANY($1) AND NOT r.is_folded \
+               AND m.member_table = 'kb_resources' AND m.member_id = ANY($2)",
         )
         .bind(&diff.unchanged)
+        .bind(&touched_resources)
         .fetch_all(&mut *tx)
         .await?;
         for rid in &region_ids {
