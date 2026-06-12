@@ -466,6 +466,26 @@ CREATE TABLE kb_cogmap_lenses (
     created              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- The INPUT-grain grouping a region is computed within (drift decision §3.2/§4). A component is a
+-- connected set of the nonzero-affinity graph; regions never span components, so clustering decomposes
+-- over them and a change re-clusters only its touched component(s). `fingerprint` is the SHA-256 of the
+-- component's membership-determining inputs (members + intra-component edges + member facets + lens
+-- affinity weights); `member_ids` is the component's node set (its identity across materializes).
+-- Together they are the persisted artifact behind incremental materialization: a current component whose
+-- (member_ids, fingerprint) matches a live row is provably unchanged ⇒ its regions are reused untouched.
+CREATE TABLE kb_cogmap_components (
+    id                   UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
+    cogmap_id            UUID NOT NULL REFERENCES kb_cogmaps(id) ON DELETE CASCADE,
+    lens_id              UUID NOT NULL REFERENCES kb_cogmap_lenses(id),
+    fingerprint          TEXT NOT NULL,               -- sha256 of membership-determining inputs
+    member_ids           UUID[] NOT NULL,             -- the component's node set (sorted; its identity)
+    asserted_by_event_id UUID NOT NULL REFERENCES kb_events(id),
+    last_event_id        UUID NOT NULL REFERENCES kb_events(id),
+    is_folded            BOOLEAN NOT NULL DEFAULT false,
+    created              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_kb_cogmap_components_live ON kb_cogmap_components(cogmap_id, lens_id) WHERE NOT is_folded;
+
 -- [LEAN→DECISION] centroid pooling (OQ-1): pool-per-concept-then-mean (one vector
 -- per member concept first), computed in MaterializeCogmapShape. No HNSW on
 -- centroid yet (OQ-2: per-map scan; wanted, deferred "as we go").
@@ -473,6 +493,7 @@ CREATE TABLE kb_cogmap_regions (
     id                   UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
     cogmap_id            UUID NOT NULL REFERENCES kb_cogmaps(id) ON DELETE CASCADE,
     lens_id              UUID NOT NULL REFERENCES kb_cogmap_lenses(id),  -- the perspective that produced this region (§3B)
+    component_id         UUID REFERENCES kb_cogmap_components(id),       -- the input-grain group this region was clustered within (drift §4)
     centroid             vector(768) NOT NULL,
     salience             DOUBLE PRECISION NOT NULL,   -- computed blend, memoized (was agent-assigned; spec §3A)
     telos_alignment      DOUBLE PRECISION,            -- cosine(centroid, telos_resource.embedding)  [salience part]

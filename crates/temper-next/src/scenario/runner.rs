@@ -18,8 +18,29 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use uuid::Uuid;
 
+/// Which materialize path the runner drives at each `materialize` step. `Full` recomputes every
+/// region (the production default, and what the corpus asserts against); `Incremental` reuses
+/// unchanged components and re-clusters only changed ones — exercised by the `incremental ≡ full`
+/// equivalence proof, where running a growth runbook this way must still satisfy every per-step
+/// assertion the full path does.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MaterializeMode {
+    Full,
+    Incremental,
+}
+
 /// `base_dir` anchors a `seed:` path reference — pass the scenario file's directory.
 pub async fn run_scenario(pool: &PgPool, s: &Scenario, base_dir: &Path) -> Result<()> {
+    run_scenario_with(pool, s, base_dir, MaterializeMode::Full).await
+}
+
+/// As [`run_scenario`], with an explicit materialize mode (see [`MaterializeMode`]).
+pub async fn run_scenario_with(
+    pool: &PgPool,
+    s: &Scenario,
+    base_dir: &Path,
+    mode: MaterializeMode,
+) -> Result<()> {
     let seed = s.resolve_seed(base_dir)?;
     let mut loaded = loader::load_seed(pool, &seed).await?;
     validate_lenses(pool, &loaded, &seed, &s.steps).await?;
@@ -32,9 +53,21 @@ pub async fn run_scenario(pool: &PgPool, s: &Scenario, base_dir: &Path) -> Resul
         match step {
             Step::Materialize { lens } => {
                 embed::embed_chunks(pool).await?;
-                let out = write::materialize_cogmap(pool, loaded.cogmap, lens, loaded.emitter)
-                    .await
-                    .with_context(|| format!("step {i}: materialize {lens}"))?;
+                let out = match mode {
+                    MaterializeMode::Full => {
+                        write::materialize_cogmap(pool, loaded.cogmap, lens, loaded.emitter).await
+                    }
+                    MaterializeMode::Incremental => {
+                        write::incremental_materialize_cogmap(
+                            pool,
+                            loaded.cogmap,
+                            lens,
+                            loaded.emitter,
+                        )
+                        .await
+                    }
+                }
+                .with_context(|| format!("step {i}: materialize {lens}"))?;
                 if let Some(prev) = current.insert(lens.clone(), out.membership_fingerprint) {
                     previous.insert(lens.clone(), prev);
                 }
