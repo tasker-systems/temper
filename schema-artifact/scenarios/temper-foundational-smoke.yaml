@@ -1,0 +1,25 @@
+# Smoke runbook over the temper-foundational charter: seed two landmark terms and a mode-of-working
+# sequence, prove the map materializes into a non-degenerate, reproducible, lens-sensitive shape.
+# The seed stays charter-only; this scenario supplies the material.
+#
+# Structure (see storyteller-smoke header): the two landmarks are a BOUND pair (shared `layer:landmark`
+# facet + `near` = 0.7, stable under both lenses → co-region assertion). The spec-then-build →
+# session-continuity sequence is a LENS-SENSITIVE pair (`leads_to` only → partition flips by lens).
+name: temper-foundational-smoke
+seed: ../seeds/temper-foundational.yaml
+steps:
+  - { do: create_resource, key: event_primary,  origin_uri: "temper://foundational/event-as-primary", body: "Landmark: event-as-primary — every mutation is an event appended to the ledger and projected to state; the ledger, not the row, is the source of truth." , facets: { values: { layer: landmark } } }
+  - { do: create_resource, key: substrate_bound, origin_uri: "temper://foundational/substrate-boundary", body: "Landmark: the substrate boundary — temper (workflow and knowledge base) and the cognitive-map system are two domains over one shared kernel, permanently." , facets: { values: { layer: landmark } } }
+  - { do: create_resource, key: spec_then_build, origin_uri: "temper://foundational/spec-then-build", body: "Mode of working: spec-then-build — brainstorm to spec to plan to implementation, each beat reviewed before the next." }
+  - { do: create_resource, key: session_continuity, origin_uri: "temper://foundational/session-continuity", body: "Mode of working: session continuity carried through temper itself — goals, tasks, sessions, and specs persist the working context across conversations." }
+  - { do: assert_edge, from: event_primary, to: substrate_bound, kind: near, label: shared-landmarks }
+  - { do: assert_edge, from: spec_then_build, to: session_continuity, kind: leads_to, label: carried-by }
+  - { do: materialize, lens: telos-default }
+  - do: assert
+    checks:
+      - { check: region_count, lens: telos-default, op: ">=", value: 2 }
+      - { check: co_region, lens: telos-default, members: [event_primary, substrate_bound], expect: true }
+  - { do: materialize, lens: telos-default }
+  - { do: assert, checks: [{ check: reproducible, lens: telos-default }] }
+  - { do: materialize, lens: telos-default-propheavy }
+  - { do: assert, checks: [{ check: fingerprint_differs, lens_a: telos-default, lens_b: telos-default-propheavy }] }
