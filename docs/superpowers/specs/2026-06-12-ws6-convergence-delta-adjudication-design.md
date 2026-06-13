@@ -369,6 +369,36 @@ call; the charter seed should be amended in the same change that lands this spec
 live write paths vs regenerating one store from the other and diffing), and it adds a second
 write path that can itself diverge — the exact failure being guarded against.
 
+**The cutover gate (decided 2026-06-13).** The mechanism behind "flip" in step 3 is an
+**in-DB backend-selection config flag** — a single setting (a one-row config table, set/swapped
+by a trivial migration) read at surface startup that chooses which substrate the surfaces
+dispatch reads/writes to. Chosen over a connection-string swap or a separate-database promotion:
+temperkb.io is single-tenant Vercel+Neon, synthesis writes additively into the **same** Neon
+database, and the flag is environment-scoped so rehearsal-on-a-branch flips independently of
+production. Cutover is then literally one config change + one redeploy.
+
+**What this buys: incrementality holds until the flip.** The flag makes the merge boundary and
+the production-behavior boundary separable, so the PR-over-PR model survives almost the whole arc:
+
+- **Chunks 1–3 change zero production behavior** and merge freely. Chunk 1 is `temper_next`
+  artifact-namespace only (prod's `public` never reads it). Chunk 2's migrations stay **strictly
+  additive** — new tables/schema alongside the live ones, synthesis an explicitly-invoked
+  operation, never a migrate-time side effect (a destructive migration here would move the
+  blocker earlier — the discipline is load-bearing). Chunk 3 is read-only parity tooling.
+- **Chunk 4 (surface ports) stays incremental *because* of the flag**: each surface lands able
+  to read/write the new substrate but **gated OFF in production**, so every port PR is
+  dead-pathed in prod and merges one-reviewed-at-a-time. Without the gate, the first repointed
+  live surface would force all of them in one deploy — the surfaces share one Postgres and
+  dual-write is rejected (split-brain: some writes to new tables, some to old, neither store
+  complete). The gate is what avoids that.
+- **The flip is the only irreducible atomic step**, and it is small: write-freeze → final
+  synthesis → set the flag (one deploy, all surfaces switch together) → rename old schema aside.
+  Rollback = flip back / old schema intact / Neon branch.
+
+Two adjacent changes are *not* part of the flip: the `temper-core` shared-type changes (§5
+`ResourceRef` collapse, `ManagedMeta` genericization) are **compile-time** atomic — one PR
+updating all callers, not a runtime cutover; and crate extraction is post-cutover (step 5).
+
 ## Out of scope
 
 - The migration plan's task-level decomposition (the successor plan, via writing-plans).
