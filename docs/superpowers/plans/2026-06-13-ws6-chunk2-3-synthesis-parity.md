@@ -522,18 +522,87 @@ git add crates/temper-next/src/synthesis/ crates/temper-next/src/lib.rs crates/t
 git commit -m "WS6 chunk2: synthesis scaffolding — source reads, prod-shape fixture, synthesize subcommand"
 ```
 
-### Task 5: Synthesis bootstrap — migration entity, per-surface entities, profiles, contexts (§1, §2)
+### Task 4.5: `kb_contexts` owner-scoped, slugged shape (§2 amendment 2026-06-13)
 
-**Tag: EXTEND/CONFORM** — §1a (*"one `migration` entity bound to Pete's profile, `metadata: {intent: 'migration', …}`"*), §1b (per-(profile,surface) entities `pete@cli`/`pete@mcp`/`pete@web`), §2 (contexts migrate by name into the thin unowned `kb_contexts`). Entity creation is administrative — **no event** (§1 open residue: *"Entity creation stays administrative (no event)"*).
+**Tag: AMEND** — `schema-artifact/01_schema.sql:98-102` (`kb_contexts(id, name UNIQUE, created)`). Authorized by the §2 **Amendment (2026-06-13)** in `docs/superpowers/specs/2026-06-12-ws6-convergence-delta-adjudication-design.md` (read it). Closes the global-`name UNIQUE` gap: contexts become owner-scoped, slugged namespaces. Must land **before** the Task 5 bootstrap rework (which writes the new columns).
 
-**Files:** Create logic in `crates/temper-next/src/synthesis/bootstrap.rs`; Test: `crates/temper-next/tests/synthesis_bootstrap.rs`
+**Invariant to preserve (verbatim, §2 amendment):** *"uuid stays the reference everything else uses … `contexts_visible_to` stays retired; `kb_team_contexts` is still the sharing mechanism, orthogonal to owner."* No SQL function reads `kb_contexts.name`/`slug` (verified: `02_functions.sql` references `kb_contexts` only as an anchor-table string literal joined by uuid — `02_functions.sql:146,170,237`), so this changes no function.
 
-- [ ] **Step 1: Failing test** — after `bootstrap::run`, assert: `temper_next.kb_contexts` has the fixture's context names; a `migration` entity exists with `metadata->>'intent' = 'migration'`; `pete@cli`/`pete@mcp`/`pete@web` entities exist; `kb_profiles` carries the originator/owner profile(s) from the fixture.
+**Files:**
+- Modify: `schema-artifact/01_schema.sql:98-102` (the DDL)
+- Modify: `crates/temper-next/src/scenario/access/model.rs` (`ContextDef`), `crates/temper-next/src/scenario/access/loader.rs` (the `INSERT INTO kb_contexts (name)` site)
+- Modify: `schema-artifact/access-scenarios/access-scenario.schema.json` (context owner field) + any access-scenario YAML carrying contexts
+- Regenerate: `migrations/20260613000001_install_temper_next.sql` (via `cargo make gen-install-migration`)
+- Test: `crates/temper-next/tests/context_shape.rs`
+
+- [ ] **Step 1: Write the failing test** (gated `#![cfg(feature = "artifact-tests")]`, `#[sqlx::test(migrator = "temper_next::MIGRATOR")]`):
+
+```rust
+mod common;
+use sqlx::Row;
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn contexts_are_owner_scoped_not_globally_unique(pool: sqlx::PgPool) {
+    // two owners may each have a 'general' context (the bug the global name UNIQUE caused).
+    let p1 = common::insert_profile(&pool, "alice").await;
+    let p2 = common::insert_profile(&pool, "bob").await;
+    common::insert_context(&pool, "kb_profiles", p1, "general", "general").await.unwrap();
+    common::insert_context(&pool, "kb_profiles", p2, "general", "general").await
+        .expect("same name+slug under a DIFFERENT owner must be allowed");
+    // duplicate slug under the SAME owner is rejected.
+    let dup = common::insert_context(&pool, "kb_profiles", p1, "general", "Another").await;
+    assert!(dup.is_err(), "duplicate slug within one owner must violate UNIQUE(owner_table,owner_id,slug)");
+}
+```
+(Add `common::insert_profile`/`insert_context` helpers in `tests/common/mod.rs` doing `SET LOCAL search_path TO temper_next, public` inserts — same discipline as bootstrap.)
+
+- [ ] **Step 2: Run; verify it fails**
+
+Run: `SQLX_OFFLINE=true DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development cargo nextest run -p temper-next --features artifact-tests contexts_are_owner_scoped`
+Expected: FAIL — the second `general` insert violates the current global `name UNIQUE`.
+
+- [ ] **Step 3: AMEND the DDL** in `schema-artifact/01_schema.sql`:
+
+```sql
+CREATE TABLE kb_contexts (
+    id           UUID PRIMARY KEY DEFAULT uuid_generate_v7(),  -- canonical reference + access mechanism
+    owner_table  VARCHAR(64) NOT NULL CHECK (owner_table IN ('kb_profiles','kb_teams')),
+    owner_id     UUID NOT NULL,
+    slug         TEXT NOT NULL,        -- per-owner addressable handle (team-style: unique slug, free name)
+    name         TEXT NOT NULL,        -- display label (may collide across owners)
+    created      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (owner_table, owner_id, slug)
+);
+CREATE INDEX idx_kb_contexts_owner ON kb_contexts(owner_table, owner_id);
+```
+
+- [ ] **Step 4: Update the access-scenario** (its leak-safety invariants are unchanged — this is mechanical). In `model.rs`, give `ContextDef` an owner: add `owner_profile: Option<String>` (a `world` profile handle) and `owner_team: Option<String>` (a `world` team slug) with a validation that exactly one is set; derive `slug = sluggify(name)`. In `loader.rs`, change the context insert to `INSERT INTO kb_contexts (owner_table, owner_id, slug, name) VALUES (...)` resolving the owner against the already-loaded `profiles`/`teams` maps (contexts load AFTER profiles+teams — confirm ordering on disk). Add the owner field to `access-scenario.schema.json` and to every access-scenario YAML that declares contexts (give each context an owner from its world).
+
+- [ ] **Step 5: Run the focused test + the access-scenario regression**
+
+Run: the filtered `contexts_are_owner_scoped` → PASS; then `cargo nextest run -p temper-next --features artifact-tests access_scenario` → PASS (leak-safety invariants hold with owned+slugged contexts).
+
+- [ ] **Step 6: Regenerate + full guard + commit**
+
+Run: `cargo make gen-install-migration && cargo make prepare-next && cargo make check` → green; full write-path suite green.
+```bash
+git add schema-artifact/01_schema.sql crates/temper-next/src/scenario/access/ schema-artifact/access-scenarios/ crates/temper-next/tests/context_shape.rs crates/temper-next/tests/common/mod.rs migrations/20260613000001_install_temper_next.sql crates/temper-next/.sqlx
+git commit -m "WS6 §2 amendment: kb_contexts owner-scoped + slugged (access-scenario updated)"
+```
+
+### Task 5 (REWORK — amends committed `93628b6`): Synthesis bootstrap — entities, profiles, owner-scoped contexts (§1, §2 amended)
+
+**Tag: EXTEND/CONFORM/AMEND** — §1a (the `migration` entity), §1b (per-(profile,surface) entities), §2 **amended** (contexts synthesize with **owner verbatim + derived slug**, and team-owned contexts get an explicit `kb_team_contexts` auto-share). Entity creation is administrative — **no event** (§1 residue). Task 5 already landed (`93628b6`) against the *old* thin-context shape; this reworks its context handling onto Task 4.5's shape.
+
+**Files:** Modify `crates/temper-next/src/synthesis/{bootstrap.rs,source.rs}`; Test: `crates/temper-next/tests/synthesis_bootstrap.rs`
+
+- [ ] **Step 1: Update the failing test** — after `bootstrap::run`, assert: each synthesized `temper_next.kb_contexts` row carries the production `(owner_table, owner_id)` verbatim, a derived `slug`, and the production `name`; a `migration` entity exists with `metadata->>'intent' = 'migration'`; `pete@cli`/`pete@mcp`/`pete@web` entities exist; `kb_profiles` carries the fixture's originator/owner profile(s); **and** for a team-owned fixture context, a `kb_team_contexts(context_id, owning_team_id)` row exists (the auto-share).
 - [ ] **Step 2: Run; verify FAIL.**
-- [ ] **Step 3: Implement** `bootstrap::run(pool, source) -> BootstrapMaps`: insert `kb_profiles` (from distinct originator/owner ids in `source::active_resources`), `kb_entities` (migration + the three surfaces, all bound to Pete's profile; `metadata` per §1a), `kb_contexts` (name-only, from `source::contexts`). Return a `BootstrapMaps { context_id_by_old: HashMap<Uuid,Uuid>, migration_entity: EntityId, ... }` for the resource synthesis to consume. **Direct inserts** (these are administrative infrastructure, not event-sourced — CONFORM to §1 residue). Bind through newtypes' `.uuid()`.
+- [ ] **Step 3: Rework** `bootstrap::run`: extend `source::contexts` to read `(id, owner_table, owner_id, name)` from `public.kb_contexts` (currently reads `(id, name)` — verify and extend). Insert `temper_next.kb_contexts (owner_table, owner_id, slug, name)` with `slug = sluggify(name)` (disambiguate on a per-owner collision by appending `-2`, `-3`, …); build `context_id_by_old`. For each team-owned context (`owner_table='kb_teams'`), also insert `kb_team_contexts(context_id, owner_id)`. Keep the entity/profile logic unchanged. Owner profiles/teams must exist in `temper_next` first — confirm bootstrap inserts profiles before contexts, and insert any `kb_teams` rows a team-owned context references (verify whether the fixture's team-owned context's owning team is already created; if not, synthesize it). **Direct inserts** within the `SET LOCAL search_path TO temper_next, public` transaction (CONFORM to the Task-5 search_path finding).
 - [ ] **Step 4: Run; verify PASS.**
 - [ ] **Step 5:** `cargo make prepare-next && cargo make check`.
-- [ ] **Step 6: Commit** `WS6 chunk2 §1/§2: synthesis bootstrap — migration/surface entities, profiles, contexts`.
+- [ ] **Step 6: Commit** `WS6 chunk2 §2 (amended): bootstrap synthesizes owner-scoped contexts + team-owned auto-share`.
+
+> **Fixture note (applies to Task 4.5/5/6):** `seed_prod_shape_fixture` seeds `public.kb_contexts` in **production** shape (`kb_owner_table, kb_owner_id, name`, `UNIQUE(owner,name)`) — that is the synthesis SOURCE and does NOT change. Add at least one **team-owned** context (and its owning team) to the fixture so the auto-share path is covered.
 
 ### Task 6: Synthesize resources + homes + single content block, chunks carried verbatim (§8, §2, §1c)
 
