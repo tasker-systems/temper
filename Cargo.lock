@@ -5202,6 +5202,7 @@ name = "temper-next"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "clap",
  "schemars",
  "serde",
  "serde_json",

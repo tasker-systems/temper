@@ -153,6 +153,39 @@ pub async fn fire_resource_with_headed_chunk(
     fired.resource().unwrap().uuid()
 }
 
+/// Fixed UUIDs the prod-shape fixture seeds, so synthesis + parity tests can assert against known
+/// ids. Mirrors `tests/fixtures/prod_shape.sql`.
+pub mod fixture_ids {
+    use uuid::{uuid, Uuid};
+    pub const OWNER_PROFILE: Uuid = uuid!("00000000-0000-0000-00f1-000000000001");
+    pub const ORIGINATOR_PROFILE: Uuid = uuid!("00000000-0000-0000-00f1-000000000002");
+    pub const CONTEXT_ONE: Uuid = uuid!("00000000-0000-0000-00c0-000000000001");
+    pub const CONTEXT_TWO: Uuid = uuid!("00000000-0000-0000-00c0-000000000002");
+    pub const EVENT: Uuid = uuid!("00000000-0000-0000-00e0-000000000001");
+    /// R1 — concept, the temper-goal target.
+    pub const RESOURCE_GOAL: Uuid = uuid!("00000000-0000-0000-00a0-000000000001");
+    /// R2 — task carrying temper-goal + the §7 key spread (originator≠owner).
+    pub const RESOURCE_TASK: Uuid = uuid!("00000000-0000-0000-00a0-000000000002");
+    /// R3 — decision.
+    pub const RESOURCE_DECISION: Uuid = uuid!("00000000-0000-0000-00a0-000000000003");
+    /// R4 — soft-deleted (must be excluded by synthesis).
+    pub const RESOURCE_DELETED: Uuid = uuid!("00000000-0000-0000-00a0-000000000004");
+    pub const EDGE_NORMAL: Uuid = uuid!("00000000-0000-0000-0dd0-000000000001");
+    pub const EDGE_FOLDED: Uuid = uuid!("00000000-0000-0000-0dd0-000000000002");
+}
+
+/// Seed the production-shape `public.*` corpus into the given pool's database. Intended for the
+/// self-contained `#[sqlx::test(migrator = "temper_next::MIGRATOR")]` tests, whose ephemeral DB has
+/// the full migration chain applied (System/Anonymous profiles + seeded doc/event types present) but
+/// an otherwise empty `public`. Runs the SQL through `pool` (NOT psql) so it lands in that DB.
+pub async fn seed_prod_shape_fixture(pool: &sqlx::PgPool) {
+    let sql = include_str!("../fixtures/prod_shape.sql");
+    sqlx::raw_sql(sql)
+        .execute(pool)
+        .await
+        .expect("prod-shape fixture failed to seed");
+}
+
 fn load_files(files: &[&str]) {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");

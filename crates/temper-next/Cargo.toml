@@ -21,7 +21,8 @@ scenario-schema = ["schemars"]
 
 [dependencies]
 temper-ingest = { path = "../temper-ingest", features = ["embed"] }
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "json", "macros", "migrate"] }
+clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["v7", "serde"] }
 serde = { version = "1", features = ["derive"] }
