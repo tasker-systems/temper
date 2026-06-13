@@ -78,7 +78,7 @@ world:
     # The directors' PRIVATE edge between two PUBLIC concepts, homed in directors-map => invisible to
     # anyone who can't read that map, even though both endpoints are public (edge-home protection, S3).
     - { from: concept_sprint, to: concept_formal, kind: leads_to,
-        label: "sprint-rituals->formalization", home: directors-map, emitter: carol-agent }
+        label: "sprint-rituals->formalization", home: { anchor: cogmap, name: directors-map }, emitter: carol-agent }
 checks:
   # S1 - consumer axis
   - { check: visible_to, profile: alice, resource: r_a_private,      expect: true  }

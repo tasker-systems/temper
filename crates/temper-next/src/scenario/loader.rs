@@ -9,7 +9,7 @@
 //! loading a seed standalone and loading it through a scenario are the same code path by
 //! construction (the load-path equivalence proof pins this).
 
-use crate::events::{fire, SeedAction};
+use crate::events::{fire, EdgeHome, SeedAction};
 use crate::ids::{EntityId, ProfileId};
 use crate::scenario::model::*;
 use anyhow::{Context, Result};
@@ -147,7 +147,7 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
                 kind: e.kind,
                 label: e.label.as_deref(),
                 weight: e.weight,
-                home: cogmap,
+                home: EdgeHome::Cogmap(cogmap),
                 emitter,
             },
         )

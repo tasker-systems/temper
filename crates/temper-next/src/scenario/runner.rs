@@ -7,7 +7,7 @@
 //! fingerprint cache backs the `reproducible` / `fingerprint_differs` checks. Any failed
 //! expectation aborts with a descriptive error.
 
-use crate::events::{fire, SeedAction};
+use crate::events::{fire, EdgeHome, SeedAction};
 use crate::ids::{CogmapId, EntityId, ProfileId, ResourceId};
 use crate::scenario::loader::{self, Loaded};
 use crate::scenario::model::*;
@@ -232,7 +232,7 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                     kind: *kind,
                     label: label.as_deref(),
                     weight: *weight,
-                    home: CogmapId::from(loaded.cogmap),
+                    home: EdgeHome::Cogmap(CogmapId::from(loaded.cogmap)),
                     emitter: EntityId::from(loaded.emitter),
                 },
             )

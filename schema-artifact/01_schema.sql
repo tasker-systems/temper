@@ -192,6 +192,19 @@ CREATE TABLE kb_team_cogmaps (
 );
 CREATE INDEX idx_kb_team_cogmaps_team ON kb_team_cogmaps(team_id);
 
+-- NEW (WS6 adjudication §2): context-shareability. Joins a context to 0+ teams —
+-- "this team's vis-reach includes this context's resources (and context-homed
+-- edges)." Sibling of kb_team_cogmaps in shape; GRANT-like in semantics (inherits
+-- DOWN the teams DAG via team_ancestors, exactly as team grants do). Cognitive
+-- maps reach workflow content ONLY through producer-intersection over their
+-- joined teams — there is no direct map↔context coupling.
+CREATE TABLE kb_team_contexts (
+    context_id  UUID NOT NULL REFERENCES kb_contexts(id) ON DELETE CASCADE,
+    team_id     UUID NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
+    PRIMARY KEY (context_id, team_id)
+);
+CREATE INDEX idx_kb_team_contexts_team ON kb_team_contexts(team_id);
+
 -- Navigation: where a resource lives. One per resource. Polymorphic anchor —
 -- no real FK (can't FK two tables); integrity is the CHECK + the seeding path.
 CREATE TABLE kb_resource_homes (

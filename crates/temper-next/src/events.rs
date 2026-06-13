@@ -21,8 +21,8 @@
 use crate::affinity::EdgeKind;
 use crate::content::{PreparedBlock, PreparedChunk};
 use crate::ids::{
-    BlockId, CogmapId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId, RegionId,
-    ResourceId,
+    BlockId, CogmapId, ContextId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId,
+    RegionId, ResourceId,
 };
 use crate::payloads;
 use crate::scenario::model::LensDef;
@@ -61,6 +61,24 @@ impl EventKind {
     }
 }
 
+/// Where an asserted edge homes — polymorphic per the payload's `AnchorRef`
+/// (`kb_cogmaps` | `kb_contexts`); the typed fire-path mirror of edge-home
+/// polymorphism (WS6 adjudication §2: context-homed edges gate by context-share).
+#[derive(Debug, Clone, Copy)]
+pub enum EdgeHome {
+    Cogmap(CogmapId),
+    Context(ContextId),
+}
+
+impl EdgeHome {
+    fn anchor_ref(self) -> payloads::AnchorRef {
+        match self {
+            EdgeHome::Cogmap(c) => payloads::AnchorRef::cogmap(c),
+            EdgeHome::Context(c) => payloads::AnchorRef::context(c),
+        }
+    }
+}
+
 /// One seeding mutation, carrying its params (typed ids — bare `Uuid` only at the SQL-bind boundary).
 /// One variant per reusable SQL mutation function, plus `Materialize` (whose event has no SQL function —
 /// it is the raw `region_materialized` INSERT, reconciled here so it shares the one firing surface).
@@ -88,7 +106,7 @@ pub enum SeedAction<'a> {
         kind: EdgeKind,
         label: Option<&'a str>,
         weight: f64,
-        home: CogmapId,
+        home: EdgeHome,
         emitter: EntityId,
     },
     FacetSet {
@@ -285,7 +303,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 polarity: payloads::EdgePolarity::Forward,
                 label: label.map(str::to_owned),
                 weight,
-                home: payloads::AnchorRef::cogmap(home),
+                home: home.anchor_ref(),
             };
             let id = sqlx::query_scalar!(
                 "SELECT relationship_assert($1,$2)",

@@ -18,6 +18,15 @@ fn load_access_yaml() -> AccessScenario {
     serde_yaml::from_str(&std::fs::read_to_string(ACCESS_SCENARIO).unwrap()).unwrap()
 }
 
+const CONTEXT_SHARE_SCENARIO: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../schema-artifact/access-scenarios/context-share-access.yaml"
+);
+
+fn load_context_share_yaml() -> AccessScenario {
+    serde_yaml::from_str(&std::fs::read_to_string(CONTEXT_SHARE_SCENARIO).unwrap()).unwrap()
+}
+
 #[tokio::test]
 async fn loads_topology_row_counts() {
     common::reset_artifact();
@@ -28,32 +37,35 @@ async fn loads_topology_row_counts() {
     let loaded = access::load(&pool, &doc.world).await.unwrap();
 
     assert_eq!(loaded.profiles.len(), 6);
-    assert_eq!(loaded.teams.len(), 6);
+    // 6 declared + the loader's DB refresh picks up the 7 trigger-created personal
+    // teams (6 fixture profiles + bootseed's `system` profile).
+    assert_eq!(loaded.teams.len(), 13);
     assert_eq!(loaded.cogmaps.len(), 5);
     assert_eq!(loaded.resources.len(), 5);
 
-    // Row-count sanity against the DB (bootseed adds no teams).
+    // Row-count sanity against the DB: 6 declared + one trigger-created personal
+    // team per profile (6 fixture profiles + bootseed's `system` profile) = 13.
     let teams: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_teams")
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(teams, 6);
-    // alice was auto-joined to temper-system root (approved) + joined epd-team-a => 2 memberships.
+    assert_eq!(teams, 13);
+    // alice: temper-system root (approved) + epd-team-a + personal-alice => 3 memberships.
     let alice_teams: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_team_members m JOIN kb_profiles p ON p.id=m.profile_id WHERE p.handle='alice'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(alice_teams, 2);
-    // nomad (system_access=none) joined nothing.
+    assert_eq!(alice_teams, 3);
+    // nomad (system_access=none) gets ONLY the personal team.
     let nomad_teams: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM kb_team_members m JOIN kb_profiles p ON p.id=m.profile_id WHERE p.handle='nomad'",
     )
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(nomad_teams, 0);
+    assert_eq!(nomad_teams, 1);
 }
 
 #[tokio::test]
@@ -65,6 +77,17 @@ async fn proves_all_access_invariants() {
     access::run_access_scenario(&pool, &load_access_yaml())
         .await
         .expect("all S1-S5 access checks pass");
+}
+
+#[tokio::test]
+async fn proves_context_share_invariants() {
+    common::reset_artifact();
+    let pool = substrate::connect().await.unwrap();
+    bootseed::seed_system(&pool).await.unwrap();
+
+    access::run_access_scenario(&pool, &load_context_share_yaml())
+        .await
+        .expect("all context-share leak-safety checks pass");
 }
 
 #[tokio::test]

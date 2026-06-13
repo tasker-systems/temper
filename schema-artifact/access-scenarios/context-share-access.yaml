@@ -1,0 +1,80 @@
+# Context-shareability leak-safety proof (WS6 adjudication §2). Proves: consumer reach
+# through a share; producer-intersection with a shared context in the topology (the
+# crux: a context shared to ONE of a map's teams is NOT reachable); DAG-down share
+# inheritance; the default-personal-team loopback (a solo map reads its owner's
+# context with zero declared teams); and the §3 edge-home re-proof with a
+# context-homed edge (private edge between public endpoints).
+name: context-share-access
+
+world:
+  profiles:
+    - { handle: alice, display_name: Alice, system_access: approved }
+    - { handle: bob,   display_name: Bob,   system_access: approved }
+    - { handle: carol, display_name: Carol, system_access: approved }
+    - { handle: nomad, display_name: Nomad, system_access: none }
+  entities:
+    - { name: alice-agent, profile: alice }
+    - { name: carol-agent, profile: carol }
+  teams:
+    - { slug: temper-system, name: Temper System }
+    - { slug: team-a, name: Team A, parents: [temper-system] }
+    - { slug: team-b, name: Team B, parents: [temper-system] }
+    - { slug: team-a-sub, name: Team A Sub, parents: [team-a] }
+  memberships:
+    - { team: team-a, profile: alice, role: member }
+    - { team: team-b, profile: bob, role: member }
+  contexts:
+    - { name: research }      # shared to team-a
+    - { name: carol-notes }   # shared to carol's trigger-created personal team
+    - { name: scratch }       # unshared — reachable by nobody but owners
+  context_shares:
+    - { context: research, team: team-a }
+    - { context: carol-notes, team: personal-carol }
+  cogmaps:
+    - { name: map-a,     teams: [team-a] }
+    - { name: map-ab,    teams: [team-a, team-b] }   # intersection probe
+    - { name: map-sub,   teams: [team-a-sub] }       # ancestor-share inheritance probe
+    - { name: map-carol, teams: [personal-carol] }   # loopback probe
+  resources:
+    # Owned by carol (NOT in team-a) so alice's reach genuinely rides the share —
+    # an alice-owned resource would prove ownership, not context-shareability.
+    - { key: rdoc, title: "research doc", origin_uri: "temper://rdoc",
+        home: { anchor: context, name: research }, owner: carol }
+    - { key: rnote, title: "research note", origin_uri: "temper://rnote",
+        home: { anchor: context, name: research }, owner: carol }
+    - { key: cnote, title: "carol note", origin_uri: "temper://cnote",
+        home: { anchor: context, name: carol-notes }, owner: carol }
+    - { key: sdoc, title: "scratch doc", origin_uri: "temper://sdoc",
+        home: { anchor: context, name: scratch }, owner: alice }
+    - { key: pub1, title: "public concept 1", origin_uri: "temper://pub1",
+        home: { anchor: context }, owner: alice,
+        grants: [{ to: { anchor: team, slug: temper-system }, can_read: true }] }
+    - { key: pub2, title: "public concept 2", origin_uri: "temper://pub2",
+        home: { anchor: context }, owner: alice,
+        grants: [{ to: { anchor: team, slug: temper-system }, can_read: true }] }
+  edges:
+    # context-homed edge between PUBLIC endpoints — the §3 re-proof: bob reads both
+    # endpoints (root grant) but NOT the edge (home context unshared to team-b).
+    - { from: pub1, to: pub2, kind: near, label: "pub1~pub2(research)",
+        home: { anchor: context, name: research }, emitter: alice-agent }
+    # cogmap-homed edge unchanged by the amendment (control).
+    - { from: rdoc, to: rnote, kind: leads_to, label: "rdoc->rnote",
+        home: { anchor: cogmap, name: map-a }, emitter: alice-agent }
+
+checks:
+  # S1 — consumer reach through a context-share
+  - { check: visible_to, profile: alice, resource: rdoc, expect: true }    # team-a share
+  - { check: visible_to, profile: bob,   resource: rdoc, expect: false }   # no share to team-b
+  - { check: visible_to, profile: nomad, resource: rdoc, expect: false }   # no teams at all
+  - { check: visible_to, profile: bob,   resource: sdoc, expect: false }   # unshared context
+  # S2 — producer-intersection with shared contexts in the topology
+  - { check: producer_reach, cogmap: map-a,     resource: rdoc,  expect: true }   # team-a share in vis(team-a)
+  - { check: producer_reach, cogmap: map-ab,    resource: rdoc,  expect: false }  # CRUX: team-b lacks the share => intersection excludes
+  - { check: producer_reach, cogmap: map-sub,   resource: rdoc,  expect: true }   # share on ancestor team-a inherits DOWN to team-a-sub
+  - { check: producer_reach, cogmap: map-carol, resource: cnote, expect: true }   # LOOPBACK: solo map reads own context via personal team
+  - { check: producer_reach, cogmap: map-a,     resource: cnote, expect: false }  # personal share never leaks cross-team
+  - { check: producer_reach, cogmap: map-a,     resource: sdoc,  expect: false }  # unshared context unreachable by any map
+  # S3 — edge-home protection, re-proven with a context home
+  - { check: edge_visible_to, profile: alice, edge: "pub1~pub2(research)", expect: true }
+  - { check: edge_visible_to, profile: bob,   edge: "pub1~pub2(research)", expect: false }  # endpoints public, HOME unshared
+  - { check: edge_visible_to, profile: alice, edge: "rdoc->rnote", expect: true }           # cogmap-homed control
