@@ -194,6 +194,35 @@ pub async fn contexts(pool: &PgPool) -> Result<Vec<SourceContext>> {
         .collect())
 }
 
+/// One production team that owns a referenced context. Synthesis mints a `temper_next.kb_teams` row
+/// from it so a team-owned context's owning team exists before the context and its `kb_team_contexts`
+/// auto-share are written (§2 amended). `slug` is `NOT NULL UNIQUE` in both schemas; `name` carries.
+#[derive(Debug, Clone)]
+pub struct SourceTeam {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+}
+
+/// The production teams for the given ids (the distinct teams that own a referenced team-owned
+/// context). An empty `ids` returns no rows (the all-profile-owned case needs no team synthesis).
+pub async fn teams(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<SourceTeam>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name FROM public.kb_teams WHERE id = ANY($1) ORDER BY created",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|row| SourceTeam {
+            id: row.get("id"),
+            slug: row.get("slug"),
+            name: row.get("name"),
+        })
+        .collect())
+}
+
 /// Parse pgvector's text rendering (`[a,b,c]`) into a `Vec<f32>`.
 fn parse_pgvector(text: &str) -> Result<Vec<f32>> {
     let inner = text

@@ -4,10 +4,12 @@
 -- `#[sqlx::test(migrator = "temper_next::MIGRATOR")]` creates): the full migration chain is applied,
 -- so System/Anonymous profiles + the seeded doc_types/event_types already exist. This fixture adds:
 --   * 2 fixture profiles (P1 owner, P2 originator) so an originator≠owner case exists (§2).
---   * 2 contexts (C1, C2).
+--   * 1 team (T1) owning the team-owned context C3 (the §2-amended team branch + auto-share).
+--   * 3 contexts: C1, C2 profile-owned (profile branch); C3 team-owned (team branch + kb_team_contexts).
 --   * 1 event (E1) the edges reference (kb_resource_edges.{asserted_by,last}_event_id are NOT NULL).
---   * 4 resources: R1 (concept, goal target), R2 (task, carries temper-goal + the §7 key spread),
---     R3 (decision) — all active — and R4 (concept) soft-deleted (is_active=false).
+--   * 5 resources: R1 (concept, goal target), R2 (task, carries temper-goal + the §7 key spread),
+--     R3 (decision), R5 (concept, homed in the team-owned C3) — all active — and R4 (concept)
+--     soft-deleted (is_active=false). So 4 active, 1 excluded.
 --   * a manifest per resource.
 --   * a revision per chunked resource (kb_chunks.first_revision_id is NOT NULL → FK to revisions).
 --   * chunks + chunk_content with DISTINCT 768-d embeddings (so vector-parity has signal) and one
@@ -21,10 +23,15 @@ INSERT INTO public.kb_profiles (id, display_name, slug) VALUES
   ('00000000-0000-0000-00f1-000000000001', 'Fixture Owner',      'fixture-owner'),
   ('00000000-0000-0000-00f1-000000000002', 'Fixture Originator', 'fixture-originator');
 
--- Contexts ------------------------------------------------------------------------------------------
+-- Teams: one fixture team that owns the team-owned context C3 (§2 amended team branch). ------------
+INSERT INTO public.kb_teams (id, name, slug, created_by_profile_id) VALUES
+  ('00000000-0000-0000-0701-000000000001', 'Fixture Team', 'fixture-team', '00000000-0000-0000-00f1-000000000001');
+
+-- Contexts: C1/C2 profile-owned (the profile branch), C3 team-owned (the team branch + auto-share). -
 INSERT INTO public.kb_contexts (id, name, kb_owner_table, kb_owner_id) VALUES
-  ('00000000-0000-0000-00c0-000000000001', 'fixture-context-one', 'kb_profiles', '00000000-0000-0000-00f1-000000000001'),
-  ('00000000-0000-0000-00c0-000000000002', 'fixture-context-two', 'kb_profiles', '00000000-0000-0000-00f1-000000000001');
+  ('00000000-0000-0000-00c0-000000000001', 'fixture-context-one',  'kb_profiles', '00000000-0000-0000-00f1-000000000001'),
+  ('00000000-0000-0000-00c0-000000000002', 'fixture-context-two',  'kb_profiles', '00000000-0000-0000-00f1-000000000001'),
+  ('00000000-0000-0000-00c0-000000000003', 'fixture-team-context', 'kb_teams',    '00000000-0000-0000-0701-000000000001');
 
 -- Event the edges reference (resource_created type already seeded by migrations) -------------------
 INSERT INTO public.kb_events (id, profile_id, device_id, kb_context_id, event_type_id, payload)
@@ -68,7 +75,14 @@ VALUES
    (SELECT id FROM public.kb_doc_types WHERE name = 'concept'),
    'temper://fixture/deleted-doc', 'Deleted Doc', 'deleted-doc',
    '00000000-0000-0000-00f1-000000000001', '00000000-0000-0000-00f1-000000000001',
-   false, '2026-01-01T00:00:04Z', '2026-01-01T00:00:04Z');
+   false, '2026-01-01T00:00:04Z', '2026-01-01T00:00:04Z'),
+  -- R5: active, homed in the team-owned context C3 (so the team branch + auto-share are exercised).
+  ('00000000-0000-0000-00a0-000000000005',
+   '00000000-0000-0000-00c0-000000000003',
+   (SELECT id FROM public.kb_doc_types WHERE name = 'concept'),
+   'temper://fixture/team-doc', 'Team Doc', 'team-doc',
+   '00000000-0000-0000-00f1-000000000001', '00000000-0000-0000-00f1-000000000001',
+   true, '2026-01-01T00:00:05Z', '2026-01-01T00:00:05Z');
 
 -- Manifests -----------------------------------------------------------------------------------------
 INSERT INTO public.kb_resource_manifests (resource_id, body_hash, managed_meta, open_meta) VALUES
@@ -92,13 +106,19 @@ INSERT INTO public.kb_resource_manifests (resource_id, body_hash, managed_meta, 
      'temper-title', 'Decision Doc', 'temper-slug', 'decision-doc',
      'temper-id', '00000000-0000-0000-00a0-000000000003'),
    '{}'::jsonb),
-  ('00000000-0000-0000-00a0-000000000004', 'sha256:r4', '{}'::jsonb, '{}'::jsonb);
+  ('00000000-0000-0000-00a0-000000000004', 'sha256:r4', '{}'::jsonb, '{}'::jsonb),
+  ('00000000-0000-0000-00a0-000000000005', 'sha256:r5',
+   jsonb_build_object(
+     'temper-title', 'Team Doc', 'temper-slug', 'team-doc',
+     'temper-id', '00000000-0000-0000-00a0-000000000005'),
+   '{}'::jsonb);
 
 -- Revisions (kb_chunks.first_revision_id FK target) ------------------------------------------------
 INSERT INTO public.kb_resource_revisions (id, resource_id, body_hash, chunk_count) VALUES
   ('00000000-0000-0000-0bb0-000000000001', '00000000-0000-0000-00a0-000000000001', 'sha256:r1', 1),
   ('00000000-0000-0000-0bb0-000000000002', '00000000-0000-0000-00a0-000000000002', 'sha256:r2', 2),
-  ('00000000-0000-0000-0bb0-000000000003', '00000000-0000-0000-00a0-000000000003', 'sha256:r3', 1);
+  ('00000000-0000-0000-0bb0-000000000003', '00000000-0000-0000-00a0-000000000003', 'sha256:r3', 1),
+  ('00000000-0000-0000-0bb0-000000000005', '00000000-0000-0000-00a0-000000000005', 'sha256:r5', 1);
 
 -- Chunks (DISTINCT 768-d embeddings; R2 chunk 1 carries heading metadata) --------------------------
 INSERT INTO public.kb_chunks
@@ -111,13 +131,16 @@ VALUES
   ('00000000-0000-0000-0cc0-000000000003', '00000000-0000-0000-00a0-000000000002', 1, 1,
    'Intro > Goals', 2, 'hash-r2-c1', array_fill(0.23::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000002'),
   ('00000000-0000-0000-0cc0-000000000004', '00000000-0000-0000-00a0-000000000003', 0, 1,
-   '', 0, 'hash-r3-c0', array_fill(0.33::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000003');
+   '', 0, 'hash-r3-c0', array_fill(0.33::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000003'),
+  ('00000000-0000-0000-0cc0-000000000005', '00000000-0000-0000-00a0-000000000005', 0, 1,
+   '', 0, 'hash-r5-c0', array_fill(0.55::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000005');
 
 INSERT INTO public.kb_chunk_content (chunk_id, content) VALUES
   ('00000000-0000-0000-0cc0-000000000001', 'Goal body text.'),
   ('00000000-0000-0000-0cc0-000000000002', 'Task intro paragraph.'),
   ('00000000-0000-0000-0cc0-000000000003', 'Task goals section body.'),
-  ('00000000-0000-0000-0cc0-000000000004', 'Decision body text.');
+  ('00000000-0000-0000-0cc0-000000000004', 'Decision body text.'),
+  ('00000000-0000-0000-0cc0-000000000005', 'Team body text.');
 
 -- Edges: 1 normal (contains R1→R2), 1 folded (near R2→R3); both endpoints active -------------------
 INSERT INTO public.kb_resource_edges

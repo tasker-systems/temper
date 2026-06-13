@@ -1,7 +1,8 @@
 //! Synthesis bootstrap (WS6 §1/§2): the administrative infrastructure the per-resource synthesis
-//! sequence stands on — profiles, the migration + per-surface emitter entities, and the thin unowned
-//! contexts. **Direct inserts, NOT event-sourced** (§1 open residue: *"Entity creation stays
-//! administrative (no event)"*); profiles and contexts are likewise administrative.
+//! sequence stands on — profiles, the migration + per-surface emitter entities, the owner-scoped
+//! slugged contexts (§2 amended), and the teams that own team-owned contexts (plus the
+//! `kb_team_contexts` auto-share each gets). **Direct inserts, NOT event-sourced** (§1 open residue:
+//! *"Entity creation stays administrative (no event)"*); profiles/contexts/teams are likewise administrative.
 //!
 //! All writes are schema-qualified (`temper_next.*`) so this runs correctly on either pool shape: the
 //! production `substrate::connect()` pool (`search_path = temper_next, public`) and the self-contained
@@ -72,6 +73,19 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
         .map(|c| (c.id, c))
         .collect();
 
+    // Teams: the distinct teams that own a referenced team-owned context (§2 amended). Each becomes a
+    // `temper_next.kb_teams` row the context's owner remap + `kb_team_contexts` auto-share consume.
+    // Personal teams are trigger-created off `kb_profiles` and are NOT synthesized here.
+    let owning_team_ids: Vec<Uuid> = referenced
+        .iter()
+        .filter_map(|old| ctx_by_old.get(old))
+        .filter(|c| c.owner_table == "kb_teams")
+        .map(|c| c.owner_id)
+        .collect::<BTreeSet<Uuid>>()
+        .into_iter()
+        .collect();
+    let src_teams = source::teams(pool, &owning_team_ids).await?;
+
     // --- All temper_next writes run in one transaction with `search_path = temper_next, public` so
     // the kb_profiles triggers (personal-team + root-membership maintenance) resolve their unqualified
     // table references into temper_next, not the bare pool's `public` (where they'd hit production's
@@ -110,15 +124,26 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
         web: insert_entity(&mut tx, pete, "pete@web", &surface_meta("web")?).await?,
     };
 
+    // Teams (§2 amended): mint a `temper_next.kb_teams` row per owning team BEFORE the team-owned
+    // contexts that reference it (the `kb_team_contexts` FK requires the team row to exist). Slug +
+    // name carry verbatim from production; production team slugs never use the `personal-` prefix the
+    // `sync_personal_team` trigger reserves, so they cannot collide with a trigger-created personal
+    // team. A real slug collision surfaces as a UNIQUE violation (escalates) rather than silent reuse.
+    let mut team_id_by_old: HashMap<Uuid, Uuid> = HashMap::new();
+    for t in &src_teams {
+        let new_id = insert_team(&mut tx, &t.slug, &t.name).await?;
+        team_id_by_old.insert(t.id, new_id);
+    }
+
     let mut context_id_by_old: HashMap<Uuid, ContextId> = HashMap::new();
     for old in referenced {
         let ctx = ctx_by_old
             .get(&old)
             .with_context(|| format!("referenced context {old} absent from public.kb_contexts"))?;
         // Owner carried verbatim, remapped into the destination id space (§2 amendment). Profile-owned
-        // contexts remap through `profile_id_by_old`; team-owned context synthesis (which also mints the
-        // `kb_team_contexts` auto-share + the owning team row) is the Task-5 rework — not reachable from
-        // the profile-only prod-shape fixture, so it escalates rather than writing a dangling owner.
+        // contexts remap through `profile_id_by_old`; team-owned contexts remap through `team_id_by_old`
+        // (the team rows minted just above) and additionally get a `kb_team_contexts` auto-share so the
+        // owning team still reaches the context's contents through the unchanged visibility function.
         let owner_id = match ctx.owner_table.as_str() {
             "kb_profiles" => profile_id_by_old
                 .get(&ctx.owner_id)
@@ -129,14 +154,21 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
                     )
                 })?
                 .uuid(),
-            "kb_teams" => anyhow::bail!(
-                "team-owned context synthesis (owner {} on context {old}) lands in the Task-5 bootstrap rework",
-                ctx.owner_id
-            ),
+            "kb_teams" => *team_id_by_old.get(&ctx.owner_id).with_context(|| {
+                format!(
+                    "context {old} owner team {} absent from team remap",
+                    ctx.owner_id
+                )
+            })?,
             other => anyhow::bail!("context {old} has unsupported owner_table {other:?}"),
         };
         let slug = slugify(&ctx.name);
         let new_id = insert_context(&mut tx, &ctx.owner_table, owner_id, &slug, &ctx.name).await?;
+        // Team-owned context → the §2-amended auto-share. Owner stays purely namespace-scoping;
+        // reachability is the explicit `kb_team_contexts(context_id, owning_team_id)` row.
+        if ctx.owner_table == "kb_teams" {
+            insert_team_context(&mut tx, new_id.uuid(), owner_id).await?;
+        }
         context_id_by_old.insert(old, new_id);
     }
 
@@ -223,6 +255,36 @@ async fn insert_context(
     .fetch_one(&mut *conn)
     .await?;
     Ok(ContextId::from(id))
+}
+
+/// Insert one `temper_next.kb_teams` row (administrative — no event) for a production team that owns a
+/// context, returning its new id. Slug + name carry verbatim; the destination `slug` is `NOT NULL
+/// UNIQUE`, so a collision surfaces as a DB error (escalation) rather than silently reusing a row.
+async fn insert_team(conn: &mut sqlx::PgConnection, slug: &str, name: &str) -> Result<Uuid> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO temper_next.kb_teams (slug, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(slug)
+    .bind(name)
+    .fetch_one(&mut *conn)
+    .await?;
+    Ok(id)
+}
+
+/// Insert one `temper_next.kb_team_contexts(context_id, team_id)` auto-share row (§2 amended): the
+/// owning team's vis-reach includes the team-owned context's resources, via the unchanged visibility
+/// function. Owner remains purely namespace-scoping; reachability is never implied by ownership alone.
+async fn insert_team_context(
+    conn: &mut sqlx::PgConnection,
+    context_id: Uuid,
+    team_id: Uuid,
+) -> Result<()> {
+    sqlx::query("INSERT INTO temper_next.kb_team_contexts (context_id, team_id) VALUES ($1, $2)")
+        .bind(context_id)
+        .bind(team_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
 }
 
 /// Choose Pete's profile = the owner of the most active resources (tie-broken by smallest uuid for

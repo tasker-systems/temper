@@ -161,6 +161,10 @@ pub mod fixture_ids {
     pub const ORIGINATOR_PROFILE: Uuid = uuid!("00000000-0000-0000-00f1-000000000002");
     pub const CONTEXT_ONE: Uuid = uuid!("00000000-0000-0000-00c0-000000000001");
     pub const CONTEXT_TWO: Uuid = uuid!("00000000-0000-0000-00c0-000000000002");
+    /// C3 — team-owned context (exercises the §2-amended team branch + kb_team_contexts auto-share).
+    pub const CONTEXT_TEAM: Uuid = uuid!("00000000-0000-0000-00c0-000000000003");
+    /// The team that owns C3 (the only team in the fixture).
+    pub const TEAM: Uuid = uuid!("00000000-0000-0000-0701-000000000001");
     pub const EVENT: Uuid = uuid!("00000000-0000-0000-00e0-000000000001");
     /// R1 — concept, the temper-goal target.
     pub const RESOURCE_GOAL: Uuid = uuid!("00000000-0000-0000-00a0-000000000001");
@@ -170,6 +174,8 @@ pub mod fixture_ids {
     pub const RESOURCE_DECISION: Uuid = uuid!("00000000-0000-0000-00a0-000000000003");
     /// R4 — soft-deleted (must be excluded by synthesis).
     pub const RESOURCE_DELETED: Uuid = uuid!("00000000-0000-0000-00a0-000000000004");
+    /// R5 — active, homed in the team-owned context C3.
+    pub const RESOURCE_TEAM: Uuid = uuid!("00000000-0000-0000-00a0-000000000005");
     pub const EDGE_NORMAL: Uuid = uuid!("00000000-0000-0000-0dd0-000000000001");
     pub const EDGE_FOLDED: Uuid = uuid!("00000000-0000-0000-0dd0-000000000002");
 }

@@ -17,7 +17,7 @@ async fn source_reads_active_resources_only(pool: sqlx::PgPool) {
         .unwrap();
     assert_eq!(
         rows.len(),
-        3,
-        "soft-deleted resource excluded (§0 active-only)"
+        4,
+        "4 active (incl. the team-context resource R5); soft-deleted R4 excluded (§0 active-only)"
     );
 }

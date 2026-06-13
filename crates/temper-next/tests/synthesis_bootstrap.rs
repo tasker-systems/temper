@@ -1,8 +1,10 @@
 #![cfg(feature = "artifact-tests")]
 //! synthesis::bootstrap seeds the administrative infrastructure (§1/§2): the per-profile
 //! `kb_profiles`, the `migration` entity + the three per-surface entities (`pete@{cli,mcp,web}`),
-//! and the thin unowned `kb_contexts` (by name), returning the old→new remaps the resource pass
-//! consumes. Entity/profile/context creation is administrative — direct inserts, NO event (§1 residue).
+//! and the owner-scoped, slugged `kb_contexts` (§2 amended) — profile-owned contexts remap their
+//! owner through the profile map; team-owned contexts synthesize the owning `kb_teams` row and an
+//! explicit `kb_team_contexts` auto-share. It returns the old→new remaps the resource pass consumes.
+//! Entity/profile/context/team creation is administrative — direct inserts, NO event (§1 residue).
 //!
 //! Runs on its own ephemeral DB via `#[sqlx::test(migrator = ...)]`: the full migration chain
 //! (including the additive `temper_next` install) is applied, so `public` is migrated-but-empty and
@@ -23,7 +25,8 @@ async fn bootstrap_seeds_entities_profiles_contexts(pool: sqlx::PgPool) {
         .await
         .unwrap();
 
-    // Contexts: exactly the two fixture contexts (both referenced by active resources) by name (§2).
+    // Contexts: the three fixture contexts referenced by active resources, by name (§2 amended) —
+    // two profile-owned (C1, C2) plus the team-owned C3.
     let ctx_names: Vec<String> =
         sqlx::query_scalar("SELECT name FROM temper_next.kb_contexts ORDER BY name")
             .fetch_all(&pool)
@@ -33,8 +36,48 @@ async fn bootstrap_seeds_entities_profiles_contexts(pool: sqlx::PgPool) {
         ctx_names,
         vec![
             "fixture-context-one".to_string(),
-            "fixture-context-two".to_string()
+            "fixture-context-two".to_string(),
+            "fixture-team-context".to_string(),
         ]
+    );
+
+    // The team-owned context (§2 amended): owner carried verbatim + remapped to the synthesized team
+    // id, a derived slug, the production name — and an explicit `kb_team_contexts` auto-share row so
+    // the owning team still reaches the context's contents through the unchanged visibility function.
+    let team_new_id: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM temper_next.kb_teams WHERE slug = 'fixture-team'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    let team_ctx_new = maps
+        .context_id_by_old
+        .get(&fixture_ids::CONTEXT_TEAM)
+        .expect("team-owned context remapped");
+    let (owner_table, owner_id, slug, name): (String, uuid::Uuid, String, String) = sqlx::query_as(
+        "SELECT owner_table, owner_id, slug, name FROM temper_next.kb_contexts WHERE id = $1",
+    )
+    .bind(team_ctx_new.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(owner_table, "kb_teams", "team-owned context owner_table");
+    assert_eq!(
+        owner_id, team_new_id,
+        "team-owned context owner remapped to the synthesized team id"
+    );
+    assert_eq!(slug, "fixture-team-context", "derived slug");
+    assert_eq!(name, "fixture-team-context", "production name carried");
+    let share_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM temper_next.kb_team_contexts WHERE context_id=$1 AND team_id=$2)",
+    )
+    .bind(team_ctx_new.uuid())
+    .bind(team_new_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        share_exists,
+        "team-owned context gets a kb_team_contexts(context_id, owning_team_id) auto-share row"
     );
 
     // Remap covers every context referenced by an active resource, and each maps to a present row.
