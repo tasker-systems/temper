@@ -11,14 +11,24 @@
 #![allow(dead_code)]
 
 /// Drop + reload the artifact schema and functions, leaving a clean (un-seeded) `temper_next`.
+/// `00_namespace_reset.sql` carries the destructive DROP/CREATE preamble (factored out of `01_schema`
+/// so the body is a namespace-resident, no-DROP install source); `01`+`02` are the shared DDL body.
 pub fn reset_artifact() {
-    load_files(&["01_schema", "02_functions"]);
+    load_files(&["00_namespace_reset", "01_schema", "02_functions"]);
 }
 
 /// Like [`reset_artifact`] but also loads the hand-written `03_seed.sql` (the legacy SQL-seed path) —
 /// used by the cross-path equivalence test to materialize the SQL-seeded onboarding-cogmap.
 pub fn reset_artifact_with_seed() {
-    load_files(&["01_schema", "02_functions", "03_seed"]);
+    load_files(&["00_namespace_reset", "01_schema", "02_functions", "03_seed"]);
+}
+
+/// Read the committed, generated additive install migration (the single source of truth the drift
+/// guard compares the generator output against). Fixed path — the generator writes it in place.
+pub fn read_latest_install_migration(root: &str) -> String {
+    let path = format!("{root}/migrations/20260613000001_install_temper_next.sql");
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read install migration at {path}: {e}"))
 }
 
 fn load_files(files: &[&str]) {

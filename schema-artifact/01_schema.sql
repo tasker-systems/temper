@@ -27,8 +27,10 @@
 -- kb_profile_auth_links, kb_resource_search_index (FTS rebuilt by trigger in prod).
 -- ============================================================================
 
-DROP SCHEMA IF EXISTS temper_next CASCADE;
-CREATE SCHEMA temper_next;
+-- Namespace-resident DDL body — NO `DROP SCHEMA`/`CREATE SCHEMA` here. The destructive test-reset
+-- preamble lives in `00_namespace_reset.sql` (prepended by the test harness); the additive production
+-- install migration prepends its own run-once `CREATE SCHEMA temper_next;` (tools/gen-install-migration.sh).
+-- This bare search_path keeps the body resolving the namespace when loaded standalone after 00.
 SET search_path TO temper_next, public;
 
 -- ============================================================================
