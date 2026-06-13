@@ -58,6 +58,101 @@ pub async fn apply_install_migration(_pool: &sqlx::PgPool) {
     assert!(status.success(), "psql -f install migration failed");
 }
 
+/// Fire a cogmap genesis + one `resource_create` homed in it, whose single chunk's sidecar entry
+/// carries `header_path` + `heading_depth`. Returns the created resource's uuid. Uses the boot-seeded
+/// canonical `system` profile/entity as owner+emitter, so call after `bootseed::seed_system`.
+pub async fn fire_resource_with_headed_chunk(
+    pool: &sqlx::PgPool,
+    header_path: &str,
+    heading_depth: i16,
+) -> uuid::Uuid {
+    use temper_next::content::{PreparedBlock, PreparedChunk};
+    use temper_next::events::{fire, SeedAction};
+    use temper_next::ids::{BlockId, ChunkId, EntityId, ProfileId};
+    use uuid::Uuid;
+
+    // One prepared block with a single chunk; a non-degenerate 768-d unit embedding keeps the cosine
+    // HNSW index well-defined. `header_path`/`heading_depth` ride the chunk into the sidecar.
+    fn one_chunk_block(
+        content: &str,
+        header_path: Option<String>,
+        heading_depth: Option<i16>,
+    ) -> PreparedBlock {
+        let mut embedding = vec![0.0_f32; 768];
+        embedding[0] = 1.0;
+        PreparedBlock {
+            block_id: BlockId::from(Uuid::now_v7()),
+            seq: 0,
+            role: None,
+            chunks: vec![PreparedChunk {
+                chunk_id: ChunkId::from(Uuid::now_v7()),
+                chunk_index: 0,
+                content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
+                content: content.to_string(),
+                embedding,
+                header_path,
+                heading_depth,
+            }],
+        }
+    }
+
+    // The boot-seeded canonical system actor (profile + entity) — owner + emitter for both fires.
+    let profile: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    let entity: Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id=$1 AND name='system'")
+            .bind(profile)
+            .fetch_one(pool)
+            .await
+            .unwrap();
+    let owner = ProfileId::from(profile);
+    let emitter = EntityId::from(entity);
+
+    // Genesis a cogmap to home the resource into (its charter block has no production headings).
+    let charter = vec![one_chunk_block("charter statement", None, None)];
+    let mut tx = pool.begin().await.unwrap();
+    let fired = fire(
+        &mut tx,
+        SeedAction::CogmapGenesis {
+            name: "heading-carry-cogmap",
+            telos_title: "Heading Carry",
+            charter: &charter,
+            owner,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    let (cogmap, _telos) = fired.cogmap_genesis().unwrap();
+
+    // The resource under test: one block, one chunk carrying header_path + heading_depth verbatim.
+    let blocks = vec![one_chunk_block(
+        "body under a heading",
+        Some(header_path.to_string()),
+        Some(heading_depth),
+    )];
+    let mut tx = pool.begin().await.unwrap();
+    let fired = fire(
+        &mut tx,
+        SeedAction::ResourceCreate {
+            title: "Headed Resource",
+            origin_uri: "temper://heading-carry/r",
+            home: cogmap,
+            owner,
+            blocks: &blocks,
+            doc_type: None,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    fired.resource().unwrap().uuid()
+}
+
 fn load_files(files: &[&str]) {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");

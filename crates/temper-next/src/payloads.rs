@@ -157,6 +157,13 @@ pub struct ChunkContent {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<EmbeddingRepr>,
+    /// Production heading metadata (§8 carry-as-is): persisted onto `kb_chunks.header_path` /
+    /// `heading_depth` by `_insert_chunk`, never part of the manifest/CAS hash. Skipped when absent
+    /// (the scenario-authoring path) so the columns stay NULL exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_depth: Option<i16>,
 }
 
 /// Insert one run of prepared chunks into a `{chunk_id: {content, embedding}}` sidecar map (keyed by
@@ -173,6 +180,8 @@ pub fn content_sidecar_chunks(
             ChunkContent {
                 content: c.content.clone(),
                 embedding: Some(EmbeddingRepr::Vector(c.embedding.clone())),
+                header_path: c.header_path.clone(),
+                heading_depth: c.heading_depth,
             },
         );
     }
@@ -487,6 +496,8 @@ mod tests {
                 content_hash: "ab".repeat(32),
                 content: "secret prose".into(),
                 embedding: vec![0.5; 4],
+                header_path: None,
+                heading_depth: None,
             }],
         };
         let m = BlockManifest::from(&b);
@@ -560,6 +571,8 @@ mod tests {
                 content_hash: "cd".repeat(32),
                 content: "the prose".into(),
                 embedding: vec![1.0, 2.0],
+                header_path: None,
+                heading_depth: None,
             }],
         };
         let side = content_sidecar(std::slice::from_ref(&b));

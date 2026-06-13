@@ -1064,18 +1064,23 @@ $$;
 -- path (next version, current) share the writer without relying on column defaults.
 CREATE FUNCTION _insert_chunk(p_chunk uuid, p_block uuid, p_resource uuid, p_chunk_index int,
                               p_version int, p_content_hash text, p_emb jsonb, p_is_current boolean,
-                              p_content text, p_occurred timestamptz)
+                              p_content text, p_header_path text, p_heading_depth smallint,
+                              p_occurred timestamptz)
 RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
+    -- header_path/heading_depth are production render metadata (§8 carry-as-is): persisted verbatim so
+    -- a downstream read reconstructs headed markdown identically to production. They are NOT inputs to
+    -- content_hash or the body_hash merkle (those stay over the chunk content hashes only). NULL on the
+    -- scenario-authoring path (no production headings), exactly as before this carry existed.
     INSERT INTO kb_chunks (id, block_id, resource_id, chunk_index, version, content_hash,
-                           embedding, is_current, created)
+                           embedding, is_current, header_path, heading_depth, created)
         VALUES (p_chunk, p_block, p_resource, p_chunk_index, p_version, p_content_hash,
                 CASE
                     WHEN p_emb IS NULL OR jsonb_typeof(p_emb) = 'null' THEN NULL
                     WHEN jsonb_typeof(p_emb) = 'string' THEN (p_emb #>> '{}')::vector  -- replay: pgvector text
                     ELSE (p_emb::text)::vector                                          -- fire: JSON array
                 END,
-                p_is_current, p_occurred);
+                p_is_current, p_header_path, p_heading_depth, p_occurred);
     INSERT INTO kb_chunk_content (chunk_id, content) VALUES (p_chunk, p_content);
 END;
 $$;
@@ -1147,7 +1152,8 @@ BEGIN
             -- create path: every chunk is version 1 + current (the column defaults, stated explicitly here).
             PERFORM _insert_chunk(v_chunk, v_block, p_resource, (v_chunk_json->>'chunk_index')::int,
                                   1, v_chunk_json->>'content_hash', v_side->'embedding', true,
-                                  v_side->>'content', v_occurred);
+                                  v_side->>'content', v_side->>'header_path',
+                                  NULLIF(v_side->>'heading_depth','')::smallint, v_occurred);
             v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
             v_chunk_count := v_chunk_count + 1;
         END LOOP;
@@ -1415,7 +1421,8 @@ BEGIN
         -- revise path: supersedes the prior chunks, so the new run carries v_next_ver + is_current.
         PERFORM _insert_chunk(v_chunk, v_block, v_resource, (v_chunk_json->>'chunk_index')::int,
                               v_next_ver, v_chunk_json->>'content_hash', v_side->'embedding', true,
-                              v_side->>'content', v_occurred);
+                              v_side->>'content', v_side->>'header_path',
+                              NULLIF(v_side->>'heading_depth','')::smallint, v_occurred);
         v_chunk_hashes := v_chunk_hashes || (v_chunk_json->>'content_hash');
         v_chunk_count := v_chunk_count + 1;
     END LOOP;
