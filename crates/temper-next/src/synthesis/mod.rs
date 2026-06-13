@@ -11,6 +11,7 @@
 //! This file currently carries the scaffolding: [`run`] is a stub returning an empty [`SynthReport`];
 //! the typed `public.*` reads live in [`source`].
 
+pub mod bootstrap;
 pub mod source;
 
 use anyhow::Result;

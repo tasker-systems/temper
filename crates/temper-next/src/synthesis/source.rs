@@ -56,6 +56,35 @@ pub async fn active_resources(pool: &PgPool) -> Result<Vec<SourceResource>> {
         .collect())
 }
 
+/// One production profile (the human/principal behind owned + originated resources). `slug` is
+/// `NOT NULL UNIQUE` in production (migration `20260407000002`), but read as `Option` so a defensive
+/// caller can fall back to a sluggified `display_name` if it is ever absent.
+#[derive(Debug, Clone)]
+pub struct SourceProfile {
+    pub id: Uuid,
+    pub display_name: String,
+    pub slug: Option<String>,
+}
+
+/// The production profiles for the given ids (the distinct originator ∪ owner set across active
+/// resources). Bootstrap turns each into a `temper_next.kb_profiles` row (§1/§2).
+pub async fn profiles(pool: &PgPool, ids: &[Uuid]) -> Result<Vec<SourceProfile>> {
+    let rows = sqlx::query(
+        "SELECT id, display_name, slug FROM public.kb_profiles WHERE id = ANY($1) ORDER BY created",
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|row| SourceProfile {
+            id: row.get("id"),
+            display_name: row.get("display_name"),
+            slug: row.get("slug"),
+        })
+        .collect())
+}
+
 /// One current chunk of a resource, carrying the heading metadata and embedding verbatim (§8: chunks,
 /// sha256 content hashes, and bge-768 embeddings carry as-is).
 #[derive(Debug, Clone)]
