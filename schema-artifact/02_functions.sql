@@ -690,7 +690,8 @@ BEGIN
     INSERT INTO kb_resource_homes (resource_id, anchor_table, anchor_id,
                                    originator_profile_id, owner_profile_id, created)
         VALUES (v_resource, p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid,
-                v_owner, v_owner, v_occurred);
+                COALESCE((p_payload->>'originator_profile_id')::uuid, v_owner),
+                v_owner, v_occurred);
     PERFORM _project_blocks(v_resource, p_event, p_payload->'blocks', p_content);
     IF p_payload->>'doc_type' IS NOT NULL THEN
         INSERT INTO kb_properties (owner_table, owner_id, property_key, property_value,

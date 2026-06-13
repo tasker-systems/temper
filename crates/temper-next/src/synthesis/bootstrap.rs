@@ -95,6 +95,20 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
         .execute(&mut *tx)
         .await?;
 
+    // Event-type registry (names only): synthesis fires through `_event_append`, which resolves an
+    // event by NAME — so the vocabulary must exist before the resource/property/edge passes. A
+    // migration-installed `temper_next` carries tables + functions but NOT this reference data (the
+    // reset-based scenario tests get it from `bootseed::seed_system` instead). Idempotent, so a name
+    // already present (a future migration, a prior synthesis run) is left untouched. Name-only is
+    // sufficient — `_event_append` does no payload-schema validation; the richer schema-stamped seed
+    // (payload contracts) stays a `seed_system` concern.
+    for name in crate::scenario::bootseed::system_event_type_names()? {
+        sqlx::query("INSERT INTO kb_event_types (name) VALUES ($1) ON CONFLICT (name) DO NOTHING")
+            .bind(name)
+            .execute(&mut *tx)
+            .await?;
+    }
+
     let mut profile_id_by_old: HashMap<Uuid, ProfileId> = HashMap::new();
     for p in &src_profiles {
         // handle is NOT NULL UNIQUE in the destination; production slug is the canonical source

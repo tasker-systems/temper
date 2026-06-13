@@ -173,8 +173,9 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                 SeedAction::ResourceCreate {
                     title: &display,
                     origin_uri,
-                    home: CogmapId::from(loaded.cogmap),
+                    home: crate::payloads::AnchorRef::cogmap(CogmapId::from(loaded.cogmap)),
                     owner: ProfileId::from(loaded.owner),
+                    originator: None,
                     blocks: &blocks,
                     doc_type: doc_type.as_deref(),
                     emitter: EntityId::from(loaded.emitter),

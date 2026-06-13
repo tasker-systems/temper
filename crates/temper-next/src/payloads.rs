@@ -243,6 +243,11 @@ pub struct ResourceCreated {
     pub origin_uri: String,
     pub home: AnchorRef,
     pub owner_profile_id: ProfileId,
+    /// The home's originator (§2: "carrying its current originator/owner"). Absent ⇒ the projector
+    /// COALESCEs it to `owner_profile_id` (the scenario path, where originator≡owner). Synthesis sets
+    /// it explicitly so a production row whose originator differs from its owner survives the carry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originator_profile_id: Option<ProfileId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_type: Option<String>,
     pub blocks: Vec<BlockManifest>,

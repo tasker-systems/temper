@@ -94,8 +94,13 @@ pub enum SeedAction<'a> {
     ResourceCreate {
         title: &'a str,
         origin_uri: &'a str,
-        home: CogmapId,
+        /// The resource's home anchor — polymorphic per `AnchorRef` (`kb_cogmaps` for the scenario
+        /// path; `kb_contexts` for synthesized, context-homed resources, §2).
+        home: payloads::AnchorRef,
         owner: ProfileId,
+        /// The home's originator (§2). `None` ⇒ the projector COALESCEs it to `owner` (scenario path,
+        /// originator≡owner); synthesis sets it so a distinct production originator survives.
+        originator: Option<ProfileId>,
         blocks: &'a [PreparedBlock],
         doc_type: Option<&'a str>,
         emitter: EntityId,
@@ -260,6 +265,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             origin_uri,
             home,
             owner,
+            originator,
             blocks,
             doc_type,
             emitter,
@@ -268,8 +274,9 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 resource_id: ResourceId::from(Uuid::now_v7()),
                 title: title.to_owned(),
                 origin_uri: origin_uri.to_owned(),
-                home: payloads::AnchorRef::cogmap(home),
+                home,
                 owner_profile_id: owner,
+                originator_profile_id: originator,
                 doc_type: doc_type.map(str::to_owned),
                 blocks: blocks.iter().map(payloads::BlockManifest::from).collect(),
             };
