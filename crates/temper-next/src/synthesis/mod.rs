@@ -12,6 +12,7 @@
 //! the typed `public.*` reads live in [`source`].
 
 pub mod bootstrap;
+pub mod key_fate;
 pub mod source;
 
 use std::collections::HashMap;
@@ -140,9 +141,80 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
     tx.commit().await?;
 
     // `state.resource_id_by_old` is the remap the property (§7) and edge (§4) passes consume; built
-    // here so they thread the old→new resource ids without re-reading the synthesized rows.
+    // above so they thread the old→new resource ids without re-reading the synthesized rows.
     debug_assert_eq!(state.resource_id_by_old.len(), report.resources);
+
+    // ── property pass (§7) ───────────────────────────────────────────────────────────────────────
+    // Each surviving manifest key becomes a `kb_properties` row per the §7 fate table. This runs AFTER
+    // the resource pass commits: `facet_set` anchors each `property_asserted` event on the owner
+    // resource's home (erroring if homeless), and the homes are now durable. A fresh transaction (homes
+    // already committed) mirrors the resource-pass search_path discipline so the SQL functions resolve
+    // their unqualified references into `temper_next`.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+
+    for r in selected {
+        let new_id = *state.resource_id_by_old.get(&r.id).with_context(|| {
+            format!(
+                "resource {} absent from resource remap (property pass)",
+                r.id
+            )
+        })?;
+
+        // Managed keys flow through the §7 fate table; only `Property`-fated keys become rows. `Die`
+        // (title/slug/id/context), `Edge` (temper-goal → edge pass, Task 8), and `ReconcileToDocType`
+        // (temper-type → the doc_type column already a property) are skipped.
+        for (key, value) in manifest_entries(&r.managed_meta) {
+            if key_fate::key_fate(key) != key_fate::KeyFate::Property {
+                continue;
+            }
+            fire_property(&mut tx, new_id, key, value, maps.migration_entity).await?;
+            report.properties += 1;
+        }
+        // Every `open_meta` key is a property verbatim (§7) — no fate-table consultation.
+        for (key, value) in manifest_entries(&r.open_meta) {
+            fire_property(&mut tx, new_id, key, value, maps.migration_entity).await?;
+            report.properties += 1;
+        }
+    }
+
+    tx.commit().await?;
+
     Ok(report)
+}
+
+/// Iterate a manifest field's object entries (`managed_meta`/`open_meta`). A non-object (null/absent)
+/// manifest field yields no entries — defensive against a resource with no manifest meta.
+fn manifest_entries(meta: &serde_json::Value) -> impl Iterator<Item = (&str, &serde_json::Value)> {
+    meta.as_object()
+        .into_iter()
+        .flat_map(|m| m.iter().map(|(k, v)| (k.as_str(), v)))
+}
+
+/// Fire one `property_asserted` for `key`/`value` on a synthesized resource, through the single
+/// `events::fire` surface (reusing the key-agnostic `facet_set` SQL). `weight` is `1.0` — synthesis
+/// carries each manifest key at full assertion weight.
+async fn fire_property(
+    tx: &mut sqlx::PgConnection,
+    resource: ResourceId,
+    key: &str,
+    value: &serde_json::Value,
+    emitter: crate::ids::EntityId,
+) -> Result<()> {
+    events::fire(
+        tx,
+        SeedAction::PropertyAssert {
+            resource,
+            key,
+            value,
+            weight: 1.0,
+            emitter,
+        },
+    )
+    .await?;
+    Ok(())
 }
 
 /// Build the §8 single up-front content block (seq 0, no role) from a resource's production chunk-set,

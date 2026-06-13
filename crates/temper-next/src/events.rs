@@ -120,6 +120,17 @@ pub enum SeedAction<'a> {
         weight: f64,
         emitter: EntityId,
     },
+    /// Assert one keyed property on a resource (WS6 §7 synthesis: one `kb_properties` row per surviving
+    /// manifest key). Unlike `FacetSet` (which hardcodes `property_key="facet"` for the scenario
+    /// value-map), this carries an arbitrary `key`/`value` pair — but fires the SAME key-agnostic
+    /// `facet_set` SQL function, so the owner resource's home anchors the event (errors if homeless).
+    PropertyAssert {
+        resource: ResourceId,
+        key: &'a str,
+        value: &'a serde_json::Value,
+        weight: f64,
+        emitter: EntityId,
+    },
     LensCreate {
         /// `None` ⇒ a global system lens (`cogmap_id NULL`).
         cogmap: Option<CogmapId>,
@@ -156,6 +167,7 @@ impl SeedAction<'_> {
             SeedAction::ResourceCreate { .. } => EventKind::ResourceCreated,
             SeedAction::RelationshipAssert { .. } => EventKind::RelationshipAsserted,
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
+            SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
@@ -336,6 +348,32 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 value: values.clone(),
                 weight,
             };
+            let id = sqlx::query_scalar!(
+                "SELECT facet_set($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("facet_set returned null")?;
+            Ok(Fired::Facet(PropertyId::from(id)))
+        }
+
+        SeedAction::PropertyAssert {
+            resource,
+            key,
+            value,
+            weight,
+            emitter,
+        } => {
+            let payload = payloads::PropertyAsserted {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::resource(resource),
+                property_key: key.to_owned(),
+                value: value.clone(),
+                weight,
+            };
+            // Reuses the same key-agnostic `facet_set` query as `FacetSet` — no new SQL function.
             let id = sqlx::query_scalar!(
                 "SELECT facet_set($1,$2)",
                 serde_json::to_value(&payload)?,

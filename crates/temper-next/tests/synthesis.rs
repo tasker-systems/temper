@@ -149,3 +149,89 @@ async fn synthesizes_resources_homes_and_single_block(pool: sqlx::PgPool) {
         "the team-context-homed resource anchors at a synthesized team-owned context"
     );
 }
+
+/// Property pass (WS6 §7 manifest-key fate table): after `synthesis::run`, each surviving manifest key
+/// of the task fixture resource (R2) is reconciled per the §7 fates — workflow/provenance managed keys
+/// and every `open_meta` key become `kb_properties` rows verbatim, while title/slug/id/context die,
+/// `temper-goal` is held back for the edge pass, and `temper-type` reconciles to the `doc_type` column.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesizes_properties_from_manifest_keys(pool: sqlx::PgPool) {
+    common::seed_prod_shape_fixture(&pool).await;
+
+    temper_next::synthesis::run(&pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run");
+
+    // Every kb_properties row owned by R2 (the task), keyed by property_key with its value as text
+    // (`#>> '{}'` extracts the JSON scalar — a managed value like "doing" reads back as `doing`).
+    let rows = sqlx::query(
+        "SELECT p.property_key, p.property_value #>> '{}' AS value_text \
+         FROM temper_next.kb_properties p \
+         JOIN temper_next.kb_resources r ON r.id = p.owner_id \
+         WHERE p.owner_table = 'kb_resources' AND r.origin_uri = 'temper://fixture/task-doc'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    let mut props: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for row in &rows {
+        props.insert(row.get("property_key"), row.get("value_text"));
+    }
+
+    // Workflow managed keys → kb_properties rows, values verbatim (§7 Property fate).
+    assert_eq!(
+        props.get("temper-stage").map(String::as_str),
+        Some("doing"),
+        "temper-stage became a property with its value verbatim"
+    );
+    assert_eq!(
+        props.get("temper-mode").map(String::as_str),
+        Some("build"),
+        "temper-mode became a property with its value verbatim"
+    );
+    assert_eq!(
+        props.get("temper-effort").map(String::as_str),
+        Some("M"),
+        "temper-effort became a property with its value verbatim"
+    );
+
+    // Every open_meta key → property verbatim (§7).
+    assert_eq!(
+        props.get("custom-key").map(String::as_str),
+        Some("custom-value"),
+        "open_meta key carried verbatim"
+    );
+    assert_eq!(
+        props.get("another-key").map(String::as_str),
+        Some("another-value"),
+        "open_meta key carried verbatim"
+    );
+
+    // Identity/derived keys die — never a property (title is a column, slug render-time, id the row id,
+    // context derives from the home row).
+    for died in ["temper-title", "temper-slug", "temper-id", "temper-context"] {
+        assert!(
+            !props.contains_key(died),
+            "{died} must die (§7), not become a property"
+        );
+    }
+
+    // temper-goal is an EDGE (synthesized by the edge pass, Task 8), never a property.
+    assert!(
+        !props.contains_key("temper-goal"),
+        "temper-goal is an edge, not a property (§7)"
+    );
+
+    // temper-type reconciles against the authoritative doctype column — the column wins, the stray
+    // dies: no `temper-type` property, but the `doc_type` property (from the resource pass) carries.
+    assert!(
+        !props.contains_key("temper-type"),
+        "temper-type reconciles to the doc_type column (§7); no property"
+    );
+    assert_eq!(
+        props.get("doc_type").map(String::as_str),
+        Some("task"),
+        "doc_type property (from resource_create) carries the authoritative doctype"
+    );
+}
