@@ -23,10 +23,13 @@ world:
   memberships:
     - { team: team-a, profile: alice, role: member }
     - { team: team-b, profile: bob, role: member }
+  # Owner is namespace-scoping only (which owner the slug is unique within), orthogonal to the
+  # context_shares that govern reachability below. Owners are declared profiles/teams (resolvable
+  # when contexts load, before the personal-team map refresh).
   contexts:
-    - { name: research }      # shared to team-a
-    - { name: carol-notes }   # shared to carol's trigger-created personal team
-    - { name: scratch }       # unshared — reachable by nobody but owners
+    - { name: research, owner_team: team-a }       # shared to team-a
+    - { name: carol-notes, owner_profile: carol }  # shared to carol's trigger-created personal team
+    - { name: scratch, owner_profile: alice }      # unshared — reachable by nobody but owners
   context_shares:
     - { context: research, team: team-a }
     - { context: carol-notes, team: personal-carol }

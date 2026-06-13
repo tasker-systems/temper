@@ -166,23 +166,29 @@ pub async fn edges(pool: &PgPool) -> Result<Vec<SourceEdge>> {
         .collect())
 }
 
-/// One production context (id + name). Contexts migrate by name into the thin, unowned destination
-/// `kb_contexts` (§2).
+/// One production context (id + owner + name). Contexts migrate with their owner carried verbatim
+/// into the owner-scoped destination `kb_contexts` (§2 amendment 2026-06-13); `slug = slugify(name)`.
 #[derive(Debug, Clone)]
 pub struct SourceContext {
     pub id: Uuid,
+    pub owner_table: String,
+    pub owner_id: Uuid,
     pub name: String,
 }
 
 /// All production contexts.
 pub async fn contexts(pool: &PgPool) -> Result<Vec<SourceContext>> {
-    let rows = sqlx::query("SELECT id, name FROM public.kb_contexts ORDER BY created")
-        .fetch_all(pool)
-        .await?;
+    let rows = sqlx::query(
+        "SELECT id, kb_owner_table, kb_owner_id, name FROM public.kb_contexts ORDER BY created",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(rows
         .iter()
         .map(|row| SourceContext {
             id: row.get("id"),
+            owner_table: row.get("kb_owner_table"),
+            owner_id: row.get("kb_owner_id"),
             name: row.get("name"),
         })
         .collect())

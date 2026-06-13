@@ -174,6 +174,55 @@ pub mod fixture_ids {
     pub const EDGE_FOLDED: Uuid = uuid!("00000000-0000-0000-0dd0-000000000002");
 }
 
+/// Insert one `temper_next.kb_profiles` row by handle (display_name = handle, `system_access` defaults
+/// to `'none'`), returning its new id. Runs inside a `SET LOCAL search_path TO temper_next, public`
+/// transaction so the `sync_personal_team` / `sync_system_membership` AFTER-INSERT triggers resolve
+/// their unqualified table references into `temper_next` (same discipline as `synthesis::bootstrap`).
+/// Runtime `sqlx::query` (a test-fixture insert) so it needs no offline-cache entry.
+pub async fn insert_profile(pool: &sqlx::PgPool, handle: &str) -> uuid::Uuid {
+    let mut tx = pool.begin().await.expect("begin");
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await
+        .expect("set search_path");
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_profiles (handle, display_name) VALUES ($1,$1) RETURNING id",
+    )
+    .bind(handle)
+    .fetch_one(&mut *tx)
+    .await
+    .expect("insert profile");
+    tx.commit().await.expect("commit");
+    id
+}
+
+/// Insert one owner-scoped `temper_next.kb_contexts` row, returning its new id (or the DB error if it
+/// violates `UNIQUE(owner_table, owner_id, slug)`). Wrapped in a `SET LOCAL search_path` transaction
+/// for parity with the other temper_next writers. Runtime `sqlx::query` (a test-fixture insert).
+pub async fn insert_context(
+    pool: &sqlx::PgPool,
+    owner_table: &str,
+    owner_id: uuid::Uuid,
+    slug: &str,
+    name: &str,
+) -> Result<uuid::Uuid, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+    let id: uuid::Uuid = sqlx::query_scalar(
+        "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) VALUES ($1,$2,$3,$4) RETURNING id",
+    )
+    .bind(owner_table)
+    .bind(owner_id)
+    .bind(slug)
+    .bind(name)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
 /// Seed the production-shape `public.*` corpus into the given pool's database. Intended for the
 /// self-contained `#[sqlx::test(migrator = "temper_next::MIGRATOR")]` tests, whose ephemeral DB has
 /// the full migration chain applied (System/Anonymous profiles + seeded doc/event types present) but

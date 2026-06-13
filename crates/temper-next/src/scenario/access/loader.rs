@@ -104,11 +104,41 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
         .execute(&mut *tx)
         .await?;
     }
-    // 5b. Contexts — real kb_contexts rows, referents for named homes and shares.
+    // 5b. Contexts — real owner-scoped kb_contexts rows (WS6 §2 amendment), referents for named homes
+    //     and shares. Each ContextDef names exactly one owner (a world profile handle or team slug);
+    //     owner is namespace-scoping only — reachability is still via context_shares. slug = slugify(name).
     let mut contexts: HashMap<String, Uuid> = HashMap::new();
     for c in &world.contexts {
+        let (owner_table, owner_id) = match (&c.owner_profile, &c.owner_team) {
+            (Some(handle), None) => (
+                "kb_profiles",
+                *profiles.get(handle).with_context(|| {
+                    format!(
+                        "context {} owner_profile {} not in world.profiles",
+                        c.name, handle
+                    )
+                })?,
+            ),
+            (None, Some(slug)) => (
+                "kb_teams",
+                *teams.get(slug).with_context(|| {
+                    format!("context {} owner_team {} not in world.teams", c.name, slug)
+                })?,
+            ),
+            (Some(_), Some(_)) => {
+                anyhow::bail!("context {} sets both owner_profile and owner_team", c.name)
+            }
+            (None, None) => anyhow::bail!(
+                "context {} must set exactly one of owner_profile / owner_team",
+                c.name
+            ),
+        };
+        let slug = crate::synthesis::bootstrap::slugify(&c.name);
         let id = sqlx::query_scalar!(
-            "INSERT INTO kb_contexts (name) VALUES ($1) RETURNING id",
+            "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) VALUES ($1,$2,$3,$4) RETURNING id",
+            owner_table,
+            owner_id,
+            slug,
             c.name,
         )
         .fetch_one(&mut *tx)

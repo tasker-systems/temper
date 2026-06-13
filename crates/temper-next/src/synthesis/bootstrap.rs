@@ -63,12 +63,13 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
         "cannot bootstrap entities: no active resources to derive an owner profile from",
     )?;
 
-    // Contexts: the distinct contexts referenced by active resources, looked up by name (§2).
+    // Contexts: the distinct contexts referenced by active resources, with owner carried verbatim (§2
+    // amendment). Keyed by old production id so the resource pass can remap homes.
     let referenced: BTreeSet<Uuid> = resources.iter().map(|r| r.kb_context_id).collect();
-    let name_by_old: HashMap<Uuid, String> = source::contexts(pool)
+    let ctx_by_old: HashMap<Uuid, source::SourceContext> = source::contexts(pool)
         .await?
         .into_iter()
-        .map(|c| (c.id, c.name))
+        .map(|c| (c.id, c))
         .collect();
 
     // --- All temper_next writes run in one transaction with `search_path = temper_next, public` so
@@ -111,10 +112,31 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
 
     let mut context_id_by_old: HashMap<Uuid, ContextId> = HashMap::new();
     for old in referenced {
-        let name = name_by_old
+        let ctx = ctx_by_old
             .get(&old)
             .with_context(|| format!("referenced context {old} absent from public.kb_contexts"))?;
-        let new_id = insert_context(&mut tx, name).await?;
+        // Owner carried verbatim, remapped into the destination id space (§2 amendment). Profile-owned
+        // contexts remap through `profile_id_by_old`; team-owned context synthesis (which also mints the
+        // `kb_team_contexts` auto-share + the owning team row) is the Task-5 rework — not reachable from
+        // the profile-only prod-shape fixture, so it escalates rather than writing a dangling owner.
+        let owner_id = match ctx.owner_table.as_str() {
+            "kb_profiles" => profile_id_by_old
+                .get(&ctx.owner_id)
+                .with_context(|| {
+                    format!(
+                        "context {old} owner profile {} absent from profile remap",
+                        ctx.owner_id
+                    )
+                })?
+                .uuid(),
+            "kb_teams" => anyhow::bail!(
+                "team-owned context synthesis (owner {} on context {old}) lands in the Task-5 bootstrap rework",
+                ctx.owner_id
+            ),
+            other => anyhow::bail!("context {old} has unsupported owner_table {other:?}"),
+        };
+        let slug = slugify(&ctx.name);
+        let new_id = insert_context(&mut tx, &ctx.owner_table, owner_id, &slug, &ctx.name).await?;
         context_id_by_old.insert(old, new_id);
     }
 
@@ -181,13 +203,25 @@ async fn insert_entity(
     Ok(EntityId::from(id))
 }
 
-/// Insert one thin, unowned `temper_next.kb_contexts` row by name (§2), returning its new id.
-async fn insert_context(conn: &mut sqlx::PgConnection, name: &str) -> Result<ContextId> {
-    let id: Uuid =
-        sqlx::query_scalar("INSERT INTO temper_next.kb_contexts (name) VALUES ($1) RETURNING id")
-            .bind(name)
-            .fetch_one(&mut *conn)
-            .await?;
+/// Insert one owner-scoped `temper_next.kb_contexts` row (§2 amendment), returning its new id. Owner is
+/// namespace-scoping only; `slug` is unique per owner.
+async fn insert_context(
+    conn: &mut sqlx::PgConnection,
+    owner_table: &str,
+    owner_id: Uuid,
+    slug: &str,
+    name: &str,
+) -> Result<ContextId> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO temper_next.kb_contexts (owner_table, owner_id, slug, name) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(owner_table)
+    .bind(owner_id)
+    .bind(slug)
+    .bind(name)
+    .fetch_one(&mut *conn)
+    .await?;
     Ok(ContextId::from(id))
 }
 
@@ -226,8 +260,8 @@ fn surface_meta(surface: &str) -> Result<serde_json::Value> {
 }
 
 /// Lowercase alphanumeric-or-dash slug (mirrors the surfaces' `slugify`); the fallback when a source
-/// profile has no slug.
-fn slugify(s: &str) -> String {
+/// profile has no slug. Shared with the access-scenario loader's context-slug derivation.
+pub(crate) fn slugify(s: &str) -> String {
     s.to_lowercase()
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '-' })

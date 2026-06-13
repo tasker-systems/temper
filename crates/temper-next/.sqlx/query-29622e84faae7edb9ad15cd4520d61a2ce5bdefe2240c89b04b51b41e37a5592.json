@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO kb_contexts (name) VALUES ($1) RETURNING id",
+  "query": "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) VALUES ($1,$2,$3,$4) RETURNING id",
   "describe": {
     "columns": [
       {
@@ -11,6 +11,9 @@
     ],
     "parameters": {
       "Left": [
+        "Varchar",
+        "Uuid",
+        "Text",
         "Text"
       ]
     },
@@ -18,5 +21,5 @@
       false
     ]
   },
-  "hash": "56c0689112de79cd7a00e277ee4a1c58cda1f94270db6a64bfef9ba2e3f88bf1"
+  "hash": "29622e84faae7edb9ad15cd4520d61a2ce5bdefe2240c89b04b51b41e37a5592"
 }

@@ -60,11 +60,19 @@ pub struct MembershipDef {
     pub role: String,    // team_role: owner | maintainer | member | watcher
 }
 
-/// A named context — a real `kb_contexts` row, the referent for named homes and shares.
+/// A named context — a real owner-scoped `kb_contexts` row (WS6 §2 amendment), the referent for named
+/// homes and shares. Exactly one of `owner_profile` (a `world` profile handle) / `owner_team` (a
+/// `world` team slug) must be set — the loader validates this and derives `slug = slugify(name)`.
+/// Owner is purely namespace-scoping (which owner the slug is unique within); reachability is still
+/// governed by `context_shares` (`kb_team_contexts`), orthogonal to owner.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct ContextDef {
     pub name: String,
+    #[serde(default)]
+    pub owner_profile: Option<String>, // handle in world.profiles
+    #[serde(default)]
+    pub owner_team: Option<String>, // slug in world.teams (declared or trigger-created)
 }
 
 /// A context-share (`kb_team_contexts`): the team's vis-reach includes the context's
@@ -226,7 +234,7 @@ world:
   memberships:
     - { team: epd-team-a, profile: alice, role: member }
   contexts:
-    - { name: research }
+    - { name: research, owner_team: epd-team-a }
   context_shares:
     - { context: research, team: epd-team-a }
   cogmaps:
@@ -262,6 +270,11 @@ checks:
         assert!(s.world.cogmaps[0].telos.is_none());
         assert!(s.world.cogmaps[1].telos.is_some());
         assert_eq!(s.world.contexts.len(), 1);
+        assert_eq!(
+            s.world.contexts[0].owner_team.as_deref(),
+            Some("epd-team-a")
+        );
+        assert!(s.world.contexts[0].owner_profile.is_none());
         assert_eq!(s.world.context_shares.len(), 1);
         assert_eq!(s.world.resources.len(), 2);
         assert!(matches!(s.world.resources[0].home, HomeDef::Cogmap { .. }));

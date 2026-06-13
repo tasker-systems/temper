@@ -96,12 +96,22 @@ CREATE TABLE kb_entities (
 );
 CREATE INDEX idx_kb_entities_profile ON kb_entities(profile_id);
 
--- Navigation home anchor (Domain-A). A resource homes in a context.
+-- Navigation home anchor (Domain-A). A resource homes in a context. Owner-scoped, slugged
+-- namespace (WS6 §2 amendment 2026-06-13): uuid stays the canonical reference everything else uses;
+-- `owner_table`/`owner_id` scope the namespace (a global `name UNIQUE` was a latent multi-tenant
+-- error); `slug` is the per-owner addressable handle (team-style: unique slug, free display name).
+-- `contexts_visible_to` stays retired and `kb_team_contexts` is still the sharing mechanism,
+-- orthogonal to owner.
 CREATE TABLE kb_contexts (
-    id       UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
-    name     TEXT NOT NULL UNIQUE,
-    created  TIMESTAMPTZ NOT NULL DEFAULT now()
+    id           UUID PRIMARY KEY DEFAULT uuid_generate_v7(),  -- canonical reference + access mechanism
+    owner_table  VARCHAR(64) NOT NULL CHECK (owner_table IN ('kb_profiles','kb_teams')),
+    owner_id     UUID NOT NULL,
+    slug         TEXT NOT NULL,        -- per-owner addressable handle (team-style: unique slug, free name)
+    name         TEXT NOT NULL,        -- display label (may collide across owners)
+    created      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (owner_table, owner_id, slug)
 );
+CREATE INDEX idx_kb_contexts_owner ON kb_contexts(owner_table, owner_id);
 
 -- Topic taxonomy (event ledger dimension; carried, minimal).
 CREATE TABLE kb_topics (
