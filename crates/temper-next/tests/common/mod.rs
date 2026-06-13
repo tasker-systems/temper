@@ -31,6 +31,33 @@ pub fn read_latest_install_migration(root: &str) -> String {
         .unwrap_or_else(|e| panic!("failed to read install migration at {path}: {e}"))
 }
 
+/// Drop `temper_next` then apply the committed additive install migration via psql — proving the
+/// run-once `CREATE SCHEMA temper_next;` path works on an absent namespace, leaving `public` untouched.
+/// Async only for ergonomics with the tokio tests that call it; the psql invocation is blocking.
+pub async fn apply_install_migration(_pool: &sqlx::PgPool) {
+    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    // Drop the namespace so CREATE SCHEMA in the migration runs against an absent namespace.
+    let drop = std::process::Command::new("psql")
+        .args([
+            url.as_str(),
+            "-q",
+            "-v",
+            "ON_ERROR_STOP=1",
+            "-c",
+            "DROP SCHEMA IF EXISTS temper_next CASCADE",
+        ])
+        .status()
+        .expect("failed to run psql (is it on PATH?)");
+    assert!(drop.success(), "psql DROP SCHEMA temper_next failed");
+    let path = format!("{root}/migrations/20260613000001_install_temper_next.sql");
+    let status = std::process::Command::new("psql")
+        .args([url.as_str(), "-q", "-v", "ON_ERROR_STOP=1", "-f", &path])
+        .status()
+        .expect("failed to run psql (is it on PATH?)");
+    assert!(status.success(), "psql -f install migration failed");
+}
+
 fn load_files(files: &[&str]) {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
