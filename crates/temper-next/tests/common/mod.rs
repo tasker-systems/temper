@@ -244,6 +244,15 @@ pub async fn seed_prod_shape_fixture(pool: &sqlx::PgPool) {
         .expect("prod-shape fixture failed to seed");
 }
 
+/// Seed the prod-shape fixture into `public.*` then run synthesis into `temper_next.*`, returning
+/// the synthesis report. The standard setup for the chunk-3 parity-read tests.
+pub async fn seed_and_synthesize(pool: &sqlx::PgPool) -> temper_next::synthesis::SynthReport {
+    seed_prod_shape_fixture(pool).await;
+    temper_next::synthesis::run(pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run")
+}
+
 fn load_files(files: &[&str]) {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
