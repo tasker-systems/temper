@@ -457,3 +457,16 @@ updating all callers, not a runtime cutover; and crate extraction is post-cutove
 - Ledger: `2026-06-09-event-payload-formalization-design.md`
 - Content: `2026-06-03-content-block-primitive-design.md`, `2026-06-08-…-event-firing-parity-design.md`
 - Goal record: `substrate-kernel-to-cognitive-map` WS6 (update status line when this lands)
+
+**Status (2026-06-14):** Chunks 2+3 landed on `jct/ws6-chunk2-3-synthesis-parity` (plan:
+`docs/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md`). Chunk 2 = strictly-additive
+install migration (single-sourced from the shared artifact body) + the explicitly-invoked
+synthesis-from-state operation (genesis-event synthesis per §0/§1/§4/§7/§8, §2 owner-scoped-contexts
+amendment) + the per-resource body-text parity gate (§8). Chunk 3 = the read-only parity-read harness
+over the full §9 floor (list / show+meta / body / FTS / vector / graph neighbors), each diffed against
+the production read for the same logical query over a synthesized prod-shape fixture. Two parity-floor
+findings recorded in the plan/PR: list-ordering and FTS rank-ordering are NOT migration invariants
+(synthesis sources timestamps from event `occurred_at` → collapsed; §9 rebuilds FTS title-only weight-A
+while production weights slug@A) — the asserted floor is the matching row/result **set**, not absolute
+ordering; vector and graph ordering ARE invariants (embeddings/edges carry verbatim). Not in scope
+(deferred to chunk 4 / the flip): ledger archive, surface repoint, crate extraction.
