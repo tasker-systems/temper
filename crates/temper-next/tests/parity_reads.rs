@@ -524,3 +524,154 @@ async fn vector_parity(pool: sqlx::PgPool) {
         "vector ranking orders resources by their best chunk's cosine distance (R5<R3<R2<R1)"
     );
 }
+
+/// One 1-hop neighbor tuple compared across the two read paths:
+/// `(neighbor_origin_uri, edge_kind, polarity, label)`. `label` is `Option<String>`: temper_next
+/// carries an empty production label as `NULL`, so the production oracle normalizes its NOT-NULL
+/// `label` column the same way (empty string → `None`) before comparing as a set.
+type NeighborTuple = (String, String, String, Option<String>);
+
+/// §9 — graph-neighbors read parity (the LAST chunk-3 read floor). For a fixture resource, the 1-hop
+/// neighbor set `readback::neighbors` reads over `temper_next.kb_edges` must equal production's 1-hop
+/// neighbor set over `public.kb_resource_edges` — same `NOT is_folded` gate, same
+/// `(edge_kind, polarity, label)` projection.
+///
+/// PRODUCTION ORACLE: a DIRECT symmetric edge query over `public.kb_resource_edges`, NOT
+/// `graph_service::aggregator_subgraph`. `aggregator_subgraph` is subgraph-over-a-node-set (you pass it
+/// a node set; it returns the edges AMONG them), so using it as a 1-hop neighbor oracle would be
+/// circular. The faithful oracle is the symmetric direct read (seed as source OR as target), with the
+/// SAME table + `NOT is_folded` gate + `edge_kind`/`polarity`/`label` projection that
+/// `aggregator_subgraph` itself uses (graph_service.rs:185-205, `FROM kb_resource_edges ... AND NOT
+/// is_folded`).
+///
+/// Two cases anchor the floor:
+///   - R2 (task-doc): the load-bearing case — it touches the minted/deduped `parent_of` edge (E1) AND
+///     the FOLDED `near` edge (E2). The folded edge must be EXCLUDED on both sides (decision-doc must
+///     NOT appear in R2's neighbor set).
+///   - R1 (goal-doc): multi-neighbor + inverse-polarity coverage (forward `contains`→task-doc AND
+///     inverse `leads_to`→decision-doc), polarity/label carried verbatim.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn graph_parity(pool: sqlx::PgPool) {
+    use std::collections::BTreeSet;
+
+    use sqlx::Row as _;
+    use uuid::Uuid;
+
+    common::seed_and_synthesize(&pool).await;
+
+    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+
+    // Production oracle: the symmetric direct 1-hop neighbor read over public.kb_resource_edges (both
+    // directions, NOT is_folded), joining to kb_resources for the OTHER endpoint's origin_uri. The
+    // NOT-NULL production `label` is normalized empty→None to match temper_next's empty→NULL carry.
+    let prod_neighbors = |old_id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            let rows = sqlx::query(
+                "SELECT t.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
+                        e.polarity::text AS polarity, e.label \
+                   FROM public.kb_resource_edges e \
+                   JOIN public.kb_resources t ON t.id = e.target_resource_id AND t.is_active \
+                  WHERE e.source_resource_id = $1 AND NOT e.is_folded \
+                 UNION ALL \
+                 SELECT s.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
+                        e.polarity::text AS polarity, e.label \
+                   FROM public.kb_resource_edges e \
+                   JOIN public.kb_resources s ON s.id = e.source_resource_id AND s.is_active \
+                  WHERE e.target_resource_id = $1 AND NOT e.is_folded",
+            )
+            .bind(old_id)
+            .fetch_all(&pool)
+            .await
+            .expect("production neighbor query");
+
+            rows.iter()
+                .map(|r| {
+                    let label: String = r.get("label");
+                    (
+                        r.get::<String, _>("origin_uri"),
+                        r.get::<String, _>("edge_kind"),
+                        r.get::<String, _>("polarity"),
+                        (!label.is_empty()).then_some(label),
+                    )
+                })
+                .collect::<BTreeSet<NeighborTuple>>()
+        }
+    };
+
+    let readback_neighbors = |new_id: Uuid| {
+        let pool = pool.clone();
+        async move {
+            readback::neighbors(&pool, new_id)
+                .await
+                .expect("readback::neighbors")
+                .into_iter()
+                .map(|n| (n.origin_uri, n.edge_kind, n.polarity, n.label))
+                .collect::<BTreeSet<NeighborTuple>>()
+        }
+    };
+
+    // --- R2 (task-doc): minted parent_of included, folded near→decision-doc excluded. ---
+    let r2_new = ids
+        .to_new(fixture_ids::RESOURCE_TASK)
+        .expect("R2 (task) synthesized");
+    let r2_prod = prod_neighbors(fixture_ids::RESOURCE_TASK).await;
+    let r2_rb = readback_neighbors(r2_new).await;
+
+    let r2_expected: BTreeSet<NeighborTuple> = [(
+        "temper://fixture/goal-doc".to_string(),
+        "contains".to_string(),
+        "forward".to_string(),
+        Some("parent_of".to_string()),
+    )]
+    .into_iter()
+    .collect();
+
+    assert_eq!(
+        r2_prod, r2_rb,
+        "R2: readback neighbors == production neighbors (symmetric direct edge read, NOT is_folded)"
+    );
+    assert_eq!(
+        r2_rb, r2_expected,
+        "R2: only the minted/deduped parent_of edge; the folded near→decision-doc edge is excluded"
+    );
+    assert!(
+        !r2_rb
+            .iter()
+            .any(|(uri, ..)| uri == "temper://fixture/decision-doc"),
+        "R2: the FOLDED near→decision-doc edge must NOT appear (excluded both sides)"
+    );
+
+    // --- R1 (goal-doc): multi-neighbor + inverse polarity. ---
+    let r1_new = ids
+        .to_new(fixture_ids::RESOURCE_GOAL)
+        .expect("R1 (goal) synthesized");
+    let r1_prod = prod_neighbors(fixture_ids::RESOURCE_GOAL).await;
+    let r1_rb = readback_neighbors(r1_new).await;
+
+    let r1_expected: BTreeSet<NeighborTuple> = [
+        (
+            "temper://fixture/task-doc".to_string(),
+            "contains".to_string(),
+            "forward".to_string(),
+            Some("parent_of".to_string()),
+        ),
+        (
+            "temper://fixture/decision-doc".to_string(),
+            "leads_to".to_string(),
+            "inverse".to_string(),
+            Some("derived_from".to_string()),
+        ),
+    ]
+    .into_iter()
+    .collect();
+
+    assert_eq!(
+        r1_prod, r1_rb,
+        "R1: readback neighbors == production neighbors (forward contains + inverse leads_to)"
+    );
+    assert_eq!(
+        r1_rb, r1_expected,
+        "R1: forward contains→task-doc (parent_of) + inverse leads_to→decision-doc (derived_from)"
+    );
+}

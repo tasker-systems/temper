@@ -365,3 +365,72 @@ pub async fn vector_search(pool: &PgPool, query_embedding: &[f32]) -> Result<Vec
         .map(|r| r.get::<String, _>("origin_uri"))
         .collect())
 }
+
+/// One 1-hop graph neighbor of a resource: the OTHER endpoint's origin_uri plus the connecting edge's
+/// kind/polarity/label. The §9 graph-neighbors read floor over `temper_next.kb_edges` (folded edges
+/// excluded, matching production's `NOT is_folded` gate).
+///
+/// `label` is `Option<String>`: an empty production label carries as `NULL` through synthesis, so an
+/// edge with no label surfaces here as `None` (never `Some("")`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Neighbor {
+    /// The neighbor (other endpoint) resource's verbatim-carried, UNIQUE `origin_uri`.
+    pub origin_uri: String,
+    /// The connecting edge's kind (`edge_kind::text`).
+    pub edge_kind: String,
+    /// The connecting edge's polarity (`polarity::text`), carried verbatim from production.
+    pub polarity: String,
+    /// The connecting edge's label, or `None` when absent (empty production label → `NULL`).
+    pub label: Option<String>,
+}
+
+/// Port of production's 1-hop graph-neighbor read onto `temper_next.*` — the §9 graph-neighbors read
+/// floor. Returns the resource↔resource neighbors of `new_id` over `temper_next.kb_edges`, in BOTH
+/// directions (the seed as `source_id` → the `target` endpoint; the seed as `target_id` → the `source`
+/// endpoint), with folded edges EXCLUDED (`NOT is_folded`, matching production's gate).
+///
+/// The production counterpart is a DIRECT symmetric edge read over `public.kb_resource_edges` (same
+/// table + `NOT is_folded` gate + `edge_kind`/`polarity`/`label` projection) — NOT
+/// `graph_service::aggregator_subgraph`, which is subgraph-over-a-node-set (it returns the edges among a
+/// passed node set) and would be circular as a 1-hop neighbor oracle. The parity test writes that
+/// production query directly.
+///
+/// 1-hop ONLY (the §9 neighbors floor) — there is deliberately NO `depth`/multi-hop traversal param:
+/// the tested floor and the production neighbor read are both 1-hop; multi-hop is a kernel concern
+/// beyond this parity task (SG-5, no speculative surface). Order is NOT contractual — the parity test
+/// compares neighbor SETS.
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn neighbors(pool: &PgPool, new_id: Uuid) -> Result<Vec<Neighbor>> {
+    let rows = sqlx::query(
+        "SELECT t.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
+                e.polarity::text AS polarity, e.label \
+           FROM temper_next.kb_edges e \
+           JOIN temper_next.kb_resources t ON t.id = e.target_id \
+          WHERE e.source_id = $1 \
+            AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources' \
+            AND NOT e.is_folded \
+         UNION ALL \
+         SELECT s.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
+                e.polarity::text AS polarity, e.label \
+           FROM temper_next.kb_edges e \
+           JOIN temper_next.kb_resources s ON s.id = e.source_id \
+          WHERE e.target_id = $1 \
+            AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources' \
+            AND NOT e.is_folded",
+    )
+    .bind(new_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| Neighbor {
+            origin_uri: row.get("origin_uri"),
+            edge_kind: row.get("edge_kind"),
+            polarity: row.get("polarity"),
+            label: row.get("label"),
+        })
+        .collect())
+}
