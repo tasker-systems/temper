@@ -231,6 +231,7 @@ async fn apply_mutation(pool: &PgPool, loaded: &mut Loaded, step: &Step) -> Resu
                     src: ResourceId::from(lookup(&loaded.keys, from)?),
                     tgt: ResourceId::from(lookup(&loaded.keys, to)?),
                     kind: *kind,
+                    polarity: crate::payloads::EdgePolarity::Forward,
                     label: label.as_deref(),
                     weight: *weight,
                     home: EdgeHome::Cogmap(CogmapId::from(loaded.cogmap)),

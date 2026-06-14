@@ -179,6 +179,8 @@ pub mod fixture_ids {
     pub const RESOURCE_TEAM: Uuid = uuid!("00000000-0000-0000-00a0-000000000005");
     pub const EDGE_NORMAL: Uuid = uuid!("00000000-0000-0000-0dd0-000000000001");
     pub const EDGE_FOLDED: Uuid = uuid!("00000000-0000-0000-0dd0-000000000002");
+    /// The inverse-polarity (leads_to, R3→R1) edge — proves polarity carries verbatim (§4).
+    pub const EDGE_INVERSE: Uuid = uuid!("00000000-0000-0000-0dd0-000000000003");
 }
 
 /// Insert one `temper_next.kb_profiles` row by handle (display_name = handle, `system_access` defaults

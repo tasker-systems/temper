@@ -235,3 +235,157 @@ async fn synthesizes_properties_from_manifest_keys(pool: sqlx::PgPool) {
         "doc_type property (from resource_create) carries the authoritative doctype"
     );
 }
+
+/// Edge pass (WS6 §4) + minted temper-goal edges (§7/G8): after `synthesis::run`, every active-endpoint
+/// `public.kb_resource_edges` row becomes a `temper_next.kb_edges` row with kind/polarity/label/weight
+/// carried verbatim and endpoints remapped to the synthesized ids; the edge homes at its SOURCE
+/// endpoint's context (§1c); the folded edge synthesizes as an assert+fold pair; and the task's
+/// `temper-goal` mints exactly ONE `contains`/`parent_of` goal→task edge — NOT double-created, since
+/// that edge is also materialized in `kb_resource_edges` (the dedup proof).
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesizes_edges_and_minted_goal_edges(pool: sqlx::PgPool) {
+    common::seed_prod_shape_fixture(&pool).await;
+
+    let report = temper_next::synthesis::run(&pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run");
+
+    // 3 source edges synthesized; the minted temper-goal edge is deduped against the materialized
+    // `contains` R1→R2 row, so `report.edges` counts only the 3 `relationship_asserted` fires.
+    assert_eq!(report.edges, 3, "3 source edges; minted goal edge deduped");
+
+    // Total kb_edges = source edges (3) + minted (1) − dedup (1) = 3.
+    let total: i64 = sqlx::query_scalar("SELECT count(*) FROM temper_next.kb_edges")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 3, "kb_edges count = source edges + minted − dedup");
+
+    // Each edge: endpoints remapped (joinable by origin_uri), both endpoints kb_resources, and the
+    // edge homes at the SOURCE resource's home context (§1c — `home_anchor_id == source home anchor`).
+    let rows = sqlx::query(
+        "SELECT s.origin_uri AS src, t.origin_uri AS tgt, e.edge_kind::text AS kind, \
+                e.polarity::text AS polarity, e.label, e.weight, e.is_folded, \
+                e.source_table, e.target_table, \
+                (e.home_anchor_table = 'kb_contexts' AND e.home_anchor_id = sh.anchor_id) AS home_ok \
+         FROM temper_next.kb_edges e \
+         JOIN temper_next.kb_resources s ON s.id = e.source_id \
+         JOIN temper_next.kb_resources t ON t.id = e.target_id \
+         JOIN temper_next.kb_resource_homes sh ON sh.resource_id = e.source_id \
+         ORDER BY s.origin_uri, t.origin_uri",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    let mut by_pair: std::collections::HashMap<(String, String), &sqlx::postgres::PgRow> =
+        std::collections::HashMap::new();
+    for r in &rows {
+        let src: String = r.get("src");
+        let tgt: String = r.get("tgt");
+        assert_eq!(r.get::<String, _>("source_table"), "kb_resources");
+        assert_eq!(r.get::<String, _>("target_table"), "kb_resources");
+        assert!(
+            r.get::<bool, _>("home_ok"),
+            "edge {src}→{tgt} homes at its source's context (§1c)"
+        );
+        by_pair.insert((src, tgt), r);
+    }
+
+    // contains R1→R2 (parent_of, forward, weight 1.0, not folded) — also R2's materialized goal edge.
+    let contains = by_pair
+        .get(&(
+            "temper://fixture/goal-doc".to_string(),
+            "temper://fixture/task-doc".to_string(),
+        ))
+        .expect("contains R1→R2 edge");
+    assert_eq!(contains.get::<String, _>("kind"), "contains");
+    assert_eq!(contains.get::<String, _>("polarity"), "forward");
+    assert_eq!(
+        contains.get::<Option<String>, _>("label"),
+        Some("parent_of".to_string())
+    );
+    assert_eq!(contains.get::<f64, _>("weight"), 1.0);
+    assert!(!contains.get::<bool, _>("is_folded"));
+
+    // near R2→R3 (forward, weight 0.5, empty production label → NULL, is_folded=true).
+    let near = by_pair
+        .get(&(
+            "temper://fixture/task-doc".to_string(),
+            "temper://fixture/decision-doc".to_string(),
+        ))
+        .expect("near R2→R3 edge");
+    assert_eq!(near.get::<String, _>("kind"), "near");
+    assert_eq!(
+        near.get::<Option<String>, _>("label"),
+        None,
+        "empty production label carries as NULL, never an empty string"
+    );
+    assert!(
+        near.get::<bool, _>("is_folded"),
+        "the folded edge is is_folded=true"
+    );
+
+    // inverse leads_to R3→R1 (polarity carried verbatim, derived_from, weight 0.7).
+    let inverse = by_pair
+        .get(&(
+            "temper://fixture/decision-doc".to_string(),
+            "temper://fixture/goal-doc".to_string(),
+        ))
+        .expect("inverse leads_to R3→R1 edge");
+    assert_eq!(inverse.get::<String, _>("kind"), "leads_to");
+    assert_eq!(
+        inverse.get::<String, _>("polarity"),
+        "inverse",
+        "inverse polarity carried verbatim (§4)"
+    );
+    assert_eq!(
+        inverse.get::<Option<String>, _>("label"),
+        Some("derived_from".to_string())
+    );
+    assert_eq!(inverse.get::<f64, _>("weight"), 0.7);
+
+    // Exactly ONE contains/parent_of edge R1→R2 — the minted temper-goal edge was deduped, not added.
+    let parent_of: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM temper_next.kb_edges e \
+         JOIN temper_next.kb_resources s ON s.id = e.source_id \
+         JOIN temper_next.kb_resources t ON t.id = e.target_id \
+         WHERE e.edge_kind = 'contains' AND e.label = 'parent_of' \
+           AND s.origin_uri = 'temper://fixture/goal-doc' \
+           AND t.origin_uri = 'temper://fixture/task-doc'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        parent_of, 1,
+        "temper-goal edge minted exactly once (deduped against the materialized kb_resource_edges row)"
+    );
+
+    // The §4 assert+fold pair: one relationship_asserted per synthesized edge, one relationship_folded
+    // for the single folded edge.
+    let asserted: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM temper_next.kb_events e \
+         JOIN temper_next.kb_event_types et ON et.id = e.event_type_id \
+         WHERE et.name = 'relationship_asserted'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        asserted, 3,
+        "one relationship_asserted per synthesized edge"
+    );
+    let folded: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM temper_next.kb_events e \
+         JOIN temper_next.kb_event_types et ON et.id = e.event_type_id \
+         WHERE et.name = 'relationship_folded'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        folded, 1,
+        "the one folded edge fired a relationship_folded event (the assert+fold pair)"
+    );
+}

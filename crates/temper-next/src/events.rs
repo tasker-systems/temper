@@ -109,6 +109,9 @@ pub enum SeedAction<'a> {
         src: ResourceId,
         tgt: ResourceId,
         kind: EdgeKind,
+        /// The edge's polarity, carried verbatim (§4). The scenario paths pass
+        /// `payloads::EdgePolarity::Forward`; synthesis carries the production value.
+        polarity: payloads::EdgePolarity,
         label: Option<&'a str>,
         weight: f64,
         home: EdgeHome,
@@ -212,6 +215,15 @@ impl Fired {
         }
     }
 
+    /// Extract the edge id a `RelationshipAssert` fire produced (so a follow-up `RelationshipFold`
+    /// can target it — the §4 assert+fold pair).
+    pub fn relationship(self) -> Result<EdgeId> {
+        match self {
+            Fired::Relationship(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Relationship, got {other:?}"),
+        }
+    }
+
     /// Extract the event id a `Materialize` fire produced.
     pub fn materialize_event(self) -> Result<EventId> {
         match self {
@@ -309,6 +321,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             src,
             tgt,
             kind,
+            polarity,
             label,
             weight,
             home,
@@ -319,7 +332,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 source: payloads::AnchorRef::resource(src),
                 target: payloads::AnchorRef::resource(tgt),
                 edge_kind: kind,
-                polarity: payloads::EdgePolarity::Forward,
+                polarity,
                 label: label.map(str::to_owned),
                 weight,
                 home: home.anchor_ref(),

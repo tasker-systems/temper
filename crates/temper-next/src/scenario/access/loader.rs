@@ -353,6 +353,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                 src,
                 tgt,
                 kind: e.kind,
+                polarity: crate::payloads::EdgePolarity::Forward,
                 label: e.label.as_deref(),
                 weight: e.weight,
                 home,

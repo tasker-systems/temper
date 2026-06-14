@@ -15,15 +15,16 @@ pub mod bootstrap;
 pub mod key_fate;
 pub mod source;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{Context, Result};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::affinity::EdgeKind;
 use crate::content::{PreparedBlock, PreparedChunk};
-use crate::events::{self, SeedAction};
-use crate::ids::{BlockId, ChunkId, ResourceId};
+use crate::events::{self, EdgeHome, SeedAction};
+use crate::ids::{BlockId, ChunkId, ContextId, ResourceId};
 use crate::payloads;
 
 /// Knobs for a synthesis run.
@@ -58,7 +59,10 @@ pub struct SynthState {
 /// one `resource_created` carrying a single up-front content block whose chunks reproduce the
 /// production chunk-set verbatim (content, sha256 content_hash, header_path/heading_depth, bge-768
 /// embedding). Homes anchor at the resource's remapped context (`('kb_contexts', ctx)`) carrying its
-/// originator/owner. The property (§7) and edge (§4) passes land in the following tasks.
+/// originator/owner. The property pass (§7) then writes each surviving manifest key as a
+/// `kb_properties` row, and the edge pass (§4) synthesizes one `relationship_asserted` per live
+/// `kb_resource_edges` row (kind/polarity/label/weight verbatim, folded rows as an assert+fold pair)
+/// plus the minted `temper-goal` → goal→task edges (G8), deduped against the materialized edges.
 pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
     let resources = source::active_resources(pool).await?;
     let maps = bootstrap::run(pool, &resources).await?;
@@ -182,7 +186,170 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
 
     tx.commit().await?;
 
+    // ── edge pass (§4) + minted temper-goal edges (§7/G8) ─────────────────────────────────────────
+    // Per live `public.kb_resource_edges` row: synthesize a `relationship_asserted` carrying kind,
+    // polarity, label, and weight verbatim, with both endpoints remapped to their synthesized ids and
+    // the edge homed at its SOURCE endpoint's remapped context (§1c — `public.kb_resource_edges` has no
+    // home column, and a resource↔resource edge homes in the shared context; for a cross-context edge
+    // the source's context is the deterministic choice). A folded row synthesizes as the assert+fold
+    // pair. Then each task carrying a non-empty `temper-goal` mints the goal→task edge the production
+    // frontmatter-edge projection emits (`Contains`/`forward`/`parent_of`/`1.0`, G8), DEDUPED against
+    // any edge already synthesized from `kb_resource_edges` (keyed on `(src, tgt, kind, label)`).
+    let source_edges = source::edges(pool).await?;
+
+    // Each selected resource's remapped home context — the edge home lookup (by source endpoint).
+    let mut ctx_by_resource: HashMap<Uuid, ContextId> = HashMap::new();
+    for r in selected {
+        if let Some(ctx) = maps.context_id_by_old.get(&r.kb_context_id) {
+            ctx_by_resource.insert(r.id, *ctx);
+        }
+    }
+
+    // Dedup set of synthesized edges, keyed on the new endpoints + kind + label so a minted
+    // temper-goal edge already present as a materialized `kb_resource_edges` row is not double-created.
+    let mut seen: HashSet<(Uuid, Uuid, EdgeKind, Option<String>)> = HashSet::new();
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+
+    for e in &source_edges {
+        // `source::edges` already restricts to active↔active; an endpoint can still be absent here only
+        // if a `RunOpts::limit` excluded the resource from the synthesized set — skip such edges.
+        let (Some(&src), Some(&tgt)) = (
+            state.resource_id_by_old.get(&e.source),
+            state.resource_id_by_old.get(&e.target),
+        ) else {
+            continue;
+        };
+        let kind = EdgeKind::from_sql(&e.edge_kind).with_context(|| {
+            format!("edge {} has unrecognized edge_kind {:?}", e.id, e.edge_kind)
+        })?;
+        let polarity = payloads::EdgePolarity::from_sql(&e.polarity)
+            .with_context(|| format!("edge {} has unrecognized polarity {:?}", e.id, e.polarity))?;
+        // An empty production label carries as no label (the payload's `Option<String>` is
+        // skip-if-none, so the projection writes NULL — never an empty string).
+        let label = (!e.label.is_empty()).then(|| e.label.clone());
+        let home = *ctx_by_resource.get(&e.source).with_context(|| {
+            format!(
+                "edge {} source {} absent from context home map",
+                e.id, e.source
+            )
+        })?;
+
+        let fired = events::fire(
+            &mut tx,
+            SeedAction::RelationshipAssert {
+                src,
+                tgt,
+                kind,
+                polarity,
+                label: label.as_deref(),
+                weight: e.weight,
+                home: EdgeHome::Context(home),
+                emitter: maps.migration_entity,
+            },
+        )
+        .await?;
+        seen.insert((src.uuid(), tgt.uuid(), kind, label.clone()));
+        report.edges += 1;
+
+        // The one folded edge synthesizes as an assert + fold pair (§4): fold the edge just asserted.
+        if e.is_folded {
+            let edge_id = fired.relationship()?;
+            events::fire(
+                &mut tx,
+                SeedAction::RelationshipFold {
+                    edge: edge_id,
+                    reason: None,
+                    emitter: maps.migration_entity,
+                },
+            )
+            .await?;
+        }
+    }
+
+    // Minted temper-goal edges (§7/G8). The goal reference (slug or trailing-uuid) resolves against the
+    // ACTIVE resource set; `goal→task` is the §7 reversal (source = goal). Skipped when the dedup set
+    // already carries it (the materialized-edge case — production's 68 `contains` rows vs 363 keys).
+    let slug_to_old: HashMap<&str, Uuid> = resources
+        .iter()
+        .filter_map(|r| r.slug.as_deref().map(|s| (s, r.id)))
+        .collect();
+    let active_ids: HashSet<Uuid> = resources.iter().map(|r| r.id).collect();
+
+    for r in selected {
+        let Some(goal_ref) = r
+            .managed_meta
+            .get("temper-goal")
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
+        };
+        let Some(goal_old) = resolve_goal_target(goal_ref, &slug_to_old, &active_ids) else {
+            continue; // unresolvable / external / forward reference — not an edge (CONFORM TargetRef::parse)
+        };
+        // goal → task (the §7 reversal): source = the goal, target = this task.
+        let (Some(&src), Some(&tgt)) = (
+            state.resource_id_by_old.get(&goal_old),
+            state.resource_id_by_old.get(&r.id),
+        ) else {
+            continue;
+        };
+        let kind = EdgeKind::Contains;
+        let label = Some("parent_of".to_owned());
+        if seen.contains(&(src.uuid(), tgt.uuid(), kind, label.clone())) {
+            continue; // already synthesized from kb_resource_edges — do not double-create (dedup)
+        }
+        let home = *ctx_by_resource.get(&goal_old).with_context(|| {
+            format!("minted temper-goal edge source {goal_old} absent from context home map")
+        })?;
+        events::fire(
+            &mut tx,
+            SeedAction::RelationshipAssert {
+                src,
+                tgt,
+                kind,
+                polarity: payloads::EdgePolarity::Forward,
+                label: label.as_deref(),
+                weight: 1.0,
+                home: EdgeHome::Context(home),
+                emitter: maps.migration_entity,
+            },
+        )
+        .await?;
+        seen.insert((src.uuid(), tgt.uuid(), kind, label));
+        report.edges += 1;
+    }
+
+    tx.commit().await?;
+
     Ok(report)
+}
+
+/// Resolve a `temper-goal` reference to a production resource id, CONFORMing to edge_service's
+/// `TargetRef::parse`: a parseable UUID resolves by id (kept only if it names an active resource), an
+/// `http(s)` URL is not a graph edge, otherwise it is a slug resolved against the active resource set.
+/// `None` ⇒ no edge is minted (unresolvable / external / a forward reference whose target isn't live).
+fn resolve_goal_target(
+    value: &str,
+    slug_to_old: &HashMap<&str, Uuid>,
+    active_ids: &HashSet<Uuid>,
+) -> Option<Uuid> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Ok(uuid) = Uuid::parse_str(trimmed) {
+        return active_ids.contains(&uuid).then_some(uuid);
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        return None;
+    }
+    slug_to_old.get(trimmed).copied()
 }
 
 /// Iterate a manifest field's object entries (`managed_meta`/`open_meta`). A non-object (null/absent)

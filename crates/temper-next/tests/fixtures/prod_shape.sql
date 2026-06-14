@@ -14,7 +14,8 @@
 --   * a revision per chunked resource (kb_chunks.first_revision_id is NOT NULL → FK to revisions).
 --   * chunks + chunk_content with DISTINCT 768-d embeddings (so vector-parity has signal) and one
 --     chunk carrying header_path/heading_depth (R2 chunk 1) for body-reconstruction parity (§8).
---   * 2 edges: a normal contains edge (R1→R2) and a folded near edge (R2→R3); both endpoints active.
+--   * 3 edges: a normal contains edge (R1→R2), a folded near edge (R2→R3), and an inverse-polarity
+--     leads_to edge (R3→R1, cross-context); all endpoints active.
 --
 -- Fixed UUIDs throughout so downstream tests can assert against known ids (see common::fixture_ids).
 
@@ -142,7 +143,9 @@ INSERT INTO public.kb_chunk_content (chunk_id, content) VALUES
   ('00000000-0000-0000-0cc0-000000000004', 'Decision body text.'),
   ('00000000-0000-0000-0cc0-000000000005', 'Team body text.');
 
--- Edges: 1 normal (contains R1→R2), 1 folded (near R2→R3); both endpoints active -------------------
+-- Edges: 1 normal (contains R1→R2), 1 folded (near R2→R3), 1 inverse-polarity (leads_to R3→R1, the
+-- cross-context case: R3 in C2, R1 in C1 — homes at the SOURCE's context); all endpoints active. The
+-- contains R1→R2 edge IS R2's materialized temper-goal edge, so it proves the §7 mint dedup.
 INSERT INTO public.kb_resource_edges
   (id, source_resource_id, target_resource_id, edge_kind, polarity, label, weight, asserted_by_event_id, last_event_id, is_folded)
 VALUES
@@ -153,4 +156,8 @@ VALUES
   ('00000000-0000-0000-0dd0-000000000002',
    '00000000-0000-0000-00a0-000000000002', '00000000-0000-0000-00a0-000000000003',
    'near', 'forward', '', 0.5,
-   '00000000-0000-0000-00e0-000000000001', '00000000-0000-0000-00e0-000000000001', true);
+   '00000000-0000-0000-00e0-000000000001', '00000000-0000-0000-00e0-000000000001', true),
+  ('00000000-0000-0000-0dd0-000000000003',
+   '00000000-0000-0000-00a0-000000000003', '00000000-0000-0000-00a0-000000000001',
+   'leads_to', 'inverse', 'derived_from', 0.7,
+   '00000000-0000-0000-00e0-000000000001', '00000000-0000-0000-00e0-000000000001', false);

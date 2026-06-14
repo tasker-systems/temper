@@ -146,6 +146,7 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
                 src,
                 tgt,
                 kind: e.kind,
+                polarity: crate::payloads::EdgePolarity::Forward,
                 label: e.label.as_deref(),
                 weight: e.weight,
                 home: EdgeHome::Cogmap(cogmap),

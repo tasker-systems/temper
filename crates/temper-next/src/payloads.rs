@@ -82,6 +82,19 @@ pub enum EdgePolarity {
     Inverse,
 }
 
+impl EdgePolarity {
+    /// Parse a `polarity` SQL enum label into the typed polarity — used by synthesis to carry a
+    /// production `kb_resource_edges.polarity` text value verbatim (§4). `None` for an unrecognized
+    /// label (escalates at the call site).
+    pub fn from_sql(s: &str) -> Option<Self> {
+        match s {
+            "forward" => Some(EdgePolarity::Forward),
+            "inverse" => Some(EdgePolarity::Inverse),
+            _ => None,
+        }
+    }
+}
+
 /// Content-addressed chunk reference: structure + hash, NEVER prose (CAS rule, spec §0.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
