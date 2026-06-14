@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::DbBackend;
+use temper_api::backend::require_legacy_backend;
 use temper_core::error::TemperError;
 use temper_core::operations::{
     AssertRelationship, FoldRelationship, ResourceRef, RetypeRelationship, ReweightRelationship,
@@ -126,7 +126,14 @@ pub async fn assert_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = require_legacy_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| map_err(e, "select_backend"))?;
     let out = backend
         .assert_relationship(cmd)
         .await
@@ -155,7 +162,14 @@ pub async fn retype_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = require_legacy_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| map_err(e, "select_backend"))?;
     let out = backend
         .retype_relationship(cmd)
         .await
@@ -183,7 +197,14 @@ pub async fn reweight_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = require_legacy_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| map_err(e, "select_backend"))?;
     let out = backend
         .reweight_relationship(cmd)
         .await
@@ -211,7 +232,14 @@ pub async fn fold_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = require_legacy_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| map_err(e, "select_backend"))?;
     let out = backend
         .fold_relationship(cmd)
         .await
