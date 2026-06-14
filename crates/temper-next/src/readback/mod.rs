@@ -245,3 +245,25 @@ pub async fn meta(pool: &PgPool, new_id: Uuid) -> Result<ReconstructedMeta> {
         doc_type,
     })
 }
+
+/// Reconstruct a synthesized resource's markdown body from `temper_next` chunks — the §9 body read
+/// floor. Reuses [`crate::synthesis::parity::reconstruct_body`] (the production `get_content` assembly)
+/// over the shared [`crate::synthesis::parity::new_substrate_chunks`] reader, so the read surface and
+/// the §8 synthesis gate share one algorithm (CONFORM, no second body assembler).
+///
+/// Resolves `new_id` → `origin_uri` (the join key both schemas share, carried verbatim) so the shared
+/// reader — keyed by `origin_uri` — can fetch the resource's current chunks.
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn body(pool: &PgPool, new_id: Uuid) -> Result<String> {
+    let origin_uri: String =
+        sqlx::query("SELECT origin_uri FROM temper_next.kb_resources WHERE id = $1")
+            .bind(new_id)
+            .fetch_one(pool)
+            .await?
+            .get("origin_uri");
+
+    let chunks = crate::synthesis::parity::new_substrate_chunks(pool, &origin_uri).await?;
+    Ok(crate::synthesis::parity::reconstruct_body(&chunks))
+}

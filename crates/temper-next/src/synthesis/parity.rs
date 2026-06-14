@@ -152,7 +152,10 @@ async fn production_chunks(pool: &PgPool, origin_uri: &str) -> Result<Vec<ReadCh
 /// ordered by the block `seq` then `chunk_index` (a single block per resource at migration, so this is
 /// effectively `chunk_index`). `header_path`/`heading_depth` are nullable in the destination but carry
 /// production's NOT-NULL `''`/`0` defaults verbatim; coalescing keeps reconstruction well-defined.
-async fn new_substrate_chunks(pool: &PgPool, origin_uri: &str) -> Result<Vec<ReadChunk>> {
+///
+/// Also the read-surface chunk reader for [`crate::readback::body`] (WS6 §9): the §8 cutover gate and
+/// the §9 body read share this one reader so they exercise the same chunk source + order (SG-3).
+pub async fn new_substrate_chunks(pool: &PgPool, origin_uri: &str) -> Result<Vec<ReadChunk>> {
     let rows = sqlx::query(
         "SELECT c.chunk_index, COALESCE(c.header_path, '') AS header_path, \
                 COALESCE(c.heading_depth, 0::smallint) AS heading_depth, cc.content \

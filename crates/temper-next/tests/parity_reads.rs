@@ -299,3 +299,58 @@ async fn show_and_meta_parity(pool: sqlx::PgPool) {
     assert!(r1.open.is_empty(), "R1 has no open_meta keys");
     assert_eq!(r1.doc_type, "concept", "R1 doc_type is concept");
 }
+
+/// §9 — body-reconstruction read parity (closes the §9 body read floor). For every active fixture
+/// resource, the markdown `readback::body` reconstructs from `temper_next` chunks must equal the body
+/// production's `get_content` serves today (`ContentResponse.markdown`).
+///
+/// This read-surface check OVERLAPS the §8 synthesis body-parity gate (`synthesis::parity`) — by design:
+/// it exercises the SAME `reconstruct_body` + `new_substrate_chunks` algorithm, but reached as a read
+/// (resource_id → body) rather than as the cutover gate's two-source comparison. Sharing one assembler
+/// is the point (CONFORM, no second body path); the new floor is that the read surface itself round-trips.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn body_read_parity(pool: sqlx::PgPool) {
+    use temper_api::services::resource_service;
+
+    common::seed_and_synthesize(&pool).await;
+
+    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+    assert_eq!(ids.len(), 4, "4 active fixture resources synthesized");
+
+    for new_id in ids.new_ids() {
+        let origin_uri = ids
+            .origin_uri_for_new(new_id)
+            .expect("synthesized id has an origin_uri")
+            .to_string();
+        let old_id = ids
+            .to_old(new_id)
+            .expect("synthesized id maps back to prod");
+
+        // Production body: get_content's assembled markdown (auth-gated for owner P1).
+        let prod = resource_service::get_content(&pool, fixture_ids::OWNER_PROFILE, old_id)
+            .await
+            .expect("production get_content")
+            .markdown;
+
+        // Readback body: reconstructed from temper_next chunks via the shared §8 assembler.
+        let rb = readback::body(&pool, new_id).await.expect("readback::body");
+
+        assert_eq!(
+            rb, prod,
+            "{origin_uri}: readback::body == production get_content markdown"
+        );
+    }
+
+    // Spot-assert R2 (task-doc): the non-vacuous multi-chunk + heading case — an unheaded preamble
+    // chunk followed by a depth-2 headed chunk, joined with a blank line.
+    let r2_new = ids
+        .to_new(fixture_ids::RESOURCE_TASK)
+        .expect("R2 (task) has a synthesized id");
+    let r2_body = readback::body(&pool, r2_new)
+        .await
+        .expect("readback::body R2");
+    assert_eq!(
+        r2_body, "Task intro paragraph.\n\n## Goals\n\nTask goals section body.",
+        "R2 reconstructs the preamble + depth-2 heading case verbatim"
+    );
+}
