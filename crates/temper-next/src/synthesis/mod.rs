@@ -13,6 +13,7 @@
 
 pub mod bootstrap;
 pub mod key_fate;
+pub mod parity;
 pub mod source;
 
 use std::collections::{HashMap, HashSet};
@@ -326,6 +327,23 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
     }
 
     tx.commit().await?;
+
+    // ── §8 body-text parity gate ─────────────────────────────────────────────────────────────────
+    // Before reporting success, prove that reconstructing each synthesized resource's body (the
+    // production `get_content` algorithm over `temper_next` chunks) reproduces the body production
+    // serves today, per resource (§8: "before cutover proceeds"). This is a TEXT comparison — never the
+    // two `body_hash` columns, which differ by construction (structural merkle vs markdown sha256). A
+    // mismatch is fatal: `run` refuses to report success so an upstream cutover cannot proceed on a
+    // silently-diverged substrate.
+    let parity = parity::body_parity_report(pool).await?;
+    if !parity.is_clean() {
+        anyhow::bail!(
+            "body-text parity gate failed (§8): {} of {} synthesized resources diverge from production: {:?}",
+            parity.mismatches.len(),
+            parity.checked,
+            parity.mismatched_uris(),
+        );
+    }
 
     Ok(report)
 }

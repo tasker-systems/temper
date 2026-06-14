@@ -389,3 +389,69 @@ async fn synthesizes_edges_and_minted_goal_edges(pool: sqlx::PgPool) {
         "the one folded edge fired a relationship_folded event (the assert+fold pair)"
     );
 }
+
+/// Body-text parity gate (WS6 §8): after a full `synthesis::run`, reconstructing each synthesized
+/// resource's body from `temper_next` chunks (the production `get_content` algorithm) reproduces the
+/// production body byte-for-byte. `run` itself enforces this — it returns `Err` on any mismatch — so a
+/// successful run already proves the gate; this asserts the report is non-vacuously clean (all 4 active
+/// resources checked, zero mismatches), then proves the gate DETECTS divergence by corrupting one
+/// synthesized chunk and re-running the report directly.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn body_parity_gate_passes_and_detects_corruption(pool: sqlx::PgPool) {
+    common::seed_prod_shape_fixture(&pool).await;
+
+    // A clean synthesis succeeds — and succeeding IS the parity assertion (run returns Err on mismatch).
+    temper_next::synthesis::run(&pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run (clean fixture → parity holds)");
+
+    // The report is non-vacuously clean: it checked every active resource (4) and flagged none.
+    let report = temper_next::synthesis::parity::body_parity_report(&pool)
+        .await
+        .expect("body_parity_report");
+    assert_eq!(
+        report.checked, 4,
+        "parity gate checked all 4 active resources"
+    );
+    assert!(
+        report.is_clean(),
+        "every reconstructed body matches production: {:?}",
+        report.mismatches
+    );
+
+    // Corrupt exactly one synthesized chunk (team-doc's single chunk) and re-run the report directly:
+    // the gate must flag precisely that one resource — proving the pass above is not vacuous.
+    let corrupted: u64 = sqlx::query(
+        "UPDATE temper_next.kb_chunk_content SET content = 'CORRUPTED BODY' \
+         WHERE chunk_id IN ( \
+           SELECT c.id FROM temper_next.kb_chunks c \
+           JOIN temper_next.kb_resources r ON r.id = c.resource_id \
+           WHERE r.origin_uri = 'temper://fixture/team-doc')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap()
+    .rows_affected();
+    assert_eq!(corrupted, 1, "team-doc has exactly one chunk to corrupt");
+
+    let report = temper_next::synthesis::parity::body_parity_report(&pool)
+        .await
+        .expect("body_parity_report after corruption");
+    assert_eq!(report.checked, 4, "still checks all 4 resources");
+    assert!(!report.is_clean(), "corruption must be detected");
+    assert_eq!(report.mismatches.len(), 1, "exactly one resource diverges");
+    assert_eq!(
+        report.mismatches[0].origin_uri, "temper://fixture/team-doc",
+        "the gate flags precisely the corrupted resource"
+    );
+
+    // The mismatch carries both bodies for diagnosis — production's intact body vs the corrupted one.
+    assert_eq!(
+        report.mismatches[0].production_body, "Team body text.",
+        "production body reconstructs intact (unaffected by the temper_next corruption)"
+    );
+    assert_eq!(
+        report.mismatches[0].new_body, "CORRUPTED BODY",
+        "the new-substrate body reflects the corruption"
+    );
+}
