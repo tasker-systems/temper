@@ -455,3 +455,114 @@ async fn body_parity_gate_passes_and_detects_corruption(pool: sqlx::PgPool) {
         "the new-substrate body reflects the corruption"
     );
 }
+
+/// End-to-end (WS6 §0): one consolidated assertion that a full `synthesis::run` over the prod-shape
+/// fixture realizes the complete per-resource sequence — `resource_created` → `property_asserted` per
+/// surviving key (§7) → `relationship_asserted` per edge (§4), folds as assert+fold pairs — and that
+/// the run is parity-clean (a successful `run` IS the parity proof: it returns `Err` on any mismatch).
+/// The per-slice tests above prove each pass in isolation; this proves the aggregate end state.
+///
+/// Count arithmetic, derived from `tests/fixtures/prod_shape.sql` (4 active: R1/R2/R3/R5; R4
+/// soft-deleted, excluded §0):
+/// * `kb_resources` = 4 — one row per active resource.
+/// * `kb_content_blocks` = 4 — the §8 single up-front block (seq 0) per active resource.
+/// * `kb_properties` = 9 — Property-fated keys via `facet_set` (`property_asserted` events): R2 carries
+///   `temper-stage`/`temper-mode`/`temper-effort` (3 managed, §7 Property) + `custom-key`/`another-key`
+///   (2 open_meta, always Property) = 5; R1/R3/R5 carry only Die-fated managed keys (title/slug/id) = 0;
+///   PLUS the `doc_type` property `_project_resource_created` writes directly (NOT via a
+///   `property_asserted` event), one per active resource = 4. Total 5 + 4 = 9.
+/// * `kb_edges` = 3 — 3 source `kb_resource_edges` rows survive (all endpoints active) + 1 minted
+///   `temper-goal` edge (R2's `temper-goal: goal-doc` → goal R1 → task R2, contains/parent_of) − 1
+///   dedup (that minted edge equals the materialized R1→R2 contains/parent_of row) = 3.
+/// * event histogram: `resource_created` = 4 (one per active resource); `property_asserted` = 5 (the
+///   `facet_set` Property keys only — `doc_type` is a direct insert in the projector, never an event);
+///   `relationship_asserted` = 3 (the 3 source edges; the minted goal edge deduped → never fired);
+///   `relationship_folded` = 1 (the one folded fixture edge, the near R2→R3 row).
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesizes_fixture_end_to_end(pool: sqlx::PgPool) {
+    common::seed_prod_shape_fixture(&pool).await;
+
+    // A successful run is itself the §8 parity-clean proof — `run` returns `Err` on any body mismatch.
+    let report = temper_next::synthesis::run(&pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run (clean fixture → full §0 sequence + parity holds)");
+
+    // The report aggregates each pass: 4 resources, 5 Property-fated property fires, 3 edge fires.
+    assert_eq!(report.resources, 4, "4 active resources synthesized");
+    assert_eq!(
+        report.properties, 5,
+        "5 property_asserted fires (Property-fated managed + open_meta keys; doc_type is direct)"
+    );
+    assert_eq!(
+        report.edges, 3,
+        "3 edge fires (source edges; minted goal edge deduped)"
+    );
+
+    // ── aggregate destination state ──────────────────────────────────────────────────────────────
+    let resources: i64 = sqlx::query_scalar("SELECT count(*) FROM temper_next.kb_resources")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(resources, 4, "one kb_resources row per active resource");
+
+    let blocks: i64 = sqlx::query_scalar("SELECT count(*) FROM temper_next.kb_content_blocks")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(blocks, 4, "one §8 single content block per active resource");
+
+    let properties: i64 = sqlx::query_scalar("SELECT count(*) FROM temper_next.kb_properties")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        properties, 9,
+        "kb_properties = 5 facet_set Property keys + 4 direct doc_type properties"
+    );
+
+    let edges: i64 = sqlx::query_scalar("SELECT count(*) FROM temper_next.kb_edges")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        edges, 3,
+        "kb_edges = 3 source edges + 1 minted goal edge − 1 dedup"
+    );
+
+    // ── event-type histogram (the §0 per-resource sequence, ledger-side) ──────────────────────────
+    let histogram_rows = sqlx::query(
+        "SELECT t.name AS name, count(*) AS n \
+         FROM temper_next.kb_events e \
+         JOIN temper_next.kb_event_types t ON t.id = e.event_type_id \
+         GROUP BY t.name",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+
+    let mut histogram: std::collections::HashMap<String, i64> = std::collections::HashMap::new();
+    for row in &histogram_rows {
+        histogram.insert(row.get("name"), row.get("n"));
+    }
+
+    assert_eq!(
+        histogram.get("resource_created").copied(),
+        Some(4),
+        "resource_created fired once per active resource"
+    );
+    assert_eq!(
+        histogram.get("property_asserted").copied(),
+        Some(5),
+        "property_asserted fired per Property-fated key (doc_type is a direct insert, not an event)"
+    );
+    assert_eq!(
+        histogram.get("relationship_asserted").copied(),
+        Some(3),
+        "relationship_asserted fired per synthesized edge (minted goal edge deduped, not fired)"
+    );
+    assert_eq!(
+        histogram.get("relationship_folded").copied(),
+        Some(1),
+        "relationship_folded fired for the one folded fixture edge (assert+fold pair)"
+    );
+}
