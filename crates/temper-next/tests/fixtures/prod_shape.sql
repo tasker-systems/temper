@@ -12,8 +12,14 @@
 --     soft-deleted (is_active=false). So 4 active, 1 excluded.
 --   * a manifest per resource.
 --   * a revision per chunked resource (kb_chunks.first_revision_id is NOT NULL → FK to revisions).
---   * chunks + chunk_content with DISTINCT 768-d embeddings (so vector-parity has signal) and one
---     chunk carrying header_path/heading_depth (R2 chunk 1) for body-reconstruction parity (§8).
+--   * chunks + chunk_content with distinct-DIRECTION 768-d embeddings (so vector-parity has signal)
+--     and one chunk carrying header_path/heading_depth (R2 chunk 1) for body-reconstruction parity (§8).
+--     NB the embeddings must differ in DIRECTION, not just magnitude: pgvector cosine distance (`<=>`)
+--     ignores magnitude, so colinear vectors (e.g. array_fill(0.11), array_fill(0.22) — both the
+--     all-ones direction) are all distance 0 from each other and a cosine query cannot order them. So
+--     each chunk's vector is 0.01 in every dimension EXCEPT dimension 1, which carries a distinct
+--     per-chunk discriminating value (R1c0 0.1, R2c0 0.2, R2c1 0.25, R3c0 0.3, R5c0 0.5). A query that
+--     loads dimension 1 then orders the resources strictly by their best (closest) chunk's value.
 --   * 3 edges: a normal contains edge (R1→R2), a folded near edge (R2→R3), and an inverse-polarity
 --     leads_to edge (R3→R1, cross-context); all endpoints active.
 --
@@ -121,20 +127,41 @@ INSERT INTO public.kb_resource_revisions (id, resource_id, body_hash, chunk_coun
   ('00000000-0000-0000-0bb0-000000000003', '00000000-0000-0000-00a0-000000000003', 'sha256:r3', 1),
   ('00000000-0000-0000-0bb0-000000000005', '00000000-0000-0000-00a0-000000000005', 'sha256:r5', 1);
 
--- Chunks (DISTINCT 768-d embeddings; R2 chunk 1 carries heading metadata) --------------------------
+-- Chunks (distinct-DIRECTION 768-d embeddings; R2 chunk 1 carries heading metadata) ----------------
+-- Each embedding is 0.01 in every dimension EXCEPT dimension 1, which carries a distinct per-chunk
+-- value. Distinct DIRECTIONS (not just magnitudes) are required: cosine distance (`<=>`) is
+-- magnitude-invariant, so colinear vectors would all be distance 0 and a cosine query could not order
+-- them. With a query that loads dimension 1, the per-resource best (closest) chunk strictly orders the
+-- resources by that value: R5(0.5) < R3(0.3) < R2(0.25 via chunk1) < R1(0.1) by ascending cosine
+-- distance. See readback::vector_search + the vector_parity test.
 INSERT INTO public.kb_chunks
   (id, resource_id, chunk_index, version, header_path, heading_depth, content_hash, embedding, is_current, first_revision_id)
 VALUES
   ('00000000-0000-0000-0cc0-000000000001', '00000000-0000-0000-00a0-000000000001', 0, 1,
-   '', 0, 'hash-r1-c0', array_fill(0.11::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000001'),
+   '', 0, 'hash-r1-c0',
+   (SELECT array_agg(CASE WHEN i = 1 THEN 0.1::real ELSE 0.01::real END ORDER BY i)
+      FROM generate_series(1,768) AS i)::vector,
+   true, '00000000-0000-0000-0bb0-000000000001'),
   ('00000000-0000-0000-0cc0-000000000002', '00000000-0000-0000-00a0-000000000002', 0, 1,
-   '', 0, 'hash-r2-c0', array_fill(0.22::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000002'),
+   '', 0, 'hash-r2-c0',
+   (SELECT array_agg(CASE WHEN i = 1 THEN 0.2::real ELSE 0.01::real END ORDER BY i)
+      FROM generate_series(1,768) AS i)::vector,
+   true, '00000000-0000-0000-0bb0-000000000002'),
   ('00000000-0000-0000-0cc0-000000000003', '00000000-0000-0000-00a0-000000000002', 1, 1,
-   'Intro > Goals', 2, 'hash-r2-c1', array_fill(0.23::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000002'),
+   'Intro > Goals', 2, 'hash-r2-c1',
+   (SELECT array_agg(CASE WHEN i = 1 THEN 0.25::real ELSE 0.01::real END ORDER BY i)
+      FROM generate_series(1,768) AS i)::vector,
+   true, '00000000-0000-0000-0bb0-000000000002'),
   ('00000000-0000-0000-0cc0-000000000004', '00000000-0000-0000-00a0-000000000003', 0, 1,
-   '', 0, 'hash-r3-c0', array_fill(0.33::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000003'),
+   '', 0, 'hash-r3-c0',
+   (SELECT array_agg(CASE WHEN i = 1 THEN 0.3::real ELSE 0.01::real END ORDER BY i)
+      FROM generate_series(1,768) AS i)::vector,
+   true, '00000000-0000-0000-0bb0-000000000003'),
   ('00000000-0000-0000-0cc0-000000000005', '00000000-0000-0000-00a0-000000000005', 0, 1,
-   '', 0, 'hash-r5-c0', array_fill(0.55::real, ARRAY[768])::vector, true, '00000000-0000-0000-0bb0-000000000005');
+   '', 0, 'hash-r5-c0',
+   (SELECT array_agg(CASE WHEN i = 1 THEN 0.5::real ELSE 0.01::real END ORDER BY i)
+      FROM generate_series(1,768) AS i)::vector,
+   true, '00000000-0000-0000-0bb0-000000000005');
 
 INSERT INTO public.kb_chunk_content (chunk_id, content) VALUES
   ('00000000-0000-0000-0cc0-000000000001', 'Goal body text.'),

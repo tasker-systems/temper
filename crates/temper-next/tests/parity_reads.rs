@@ -457,3 +457,70 @@ async fn fts_parity(pool: sqlx::PgPool) {
         "\"body\" is in every active body text → exactly 4 hits (non-vacuous)"
     );
 }
+
+/// §9 — vector search parity. Unlike FTS (where production's slug@A weight makes only SET parity an
+/// invariant), embeddings carry VERBATIM through synthesis (§8), so production vector search and
+/// readback must agree on the EXACT ORDERED list. readback mirrors production's `vec_hits`: per
+/// resource the best (MIN cosine-distance) current chunk decides rank, results ascend by that
+/// distance.
+///
+/// The fixture embeddings are 0.01 in every dimension except dimension 1, which carries a distinct
+/// per-chunk discriminating value (DISTINCT DIRECTIONS — cosine distance is magnitude-invariant, so
+/// colinear vectors would be a total tie). A query that loads dimension 1 (`q[0] = 1.0`, rest 0.01)
+/// orders the resources strictly by their best chunk's dimension-1 value: R5(0.5) < R3(0.3) <
+/// R2(0.25 via its CLOSER chunk1) < R1(0.1) by ascending cosine distance. The R2 case is non-vacuous
+/// proof that per-resource MIN distance picks the closer chunk (chunk1@0.25, not chunk0@0.2).
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn vector_parity(pool: sqlx::PgPool) {
+    use temper_api::services::search_service;
+    use temper_core::types::api::SearchParams;
+
+    common::seed_and_synthesize(&pool).await;
+
+    // Query embedding: dimension 1 (0-indexed dim 0) carries the full weight, rest tiny — so the rank
+    // is decided by each resource's best chunk's dimension-1 value.
+    let mut q = vec![0.01_f32; 768];
+    q[0] = 1.0;
+
+    // Production vector-only search: embedding present, query None → compute_weights = (0.0, 1.0).
+    // graph_expand off routes through unified_search (vec_hits). Results come back ordered by
+    // combined_score DESC == ascending MIN cosine distance. Collect origin_uris IN RETURNED ORDER.
+    let params = SearchParams {
+        query: None,
+        embedding: Some(q.clone()),
+        search_config: "english".to_string(),
+        graph_expand: false,
+        limit: Some(50),
+        ..Default::default()
+    };
+    let prod_order: Vec<String> = search_service::search(&pool, fixture_ids::OWNER_PROFILE, params)
+        .await
+        .expect("production vector search")
+        .into_iter()
+        .map(|r| r.origin_uri)
+        .collect();
+
+    let rb_order: Vec<String> = readback::vector_search(&pool, &q)
+        .await
+        .expect("readback::vector_search");
+
+    // The load-bearing invariant: embeddings carry verbatim, so the ORDERED lists match bit-for-bit
+    // (contrast fts_parity, where slug@A makes only the SET an invariant).
+    assert_eq!(
+        prod_order, rb_order,
+        "production vector search and readback::vector_search agree on the EXACT ORDER"
+    );
+
+    // ...and that shared order is the expected, non-vacuous anchor: per-resource MIN distance picks
+    // R2's closer chunk1 (@0.25), placing R2 ahead of R1 (@0.1) but behind R3 (@0.3) and R5 (@0.5).
+    let expected = vec![
+        "temper://fixture/team-doc".to_string(),
+        "temper://fixture/decision-doc".to_string(),
+        "temper://fixture/task-doc".to_string(),
+        "temper://fixture/goal-doc".to_string(),
+    ];
+    assert_eq!(
+        rb_order, expected,
+        "vector ranking orders resources by their best chunk's cosine distance (R5<R3<R2<R1)"
+    );
+}

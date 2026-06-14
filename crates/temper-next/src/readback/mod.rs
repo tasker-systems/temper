@@ -315,3 +315,53 @@ pub async fn fts_search(pool: &PgPool, query: &str) -> Result<Vec<String>> {
         .map(|r| r.get::<String, _>("origin_uri"))
         .collect())
 }
+
+/// Format a `Vec<f32>` as a pgvector text literal (`[a,b,c]`) for binding into a `::vector` cast — the
+/// inverse of [`crate::synthesis::source`]'s `parse_pgvector`. Inlined here (a tiny helper) rather than
+/// reusing production's `temper_core::types::ingest::format_embedding`: temper-core is only a DEV-dep of
+/// temper-next, not a lib dep, and pulling it into the lib just to format five floats would be
+/// over-coupling. Uses `{}` (not `{:?}`) so each float renders without a debug wrapper.
+fn format_pgvector(v: &[f32]) -> String {
+    let mut out = String::with_capacity(v.len() * 8 + 2);
+    out.push('[');
+    for (i, x) in v.iter().enumerate() {
+        if i > 0 {
+            out.push(',');
+        }
+        out.push_str(&x.to_string());
+    }
+    out.push(']');
+    out
+}
+
+/// Cosine vector search over `temper_next` chunks (§9 vector floor). Per resource, the best (min-cosine-
+/// distance) current chunk decides rank; results ascend by that distance — exactly production's
+/// `vec_hits` (MIN distance per resource, `ORDER BY MIN(embedding <=> query)`). Embeddings carry
+/// verbatim from production (§8), so this ordered output matches production's vector search bit-for-bit
+/// (contrast `fts_search`, where production's slug@A weight makes only the matching SET an invariant).
+///
+/// The query embedding is formatted to a pgvector text literal and bound into a `$1::vector` cast.
+/// Runtime `sqlx::query` with the `::vector` cast is the ESTABLISHED pgvector-macro exception —
+/// production's own `unified_search` uses runtime `query_as` for exactly this reason (the `query!`
+/// macros don't support the `::vector` cast).
+///
+/// Read-only; no writes. Schema-qualified throughout — see the module-level note.
+pub async fn vector_search(pool: &PgPool, query_embedding: &[f32]) -> Result<Vec<String>> {
+    let embedding_text = format_pgvector(query_embedding);
+    let rows = sqlx::query(
+        "SELECT r.origin_uri
+           FROM temper_next.kb_resources r
+           JOIN temper_next.kb_chunks c
+             ON c.resource_id = r.id AND c.is_current
+          GROUP BY r.id, r.origin_uri
+          ORDER BY MIN(c.embedding <=> $1::vector) ASC",
+    )
+    .bind(embedding_text)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| r.get::<String, _>("origin_uri"))
+        .collect())
+}
