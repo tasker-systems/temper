@@ -31,7 +31,11 @@ async fn main() -> Result<(), vercel_runtime::Error> {
         .expect("Failed to connect to database");
 
     let jwks_store = JwksKeyStore::new(api_config.jwks_url.clone());
-    let api_state = AppState::new(pool, jwks_store, api_config);
+    let backend_selection = temper_api::services::backend_selection_service::read(&pool)
+        .await
+        .expect("Failed to read backend selection flag");
+    let api_state =
+        AppState::new(pool, jwks_store, api_config).with_backend_selection(backend_selection);
 
     let app = temper_mcp::build_router(api_state, mcp_config);
 

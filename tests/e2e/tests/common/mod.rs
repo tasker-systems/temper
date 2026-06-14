@@ -327,7 +327,11 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
         enable_swagger: false,
     };
 
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
+    let backend_selection = temper_api::services::backend_selection_service::read(&pool)
+        .await
+        .expect("read backend selection flag");
+    let state = AppState::new(pool.clone(), jwks_store, api_config)
+        .with_backend_selection(backend_selection);
     let app = create_app(state);
 
     let listener = TcpListener::bind("127.0.0.1:0")
