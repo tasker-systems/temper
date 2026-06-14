@@ -31,3 +31,12 @@ serde_yaml = "0.9"
 schemars = { version = "1", features = ["uuid1"], optional = true }
 anyhow = "1"
 sha2 = "0.10"
+
+[dev-dependencies]
+# WS6 chunk-3 parity reads compare `readback::*` against the ACTUAL production read paths, so the
+# parity tests call into temper-api's services (e.g. `resource_service::list_visible`) and construct
+# their param/response types from temper-core. Dev-only: `cargo sqlx prepare` skips test targets, so
+# this never enters temper-next's lib build graph (prepare-next stays clean) — it links only when the
+# integration-test binaries compile.
+temper-api = { path = "../temper-api" }
+temper-core = { path = "../temper-core" }
