@@ -13,8 +13,11 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
+
+use crate::synthesis::key_fate::is_managed_property_key;
 
 /// A bidirectional map between a production resource id (`public.kb_resources.id`, active only) and its
 /// synthesized counterpart (`temper_next.kb_resources.id`), keyed by the shared `origin_uri` (carried
@@ -171,4 +174,74 @@ pub async fn list(pool: &PgPool) -> Result<Vec<ListRow>> {
             effort: row.get("effort"),
         })
         .collect())
+}
+
+/// Reconstructed frontmatter for one synthesized resource, the inverse of the §7 fate table over
+/// `temper_next.kb_properties`. Mirrors production `get_meta`'s managed/open split, EXCEPT the §7-died
+/// keys (`temper-title`/`-slug`/`-id`/`-context`) never reappear (their state lives authoritatively in
+/// the column / render-time decoration / row id / home row) and `temper-goal` lives as an edge, not
+/// here. `temper-type` is reconciled to the `doc_type` column.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReconstructedMeta {
+    /// Surviving managed (workflow + provenance) keys — those in
+    /// [`crate::synthesis::key_fate::MANAGED_PROPERTY_KEYS`] — with values verbatim.
+    pub managed: Map<String, Value>,
+    /// Open (user-defined) keys, verbatim.
+    pub open: Map<String, Value>,
+    /// The authoritative doc type (the `doc_type` property; successor to production's `temper-type`).
+    pub doc_type: String,
+}
+
+/// Port of production's `get_meta` (the meta tier behind `show`) onto `temper_next.*`: reconstruct the
+/// managed/open frontmatter split for one synthesized resource from its `kb_properties` rows — the
+/// inverse of the §7 fate table.
+///
+/// §7 dissolved the production manifest into columns, the home row, edges, the `doc_type` property, and
+/// `kb_properties`. The properties carry both the surviving managed (workflow/provenance) keys and the
+/// open (user-defined) keys; `is_managed_property_key` is the inverse fate that tells them apart (the
+/// forward classifier can't — it carries unknown keys as `Property` too). The `doc_type` property is
+/// the authoritative doctype the resource pass stamped (successor to production's `temper-type`). The
+/// §7-died keys are absent by construction — they were never written as properties.
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn meta(pool: &PgPool, new_id: Uuid) -> Result<ReconstructedMeta> {
+    let rows = sqlx::query(
+        "SELECT property_key, property_value
+           FROM temper_next.kb_properties
+          WHERE owner_table = 'kb_resources' AND owner_id = $1",
+    )
+    .bind(new_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut managed = Map::new();
+    let mut open = Map::new();
+    let mut doc_type: Option<String> = None;
+
+    for row in &rows {
+        let key: String = row.get("property_key");
+        let value: Value = row.get("property_value");
+        if key == "doc_type" {
+            // The authoritative doctype is a JSON string scalar; surface it as the typed field.
+            doc_type = Some(match value {
+                Value::String(s) => s,
+                other => other.to_string(),
+            });
+        } else if is_managed_property_key(&key) {
+            managed.insert(key, value);
+        } else {
+            open.insert(key, value);
+        }
+    }
+
+    let doc_type = doc_type.ok_or_else(|| {
+        anyhow::anyhow!("synthesized resource {new_id} has no doc_type property (every resource pass stamps one)")
+    })?;
+
+    Ok(ReconstructedMeta {
+        managed,
+        open,
+        doc_type,
+    })
 }

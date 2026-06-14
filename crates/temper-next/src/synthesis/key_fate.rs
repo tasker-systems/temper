@@ -24,18 +24,44 @@ pub enum KeyFate {
     ReconcileToDocType,
 }
 
+/// The managed manifest keys whose §7 fate is [`KeyFate::Property`] — the workflow fields
+/// (`temper-stage`/`-mode`/`-effort`/`-status`/`-seq`) and the provenance fields
+/// (`temper-llm-run`/`-provenance`/`-branch`/`-pr`/`date`). Single source of truth for both directions
+/// of the fate: the forward [`key_fate`] classifier matches on it, and the read path
+/// ([`crate::readback::meta`]) uses [`is_managed_property_key`] to tell a managed workflow/provenance
+/// key apart from an open (user-defined) one — a distinction [`key_fate`] alone cannot make, because it
+/// returns [`KeyFate::Property`] for UNKNOWN keys too (the conservative carry).
+pub const MANAGED_PROPERTY_KEYS: &[&str] = &[
+    "temper-stage",
+    "temper-mode",
+    "temper-effort",
+    "temper-status",
+    "temper-seq",
+    "temper-llm-run",
+    "temper-provenance",
+    "temper-branch",
+    "temper-pr",
+    "date",
+];
+
+/// True iff `key` is one of the managed property keys ([`MANAGED_PROPERTY_KEYS`]) — i.e. a managed
+/// workflow/provenance key that survives §7 as a `kb_properties` row. The read path uses this as the
+/// inverse fate: a surviving property whose key is in this set is managed; anything else is open.
+pub fn is_managed_property_key(key: &str) -> bool {
+    MANAGED_PROPERTY_KEYS.contains(&key)
+}
+
 /// The fate of one **managed** manifest key per the §7 table (G7). The 16 managed keys that exist in
 /// production are all enumerated; an unrecognized managed key defaults to [`KeyFate::Property`] — the
 /// conservative carry (workflow-meta verbatim, never a silent drop).
 pub fn key_fate(key: &str) -> KeyFate {
     match key {
         "temper-title" | "temper-slug" | "temper-id" | "temper-context" => KeyFate::Die,
-        "temper-stage" | "temper-mode" | "temper-effort" | "temper-status" | "temper-seq"
-        | "temper-llm-run" | "temper-provenance" | "temper-branch" | "temper-pr" | "date" => {
-            KeyFate::Property
-        }
         "temper-goal" => KeyFate::Edge,
         "temper-type" => KeyFate::ReconcileToDocType,
+        // Workflow + provenance managed keys carry verbatim; so does any unrecognized managed key
+        // (conservative carry, never a silent drop). Single-sourced via `MANAGED_PROPERTY_KEYS`.
+        k if is_managed_property_key(k) => KeyFate::Property,
         _ => KeyFate::Property,
     }
 }

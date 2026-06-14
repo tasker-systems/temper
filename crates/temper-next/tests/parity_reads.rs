@@ -8,6 +8,7 @@ mod common;
 use std::collections::BTreeMap;
 
 use common::fixture_ids;
+use serde_json::{Map, Value};
 use temper_next::readback::{self, ResolvedIds};
 
 /// Smoke test: the chunk-3 harness composes. Seed the prod-shape fixture into `public.*`, synthesize
@@ -144,4 +145,157 @@ async fn list_parity(pool: sqlx::PgPool) {
         )),
         "R1 carries no workflow keys, so stage/mode/effort are None (LEFT-JOIN absent, not dropped)"
     );
+}
+
+/// The §7-died (and relocated) managed keys: never reappear in a readback's reconstructed managed map.
+/// `temper-title`/`temper-slug`/`temper-id`/`temper-context` DIE (the column/render/row-id/home row
+/// carry that state authoritatively); `temper-goal` becomes an EDGE; `temper-type` reconciles to the
+/// `doc_type` column. Production's manifest still carries all six, so the expected managed set strips
+/// them before comparing against readback.
+const DROPPED_MANAGED_KEYS: &[&str] = &[
+    "temper-title",
+    "temper-slug",
+    "temper-id",
+    "temper-context",
+    "temper-goal",
+    "temper-type",
+];
+
+/// Coerce a serialized `ManagedMeta` (or `open_meta`) `Value` into a JSON object map. Both production
+/// shapes are always JSON objects; a non-object is a contract break we want to surface loudly.
+fn as_object(v: Value, what: &str) -> Map<String, Value> {
+    match v {
+        Value::Object(m) => m,
+        other => panic!("expected {what} to be a JSON object, got {other:?}"),
+    }
+}
+
+/// §9 — `show` + `get_meta` parity. §7 dissolves the production manifest into `kb_resources` columns,
+/// the home row, the `doc_type` property, edges, and `kb_properties`; readback reconstructs the
+/// managed/open split from `kb_properties` using the inverse fate set (`MANAGED_PROPERTY_KEYS`). The
+/// §7-died keys (title/slug/id/context) are gone by construction — the column/home/id carry that state
+/// authoritatively — and the relocated keys (`temper-goal` → edge, `temper-type` → `doc_type` column)
+/// are absent too. So parity holds modulo `DROPPED_MANAGED_KEYS`: production managed, minus those six,
+/// equals readback managed; production `open_meta` equals readback open verbatim.
+///
+/// The "show" auth gate is `resource_service::get_visible`, already invoked inside `get_meta` — the
+/// meta reconstruction IS the show+meta parity (no separate `readback::show` is built).
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn show_and_meta_parity(pool: sqlx::PgPool) {
+    use temper_api::services::meta_service;
+    use temper_core::types::ids::{ProfileId, ResourceId};
+
+    common::seed_and_synthesize(&pool).await;
+
+    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+    assert_eq!(ids.len(), 4, "4 active fixture resources synthesized");
+
+    // Keyed by origin_uri so the per-resource spot-checks can find R1/R2 regardless of iteration order.
+    let mut rb_by_uri: BTreeMap<String, readback::ReconstructedMeta> = BTreeMap::new();
+
+    for new_id in ids.new_ids() {
+        let origin_uri = ids
+            .origin_uri_for_new(new_id)
+            .expect("synthesized id has an origin_uri")
+            .to_string();
+        let old_id = ids
+            .to_old(new_id)
+            .expect("synthesized id maps back to prod");
+
+        // Production read (auth-gated by get_visible inside get_meta) for the owner profile P1.
+        let prod = meta_service::get_meta(
+            &pool,
+            ProfileId::from(fixture_ids::OWNER_PROFILE),
+            ResourceId::from(old_id),
+        )
+        .await
+        .expect("production get_meta");
+
+        let prod_managed_raw = as_object(
+            serde_json::to_value(prod.managed_meta.expect("prod managed_meta present"))
+                .expect("serialize managed_meta"),
+            "managed_meta",
+        );
+        let prod_open = as_object(prod.open_meta.expect("prod open_meta present"), "open_meta");
+
+        // Production managed minus the §7-died/relocated keys = what readback should reconstruct.
+        let mut expected_managed = prod_managed_raw.clone();
+        for k in DROPPED_MANAGED_KEYS {
+            expected_managed.remove(*k);
+        }
+
+        let rb = readback::meta(&pool, new_id).await.expect("readback::meta");
+
+        assert_eq!(
+            rb.managed, expected_managed,
+            "{origin_uri}: surviving managed keys + values match production minus the §7-dropped set"
+        );
+        assert_eq!(
+            rb.open, prod_open,
+            "{origin_uri}: open keys carry verbatim, matching production open_meta"
+        );
+
+        // The §7 guarantee: died keys never reappear in the reconstructed managed map.
+        for died in ["temper-title", "temper-slug", "temper-id", "temper-context"] {
+            assert!(
+                !rb.managed.contains_key(died),
+                "{origin_uri}: §7-died key {died} must be absent from readback managed"
+            );
+        }
+
+        // doc_type is the successor to production's temper-type when present, and always equals the
+        // authoritative doctype synthesis stamped (cross-checked against itself + temper-type).
+        if let Some(prod_type) = prod_managed_raw.get("temper-type") {
+            assert_eq!(
+                Value::String(rb.doc_type.clone()),
+                *prod_type,
+                "{origin_uri}: readback doc_type == production temper-type"
+            );
+        }
+
+        rb_by_uri.insert(origin_uri, rb);
+    }
+
+    // Spot-check R2 (task): the rich case — three surviving managed workflow keys, two open keys, task.
+    let r2 = rb_by_uri
+        .get("temper://fixture/task-doc")
+        .expect("R2 reconstructed");
+    let expected_r2_managed: Map<String, Value> = [
+        ("temper-stage", "doing"),
+        ("temper-mode", "build"),
+        ("temper-effort", "M"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+    .collect();
+    assert_eq!(
+        r2.managed, expected_r2_managed,
+        "R2 managed = exactly the three surviving workflow keys, values verbatim"
+    );
+    let expected_r2_open: Map<String, Value> = [
+        ("custom-key", "custom-value"),
+        ("another-key", "another-value"),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), Value::String(v.to_string())))
+    .collect();
+    assert_eq!(
+        r2.open, expected_r2_open,
+        "R2 open = its two open_meta keys verbatim"
+    );
+    assert_eq!(
+        r2.doc_type, "task",
+        "R2 doc_type is the reconciled task doctype"
+    );
+
+    // Spot-check R1 (goal-doc, a concept): no surviving managed keys, no open keys, doctype concept.
+    let r1 = rb_by_uri
+        .get("temper://fixture/goal-doc")
+        .expect("R1 reconstructed");
+    assert!(
+        r1.managed.is_empty(),
+        "R1 carries only died managed keys → empty managed"
+    );
+    assert!(r1.open.is_empty(), "R1 has no open_meta keys");
+    assert_eq!(r1.doc_type, "concept", "R1 doc_type is concept");
 }
