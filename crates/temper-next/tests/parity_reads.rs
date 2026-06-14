@@ -354,3 +354,106 @@ async fn body_read_parity(pool: sqlx::PgPool) {
         "R2 reconstructs the preamble + depth-2 heading case verbatim"
     );
 }
+
+/// §9 — FTS search parity. For a fixed query set, `readback::fts_search` over `temper_next.*` (a
+/// tsvector REBUILT per §9 — title weight-A, body weight-B, body = RAW current-chunk content
+/// space-joined) must find the SAME resources as production FTS (`search_service::search`, FTS-only)
+/// over the synthesized prod-shape fixture.
+///
+/// The parity floor is the MATCHING SET (a `BTreeSet` of origin_uris), NOT the ordered list, for three
+/// independent reasons:
+///   1. Production's tsvector is `setweight(title,'A') || setweight(slug,'A') || setweight(body,'B')`
+///      (`rebuild_resource_search_vector`, migration 20260405000001) — slug is weight-A. §7 dissolved
+///      slug, so §9 explicitly REBUILDS FTS title-only weight-A. Production can rank a slug match at A;
+///      readback structurally cannot. Absolute `ts_rank` values and the order among equal-weight
+///      matches therefore legitimately differ — they are NOT a migration invariant.
+///   2. `plainto_tsquery` is AND-semantics, so multi-term queries narrow; with this tiny fixture there
+///      is no deterministic multi-result ordering to assert against.
+/// (This mirrors `list_parity`, which likewise compares a set, not `updated`-ordering.) `fts_search`
+/// still ORDERs by `ts_rank DESC` to stay faithful to production; the TEST compares results as sets.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn fts_parity(pool: sqlx::PgPool) {
+    use std::collections::BTreeSet;
+
+    use temper_api::services::search_service;
+    use temper_core::types::api::SearchParams;
+
+    common::seed_and_synthesize(&pool).await;
+
+    // Each query → the set of origin_uris it should find (same set both sides). "body" is in every
+    // active resource's body text, so it finds all 4. "task" hits R2's title + body only. "goal" hits
+    // R1's title "Goal Doc" AND R2's body "Task goals section body." — the english config STEMS
+    // "goals" → "goal", so the body match pulls R2 in on BOTH sides (production via its body@B,
+    // readback via the same raw-chunk body@B); the parity floor (prod set == readback set) is what
+    // matters, and it holds for the stemmed two-hit case too.
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "goal",
+            &["temper://fixture/goal-doc", "temper://fixture/task-doc"],
+        ),
+        ("task", &["temper://fixture/task-doc"]),
+        (
+            "body",
+            &[
+                "temper://fixture/goal-doc",
+                "temper://fixture/task-doc",
+                "temper://fixture/decision-doc",
+                "temper://fixture/team-doc",
+            ],
+        ),
+    ];
+
+    for (query, expected) in cases {
+        // Production FTS-only: query set, no embedding → compute_weights = (1.0, 0.0). graph_expand
+        // off routes through unified_search (FTS path). search_config "english" matches readback's
+        // 'english'. A generous limit defeats the default page size on the "body" (4-hit) case.
+        let params = SearchParams {
+            query: Some((*query).to_string()),
+            embedding: None,
+            search_config: "english".to_string(),
+            graph_expand: false,
+            limit: Some(50),
+            ..Default::default()
+        };
+        let prod_set: BTreeSet<String> =
+            search_service::search(&pool, fixture_ids::OWNER_PROFILE, params)
+                .await
+                .expect("production FTS search")
+                .into_iter()
+                .map(|r| r.origin_uri)
+                .collect();
+
+        let rb_set: BTreeSet<String> = readback::fts_search(&pool, query)
+            .await
+            .expect("readback::fts_search")
+            .into_iter()
+            .collect();
+
+        let expected_set: BTreeSet<String> = expected.iter().map(|s| (*s).to_string()).collect();
+
+        // The load-bearing parity floor: production FTS and readback find the SAME resources.
+        assert_eq!(
+            prod_set, rb_set,
+            "production FTS and readback::fts_search find the SAME resources for {query:?}"
+        );
+        // ...and that shared set is the expected, non-vacuous anchor.
+        assert_eq!(
+            prod_set, expected_set,
+            "production FTS for {query:?} finds the expected resource set"
+        );
+        assert_eq!(
+            rb_set, expected_set,
+            "readback::fts_search for {query:?} finds the expected resource set"
+        );
+    }
+
+    // Non-vacuous spot-check: "body" appears in every active body, so both sides find exactly 4.
+    let body_hits = readback::fts_search(&pool, "body")
+        .await
+        .expect("readback::fts_search body");
+    assert_eq!(
+        body_hits.len(),
+        4,
+        "\"body\" is in every active body text → exactly 4 hits (non-vacuous)"
+    );
+}

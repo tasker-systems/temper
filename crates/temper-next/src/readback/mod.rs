@@ -267,3 +267,51 @@ pub async fn body(pool: &PgPool, new_id: Uuid) -> Result<String> {
     let chunks = crate::synthesis::parity::new_substrate_chunks(pool, &origin_uri).await?;
     Ok(crate::synthesis::parity::reconstruct_body(&chunks))
 }
+
+/// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
+/// search read floor. Builds, per resource, the §9-REBUILT weighted tsvector and returns the matching
+/// `origin_uri`s ranked by `ts_rank DESC`.
+///
+/// The tsvector is `setweight(to_tsvector('english', title), 'A') || setweight(..body.., 'B')` —
+/// title-only weight-A, body weight-B. This deliberately DIVERGES from production's
+/// `rebuild_resource_search_vector` (migration 20260405000001), whose A-weight is `title || slug`: §7
+/// dissolved slug, so §9 rebuilds FTS title-only. The body is the RAW current-chunk content
+/// space-joined (`string_agg(content, ' ')`), exactly as production aggregates it — NOT the
+/// heading-prefixed assembled markdown [`crate::synthesis::parity::reconstruct_body`] produces (that's
+/// the `get_content` body, wrong for FTS). Config is `'english'` (production's default).
+///
+/// Because production ranks slug@A and readback structurally cannot, absolute `ts_rank` and the order
+/// among equal-weight matches are NOT migration invariants — the parity floor the test asserts is the
+/// matching SET, not the ordered list. `ORDER BY rank DESC` here stays faithful to production behavior.
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn fts_search(pool: &PgPool, query: &str) -> Result<Vec<String>> {
+    let rows = sqlx::query(
+        "WITH doc AS (
+           SELECT r.id,
+                  r.origin_uri,
+                  setweight(to_tsvector('english', r.title), 'A') ||
+                  setweight(to_tsvector('english', COALESCE(string_agg(cc.content, ' '), '')), 'B')
+                    AS search_vector
+             FROM temper_next.kb_resources r
+             LEFT JOIN temper_next.kb_chunks c
+               ON c.resource_id = r.id AND c.is_current
+             LEFT JOIN temper_next.kb_chunk_content cc
+               ON cc.chunk_id = c.id
+            GROUP BY r.id, r.origin_uri, r.title
+         )
+         SELECT origin_uri
+           FROM doc
+          WHERE search_vector @@ plainto_tsquery('english', $1)
+          ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC",
+    )
+    .bind(query)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|r| r.get::<String, _>("origin_uri"))
+        .collect())
+}
