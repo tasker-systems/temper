@@ -8,9 +8,11 @@
 //! See `docs/superpowers/specs/2026-05-07-wave1-phase3-dbbackend-design.md`.
 
 mod db_backend;
+pub mod selection;
 mod translators;
 
 #[cfg(all(test, feature = "test-db"))]
 mod tests;
 
 pub use db_backend::DbBackend;
+pub use selection::{require_legacy_backend, select_backend, BackendSelection};
