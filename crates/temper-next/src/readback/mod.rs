@@ -1,9 +1,17 @@
 //! WS6 §9 chunk-3 read surface over `temper_next.*` — read-only parity tooling.
 //!
 //! This module ports the production read paths (list / meta / body / FTS / vector / neighbors) onto
-//! the synthesized substrate so each can be asserted byte-for-byte against the production read for the
-//! same logical query (the parity-read harness in `tests/parity_reads.rs`). This file currently carries
-//! only the harness scaffold; the individual read ports land in later chunk-3 tasks.
+//! the synthesized substrate so each can be asserted against the production read for the same logical
+//! query (the parity-read harness in `tests/parity_reads.rs`).
+//!
+//! **Scope: this harness proves data/projection parity, NOT access parity.** The readback reads are
+//! deliberately **visibility-unscoped** — they return every synthesized resource, where production's
+//! oracles scope through `resources_visible_to(profile)` (list) or a `visible` CTE (FTS/vector). Access
+//! over `temper_next` is WS2's concern (the producer-intersection model), not this §9 floor. The parity
+//! tests hold because the prod-shape fixture makes every active resource visible to its owner P1, so the
+//! production and readback result SETS coincide. Leaving readback unscoped is the SAFE direction: an
+//! unscoped read is strictly more inclusive, so a synthesis bug producing an extra or wrong-owner row
+//! makes the set comparison FAIL loudly — it can never mask a defect as a false pass.
 //!
 //! All reads are runtime, schema-qualified `sqlx::query` (NEVER the `query!`/`query_as!` macros), same
 //! discipline as [`crate::synthesis::source`] and [`crate::synthesis::parity`]: the temper-next macro
@@ -203,6 +211,11 @@ pub struct ReconstructedMeta {
 /// the authoritative doctype the resource pass stamped (successor to production's `temper-type`). The
 /// §7-died keys are absent by construction — they were never written as properties.
 ///
+/// Faithful only for production's closed managed-key universe (the 16 keys of G7): an *unrecognized*
+/// managed key would synthesize as a `Property` (the forward classifier's conservative carry) yet land
+/// in `open` here (`is_managed_property_key` returns false for it). That asymmetry cannot occur for the
+/// fixed production key set; if the managed vocabulary ever grows, extend `MANAGED_PROPERTY_KEYS`.
+///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
 pub async fn meta(pool: &PgPool, new_id: Uuid) -> Result<ReconstructedMeta> {
@@ -283,6 +296,10 @@ pub async fn body(pool: &PgPool, new_id: Uuid) -> Result<String> {
 /// Because production ranks slug@A and readback structurally cannot, absolute `ts_rank` and the order
 /// among equal-weight matches are NOT migration invariants — the parity floor the test asserts is the
 /// matching SET, not the ordered list. `ORDER BY rank DESC` here stays faithful to production behavior.
+/// Note slug@A can change *membership*, not just order: a query term living ONLY in a slug would match
+/// production and not readback. Set parity is therefore guaranteed only for terms present in title/body
+/// (where it holds exactly); a slug-only term legitimately diverges — that's §7 dissolving the slug, not
+/// a defect. The fixture's queries are title/body terms by design.
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.

@@ -59,8 +59,11 @@ pub fn key_fate(key: &str) -> KeyFate {
         "temper-title" | "temper-slug" | "temper-id" | "temper-context" => KeyFate::Die,
         "temper-goal" => KeyFate::Edge,
         "temper-type" => KeyFate::ReconcileToDocType,
-        // Workflow + provenance managed keys carry verbatim; so does any unrecognized managed key
-        // (conservative carry, never a silent drop). Single-sourced via `MANAGED_PROPERTY_KEYS`.
+        // Two arms that intentionally share an outcome but NOT a meaning (kept distinct on purpose,
+        // not dead code): the guard is the KNOWN workflow/provenance managed keys, carried verbatim and
+        // single-sourced via `MANAGED_PROPERTY_KEYS` (this is the linkage `readback::meta`'s inverse
+        // `is_managed_property_key` relies on); the wildcard is the UNKNOWN managed key — same
+        // conservative `Property` carry (never a silent drop), but a different case the reader should see.
         k if is_managed_property_key(k) => KeyFate::Property,
         _ => KeyFate::Property,
     }
