@@ -3,14 +3,12 @@ use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::DbBackend;
+use crate::backend::select_backend;
 use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::state::AppState;
 
-use temper_core::operations::{
-    Backend, BodyUpdate, CreateResource, ResourceRef, Surface, UpdateResource,
-};
+use temper_core::operations::{BodyUpdate, CreateResource, ResourceRef, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::managed_meta::ManagedMeta;
@@ -66,12 +64,14 @@ pub async fn create(
         origin: Surface::ApiHttp,
     };
 
-    let backend = DbBackend::new(
-        state.pool.clone(),
+    let backend = select_backend(
+        state.backend_selection,
+        &state.pool,
         ProfileId::from(auth.0.profile.id),
         device_id,
         Surface::ApiHttp,
-    );
+    )
+    .map_err(ApiError::from)?;
     let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -132,12 +132,14 @@ pub async fn update(
         move_to: None,
         origin: Surface::ApiHttp,
     };
-    let backend = DbBackend::new(
-        state.pool.clone(),
+    let backend = select_backend(
+        state.backend_selection,
+        &state.pool,
         ProfileId::from(auth.0.profile.id),
         device_id,
         Surface::ApiHttp,
-    );
+    )
+    .map_err(ApiError::from)?;
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
