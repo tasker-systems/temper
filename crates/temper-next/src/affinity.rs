@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub enum EdgeKind {
@@ -18,6 +18,21 @@ impl EdgeKind {
             EdgeKind::Contains => "contains",
             EdgeKind::LeadsTo => "leads_to",
             EdgeKind::Near => "near",
+        }
+    }
+
+    /// Parse an `edge_kind` SQL enum label back into the typed kind — the inverse of [`as_sql`], used
+    /// by synthesis to map a production `kb_resource_edges.edge_kind` text value onto the typed enum
+    /// (§4: kind carries verbatim). `None` for an unrecognized label (escalates at the call site).
+    ///
+    /// [`as_sql`]: EdgeKind::as_sql
+    pub fn from_sql(s: &str) -> Option<Self> {
+        match s {
+            "express" => Some(EdgeKind::Express),
+            "contains" => Some(EdgeKind::Contains),
+            "leads_to" => Some(EdgeKind::LeadsTo),
+            "near" => Some(EdgeKind::Near),
+            _ => None,
         }
     }
 }

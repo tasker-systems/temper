@@ -74,6 +74,10 @@ echo ""
 echo "Run 'cargo make --list-all-steps' for all tasks"
 '''
 
+[tasks.gen-install-migration]
+description = "Regenerate the additive temper_next install migration from the shared artifact body"
+script = ["bash tools/gen-install-migration.sh"]
+
 [tasks.prepare-next]
 description = "Regenerate temper-next's per-crate .sqlx cache against the loaded temper_next artifact"
 env = { SQLX_OFFLINE = "false" }   # prepare must introspect the LIVE artifact to build the cache
@@ -82,7 +86,9 @@ script = '''
 # public schema), so prepare needs the artifact loaded + search_path set. Per-crate (run from the
 # crate dir) — NOT `--workspace`, which clobbers per-crate caches.
 DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}"
-for f in 01_schema 02_functions; do psql "$DB" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null; done
+# 00_namespace_reset carries the DROP/CREATE preamble (factored out of 01_schema so the body is a
+# no-DROP install source); prepend it so prepare introspects a clean namespace.
+for f in 00_namespace_reset 01_schema 02_functions; do psql "$DB" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null; done
 cd crates/temper-next
 DATABASE_URL="${DB}?options=-csearch_path%3Dtemper_next,public" cargo sqlx prepare
 '''

@@ -170,11 +170,25 @@
       ]
     },
     "ContextDef": {
-      "description": "A named context — a real `kb_contexts` row, the referent for named homes and shares.",
+      "description": "A named context — a real owner-scoped `kb_contexts` row (WS6 §2 amendment), the referent for named\nhomes and shares. Exactly one of `owner_profile` (a `world` profile handle) / `owner_team` (a\n`world` team slug) must be set — the loader validates this and derives `slug = slugify(name)`.\nOwner is purely namespace-scoping (which owner the slug is unique within); reachability is still\ngoverned by `context_shares` (`kb_team_contexts`), orthogonal to owner.",
       "type": "object",
       "properties": {
         "name": {
           "type": "string"
+        },
+        "owner_profile": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "owner_team": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
         }
       },
       "required": [

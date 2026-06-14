@@ -133,6 +133,30 @@ lands there — not invented here.
 
 ## Adjudication 2 — Owned-context policy
 
+> **Amendment (2026-06-13) — contexts are owner-scoped, slugged namespaces.** The original call below
+> migrated contexts to a *thin unowned* `kb_contexts(id, name UNIQUE, created)`. That conflated two roles
+> of ownership and dropped both: *ownership-for-access-gating* (`contexts_visible_to` — correctly retired;
+> visibility is at home/team grain) **and** *ownership-for-namespace-scoping* (which namespace a context's
+> name/slug lives under — wrongly dropped). A global `name UNIQUE` is a latent multi-tenant error and a
+> concrete synthesis-collision risk: production keys uniqueness per-owner across 11 profile- **and**
+> team-owned contexts. This amendment restores **only** the namespace-scoping role (the "bounding-constraint
+> utility survives" line below, now in DDL). Revised shape:
+> ```sql
+> CREATE TABLE kb_contexts (
+>     id           UUID PRIMARY KEY DEFAULT uuid_generate_v7(),  -- canonical reference + access mechanism
+>     owner_table  VARCHAR(64) NOT NULL CHECK (owner_table IN ('kb_profiles','kb_teams')),
+>     owner_id     UUID NOT NULL,
+>     slug         TEXT NOT NULL,   -- per-owner addressable handle (team-style: unique slug, free name)
+>     name         TEXT NOT NULL,   -- display label (may collide across owners)
+>     created      TIMESTAMPTZ NOT NULL DEFAULT now(),
+>     UNIQUE (owner_table, owner_id, slug)
+> );
+> ```
+> uuid stays the reference everything else uses (`kb_resource_homes.anchor_id`, `kb_team_contexts.context_id`,
+> `kb_events.producing_anchor_id` — all unchanged). `contexts_visible_to` **stays retired**; `kb_team_contexts`
+> is still the sharing mechanism, orthogonal to owner. The **Call** and **Binding remap rule** below are
+> superseded by the **Amended remap rule** at the end of this section.
+
 **Delta.** Production: 11 contexts owned via `(kb_owner_table, kb_owner_id)`, uniqueness
 `(owner, name)`, `contexts_visible_to` gates listing, every resource carries `kb_context_id`.
 Artifact: `kb_contexts(id, name, created)` — unowned navigation anchors; ownership/visibility at
@@ -175,6 +199,21 @@ direct map↔context coupling exists. The keyboard-holder's reach never enters; 
 **Open residue.** The team↔context capability shape (read-only share vs contribute); whether a
 cogmap can ever home in a context (current answer: no — maps join teams; map↔context stays
 indirect, preserving the intersection discipline).
+
+**Amended remap rule (2026-06-13, supersedes the "Binding remap rule" above).**
+- Per production context → `owner_table`/`owner_id` carried verbatim; `name` = production name; `slug` =
+  `sluggify(name)`, disambiguated on the rare per-owner slug collision; uuid newly minted (old→new id map
+  threaded to the resource/home pass).
+- For each **team-owned** context, synthesize an explicit `kb_team_contexts(context_id, owning_team_id)`
+  row so the owning team still reaches its contents through the **unchanged** visibility function
+  (`vis_team`/`resources_visible_to`). Owner stays purely namespace-scoping; reachability is never implied
+  by ownership. Profile-owned contexts need no such row (their resources are owner-visible via homes/access).
+- Every context-homed resource → home row `('kb_contexts', ctx)` carrying its current originator/owner
+  (unchanged from the original rule).
+- `temper-context` frontmatter key dies — derivable from the home row at render time (unchanged).
+- Access-scaffold coverage: the access-scenario's context rows now carry an owner (a profile or team from
+  the scenario `world`) + a derived slug. The leak-safety invariants are **unchanged** — they gate on
+  resource visibility, not context naming — so this is a mechanical loader/model update, not a new proof.
 
 ## Adjudication 3 — Access remap
 
@@ -418,3 +457,16 @@ updating all callers, not a runtime cutover; and crate extraction is post-cutove
 - Ledger: `2026-06-09-event-payload-formalization-design.md`
 - Content: `2026-06-03-content-block-primitive-design.md`, `2026-06-08-…-event-firing-parity-design.md`
 - Goal record: `substrate-kernel-to-cognitive-map` WS6 (update status line when this lands)
+
+**Status (2026-06-14):** Chunks 2+3 landed on `jct/ws6-chunk2-3-synthesis-parity` (plan:
+`docs/superpowers/plans/2026-06-13-ws6-chunk2-3-synthesis-parity.md`). Chunk 2 = strictly-additive
+install migration (single-sourced from the shared artifact body) + the explicitly-invoked
+synthesis-from-state operation (genesis-event synthesis per §0/§1/§4/§7/§8, §2 owner-scoped-contexts
+amendment) + the per-resource body-text parity gate (§8). Chunk 3 = the read-only parity-read harness
+over the full §9 floor (list / show+meta / body / FTS / vector / graph neighbors), each diffed against
+the production read for the same logical query over a synthesized prod-shape fixture. Two parity-floor
+findings recorded in the plan/PR: list-ordering and FTS rank-ordering are NOT migration invariants
+(synthesis sources timestamps from event `occurred_at` → collapsed; §9 rebuilds FTS title-only weight-A
+while production weights slug@A) — the asserted floor is the matching row/result **set**, not absolute
+ordering; vector and graph ordering ARE invariants (embeddings/edges carry verbatim). Not in scope
+(deferred to chunk 4 / the flip): ledger archive, surface repoint, crate extraction.

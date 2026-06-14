@@ -82,6 +82,19 @@ pub enum EdgePolarity {
     Inverse,
 }
 
+impl EdgePolarity {
+    /// Parse a `polarity` SQL enum label into the typed polarity — used by synthesis to carry a
+    /// production `kb_resource_edges.polarity` text value verbatim (§4). `None` for an unrecognized
+    /// label (escalates at the call site).
+    pub fn from_sql(s: &str) -> Option<Self> {
+        match s {
+            "forward" => Some(EdgePolarity::Forward),
+            "inverse" => Some(EdgePolarity::Inverse),
+            _ => None,
+        }
+    }
+}
+
 /// Content-addressed chunk reference: structure + hash, NEVER prose (CAS rule, spec §0.1).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -157,6 +170,13 @@ pub struct ChunkContent {
     pub content: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<EmbeddingRepr>,
+    /// Production heading metadata (§8 carry-as-is): persisted onto `kb_chunks.header_path` /
+    /// `heading_depth` by `_insert_chunk`, never part of the manifest/CAS hash. Skipped when absent
+    /// (the scenario-authoring path) so the columns stay NULL exactly as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub header_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_depth: Option<i16>,
 }
 
 /// Insert one run of prepared chunks into a `{chunk_id: {content, embedding}}` sidecar map (keyed by
@@ -173,6 +193,8 @@ pub fn content_sidecar_chunks(
             ChunkContent {
                 content: c.content.clone(),
                 embedding: Some(EmbeddingRepr::Vector(c.embedding.clone())),
+                header_path: c.header_path.clone(),
+                heading_depth: c.heading_depth,
             },
         );
     }
@@ -234,6 +256,11 @@ pub struct ResourceCreated {
     pub origin_uri: String,
     pub home: AnchorRef,
     pub owner_profile_id: ProfileId,
+    /// The home's originator (§2: "carrying its current originator/owner"). Absent ⇒ the projector
+    /// COALESCEs it to `owner_profile_id` (the scenario path, where originator≡owner). Synthesis sets
+    /// it explicitly so a production row whose originator differs from its owner survives the carry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub originator_profile_id: Option<ProfileId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub doc_type: Option<String>,
     pub blocks: Vec<BlockManifest>,
@@ -487,6 +514,8 @@ mod tests {
                 content_hash: "ab".repeat(32),
                 content: "secret prose".into(),
                 embedding: vec![0.5; 4],
+                header_path: None,
+                heading_depth: None,
             }],
         };
         let m = BlockManifest::from(&b);
@@ -560,6 +589,8 @@ mod tests {
                 content_hash: "cd".repeat(32),
                 content: "the prose".into(),
                 embedding: vec![1.0, 2.0],
+                header_path: None,
+                heading_depth: None,
             }],
         };
         let side = content_sidecar(std::slice::from_ref(&b));

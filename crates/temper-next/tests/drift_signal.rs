@@ -67,8 +67,9 @@ async fn lens_drift_is_fresh_after_materialize_then_component_scoped_structural(
         SeedAction::ResourceCreate {
             title: "isolated",
             origin_uri: "temper://drift/isolated",
-            home: CogmapId::from(loaded.cogmap),
+            home: temper_next::payloads::AnchorRef::cogmap(CogmapId::from(loaded.cogmap)),
             owner: ProfileId::from(loaded.owner),
+            originator: None,
             blocks: &blocks,
             doc_type: None,
             emitter: EntityId::from(loaded.emitter),

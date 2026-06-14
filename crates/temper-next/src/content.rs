@@ -28,6 +28,12 @@ pub struct PreparedChunk {
     pub content_hash: String,
     pub content: String,
     pub embedding: Vec<f32>,
+    /// Production render metadata (§8 carry-as-is): the heading breadcrumb this chunk sits under and
+    /// its heading depth, persisted onto `kb_chunks` so a downstream read reconstructs headed markdown
+    /// identically to production. `None` for the scenario-authoring path (no production headings) —
+    /// the columns stay NULL, exactly as before this carry existed.
+    pub header_path: Option<String>,
+    pub heading_depth: Option<i16>,
 }
 
 /// One content-block (seq-ordered within its resource) and its ordered chunks. Blocks carry **no**
@@ -77,6 +83,9 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
                 content_hash,
                 content,
                 embedding,
+                // the scenario-authoring path has no production headings; carry NULL (unchanged).
+                header_path: None,
+                heading_depth: None,
             },
         )
         .collect();
@@ -150,6 +159,8 @@ mod tests {
                 content_hash: "ab".repeat(32),
                 content: "hi".into(),
                 embedding: vec![0.1, 0.2, 0.3],
+                header_path: None,
+                heading_depth: None,
             }],
         };
         let v = serde_json::to_value([&block]).unwrap();

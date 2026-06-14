@@ -94,8 +94,13 @@ pub enum SeedAction<'a> {
     ResourceCreate {
         title: &'a str,
         origin_uri: &'a str,
-        home: CogmapId,
+        /// The resource's home anchor — polymorphic per `AnchorRef` (`kb_cogmaps` for the scenario
+        /// path; `kb_contexts` for synthesized, context-homed resources, §2).
+        home: payloads::AnchorRef,
         owner: ProfileId,
+        /// The home's originator (§2). `None` ⇒ the projector COALESCEs it to `owner` (scenario path,
+        /// originator≡owner); synthesis sets it so a distinct production originator survives.
+        originator: Option<ProfileId>,
         blocks: &'a [PreparedBlock],
         doc_type: Option<&'a str>,
         emitter: EntityId,
@@ -104,6 +109,9 @@ pub enum SeedAction<'a> {
         src: ResourceId,
         tgt: ResourceId,
         kind: EdgeKind,
+        /// The edge's polarity, carried verbatim (§4). The scenario paths pass
+        /// `payloads::EdgePolarity::Forward`; synthesis carries the production value.
+        polarity: payloads::EdgePolarity,
         label: Option<&'a str>,
         weight: f64,
         home: EdgeHome,
@@ -112,6 +120,17 @@ pub enum SeedAction<'a> {
     FacetSet {
         resource: ResourceId,
         values: &'a serde_json::Value,
+        weight: f64,
+        emitter: EntityId,
+    },
+    /// Assert one keyed property on a resource (WS6 §7 synthesis: one `kb_properties` row per surviving
+    /// manifest key). Unlike `FacetSet` (which hardcodes `property_key="facet"` for the scenario
+    /// value-map), this carries an arbitrary `key`/`value` pair — but fires the SAME key-agnostic
+    /// `facet_set` SQL function, so the owner resource's home anchors the event (errors if homeless).
+    PropertyAssert {
+        resource: ResourceId,
+        key: &'a str,
+        value: &'a serde_json::Value,
         weight: f64,
         emitter: EntityId,
     },
@@ -151,6 +170,7 @@ impl SeedAction<'_> {
             SeedAction::ResourceCreate { .. } => EventKind::ResourceCreated,
             SeedAction::RelationshipAssert { .. } => EventKind::RelationshipAsserted,
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
+            SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
@@ -192,6 +212,15 @@ impl Fired {
         match self {
             Fired::Resource(id) => Ok(id),
             other => anyhow::bail!("expected Fired::Resource, got {other:?}"),
+        }
+    }
+
+    /// Extract the edge id a `RelationshipAssert` fire produced (so a follow-up `RelationshipFold`
+    /// can target it — the §4 assert+fold pair).
+    pub fn relationship(self) -> Result<EdgeId> {
+        match self {
+            Fired::Relationship(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Relationship, got {other:?}"),
         }
     }
 
@@ -260,6 +289,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             origin_uri,
             home,
             owner,
+            originator,
             blocks,
             doc_type,
             emitter,
@@ -268,8 +298,9 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 resource_id: ResourceId::from(Uuid::now_v7()),
                 title: title.to_owned(),
                 origin_uri: origin_uri.to_owned(),
-                home: payloads::AnchorRef::cogmap(home),
+                home,
                 owner_profile_id: owner,
+                originator_profile_id: originator,
                 doc_type: doc_type.map(str::to_owned),
                 blocks: blocks.iter().map(payloads::BlockManifest::from).collect(),
             };
@@ -290,6 +321,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             src,
             tgt,
             kind,
+            polarity,
             label,
             weight,
             home,
@@ -300,7 +332,7 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 source: payloads::AnchorRef::resource(src),
                 target: payloads::AnchorRef::resource(tgt),
                 edge_kind: kind,
-                polarity: payloads::EdgePolarity::Forward,
+                polarity,
                 label: label.map(str::to_owned),
                 weight,
                 home: home.anchor_ref(),
@@ -329,6 +361,32 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 value: values.clone(),
                 weight,
             };
+            let id = sqlx::query_scalar!(
+                "SELECT facet_set($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("facet_set returned null")?;
+            Ok(Fired::Facet(PropertyId::from(id)))
+        }
+
+        SeedAction::PropertyAssert {
+            resource,
+            key,
+            value,
+            weight,
+            emitter,
+        } => {
+            let payload = payloads::PropertyAsserted {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::resource(resource),
+                property_key: key.to_owned(),
+                value: value.clone(),
+                weight,
+            };
+            // Reuses the same key-agnostic `facet_set` query as `FacetSet` — no new SQL function.
             let id = sqlx::query_scalar!(
                 "SELECT facet_set($1,$2)",
                 serde_json::to_value(&payload)?,

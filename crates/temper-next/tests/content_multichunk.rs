@@ -84,8 +84,9 @@ async fn resource_create_persists_multi_block_multi_chunk_nesting() {
         SeedAction::ResourceCreate {
             title: "Onboarding doc",
             origin_uri: "temper://c/multi",
-            home: CogmapId::from(cogmap.uuid()),
+            home: temper_next::payloads::AnchorRef::cogmap(CogmapId::from(cogmap.uuid())),
             owner: ProfileId::from(owner),
+            originator: None,
             blocks: &blocks,
             doc_type: Some("concept"),
             emitter: EntityId::from(emitter),

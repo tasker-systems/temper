@@ -104,8 +104,9 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
             SeedAction::ResourceCreate {
                 title: &title,
                 origin_uri: &r.origin_uri,
-                home: cogmap,
+                home: crate::payloads::AnchorRef::cogmap(cogmap),
                 owner,
+                originator: None,
                 blocks: &blocks,
                 doc_type: r.doc_type.as_deref(),
                 emitter,
@@ -145,6 +146,7 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
                 src,
                 tgt,
                 kind: e.kind,
+                polarity: crate::payloads::EdgePolarity::Forward,
                 label: e.label.as_deref(),
                 weight: e.weight,
                 home: EdgeHome::Cogmap(cogmap),
