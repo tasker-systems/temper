@@ -108,8 +108,10 @@ Expected: PASS (temper-next not linked; nothing references it yet).
 
 - [ ] **Step 3: Verify temper-api builds WITH the feature**
 
-Run: `cargo build -p temper-api --features next-backend`
+Run: `SQLX_OFFLINE=true cargo build -p temper-api --features next-backend`
 Expected: PASS (temper-next + onnx link; no code uses it yet, but the dep resolves).
+
+**CRITICAL (verified at build):** temper-next's `sqlx::query!` macros target the `temper_next` namespace and CANNOT validate live against the dev DB. So ANY temper-api build with `next-backend` MUST set `SQLX_OFFLINE=true` (raw `cargo build` without it fails with 58 "cannot infer type" errors from temper-next). `cargo make` tasks already set it; the deployed adapter build (Task 9) MUST set it too.
 
 - [ ] **Step 4: Commit**
 
