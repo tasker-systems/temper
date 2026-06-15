@@ -32,10 +32,16 @@ mod common;
 
 use reqwest::StatusCode;
 
-/// A backend-constructed read (`show`) is gated off under `next`: the response
-/// flips from the legacy `404` (random id, not found) to a `500` guard.
+/// A backend-constructed read (`show`) routes through the `next` arm when the flag is flipped — proving
+/// the seam is wired into the live HTTP stack. The observed status depends on whether `NextBackend` is
+/// compiled in:
+/// - WITHOUT `next-backend` (the default e2e build / CI): the `next` arm is gated and surfaces as a
+///   `500` "not implemented" guard (the 4a behavior).
+/// - WITH `next-backend` (4b): `NextBackend` is functional; a random id is not found in `temper_next`,
+///   so the read returns `404` — the SAME as legacy, proving the next arm reaches a real lookup (not a
+///   gate). The substantive "next answers from temper_next" proof is `backend_read_path_next.rs`.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn api_show_is_gated_off_under_next(pool: sqlx::PgPool) {
+async fn api_show_routes_through_next_arm(pool: sqlx::PgPool) {
     // Flip the flag to `next` BEFORE the server starts — startup reads it once
     // (the cutover model: a flip takes effect on the next redeploy / spawn).
     sqlx::query("UPDATE kb_backend_selection SET backend = 'next' WHERE id = true")
@@ -54,16 +60,24 @@ async fn api_show_is_gated_off_under_next(pool: sqlx::PgPool) {
         .await
         .expect("request failed");
 
+    #[cfg(not(feature = "next-backend"))]
+    {
+        assert_eq!(
+            resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "without next-backend, the next arm surfaces as a server error (gated)"
+        );
+        let body = resp.text().await.expect("read error body");
+        assert!(
+            body.contains("not implemented"),
+            "the error body should name the gate, got: {body}"
+        );
+    }
+    #[cfg(feature = "next-backend")]
     assert_eq!(
         resp.status(),
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "the next arm must surface as a server error until 4b lands NextBackend"
-    );
-
-    let body = resp.text().await.expect("read error body");
-    assert!(
-        body.contains("not implemented"),
-        "the error body should name the gate, got: {body}"
+        StatusCode::NOT_FOUND,
+        "with next-backend, the functional next arm returns 404 for a random id (not in temper_next)"
     );
 }
 
