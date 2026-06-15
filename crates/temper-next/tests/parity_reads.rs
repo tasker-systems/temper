@@ -675,3 +675,53 @@ async fn graph_parity(pool: sqlx::PgPool) {
         "R1: forward contains→task-doc (parent_of) + inverse leads_to→decision-doc (derived_from)"
     );
 }
+
+/// §9 — full-row (`show`/`by_uri`) parity at the INVARIANT-FIELD subset. The non-invariant fields
+/// (re-minted ids, §7-dissolved slug/hashes, synthesis-collapsed timestamps) are deliberately NOT
+/// compared — see the 4b spec's parity-floor amendment.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn resource_row_parity(pool: sqlx::PgPool) {
+    use temper_api::services::resource_service;
+
+    common::seed_and_synthesize(&pool).await;
+    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+    assert_eq!(ids.len(), 4, "4 active fixture resources synthesized");
+
+    for new_id in ids.new_ids() {
+        let origin_uri = ids
+            .origin_uri_for_new(new_id)
+            .expect("origin_uri")
+            .to_string();
+        let old_id = ids.to_old(new_id).expect("maps back to prod");
+
+        let rb = readback::resource_row(&pool, new_id)
+            .await
+            .expect("readback::resource_row");
+        // Production oracle: get_visible returns the full ResourceRow for the owner profile.
+        let prod = resource_service::get_visible(&pool, fixture_ids::OWNER_PROFILE, old_id)
+            .await
+            .expect("prod get_visible");
+
+        assert_eq!(rb.origin_uri, prod.origin_uri, "{origin_uri}: origin_uri");
+        assert_eq!(rb.title, prod.title, "{origin_uri}: title");
+        assert_eq!(rb.is_active, prod.is_active, "{origin_uri}: is_active");
+        assert_eq!(
+            rb.context_name, prod.context_name,
+            "{origin_uri}: context_name"
+        );
+        assert_eq!(
+            rb.doc_type_name, prod.doc_type_name,
+            "{origin_uri}: doc_type_name"
+        );
+        // owner_handle is NOT asserted: production projects it caller-relative ("@me" when
+        // owner == caller); the substrate carries the raw handle. It is a render-time decoration,
+        // non-invariant — see the 4b spec parity-floor amendment.
+        assert_eq!(rb.stage, prod.stage, "{origin_uri}: stage");
+        assert_eq!(rb.mode, prod.mode, "{origin_uri}: mode");
+        assert_eq!(rb.effort, prod.effort, "{origin_uri}: effort");
+        assert_eq!(rb.seq, prod.seq, "{origin_uri}: seq");
+        // body_hash is NOT asserted: production stores the manifest hash while temper_next recomputes
+        // a merkle over chunks (different algorithms) — the §8 gate compares reconstructed body TEXT,
+        // not the hash columns (proven separately by `body_read_parity`). Non-invariant.
+    }
+}
