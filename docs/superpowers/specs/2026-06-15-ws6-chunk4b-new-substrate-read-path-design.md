@@ -36,6 +36,16 @@ The selector reads `state.backend_selection` (already on `AppState` from 4a). Bo
 ### What stays erroring under `next`
 Writes: `NextBackend`'s write stubs + the relationship/edge sites still on `require_legacy_backend`. The gate is deliberately **half-open** at the end of 4b — reads answer from `temper_next`, writes refuse. That is a coherent intermediate: no production traffic hits it (gated OFF), and the next sub-chunk (4c) closes writes.
 
+### Full-row read parity floor (show / by_uri) — amendment 2026-06-15
+
+Grounding during planning showed the spec's "reconstructed into `ResourceRow`" cannot be byte-identical: synthesis re-mints all identity UUIDs (resource `id`, `kb_context_id`, `owner_profile_id`, `originator_profile_id`; `bootstrap.rs`/`source.rs`), §7 dissolved `slug`/`managed_hash`/`open_hash` (no `kb_resource_manifests` in `temper_next`), and `created`/`updated` collapse to synthesis tx-time. So the full-row parity floor is the **migration-invariant field subset** — exactly the chunk-3 precedent that list/FTS *ordering* is not a migration invariant.
+
+- **Invariant (asserted equal across `legacy` and `next`):** `origin_uri`, `title`, `is_active`, `context_name`, `doc_type_name`, `owner_handle`, `stage`, `mode`, `effort`, `seq`, `body_hash`.
+- **Non-invariant (NOT asserted):** `id`, `kb_context_id`, `owner_profile_id`, `originator_profile_id` (re-minted); `slug`, `managed_hash`, `open_hash` (§7-dissolved); `created`, `updated` (synthesis-collapsed).
+- `NextBackend::show_resource` fills the non-invariant fields with best-effort values: re-minted IDs as-is, `kb_doc_type_id` via a **transitional `public.kb_doc_types` name→id lookup** (valid during the migration window), `slug`/`managed_hash`/`open_hash` = `None`, `created`/`updated` = read-time `Utc::now()`.
+
+**Graph scope:** `GET /api/graph/subgraph` is a depth-2 concept-aggregator read, not the §9 1-hop neighbor floor. It stays on legacy in 4b; 1-hop neighbor parity is proven at the parity-harness level, not via an HTTP endpoint.
+
 ## Proof gates
 
 1. **Re-pointed parity harness.** The chunk-3 parity tests currently call `readback::*` directly. 4b re-points them (or adds a sibling layer) so they drive reads through `NextBackend` / the read selector — proving the **wiring layer** preserves the §9 floor, not just the underlying SQL. The floor is unchanged: set-equality on `list` / `fts`, ordering-invariant on `vector` / `neighbors` (per chunk 3's two findings — list/FTS ordering are not migration invariants; vector/graph are).
