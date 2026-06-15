@@ -410,6 +410,13 @@ fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::Erro
     }
 }
 
+// WS6 4b note: `get_resource` / `list_resources` stay on the legacy services under `flag=next`.
+// They layer relationship enrichment (`enrich_resources` / `build_enriched`) — reads over
+// `public.kb_resource_edges` keyed by resource id — on top of the base read. The new substrate
+// re-mints ids, so routing only the base read through `read_selector` would leave the enrichment
+// querying `public` with ids that don't exist there (mixed-substrate, incorrect). The enrichment
+// layer is beyond the §9 read floor; routing these tools waits on porting relationship reads
+// (alongside 4c writes). The MCP `search` tool, which has no enrichment, IS routed (see search.rs).
 pub async fn get_resource(
     svc: &TemperMcpService,
     input: GetResourceInput,
