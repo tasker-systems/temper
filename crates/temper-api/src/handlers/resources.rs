@@ -76,8 +76,13 @@ pub async fn list(
             resource_service::list_visible_meta(&state.pool, auth.0.profile.id, params).await?;
         Ok(ListResourcesResponse::Meta(response))
     } else {
-        let response =
-            resource_service::list_visible(&state.pool, auth.0.profile.id, params).await?;
+        let response = crate::backend::read_selector::list_select(
+            state.backend_selection,
+            &state.pool,
+            auth.0.profile.id,
+            params,
+        )
+        .await?;
         Ok(ListResourcesResponse::Default(response))
     }
 }
@@ -160,9 +165,14 @@ pub async fn get_content(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ContentResponse>> {
-    resource_service::get_content(&state.pool, auth.0.profile.id, resource_id)
-        .await
-        .map(Json)
+    crate::backend::read_selector::get_content_select(
+        state.backend_selection,
+        &state.pool,
+        auth.0.profile.id,
+        resource_id,
+    )
+    .await
+    .map(Json)
 }
 
 #[utoipa::path(

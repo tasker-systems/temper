@@ -6,7 +6,6 @@ use uuid::Uuid;
 use crate::backend::select_backend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::{AuthUser, DeviceId};
-use crate::services::meta_service;
 use crate::state::AppState;
 
 use temper_core::operations::{ResourceRef, Surface, UpdateResource};
@@ -31,7 +30,8 @@ pub async fn get_meta(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceMetaResponse>> {
-    meta_service::get_meta(
+    crate::backend::read_selector::get_meta_select(
+        state.backend_selection,
         &state.pool,
         ProfileId::from(auth.0.profile.id),
         ResourceId::from(resource_id),
