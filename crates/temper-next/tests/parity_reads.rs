@@ -783,3 +783,134 @@ async fn show_through_next_backend_preserves_invariants(pool: sqlx::PgPool) {
         );
     }
 }
+
+/// §9 — the read-selector wiring proof (spec proof gate 2, harness level): drive the service-direct
+/// read selector (`list` / `get_content` / `get_meta` / `search`) under both `Legacy` and `Next` over
+/// the synthesized fixture, asserting the `Next` arm returns the same invariant data as `Legacy`. This
+/// behavior-tests the selector's `Next` reconstruction (full-row list, body, typed-meta assembly, FTS
+/// enrichment) end-to-end through the temper-api wiring, not just `readback::*`. Gated on `next-backend`.
+#[cfg(feature = "next-backend")]
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn read_selector_next_matches_legacy(pool: sqlx::PgPool) {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use temper_api::backend::read_selector;
+    use temper_api::backend::BackendSelection;
+    use temper_core::types::api::SearchParams;
+    use temper_core::types::ids::{ProfileId, ResourceId};
+    use temper_core::types::resource::{ResourceListParams, ResourceListResponse};
+
+    common::seed_and_synthesize(&pool).await;
+    let p1 = fixture_ids::OWNER_PROFILE;
+
+    // --- list: invariant projection per origin_uri must match ---
+    type Proj = (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        bool,
+    );
+    let project = |r: &ResourceListResponse| -> BTreeMap<String, Proj> {
+        r.rows
+            .iter()
+            .map(|x| {
+                (
+                    x.origin_uri.clone(),
+                    (
+                        x.title.clone(),
+                        x.doc_type_name.clone(),
+                        x.stage.clone(),
+                        x.mode.clone(),
+                        x.effort.clone(),
+                        x.is_active,
+                    ),
+                )
+            })
+            .collect()
+    };
+    let params = ResourceListParams {
+        limit: Some(100),
+        ..Default::default()
+    };
+    let leg = read_selector::list_select(BackendSelection::Legacy, &pool, p1, params.clone())
+        .await
+        .expect("legacy list");
+    let nxt = read_selector::list_select(BackendSelection::Next, &pool, p1, params)
+        .await
+        .expect("next list");
+    assert_eq!(
+        project(&leg),
+        project(&nxt),
+        "list_select Next matches Legacy invariant projection (per origin_uri)"
+    );
+    assert_eq!(nxt.total, 4, "next list total = 4 active fixture resources");
+
+    // --- get_content (R2 task): body markdown must match ---
+    let r2 = fixture_ids::RESOURCE_TASK;
+    let leg_c = read_selector::get_content_select(BackendSelection::Legacy, &pool, p1, r2)
+        .await
+        .expect("legacy content");
+    let nxt_c = read_selector::get_content_select(BackendSelection::Next, &pool, p1, r2)
+        .await
+        .expect("next content");
+    assert_eq!(
+        leg_c.markdown, nxt_c.markdown,
+        "get_content_select Next markdown == Legacy"
+    );
+
+    // --- get_meta (R2): open_meta carries verbatim; managed reconstructed ---
+    let leg_m = read_selector::get_meta_select(
+        BackendSelection::Legacy,
+        &pool,
+        ProfileId::from(p1),
+        ResourceId::from(r2),
+    )
+    .await
+    .expect("legacy meta");
+    let nxt_m = read_selector::get_meta_select(
+        BackendSelection::Next,
+        &pool,
+        ProfileId::from(p1),
+        ResourceId::from(r2),
+    )
+    .await
+    .expect("next meta");
+    assert_eq!(
+        leg_m.open_meta, nxt_m.open_meta,
+        "get_meta_select Next open_meta == Legacy (open keys carry verbatim)"
+    );
+    assert!(
+        nxt_m.managed_meta.is_some(),
+        "next get_meta reconstructs managed_meta from kb_properties"
+    );
+
+    // --- search: the matching origin_uri SET must match (scores are not invariants) ---
+    let sp = SearchParams {
+        query: Some("task".to_string()),
+        embedding: None,
+        search_config: "english".to_string(),
+        graph_expand: false,
+        limit: Some(50),
+        ..Default::default()
+    };
+    let leg_s: BTreeSet<String> =
+        read_selector::search_select(BackendSelection::Legacy, &pool, p1, sp.clone())
+            .await
+            .expect("legacy search")
+            .into_iter()
+            .map(|r| r.origin_uri)
+            .collect();
+    let nxt_s: BTreeSet<String> =
+        read_selector::search_select(BackendSelection::Next, &pool, p1, sp)
+            .await
+            .expect("next search")
+            .into_iter()
+            .map(|r| r.origin_uri)
+            .collect();
+    assert_eq!(
+        leg_s, nxt_s,
+        "search_select Next origin_uri set == Legacy for query 'task'"
+    );
+}
