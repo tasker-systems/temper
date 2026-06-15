@@ -952,32 +952,15 @@ git commit -m "WS6 4b: route MCP read tools through the read selector"
 
 ---
 
-## Task 9: Enable `next-backend` in the deployed adapters
+## Task 9: Enable `next-backend` in the deployed adapters — DEFERRED to flip-prep (chunk 5)
 
-**Files:**
-- Modify: `api/axum.rs` (or its Cargo manifest / the workspace feature wiring that builds the Vercel function)
-- Modify: `api/mcp.rs` (same)
+**Status: DEFERRED. Do not do in 4b.**
 
-The flip must be config-only (a `kb_backend_selection` row + redeploy), NOT a recompile — so the deployed binaries must be built WITH `next-backend`. Mirror how `ingest-pipeline` is enabled for the deployed build.
+**Why deferred (verified during 4b):** The deployed bins (`temper-cloud` package `[[bin]]` axum/mcp) build from the root `Cargo.toml`'s `temper-api = { features = [...] }` line — the Vercel `vercel-rust` builder has no per-deploy `--features` injection point (`vercel.json` only sets `build.env.SQLX_OFFLINE=true`; it cannot add cargo features). So enabling `next-backend` for deployment *requires* adding it to the committed default `temper-cloud` build. But that pulls `temper-next` into the **default** build, and `temper-next`'s `temper_next`-namespace `sqlx::query!` macros CANNOT validate live — the pre-commit hook's clippy and CI's `code-quality` clippy both compile **live** (no `SQLX_OFFLINE`), so they fail with "function cogmap_genesis does not exist" (validating against the dev DB's `public` search_path). Verified: adding the feature to root `Cargo.toml` breaks `git commit` (pre-commit clippy).
 
-- [ ] **Step 1: Find how `ingest-pipeline` reaches the deployed adapters**
+**Why it's safe to defer:** 4b is gated OFF and the **flip is chunk 5** (gated additionally on 4c writes + WS2 access). 4b's correctness is proven by Tasks 10–11, which enable `next-backend` **explicitly** in their test builds (`--features ...,next-backend`). The deployed enable is only needed so the chunk-5 flip is config-only; making it then lets the `SQLX_OFFLINE` strategy for the pre-commit hook + CI `code-quality` clippy be decided deliberately (e.g. switch those to offline with the committed `.sqlx` caches — the same stance `cargo make check` already takes — or scope temper-next out of the live clippy job).
 
-Run: `grep -rn "ingest-pipeline\|next-backend\|features" api/ Cargo.toml packages/temper-cloud/ 2>/dev/null | grep -i feature`
-Identify the manifest/section that enables temper-api features for the Vercel functions.
-
-- [ ] **Step 2: Add `next-backend` alongside `ingest-pipeline` there** (same mechanism — a feature in the adapter's `temper-api` dep, or the workspace-level enabling package).
-
-- [ ] **Step 3: Build the adapters with the feature**
-
-Run: `cargo build -p temper-api --features next-backend` (and the adapter target if it has its own build, per Step 1's finding).
-Expected: PASS.
-
-- [ ] **Step 4: Commit**
-
-```bash
-git add api/ Cargo.toml
-git commit -m "WS6 4b: enable next-backend feature in deployed adapters (flip is config-only)"
-```
+**Carried to chunk-5 flip prep:** add `"next-backend"` to root `Cargo.toml`'s `temper-api` features, AND resolve the live-clippy validation (pre-commit hook + CI `code-quality`) so the workspace build with `next-backend` validates offline.
 
 ---
 

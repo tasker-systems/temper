@@ -725,3 +725,61 @@ async fn resource_row_parity(pool: sqlx::PgPool) {
         // not the hash columns (proven separately by `body_read_parity`). Non-invariant.
     }
 }
+
+/// §9 — the wiring proof (spec proof gate 1): drive `show` through temper-api's `NextBackend` (the
+/// trait layer the HTTP show path uses) rather than `readback::*` directly, and assert it reconstructs
+/// the same invariant fields as `readback::resource_row`. Confirms the wiring layer preserves the §9
+/// floor, not just the underlying SQL. Gated on `next-backend` (temper-api's NextBackend, a dev-dep
+/// feature): `cargo nextest run -p temper-next --features artifact-tests,next-backend`.
+#[cfg(feature = "next-backend")]
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn show_through_next_backend_preserves_invariants(pool: sqlx::PgPool) {
+    use temper_api::backend::NextBackend;
+    use temper_core::operations::{Backend, ResourceRef, ShowResource, Surface};
+    use temper_core::types::ids::{ProfileId, ResourceId};
+
+    common::seed_and_synthesize(&pool).await;
+    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+    let backend = NextBackend::new(pool.clone(), ProfileId::from(fixture_ids::OWNER_PROFILE));
+
+    for new_id in ids.new_ids() {
+        let old_id = ids.to_old(new_id).expect("maps back to prod");
+        let out = backend
+            .show_resource(ShowResource {
+                resource: ResourceRef::Uuid {
+                    id: ResourceId::from(old_id),
+                },
+                origin: Surface::ApiHttp,
+            })
+            .await
+            .expect("NextBackend::show_resource");
+
+        // The wiring must reproduce readback::resource_row's invariant fields.
+        let direct = readback::resource_row(&pool, new_id)
+            .await
+            .expect("readback::resource_row");
+        assert_eq!(
+            out.value.origin_uri, direct.origin_uri,
+            "origin_uri via NextBackend"
+        );
+        assert_eq!(out.value.title, direct.title, "title via NextBackend");
+        assert_eq!(
+            out.value.doc_type_name, direct.doc_type_name,
+            "doc_type_name via NextBackend"
+        );
+        assert_eq!(
+            out.value.context_name, direct.context_name,
+            "context_name via NextBackend"
+        );
+        assert_eq!(out.value.stage, direct.stage, "stage via NextBackend");
+        assert_eq!(out.value.mode, direct.mode, "mode via NextBackend");
+        assert_eq!(out.value.effort, direct.effort, "effort via NextBackend");
+        assert_eq!(out.value.seq, direct.seq, "seq via NextBackend");
+        // Non-invariant fields are present but best-effort: slug/hashes None.
+        assert!(out.value.slug.is_none(), "slug §7-dissolved");
+        assert!(
+            out.value.managed_hash.is_none() && out.value.open_hash.is_none(),
+            "manifest hashes §7-dissolved"
+        );
+    }
+}

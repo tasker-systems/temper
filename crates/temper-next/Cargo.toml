@@ -18,6 +18,10 @@ artifact-tests = []
 artifact-tests-legacy = []
 # Emit + snapshot-test the scenario JSON Schema from the loader structs (schemars derives).
 scenario-schema = ["schemars"]
+# WS6 4b: enable temper-api's NextBackend (a dev-dep feature) so the parity harness can drive a read
+# through the temper-api wiring layer, not just `readback::*` directly. Test-only — temper-api is a
+# dev-dependency, so this never enters the lib build graph.
+next-backend = ["temper-api/next-backend"]
 
 [dependencies]
 temper-ingest = { path = "../temper-ingest", features = ["embed"] }
