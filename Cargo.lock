@@ -4970,6 +4970,7 @@ dependencies = [
  "temper-core",
  "temper-events",
  "temper-ingest",
+ "temper-next",
  "thiserror 2.0.18",
  "tokio",
  "tower-http",
