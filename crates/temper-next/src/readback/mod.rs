@@ -306,10 +306,10 @@ pub struct ResourceRowParity {
 }
 
 /// Port of production's full-row read (`resource_service::get_visible` / `resolve_by_uri`, behind
-/// `show` / `by_uri`) onto `temper_next.*`, at the §9 INVARIANT-FIELD floor. Joins the home (→ context
-/// + owner profile), the `doc_type` property, and the workflow properties. Deliberately does NOT select
-/// `created`/`updated` (temper-next's sqlx has no `chrono` feature, and they are synthesis-collapsed
-/// non-invariants — the caller stamps read-time `now()`).
+/// `show` / `by_uri`) onto `temper_next.*`, at the §9 INVARIANT-FIELD floor. Joins the home (which
+/// anchors the context and owner profile), the `doc_type` property, and the workflow properties.
+/// Deliberately does NOT select `created`/`updated` (temper-next's sqlx has no `chrono` feature, and
+/// they are synthesis-collapsed non-invariants — the caller stamps read-time `now()`).
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
@@ -381,6 +381,20 @@ pub async fn resource_row(pool: &PgPool, new_id: Uuid) -> Result<ResourceRowPari
         seq,
         body_hash: row.get("body_hash"),
     })
+}
+
+/// Resolve a synthesized resource id from its `origin_uri` (the verbatim-carried, UNIQUE key both
+/// schemas share). `None` when no synthesized resource carries that uri. Used by read surfaces that
+/// hold an `origin_uri` (e.g. search results) and need the row id for a follow-up reconstruction.
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn resource_id_by_origin_uri(pool: &PgPool, origin_uri: &str) -> Result<Option<Uuid>> {
+    let row = sqlx::query("SELECT id FROM temper_next.kb_resources WHERE origin_uri = $1")
+        .bind(origin_uri)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<Uuid, _>("id")))
 }
 
 /// Reconstruct a synthesized resource's markdown body from `temper_next` chunks — the §9 body read

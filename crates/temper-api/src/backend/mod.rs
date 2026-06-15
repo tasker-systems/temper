@@ -10,6 +10,7 @@
 mod db_backend;
 #[cfg(feature = "next-backend")]
 mod next_backend;
+pub mod read_selector;
 pub mod selection;
 mod translators;
 

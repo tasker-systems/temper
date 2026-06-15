@@ -23,6 +23,60 @@ use temper_core::types::resource::ResourceRow;
 
 use temper_next::readback;
 
+/// Transitional `public.kb_doc_types` name→id lookup (valid during the migration window; `public`
+/// still exists pre-flip). §7 dissolved the typed `DocTypeId`; the substrate keeps only the name.
+/// Free function so both `NextBackend` and the read selector (full-row `list`) can reuse it.
+pub(crate) async fn doc_type_id_by_name(
+    pool: &PgPool,
+    name: &str,
+) -> Result<DocTypeId, TemperError> {
+    let row = sqlx::query("SELECT id FROM public.kb_doc_types WHERE name = $1")
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .map_err(|e| TemperError::Api(format!("doc_type lookup for {name:?}: {e}")))?;
+    Ok(DocTypeId::from(row.get::<uuid::Uuid, _>("id")))
+}
+
+/// Reconstruct a full production-shaped `ResourceRow` from a synthesized (`temper_next`) resource id,
+/// at the §9 invariant floor. The invariant fields come from `readback::resource_row`; the
+/// non-invariant fields are filled best-effort (re-minted ids verbatim, `kb_doc_type_id` via the
+/// transitional `public` lookup, `slug`/hashes `None`, timestamps read-time `now()`). Shared by
+/// `NextBackend::show_resource` and the read selector's full-row `list`.
+pub(crate) async fn reconstruct_resource_row(
+    pool: &PgPool,
+    new_id: uuid::Uuid,
+) -> Result<ResourceRow, TemperError> {
+    let p = readback::resource_row(pool, new_id)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+    let kb_doc_type_id = doc_type_id_by_name(pool, &p.doc_type_name).await?;
+    let now = Utc::now();
+    Ok(ResourceRow {
+        id: ResourceId::from(p.re_minted_id),
+        kb_context_id: ContextId::from(p.re_minted_context_id),
+        kb_doc_type_id,
+        origin_uri: p.origin_uri,
+        title: p.title,
+        slug: None,
+        originator_profile_id: ProfileId::from(p.originator_profile_id),
+        owner_profile_id: ProfileId::from(p.owner_profile_id),
+        is_active: p.is_active,
+        created: now,
+        updated: now,
+        context_name: p.context_name,
+        doc_type_name: p.doc_type_name,
+        owner_handle: p.owner_handle,
+        stage: p.stage,
+        seq: p.seq,
+        mode: p.mode,
+        effort: p.effort,
+        body_hash: p.body_hash,
+        managed_hash: None,
+        open_hash: None,
+    })
+}
+
 /// The `temper_next.*` backend. Holds a pool + the caller profile (for symmetry with `DbBackend`;
 /// 4b reads are visibility-UNSCOPED per the §9 floor — access-scoping is a named flip prerequisite,
 /// tracked to WS2).
@@ -55,17 +109,6 @@ impl NextBackend {
             )),
         }
     }
-
-    /// Transitional `public.kb_doc_types` name→id lookup (valid during the migration window; `public`
-    /// still exists pre-flip). §7 dissolved the typed `DocTypeId`; the substrate keeps only the name.
-    async fn doc_type_id_by_name(&self, name: &str) -> Result<DocTypeId, TemperError> {
-        let row = sqlx::query("SELECT id FROM public.kb_doc_types WHERE name = $1")
-            .bind(name)
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| TemperError::Api(format!("doc_type lookup for {name:?}: {e}")))?;
-        Ok(DocTypeId::from(row.get::<uuid::Uuid, _>("id")))
-    }
 }
 
 #[async_trait]
@@ -84,36 +127,7 @@ impl Backend for NextBackend {
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         let new_id = self.resolve_new_id(&cmd.resource).await?;
-        let p = readback::resource_row(&self.pool, new_id)
-            .await
-            .map_err(|e| TemperError::Api(e.to_string()))?;
-        let kb_doc_type_id = self.doc_type_id_by_name(&p.doc_type_name).await?;
-
-        // Non-invariant fields filled best-effort per the 4b parity-floor amendment.
-        let now = Utc::now();
-        let row = ResourceRow {
-            id: ResourceId::from(p.re_minted_id),
-            kb_context_id: ContextId::from(p.re_minted_context_id),
-            kb_doc_type_id,
-            origin_uri: p.origin_uri,
-            title: p.title,
-            slug: None,
-            originator_profile_id: ProfileId::from(p.originator_profile_id),
-            owner_profile_id: ProfileId::from(p.owner_profile_id),
-            is_active: p.is_active,
-            created: now,
-            updated: now,
-            context_name: p.context_name,
-            doc_type_name: p.doc_type_name,
-            owner_handle: p.owner_handle,
-            stage: p.stage,
-            seq: p.seq,
-            mode: p.mode,
-            effort: p.effort,
-            body_hash: p.body_hash,
-            managed_hash: None,
-            open_hash: None,
-        };
+        let row = reconstruct_resource_row(&self.pool, new_id).await?;
         Ok(CommandOutput::new(row))
     }
 
