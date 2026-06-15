@@ -53,9 +53,23 @@ pub fn select_backend(
             device_id,
             surface,
         ))),
-        BackendSelection::Next => Err(TemperError::NotImplemented(
-            "next backend not yet available (WS6 4b)".into(),
-        )),
+        BackendSelection::Next => {
+            #[cfg(feature = "next-backend")]
+            {
+                let _ = (device_id, surface);
+                Ok(Box::new(crate::backend::NextBackend::new(
+                    pool.clone(),
+                    profile_id,
+                )))
+            }
+            #[cfg(not(feature = "next-backend"))]
+            {
+                let _ = (pool, profile_id, device_id, surface);
+                Err(TemperError::NotImplemented(
+                    "next backend requires the `next-backend` build feature".into(),
+                ))
+            }
+        }
     }
 }
 
@@ -103,7 +117,7 @@ mod tests {
     }
 
     #[sqlx::test(migrations = "../../migrations")]
-    async fn select_backend_next_errors(pool: PgPool) {
+    async fn select_backend_next_constructs_or_gates(pool: PgPool) {
         let b = select_backend(
             BackendSelection::Next,
             &pool,
@@ -111,9 +125,15 @@ mod tests {
             "api".to_string(),
             Surface::ApiHttp,
         );
+        #[cfg(feature = "next-backend")]
+        assert!(
+            b.is_ok(),
+            "with the next-backend feature, the next arm constructs NextBackend"
+        );
+        #[cfg(not(feature = "next-backend"))]
         assert!(
             matches!(b, Err(TemperError::NotImplemented(_))),
-            "next arm must error until 4b"
+            "without the feature, the next arm gates"
         );
     }
 
