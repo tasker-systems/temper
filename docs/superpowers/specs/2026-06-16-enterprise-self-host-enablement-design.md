@@ -90,6 +90,30 @@ A follow-up can extend the runbook to the UI later.
   validated against the live project's shape (Postgres version, pgvector
   extension, connection-string form, pooled vs direct).
 
+### Introspection findings (confirmed against live temperkb deployment)
+
+- **Auth0** (`temperkb.us.auth0.com`): one resource server **`temper-api`**
+  (audience `https://temperkb.io/api`); native app **`temper-cli`** (client_id
+  `mWp8znLw…` — the exact value currently hardcoded in `config.rs`; callback
+  `https://temperkb.io/api/auth/cli-callback`; grants authorization_code +
+  refresh_token); native app **`Temper MCP`** (the `MCP_CLIENT_ID`; callbacks
+  for claude.ai/claude.com + localhost). The `TemperKB Web` regular-web app is
+  the UI — out of scope. → the runbook's Auth0 contract is: **1 API + 1 CLI
+  native app + 1 MCP native app** (the web app is the deferred UI).
+- **Neon** (project `temper-cloud`, `crimson-fog-23541670`): **Postgres 17.10**
+  (note: docs/CLAUDE.md say "18" — that is the *local Docker* version; Neon
+  cloud is 17, and the runbook must state 17). Extensions: **`vector`**
+  (pgvector), **`pg_uuidv7`** (in-DB UUIDv7), `plpgsql` — an enterprise must
+  install `vector` + `pg_uuidv7`. DB `neondb`, role `neondb_owner`. Connection
+  form `…@<host>/neondb?sslmode=require&channel_binding=require`; pooled host
+  adds `-pooler`. Per-preview Neon branches are wired to Vercel preview deploys.
+- **Vercel**: **not reachable** from the authenticated `vercel` CLI login
+  (`jcoletaylor` / `jcoletaylors-projects` has no projects — the production
+  project lives under a different Vercel account/team), and the claude.ai
+  Vercel MCP tools are not exposed in-session. The env-var contract is therefore
+  grounded from code + templates (canonical and complete); the live "which vars
+  are actually set" cross-check is an open item (see Open Questions §3).
+
 ## Design
 
 ### 1. Strip baked-in defaults (`temper-core`)
@@ -215,3 +239,10 @@ Operator-facing, ordered by provisioning dependency:
 2. **Auth0 MCP enablement scope** — wire the Auth0 MCP server into this repo's
    MCP config (committed) or keep it a local/dev convenience? (Lean: local
    convenience; the runbook documents the CLI path which needs no MCP.)
+3. **Vercel live cross-check** — the production Vercel project isn't reachable
+   from the current CLI login. To validate the env contract against the live
+   project, either (a) authenticate the `vercel` CLI to the right account /
+   team and run `vercel env ls`, or (b) ship the runbook with the contract
+   derived from code + templates (canonical) and cross-check via the dashboard
+   later. (Lean: (b) for now — code is the source of truth for *which* vars
+   exist; the live check only confirms they're populated.)
