@@ -74,10 +74,6 @@ echo ""
 echo "Run 'cargo make --list-all-steps' for all tasks"
 '''
 
-[tasks.gen-install-migration]
-description = "Regenerate the additive temper_next install migration from the shared artifact body"
-script = ["bash tools/gen-install-migration.sh"]
-
 [tasks.prepare-next]
 description = "Regenerate temper-next's per-crate .sqlx cache against the loaded temper_next artifact"
 env = { SQLX_OFFLINE = "false" }   # prepare must introspect the LIVE artifact to build the cache
