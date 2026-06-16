@@ -759,7 +759,15 @@ BEGIN
             p_payload->>'label',
             (p_payload->>'weight')::double precision,
             p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid,
-            p_event, p_event, v_occurred);
+            p_event, p_event, v_occurred)
+    -- Idempotent on the active-edge invariant (uq_kb_edges_assertion): re-asserting the same active
+    -- relationship updates the existing edge's weight (+ last_event_id) and returns ITS id rather than
+    -- creating a duplicate active edge. asserted_by_event_id is left on the original assertion. The
+    -- ON CONFLICT inference clause mirrors uq_kb_edges_assertion's columns + partial predicate exactly.
+    ON CONFLICT (source_table, source_id, target_table, target_id, edge_kind, COALESCE(label, ''),
+                 home_anchor_table, home_anchor_id) WHERE NOT is_folded
+        DO UPDATE SET weight = EXCLUDED.weight, last_event_id = EXCLUDED.last_event_id
+    RETURNING id INTO v_edge;
     RETURN v_edge;
 END;
 $$;
