@@ -27,15 +27,19 @@ Grounded against `schema-artifact/`:
 
 1. **`resource_delete`** — `kb_resources.is_active BOOLEAN NOT NULL DEFAULT true` exists (`schema-artifact/01_schema.sql:171`) and event type `resource_deleted` is registered (`schema-artifact/03_seed.sql:31`), but there is **no** `_project_resource_deleted` or `resource_delete` mutation. Production delete = soft-delete (`db_backend.rs:490-504` → `resource_service::delete`).
 2. **`resource_update`** — `block_mutate` revises body, `facet_set` sets properties, but neither touches the `kb_resources.title`/`origin_uri` columns (`title` is a §9 invariant). Event type `resource_updated` is registered but unbacked.
-3. **`relationship_retype` / `relationship_reweight`** — do not exist. Production keys edges by `correlation_id` with retype/reweight/fold as correlated events and re-assert auto-diverting to reweight (`db_backend.rs:98-415`); temper_next keys edges by `edge_id` with only assert+fold.
+3. **`relationship_retype` / `relationship_reweight`** — do not exist. temper_next keys edges by `kb_edges.id` (UUID PK, `schema-artifact/01_schema.sql:424`) with `last_event_id` + the event ledger threading history; only assert+fold exist so far.
+4. **`relationship_assert` has no uniqueness guard** — re-asserting the same active `(source_id, target_id, edge_kind, label)` would silently create a **duplicate active edge**, which the affinity math double-counts. Production prevents this by diverting a re-assert to a reweight (`db_backend.rs:98-190`).
+5. **Resource home-reanchor (context move)** — `doc_type` is a *property* (`readback/mod.rs:119`; stamped via `facet_set`, `02_functions.sql:696`), so a doctype move is already a `facet_set`. A *context* move re-points the resource's `kb_resource_homes` row (`schema-artifact/01_schema.sql:222`) and has no mutation function yet.
 
 ## Settled decisions
 
 - **Full 4c, sequenced internally** — all of create/update/delete + the four-method relationship trait growth, committed per slice, one PR when complete.
 - **Natural-key identity resolution (no schema change)** — a live write resolves caller identity by the same keys synthesis writes by: profile by `handle` (= production `kb_profiles.slug`), emitter entity `pete@<surface>` (from `cmd.origin: Surface`) for that profile, home context by `(owner, slugify(cmd.context))`. No persisted old→new id-map table.
-- **Build retype/reweight as new substrate functions** — model-faithful (vs. fold+re-assert or defer). New `relationship_retyped`/`relationship_reweighted` event types + projections + mutation functions, with replay parity.
+- **Commit to the edge_id-keyed model; do NOT port `correlation_id`-as-edge-identity** — temper_next's `kb_edges.id` is the stable identity and the event ledger (keyed on `edge_id` in payloads) is the history; production's correlation-chain addressing is an indirection we shed. retype/reweight become edge_id-keyed event-sourced `UPDATE`s mirroring `relationship_fold` (`02_functions.sql:781-810`). `kb_events.correlation_id` stays for its actual purpose — *grouping a multi-event act* — never edge identity.
+- **Keep the no-duplicate-active-edge *invariant*, drop the divert *mechanism*** — a partial unique index on `(source_id, target_id, edge_kind, label) WHERE NOT is_folded` + an **idempotent `relationship_assert`** (re-assert of an active edge upserts the weight on the existing edge and returns its id). This preserves what production's reweight-divert protected, as a DB constraint rather than correlation-chain logic.
+- **Edge handle is backend-opaque** — the `Uuid` an assert returns (correlation_id for legacy, edge_id for next) is fed back into retype/reweight/fold *within the same backend*; the gate switches the whole backend, so no runtime cross-backend id translation is needed. The trait commands' `correlation_id` field is legacy-flavored but value-opaque; **renaming it is a §5 concern** (shared-type genericization, compile-time-atomic, touches all callers).
 - **`resource_update` for `title`/`origin_uri`** (approved) — title is mutable at the §9 floor, written via an event-sourced `resource_updated`.
-- **Edge handle is backend-opaque** — the `Uuid` an assert returns (correlation_id for legacy, edge_id for next) is fed back into retype/reweight/fold *within the same backend*; the gate switches the whole backend, so no runtime cross-backend id translation is needed.
+- **`move` stays in scope, not deferred** — re-homing/re-typing is a real reorganize op. Doctype-move = the existing `facet_set` on the `doc_type` property; context-move = a new event-sourced home-reanchor function. No `NotImplemented`, no silent-ignore.
 - **Proof = e2e round-trip** (approved) — not a temper-next artifact test (which can't drive the legacy `ingest_service` path).
 
 ## Design
@@ -48,10 +52,13 @@ Four event-sourced functions, each following the established `_project_*` + muta
 |---|---|---|
 | `resource_delete` | `resource_deleted` *(registered)* | `is_active = false` on the target resource |
 | `resource_update` | `resource_updated` *(registered)* | revise mutable `kb_resources` columns (`title`, `origin_uri`) |
-| `relationship_retype` | `relationship_retyped` *(new)* | set `edge_kind`/`polarity` on an edge by id |
-| `relationship_reweight` | `relationship_reweighted` *(new)* | set `weight` on an edge by id |
+| `resource_rehome` | `resource_rehomed` *(new)* | re-point the resource's `kb_resource_homes` row to a new context (the context-move half) |
+| `relationship_retype` | `relationship_retyped` *(new)* | set `edge_kind`/`polarity` on an edge by `kb_edges.id` |
+| `relationship_reweight` | `relationship_reweighted` *(new)* | set `weight` on an edge by `kb_edges.id` |
 
-Each: add the event-type name to the bootseed/system registry (`crates/temper-next/src/scenario/bootseed.rs` — `system_event_type_names`, the same list synthesis idempotently installs at `bootstrap.rs:105`), a `SeedAction` variant + `events::fire` arm + payload type (`payloads.rs`), regenerate the per-crate cache with **`cargo make prepare-next`**, and cover replay parity under `--features artifact-tests`.
+All edge mutations key by `kb_edges.id` and mirror `relationship_fold`'s shape (`02_functions.sql:781-810`): read the edge's home for the event envelope, append the event, project the column change + `last_event_id`. Each function: add the event-type name to the bootseed/system registry (`crates/temper-next/src/scenario/bootseed.rs` — `system_event_type_names`, the same list synthesis idempotently installs at `bootstrap.rs:105`), a `SeedAction` variant + `events::fire` arm + payload type (`payloads.rs`), regenerate the per-crate cache with **`cargo make prepare-next`**, and cover replay parity under `--features artifact-tests`.
+
+**Plus** the edge-uniqueness invariant (schema): a partial unique index `(source_id, target_id, edge_kind, label) WHERE NOT is_folded` on `kb_edges`, and `relationship_assert` made idempotent (re-assert of an active match upserts the weight on the existing edge, returns its id — `ON CONFLICT … DO UPDATE`). This is an artifact `01`/`02` change with its own replay-parity coverage (assert-then-reassert ⇒ one edge, updated weight).
 
 **Invariant carried verbatim (adjudication §0/§3):** *"all writes through atomic SQL mutation functions that emit + project in one transaction"* and *"replay is the same code path as normal operation"* — the new functions use the `_event_append` / `_project_*` split, never a direct projection write.
 
@@ -60,9 +67,9 @@ Each: add the event-type name to the bootseed/system registry (`crates/temper-ne
 Typed Rust wrappers NextBackend calls, all `temper_next.*` under `SET LOCAL search_path TO temper_next, public`, one tx each, fired through `events::fire` (mirrors `synthesis::run`'s discipline at `synthesis/mod.rs:91-94`). Home: extend `write.rs` or a focused `writes` module.
 
 - `create_resource(...)` → `content::prepare_blocks(body)` → fire `ResourceCreate` → fire `PropertyAssert` per `Property`-fated managed key (`synthesis::key_fate`) + every open key. Returns the new resource id.
-- `update_resource(...)` → `block_mutate` (body, if present) + `facet_set` (stage/mode/effort/seq + meta keys present) + `resource_update` (title/origin_uri if changed). Partial — only the fields the command carries.
+- `update_resource(...)` → `block_mutate` (body, if present) + `facet_set` (stage/mode/effort/seq + meta keys present, **incl. `doc_type` for a type-move**) + `resource_update` (title/origin_uri if changed) + `resource_rehome` (context-move, if `move_to.context_to` present). Partial — only the fields the command carries.
 - `delete_resource(id, emitter)` → `resource_delete`.
-- `assert_relationship` / `retype_relationship` / `reweight_relationship` / `fold_relationship`.
+- `assert_relationship` (idempotent on the active-edge unique key) / `retype_relationship` / `reweight_relationship` / `fold_relationship`.
 
 ### Component 3 — identity resolution (NextBackend `resolve` helper)
 
@@ -102,7 +109,7 @@ Plus per-function replay parity under `artifact-tests`.
 
 ## Sequencing (commit per slice)
 
-1. Substrate functions: `resource_delete` → `resource_update` → `relationship_retype` → `relationship_reweight` (+ event types, payloads, `SeedAction` arms, `prepare-next`, artifact-tests).
+1. Substrate work: the edge-uniqueness index + idempotent `relationship_assert`, then `resource_delete` → `resource_update` → `resource_rehome` → `relationship_retype` → `relationship_reweight` (+ event types, payloads, `SeedAction` arms, `prepare-next`, artifact-tests incl. assert-then-reassert ⇒ one edge).
 2. temper-next typed write ops (Component 2).
 3. NextBackend create → update → delete + identity resolution (Component 3) + round-trip e2e per op.
 4. Trait growth (Component 4): move DbBackend methods, NextBackend edge methods, repoint relationship sites + edge round-trip e2e.
@@ -112,7 +119,6 @@ Plus per-function replay parity under `artifact-tests`.
 
 ## Out of scope (named, not dropped)
 
-- **`move_to`** (context/doctype change on update) — rare, outside the tight §9 floor; the update method ignores it on the next backend for now (named deferral).
 - **`by_uri`** + MCP `get_resource`/`list_resources` enrichment reads — deferred from 4b (slug §7-dissolved; relationship enrichment over public ids).
 - **§5 shared-type changes** (`ResourceRef` collapse, `ManagedMeta` genericization) — compile-time-atomic, carved out of the gate; its own change, sequenced after 4c.
 - **The flip** (chunk 5) and **access-scoping over `temper_next`** (WS2 flip prerequisite).
