@@ -7,7 +7,6 @@
 //! re-minted ids verbatim, `kb_doc_type_id` via a transitional `public.kb_doc_types` name→id lookup,
 //! `slug`/`managed_hash`/`open_hash` = `None`, `created`/`updated` = read-time `Utc::now()`. See the
 //! 4b spec parity-floor amendment.
-#![cfg(feature = "next-backend")]
 
 use async_trait::async_trait;
 use chrono::Utc;
