@@ -28,7 +28,7 @@ SET search_path TO temper_next, public;
 
 -- Event types (the ledger registry). ------------------------------------------
 INSERT INTO kb_event_types (name) VALUES
-    ('resource_created'), ('resource_updated'), ('resource_deleted'),
+    ('resource_created'), ('resource_updated'), ('resource_deleted'), ('resource_rehomed'),
     ('relationship_asserted'), ('relationship_retracted'), ('relationship_retyped'),
     ('relationship_reweighted'), ('relationship_folded'),
     ('relationship_decayed'), ('relationship_corrected'),

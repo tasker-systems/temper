@@ -10,6 +10,7 @@ event_types:
   - resource_created
   - resource_updated
   - resource_deleted
+  - resource_rehomed
   - relationship_asserted
   - relationship_retracted
   - relationship_retyped
