@@ -177,12 +177,14 @@ impl TokenStore for MemoryTokenStore {
     }
 }
 
-/// Default Auth0 tenant domain used when no explicit domain is supplied via
-/// `TEMPER_PROVIDER`. Matches `CloudSection::default()` in `temper-core`.
-/// Kept as a compile-time constant to avoid an I/O dependency in the env-var
-/// bootstrap path — see also `default_provider_is_auth0_with_config` in
-/// `config::tests` which pins the same value.
-const DEFAULT_AUTH0_DOMAIN: &str = "temperkb.us.auth0.com";
+/// Fallback Auth0 tenant domain for the `Provider::Auth0` metadata tag when no
+/// explicit domain is supplied via `TEMPER_PROVIDER` and none is derived from
+/// config. Empty by default: the OSS binary bakes in no tenant — the instance
+/// and provider are configured via `temper init` (hosted preset or self-hosted).
+/// This value is informational metadata stored in `auth.json`; live OAuth
+/// endpoints always come from the `[[auth.providers]]` config block, never from
+/// this tag (`Provider::domain()` has no live call sites).
+const DEFAULT_AUTH0_DOMAIN: &str = "";
 
 /// Expose the default Auth0 domain for consumers that need to construct a
 /// `Provider::Auth0` without re-reading config.

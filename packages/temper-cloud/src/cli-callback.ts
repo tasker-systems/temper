@@ -34,6 +34,10 @@ export function buildCliCallbackResponse(rawUrl: string, host: string | null): R
   }
 
   const location = `http://localhost:${port}?code=${encodeURIComponent(code)}`;
+  // Set the Location header manually rather than via `Response.redirect()`:
+  // the latter runs the target through WHATWG URL normalization, which appends
+  // a trailing slash (`localhost:PORT/?code=…`) the CLI's bare-port listener
+  // does not expect. Keep the target byte-exact.
   return new Response(null, {
     status: 302,
     headers: { Location: location },

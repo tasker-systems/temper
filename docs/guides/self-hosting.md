@@ -139,7 +139,7 @@ Import the repository into a new Vercel project. Set `framework` override to **O
 | `MCP_AUDIENCE` | mcp | Yes | Auth0 API identifier for MCP token validation |
 | `MCP_CLIENT_ID` | mcp | Yes | MCP native application client_id |
 | `MCP_BASE_URL` | mcp | Yes | `https://<instance>` — used in OAuth discovery responses |
-| `API_BASE_URL` | api | Yes | `https://<instance>` — used in redirect generation |
+| `API_BASE_URL` | ui | No | Consumed only by the `temper-ui` web app (out of scope); not required for API + MCP + CLI |
 | `BLOB_READ_WRITE_TOKEN` | api | Yes | Vercel Blob token — used by the upload/extract/embed pipeline |
 | `ENABLE_SWAGGER` | api | No | Set `true` to expose `/swagger-ui` in non-production deployments |
 | `SQLX_OFFLINE` | build | Yes | Must be `true` — compile-time SQL checks run against the committed `.sqlx/` cache |

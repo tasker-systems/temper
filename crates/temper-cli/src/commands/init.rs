@@ -413,21 +413,31 @@ fn provider_and_cloud_sections(
     client_id: &str,
     audience: &str,
 ) -> (String, String) {
+    // Route every interpolated value through `toml::Value::String` (the same
+    // escaping the vault path gets) so any character requiring escaping
+    // round-trips, rather than relying on these always being metacharacter-free.
+    let tv = |s: String| toml::Value::String(s).to_string();
+    let authorize_url = tv(format!("https://{auth_domain}/authorize"));
+    let token_url = tv(format!("https://{auth_domain}/oauth/token"));
+    let callback_url = tv(format!("{api_url}/api/auth/cli-callback"));
+    let client_id_toml = tv(client_id.to_string());
+    let audience_toml = tv(audience.to_string());
+
     let auth = format!(
         r#"[auth]
 provider = "auth0"
 
 [[auth.providers]]
 name = "auth0"
-authorize_url = "https://{auth_domain}/authorize"
-token_url = "https://{auth_domain}/oauth/token"
-client_id = "{client_id}"
-audience = "{audience}"
-callback_url = "{api_url}/api/auth/cli-callback"
+authorize_url = {authorize_url}
+token_url = {token_url}
+client_id = {client_id_toml}
+audience = {audience_toml}
+callback_url = {callback_url}
 scopes = ["openid", "profile", "email", "offline_access"]
 "#
     );
-    let cloud = format!("[cloud]\napi_url = \"{api_url}\"\n");
+    let cloud = format!("[cloud]\napi_url = {}\n", tv(api_url.to_string()));
     (auth, cloud)
 }
 
@@ -808,7 +818,10 @@ mod tests {
     }
 
     #[test]
-    fn non_interactive_self_host_writes_derived_config() {
+    fn non_interactive_self_host_applies_without_error() {
+        // register_global=false, so no config file is written here — this only
+        // exercises the self-host non-interactive apply path (vault scaffold).
+        // The derived-config emission itself is covered by `self_hosted_emits_derived_urls`.
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path().join("v");
         let sh = SelfHostConfig {
