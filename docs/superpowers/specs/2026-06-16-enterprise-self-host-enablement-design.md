@@ -107,12 +107,19 @@ A follow-up can extend the runbook to the UI later.
   install `vector` + `pg_uuidv7`. DB `neondb`, role `neondb_owner`. Connection
   form `…@<host>/neondb?sslmode=require&channel_binding=require`; pooled host
   adds `-pooler`. Per-preview Neon branches are wired to Vercel preview deploys.
-- **Vercel**: **not reachable** from the authenticated `vercel` CLI login
-  (`jcoletaylor` / `jcoletaylors-projects` has no projects — the production
-  project lives under a different Vercel account/team), and the claude.ai
-  Vercel MCP tools are not exposed in-session. The env-var contract is therefore
-  grounded from code + templates (canonical and complete); the live "which vars
-  are actually set" cross-check is an open item (see Open Questions §3).
+- **Vercel** (project `jcoletaylors-projects/temper-cloud`, repo linked): live
+  `vercel env ls` confirms the **Production** contract is exactly the code-
+  derived set — `DATABASE_URL` (pooled) + `DATABASE_URL_UNPOOLED` (direct, for
+  migrations), `AUTH_ISSUER`, `JWKS_URL`, `AUTH_AUDIENCE`, `AUTH_PROVIDER_NAME`,
+  `MCP_BASE_URL`, `MCP_AUDIENCE`, `MCP_CLIENT_ID`, `API_BASE_URL`,
+  `BLOB_READ_WRITE_TOKEN` (Vercel Blob, upload pipeline), `ENABLE_SWAGGER`,
+  `SQLX_OFFLINE` (Production build only). Findings: **`CORS_ORIGINS` is set on
+  Preview/Dev but not Production** (the runbook flags this — confirm whether
+  same-origin makes it unnecessary in prod, or it's a gap). **`NEON_AUTH_BASE_URL`
+  and `VITE_NEON_AUTH_URL` survive only on stale preview branches** — dead
+  Neon-Auth/Vite leftovers, excluded from the runbook (and candidates for ops
+  cleanup). The Neon×Vercel integration provisions `DATABASE_URL[_UNPOOLED]`
+  per preview branch automatically.
 
 ## Design
 
@@ -151,8 +158,12 @@ three-way instance choice:
   unchanged from today.
 
 The non-interactive (`--no-interactive`) path no longer emits a temperkb
-config; it writes the `none` posture (or accepts the values via flags/env if we
-choose to add them — see Open Questions).
+config. It accepts self-host values via flags (with env fallbacks) —
+`--instance-url`, `--auth-domain`, `--auth-client-id`, `--auth-audience` — and
+derives the same provider block as the interactive self-hosted path; with none
+supplied it writes the `none` posture. Interactive
+and non-interactive share one answer-assembly + emitter path so they cannot
+drift.
 
 ### 3. `api/auth/cli-callback.ts` — host-relative parsing
 
@@ -229,20 +240,19 @@ Operator-facing, ordered by provisioning dependency:
 - RabbitMQ / alternative messaging, multi-region, HA Neon — single-instance
   self-host is the target.
 
-## Open Questions
+## Resolved Decisions
 
-1. **`--no-interactive` self-host config** — should `temper init
-   --no-interactive` accept instance/Auth0 values via flags or env (for
-   scripted enterprise provisioning), or is the `none` posture + manual
-   `config.toml` edit sufficient for v1? (Lean: env/flags, since enterprise
-   provisioning is often scripted — but confirm.)
-2. **Auth0 MCP enablement scope** — wire the Auth0 MCP server into this repo's
-   MCP config (committed) or keep it a local/dev convenience? (Lean: local
-   convenience; the runbook documents the CLI path which needs no MCP.)
-3. **Vercel live cross-check** — the production Vercel project isn't reachable
-   from the current CLI login. To validate the env contract against the live
-   project, either (a) authenticate the `vercel` CLI to the right account /
-   team and run `vercel env ls`, or (b) ship the runbook with the contract
-   derived from code + templates (canonical) and cross-check via the dashboard
-   later. (Lean: (b) for now — code is the source of truth for *which* vars
-   exist; the live check only confirms they're populated.)
+1. **`temper init --no-interactive` supports self-host provisioning.** It
+   accepts the instance URL + Auth0 domain/client_id/audience via flags (with
+   env fallbacks) so enterprises can configure the CLI headlessly in CI /
+   provisioning scripts. The interactive wizard and the non-interactive flags
+   share one answer-assembly path so both emit identical config.
+2. **Auth0 MCP server is a local/dev convenience, not committed.** It is added
+   to local Claude config only; the runbook documents the `auth0` CLI path,
+   which needs no MCP and is already working. The repo's MCP config gains no
+   Auth0 dependency.
+3. **Vercel contract is grounded live.** The repo is linked to the
+   `temper-cloud` Vercel project; the Production env set was confirmed via
+   `vercel env ls` (see Introspection findings). The runbook documents the
+   confirmed contract and excludes the stale `NEON_AUTH_*` / `VITE_NEON_AUTH_*`
+   vars.
