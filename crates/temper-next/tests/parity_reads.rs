@@ -45,6 +45,27 @@ async fn parity_harness_setup_synthesizes(pool: sqlx::PgPool) {
     );
 }
 
+/// WS2 — synthesis preserves production profile ids verbatim (spec D2 principal-mapping). The
+/// prod-shape fixture's owner profile (`fixture_ids::OWNER_PROFILE`) must keep its id in
+/// `temper_next` so `resources_visible_to(prod_profile)` resolves directly with no read-time bimap.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesis_preserves_production_profile_ids(pool: sqlx::PgPool) {
+    common::seed_and_synthesize(&pool).await;
+
+    let preserved: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT id FROM temper_next.kb_profiles WHERE id = $1")
+            .bind(fixture_ids::OWNER_PROFILE)
+            .fetch_optional(&pool)
+            .await
+            .expect("query temper_next.kb_profiles by preserved id");
+
+    assert_eq!(
+        preserved,
+        Some(fixture_ids::OWNER_PROFILE),
+        "synthesis must preserve the production owner profile id verbatim (not re-mint it)"
+    );
+}
+
 /// The projected list-row tuple compared across the two read paths, keyed by `origin_uri`.
 type ListProjection = (
     String,         // title
