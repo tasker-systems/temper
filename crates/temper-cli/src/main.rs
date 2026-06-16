@@ -92,7 +92,7 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             let vault_path = path
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-            temper_cli::commands::init::run(&vault_path, no_interactive, true, output_format)
+            temper_cli::commands::init::run(&vault_path, no_interactive, true, output_format, None)
         }
         Commands::Check { quiet } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;

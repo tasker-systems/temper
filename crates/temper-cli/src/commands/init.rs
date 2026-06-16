@@ -22,10 +22,34 @@ pub(crate) struct InitSummary {
     pub auth: String,
 }
 
-/// User selection for auth provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Hosted-instance preset values (the only place the temperkb.io constants
+/// live after the binary stopped baking them into config defaults).
+const HOSTED_API_URL: &str = "https://temperkb.io";
+const HOSTED_AUTH_DOMAIN: &str = "temperkb.us.auth0.com";
+const HOSTED_CLIENT_ID: &str = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF";
+const HOSTED_AUDIENCE: &str = "https://temperkb.io/api";
+
+/// Per-instance OAuth inputs for a self-hosted deployment.
+#[derive(Debug, Clone)]
+pub struct SelfHostConfig {
+    /// Instance base URL, e.g. `https://temper.acme.com`.
+    pub instance_url: String,
+    /// Auth0 tenant domain, e.g. `acme.us.auth0.com`.
+    pub auth_domain: String,
+    /// Auth0 native-app client_id for the CLI.
+    pub client_id: String,
+    /// API audience / resource identifier, e.g. `https://temper.acme.com/api`.
+    pub audience: String,
+}
+
+/// User selection for instance + auth provider.
+#[derive(Debug, Clone)]
 pub enum AuthChoice {
-    Auth0,
+    /// temperkb.io hosted preset.
+    Hosted,
+    /// A self-hosted instance with its own Auth0 tenant.
+    SelfHosted(SelfHostConfig),
+    /// Local-only, no cloud sync.
     None,
 }
 
@@ -124,9 +148,10 @@ pub fn run(
     no_interactive: bool,
     register_global: bool,
     format: OutputFormat,
+    self_host: Option<SelfHostConfig>,
 ) -> Result<()> {
     if no_interactive {
-        return run_non_interactive(path, register_global, format);
+        return run_non_interactive(path, register_global, format, self_host);
     }
     let initial_vault = resolve_initial_vault(path);
     let answers = gather_answers(&initial_vault)?;
@@ -145,11 +170,20 @@ pub fn run(
 
 /// Non-interactive path — uses all defaults, emitting a structured summary in
 /// the resolved output format.
-pub fn run_non_interactive(path: &Path, register_global: bool, format: OutputFormat) -> Result<()> {
+pub fn run_non_interactive(
+    path: &Path,
+    register_global: bool,
+    format: OutputFormat,
+    self_host: Option<SelfHostConfig>,
+) -> Result<()> {
+    let auth_choice = match self_host {
+        Some(sh) => AuthChoice::SelfHosted(sh),
+        None => AuthChoice::None,
+    };
     let answers = WizardAnswers {
         vault_path: resolve_initial_vault(path),
         extra_contexts: Vec::new(),
-        auth_choice: AuthChoice::Auth0,
+        auth_choice,
     };
     apply_answers(&answers, register_global, None)?;
 
@@ -157,8 +191,9 @@ pub fn run_non_interactive(path: &Path, register_global: bool, format: OutputFor
     // uses styled output instead). The format is resolved globally upstream.
     let mut contexts = vec!["default".to_string()];
     contexts.extend(answers.extra_contexts.iter().cloned());
-    let auth = match answers.auth_choice {
-        AuthChoice::Auth0 => "auth0".to_string(),
+    let auth = match &answers.auth_choice {
+        AuthChoice::Hosted => "auth0".to_string(),
+        AuthChoice::SelfHosted(_) => "auth0 (self-hosted)".to_string(),
         AuthChoice::None => "none".to_string(),
     };
     let summary = InitSummary {
@@ -196,20 +231,44 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
         .collect();
 
     let items = [
-        "auth0 (recommended — temperkb.io cloud sync)",
+        "hosted (temperkb.io cloud sync)",
+        "self-hosted (your own instance + Auth0 tenant)",
         "none (local-only, no sync)",
     ];
     let idx = Select::with_theme(&theme)
-        .with_prompt("Auth provider")
+        .with_prompt("Instance")
         .default(0)
         .items(items)
         .interact()
         .map_err(prompt_err)?;
 
-    let auth_choice = if idx == 0 {
-        AuthChoice::Auth0
-    } else {
-        AuthChoice::None
+    let auth_choice = match idx {
+        0 => AuthChoice::Hosted,
+        1 => {
+            let instance_url: String = Input::with_theme(&theme)
+                .with_prompt("Instance base URL (e.g. https://temper.acme.com)")
+                .interact_text()
+                .map_err(prompt_err)?;
+            let auth_domain: String = Input::with_theme(&theme)
+                .with_prompt("Auth0 tenant domain (e.g. acme.us.auth0.com)")
+                .interact_text()
+                .map_err(prompt_err)?;
+            let client_id: String = Input::with_theme(&theme)
+                .with_prompt("Auth0 CLI application client_id")
+                .interact_text()
+                .map_err(prompt_err)?;
+            let audience: String = Input::with_theme(&theme)
+                .with_prompt("API audience (e.g. https://temper.acme.com/api)")
+                .interact_text()
+                .map_err(prompt_err)?;
+            AuthChoice::SelfHosted(SelfHostConfig {
+                instance_url: instance_url.trim().trim_end_matches('/').to_string(),
+                auth_domain: auth_domain.trim().to_string(),
+                client_id: client_id.trim().to_string(),
+                audience: audience.trim().to_string(),
+            })
+        }
+        _ => AuthChoice::None,
     };
 
     Ok(WizardAnswers {
@@ -226,8 +285,9 @@ fn print_summary(answers: &WizardAnswers, register_global: bool) {
     let mut ctxs = vec!["default".to_string()];
     ctxs.extend(answers.extra_contexts.iter().cloned());
     output::label("Contexts", ctxs.join(", "));
-    let auth_label = match answers.auth_choice {
-        AuthChoice::Auth0 => "auth0",
+    let auth_label = match &answers.auth_choice {
+        AuthChoice::Hosted => "auth0",
+        AuthChoice::SelfHosted(_) => "auth0 (self-hosted)",
         AuthChoice::None => "none",
     };
     output::label("Auth", auth_label);
@@ -283,8 +343,8 @@ pub fn apply_answers(
             output::dim("Global config already exists, skipping");
         }
 
-        // Cloud-ensure step: only when auth is enabled.
-        if answers.auth_choice == AuthChoice::Auth0 {
+        // Cloud-ensure step: only when an instance is configured.
+        if !matches!(answers.auth_choice, AuthChoice::None) {
             ensure_server_contexts(answers, ensurer)?;
         }
     }
@@ -345,6 +405,32 @@ fn ensure_server_contexts(
     Ok(())
 }
 
+/// Build the `[auth]` + `[[auth.providers]]` block and the `[cloud]` api_url
+/// line for a configured instance (hosted or self-hosted).
+fn provider_and_cloud_sections(
+    api_url: &str,
+    auth_domain: &str,
+    client_id: &str,
+    audience: &str,
+) -> (String, String) {
+    let auth = format!(
+        r#"[auth]
+provider = "auth0"
+
+[[auth.providers]]
+name = "auth0"
+authorize_url = "https://{auth_domain}/authorize"
+token_url = "https://{auth_domain}/oauth/token"
+client_id = "{client_id}"
+audience = "{audience}"
+callback_url = "{api_url}/api/auth/cli-callback"
+scopes = ["openid", "profile", "email", "offline_access"]
+"#
+    );
+    let cloud = format!("[cloud]\napi_url = \"{api_url}\"\n");
+    (auth, cloud)
+}
+
 /// Produce the TOML body for `config.toml` from the collected answers.
 ///
 /// Both the vault path and each context name are routed through
@@ -360,20 +446,20 @@ pub fn render_config_toml(answers: &WizardAnswers) -> String {
         .collect::<Vec<_>>()
         .join(", ");
 
-    let auth_section = match answers.auth_choice {
-        AuthChoice::None => "[auth]\nprovider = \"none\"\n".to_string(),
-        AuthChoice::Auth0 => r#"[auth]
-provider = "auth0"
-
-[[auth.providers]]
-name = "auth0"
-authorize_url = "https://temperkb.us.auth0.com/authorize"
-token_url = "https://temperkb.us.auth0.com/oauth/token"
-client_id = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF"
-audience = "https://temperkb.io/api"
-scopes = ["openid", "profile", "email", "offline_access"]
-"#
-        .to_string(),
+    let (auth_section, cloud_section) = match &answers.auth_choice {
+        AuthChoice::Hosted => provider_and_cloud_sections(
+            HOSTED_API_URL,
+            HOSTED_AUTH_DOMAIN,
+            HOSTED_CLIENT_ID,
+            HOSTED_AUDIENCE,
+        ),
+        AuthChoice::SelfHosted(sh) => provider_and_cloud_sections(
+            &sh.instance_url,
+            &sh.auth_domain,
+            &sh.client_id,
+            &sh.audience,
+        ),
+        AuthChoice::None => ("[auth]\nprovider = \"none\"\n".to_string(), String::new()),
     };
 
     // toml::Value::String already includes the surrounding quotes, so the
@@ -391,9 +477,7 @@ contexts = [{ctx_list}]
 output = "~/.claude/skills/temper"
 
 {auth_section}
-[cloud]
-api_url = "https://temperkb.io"
-
+{cloud_section}
 # [cli] — output-presentation defaults (optional; omit for agent-first auto behavior).
 # Precedence for each knob: CLI flag > env var > this config > tty-aware default.
 #   format: "json" | "toon"            env: TEMPER_FORMAT  (default: toon on a TTY, json otherwise)
@@ -436,15 +520,80 @@ mod tests {
         }
     }
 
+    #[test]
+    fn hosted_preset_emits_temperkb_provider_and_api_url() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::Hosted,
+        };
+        let toml = render_config_toml(&answers);
+        let cfg: TemperConfig = toml::from_str(&toml).expect("hosted toml parses");
+        cfg.validate().expect("hosted config validates");
+        assert_eq!(cfg.auth.provider, "auth0");
+        assert_eq!(cfg.cloud.api_url, "https://temperkb.io");
+        let p = &cfg.auth.providers[0];
+        assert_eq!(p.authorize_url, "https://temperkb.us.auth0.com/authorize");
+        assert_eq!(p.audience, "https://temperkb.io/api");
+        assert_eq!(p.callback_url, "https://temperkb.io/api/auth/cli-callback");
+    }
+
+    #[test]
+    fn self_hosted_emits_derived_urls() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::SelfHosted(SelfHostConfig {
+                instance_url: "https://temper.acme.com".into(),
+                auth_domain: "acme.us.auth0.com".into(),
+                client_id: "AcMeClientId123".into(),
+                audience: "https://temper.acme.com/api".into(),
+            }),
+        };
+        let toml = render_config_toml(&answers);
+        let cfg: TemperConfig = toml::from_str(&toml).expect("self-hosted toml parses");
+        cfg.validate().expect("self-hosted config validates");
+        assert_eq!(cfg.cloud.api_url, "https://temper.acme.com");
+        assert_eq!(cfg.auth.provider, "auth0");
+        let p = &cfg.auth.providers[0];
+        assert_eq!(p.authorize_url, "https://acme.us.auth0.com/authorize");
+        assert_eq!(p.token_url, "https://acme.us.auth0.com/oauth/token");
+        assert_eq!(p.client_id, "AcMeClientId123");
+        assert_eq!(p.audience, "https://temper.acme.com/api");
+        assert_eq!(
+            p.callback_url,
+            "https://temper.acme.com/api/auth/cli-callback"
+        );
+        assert_eq!(
+            p.scopes,
+            vec!["openid", "profile", "email", "offline_access"]
+        );
+    }
+
+    #[test]
+    fn none_choice_omits_cloud_and_providers() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::None,
+        };
+        let toml = render_config_toml(&answers);
+        assert!(toml.contains(r#"provider = "none""#));
+        assert!(!toml.contains("[[auth.providers]]"));
+        let cfg: TemperConfig = toml::from_str(&toml).expect("none toml parses");
+        cfg.validate().expect("none config validates");
+        assert_eq!(cfg.cloud.api_url, "");
+    }
+
     /// Round-trip guard: the rendered TOML must parse into a valid
     /// `TemperConfig` for every auth choice. This catches template drift
     /// that string-contains assertions would miss.
     #[test]
-    fn rendered_toml_parses_and_validates_auth0() {
+    fn rendered_toml_parses_and_validates_hosted() {
         let answers = WizardAnswers {
             vault_path: "/tmp/roundtrip".into(),
             extra_contexts: vec!["one".into(), "two".into()],
-            auth_choice: AuthChoice::Auth0,
+            auth_choice: AuthChoice::Hosted,
         };
         let rendered = render_config_toml(&answers);
         let cfg: TemperConfig =
@@ -498,7 +647,7 @@ mod tests {
         let answers = WizardAnswers {
             vault_path: "/tmp/my-vault".into(),
             extra_contexts: vec![],
-            auth_choice: AuthChoice::Auth0,
+            auth_choice: AuthChoice::Hosted,
         };
         let toml = render_config_toml(&answers);
         assert!(toml.contains(r#"path = "/tmp/my-vault""#));
@@ -544,7 +693,7 @@ mod tests {
         let answers = WizardAnswers {
             vault_path: "/tmp/v".into(),
             extra_contexts: vec![],
-            auth_choice: AuthChoice::Auth0,
+            auth_choice: AuthChoice::Hosted,
         };
         let toml = render_config_toml(&answers);
         // Must use the new array-of-tables format, NOT the old dotted-map form
@@ -564,7 +713,7 @@ mod tests {
         let answers = WizardAnswers {
             vault_path: vault.to_string_lossy().to_string(),
             extra_contexts: vec![],
-            auth_choice: AuthChoice::Auth0,
+            auth_choice: AuthChoice::Hosted,
         };
         // register_global=false — the config-file marker lives at
         // global_config_path() (not in the tmpdir), so we can't pre-create
@@ -602,7 +751,7 @@ mod tests {
     fn no_interactive_defaults_and_applies() {
         let tmp = tempfile::tempdir().unwrap();
         let vault = tmp.path().join("v");
-        run_non_interactive(&vault, false, OutputFormat::Json)
+        run_non_interactive(&vault, false, OutputFormat::Json, None)
             .expect("non-interactive run should succeed");
         // .temper/ created.
         assert!(vault.join(".temper").is_dir());
@@ -615,7 +764,7 @@ mod tests {
         let answers = WizardAnswers {
             vault_path: "/tmp/v".into(),
             extra_contexts: vec!["temper".into(), "writing".into()],
-            auth_choice: AuthChoice::Auth0,
+            auth_choice: AuthChoice::Hosted,
         };
         let toml = render_config_toml(&answers);
         assert!(toml.contains(r#"contexts = ["default", "temper", "writing"]"#));
@@ -628,7 +777,7 @@ mod tests {
         let answers = WizardAnswers {
             vault_path: vault_path.to_string_lossy().to_string(),
             extra_contexts: vec!["writing".into()],
-            auth_choice: AuthChoice::Auth0,
+            auth_choice: AuthChoice::Hosted,
         };
         let mock = MockEnsurer::new();
         // register_global=false means the cloud-ensure block is skipped,
@@ -656,5 +805,20 @@ mod tests {
         assert!(out.contains("\"contexts\""), "json: {out}");
         assert!(out.contains("\"auth\""), "json: {out}");
         assert!(out.contains("auth0"), "json: {out}");
+    }
+
+    #[test]
+    fn non_interactive_self_host_writes_derived_config() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path().join("v");
+        let sh = SelfHostConfig {
+            instance_url: "https://temper.acme.com".into(),
+            auth_domain: "acme.us.auth0.com".into(),
+            client_id: "AcMeClientId123".into(),
+            audience: "https://temper.acme.com/api".into(),
+        };
+        run_non_interactive(&vault, false, OutputFormat::Json, Some(sh))
+            .expect("self-host non-interactive run should succeed");
+        assert!(vault.join(".temper").is_dir());
     }
 }
