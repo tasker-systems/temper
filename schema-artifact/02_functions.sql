@@ -989,5 +989,144 @@ END;
 $$;
 
 -- ============================================================================
+-- WS6 chunk 4c — resource + relationship mutation functions for the live write path.
+-- Resource mutations take the envelope from the resource's own home (the facet_set discipline);
+-- edge mutations take it from the edge's home (the relationship_fold discipline). Each emits + projects
+-- in one txn through _event_append, so replay is the same code path.
+-- ============================================================================
+
+-- ── resource_deleted (soft-delete) ───────────────────────────────────────────
+CREATE FUNCTION _project_resource_deleted(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_resource uuid := (p_payload->>'resource_id')::uuid;
+BEGIN
+    UPDATE kb_resources SET is_active = false,
+        updated = (SELECT occurred_at FROM kb_events WHERE id = p_event)
+        WHERE id = v_resource;
+    IF NOT FOUND THEN RAISE EXCEPTION 'resource_delete: resource % not found', v_resource; END IF;
+    RETURN v_resource;
+END;
+$$;
+
+CREATE FUNCTION resource_delete(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_resource uuid := (p_payload->>'resource_id')::uuid;
+        v_anchor_tbl text; v_anchor uuid;
+BEGIN
+    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
+        WHERE resource_id = v_resource ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
+    IF v_anchor IS NULL THEN RAISE EXCEPTION 'resource_delete: resource % has no home', v_resource; END IF;
+    v_ev := _event_append('resource_deleted', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    RETURN _project_resource_deleted(v_ev, p_payload);
+END;
+$$;
+
+-- ── resource_updated (mutable kb_resources columns) ──────────────────────────
+-- COALESCE keeps an unset field at its current value — the payload carries only the changed columns.
+CREATE FUNCTION _project_resource_updated(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_resource uuid := (p_payload->>'resource_id')::uuid;
+BEGIN
+    UPDATE kb_resources SET
+        title      = COALESCE(p_payload->>'title', title),
+        origin_uri = COALESCE(p_payload->>'origin_uri', origin_uri),
+        updated    = (SELECT occurred_at FROM kb_events WHERE id = p_event)
+        WHERE id = v_resource;
+    IF NOT FOUND THEN RAISE EXCEPTION 'resource_update: resource % not found', v_resource; END IF;
+    RETURN v_resource;
+END;
+$$;
+
+CREATE FUNCTION resource_update(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_resource uuid := (p_payload->>'resource_id')::uuid;
+        v_anchor_tbl text; v_anchor uuid;
+BEGIN
+    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
+        WHERE resource_id = v_resource ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
+    IF v_anchor IS NULL THEN RAISE EXCEPTION 'resource_update: resource % has no home', v_resource; END IF;
+    v_ev := _event_append('resource_updated', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    RETURN _project_resource_updated(v_ev, p_payload);
+END;
+$$;
+
+-- ── resource_rehomed (context move) ──────────────────────────────────────────
+-- Re-point the resource's single home row to the destination anchor. The event envelope is the
+-- DESTINATION home (post-move, that is where the resource lives) — read from the payload, not the row.
+CREATE FUNCTION _project_resource_rehomed(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_resource uuid := (p_payload->>'resource_id')::uuid;
+BEGIN
+    UPDATE kb_resource_homes SET
+        anchor_table = p_payload#>>'{home,table}',
+        anchor_id    = (p_payload#>>'{home,id}')::uuid
+        WHERE resource_id = v_resource;
+    IF NOT FOUND THEN RAISE EXCEPTION 'resource_rehome: resource % has no home', v_resource; END IF;
+    RETURN v_resource;
+END;
+$$;
+
+CREATE FUNCTION resource_rehome(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid;
+BEGIN
+    v_ev := _event_append('resource_rehomed', p_emitter,
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+    RETURN _project_resource_rehomed(v_ev, p_payload);
+END;
+$$;
+
+-- ── relationship_retyped (edge_kind / polarity) ──────────────────────────────
+CREATE FUNCTION _project_relationship_retyped(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+BEGIN
+    UPDATE kb_edges SET
+        edge_kind = (p_payload->>'edge_kind')::edge_kind,
+        polarity  = (p_payload->>'polarity')::edge_polarity,
+        last_event_id = p_event
+        WHERE id = v_edge;
+    IF NOT FOUND THEN RAISE EXCEPTION 'relationship_retype: edge % not found', v_edge; END IF;
+    RETURN v_edge;
+END;
+$$;
+
+CREATE FUNCTION relationship_retype(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_edge uuid := (p_payload->>'edge_id')::uuid;
+        v_home_tbl text; v_home uuid;
+BEGIN
+    SELECT home_anchor_table, home_anchor_id INTO v_home_tbl, v_home FROM kb_edges WHERE id = v_edge;
+    IF v_home IS NULL THEN RAISE EXCEPTION 'relationship_retype: edge % not found', v_edge; END IF;
+    v_ev := _event_append('relationship_retyped', p_emitter, v_home_tbl, v_home, p_payload);
+    RETURN _project_relationship_retyped(v_ev, p_payload);
+END;
+$$;
+
+-- ── relationship_reweighted (weight) ─────────────────────────────────────────
+CREATE FUNCTION _project_relationship_reweighted(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_edge uuid := (p_payload->>'edge_id')::uuid;
+BEGIN
+    UPDATE kb_edges SET weight = (p_payload->>'weight')::double precision, last_event_id = p_event
+        WHERE id = v_edge;
+    IF NOT FOUND THEN RAISE EXCEPTION 'relationship_reweight: edge % not found', v_edge; END IF;
+    RETURN v_edge;
+END;
+$$;
+
+CREATE FUNCTION relationship_reweight(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_edge uuid := (p_payload->>'edge_id')::uuid;
+        v_home_tbl text; v_home uuid;
+BEGIN
+    SELECT home_anchor_table, home_anchor_id INTO v_home_tbl, v_home FROM kb_edges WHERE id = v_edge;
+    IF v_home IS NULL THEN RAISE EXCEPTION 'relationship_reweight: edge % not found', v_edge; END IF;
+    v_ev := _event_append('relationship_reweighted', p_emitter, v_home_tbl, v_home, p_payload);
+    RETURN _project_relationship_reweighted(v_ev, p_payload);
+END;
+$$;
+
+-- ============================================================================
 -- End of 02_functions.sql. Seed → 03_seed.sql; scenarios → 04_scenarios.sql.
 -- ============================================================================

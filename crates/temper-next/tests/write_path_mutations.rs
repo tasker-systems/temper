@@ -104,6 +104,18 @@ async fn make_resource(
     id
 }
 
+/// Fire one action in its own tx (search_path set), returning its `Fired` record.
+async fn fire_one(pool: &sqlx::PgPool, action: SeedAction<'_>) -> temper_next::events::Fired {
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let fired = fire(&mut tx, action).await.unwrap();
+    tx.commit().await.unwrap();
+    fired
+}
+
 /// Assert one edge `src → tgt`, returning its id. Own tx with the search_path discipline.
 #[allow(clippy::too_many_arguments)]
 async fn assert_edge(
@@ -235,4 +247,253 @@ async fn reassert_after_fold_creates_fresh_edge() {
     .unwrap();
     assert_eq!(active, 1, "exactly one active edge");
     assert_eq!(folded, 1, "the folded edge remains");
+}
+
+// ── Task 1.3: resource_delete ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn resource_delete_sets_inactive() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "del").await;
+    let r = make_resource(&pool, ctx, owner, emitter, "temper://d/r", "body").await;
+
+    fire_one(
+        &pool,
+        SeedAction::ResourceDelete {
+            resource: r,
+            emitter,
+        },
+    )
+    .await;
+
+    let active: bool =
+        sqlx::query_scalar("SELECT is_active FROM temper_next.kb_resources WHERE id=$1")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(!active, "resource_delete must flip is_active to false");
+}
+
+// ── Task 1.4: resource_update ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn resource_update_changes_title_only() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "upd").await;
+    // make_resource sets title == origin_uri == "temper://u/r"
+    let r = make_resource(&pool, ctx, owner, emitter, "temper://u/r", "body").await;
+
+    fire_one(
+        &pool,
+        SeedAction::ResourceUpdate {
+            resource: r,
+            title: Some("New Title"),
+            origin_uri: None,
+            emitter,
+        },
+    )
+    .await;
+
+    let (title, uri): (String, String) =
+        sqlx::query_as("SELECT title, origin_uri FROM temper_next.kb_resources WHERE id=$1")
+            .bind(r.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(title, "New Title", "title updated");
+    assert_eq!(
+        uri, "temper://u/r",
+        "origin_uri unchanged (None ⇒ COALESCE to current)"
+    );
+}
+
+// ── Task 1.5: resource_rehome ───────────────────────────────────────────────────
+
+#[tokio::test]
+async fn resource_rehome_moves_to_destination_context() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx_a = make_context(&pool, owner, "ctx-a").await;
+    let ctx_b = make_context(&pool, owner, "ctx-b").await;
+    let r = make_resource(&pool, ctx_a, owner, emitter, "temper://m/r", "body").await;
+
+    fire_one(
+        &pool,
+        SeedAction::ResourceRehome {
+            resource: r,
+            home: AnchorRef::context(ctx_b),
+            emitter,
+        },
+    )
+    .await;
+
+    let anchor: Uuid = sqlx::query_scalar(
+        "SELECT anchor_id FROM temper_next.kb_resource_homes WHERE resource_id=$1",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        anchor,
+        ctx_b.uuid(),
+        "home re-anchored to the destination context"
+    );
+}
+
+// ── Task 1.6: relationship_retype ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn relationship_retype_changes_kind() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "rt").await;
+    let a = make_resource(&pool, ctx, owner, emitter, "temper://rt/a", "alpha").await;
+    let b = make_resource(&pool, ctx, owner, emitter, "temper://rt/b", "beta").await;
+    let edge = assert_edge(&pool, a, b, EdgeKind::LeadsTo, Some("x"), 1.0, ctx, emitter).await;
+
+    fire_one(
+        &pool,
+        SeedAction::RelationshipRetype {
+            edge,
+            kind: EdgeKind::Contains,
+            polarity: EdgePolarity::Forward,
+            emitter,
+        },
+    )
+    .await;
+
+    let kind: String =
+        sqlx::query_scalar("SELECT edge_kind::text FROM temper_next.kb_edges WHERE id=$1")
+            .bind(edge.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(kind, "contains", "edge_kind retyped");
+}
+
+// ── Task 1.7: relationship_reweight ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn relationship_reweight_changes_weight() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "rw").await;
+    let a = make_resource(&pool, ctx, owner, emitter, "temper://rw/a", "alpha").await;
+    let b = make_resource(&pool, ctx, owner, emitter, "temper://rw/b", "beta").await;
+    let edge = assert_edge(&pool, a, b, EdgeKind::LeadsTo, Some("x"), 1.0, ctx, emitter).await;
+
+    fire_one(
+        &pool,
+        SeedAction::RelationshipReweight {
+            edge,
+            weight: 3.5,
+            emitter,
+        },
+    )
+    .await;
+
+    let weight: f64 = sqlx::query_scalar("SELECT weight FROM temper_next.kb_edges WHERE id=$1")
+        .bind(edge.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(weight, 3.5, "edge weight updated");
+}
+
+// ── consolidated replay parity for the 4c mutations ─────────────────────────────
+
+/// Fire every new mutation, then reset + replay the ledger through the SAME `_project_*` halves and
+/// prove the projections come back byte-identical (replay-is-the-same-code-path, spec §0/§3). Also
+/// covers the relationship_folded replay arm wired alongside the 4c ones.
+#[tokio::test]
+async fn mutations_replay_byte_identically() {
+    use temper_next::replay;
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx_a = make_context(&pool, owner, "rp-a").await;
+    let ctx_b = make_context(&pool, owner, "rp-b").await;
+    let a = make_resource(&pool, ctx_a, owner, emitter, "temper://rp/a", "alpha body").await;
+    let b = make_resource(&pool, ctx_a, owner, emitter, "temper://rp/b", "beta body").await;
+    let edge = assert_edge(
+        &pool,
+        a,
+        b,
+        EdgeKind::LeadsTo,
+        Some("x"),
+        1.0,
+        ctx_a,
+        emitter,
+    )
+    .await;
+
+    fire_one(
+        &pool,
+        SeedAction::ResourceUpdate {
+            resource: a,
+            title: Some("Renamed"),
+            origin_uri: None,
+            emitter,
+        },
+    )
+    .await;
+    fire_one(
+        &pool,
+        SeedAction::ResourceRehome {
+            resource: a,
+            home: AnchorRef::context(ctx_b),
+            emitter,
+        },
+    )
+    .await;
+    fire_one(
+        &pool,
+        SeedAction::RelationshipRetype {
+            edge,
+            kind: EdgeKind::Contains,
+            polarity: EdgePolarity::Forward,
+            emitter,
+        },
+    )
+    .await;
+    fire_one(
+        &pool,
+        SeedAction::RelationshipReweight {
+            edge,
+            weight: 2.5,
+            emitter,
+        },
+    )
+    .await;
+    fire_one(
+        &pool,
+        SeedAction::RelationshipFold {
+            edge,
+            reason: Some("retired"),
+            emitter,
+        },
+    )
+    .await;
+    fire_one(
+        &pool,
+        SeedAction::ResourceDelete {
+            resource: b,
+            emitter,
+        },
+    )
+    .await;
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_artifact();
+    replay::replay(&pool, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool).await.unwrap();
+
+    for ((ta, va), (tb, vb)) in before.iter().zip(after.iter()) {
+        assert_eq!(ta, tb);
+        assert_eq!(va, vb, "projection table {ta} diverged under replay");
+    }
 }

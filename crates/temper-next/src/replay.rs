@@ -266,6 +266,49 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
+            // WS6 4c mutations + the relationship_folded sibling (payload-only projectors, no sidecar).
+            "relationship_folded" => {
+                sqlx::query("SELECT _project_relationship_folded($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            "relationship_retyped" => {
+                sqlx::query("SELECT _project_relationship_retyped($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            "relationship_reweighted" => {
+                sqlx::query("SELECT _project_relationship_reweighted($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            "resource_deleted" => {
+                sqlx::query("SELECT _project_resource_deleted($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            "resource_updated" => {
+                sqlx::query("SELECT _project_resource_updated($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            "resource_rehomed" => {
+                sqlx::query("SELECT _project_resource_rehomed($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
             other => anyhow::bail!("replay: no projector for event type {other}"),
         }
     }
