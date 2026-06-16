@@ -16,12 +16,55 @@ use sqlx::{PgPool, Row};
 use temper_core::error::TemperError;
 use temper_core::operations::{
     Backend, CommandOutput, CreateResource, DeleteResource, ListResources, ResourceRef,
-    ResourceSummary, SearchHit, SearchResources, ShowResource, UpdateResource,
+    ResourceSummary, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
 use temper_core::types::resource::ResourceRow;
 
 use temper_next::readback;
+use temper_next::synthesis::key_fate::{key_fate, KeyFate};
+use temper_next::writes;
+
+/// Bridge a temper-next (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
+/// depend on it) — `anyhow::Error: Display`, so `to_string()` carries the message.
+fn api_err(e: impl std::fmt::Display) -> TemperError {
+    TemperError::Api(e.to_string())
+}
+
+/// Map an inbound [`Surface`] to the synthesized per-surface emitter marker (`pete@<marker>`, §1b).
+/// The HTTP/API surface maps to the web emitter (temperkb.io's surface).
+fn surface_marker(s: Surface) -> &'static str {
+    match s {
+        Surface::CliCloud => "cli",
+        Surface::Mcp => "mcp",
+        Surface::ApiHttp => "web",
+    }
+}
+
+/// Split a command's `managed_meta` + `open_meta` into the `(key, value)` property pairs the live write
+/// path asserts: Property-fated managed keys (§7) + every open key, dropping nulls. `doc_type` rides the
+/// `ResourceCreate` separately, and Die/Edge/ReconcileToDocType managed keys are excluded by fate.
+fn properties_from_meta(
+    managed_meta: &serde_json::Value,
+    open_meta: Option<&serde_json::Value>,
+) -> Vec<(String, serde_json::Value)> {
+    let mut out: Vec<(String, serde_json::Value)> = Vec::new();
+    if let Some(obj) = managed_meta.as_object() {
+        for (k, v) in obj {
+            if !v.is_null() && key_fate(k) == KeyFate::Property {
+                out.push((k.clone(), v.clone()));
+            }
+        }
+    }
+    if let Some(obj) = open_meta.and_then(|o| o.as_object()) {
+        for (k, v) in obj {
+            if !v.is_null() {
+                out.push((k.clone(), v.clone()));
+            }
+        }
+    }
+    out
+}
 
 /// Transitional `public.kb_doc_types` name→id lookup (valid during the migration window; `public`
 /// still exists pre-flip). §7 dissolved the typed `DocTypeId`; the substrate keeps only the name.
@@ -82,7 +125,8 @@ pub(crate) async fn reconstruct_resource_row(
 /// tracked to WS2).
 pub struct NextBackend {
     pool: PgPool,
-    #[allow(dead_code)] // used once access-scoping lands (WS2 / flip prerequisite)
+    /// The caller profile — resolved to the synthesized `temper_next` profile by handle on each write
+    /// (4c). Reads are visibility-UNSCOPED at the §9 floor (access-scoping is the WS2 flip prerequisite).
     profile_id: ProfileId,
 }
 
@@ -115,11 +159,51 @@ impl NextBackend {
 impl Backend for NextBackend {
     async fn create_resource(
         &self,
-        _cmd: CreateResource,
+        cmd: CreateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        Err(TemperError::NotImplemented(
-            "create over the next backend (WS6 4c)".into(),
-        ))
+        // Resolve the caller's synthesized identity (natural-key) and the home context.
+        let prod_profile: uuid::Uuid = *self.profile_id;
+        let owner = writes::resolve_profile(&self.pool, prod_profile)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+        let home = writes::resolve_context(&self.pool, owner, &cmd.context)
+            .await
+            .map_err(api_err)?;
+
+        let body = cmd
+            .body
+            .as_ref()
+            .map(|b| b.content.clone())
+            .unwrap_or_default();
+        let origin_uri = cmd.origin_uri.clone().unwrap_or_default();
+        let managed =
+            serde_json::to_value(&cmd.managed_meta).map_err(|e| TemperError::Api(e.to_string()))?;
+        let properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
+
+        let new_id = writes::create_resource(
+            &self.pool,
+            writes::CreateParams {
+                title: &cmd.title,
+                origin_uri: &origin_uri,
+                body: &body,
+                doc_type: &cmd.doctype,
+                home,
+                owner,
+                // A fresh create's originator is its owner (the caller); a distinct originator only
+                // arises via synthesis carrying a production row's history.
+                originator: owner,
+                emitter,
+                properties: &properties,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+
+        let row = reconstruct_resource_row(&self.pool, new_id.uuid()).await?;
+        Ok(CommandOutput::new(row))
     }
 
     async fn show_resource(
@@ -133,20 +217,83 @@ impl Backend for NextBackend {
 
     async fn update_resource(
         &self,
-        _cmd: UpdateResource,
+        cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        Err(TemperError::NotImplemented(
-            "update over the next backend (WS6 4c)".into(),
-        ))
+        // Address the target by its public id via ResolvedIds (the transitional parity model 4b reads
+        // use; native-id addressing without a legacy twin is a chunk-5 flip concern).
+        let new_id = self.resolve_new_id(&cmd.resource).await?;
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+
+        let body = cmd.body.as_ref().map(|b| b.content.clone());
+        // temper-title (a §7-Die managed key) maps to the kb_resources.title column, not a property.
+        let mut title: Option<String> = None;
+        let mut properties: Vec<(String, serde_json::Value)> = Vec::new();
+        if let Some(mm) = &cmd.managed_meta {
+            let managed = serde_json::to_value(mm).map_err(|e| TemperError::Api(e.to_string()))?;
+            title = managed
+                .get("temper-title")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+            properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
+        } else if cmd.open_meta.is_some() {
+            properties = properties_from_meta(&serde_json::Value::Null, cmd.open_meta.as_ref());
+        }
+
+        // A type-move sets the authoritative `doc_type` property; a context-move re-homes.
+        let mut rehome_to = None;
+        if let Some(mv) = &cmd.move_to {
+            if let Some(type_to) = &mv.type_to {
+                properties.push(("doc_type".to_owned(), serde_json::json!(type_to)));
+            }
+            if let Some(ctx_to) = &mv.context_to {
+                rehome_to = Some(
+                    writes::resolve_context(&self.pool, owner, ctx_to)
+                        .await
+                        .map_err(api_err)?,
+                );
+            }
+        }
+
+        writes::update_resource(
+            &self.pool,
+            writes::UpdateParams {
+                resource: temper_next::ids::ResourceId::from(new_id),
+                body: body.as_deref(),
+                title: title.as_deref(),
+                origin_uri: None,
+                properties: &properties,
+                rehome_to,
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+
+        let row = reconstruct_resource_row(&self.pool, new_id).await?;
+        Ok(CommandOutput::new(row))
     }
 
-    async fn delete_resource(
-        &self,
-        _cmd: DeleteResource,
-    ) -> Result<CommandOutput<()>, TemperError> {
-        Err(TemperError::NotImplemented(
-            "delete over the next backend (WS6 4c)".into(),
-        ))
+    async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
+        let new_id = self.resolve_new_id(&cmd.resource).await?;
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+        writes::delete_resource(
+            &self.pool,
+            temper_next::ids::ResourceId::from(new_id),
+            emitter,
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(()))
     }
 
     async fn list_resources(
