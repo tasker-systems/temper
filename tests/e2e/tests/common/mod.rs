@@ -306,6 +306,46 @@ async fn clean_and_seed(pool: &PgPool) {
     .expect("seed resource");
 }
 
+/// Spawn ONLY an Axum server (no clean/seed) over an existing pool, with an explicit
+/// `BackendSelection`, and return its address. Used by tests that need a SECOND server over the same
+/// data under a different substrate selection (e.g. the WS6 4b read-path test: seed + synthesize under
+/// legacy, then serve the same pool under `Next`). The startup-reads-the-flag-once model is what the
+/// real deploy does; here the selection is injected directly rather than via the DB flag.
+pub async fn spawn_app_server(
+    pool: PgPool,
+    selection: temper_api::backend::BackendSelection,
+) -> SocketAddr {
+    let decoding_key =
+        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("../fixtures/test_rsa.pub"))
+            .expect("Failed to load test RSA public key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
+
+    let api_config = ApiConfig {
+        database_url: "unused".to_string(),
+        jwks_url: "unused".to_string(),
+        auth_issuer: "test-issuer".to_string(),
+        auth_audience: None,
+        auth_provider_name: "test-provider".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+    };
+
+    let state = AppState::new(pool, jwks_store, api_config).with_backend_selection(selection);
+    let app = create_app(state);
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("Failed to bind test listener");
+    let addr = listener.local_addr().expect("Failed to get local addr");
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .await
+            .expect("Test server failed");
+    });
+    addr
+}
+
 /// Build an `E2eTestApp` from a pool provided by `#[sqlx::test]`.
 pub async fn setup(pool: PgPool) -> E2eTestApp {
     clean_and_seed(&pool).await;
@@ -327,7 +367,11 @@ pub async fn setup(pool: PgPool) -> E2eTestApp {
         enable_swagger: false,
     };
 
-    let state = AppState::new(pool.clone(), jwks_store, api_config);
+    let backend_selection = temper_api::services::backend_selection_service::read(&pool)
+        .await
+        .expect("read backend selection flag");
+    let state = AppState::new(pool.clone(), jwks_store, api_config)
+        .with_backend_selection(backend_selection);
     let app = create_app(state);
 
     let listener = TcpListener::bind("127.0.0.1:0")

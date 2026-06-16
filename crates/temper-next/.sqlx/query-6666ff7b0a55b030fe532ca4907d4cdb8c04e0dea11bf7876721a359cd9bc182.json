@@ -1,16 +1,17 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT EXISTS (SELECT 1 FROM kb_scopes WHERE id = $1)",
+  "query": "SELECT resource_delete($1,$2)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "exists",
-        "type_info": "Bool"
+        "name": "resource_delete",
+        "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
+        "Jsonb",
         "Uuid"
       ]
     },
@@ -18,5 +19,5 @@
       null
     ]
   },
-  "hash": "ce040612b3130dadfdbb3daae05b63b1d4d88c1fc16b901fc70e0db383702988"
+  "hash": "6666ff7b0a55b030fe532ca4907d4cdb8c04e0dea11bf7876721a359cd9bc182"
 }

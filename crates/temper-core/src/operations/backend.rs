@@ -12,12 +12,14 @@
 //! the shared trait.
 
 use async_trait::async_trait;
+use uuid::Uuid;
 
 use crate::error::TemperError;
 use crate::types::resource::ResourceRow;
 
 use super::commands::{
-    CreateResource, DeleteResource, ListResources, SearchResources, ShowResource, UpdateResource,
+    AssertRelationship, CreateResource, DeleteResource, FoldRelationship, ListResources,
+    RetypeRelationship, ReweightRelationship, SearchResources, ShowResource, UpdateResource,
 };
 use super::output::CommandOutput;
 
@@ -69,6 +71,31 @@ pub trait Backend: Send + Sync {
         &self,
         cmd: SearchResources,
     ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError>;
+
+    // ── relationship/edge writes (WS6 4c) ──
+    // Brought under the trait so surfaces dispatch them through `select_backend` to the selected
+    // substrate. Each returns the edge handle (`Uuid`): correlation_id for `DbBackend`, edge_id for
+    // `NextBackend` — backend-opaque, fed back into retype/reweight/fold within the same backend.
+
+    async fn assert_relationship(
+        &self,
+        cmd: AssertRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError>;
+
+    async fn retype_relationship(
+        &self,
+        cmd: RetypeRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError>;
+
+    async fn reweight_relationship(
+        &self,
+        cmd: ReweightRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError>;
+
+    async fn fold_relationship(
+        &self,
+        cmd: FoldRelationship,
+    ) -> Result<CommandOutput<Uuid>, TemperError>;
 }
 
 #[cfg(test)]

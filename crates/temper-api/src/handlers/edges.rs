@@ -3,7 +3,7 @@ use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::DbBackend;
+use crate::backend::select_backend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::edge_service;
@@ -74,12 +74,14 @@ pub async fn assert(
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
-    let backend = DbBackend::new(
-        state.pool.clone(),
+    let backend = select_backend(
+        state.backend_selection,
+        &state.pool,
         ProfileId::from(auth.0.profile.id),
         device_id,
         Surface::ApiHttp,
-    );
+    )
+    .map_err(ApiError::from)?;
     let out = backend
         .assert_relationship(cmd)
         .await
@@ -120,12 +122,14 @@ pub async fn retype(
         polarity: req.polarity,
         origin: Surface::ApiHttp,
     };
-    let backend = DbBackend::new(
-        state.pool.clone(),
+    let backend = select_backend(
+        state.backend_selection,
+        &state.pool,
         ProfileId::from(auth.0.profile.id),
         device_id,
         Surface::ApiHttp,
-    );
+    )
+    .map_err(ApiError::from)?;
     let out = backend
         .retype_relationship(cmd)
         .await
@@ -165,12 +169,14 @@ pub async fn reweight(
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
-    let backend = DbBackend::new(
-        state.pool.clone(),
+    let backend = select_backend(
+        state.backend_selection,
+        &state.pool,
         ProfileId::from(auth.0.profile.id),
         device_id,
         Surface::ApiHttp,
-    );
+    )
+    .map_err(ApiError::from)?;
     let out = backend
         .reweight_relationship(cmd)
         .await
@@ -210,12 +216,14 @@ pub async fn fold(
         reason: req.reason,
         origin: Surface::ApiHttp,
     };
-    let backend = DbBackend::new(
-        state.pool.clone(),
+    let backend = select_backend(
+        state.backend_selection,
+        &state.pool,
         ProfileId::from(auth.0.profile.id),
         device_id,
         Surface::ApiHttp,
-    );
+    )
+    .map_err(ApiError::from)?;
     let out = backend
         .fold_relationship(cmd)
         .await

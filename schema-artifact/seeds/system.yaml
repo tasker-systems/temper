@@ -10,6 +10,7 @@ event_types:
   - resource_created
   - resource_updated
   - resource_deleted
+  - resource_rehomed
   - relationship_asserted
   - relationship_retracted
   - relationship_retyped
@@ -18,6 +19,7 @@ event_types:
   - relationship_decayed
   - relationship_corrected
   - property_asserted
+  - property_set
   - property_retracted
   - property_reweighted
   - property_folded

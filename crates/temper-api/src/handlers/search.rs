@@ -3,7 +3,7 @@ use axum::Json;
 
 use crate::error::{ApiResult, ErrorBody};
 use crate::middleware::auth::AuthUser;
-use crate::services::search_service::{self, SearchParams, UnifiedSearchResultRow};
+use crate::services::search_service::{SearchParams, UnifiedSearchResultRow};
 use crate::state::AppState;
 
 #[utoipa::path(
@@ -23,7 +23,12 @@ pub async fn search(
     auth: AuthUser,
     Json(params): Json<SearchParams>,
 ) -> ApiResult<Json<Vec<UnifiedSearchResultRow>>> {
-    search_service::search(&state.pool, auth.0.profile.id, params)
-        .await
-        .map(Json)
+    crate::backend::read_selector::search_select(
+        state.backend_selection,
+        &state.pool,
+        auth.0.profile.id,
+        params,
+    )
+    .await
+    .map(Json)
 }

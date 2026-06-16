@@ -5,12 +5,12 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::DbBackend;
+use temper_api::backend::select_backend;
 use temper_api::services::{
     context_service, doc_type_service, ingest_service, meta_service, resource_service,
 };
 use temper_core::error::TemperError;
-use temper_core::operations::{Backend, BodyUpdate, CreateResource, Surface};
+use temper_core::operations::{BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
 
@@ -361,7 +361,14 @@ pub async fn create_resource(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = select_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
     let out = backend.create_resource(cmd).await.map_err(|e| match e {
         TemperError::NotFound(_) => rmcp::ErrorData::invalid_params(
             "Context or doc_type not found. Use create_context / list_doc_types to verify."
@@ -403,6 +410,13 @@ fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::Erro
     }
 }
 
+// WS6 4b note: `get_resource` / `list_resources` stay on the legacy services under `flag=next`.
+// They layer relationship enrichment (`enrich_resources` / `build_enriched`) — reads over
+// `public.kb_resource_edges` keyed by resource id — on top of the base read. The new substrate
+// re-mints ids, so routing only the base read through `read_selector` would leave the enrichment
+// querying `public` with ids that don't exist there (mixed-substrate, incorrect). The enrichment
+// layer is beyond the §9 read floor; routing these tools waits on porting relationship reads
+// (alongside 4c writes). The MCP `search` tool, which has no enrichment, IS routed (see search.rs).
 pub async fn get_resource(
     svc: &TemperMcpService,
     input: GetResourceInput,
@@ -619,7 +633,14 @@ pub async fn update_resource(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = select_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
     backend.update_resource(cmd).await.map_err(|e| match e {
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
@@ -671,7 +692,14 @@ pub async fn update_resource_meta(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = select_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
     backend.update_resource(cmd).await.map_err(|e| match e {
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),
@@ -714,7 +742,14 @@ pub async fn delete_resource(
         origin: Surface::Mcp,
     };
 
-    let backend = DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp);
+    let backend = select_backend(
+        svc.api_state.backend_selection,
+        pool,
+        profile_id,
+        "mcp".to_string(),
+        Surface::Mcp,
+    )
+    .map_err(|e| rmcp::ErrorData::internal_error(e.to_string(), None))?;
     backend.delete_resource(cmd).await.map_err(|e| match e {
         TemperError::Forbidden => rmcp::ErrorData::invalid_params(
             "Resource not found or not modifiable".to_string(),

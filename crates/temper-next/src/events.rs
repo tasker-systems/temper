@@ -37,8 +37,14 @@ use uuid::Uuid;
 pub enum EventKind {
     CogmapSeeded,
     ResourceCreated,
+    ResourceUpdated,
+    ResourceDeleted,
+    ResourceRehomed,
     RelationshipAsserted,
+    RelationshipRetyped,
+    RelationshipReweighted,
     PropertyAsserted,
+    PropertySet,
     LensCreated,
     RegionMaterialized,
     RelationshipFolded,
@@ -51,8 +57,14 @@ impl EventKind {
         match self {
             EventKind::CogmapSeeded => "cogmap_seeded",
             EventKind::ResourceCreated => "resource_created",
+            EventKind::ResourceUpdated => "resource_updated",
+            EventKind::ResourceDeleted => "resource_deleted",
+            EventKind::ResourceRehomed => "resource_rehomed",
             EventKind::RelationshipAsserted => "relationship_asserted",
+            EventKind::RelationshipRetyped => "relationship_retyped",
+            EventKind::RelationshipReweighted => "relationship_reweighted",
             EventKind::PropertyAsserted => "property_asserted",
+            EventKind::PropertySet => "property_set",
             EventKind::LensCreated => "lens_created",
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
@@ -134,6 +146,16 @@ pub enum SeedAction<'a> {
         weight: f64,
         emitter: EntityId,
     },
+    /// Set a SINGLE-valued property: folds prior active `(owner, key)` rows then asserts this value, so
+    /// the key holds one current value (the resource-frontmatter shape). Multi-valued facets use
+    /// [`SeedAction::FacetSet`] / [`SeedAction::PropertyAssert`] (append).
+    PropertySet {
+        resource: ResourceId,
+        key: &'a str,
+        value: &'a serde_json::Value,
+        weight: f64,
+        emitter: EntityId,
+    },
     LensCreate {
         /// `None` ⇒ a global system lens (`cogmap_id NULL`).
         cogmap: Option<CogmapId>,
@@ -160,6 +182,35 @@ pub enum SeedAction<'a> {
         chunks: &'a [PreparedChunk],
         emitter: EntityId,
     },
+    // ── WS6 4c resource + relationship mutations (live write path) ──
+    ResourceDelete {
+        resource: ResourceId,
+        emitter: EntityId,
+    },
+    ResourceUpdate {
+        resource: ResourceId,
+        /// Mutable `kb_resources` columns; `None` ⇒ unchanged (projector COALESCEs).
+        title: Option<&'a str>,
+        origin_uri: Option<&'a str>,
+        emitter: EntityId,
+    },
+    ResourceRehome {
+        resource: ResourceId,
+        /// The destination anchor (a `kb_contexts` ref for a context move).
+        home: payloads::AnchorRef,
+        emitter: EntityId,
+    },
+    RelationshipRetype {
+        edge: EdgeId,
+        kind: EdgeKind,
+        polarity: payloads::EdgePolarity,
+        emitter: EntityId,
+    },
+    RelationshipReweight {
+        edge: EdgeId,
+        weight: f64,
+        emitter: EntityId,
+    },
 }
 
 impl SeedAction<'_> {
@@ -171,10 +222,16 @@ impl SeedAction<'_> {
             SeedAction::RelationshipAssert { .. } => EventKind::RelationshipAsserted,
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
+            SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
             SeedAction::BlockMutate { .. } => EventKind::BlockMutated,
+            SeedAction::ResourceDelete { .. } => EventKind::ResourceDeleted,
+            SeedAction::ResourceUpdate { .. } => EventKind::ResourceUpdated,
+            SeedAction::ResourceRehome { .. } => EventKind::ResourceRehomed,
+            SeedAction::RelationshipRetype { .. } => EventKind::RelationshipRetyped,
+            SeedAction::RelationshipReweight { .. } => EventKind::RelationshipReweighted,
         }
     }
 }
@@ -398,6 +455,31 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             Ok(Fired::Facet(PropertyId::from(id)))
         }
 
+        SeedAction::PropertySet {
+            resource,
+            key,
+            value,
+            weight,
+            emitter,
+        } => {
+            let payload = payloads::PropertySet {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::resource(resource),
+                property_key: key.to_owned(),
+                value: value.clone(),
+                weight,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT property_set($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("property_set returned null")?;
+            Ok(Fired::Facet(PropertyId::from(id)))
+        }
+
         SeedAction::LensCreate {
             cogmap,
             lens,
@@ -505,6 +587,105 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             .await?
             .context("block_mutate returned null")?;
             Ok(Fired::Block(BlockId::from(id)))
+        }
+
+        SeedAction::ResourceDelete { resource, emitter } => {
+            let payload = payloads::ResourceDeleted {
+                resource_id: resource,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT resource_delete($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("resource_delete returned null")?;
+            Ok(Fired::Resource(ResourceId::from(id)))
+        }
+
+        SeedAction::ResourceUpdate {
+            resource,
+            title,
+            origin_uri,
+            emitter,
+        } => {
+            let payload = payloads::ResourceUpdated {
+                resource_id: resource,
+                title: title.map(str::to_owned),
+                origin_uri: origin_uri.map(str::to_owned),
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT resource_update($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("resource_update returned null")?;
+            Ok(Fired::Resource(ResourceId::from(id)))
+        }
+
+        SeedAction::ResourceRehome {
+            resource,
+            home,
+            emitter,
+        } => {
+            let payload = payloads::ResourceRehomed {
+                resource_id: resource,
+                home,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT resource_rehome($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("resource_rehome returned null")?;
+            Ok(Fired::Resource(ResourceId::from(id)))
+        }
+
+        SeedAction::RelationshipRetype {
+            edge,
+            kind,
+            polarity,
+            emitter,
+        } => {
+            let payload = payloads::RelationshipRetyped {
+                edge_id: edge,
+                edge_kind: kind,
+                polarity,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT relationship_retype($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("relationship_retype returned null")?;
+            Ok(Fired::Relationship(EdgeId::from(id)))
+        }
+
+        SeedAction::RelationshipReweight {
+            edge,
+            weight,
+            emitter,
+        } => {
+            let payload = payloads::RelationshipReweighted {
+                edge_id: edge,
+                weight,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT relationship_reweight($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("relationship_reweight returned null")?;
+            Ok(Fired::Relationship(EdgeId::from(id)))
         }
     }
 }

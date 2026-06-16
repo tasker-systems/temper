@@ -14,7 +14,7 @@ async fn install_is_additive_and_creates_namespace() {
             .await
             .unwrap()
             .get(0);
-    // apply the generated install migration into a fresh temper_next.
+    // apply the committed migration lineage (frozen install + forward deltas) into a fresh temper_next.
     common::apply_install_migration(&pool).await;
     let after: i64 =
         sqlx::query("SELECT count(*) FROM information_schema.tables WHERE table_schema='public'")

@@ -291,6 +291,20 @@ pub struct PropertyAsserted {
     pub weight: f64,
 }
 
+/// Set a **single-valued** property (WS6 4c): the projection folds prior active rows for
+/// `(owner, property_key)` then inserts this value, so the key holds exactly one current value (the
+/// resource-frontmatter shape, where each managed/open key has one value). Distinct from
+/// `PropertyAsserted` (append — the multi-valued facet shape, kept for `facet_set`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PropertySet {
+    pub property_id: PropertyId,
+    pub owner: AnchorRef,
+    pub property_key: String,
+    pub value: serde_json::Value,
+    pub weight: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct LensWeights {
@@ -376,6 +390,36 @@ pub struct RelationshipCorrected {
     pub edge_id: EdgeId,
     /// Structured account of the wrongness — the scar (production's shape).
     pub scar: String,
+}
+
+// ── resource mutations (WS6 4c live write path) ──────────────────────────────
+
+/// Soft-delete a resource — projection flips `is_active`. Identity-only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceDeleted {
+    pub resource_id: ResourceId,
+}
+
+/// Update mutable `kb_resources` columns. Each field is optional — absent ⇒ the projector COALESCEs to
+/// the current value, so a partial update carries only what changed (`title`/`origin_uri` are the §9
+/// invariants this covers; stage/mode/effort/doc_type live as properties, set via `facet_set`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceUpdated {
+    pub resource_id: ResourceId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_uri: Option<String>,
+}
+
+/// Re-home a resource (context move) — re-point its single `kb_resource_homes` row to `home`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct ResourceRehomed {
+    pub resource_id: ResourceId,
+    pub home: AnchorRef,
 }
 
 /// Tagged like the DDL's provenance_source_kind ({kind, value} sum — content-block spec).

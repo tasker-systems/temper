@@ -49,8 +49,9 @@ impl CloudBackend {
 mod embed_impl {
     use async_trait::async_trait;
     use temper_core::operations::{
-        Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent, ListResources,
-        ResourceRef, SearchResources, ShowResource, UpdateResource,
+        AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent,
+        FoldRelationship, ListResources, ResourceRef, RetypeRelationship, ReweightRelationship,
+        SearchResources, ShowResource, UpdateResource,
     };
     use temper_core::operations::{ResourceSummary, SearchHit};
     use temper_core::types::resource::ResourceRow;
@@ -164,6 +165,44 @@ mod embed_impl {
             Err(TemperError::Project(
                 "CloudBackend::search_resources not implemented — reads stay surface-direct"
                     .to_string(),
+            ))
+        }
+
+        // Relationship writes are on the trait (WS6 4c) but the CLI still routes them through
+        // temper-client directly; these stubs satisfy the trait until the cutover wires them.
+        async fn assert_relationship(
+            &self,
+            _cmd: AssertRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::assert_relationship not wired until cutover".to_string(),
+            ))
+        }
+
+        async fn retype_relationship(
+            &self,
+            _cmd: RetypeRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::retype_relationship not wired until cutover".to_string(),
+            ))
+        }
+
+        async fn reweight_relationship(
+            &self,
+            _cmd: ReweightRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::reweight_relationship not wired until cutover".to_string(),
+            ))
+        }
+
+        async fn fold_relationship(
+            &self,
+            _cmd: FoldRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::Project(
+                "CloudBackend::fold_relationship not wired until cutover".to_string(),
             ))
         }
     }
@@ -318,7 +357,8 @@ mod embed_impl {
 mod non_embed_impl {
     use async_trait::async_trait;
     use temper_core::operations::{
-        Backend, CommandOutput, CreateResource, DeleteResource, ListResources, ResourceSummary,
+        AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource,
+        FoldRelationship, ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship,
         SearchHit, SearchResources, ShowResource, UpdateResource,
     };
     use temper_core::types::resource::ResourceRow;
@@ -381,6 +421,42 @@ mod non_embed_impl {
             &self,
             _cmd: SearchResources,
         ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn assert_relationship(
+            &self,
+            _cmd: AssertRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn retype_relationship(
+            &self,
+            _cmd: RetypeRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn reweight_relationship(
+            &self,
+            _cmd: ReweightRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+            Err(TemperError::BadRequest(
+                "cloud mode requires --features embed".to_string(),
+            ))
+        }
+
+        async fn fold_relationship(
+            &self,
+            _cmd: FoldRelationship,
+        ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
             Err(TemperError::BadRequest(
                 "cloud mode requires --features embed".to_string(),
             ))

@@ -457,9 +457,13 @@ CREATE TABLE kb_properties (
     asserted_by_event_id  UUID NOT NULL REFERENCES kb_events(id),
     last_event_id         UUID NOT NULL REFERENCES kb_events(id),
     is_folded             BOOLEAN NOT NULL DEFAULT false,
-    created               TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (owner_table, owner_id, property_key, property_value)
+    created               TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Uniqueness applies to ACTIVE rows only (partial): a folded property is history and may repeat a
+-- value, so property_set's fold-then-reinsert (incl. revert-to-a-prior-value) never collides. Active
+-- duplicates of (owner, key, value) stay forbidden — the multi-valued-facet guard.
+CREATE UNIQUE INDEX uq_kb_properties_active ON kb_properties
+    (owner_table, owner_id, property_key, property_value) WHERE NOT is_folded;
 CREATE INDEX idx_kb_properties_owner     ON kb_properties(owner_table, owner_id) WHERE NOT is_folded;
 CREATE INDEX idx_kb_properties_value_gin ON kb_properties USING gin (property_value jsonb_path_ops);
 CREATE INDEX idx_kb_properties_key       ON kb_properties(property_key) WHERE NOT is_folded;

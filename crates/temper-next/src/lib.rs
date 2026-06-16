@@ -18,6 +18,7 @@ pub mod scenario;
 pub mod substrate;
 pub mod synthesis;
 pub mod write;
+pub mod writes;
 
 /// The shared sqlx migration chain (workspace `migrations/`). Exposed so synthesis + parity
 /// integration tests can spin up an isolated ephemeral DB via `#[sqlx::test(migrator = ...)]` with

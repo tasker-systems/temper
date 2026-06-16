@@ -1,4 +1,5 @@
 pub mod access_service;
+pub mod backend_selection_service;
 pub mod context_service;
 pub mod doc_type_service;
 pub mod edge_service;

@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
 use temper_core::operations::{
-    AssertRelationship, DomainEvent, FoldRelationship, ResourceRef, RetypeRelationship,
+    AssertRelationship, Backend, DomainEvent, FoldRelationship, ResourceRef, RetypeRelationship,
     ReweightRelationship, Surface,
 };
 use temper_core::types::graph::{EdgeKind, Polarity};

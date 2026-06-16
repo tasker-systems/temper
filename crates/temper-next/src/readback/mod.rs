@@ -156,16 +156,16 @@ pub async fn list(pool: &PgPool) -> Result<Vec<ListRow>> {
            FROM temper_next.kb_resources r
            JOIN temper_next.kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
-            AND dt.property_key = 'doc_type'
+            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
            LEFT JOIN temper_next.kb_properties st
              ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
-            AND st.property_key = 'temper-stage'
+            AND st.property_key = 'temper-stage' AND NOT st.is_folded
            LEFT JOIN temper_next.kb_properties md
              ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
-            AND md.property_key = 'temper-mode'
+            AND md.property_key = 'temper-mode' AND NOT md.is_folded
            LEFT JOIN temper_next.kb_properties ef
              ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
-            AND ef.property_key = 'temper-effort'
+            AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
           ORDER BY r.origin_uri",
     )
     .fetch_all(pool)
@@ -222,7 +222,7 @@ pub async fn meta(pool: &PgPool, new_id: Uuid) -> Result<ReconstructedMeta> {
     let rows = sqlx::query(
         "SELECT property_key, property_value
            FROM temper_next.kb_properties
-          WHERE owner_table = 'kb_resources' AND owner_id = $1",
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded",
     )
     .bind(new_id)
     .fetch_all(pool)
@@ -257,6 +257,144 @@ pub async fn meta(pool: &PgPool, new_id: Uuid) -> Result<ReconstructedMeta> {
         open,
         doc_type,
     })
+}
+
+/// The migration-invariant subset of production's `ResourceRow`, reconstructed from `temper_next.*`
+/// for the full-row reads (`show` / `by_uri`). Excludes the non-invariant fields by construction:
+/// re-minted identity UUIDs (resource id / context id / profile ids), §7-dissolved
+/// `slug`/`managed_hash`/`open_hash`, and the synthesis-collapsed `created`/`updated`. The caller
+/// (`NextBackend::show_resource`) supplies those from elsewhere (re-minted ids verbatim, a transitional
+/// `public.kb_doc_types` lookup for the doctype id, `None` for the dissolved fields, `Utc::now()` for
+/// the timestamps). See the WS6 4b spec parity-floor amendment.
+///
+/// The re-minted ids (`re_minted_id` / `re_minted_context_id` / `owner_profile_id` /
+/// `originator_profile_id`) are carried so the caller can populate `ResourceRow`'s non-optional UUID
+/// fields with the synthesized values — they are NOT migration invariants and are never asserted in
+/// parity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResourceRowParity {
+    /// The synthesized resource id (re-minted; not a parity invariant).
+    pub re_minted_id: Uuid,
+    /// The synthesized home-anchor context id (re-minted; not a parity invariant).
+    pub re_minted_context_id: Uuid,
+    /// The synthesized owner profile id (re-minted; not a parity invariant).
+    pub owner_profile_id: Uuid,
+    /// The synthesized originator profile id (re-minted; not a parity invariant).
+    pub originator_profile_id: Uuid,
+    /// Verbatim-carried, UNIQUE origin_uri (invariant).
+    pub origin_uri: String,
+    /// Resource title (invariant).
+    pub title: String,
+    /// Active flag (invariant; synthesis carries only active resources, so always true here).
+    pub is_active: bool,
+    /// Home context display name (invariant).
+    pub context_name: String,
+    /// Authoritative doctype name (invariant) — the `doc_type` property.
+    pub doc_type_name: String,
+    /// Owner profile handle (invariant).
+    pub owner_handle: String,
+    /// `temper-stage`, if present (invariant).
+    pub stage: Option<String>,
+    /// `temper-mode`, if present (invariant).
+    pub mode: Option<String>,
+    /// `temper-effort`, if present (invariant).
+    pub effort: Option<String>,
+    /// `temper-seq` parsed to i64, if present (invariant).
+    pub seq: Option<i64>,
+    /// Denormalized body merkle hash (invariant) — `kb_resources.body_hash`.
+    pub body_hash: Option<String>,
+}
+
+/// Port of production's full-row read (`resource_service::get_visible` / `resolve_by_uri`, behind
+/// `show` / `by_uri`) onto `temper_next.*`, at the §9 INVARIANT-FIELD floor. Joins the home (which
+/// anchors the context and owner profile), the `doc_type` property, and the workflow properties.
+/// Deliberately does NOT select `created`/`updated` (temper-next's sqlx has no `chrono` feature, and
+/// they are synthesis-collapsed non-invariants — the caller stamps read-time `now()`).
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn resource_row(pool: &PgPool, new_id: Uuid) -> Result<ResourceRowParity> {
+    let row = sqlx::query(
+        "SELECT r.id              AS re_minted_id,
+                r.origin_uri,
+                r.title,
+                r.is_active,
+                r.body_hash,
+                c.id              AS re_minted_context_id,
+                c.name            AS context_name,
+                h.owner_profile_id,
+                h.originator_profile_id,
+                p.handle          AS owner_handle,
+                dt.property_value #>> '{}' AS doc_type_name,
+                st.property_value #>> '{}' AS stage,
+                md.property_value #>> '{}' AS mode,
+                ef.property_value #>> '{}' AS effort,
+                sq.property_value #>> '{}' AS seq
+           FROM temper_next.kb_resources r
+           JOIN temper_next.kb_resource_homes h ON h.resource_id = r.id
+           JOIN temper_next.kb_contexts c
+             ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+           JOIN temper_next.kb_profiles p ON p.id = h.owner_profile_id
+           JOIN temper_next.kb_properties dt
+             ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+           LEFT JOIN temper_next.kb_properties st
+             ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
+            AND st.property_key = 'temper-stage' AND NOT st.is_folded
+           LEFT JOIN temper_next.kb_properties md
+             ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
+            AND md.property_key = 'temper-mode' AND NOT md.is_folded
+           LEFT JOIN temper_next.kb_properties ef
+             ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
+            AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
+           LEFT JOIN temper_next.kb_properties sq
+             ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
+            AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
+          WHERE r.id = $1",
+    )
+    .bind(new_id)
+    .fetch_one(pool)
+    .await?;
+
+    let seq_text: Option<String> = row.get("seq");
+    let seq = match seq_text {
+        Some(s) => Some(s.parse::<i64>().map_err(|e| {
+            anyhow::anyhow!("temper-seq {s:?} is not an i64 for resource {new_id}: {e}")
+        })?),
+        None => None,
+    };
+
+    Ok(ResourceRowParity {
+        re_minted_id: row.get("re_minted_id"),
+        re_minted_context_id: row.get("re_minted_context_id"),
+        owner_profile_id: row.get("owner_profile_id"),
+        originator_profile_id: row.get("originator_profile_id"),
+        origin_uri: row.get("origin_uri"),
+        title: row.get("title"),
+        is_active: row.get("is_active"),
+        context_name: row.get("context_name"),
+        doc_type_name: row.get("doc_type_name"),
+        owner_handle: row.get("owner_handle"),
+        stage: row.get("stage"),
+        mode: row.get("mode"),
+        effort: row.get("effort"),
+        seq,
+        body_hash: row.get("body_hash"),
+    })
+}
+
+/// Resolve a synthesized resource id from its `origin_uri` (the verbatim-carried, UNIQUE key both
+/// schemas share). `None` when no synthesized resource carries that uri. Used by read surfaces that
+/// hold an `origin_uri` (e.g. search results) and need the row id for a follow-up reconstruction.
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn resource_id_by_origin_uri(pool: &PgPool, origin_uri: &str) -> Result<Option<Uuid>> {
+    let row = sqlx::query("SELECT id FROM temper_next.kb_resources WHERE origin_uri = $1")
+        .bind(origin_uri)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|r| r.get::<Uuid, _>("id")))
 }
 
 /// Reconstruct a synthesized resource's markdown body from `temper_next` chunks — the §9 body read
