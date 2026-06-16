@@ -252,6 +252,13 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
                     .execute(pool)
                     .await?;
             }
+            "property_set" => {
+                sqlx::query("SELECT _project_property_set($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
             "lens_created" => {
                 sqlx::query("SELECT _project_lens_created($1,$2)")
                     .bind(id)

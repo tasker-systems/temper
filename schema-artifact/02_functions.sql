@@ -1076,6 +1076,45 @@ BEGIN
 END;
 $$;
 
+-- ── property_set (single-valued upsert) ──────────────────────────────────────
+-- Fold prior ACTIVE rows for (owner, property_key) then insert the new value, so a single-valued key
+-- (the resource-frontmatter shape) holds exactly one current row. Distinct from facet_set/
+-- property_asserted (append — the multi-valued facet shape). Replay-safe: deterministic from payload.
+CREATE FUNCTION _project_property_set(p_event uuid, p_payload jsonb)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_prop uuid := (p_payload->>'property_id')::uuid;
+        v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+        v_owner_tbl text := p_payload#>>'{owner,table}';
+        v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
+        v_key text := p_payload->>'property_key';
+BEGIN
+    UPDATE kb_properties SET is_folded = true, last_event_id = p_event
+        WHERE owner_table = v_owner_tbl AND owner_id = v_owner
+          AND property_key = v_key AND NOT is_folded;
+    INSERT INTO kb_properties (id, owner_table, owner_id, property_key, property_value, weight,
+                               asserted_by_event_id, last_event_id, created)
+    VALUES (v_prop, v_owner_tbl, v_owner, v_key, p_payload->'value',
+            (p_payload->>'weight')::double precision, p_event, p_event, v_occurred);
+    RETURN v_prop;
+END;
+$$;
+
+-- Envelope = the owner resource's home (the facet_set discipline). A homeless owner is an error.
+CREATE FUNCTION property_set(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_ev uuid; v_anchor_tbl text; v_anchor uuid;
+        v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
+BEGIN
+    SELECT anchor_table, anchor_id INTO v_anchor_tbl, v_anchor FROM kb_resource_homes
+        WHERE resource_id = v_owner ORDER BY (anchor_table='kb_cogmaps') DESC LIMIT 1;
+    IF v_anchor IS NULL THEN
+        RAISE EXCEPTION 'property_set: resource % has no home to anchor the property event', v_owner;
+    END IF;
+    v_ev := _event_append('property_set', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    RETURN _project_property_set(v_ev, p_payload);
+END;
+$$;
+
 -- ── relationship_retyped (edge_kind / polarity) ──────────────────────────────
 CREATE FUNCTION _project_relationship_retyped(p_event uuid, p_payload jsonb)
 RETURNS uuid LANGUAGE plpgsql AS $$

@@ -497,3 +497,183 @@ async fn mutations_replay_byte_identically() {
         assert_eq!(va, vb, "projection table {ta} diverged under replay");
     }
 }
+
+// ── property_set single-valued supersede ────────────────────────────────────────
+
+/// Setting a single-valued key repeatedly (incl. revert-to-a-prior-value) leaves exactly one ACTIVE
+/// row at the latest value, with the prior values folded as history — and never trips the active
+/// uniqueness index.
+#[tokio::test]
+async fn property_set_supersedes_prior_value() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "ps").await;
+    let r = make_resource(&pool, ctx, owner, emitter, "temper://ps/r", "body").await;
+
+    for v in ["backlog", "done", "backlog"] {
+        fire_one(
+            &pool,
+            SeedAction::PropertySet {
+                resource: r,
+                key: "temper-stage",
+                value: &serde_json::json!(v),
+                weight: 1.0,
+                emitter,
+            },
+        )
+        .await;
+    }
+
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM temper_next.kb_properties \
+         WHERE owner_id=$1 AND property_key='temper-stage' AND NOT is_folded",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        active, 1,
+        "exactly one active temper-stage row after supersede + revert"
+    );
+
+    let val: serde_json::Value = sqlx::query_scalar(
+        "SELECT property_value FROM temper_next.kb_properties \
+         WHERE owner_id=$1 AND property_key='temper-stage' AND NOT is_folded",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        val,
+        serde_json::json!("backlog"),
+        "current value is the last set"
+    );
+
+    let total: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM temper_next.kb_properties \
+         WHERE owner_id=$1 AND property_key='temper-stage'",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(total, 3, "prior values preserved as folded history");
+}
+
+// ── Slice 2: writes module composition ──────────────────────────────────────────
+
+/// create_resource + update_resource through the typed write ops, observed via readback — proves the
+/// composition (block + single-valued properties + title + rehome) lands at the §9 read floor.
+#[tokio::test]
+async fn writes_create_then_update_reflected_in_readback() {
+    use temper_next::{readback, writes};
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let ctx = make_context(&pool, owner, "w").await;
+    let ctx2 = make_context(&pool, owner, "w2").await;
+
+    let create_props = vec![("temper-stage".to_string(), serde_json::json!("backlog"))];
+    let r = writes::create_resource(
+        &pool,
+        writes::CreateParams {
+            title: "Orig",
+            origin_uri: "temper://w/r",
+            body: "original body text here",
+            doc_type: "task",
+            home: ctx,
+            owner,
+            originator: owner,
+            emitter,
+            properties: &create_props,
+        },
+    )
+    .await
+    .unwrap();
+
+    writes::update_resource(
+        &pool,
+        writes::UpdateParams {
+            resource: r,
+            body: Some("revised body text now"),
+            title: Some("Renamed"),
+            origin_uri: None,
+            properties: &[("temper-stage".to_string(), serde_json::json!("done"))],
+            rehome_to: Some(ctx2),
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    let row = readback::resource_row(&pool, r.uuid()).await.unwrap();
+    assert_eq!(row.title, "Renamed", "title updated");
+    assert_eq!(
+        row.stage.as_deref(),
+        Some("done"),
+        "stage superseded, single current value"
+    );
+
+    let body: String = sqlx::query_scalar("SELECT temper_next.resource_body_text($1)")
+        .bind(r.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(body.contains("revised"), "body revised: {body:?}");
+
+    let anchor: Uuid = sqlx::query_scalar(
+        "SELECT anchor_id FROM temper_next.kb_resource_homes WHERE resource_id=$1",
+    )
+    .bind(r.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(anchor, ctx2.uuid(), "rehomed to ctx2");
+}
+
+/// The natural-key resolvers find an entity + context by their synthesis-written keys.
+#[tokio::test]
+async fn writes_resolvers_find_context_and_emitter() {
+    use temper_next::writes;
+    let pool = setup().await;
+    let (owner, _sys) = system_actor(&pool).await;
+    // a context named "My Ctx" → slug "my-ctx"; an emitter pete@cli for the owner profile.
+    common::insert_context(&pool, "kb_profiles", owner.uuid(), "my-ctx", "My Ctx")
+        .await
+        .unwrap();
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO kb_entities (profile_id, name) VALUES ($1, 'pete@cli')")
+        .bind(owner.uuid())
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    let ctx = writes::resolve_context(&pool, owner, "My Ctx")
+        .await
+        .unwrap();
+    let exists: bool = sqlx::query_scalar(
+        "SELECT exists(SELECT 1 FROM temper_next.kb_contexts WHERE id=$1 AND slug='my-ctx')",
+    )
+    .bind(ctx.uuid())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert!(
+        exists,
+        "resolve_context slugified the name and found the row"
+    );
+
+    let emitter = writes::resolve_emitter(&pool, owner, "cli").await.unwrap();
+    let name: String = sqlx::query_scalar("SELECT name FROM temper_next.kb_entities WHERE id=$1")
+        .bind(emitter.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(name, "pete@cli");
+}

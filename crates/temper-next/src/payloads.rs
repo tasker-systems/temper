@@ -291,6 +291,20 @@ pub struct PropertyAsserted {
     pub weight: f64,
 }
 
+/// Set a **single-valued** property (WS6 4c): the projection folds prior active rows for
+/// `(owner, property_key)` then inserts this value, so the key holds exactly one current value (the
+/// resource-frontmatter shape, where each managed/open key has one value). Distinct from
+/// `PropertyAsserted` (append — the multi-valued facet shape, kept for `facet_set`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct PropertySet {
+    pub property_id: PropertyId,
+    pub owner: AnchorRef,
+    pub property_key: String,
+    pub value: serde_json::Value,
+    pub weight: f64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
 pub struct LensWeights {

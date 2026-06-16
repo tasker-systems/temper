@@ -44,6 +44,7 @@ pub enum EventKind {
     RelationshipRetyped,
     RelationshipReweighted,
     PropertyAsserted,
+    PropertySet,
     LensCreated,
     RegionMaterialized,
     RelationshipFolded,
@@ -63,6 +64,7 @@ impl EventKind {
             EventKind::RelationshipRetyped => "relationship_retyped",
             EventKind::RelationshipReweighted => "relationship_reweighted",
             EventKind::PropertyAsserted => "property_asserted",
+            EventKind::PropertySet => "property_set",
             EventKind::LensCreated => "lens_created",
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
@@ -144,6 +146,16 @@ pub enum SeedAction<'a> {
         weight: f64,
         emitter: EntityId,
     },
+    /// Set a SINGLE-valued property: folds prior active `(owner, key)` rows then asserts this value, so
+    /// the key holds one current value (the resource-frontmatter shape). Multi-valued facets use
+    /// [`SeedAction::FacetSet`] / [`SeedAction::PropertyAssert`] (append).
+    PropertySet {
+        resource: ResourceId,
+        key: &'a str,
+        value: &'a serde_json::Value,
+        weight: f64,
+        emitter: EntityId,
+    },
     LensCreate {
         /// `None` ⇒ a global system lens (`cogmap_id NULL`).
         cogmap: Option<CogmapId>,
@@ -210,6 +222,7 @@ impl SeedAction<'_> {
             SeedAction::RelationshipAssert { .. } => EventKind::RelationshipAsserted,
             SeedAction::FacetSet { .. } => EventKind::PropertyAsserted,
             SeedAction::PropertyAssert { .. } => EventKind::PropertyAsserted,
+            SeedAction::PropertySet { .. } => EventKind::PropertySet,
             SeedAction::LensCreate { .. } => EventKind::LensCreated,
             SeedAction::Materialize { .. } => EventKind::RegionMaterialized,
             SeedAction::RelationshipFold { .. } => EventKind::RelationshipFolded,
@@ -439,6 +452,31 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             .fetch_one(&mut *conn)
             .await?
             .context("facet_set returned null")?;
+            Ok(Fired::Facet(PropertyId::from(id)))
+        }
+
+        SeedAction::PropertySet {
+            resource,
+            key,
+            value,
+            weight,
+            emitter,
+        } => {
+            let payload = payloads::PropertySet {
+                property_id: PropertyId::from(Uuid::now_v7()),
+                owner: payloads::AnchorRef::resource(resource),
+                property_key: key.to_owned(),
+                value: value.clone(),
+                weight,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT property_set($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("property_set returned null")?;
             Ok(Fired::Facet(PropertyId::from(id)))
         }
 

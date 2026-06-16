@@ -32,7 +32,7 @@ INSERT INTO kb_event_types (name) VALUES
     ('relationship_asserted'), ('relationship_retracted'), ('relationship_retyped'),
     ('relationship_reweighted'), ('relationship_folded'),
     ('relationship_decayed'), ('relationship_corrected'),
-    ('property_asserted'), ('property_retracted'), ('property_reweighted'), ('property_folded'),
+    ('property_asserted'), ('property_set'), ('property_retracted'), ('property_reweighted'), ('property_folded'),
     ('block_created'), ('block_mutated'), ('block_folded'), ('block_provenance_corrected'),
     ('grant_created'), ('grant_revoked'),
     ('cogmap_seeded'), ('region_materialized'), ('delegated_launch'), ('lens_created');

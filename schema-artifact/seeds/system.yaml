@@ -19,6 +19,7 @@ event_types:
   - relationship_decayed
   - relationship_corrected
   - property_asserted
+  - property_set
   - property_retracted
   - property_reweighted
   - property_folded

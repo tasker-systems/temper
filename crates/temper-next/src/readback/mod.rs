@@ -156,16 +156,16 @@ pub async fn list(pool: &PgPool) -> Result<Vec<ListRow>> {
            FROM temper_next.kb_resources r
            JOIN temper_next.kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
-            AND dt.property_key = 'doc_type'
+            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
            LEFT JOIN temper_next.kb_properties st
              ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
-            AND st.property_key = 'temper-stage'
+            AND st.property_key = 'temper-stage' AND NOT st.is_folded
            LEFT JOIN temper_next.kb_properties md
              ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
-            AND md.property_key = 'temper-mode'
+            AND md.property_key = 'temper-mode' AND NOT md.is_folded
            LEFT JOIN temper_next.kb_properties ef
              ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
-            AND ef.property_key = 'temper-effort'
+            AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
           ORDER BY r.origin_uri",
     )
     .fetch_all(pool)
@@ -222,7 +222,7 @@ pub async fn meta(pool: &PgPool, new_id: Uuid) -> Result<ReconstructedMeta> {
     let rows = sqlx::query(
         "SELECT property_key, property_value
            FROM temper_next.kb_properties
-          WHERE owner_table = 'kb_resources' AND owner_id = $1",
+          WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded",
     )
     .bind(new_id)
     .fetch_all(pool)
@@ -337,19 +337,19 @@ pub async fn resource_row(pool: &PgPool, new_id: Uuid) -> Result<ResourceRowPari
            JOIN temper_next.kb_profiles p ON p.id = h.owner_profile_id
            JOIN temper_next.kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
-            AND dt.property_key = 'doc_type'
+            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
            LEFT JOIN temper_next.kb_properties st
              ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
-            AND st.property_key = 'temper-stage'
+            AND st.property_key = 'temper-stage' AND NOT st.is_folded
            LEFT JOIN temper_next.kb_properties md
              ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
-            AND md.property_key = 'temper-mode'
+            AND md.property_key = 'temper-mode' AND NOT md.is_folded
            LEFT JOIN temper_next.kb_properties ef
              ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
-            AND ef.property_key = 'temper-effort'
+            AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
            LEFT JOIN temper_next.kb_properties sq
              ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
-            AND sq.property_key = 'temper-seq'
+            AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
           WHERE r.id = $1",
     )
     .bind(new_id)
