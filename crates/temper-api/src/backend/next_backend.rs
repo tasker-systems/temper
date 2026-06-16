@@ -15,9 +15,11 @@ use sqlx::{PgPool, Row};
 
 use temper_core::error::TemperError;
 use temper_core::operations::{
-    Backend, CommandOutput, CreateResource, DeleteResource, ListResources, ResourceRef,
-    ResourceSummary, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
+    AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
+    ListResources, ResourceRef, ResourceSummary, RetypeRelationship, ReweightRelationship,
+    SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
 };
+use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
 use temper_core::types::resource::ResourceRow;
 
@@ -29,6 +31,26 @@ use temper_next::writes;
 /// depend on it) — `anyhow::Error: Display`, so `to_string()` carries the message.
 fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
+}
+
+/// graph::EdgeKind → temper-next's affinity::EdgeKind (identical 4-variant taxonomy — 1:1, no §4 remap).
+fn map_edge_kind(k: graph::EdgeKind) -> temper_next::affinity::EdgeKind {
+    use temper_next::affinity::EdgeKind as N;
+    match k {
+        graph::EdgeKind::Express => N::Express,
+        graph::EdgeKind::Contains => N::Contains,
+        graph::EdgeKind::LeadsTo => N::LeadsTo,
+        graph::EdgeKind::Near => N::Near,
+    }
+}
+
+/// graph::Polarity → temper-next's payloads::EdgePolarity.
+fn map_polarity(p: graph::Polarity) -> temper_next::payloads::EdgePolarity {
+    use temper_next::payloads::EdgePolarity as N;
+    match p {
+        graph::Polarity::Forward => N::Forward,
+        graph::Polarity::Inverse => N::Inverse,
+    }
 }
 
 /// Map an inbound [`Surface`] to the synthesized per-surface emitter marker (`pete@<marker>`, §1b).
@@ -340,6 +362,150 @@ impl Backend for NextBackend {
             })
             .collect();
         Ok(CommandOutput::new(hits))
+    }
+
+    async fn assert_relationship(
+        &self,
+        cmd: AssertRelationship,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        // Source public id (the ref carries it; Scoped lands with by_uri, chunk-5).
+        let source_pub = match &cmd.source {
+            ResourceRef::Uuid { id } => uuid::Uuid::from(*id),
+            ResourceRef::Scoped { .. } => {
+                return Err(TemperError::NotImplemented(
+                    "scoped source ref on next assert (by_uri, chunk-5)".into(),
+                ))
+            }
+        };
+        let ids = readback::ResolvedIds::load(&self.pool)
+            .await
+            .map_err(api_err)?;
+        let src_next = ids.to_new(source_pub).ok_or_else(|| {
+            TemperError::NotFound(format!("source {source_pub} not in temper_next"))
+        })?;
+
+        // Resolve the target by slug in the source's (public) context, then map to its temper_next id —
+        // slug is §7-dissolved in temper_next, so resolution stays in `public` during the parity era.
+        let src_ctx_pub: uuid::Uuid =
+            sqlx::query_scalar("SELECT kb_context_id FROM public.kb_resources WHERE id=$1")
+                .bind(source_pub)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| TemperError::Api(e.to_string()))?;
+        let target_pub: uuid::Uuid = sqlx::query_scalar(
+            "SELECT id FROM public.kb_resources WHERE slug=$1 AND kb_context_id=$2 AND is_active",
+        )
+        .bind(&cmd.target_slug)
+        .bind(src_ctx_pub)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?
+        .ok_or_else(|| {
+            TemperError::NotFound(format!("target slug {:?} not found", cmd.target_slug))
+        })?;
+        let tgt_next = ids.to_new(target_pub).ok_or_else(|| {
+            TemperError::NotFound(format!("target {target_pub} not in temper_next"))
+        })?;
+
+        // The edge homes in the source's temper_next context (its home anchor).
+        let home_next: uuid::Uuid = sqlx::query_scalar(
+            "SELECT anchor_id FROM temper_next.kb_resource_homes \
+             WHERE resource_id=$1 AND anchor_table='kb_contexts'",
+        )
+        .bind(src_next)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| TemperError::Api(e.to_string()))?;
+
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+
+        let label = (!cmd.label.is_empty()).then_some(cmd.label.as_str());
+        let edge = writes::assert_relationship(
+            &self.pool,
+            writes::AssertParams {
+                src: temper_next::ids::ResourceId::from(src_next),
+                tgt: temper_next::ids::ResourceId::from(tgt_next),
+                kind: map_edge_kind(cmd.edge_kind),
+                polarity: map_polarity(cmd.polarity),
+                label,
+                weight: cmd.weight,
+                home: temper_next::ids::ContextId::from(home_next),
+                emitter,
+            },
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(edge.uuid()))
+    }
+
+    async fn retype_relationship(
+        &self,
+        cmd: RetypeRelationship,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        // The edge handle on the next backend IS the temper_next edge id (returned by assert).
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+        writes::retype_relationship(
+            &self.pool,
+            temper_next::ids::EdgeId::from(cmd.correlation_id),
+            map_edge_kind(cmd.edge_kind),
+            map_polarity(cmd.polarity),
+            emitter,
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(cmd.correlation_id))
+    }
+
+    async fn reweight_relationship(
+        &self,
+        cmd: ReweightRelationship,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+        writes::reweight_relationship(
+            &self.pool,
+            temper_next::ids::EdgeId::from(cmd.correlation_id),
+            cmd.weight,
+            emitter,
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(cmd.correlation_id))
+    }
+
+    async fn fold_relationship(
+        &self,
+        cmd: FoldRelationship,
+    ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        let owner = writes::resolve_profile(&self.pool, *self.profile_id)
+            .await
+            .map_err(api_err)?;
+        let emitter = writes::resolve_emitter(&self.pool, owner, surface_marker(cmd.origin))
+            .await
+            .map_err(api_err)?;
+        writes::fold_relationship(
+            &self.pool,
+            temper_next::ids::EdgeId::from(cmd.correlation_id),
+            cmd.reason.as_deref(),
+            emitter,
+        )
+        .await
+        .map_err(api_err)?;
+        Ok(CommandOutput::new(cmd.correlation_id))
     }
 }
 

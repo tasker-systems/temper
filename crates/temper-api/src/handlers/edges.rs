@@ -3,7 +3,7 @@ use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::require_legacy_backend;
+use crate::backend::select_backend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::edge_service;
@@ -74,7 +74,7 @@ pub async fn assert(
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         state.backend_selection,
         &state.pool,
         ProfileId::from(auth.0.profile.id),
@@ -122,7 +122,7 @@ pub async fn retype(
         polarity: req.polarity,
         origin: Surface::ApiHttp,
     };
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         state.backend_selection,
         &state.pool,
         ProfileId::from(auth.0.profile.id),
@@ -169,7 +169,7 @@ pub async fn reweight(
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         state.backend_selection,
         &state.pool,
         ProfileId::from(auth.0.profile.id),
@@ -216,7 +216,7 @@ pub async fn fold(
         reason: req.reason,
         origin: Surface::ApiHttp,
     };
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         state.backend_selection,
         &state.pool,
         ProfileId::from(auth.0.profile.id),

@@ -170,3 +170,161 @@ async fn create_update_delete_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
     assert!(!legacy_active, "legacy soft-deleted");
     assert!(!next_active, "next soft-deleted");
 }
+
+// ── relationship round-trip ─────────────────────────────────────────────────────
+
+use temper_core::operations::{
+    AssertRelationship, FoldRelationship, RetypeRelationship, ReweightRelationship,
+};
+use temper_core::types::graph::{EdgeKind, Polarity};
+
+/// (edge_kind, polarity, label, weight, is_folded) for an edge — the state the §9 graph floor asserts.
+type EdgeState = (String, String, Option<String>, f64, bool);
+
+async fn legacy_edge(pool: &sqlx::PgPool, src: uuid::Uuid, tgt: uuid::Uuid) -> EdgeState {
+    sqlx::query_as(
+        "SELECT edge_kind::text, polarity::text, label, weight, is_folded \
+         FROM public.kb_resource_edges \
+         WHERE source_resource_id=$1 AND target_resource_id=$2 ORDER BY created DESC LIMIT 1",
+    )
+    .bind(src)
+    .bind(tgt)
+    .fetch_one(pool)
+    .await
+    .expect("legacy edge")
+}
+
+async fn next_edge(pool: &sqlx::PgPool, edge_id: uuid::Uuid) -> EdgeState {
+    sqlx::query_as(
+        "SELECT edge_kind::text, polarity::text, label, weight, is_folded \
+         FROM temper_next.kb_edges WHERE id=$1",
+    )
+    .bind(edge_id)
+    .fetch_one(pool)
+    .await
+    .expect("next edge")
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    let profile = ProfileId::from(uuid::Uuid::parse_str(common::SYSTEM_PROFILE_ID).unwrap());
+    sqlx::query(
+        "UPDATE kb_contexts SET kb_owner_table='kb_profiles', kb_owner_id=$1::uuid WHERE id=$2::uuid",
+    )
+    .bind(common::SYSTEM_PROFILE_ID)
+    .bind(common::TEMPER_CONTEXT_ID)
+    .execute(&app.pool)
+    .await
+    .expect("own temper context");
+
+    let legacy = DbBackend::new(app.pool.clone(), profile, "dev".into(), Surface::CliCloud);
+    let next = NextBackend::new(app.pool.clone(), profile);
+
+    // Two endpoint resources (slugged), created in public, then synthesized into temper_next.
+    let mut a_cmd = create_cmd("test://edge-a");
+    a_cmd.slug = "edge-a".into();
+    a_cmd.title = "Edge A".into();
+    let mut b_cmd = create_cmd("test://edge-b");
+    b_cmd.slug = "edge-b".into();
+    b_cmd.title = "Edge B".into();
+    let a = legacy.create_resource(a_cmd).await.expect("create A").value;
+    let b = legacy.create_resource(b_cmd).await.expect("create B").value;
+    temper_next::synthesis::run(&app.pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run");
+
+    let assert_cmd = || AssertRelationship {
+        source: ResourceRef::Uuid { id: a.id },
+        target_slug: "edge-b".into(),
+        edge_kind: EdgeKind::LeadsTo,
+        polarity: Polarity::Forward,
+        label: "operationalized_by".into(),
+        weight: 1.0,
+        origin: Surface::CliCloud,
+    };
+
+    // ── assert ──
+    let corr_l = legacy
+        .assert_relationship(assert_cmd())
+        .await
+        .expect("legacy assert")
+        .value;
+    let edge_n = next
+        .assert_relationship(assert_cmd())
+        .await
+        .expect("next assert")
+        .value;
+    assert_eq!(
+        legacy_edge(&app.pool, *a.id, *b.id).await,
+        next_edge(&app.pool, edge_n).await,
+        "edge state after assert"
+    );
+
+    // ── retype (kind LeadsTo → Contains) ──
+    legacy
+        .retype_relationship(RetypeRelationship {
+            correlation_id: corr_l,
+            edge_kind: EdgeKind::Contains,
+            polarity: Polarity::Forward,
+            origin: Surface::CliCloud,
+        })
+        .await
+        .expect("legacy retype");
+    next.retype_relationship(RetypeRelationship {
+        correlation_id: edge_n,
+        edge_kind: EdgeKind::Contains,
+        polarity: Polarity::Forward,
+        origin: Surface::CliCloud,
+    })
+    .await
+    .expect("next retype");
+    assert_eq!(
+        legacy_edge(&app.pool, *a.id, *b.id).await,
+        next_edge(&app.pool, edge_n).await,
+        "edge state after retype"
+    );
+
+    // ── reweight ──
+    legacy
+        .reweight_relationship(ReweightRelationship {
+            correlation_id: corr_l,
+            weight: 2.5,
+            origin: Surface::CliCloud,
+        })
+        .await
+        .expect("legacy reweight");
+    next.reweight_relationship(ReweightRelationship {
+        correlation_id: edge_n,
+        weight: 2.5,
+        origin: Surface::CliCloud,
+    })
+    .await
+    .expect("next reweight");
+    assert_eq!(
+        legacy_edge(&app.pool, *a.id, *b.id).await,
+        next_edge(&app.pool, edge_n).await,
+        "edge state after reweight"
+    );
+
+    // ── fold ──
+    legacy
+        .fold_relationship(FoldRelationship {
+            correlation_id: corr_l,
+            reason: None,
+            origin: Surface::CliCloud,
+        })
+        .await
+        .expect("legacy fold");
+    next.fold_relationship(FoldRelationship {
+        correlation_id: edge_n,
+        reason: None,
+        origin: Surface::CliCloud,
+    })
+    .await
+    .expect("next fold");
+    let (_, _, _, _, l_folded) = legacy_edge(&app.pool, *a.id, *b.id).await;
+    let (_, _, _, _, n_folded) = next_edge(&app.pool, edge_n).await;
+    assert!(l_folded, "legacy edge folded");
+    assert!(n_folded, "next edge folded");
+}

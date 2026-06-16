@@ -78,8 +78,127 @@ impl DbBackend {
     fn explicit_intent_metadata() -> serde_json::Value {
         serde_json::json!({ "intent": "explicit" })
     }
+}
 
-    /// Assert a new relationship from `cmd.source` to `cmd.target_slug`.
+#[async_trait]
+impl Backend for DbBackend {
+    async fn create_resource(
+        &self,
+        cmd: CreateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        let payload = create_resource_to_ingest_payload(cmd);
+        let row = ingest_service::ingest(self.pool(), self.profile_id(), self.device_id(), payload)
+            .await
+            .map_err(TemperError::from)?;
+        let event = DomainEvent::DbResourceCreated {
+            resource_id: row.id,
+        };
+        Ok(CommandOutput::with_events(row, vec![event]))
+    }
+
+    async fn show_resource(
+        &self,
+        cmd: ShowResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        let row = match cmd.resource {
+            ResourceRef::Uuid { id } => {
+                resource_service::get_visible(self.pool(), *self.profile_id(), *id)
+                    .await
+                    .map_err(TemperError::from)?
+            }
+            ResourceRef::Scoped {
+                owner,
+                context,
+                doctype,
+                slug,
+            } => {
+                let params = resource_service::ResolveByUriParams {
+                    owner,
+                    context,
+                    doc_type: doctype,
+                    ident: slug,
+                };
+                resource_service::resolve_by_uri(self.pool(), *self.profile_id(), &params)
+                    .await
+                    .map_err(TemperError::from)?
+            }
+        };
+        Ok(CommandOutput::new(row))
+    }
+
+    async fn update_resource(
+        &self,
+        cmd: UpdateResource,
+    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
+        let resource_id = super::translators::resolve_resource_ref(
+            self.pool(),
+            self.profile_id(),
+            cmd.resource.clone(),
+        )
+        .await?;
+        let req = super::translators::update_resource_to_request(cmd)?;
+        let row = resource_service::update(
+            self.pool(),
+            *self.profile_id(),
+            *resource_id,
+            self.device_id(),
+            req,
+        )
+        .await
+        .map_err(TemperError::from)?;
+        let event = DomainEvent::DbResourceUpdated {
+            resource_id: row.id,
+        };
+        Ok(CommandOutput::with_events(row, vec![event]))
+    }
+
+    async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
+        let resource_id =
+            super::translators::resolve_resource_ref(self.pool(), self.profile_id(), cmd.resource)
+                .await?;
+        resource_service::delete(
+            self.pool(),
+            self.profile_id(),
+            resource_id,
+            self.device_id(),
+        )
+        .await
+        .map_err(TemperError::from)?;
+        let event = DomainEvent::DbResourceSoftDeleted { resource_id };
+        Ok(CommandOutput::with_events((), vec![event]))
+    }
+
+    async fn list_resources(
+        &self,
+        cmd: ListResources,
+    ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
+        let params = super::translators::list_filter_to_params(cmd.filter);
+        let response = resource_service::list_visible(self.pool(), *self.profile_id(), params)
+            .await
+            .map_err(TemperError::from)?;
+        let summaries: Vec<ResourceSummary> = response
+            .rows
+            .iter()
+            .map(super::translators::resource_row_to_summary)
+            .collect();
+        Ok(CommandOutput::new(summaries))
+    }
+
+    async fn search_resources(
+        &self,
+        cmd: SearchResources,
+    ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
+        let params = super::translators::search_query_to_params(cmd.query);
+        let rows = crate::services::search_service::search(self.pool(), *self.profile_id(), params)
+            .await
+            .map_err(TemperError::from)?;
+        let hits: Vec<SearchHit> = rows
+            .iter()
+            .map(super::translators::unified_hit_to_search_hit)
+            .collect();
+        Ok(CommandOutput::new(hits))
+    }
+
     ///
     /// If the target slug resolves to a resource in the same context as the
     /// source, an edge row is projected immediately. If not, the event is
@@ -95,7 +214,7 @@ impl DbBackend {
     /// - Slug-target re-assert (target not yet resolved) → fresh assert as
     ///   normal; the slug-resolves-later case is handled by
     ///   `reproject_pending_for_resource` on the create path.
-    pub async fn assert_relationship(
+    async fn assert_relationship(
         &self,
         cmd: AssertRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
@@ -249,7 +368,7 @@ impl DbBackend {
 
     /// Retype an existing relationship — changes `edge_kind` / `polarity`.
     /// Identified by the original assertion's `correlation_id`.
-    pub async fn retype_relationship(
+    async fn retype_relationship(
         &self,
         cmd: RetypeRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
@@ -306,7 +425,7 @@ impl DbBackend {
 
     /// Reweight an existing relationship — changes `weight`.
     /// Identified by the original assertion's `correlation_id`.
-    pub async fn reweight_relationship(
+    async fn reweight_relationship(
         &self,
         cmd: ReweightRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
@@ -360,7 +479,7 @@ impl DbBackend {
 
     /// Fold (retract) an existing relationship — sets `is_folded = true`.
     /// Identified by the original assertion's `correlation_id`.
-    pub async fn fold_relationship(
+    async fn fold_relationship(
         &self,
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
@@ -412,125 +531,5 @@ impl DbBackend {
                 correlation_id: cmd.correlation_id,
             }],
         ))
-    }
-}
-
-#[async_trait]
-impl Backend for DbBackend {
-    async fn create_resource(
-        &self,
-        cmd: CreateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        let payload = create_resource_to_ingest_payload(cmd);
-        let row = ingest_service::ingest(self.pool(), self.profile_id(), self.device_id(), payload)
-            .await
-            .map_err(TemperError::from)?;
-        let event = DomainEvent::DbResourceCreated {
-            resource_id: row.id,
-        };
-        Ok(CommandOutput::with_events(row, vec![event]))
-    }
-
-    async fn show_resource(
-        &self,
-        cmd: ShowResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        let row = match cmd.resource {
-            ResourceRef::Uuid { id } => {
-                resource_service::get_visible(self.pool(), *self.profile_id(), *id)
-                    .await
-                    .map_err(TemperError::from)?
-            }
-            ResourceRef::Scoped {
-                owner,
-                context,
-                doctype,
-                slug,
-            } => {
-                let params = resource_service::ResolveByUriParams {
-                    owner,
-                    context,
-                    doc_type: doctype,
-                    ident: slug,
-                };
-                resource_service::resolve_by_uri(self.pool(), *self.profile_id(), &params)
-                    .await
-                    .map_err(TemperError::from)?
-            }
-        };
-        Ok(CommandOutput::new(row))
-    }
-
-    async fn update_resource(
-        &self,
-        cmd: UpdateResource,
-    ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        let resource_id = super::translators::resolve_resource_ref(
-            self.pool(),
-            self.profile_id(),
-            cmd.resource.clone(),
-        )
-        .await?;
-        let req = super::translators::update_resource_to_request(cmd)?;
-        let row = resource_service::update(
-            self.pool(),
-            *self.profile_id(),
-            *resource_id,
-            self.device_id(),
-            req,
-        )
-        .await
-        .map_err(TemperError::from)?;
-        let event = DomainEvent::DbResourceUpdated {
-            resource_id: row.id,
-        };
-        Ok(CommandOutput::with_events(row, vec![event]))
-    }
-
-    async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
-        let resource_id =
-            super::translators::resolve_resource_ref(self.pool(), self.profile_id(), cmd.resource)
-                .await?;
-        resource_service::delete(
-            self.pool(),
-            self.profile_id(),
-            resource_id,
-            self.device_id(),
-        )
-        .await
-        .map_err(TemperError::from)?;
-        let event = DomainEvent::DbResourceSoftDeleted { resource_id };
-        Ok(CommandOutput::with_events((), vec![event]))
-    }
-
-    async fn list_resources(
-        &self,
-        cmd: ListResources,
-    ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-        let params = super::translators::list_filter_to_params(cmd.filter);
-        let response = resource_service::list_visible(self.pool(), *self.profile_id(), params)
-            .await
-            .map_err(TemperError::from)?;
-        let summaries: Vec<ResourceSummary> = response
-            .rows
-            .iter()
-            .map(super::translators::resource_row_to_summary)
-            .collect();
-        Ok(CommandOutput::new(summaries))
-    }
-
-    async fn search_resources(
-        &self,
-        cmd: SearchResources,
-    ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
-        let params = super::translators::search_query_to_params(cmd.query);
-        let rows = crate::services::search_service::search(self.pool(), *self.profile_id(), params)
-            .await
-            .map_err(TemperError::from)?;
-        let hits: Vec<SearchHit> = rows
-            .iter()
-            .map(super::translators::unified_hit_to_search_hit)
-            .collect();
-        Ok(CommandOutput::new(hits))
     }
 }

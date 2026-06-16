@@ -11,7 +11,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::require_legacy_backend;
+use temper_api::backend::select_backend;
 use temper_core::error::TemperError;
 use temper_core::operations::{
     AssertRelationship, FoldRelationship, ResourceRef, RetypeRelationship, ReweightRelationship,
@@ -126,7 +126,7 @@ pub async fn assert_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         svc.api_state.backend_selection,
         pool,
         profile_id,
@@ -162,7 +162,7 @@ pub async fn retype_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         svc.api_state.backend_selection,
         pool,
         profile_id,
@@ -197,7 +197,7 @@ pub async fn reweight_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         svc.api_state.backend_selection,
         pool,
         profile_id,
@@ -232,7 +232,7 @@ pub async fn fold_relationship(
         origin: Surface::Mcp,
     };
 
-    let backend = require_legacy_backend(
+    let backend = select_backend(
         svc.api_state.backend_selection,
         pool,
         profile_id,
