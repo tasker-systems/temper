@@ -52,6 +52,8 @@ Add a `principal: Uuid` (profile id) parameter to the readback read functions an
 
 The principal is the JWT-authenticated profile already available at each surface (the same value production threads into `resources_visible_to($1)` today). The `read_selector` arms (`list_select`/`get_content_select`/`get_meta_select`/`search_select`) and the MCP search path take it from their existing auth context and pass it down. **No `SET LOCAL` session-var indirection** — explicit parameter, conforming to the function's `(p_profile)` signature.
 
+**Principal id mapping — preserve profile ids in synthesis (decided 2026-06-16).** `resources_visible_to(p_profile)` expects a `temper_next` profile id, but the auth'd principal is a *production* profile id. Synthesis currently re-mints profile ids (`bootstrap.rs:202` `insert_profile` inserts with the DB-default uuid, using `old_id` only for handle disambiguation), and there is **no read-time profile bimap** (unlike resources' `ResolvedIds`-by-`origin_uri`). Rather than add a read-time mapping layer, **synthesis preserves production profile ids verbatim** — `insert_profile` inserts the explicit `id = old_id` (PR#124 identity-as-input). Then `resources_visible_to(prod_profile_id)` resolves directly, no mapping. This is the targeted slice of the broader "preserve vs re-mint ids" question (profiles only — they are just principals, with none of the native-id-addressing implications resource ids carry); it tightens parity (synthesized `Pete.id == prod Pete.id`) and never widens the §9 floor (profile ids are not asserted invariants there). The personal-team / system-membership triggers key on the profile id and are unaffected.
+
 ### D3 — Add the write-axis `can_modify` function (forward migration) + wire NextBackend writes
 
 The install migration is **frozen append-only** (the 4c critical fix: `migrations/20260613000001` is checksum-tracked and must never change in place). So the new write-axis gate lands as a **new forward migration** (`20260616…` lineage), idempotent, adding:
@@ -81,11 +83,12 @@ The 4c semantic migration drift guard (committed migrations reconstruct the arti
 
 ## Units (for writing-plans)
 
-1. Thread `principal` through `readback` read fns + JOIN-filter (D1/D2); read_selector + MCP search pass it down.
-2. `can_modify_resource` — artifact `02_functions.sql` + forward migration + drift-guard (D3/D4).
-3. NextBackend writes call the modify gate before mutation (D3).
-4. P1 scenario-topology wiring tests (reuse access-scenario harness).
-5. P2 principal-aware extension to the chunk-3 parity harness.
+1. Preserve production profile ids in synthesis (`insert_profile` inserts explicit `id = old_id`) so the auth'd principal resolves directly (D2 principal-mapping).
+2. Thread `principal` through `readback` read fns + JOIN-filter (D1/D2); read_selector + MCP search pass it down.
+3. `can_modify_resource` — artifact `02_functions.sql` + forward migration + drift-guard (D3/D4).
+4. NextBackend writes call the modify gate before mutation (D3).
+5. P1 scenario-topology wiring tests (reuse access-scenario harness).
+6. P2 principal-aware extension to the chunk-3 parity harness.
 
 ## Grounding citations (evidence, per implementation-grounding GD-1)
 
