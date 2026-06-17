@@ -177,7 +177,7 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 
 ## Semantic Search
 
-Temper embeds your vault content using all-MiniLM-L6-v2 (via Candle, no Python required) and stores vectors for fast approximate nearest-neighbor search. Indexing is incremental — only changed files are re-embedded.
+Temper embeds your query locally with BAAI/bge-base-en-v1.5 (via ONNX Runtime, no Python required), sends the 768-dim vector to the cloud API, and returns pgvector cosine-similarity matches scoped to what you can access.
 
 ```bash
 temper search "design patterns" --limit 5
