@@ -237,7 +237,7 @@ async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
 
     let assert_cmd = || AssertRelationship {
         source: ResourceRef::Uuid { id: a.id },
-        target_slug: "edge-b".into(),
+        target: b.id,
         edge_kind: EdgeKind::LeadsTo,
         polarity: Polarity::Forward,
         label: "operationalized_by".into(),
@@ -454,14 +454,14 @@ async fn next_relationship_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
     b_cmd.slug = "edge-b".into();
     b_cmd.title = "Edge B".into();
     let a = legacy.create_resource(a_cmd).await.expect("create A").value;
-    let _b = legacy.create_resource(b_cmd).await.expect("create B").value;
+    let b = legacy.create_resource(b_cmd).await.expect("create B").value;
     temper_next::synthesis::run(&app.pool, temper_next::synthesis::RunOpts::default())
         .await
         .expect("synthesis::run");
     let edge_n = owner_backend
         .assert_relationship(AssertRelationship {
             source: ResourceRef::Uuid { id: a.id },
-            target_slug: "edge-b".into(),
+            target: b.id,
             edge_kind: EdgeKind::LeadsTo,
             polarity: Polarity::Forward,
             label: "operationalized_by".into(),

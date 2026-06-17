@@ -36,21 +36,20 @@ impl From<CliPolarity> for Polarity {
 pub fn run(action: EdgeAction) -> Result<()> {
     match action {
         EdgeAction::Assert {
-            source_owner,
-            source_context,
-            source_doctype,
-            source_slug,
+            source,
             target,
             kind,
             polarity,
             label,
             weight,
         } => {
-            let source =
-                ResourceRef::scoped(source_owner, source_context, source_doctype, source_slug);
+            let source = ResourceRef::Uuid {
+                id: temper_core::operations::parse_ref(&source)?,
+            };
+            let target = temper_core::operations::parse_ref(&target)?;
             let req = AssertRelationshipRequest {
                 source,
-                target_slug: target,
+                target,
                 edge_kind: kind.into(),
                 polarity: polarity.into(),
                 label,
@@ -143,11 +142,8 @@ mod tests {
             "temper",
             "edge",
             "assert",
-            "--source-owner=me",
-            "--source-context=temper",
-            "--source-doctype=task",
-            "--source-slug=foo",
-            "--target=bar",
+            "source-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "target-019e84ab-26ba-7560-9d34-c60d74a9fbe3",
             "--kind=leads-to",
             "--polarity=inverse",
             "--label=depends_on",
@@ -158,10 +154,7 @@ mod tests {
             Commands::Edge {
                 action:
                     EdgeAction::Assert {
-                        source_owner,
-                        source_context,
-                        source_doctype,
-                        source_slug,
+                        source,
                         target,
                         kind,
                         polarity,
@@ -169,11 +162,8 @@ mod tests {
                         weight,
                     },
             } => {
-                assert_eq!(source_owner, "me");
-                assert_eq!(source_context, "temper");
-                assert_eq!(source_doctype, "task");
-                assert_eq!(source_slug, "foo");
-                assert_eq!(target, "bar");
+                assert_eq!(source, "source-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
+                assert_eq!(target, "target-019e84ab-26ba-7560-9d34-c60d74a9fbe3");
                 assert_eq!(kind, CliEdgeKind::LeadsTo);
                 assert_eq!(polarity, CliPolarity::Inverse);
                 assert_eq!(label, "depends_on");
@@ -189,11 +179,8 @@ mod tests {
             "temper",
             "edge",
             "assert",
-            "--source-owner=@me",
-            "--source-context=temper",
-            "--source-doctype=task",
-            "--source-slug=foo",
-            "--target=bar",
+            "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "019e84ab-26ba-7560-9d34-c60d74a9fbe3",
             "--kind=near",
             "--polarity=forward",
             "--label=references",

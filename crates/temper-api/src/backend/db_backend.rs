@@ -200,20 +200,18 @@ impl Backend for DbBackend {
     }
 
     ///
-    /// If the target slug resolves to a resource in the same context as the
-    /// source, an edge row is projected immediately. If not, the event is
-    /// still appended (with a `Slug` target endpoint); the edge is projected
-    /// later by `relationship_service::reproject_pending_for_resource`, which
-    /// `ingest_service::ingest` invokes once the target lands.
+    /// Both endpoints are pre-resolved ids: the target arrives as a
+    /// `ResourceId` and the edge is projected immediately as a
+    /// `TargetEndpoint::Resource`. The legacy forward-reference-by-slug path
+    /// (append now, project once the target lands) is no longer reachable from
+    /// this command surface — it survives only for historical event replay and
+    /// the frontmatter-declaration ingest path.
     ///
     /// **Re-assert semantics:**
     /// - Active edge + re-assert → diverts to a `reweight` under the existing
     ///   correlation chain. Returns `DbRelationshipReweighted`.
     /// - Folded edge + re-assert → fresh assertion (ON CONFLICT transfers
     ///   ownership of `asserted_by_event_id` to the new chain).
-    /// - Slug-target re-assert (target not yet resolved) → fresh assert as
-    ///   normal; the slug-resolves-later case is handled by
-    ///   `reproject_pending_for_resource` on the create path.
     async fn assert_relationship(
         &self,
         cmd: AssertRelationship,
@@ -232,29 +230,12 @@ impl Backend for DbBackend {
         relationship_service::validate_assertion_label(cmd.edge_kind, &cmd.label)
             .map_err(TemperError::BadRequest)?;
 
-        // 4. Pre-tx: resolve source context + target slug (read-only).
-        //    This lookup is repeated inside the write tx below for consistency.
-        //    We do it here so we can check for an existing active edge before
-        //    opening a write transaction.
-        let source_context_id: Uuid = sqlx::query_scalar!(
-            r#"SELECT kb_context_id AS "kb_context_id!: Uuid" FROM kb_resources WHERE id = $1"#,
-            source_resource_id,
-        )
-        .fetch_one(self.pool())
-        .await
-        .map_err(sqlx_err)?;
+        // 4. Target is pre-resolved — no slug lookup needed.
+        let target_id = uuid::Uuid::from(cmd.target);
 
-        let pre_target_id = relationship_service::find_slug_in_context_pool(
-            self.pool(),
-            source_context_id,
-            &cmd.target_slug,
-        )
-        .await
-        .map_err(TemperError::from)?;
-
-        // 5. If target resolved AND an active (non-folded) edge row exists,
-        //    divert to a reweight under the existing correlation chain.
-        if let Some(target_id) = pre_target_id {
+        // 5. If an active (non-folded) edge row already exists for this exact
+        //    key, divert to a reweight under the existing correlation chain.
+        {
             let existing = relationship_service::find_active_edge(
                 self.pool(),
                 source_resource_id,
@@ -308,25 +289,13 @@ impl Backend for DbBackend {
             }
         }
 
-        // 6. Open write transaction; re-resolve slug within tx for consistency.
+        // 6. Open write transaction.
         let mut tx = self.pool().begin().await.map_err(sqlx_err)?;
 
-        let target_endpoint = match relationship_service::find_slug_in_context(
-            &mut tx,
-            source_context_id,
-            &cmd.target_slug,
-        )
-        .await
-        .map_err(TemperError::from)?
-        {
-            Some(target_id) => TargetEndpoint::Resource(target_id),
-            None => TargetEndpoint::Slug(cmd.target_slug),
-        };
-
-        // 7. Build payload.
+        // 7. Build payload — the target is always a resolved resource now.
         let payload = serde_json::to_value(&RelationshipAsserted {
             source_resource_id,
-            target: target_endpoint,
+            target: TargetEndpoint::Resource(target_id),
             edge_kind: cmd.edge_kind,
             polarity: cmd.polarity,
             label: cmd.label,

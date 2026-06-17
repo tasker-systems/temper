@@ -57,10 +57,11 @@ async fn create_resource_in_context(
 
 /// Build an `AssertRelationship` command using `ResourceRef::Scoped` for the
 /// source. The source resource must live in a profile-owned "temper" context.
+/// The target is a pre-resolved resource id (edge addressing is id-based).
 fn assert_cmd_scoped(
     context: &str,
     source_slug: &str,
-    target_slug: &str,
+    target_id: Uuid,
     edge_kind: EdgeKind,
     polarity: Polarity,
     label: &str,
@@ -73,7 +74,7 @@ fn assert_cmd_scoped(
             doctype: "research".to_string(),
             slug: source_slug.to_string(),
         },
-        target_slug: target_slug.to_string(),
+        target: target_id.into(),
         edge_kind,
         polarity,
         label: label.to_string(),
@@ -87,7 +88,7 @@ fn assert_cmd_scoped(
 /// a different profile tries to assert on a resource it doesn't own.
 fn assert_cmd_uuid(
     source_id: Uuid,
-    target_slug: &str,
+    target_id: Uuid,
     edge_kind: EdgeKind,
     polarity: Polarity,
     label: &str,
@@ -97,7 +98,7 @@ fn assert_cmd_uuid(
         source: ResourceRef::Uuid {
             id: source_id.into(),
         },
-        target_slug: target_slug.to_string(),
+        target: target_id.into(),
         edge_kind,
         polarity,
         label: label.to_string(),
@@ -138,7 +139,7 @@ async fn assert_relationship_projects_edge(pool: PgPool) {
     let cmd = assert_cmd_scoped(
         "temper",
         "rw-assert-a",
-        "rw-assert-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -207,19 +208,12 @@ async fn assert_relationship_unauthorized_profile(pool: PgPool) {
         common::fixtures::create_test_profile_with_context(&pool, "rw-authq@test.com").await;
     // A is owned by P.
     let a = create_resource_in_context(&pool, profile_p, context_p, "Doc A", "rw-auth-a").await;
-    let _b = create_resource_in_context(&pool, profile_p, context_p, "Doc B", "rw-auth-b").await;
+    let b = create_resource_in_context(&pool, profile_p, context_p, "Doc B", "rw-auth-b").await;
 
     let before = count_relationship_events(&pool, a).await;
 
     // Q tries to assert from A (which P owns) using UUID ref so resolution succeeds.
-    let cmd = assert_cmd_uuid(
-        a,
-        "rw-auth-b",
-        EdgeKind::Near,
-        Polarity::Forward,
-        "relates_to",
-        1.0,
-    );
+    let cmd = assert_cmd_uuid(a, b, EdgeKind::Near, Polarity::Forward, "relates_to", 1.0);
 
     let result = backend(pool.clone(), profile_q)
         .assert_relationship(cmd)
@@ -234,48 +228,12 @@ async fn assert_relationship_unauthorized_profile(pool: PgPool) {
     assert_eq!(before, after, "no events should have been appended");
 }
 
-// ─── Test 3: assert to nonexistent slug appends event but no edge row ────────
-
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn assert_to_nonexistent_slug_appends_event_but_no_row(pool: PgPool) {
-    common::fixtures::clean_and_seed(&pool).await;
-    let (profile, context_id) =
-        common::fixtures::create_test_profile_with_context(&pool, "rw-ghost@test.com").await;
-    let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-ghost-a").await;
-
-    let cmd = assert_cmd_scoped(
-        "temper",
-        "rw-ghost-a",
-        "ghost-slug",
-        EdgeKind::LeadsTo,
-        Polarity::Forward,
-        "depends_on",
-        1.0,
-    );
-
-    let output = backend(pool.clone(), profile)
-        .assert_relationship(cmd)
-        .await
-        .expect("assert to nonexistent slug should succeed");
-
-    let _ = output.value;
-
-    // Event exists in the ledger.
-    let event_count: i64 = count_relationship_events(&pool, a).await;
-    assert_eq!(event_count, 1, "event appended to ledger");
-
-    // No edge row projected.
-    let edge_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM kb_resource_edges WHERE source_resource_id = $1")
-            .bind(a)
-            .fetch_one(&pool)
-            .await
-            .expect("edge count");
-    assert_eq!(
-        edge_count, 0,
-        "no edge projected for unresolved slug target"
-    );
-}
+// (Removed Test 3 "assert to nonexistent slug appends event but no edge row":
+// the live `AssertRelationship` command no longer accepts an unresolved slug
+// target. Both endpoints are pre-resolved ids now, so forward-reference-by-slug
+// is not expressible on this surface. The forward-projection capability survives
+// only in the frontmatter-declaration ingest path and historical event replay,
+// covered by `relationship_projection_test.rs`.)
 
 // ─── Test 4: retype changes edge_kind ────────────────────────────────────────
 
@@ -285,12 +243,12 @@ async fn retype_changes_edge_kind(pool: PgPool) {
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-retype@test.com").await;
     let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-retype-a").await;
-    let _b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-retype-b").await;
+    let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-retype-b").await;
 
     let cmd = assert_cmd_scoped(
         "temper",
         "rw-retype-a",
-        "rw-retype-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -361,12 +319,12 @@ async fn reweight_changes_weight(pool: PgPool) {
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-reweight@test.com").await;
     let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-reweight-a").await;
-    let _b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-reweight-b").await;
+    let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-reweight-b").await;
 
     let cmd = assert_cmd_scoped(
         "temper",
         "rw-reweight-a",
-        "rw-reweight-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -416,12 +374,12 @@ async fn fold_marks_row_folded(pool: PgPool) {
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-fold@test.com").await;
     let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-fold-a").await;
-    let _b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-fold-b").await;
+    let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-fold-b").await;
 
     let cmd = assert_cmd_scoped(
         "temper",
         "rw-fold-a",
-        "rw-fold-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -487,13 +445,13 @@ async fn retype_unauthorized(pool: PgPool) {
     let (profile_q, _) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-rauth-q@test.com").await;
     let _a = create_resource_in_context(&pool, profile_p, context_p, "Doc A", "rw-rauth-a").await;
-    let _b = create_resource_in_context(&pool, profile_p, context_p, "Doc B", "rw-rauth-b").await;
+    let b = create_resource_in_context(&pool, profile_p, context_p, "Doc B", "rw-rauth-b").await;
 
     // P asserts A→B.
     let cmd = assert_cmd_scoped(
         "temper",
         "rw-rauth-a",
-        "rw-rauth-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -549,13 +507,13 @@ async fn reassert_active_edge_converts_to_reweight(pool: PgPool) {
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-reassert@test.com").await;
     let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-reassert-a").await;
-    let _b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-reassert-b").await;
+    let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-reassert-b").await;
 
     // First assertion (weight=1.0).
     let first_cmd = assert_cmd_scoped(
         "temper",
         "rw-reassert-a",
-        "rw-reassert-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -582,7 +540,7 @@ async fn reassert_active_edge_converts_to_reweight(pool: PgPool) {
     let second_cmd = assert_cmd_scoped(
         "temper",
         "rw-reassert-a",
-        "rw-reassert-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -687,13 +645,13 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-refold@test.com").await;
     let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-refold-a").await;
-    let _b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-refold-b").await;
+    let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-refold-b").await;
 
     // First assertion.
     let cmd1 = assert_cmd_scoped(
         "temper",
         "rw-refold-a",
-        "rw-refold-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",
@@ -720,7 +678,7 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
     let cmd2 = assert_cmd_scoped(
         "temper",
         "rw-refold-a",
-        "rw-refold-b",
+        b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
         "depends_on",

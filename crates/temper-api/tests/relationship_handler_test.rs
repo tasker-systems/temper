@@ -60,7 +60,7 @@ async fn assert_relationship_returns_ack(pool: PgPool) {
     let token = common::generate_test_jwt(&sub, &email);
 
     insert_resource(&pool, profile_id, context_id, "Doc A", "rh-assert-a").await;
-    insert_resource(&pool, profile_id, context_id, "Doc B", "rh-assert-b").await;
+    let target_b = insert_resource(&pool, profile_id, context_id, "Doc B", "rh-assert-b").await;
 
     let body = json!({
         "source": {
@@ -70,7 +70,7 @@ async fn assert_relationship_returns_ack(pool: PgPool) {
             "doctype": "research",
             "slug": "rh-assert-a"
         },
-        "target_slug": "rh-assert-b",
+        "target": target_b.to_string(),
         "edge_kind": "leads_to",
         "polarity": "forward",
         "label": "depends_on",
@@ -146,7 +146,7 @@ async fn assert_relationship_without_auth_returns_401(pool: PgPool) {
             "doctype": "research",
             "slug": "some-resource"
         },
-        "target_slug": "other-resource",
+        "target": Uuid::new_v4().to_string(),
         "edge_kind": "near",
         "polarity": "forward",
         "label": "relates_to",
@@ -195,7 +195,7 @@ async fn assert_relationship_on_other_profile_resource_returns_403(pool: PgPool)
             "kind": "uuid",
             "resource_id": resource_p.to_string()
         },
-        "target_slug": "some-other-slug",
+        "target": Uuid::new_v4().to_string(),
         "edge_kind": "near",
         "polarity": "forward",
         "label": "relates_to",
@@ -232,7 +232,7 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
     let token = common::generate_test_jwt(&sub, &email);
 
     insert_resource(&pool, profile_id, context_id, "Doc A", "rh-fold-a").await;
-    insert_resource(&pool, profile_id, context_id, "Doc B", "rh-fold-b").await;
+    let target_b = insert_resource(&pool, profile_id, context_id, "Doc B", "rh-fold-b").await;
 
     // First, assert the relationship.
     let assert_body = json!({
@@ -243,7 +243,7 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
             "doctype": "research",
             "slug": "rh-fold-a"
         },
-        "target_slug": "rh-fold-b",
+        "target": target_b.to_string(),
         "edge_kind": "leads_to",
         "polarity": "forward",
         "label": "depends_on",

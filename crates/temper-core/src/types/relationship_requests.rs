@@ -11,15 +11,16 @@ use uuid::Uuid;
 
 use crate::operations::ResourceRef;
 use crate::types::graph::{EdgeKind, Polarity};
+use crate::types::ids::ResourceId;
 
 /// Request body for `POST /api/relationships`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct AssertRelationshipRequest {
-    /// Source resource — owner, context, doctype, slug.
+    /// Source resource — a pre-resolved ref (UUID, or scoped in the legacy era).
     pub source: ResourceRef,
-    /// Target resource slug (resolved within source's context).
-    pub target_slug: String,
+    /// Target resource — a pre-resolved id (both endpoints are resolved now).
+    pub target: ResourceId,
     pub edge_kind: EdgeKind,
     pub polarity: Polarity,
     pub label: String,

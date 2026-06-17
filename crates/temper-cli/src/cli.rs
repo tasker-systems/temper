@@ -455,20 +455,9 @@ pub enum EdgeAction {
     /// Sends a `POST /api/relationships` request. Returns a `correlation_id`
     /// that identifies the relationship chain for subsequent retype/reweight/fold.
     Assert {
-        /// Owner of the source resource (e.g. "@me" or "+team-acme")
-        #[arg(long)]
-        source_owner: String,
-        /// Context of the source resource
-        #[arg(long)]
-        source_context: String,
-        /// Doc type of the source resource (e.g. "task", "goal")
-        #[arg(long)]
-        source_doctype: String,
-        /// Slug of the source resource
-        #[arg(long)]
-        source_slug: String,
-        /// Slug of the target resource (resolved within source's context)
-        #[arg(long)]
+        /// Source resource ref: a UUID or the decorated `slug-<uuid>` form
+        source: String,
+        /// Target resource ref: a UUID or the decorated `slug-<uuid>` form
         target: String,
         /// Edge kind (express, contains, leads-to, near)
         #[arg(long, value_enum)]

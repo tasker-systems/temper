@@ -453,25 +453,8 @@ impl Backend for NextBackend {
         // "Cannot modify source resource"). Gate before resolving the target / writing the edge.
         self.check_can_modify_next(src_next).await?;
 
-        // Resolve the target by slug in the source's (public) context, then map to its temper_next id —
-        // slug is §7-dissolved in temper_next, so resolution stays in `public` during the parity era.
-        let src_ctx_pub: uuid::Uuid =
-            sqlx::query_scalar("SELECT kb_context_id FROM public.kb_resources WHERE id=$1")
-                .bind(source_pub)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| TemperError::Api(e.to_string()))?;
-        let target_pub: uuid::Uuid = sqlx::query_scalar(
-            "SELECT id FROM public.kb_resources WHERE slug=$1 AND kb_context_id=$2 AND is_active",
-        )
-        .bind(&cmd.target_slug)
-        .bind(src_ctx_pub)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| TemperError::Api(e.to_string()))?
-        .ok_or_else(|| {
-            TemperError::NotFound(format!("target slug {:?} not found", cmd.target_slug))
-        })?;
+        // The target is pre-resolved — map its public id to its temper_next id.
+        let target_pub = uuid::Uuid::from(cmd.target);
         let tgt_next = ids.to_new(target_pub).ok_or_else(|| {
             TemperError::NotFound(format!("target {target_pub} not in temper_next"))
         })?;

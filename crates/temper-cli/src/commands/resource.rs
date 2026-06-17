@@ -315,21 +315,31 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                 use temper_core::types::graph::{EdgeKind, Polarity};
                 use temper_core::types::relationship_requests::AssertRelationshipRequest;
 
-                let req = AssertRelationshipRequest {
-                    source: ResourceRef::uuid(output.value.id),
-                    target_slug: task_info.slug.clone(),
-                    edge_kind: EdgeKind::LeadsTo,
-                    polarity: Polarity::Forward,
-                    label: "advances".to_string(),
-                    weight: 1.0,
-                };
-                match runtime.block_on(async {
+                // Edge addressing is id-based now: resolve the task slug to its
+                // resource id surface-side before asserting the link.
+                let owner = config.owner_for_context(&task_info.context);
+                let source_id = output.value.id;
+                let result = runtime.block_on(async {
+                    let target = client
+                        .resources()
+                        .resolve_by_uri(&owner, &task_info.context, "task", &task_info.slug)
+                        .await
+                        .map_err(crate::commands::client_err)?;
+                    let req = AssertRelationshipRequest {
+                        source: ResourceRef::uuid(source_id),
+                        target: target.id,
+                        edge_kind: EdgeKind::LeadsTo,
+                        polarity: Polarity::Forward,
+                        label: "advances".to_string(),
+                        weight: 1.0,
+                    };
                     client
                         .relationships()
                         .assert(&req)
                         .await
                         .map_err(crate::commands::client_err)
-                }) {
+                });
+                match result {
                     Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
                     Err(e) => tracing::warn!(
                         task = task_slug,

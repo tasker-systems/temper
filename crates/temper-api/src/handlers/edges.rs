@@ -67,7 +67,7 @@ pub async fn assert(
         .unwrap_or_else(|| "api".to_string());
     let cmd = AssertRelationship {
         source: req.source,
-        target_slug: req.target_slug,
+        target: req.target,
         edge_kind: req.edge_kind,
         polarity: req.polarity,
         label: req.label,

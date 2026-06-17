@@ -252,7 +252,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         .relationships()
         .assert(&AssertRelationshipRequest {
             source: ResourceRef::uuid(alpha_id),
-            target_slug: "beta".to_string(),
+            target: beta_id,
             edge_kind: EdgeKind::Near,
             polarity: Polarity::Forward,
             label: "references".to_string(),
@@ -268,7 +268,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         .relationships()
         .assert(&AssertRelationshipRequest {
             source: ResourceRef::uuid(alpha_id),
-            target_slug: "gamma".to_string(),
+            target: gamma_id,
             edge_kind: EdgeKind::Contains,
             polarity: Polarity::Forward,
             label: "parent_of".to_string(),
@@ -284,7 +284,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         .relationships()
         .assert(&AssertRelationshipRequest {
             source: ResourceRef::uuid(alpha_id),
-            target_slug: "delta".to_string(),
+            target: delta_id,
             edge_kind: EdgeKind::Near,
             polarity: Polarity::Forward,
             label: "references".to_string(),

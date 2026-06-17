@@ -12,6 +12,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::types::ids::ResourceId;
 use crate::types::managed_meta::ManagedMeta;
 
 use super::{
@@ -113,12 +114,16 @@ pub struct SearchResources {
     pub origin: Surface,
 }
 
-/// Assert a new relationship from `source` to `target_slug`. Cloud-only —
-/// emits a `relationship_asserted` event and projects an edge row.
+/// Assert a new relationship from `source` to `target`. Cloud-only —
+/// emits a `relationship_asserted` event and projects an edge row. Both
+/// endpoints are pre-resolved ids: the target is a `ResourceId`, the source
+/// a `ResourceRef` (collapses to `ResourceId` in the final ref sweep).
+/// Forward-reference-by-slug targets are no longer expressible here — that
+/// legacy capability lives only in the frontmatter-declaration ingest path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssertRelationship {
     pub source: ResourceRef,
-    pub target_slug: String,
+    pub target: ResourceId,
     pub edge_kind: crate::types::graph::EdgeKind,
     pub polarity: crate::types::graph::Polarity,
     pub label: String,
@@ -216,7 +221,7 @@ mod tests {
     fn assert_relationship_command_round_trips() {
         let cmd = AssertRelationship {
             source: ResourceRef::scoped("@me", "temper", "task", "a"),
-            target_slug: "b".to_string(),
+            target: ResourceId(uuid::Uuid::now_v7()),
             edge_kind: crate::types::graph::EdgeKind::LeadsTo,
             polarity: crate::types::graph::Polarity::Inverse,
             label: "depends_on".to_string(),
@@ -225,5 +230,21 @@ mod tests {
         };
         let s = serde_json::to_string(&cmd).unwrap();
         assert_eq!(serde_json::from_str::<AssertRelationship>(&s).unwrap(), cmd);
+    }
+
+    #[test]
+    fn assert_relationship_carries_resolved_target_id() {
+        let cmd = AssertRelationship {
+            source: ResourceRef::Uuid {
+                id: ResourceId(uuid::Uuid::nil()),
+            },
+            target: ResourceId(uuid::Uuid::now_v7()),
+            edge_kind: crate::types::graph::EdgeKind::Near,
+            polarity: crate::types::graph::Polarity::Forward,
+            label: "rel".into(),
+            weight: 1.0,
+            origin: Surface::Mcp,
+        };
+        assert_ne!(uuid::Uuid::from(cmd.target), uuid::Uuid::nil());
     }
 }
