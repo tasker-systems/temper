@@ -348,18 +348,20 @@ git commit -m "feat(cli,mcp): emit decorated ref on every printed resource (iden
 
 ---
 
-## Task 3: CloudBackend UUID dispatch (resource show/update/delete)
+## Task 3: CloudBackend UUID dispatch (resource update/delete writes)
 
 Make the CLI's `CloudBackend` handle `ResourceRef::Uuid` directly via the by-id client methods, skipping the `resolve_by_uri` round-trip. Additive — `Scoped` arms stay; this just adds the `Uuid` path the CLI will use in Task 4.
 
+**VERIFIED scope correction:** Only `update_resource` + `delete_resource` go through `CloudBackend` (cloud writes route through the backend trait). `CloudBackend::show_resource` is a **stub** (`backend.rs:141-149`, `"reads stay surface-direct"`) — CLI reads use `runtime::with_client` + `client.resources().get(id)`/`content(id)` directly, NOT the backend. So this task touches update/delete only; leave `show_resource` as the stub.
+
 **Files:**
-- Modify: `crates/temper-cli/src/cloud_backend/backend.rs` (`show_resource` / `update_resource` / `delete_resource` trait impls)
-- Modify: `crates/temper-cli/src/cloud_backend/translators.rs` (`cmd_to_delete_args`, `extract_scoped_update_components` — add Uuid handling)
+- Modify: `crates/temper-cli/src/cloud_backend/backend.rs:86-139` (`update_resource` / `delete_resource` trait impls + the inherent `extract_scoped_update_components` helper at `:215`)
+- Modify: `crates/temper-cli/src/cloud_backend/translators.rs:200-234` (`cmd_to_delete_args` → add a Uuid-aware discriminator)
 - Test: `crates/temper-cli/src/cloud_backend/backend.rs` tests (mirror the existing scoped-component tests)
 
 **Interfaces:**
-- Consumes: `temper_client::resources()::{get(id), update(id, req), delete(id)}` (already by-UUID), `ResourceRef::Uuid`.
-- Produces: `CloudBackend` resolves a `Uuid` ref to the by-id client call directly; a `Scoped` ref keeps the existing resolve-by-uri path (removed in Task 7).
+- Consumes: `temper_client::resources()::{update(id: Uuid, req), delete(id: Uuid)}` (already by-UUID), `ResourceRef::{Uuid, Scoped}`.
+- Produces: `CloudBackend::{update_resource, delete_resource}` resolve a `Uuid` ref to the by-id client call directly; a `Scoped` ref keeps the existing resolve-by-uri path (removed in Task 7).
 
 - [ ] **Step 1: Write failing tests** — `crates/temper-cli/src/cloud_backend/backend.rs` tests module
 
@@ -416,21 +418,27 @@ pub(crate) fn resolve_delete_target(
     }
 }
 ```
-(The old `cmd_to_delete_args` stays for now; `delete_resource` in `backend.rs` switches to `resolve_delete_target` and branches: `Id` → `client.resources().delete(uuid)`; `Scoped` → existing resolve-by-uri-then-delete. Do the equivalent `UpdateTarget` for `update_resource` / `extract_scoped_update_components` and a `Uuid` arm in `show_resource` → `client.resources().get(uuid)`.)
+(The old `cmd_to_delete_args` stays for now; `delete_resource` in `backend.rs` switches to `resolve_delete_target` and branches: `Id` → `client.resources().delete(uuid)`; `Scoped` → existing resolve-by-uri-then-delete. Do the equivalent `UpdateTarget` discriminator for `update_resource` / `extract_scoped_update_components`. Do NOT touch `show_resource` — it is a stub by design.)
 
-- [ ] **Step 4: Branch the three trait impls on the target** in `crates/temper-cli/src/cloud_backend/backend.rs`
+- [ ] **Step 4: Branch the two write trait impls on the target** in `crates/temper-cli/src/cloud_backend/backend.rs:86-139`
 
-For `delete_resource`, `update_resource`, `show_resource`: add the `Uuid` fast path (`client.resources().{delete,update,get}` by id) and keep the `Scoped` path. Show the implementer the `delete_resource` shape:
+For `delete_resource` and `update_resource`: add the `Uuid` fast path (`client.resources().{delete,update}` by id) and keep the `Scoped` path. The current impls (`:111-139` delete, `:86-109` update) call `cmd_to_delete_args`/`extract_scoped_update_components` then `resolve_by_uri`; replace the head with the discriminator. `delete_resource` shape:
 ```rust
-match resolve_delete_target(&cmd, self.fallback_owner())? {
-    DeleteTarget::Id(id) => { self.client.resources().delete(id).await?; }
-    DeleteTarget::Scoped { owner, context, doctype, slug } => {
-        let row = self.client.resources().resolve_by_uri(&owner, &context, &doctype, &slug).await?;
-        self.client.resources().delete(row.id.into()).await?;
+match resolve_delete_target(&cmd, &self.owner)? {
+    DeleteTarget::Id(id) => {
+        self.client.resources().delete(id).await.map_err(crate::commands::client_err)?;
+        id
     }
-}
+    DeleteTarget::Scoped { owner, context, doctype, slug } => {
+        let row = self.client.resources().resolve_by_uri(&owner, &context, &doctype, &slug)
+            .await.map_err(crate::actions::runtime::client_err_to_temper)?;
+        let id = *row.id.as_uuid();
+        self.client.resources().delete(id).await.map_err(crate::commands::client_err)?;
+        id
+    }
+};
 ```
-(Mirror for update/show; the exact `resolve_by_uri` client signature is in `crates/temper-client/src/resources.rs` — confirm arg order at the call site.)
+(`self.owner` is the fallback owner field, `resolve_by_uri(owner, context, doc_type, ident)` per `crates/temper-client/src/resources.rs:105`. Mirror for `update_resource` with `client.resources().update(id, &req)`. Preserve the existing `DomainEvent::RemoteSynced { resource_id }` return + the `client_err` vs `client_err_to_temper` mapping the current delete uses.)
 
 - [ ] **Step 5: Run tests + verify the by-id path**
 
@@ -451,35 +459,43 @@ git commit -m "feat(cli): CloudBackend resolves Uuid resource refs by id (skip r
 
 Repoint `show`/`update`/`delete` to a single decorated-ref positional; drop `--type`/`--context`/`--owner`; read doctype/context from the resolved row where the command needs them.
 
+**VERIFIED simplification:** `task::show` / `session::show` / `show_generic` are byte-identical except the hardcoded doctype string passed to `resolve_by_uri` — there is NO doctype-specific rendering (session.rs even documents "same as task::show and show_generic"). They are called ONLY from `resource::show`'s doctype dispatch (`resource.rs:619-621`), nowhere else. Under id addressing the dispatch is unnecessary: **`show` collapses to one read-by-id-and-render**, and `task::show` + `session::show` are deleted. Reads are context-free via `runtime::with_client` + `client.resources().get(id)`/`content(id)`/`get_meta(id)` — no backend, no context. Only writes (update/delete) need `build_backend(config, ctx)`; get the ctx from the fetched row's `context_name`.
+
 **Files:**
 - Modify: `crates/temper-cli/src/cli.rs:255-380` (Show/Update/Delete arg structs)
-- Modify: `crates/temper-cli/src/commands/resource.rs` (`show`, `update`, `delete` + `ShowParams`/`UpdateParams`)
-- Modify: `crates/temper-cli/src/commands/task.rs` / `session.rs` (`show` keyed by resolved row/id)
-- Modify: `crates/temper-cli/src/projection.rs` (`remove_resource_file` keyed by id, or fed from the resolved row)
+- Modify: `crates/temper-cli/src/commands/resource.rs` (`show`, `update`, `delete`, `show_meta_only`, `show_generic`, `show_edges`; `ShowParams`/`UpdateParams`)
+- Delete: `crates/temper-cli/src/commands/task.rs::show`, `crates/temper-cli/src/commands/session.rs::show` (now dead)
+- Modify: `crates/temper-cli/src/projection.rs` (a `remove_resource_file_for_row(vault_root, &ResourceRow)` wrapper)
 - Modify: the `main.rs`/dispatch site mapping clap args → these functions
-- Test: `crates/temper-cli/src/commands/resource.rs` tests (arg parsing + the fetch-then-dispatch branch)
+- Test: `crates/temper-cli/src/cli.rs` arg-parse tests + `crates/temper-cli/src/commands/resource.rs` tests
 
 **Interfaces:**
-- Consumes: `parse_ref` (T1), `CloudBackend` Uuid dispatch (T3), `backend.show_resource(ResourceRef::Uuid{..})` → `ResourceRow` (carries `doc_type_name`, `context_name`).
-- Produces: `show`/`update`/`delete` that take one `ref: String` positional. `update`/`delete`/`show` resolve `parse_ref(ref)? → id`, then fetch the row (when doctype/context is needed) and branch on `row.doc_type_name`.
+- Consumes: `parse_ref` (T1), `CloudBackend` Uuid write dispatch (T3), `client.resources().{get(id), content(id), get_meta(id)}` (context-free reads via `runtime::with_client`), `build_backend(config, &row.context_name)` for writes.
+- Produces: `show`/`update`/`delete` that take one `r#ref: String` positional → `parse_ref → id`. `show` reads + renders by id uniformly. `update`/`delete` fetch the row by id first (context-free) to learn `context_name` (for `build_backend`) + `doc_type_name` (update validation) + projection path, then dispatch the write with `ResourceRef::Uuid { id }`.
 
 - [ ] **Step 1: Write the failing arg-parse test** — `crates/temper-cli/src/cli.rs` (or the CLI parse test module)
 
 ```rust
 #[test]
-fn show_takes_single_ref_positional_no_type_flag() {
+fn show_accepts_bare_ref_and_rejects_type_flag() {
     use clap::Parser;
-    let cli = Cli::try_parse_from(["temper", "resource", "show", "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2"]).unwrap();
-    // assert the Show variant carries `ref` and no `r#type` field exists
-    // (compile-time: the struct no longer has r#type/context/owner)
-    match cli.command { /* … Resource(Show { r#ref, .. }) => assert_eq!(r#ref, "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2") … */ }
+    // A single ref positional parses.
+    assert!(Cli::try_parse_from([
+        "temper", "resource", "show",
+        "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+    ]).is_ok());
+    // The removed --type flag is now an unknown arg → parse error.
+    assert!(Cli::try_parse_from([
+        "temper", "resource", "show", "some-ref", "--type", "task",
+    ]).is_err());
 }
 ```
+(`Cli` is the top-level clap parser in `cli.rs`; place the test in `cli.rs`'s test module where other `try_parse_from` tests live. If the subcommand path differs, mirror the existing parse-test idiom in that module.)
 
-- [ ] **Step 2: Run to verify it fails** (the struct still has `slug`/`r#type`)
+- [ ] **Step 2: Run to verify it fails** (the struct still has `slug`/`r#type`, so `--type task` currently parses OK → the `is_err()` assertion fails)
 
-Run: `cargo nextest run -p temper-cli show_takes_single_ref`
-Expected: FAIL to compile / assertion.
+Run: `cargo nextest run -p temper-cli show_accepts_bare_ref`
+Expected: FAIL on the `--type` assertion (it still parses today).
 
 - [ ] **Step 3: Rewrite the Show / Update / Delete clap args** — `crates/temper-cli/src/cli.rs`
 
@@ -502,77 +518,94 @@ Show becomes (drop `r#type`, `context`; keep `edges`/`meta_only`/`fields`):
 ```
 Update: replace `slug` + `r#type`/`type_from`/`context` with `r#ref: String`; **keep** `type_to`/`context_to` (those are *mutations* — move/retype, not addressing), and all schema flags. Delete: replace `slug` + `r#type` + `context` with `r#ref: String`; keep `force`.
 
-- [ ] **Step 4: Rewrite `delete`** — `crates/temper-cli/src/commands/resource.rs:527-571` (simplest, do first)
+- [ ] **Step 4: Rewrite `delete`** — `crates/temper-cli/src/commands/resource.rs:527-571` (do first)
 
 ```rust
 pub fn delete(config: &Config, r#ref: &str, force: bool, fmt: crate::format::OutputFormat) -> Result<()> {
     use temper_core::operations::{DeleteResource, ResourceRef};
     let id = temper_core::operations::parse_ref(r#ref)?;
 
+    // Context-free read: fetch the row by id to learn its context (for the
+    // write backend), doctype + slug (for projection removal + result shape).
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client.resources().get(uuid::Uuid::from(id))
+                .await.map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+
     let cmd = DeleteResource {
         resource: ResourceRef::Uuid { id },
         force,
         origin: temper_core::operations::Surface::CliCloud,
     };
-    // build_backend needs a context only for client wiring; resolve it from
-    // the resource itself. Fetch the row first (also gives doctype for the
-    // projection-file removal + the result shape).
-    let (runtime, backend, client) = crate::backend_select::build_backend_uuid(config)?;
-    let row = runtime.block_on(backend.show_resource(temper_core::operations::ShowResource {
-        resource: ResourceRef::Uuid { id }, origin: temper_core::operations::Surface::CliCloud,
-    }))?.value;
+    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &row.context_name)?;
     runtime.block_on(backend.delete_resource(cmd))?;
 
-    // Projection removal keyed by the resolved row's path components.
     if let Err(e) = crate::projection::remove_resource_file_for_row(&config.vault_root, &row) {
         output::warning(format!("could not remove projection file: {e}"));
     }
 
-    let result = DeleteActionResult { status: "ok", slug: row.slug.clone().unwrap_or_default(), doc_type: row.doc_type_name.clone() };
+    let result = DeleteActionResult {
+        status: "ok",
+        slug: row.slug.clone().unwrap_or_default(),
+        doc_type: row.doc_type_name.clone(),
+    };
     println!("{}", crate::format::render(&result, fmt)?);
     Ok(())
 }
 ```
-Notes for the implementer:
-- `build_backend` today takes a context to pick the owner/client config. Add `build_backend_uuid(config)` (or pass a default context) since addressing no longer carries one — confirm what `build_backend` actually needs the context for (likely just the owner sigil for create); for uuid addressing a single default-context client is fine.
-- `remove_resource_file_for_row(vault_root, &ResourceRow)` is a thin wrapper over the existing `remove_resource_file` that derives `owner/context/doctype/slug` from the row (`row.context_name`, `row.doc_type_name`, `row.slug`). Add it to `projection.rs`.
+Note: `remove_resource_file_for_row(vault_root, &ResourceRow)` wraps the existing `remove_resource_file`, deriving `owner` from `config.owner_for_context(&row.context_name)` and `context`/`doctype`/`slug` from the row (`row.context_name`, `row.doc_type_name`, `row.slug`). Add it to `projection.rs`. (Confirm `ResourceRow` carries `context_name`/`doc_type_name`/`slug` — it does, per the list output shape.)
 
-- [ ] **Step 5: Rewrite `show`** — resolve id, fetch row, dispatch render on `row.doc_type_name`
+- [ ] **Step 5: Unify `show`** — one read-by-id-and-render; delete the doctype dispatch and `task::show`/`session::show`
 
-`ShowParams` loses `doc_type`/`context`, gains `r#ref`. The body:
+`ShowParams` loses `doc_type`/`context`, gains `r#ref`. Replace the whole `show` + the `show_generic` body with one function (the three old shows were identical):
 ```rust
 pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
     let id = temper_core::operations::parse_ref(params.r#ref)?;
     if params.meta_only {
-        return show_meta_only_by_id(config, id, params.format, params.fields);
+        return show_meta_only(config, id, params.format, params.fields);
     }
-    let (runtime, backend, client) = crate::backend_select::build_backend_uuid(config)?;
-    let row = runtime.block_on(backend.show_resource(/* Uuid ref */))?.value;
-    match row.doc_type_name.as_str() {
-        "task" => crate::commands::task::show_row(config, &row, params.format)?,
-        "session" => crate::commands::session::show_row(config, &row, params.format)?,
-        _ => show_generic_row(config, &row, params.format)?,
-    }
+    let config_clone = config.clone();
+    let (mut metadata, body) = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            let row = client.resources().get(uuid::Uuid::from(id))
+                .await.map_err(crate::actions::runtime::client_err_to_temper)?;
+            let resp = client.resources().content(uuid::Uuid::from(id))
+                .await.map_err(crate::actions::runtime::client_err_to_temper)?;
+            // best-effort projection refresh (unchanged helper)
+            let _ = crate::projection::write_resource_file_from_parts(&config_clone.vault_root, &row, &resp);
+            let metadata = serde_json::to_value(&row)
+                .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
+            Ok((metadata, resp.markdown))
+        })
+    })?;
+    inject_ref(&mut metadata);
+    println!("{}", crate::format::render_resource_show(&metadata, &body, params.format)?);
     if params.edges {
-        show_edges_by_id(config, id, params.format)?;
+        show_edges(config, id, params.format)?;   // re-key show_edges to take an id
     }
     Ok(())
 }
 ```
-`task::show` / `session::show` / `show_generic` are refactored to `*_row(config, &ResourceRow, fmt)` variants that take the already-fetched row (and fetch body via `client.resources().get_content(id)` as they do today, but keyed by `row.id`). `show_edges` becomes `show_edges_by_id`.
+Then: delete `crate::commands::task::show` + `crate::commands::session::show` and the `match params.doc_type` dispatch; re-key `show_edges` to fetch edges by id (`client.resources().edges(id)` per `resources.rs:95`); update `show_meta_only` to take `(config, id, fmt, fields)` and read via `client.resources().get_meta(id)` (`resources.rs:139`) instead of resolve-by-uri.
 
 - [ ] **Step 6: Rewrite `update`** — resolve id, fetch row for doctype-scoped validation, update by id
 
 `UpdateParams` loses `doc_type`/`type_from`/`context`, gains `r#ref`. Body:
 ```rust
     let id = temper_core::operations::parse_ref(params.r#ref)?;
-    let (runtime, backend, client) = crate::backend_select::build_backend_uuid(config)?;
-    let row = runtime.block_on(backend.show_resource(/* Uuid ref */))?.value;
+    // Context-free read for doctype (validation) + context (write backend).
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client.resources().get(uuid::Uuid::from(id))
+                .await.map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
     let current_type = row.doc_type_name.clone();
-    // type_to validation unchanged (it IS user input)
     if let Some(tt) = params.type_to { let _ = temper_core::frontmatter::DocType::from_str(tt)?; }
-    validate_update_args(params, &current_type)?;   // now keyed by the resolved doctype
-    // … body resolution unchanged …
+    validate_update_args(params, &current_type)?;   // keyed by the resolved doctype
+    // … --body resolution unchanged …
     let cmd = UpdateResource {
         resource: ResourceRef::Uuid { id },
         body: resolved_body.map(BodyUpdate::new),
@@ -581,8 +614,10 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
         move_to: build_move_spec_from_args(params),   // uses type_to/context_to
         origin: temper_core::operations::Surface::CliCloud,
     };
+    let (runtime, backend, client) = crate::backend_select::build_backend(config, &row.context_name)?;
+    let output = runtime.block_on(backend.update_resource(cmd))?;
 ```
-The projection-rewrite tail (`write_resource_file`) is unchanged — it already takes the returned server row.
+The projection-rewrite tail (`write_resource_file` from `output.value`) is unchanged.
 
 - [ ] **Step 7: Update the dispatch site** (`main.rs` / wherever clap variants call these) to pass `r#ref` instead of `slug`/`type`/`context`.
 
