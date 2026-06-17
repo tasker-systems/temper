@@ -6,8 +6,12 @@
 //!
 //! Proof shape (mutate-public-after-synthesis): seed + synthesize under legacy, then MUTATE the title in
 //! `public` only. `temper_next` keeps the pre-mutation title. So a `next` read returning the
-//! pre-mutation title proves the read came from `temper_next`, NOT `public` — a negative control that
-//! sidesteps visibility subtleties (`NextBackend` reads are §9-unscoped by design).
+//! pre-mutation title proves the read came from `temper_next`, NOT `public`.
+//!
+//! Reads are visibility-SCOPED to the caller's profile (WS2): the readbacks gate through
+//! `temper_next.resources_visible_to`. The seed is owned by `SYSTEM_PROFILE_ID`, so the test binds the
+//! authenticated principal (`e2e-test-user`) to that profile — the reader owns what it reads — and the
+//! scoped read returns 200. (Pre-WS2 these reads were unscoped, so this binding was unnecessary.)
 //!
 //! Local-only: no CI job enables `next-backend`. Run with
 //! `cargo nextest run -p temper-e2e --features test-db,next-backend`.
@@ -24,6 +28,22 @@ const SEED_RESOURCE_ID: &str = "00000000-0000-0000-0099-000000000001";
 async fn next_http_read_answers_from_temper_next_not_public(pool: sqlx::PgPool) {
     // 1. Legacy setup: base profile + the seeded metadata-only resource in `public`.
     let app = common::setup(pool).await;
+
+    // Bind the authenticated principal (`e2e-test-user`) to the seed's owner profile (SYSTEM) so the
+    // WS2 visibility-scoped read is authorized — resolve_from_claims resolves by (provider, subject)
+    // first, so this pre-bound link makes the HTTP caller BE the owner. (auth_provider = the test
+    // server's configured provider name, "test-provider".)
+    sqlx::query(
+        "INSERT INTO kb_profile_auth_links \
+            (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at) \
+         VALUES (gen_random_uuid(), $1::uuid, 'test-provider', 'e2e-test-user', \
+                 'e2e@test.example.com', true, now()) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(common::SYSTEM_PROFILE_ID)
+    .execute(&app.pool)
+    .await
+    .expect("bind principal to seed owner");
 
     // 2. Add a manifest row so synthesis (which inner-joins `kb_resource_manifests`) carries the
     //    resource, with the workflow managed-meta that becomes temper_next properties.
