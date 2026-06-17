@@ -31,7 +31,7 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 Standalone test crate (not in `crates/`) that exercises the full stack: spawns a real Axum server, hits a real Postgres test database, and drives flows through the actual `temper-cli` and `temper-client` code paths. Use this layer for tests that span CLI ↔ API ↔ DB or that need real auth (JWT, JWKS fixtures in `tests/e2e/tests/fixtures/`). Test files in `tests/e2e/tests/`, shared harness in `tests/e2e/tests/common/`. Run with `cargo make test-e2e`.
 
 ### Database
-- PostgreSQL 18 with pgvector. Migrations in `migrations/` using sqlx.
+- PostgreSQL with pgvector. Local dev/CI runs **PostgreSQL 18** (Docker `pgvector/pgvector:…-pg18`); **Neon cloud runs PostgreSQL 17**. The schema and sqlx migrations are written to run on both — version-portable across 17/18, with no version-specific SQL — so the same `migrations/` apply locally and in cloud. Migrations live in `migrations/` and use sqlx.
 - Dev database: `postgresql://temper:temper@localhost:5437/temper_development`
 
 ## Build & Test Commands
