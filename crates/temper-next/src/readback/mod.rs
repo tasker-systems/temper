@@ -28,6 +28,59 @@ use uuid::Uuid;
 
 use crate::synthesis::key_fate::is_managed_property_key;
 
+/// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
+/// the surface can map each mode to the right HTTP status. The alternative — string-matching one
+/// `anyhow` message — is forbidden by the repo's no-stringly-typed-matching rule.
+///
+/// - [`ReadbackError::NotVisible`] is the leak-safe deny: the principal cannot see the resource. The
+///   surface maps it to **404** — never 403 (403 would confirm the resource exists, an existence oracle),
+///   never 500 (not a system failure).
+/// - [`ReadbackError::Fault`] is a genuine failure (DB error, malformed synthesized state). The surface
+///   maps it to **500**. Collapsing it into NotVisible — the pre-typing behavior — masked real faults
+///   as 404.
+///
+/// The set reads (`list`/`fts_search`/`vector_search`/`neighbors`/`resource_id_by_origin_uri`) JOIN-filter
+/// the visible set instead of pre-checking one id, so they have no not-visible signal and stay
+/// `anyhow::Result` (any error there is a genuine fault → 500).
+#[derive(Debug)]
+pub enum ReadbackError {
+    /// The resource is not visible to the principal under `resources_visible_to` → surface 404.
+    NotVisible {
+        /// The (synthesized) resource id that was requested.
+        resource_id: Uuid,
+        /// The principal the visibility check ran against.
+        principal: Uuid,
+    },
+    /// A genuine read-path fault (DB error, missing-by-construction state) → surface 500.
+    Fault(anyhow::Error),
+}
+
+impl std::fmt::Display for ReadbackError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotVisible {
+                resource_id,
+                principal,
+            } => write!(f, "resource {resource_id} not visible to {principal}"),
+            Self::Fault(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+impl std::error::Error for ReadbackError {}
+
+impl From<sqlx::Error> for ReadbackError {
+    fn from(e: sqlx::Error) -> Self {
+        Self::Fault(e.into())
+    }
+}
+
+impl From<anyhow::Error> for ReadbackError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Fault(e)
+    }
+}
+
 /// A bidirectional map between a production resource id (`public.kb_resources.id`, active only) and its
 /// synthesized counterpart (`temper_next.kb_resources.id`), keyed by the shared `origin_uri` (carried
 /// verbatim, UNIQUE in both schemas). Built once per parity read so a test can resolve a known fixture
@@ -149,9 +202,17 @@ pub struct ListRow {
 /// WS2 consumer-axis gate for single-resource reads: error unless `new_id` is visible to
 /// `principal` under `temper_next.resources_visible_to`. The set reads (`list`/`fts_search`/
 /// `vector_search`/`neighbors`) instead JOIN the function directly (a set can't be pre-checked).
-/// The caller (read_selector) maps this error to a 404 — denying existence, never 403 (no
-/// existence-leak oracle), CONFORMing to production's NotFound-on-not-visible (resource_service).
-async fn ensure_visible(pool: &PgPool, principal: Uuid, new_id: Uuid) -> Result<()> {
+///
+/// Returns a TYPED [`ReadbackError`]: [`ReadbackError::NotVisible`] when the principal can't see the
+/// resource (the caller maps it to 404 — denying existence, never 403, no existence-leak oracle,
+/// CONFORMing to production's NotFound-on-not-visible) versus [`ReadbackError::Fault`] for a genuine DB
+/// error in the check itself (mapped to 500). Conflating the two — the pre-typing behavior — masked
+/// real faults as 404.
+async fn ensure_visible(
+    pool: &PgPool,
+    principal: Uuid,
+    new_id: Uuid,
+) -> std::result::Result<(), ReadbackError> {
     // `resources_visible_to`'s body calls `profile_effective_teams`/`team_ancestors` UNQUALIFIED,
     // so they resolve against the connection's search_path — which on a bare pool is `public`,
     // where the `temper_next` helpers do not exist. Run inside a `SET LOCAL search_path` txn (the
@@ -173,9 +234,10 @@ async fn ensure_visible(pool: &PgPool, principal: Uuid, new_id: Uuid) -> Result<
     if visible {
         Ok(())
     } else {
-        Err(anyhow::anyhow!(
-            "resource {new_id} not visible to {principal}"
-        ))
+        Err(ReadbackError::NotVisible {
+            resource_id: new_id,
+            principal,
+        })
     }
 }
 
@@ -261,7 +323,11 @@ pub struct ReconstructedMeta {
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn meta(pool: &PgPool, principal: Uuid, new_id: Uuid) -> Result<ReconstructedMeta> {
+pub async fn meta(
+    pool: &PgPool,
+    principal: Uuid,
+    new_id: Uuid,
+) -> std::result::Result<ReconstructedMeta, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
     let rows = sqlx::query(
         "SELECT property_key, property_value
@@ -361,7 +427,7 @@ pub async fn resource_row(
     pool: &PgPool,
     principal: Uuid,
     new_id: Uuid,
-) -> Result<ResourceRowParity> {
+) -> std::result::Result<ResourceRowParity, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
     let row = sqlx::query(
         "SELECT r.id              AS re_minted_id,
@@ -456,7 +522,11 @@ pub async fn resource_id_by_origin_uri(pool: &PgPool, origin_uri: &str) -> Resul
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn body(pool: &PgPool, principal: Uuid, new_id: Uuid) -> Result<String> {
+pub async fn body(
+    pool: &PgPool,
+    principal: Uuid,
+    new_id: Uuid,
+) -> std::result::Result<String, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
     let origin_uri: String =
         sqlx::query("SELECT origin_uri FROM temper_next.kb_resources WHERE id = $1")

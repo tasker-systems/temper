@@ -19,10 +19,18 @@
 mod common;
 
 use reqwest::StatusCode;
-use temper_api::backend::BackendSelection;
+use temper_api::backend::{BackendSelection, NextBackend};
+use temper_core::error::TemperError;
+use temper_core::operations::{Backend, ResourceRef, ShowResource, Surface};
+use temper_core::types::ids::{ProfileId, ResourceId};
 
 /// The metadata-only resource `common::clean_and_seed` inserts (`test://seed-resource`).
 const SEED_RESOURCE_ID: &str = "00000000-0000-0000-0099-000000000001";
+
+/// A principal that neither owns/originated nor holds a READ grant on the seed — so the seed is not
+/// visible to it under `resources_visible_to`. A phantom production id is a valid non-owner: it matches
+/// no home row and no grant. (Same shape as the write-path gate test's intruder.)
+const INTRUDER_PROFILE_ID: &str = "00000000-0000-0000-00cc-0000000000ff";
 
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn next_http_read_answers_from_temper_next_not_public(pool: sqlx::PgPool) {
@@ -128,4 +136,106 @@ async fn next_http_read_answers_from_temper_next_not_public(pool: sqlx::PgPool) 
     assert_eq!(body["stage"], "in-progress", "stage property");
     assert_eq!(body["mode"], "build", "mode property");
     assert_eq!(body["effort"], "M", "effort property");
+}
+
+// ── deny-status split: not-visible → 404, genuine fault → 500 ────────────────────
+//
+// Both single-resource reads (show/content/meta) flow through `readback`'s typed `ReadbackError`, which
+// the surface maps so that a not-visible deny is a leak-safe 404 (never 403 — that confirms existence)
+// while a genuine reconstruction fault stays 500. Pre-fix the surface collapsed every post-resolve error
+// to NotFound, which masked real faults as 404. These two tests pin both arms apart, exercised
+// backend-level (`NextBackend::show_resource`) like the write-path gate tests.
+
+/// Manifest the seed resource (with workflow managed-meta) and synthesize public → temper_next. Returns
+/// the synthesized (re-minted) resource id, resolved by the verbatim-carried `origin_uri`.
+async fn seed_and_synthesize(pool: &sqlx::PgPool) -> uuid::Uuid {
+    sqlx::query(
+        "INSERT INTO kb_resource_manifests (resource_id, managed_meta, open_meta) \
+         VALUES ($1::uuid, $2::jsonb, '{}'::jsonb) \
+         ON CONFLICT (resource_id) DO UPDATE SET managed_meta = EXCLUDED.managed_meta",
+    )
+    .bind(SEED_RESOURCE_ID)
+    .bind(serde_json::json!({ "temper-type": "research" }))
+    .execute(pool)
+    .await
+    .expect("insert manifest");
+    temper_next::synthesis::run(pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run");
+    sqlx::query_scalar("SELECT id FROM temper_next.kb_resources WHERE origin_uri = $1")
+        .bind("test://seed-resource")
+        .fetch_one(pool)
+        .await
+        .expect("synthesized resource id")
+}
+
+fn show_seed() -> ShowResource {
+    ShowResource {
+        resource: ResourceRef::Uuid {
+            id: ResourceId::from(uuid::Uuid::parse_str(SEED_RESOURCE_ID).unwrap()),
+        },
+        origin: Surface::CliCloud,
+    }
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn next_read_not_visible_returns_not_found(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    seed_and_synthesize(&app.pool).await;
+
+    let owner = ProfileId::from(uuid::Uuid::parse_str(common::SYSTEM_PROFILE_ID).unwrap());
+    let intruder = ProfileId::from(uuid::Uuid::parse_str(INTRUDER_PROFILE_ID).unwrap());
+
+    // Positive control: the owner sees its own resource (the deny is not blanket).
+    NextBackend::new(app.pool.clone(), owner)
+        .show_resource(show_seed())
+        .await
+        .expect("owner read admitted");
+
+    // Not-visible → NotFound (404): the leak-safe deny. NEVER Forbidden (403 confirms existence).
+    let err = NextBackend::new(app.pool.clone(), intruder)
+        .show_resource(show_seed())
+        .await
+        .expect_err("non-owner read must be denied");
+    assert!(
+        matches!(err, TemperError::NotFound(_)),
+        "not-visible read must be NotFound (404), got {err:?}"
+    );
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn next_read_genuine_fault_returns_api_error(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    let new_id = seed_and_synthesize(&app.pool).await;
+    let owner = ProfileId::from(uuid::Uuid::parse_str(common::SYSTEM_PROFILE_ID).unwrap());
+
+    // Positive control: the (visible) owner reads it cleanly before any fault injection.
+    NextBackend::new(app.pool.clone(), owner)
+        .show_resource(show_seed())
+        .await
+        .expect("owner read admitted before fault injection");
+
+    // Inject a genuine reconstruction fault on the SAME visible resource: drop the `doc_type` property
+    // every resource pass stamps. The resource stays visible (`ensure_visible` still passes), but
+    // `resource_row`'s inner JOIN on the doc_type property now finds no row → a real DB fault, distinct
+    // from a visibility deny.
+    sqlx::query(
+        "DELETE FROM temper_next.kb_properties \
+         WHERE owner_table='kb_resources' AND owner_id=$1::uuid AND property_key='doc_type'",
+    )
+    .bind(new_id)
+    .execute(&app.pool)
+    .await
+    .expect("delete doc_type property");
+
+    // The fault is a system failure → Api (500), NOT NotFound (404). This is the deny-status split: the
+    // resource is still visible, so collapsing this to 404 would mask a real fault.
+    let err = NextBackend::new(app.pool.clone(), owner)
+        .show_resource(show_seed())
+        .await
+        .expect_err("a genuine reconstruction fault must surface");
+    assert!(
+        matches!(err, TemperError::Api(_)),
+        "genuine fault must be Api (500), not NotFound (404), got {err:?}"
+    );
 }

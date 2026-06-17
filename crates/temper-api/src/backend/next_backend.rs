@@ -32,6 +32,21 @@ fn api_err(e: impl std::fmt::Display) -> TemperError {
     TemperError::Api(e.to_string())
 }
 
+/// Map a typed [`readback::ReadbackError`] to the surface status, splitting the two deny modes the
+/// single-resource reads can return: not-visible is the leak-safe deny → **404** (`NotFound`), never 403
+/// (403 confirms existence) and never 500 (it is not a system failure); a genuine fault stays **500**
+/// (`Api`). Collapsing both into NotFound — the pre-typing behavior on every `temper_next` single-read
+/// surface — masked real faults as 404. Shared by `reconstruct_resource_row` and the read selector's
+/// `get_content`/`get_meta` arms so the mapping lives in exactly one place.
+pub(crate) fn map_readback_err(e: readback::ReadbackError) -> TemperError {
+    match e {
+        readback::ReadbackError::NotVisible { resource_id, .. } => {
+            TemperError::NotFound(format!("resource {resource_id} not found"))
+        }
+        readback::ReadbackError::Fault(inner) => TemperError::Api(inner.to_string()),
+    }
+}
+
 /// graph::EdgeKind → temper-next's affinity::EdgeKind (identical 4-variant taxonomy — 1:1, no §4 remap).
 fn map_edge_kind(k: graph::EdgeKind) -> temper_next::affinity::EdgeKind {
     use temper_next::affinity::EdgeKind as N;
@@ -114,7 +129,7 @@ pub(crate) async fn reconstruct_resource_row(
 ) -> Result<ResourceRow, TemperError> {
     let p = readback::resource_row(pool, principal, new_id)
         .await
-        .map_err(|e| TemperError::Api(e.to_string()))?;
+        .map_err(map_readback_err)?;
     let kb_doc_type_id = doc_type_id_by_name(pool, &p.doc_type_name).await?;
     let now = Utc::now();
     Ok(ResourceRow {
@@ -276,14 +291,11 @@ impl Backend for NextBackend {
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         let new_id = self.resolve_new_id(&cmd.resource).await?;
-        // `reconstruct_resource_row` gates visibility (WS2). After a successful `resolve_new_id` the
-        // resource exists in `temper_next`, so an error here is "not visible" → NotFound, CONFORMing to
-        // production's not-visible→404 collapse (never 403/500; no existence-leak oracle) and matching
-        // the read_selector get_content/get_meta arms. A rare DB fault in the gate also maps here — the
-        // accepted tradeoff on this gated read surface.
-        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id)
-            .await
-            .map_err(|_| TemperError::NotFound(format!("resource {new_id} not found")))?;
+        // `reconstruct_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
+        // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
+        // existence-leak oracle), a genuine fault → Api (500). The earlier blanket `|_| NotFound`
+        // collapse masked real faults as 404.
+        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
         Ok(CommandOutput::new(row))
     }
 

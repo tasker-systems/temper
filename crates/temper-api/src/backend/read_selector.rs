@@ -119,7 +119,7 @@ mod next_impl {
 #[cfg(feature = "next-backend")]
 mod next_impl {
     use super::*;
-    use crate::backend::next_backend::reconstruct_resource_row;
+    use crate::backend::next_backend::{map_readback_err, reconstruct_resource_row};
     use crate::error::ApiError;
     use std::collections::HashMap;
     use temper_core::error::TemperError;
@@ -170,15 +170,11 @@ mod next_impl {
         prod_id: Uuid,
     ) -> ApiResult<ContentResponse> {
         let new_id = resolve_new_id(pool, prod_id).await?;
-        // `readback::body` gates visibility (WS2). After a successful `resolve_new_id` the resource
-        // exists in `temper_next`, so a gate error here is "not visible" → NotFound, CONFORMing to
-        // production's not-visible→NotFound collapse (never 403; no existence-leak oracle). A rare DB
-        // fault in the gate also maps here — an accepted tradeoff on this gated read surface.
-        let markdown = readback::body(pool, principal, new_id).await.map_err(|_| {
-            ApiError::from(TemperError::NotFound(format!(
-                "resource {prod_id} not found"
-            )))
-        })?;
+        // `readback::body` gates visibility (WS2) and returns a typed `ReadbackError`; `map_readback_err`
+        // splits not-visible → NotFound (404, leak-safe deny, never 403) from a genuine fault → Api (500).
+        let markdown = readback::body(pool, principal, new_id)
+            .await
+            .map_err(|e| ApiError::from(map_readback_err(e)))?;
         Ok(ContentResponse {
             resource_id: ResourceId::from(new_id),
             markdown,
@@ -196,13 +192,11 @@ mod next_impl {
         prod_id: Uuid,
     ) -> ApiResult<ResourceMetaResponse> {
         let new_id = resolve_new_id(pool, prod_id).await?;
-        // `readback::meta` gates visibility (WS2); a gate error after a successful resolve is
-        // "not visible" → NotFound (CONFORM to production's collapse; never 403).
-        let rb = readback::meta(pool, principal, new_id).await.map_err(|_| {
-            ApiError::from(TemperError::NotFound(format!(
-                "resource {prod_id} not found"
-            )))
-        })?;
+        // `readback::meta` gates visibility (WS2) and returns a typed `ReadbackError`; `map_readback_err`
+        // splits not-visible → NotFound (404, leak-safe deny, never 403) from a genuine fault → Api (500).
+        let rb = readback::meta(pool, principal, new_id)
+            .await
+            .map_err(|e| ApiError::from(map_readback_err(e)))?;
         let managed: ManagedMeta =
             serde_json::from_value(serde_json::Value::Object(rb.managed)).map_err(api_err)?;
         Ok(ResourceMetaResponse {
