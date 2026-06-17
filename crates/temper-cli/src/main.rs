@@ -124,11 +124,6 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             temper_cli::commands::status::run(&config, verbose, output_format)
         }
-        Commands::Events { context, limit } => {
-            let config = temper_cli::config::load(cli.vault.as_deref())?;
-            let context = context.as_deref();
-            temper_cli::commands::events::run(&config, context, limit, output_format)
-        }
         Commands::Resource { action } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;
             match action {

@@ -86,13 +86,6 @@ pub enum Commands {
         #[arg(long)]
         verbose: bool,
     },
-    /// Show recent vault events
-    Events {
-        #[arg(long)]
-        context: Option<String>,
-        #[arg(long, default_value = "20")]
-        limit: usize,
-    },
     /// Manage resources (tasks, goals, sessions, research, concepts, decisions)
     Resource {
         #[command(subcommand)]

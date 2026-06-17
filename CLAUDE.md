@@ -15,7 +15,7 @@ Temper is a knowledge base system for AI-assisted development. It maintains a va
 - **temper-cli** — The `temper` binary. Uses clap for arg parsing. Commands live in `src/commands/`, business logic in `src/actions/`. Templates use askama.
 - **temper-api** — Axum HTTP server. Handlers in `src/handlers/`, services in `src/services/`, JWT auth middleware in `src/middleware/`. Uses utoipa for OpenAPI spec generation.
 - **temper-client** — Auth-aware HTTP client for the cloud API. Handles Auth0 PKCE device flow, token caching, and all API calls.
-- **temper-ingest** — Embedding (ort/ONNX with all-MiniLM-L6-v2) and document extraction (kreuzberg). Both behind feature flags: `embed`, `extract`.
+- **temper-ingest** — Embedding (ort/ONNX with BAAI/bge-base-en-v1.5, 768-dim) and document extraction (kreuzberg). Both behind feature flags: `embed`, `extract`.
 - **temper-mcp** — Remote MCP server (Streamable HTTP via rmcp). Deployed as a Vercel serverless function alongside temper-api. Auth0 JWT validation, OAuth discovery endpoints (RFC 8414/9728). Tools delegate to temper-api services for DB access. Config in `src/config.rs`, tools in `src/tools/`.
 
 ### TypeScript Packages (packages/)
