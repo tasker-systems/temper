@@ -197,18 +197,14 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     },
                 ),
                 ResourceAction::Show {
-                    slug,
-                    r#type,
-                    context,
+                    r#ref,
                     edges,
                     meta_only,
                     fields,
                 } => temper_cli::commands::resource::show(
                     &config,
                     temper_cli::commands::resource::ShowParams {
-                        doc_type: &r#type,
-                        slug: &slug,
-                        context: context.as_deref(),
+                        r#ref: &r#ref,
                         format: output_format,
                         edges,
                         meta_only,
@@ -216,11 +212,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     },
                 ),
                 ResourceAction::Update {
-                    slug,
-                    r#type,
-                    type_from,
+                    r#ref,
                     type_to,
-                    context,
                     context_to,
                     title,
                     tags,
@@ -242,11 +235,8 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     body,
                 } => {
                     let params = temper_cli::commands::resource::UpdateParams {
-                        slug: &slug,
-                        doc_type: r#type.as_deref(),
-                        type_from: type_from.as_deref(),
+                        r#ref: &r#ref,
                         type_to: type_to.as_deref(),
-                        context: context.as_deref(),
                         context_to: context_to.as_deref(),
                         title: title.as_deref(),
                         tags: &tags,
@@ -270,19 +260,9 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
                     };
                     temper_cli::commands::resource::update(&config, &params)
                 }
-                ResourceAction::Delete {
-                    slug,
-                    r#type,
-                    context,
-                    force,
-                } => temper_cli::commands::resource::delete(
-                    &config,
-                    &r#type,
-                    &slug,
-                    context.as_deref(),
-                    force,
-                    output_format,
-                ),
+                ResourceAction::Delete { r#ref, force } => {
+                    temper_cli::commands::resource::delete(&config, &r#ref, force, output_format)
+                }
             }
         }
         Commands::Context { action } => match action {

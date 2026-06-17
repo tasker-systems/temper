@@ -282,6 +282,38 @@ pub async fn write_resource_file(
 /// by `temper resource delete` after a successful server-side delete. An
 /// already-absent file is a silent success — the projection is
 /// derivative, so "the file is gone" is the desired end state either way.
+/// Remove a resource's projection file given a server [`ResourceRow`].
+///
+/// A by-row convenience over [`remove_resource_file`] for the id-addressed
+/// `temper resource delete` path: derives `owner` from the row's context
+/// subscription (`config.owner_for_context`) and `context`/`doctype`/`slug`
+/// from the row. A row with no slug falls back to the title-derived slug so
+/// the path matches what the projection writer would have produced.
+pub fn remove_resource_file_for_row(
+    vault_root: &Path,
+    config: &crate::config::Config,
+    row: &ResourceRow,
+) -> Result<()> {
+    use crate::actions::ingest;
+
+    let owner = config.owner_for_context(&row.context_name);
+    let slug_owned;
+    let slug: &str = match row.slug.as_deref() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            slug_owned = ingest::slug_from_title(&row.title);
+            slug_owned.as_str()
+        }
+    };
+    remove_resource_file(
+        vault_root,
+        &owner,
+        &row.context_name,
+        &row.doc_type_name,
+        slug,
+    )
+}
+
 pub fn remove_resource_file(
     vault_root: &Path,
     owner: &str,
