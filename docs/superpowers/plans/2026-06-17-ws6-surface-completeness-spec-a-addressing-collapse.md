@@ -260,16 +260,17 @@ Expected: FAIL — `inject_ref` undefined.
 
 ```rust
 /// Insert a derived `ref` key (the decorated, self-resolving identifier)
-/// into a serialized resource row, computed from its `title` + `id`. The
+/// into a serialized resource row, computed from its id + `title`. The
 /// `ref` is render-time only — never persisted, never on the wire type.
-/// No-op if `id` is absent or unparseable (defensive; rows always carry it).
+/// Reads the anchor id from `id` (ResourceRow) OR `resource_id`
+/// (UnifiedSearchResultRow). No-op if the id is absent or unparseable.
 pub(crate) fn inject_ref(row: &mut serde_json::Value) {
-    let (Some(id), title) = (
-        row.get("id").and_then(|v| v.as_str()),
-        row.get("title").and_then(|v| v.as_str()).unwrap_or(""),
-    ) else {
-        return;
-    };
+    let id = row
+        .get("id")
+        .or_else(|| row.get("resource_id"))
+        .and_then(|v| v.as_str());
+    let Some(id) = id else { return };
+    let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
     if let Ok(uuid) = uuid::Uuid::parse_str(id) {
         let decorated =
             temper_core::operations::decorated_ref(title, temper_core::types::ids::ResourceId(uuid));
@@ -295,8 +296,19 @@ Insert (right after `let mut envelope = serde_json::to_value(&response)…?;`):
 
 - [ ] **Step 5: Inject into `show` + `search`**
 
-- `show_generic` / `show_meta_only` (`commands/resource.rs`) and `task::show` / `session::show`: each builds a `metadata` value passed to `crate::format::render` or `render_resource_show`. Add `inject_ref(&mut metadata);` immediately before the render call in each. (Find each `render_resource_show(&metadata, …)` / `render(&metadata, …)` site in these four functions.)
-- `crates/temper-cli/src/actions/search.rs`: where each search result row is serialized for output, call `inject_ref` per row (same pattern as `list`).
+- `show_generic` (`commands/resource.rs:739-741`): inject into `metadata` right before `render_resource_show(&metadata, …)` → `inject_ref(&mut metadata);`.
+- `show_meta_only` (`commands/resource.rs:617-663`): inject into the `filtered` resource Value right before `render(&filtered, fmt)` at `:663`.
+- `task::show` / `session::show` (`commands/task.rs`, `commands/session.rs`): each builds a metadata Value and calls `render`/`render_resource_show` — add `inject_ref(&mut metadata)` before that render call (find the `to_value(&row)` → render site in each).
+- **search** (`commands/search_cmd.rs:46`): the path renders `&results: Vec<UnifiedSearchResultRow>` directly. Convert to a Value array first, inject per row, then render the Value:
+  ```rust
+  let mut results_value = serde_json::to_value(&results)
+      .map_err(|e| crate::error::TemperError::Api(format!("search serialize: {e}")))?;
+  if let Some(arr) = results_value.as_array_mut() {
+      for row in arr.iter_mut() { crate::commands::resource::inject_ref(row); }
+  }
+  let rendered = crate::format::render(&results_value, fmt)?;
+  ```
+  (`inject_ref` reads `resource_id` for search rows — handled by the dual-key lookup.)
 
 - [ ] **Step 6: Add `ref` to MCP `EnrichedResource`** — `crates/temper-mcp/src/tools/resources.rs:183-237`
 
