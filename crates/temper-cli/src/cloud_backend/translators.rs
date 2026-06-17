@@ -196,7 +196,13 @@ pub(crate) fn wire_resource_to_resource_row(
 ///
 /// Errors on `ResourceRef::Uuid` — cloud-mode delete requires a scoped
 /// ref because the resolve-by-URI endpoint needs all four components.
+///
+/// The live delete path now dispatches through `resolve_delete_target`; this
+/// legacy extractor is retained solely for the tests that pin its behavior
+/// until a later task deletes it, so it is gated to test builds to avoid
+/// shipping dead code.
 #[cfg(feature = "embed")]
+#[cfg(test)]
 pub(crate) fn cmd_to_delete_args<'a>(
     cmd: &'a temper_core::operations::DeleteResource,
     fallback_owner: &'a str,
@@ -230,6 +236,106 @@ pub(crate) fn cmd_to_delete_args<'a>(
              uuid-only refs not supported"
                 .to_string(),
         )),
+    }
+}
+
+/// How a delete command addresses its target resource.
+///
+/// A `Uuid` ref dispatches straight to the by-id delete endpoint; a legacy
+/// `Scoped` ref still resolves through `resolve_by_uri` first. The `Scoped`
+/// arm is removed in a later task once every surface builds uuid refs.
+#[cfg(feature = "embed")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum DeleteTarget {
+    /// Direct by-UUID — no `resolve_by_uri` round-trip.
+    Id(uuid::Uuid),
+    /// Legacy scoped slug — resolved via `resolve_by_uri`.
+    Scoped {
+        owner: String,
+        context: String,
+        doctype: String,
+        slug: String,
+    },
+}
+
+/// Discriminate a `DeleteResource` command's `ResourceRef` into a
+/// [`DeleteTarget`]. A `Uuid` ref maps to the by-id fast path; a `Scoped`
+/// ref carries the four URI components (with `fallback_owner` substituted
+/// for an empty owner) for the resolve-by-uri path.
+#[cfg(feature = "embed")]
+pub(crate) fn resolve_delete_target(
+    cmd: &temper_core::operations::DeleteResource,
+    fallback_owner: &str,
+) -> Result<DeleteTarget> {
+    use temper_core::operations::ResourceRef;
+    match &cmd.resource {
+        ResourceRef::Uuid { id } => Ok(DeleteTarget::Id(uuid::Uuid::from(*id))),
+        ResourceRef::Scoped {
+            owner,
+            context,
+            doctype,
+            slug,
+        } => {
+            let owner = if owner.is_empty() {
+                fallback_owner
+            } else {
+                owner.as_str()
+            };
+            Ok(DeleteTarget::Scoped {
+                owner: owner.to_string(),
+                context: context.clone(),
+                doctype: doctype.clone(),
+                slug: slug.clone(),
+            })
+        }
+    }
+}
+
+/// How an update command addresses its target resource. Parallel to
+/// [`DeleteTarget`] — a `Uuid` ref dispatches by id, a `Scoped` ref resolves
+/// through `resolve_by_uri` first. The `Scoped` arm is removed in a later task.
+#[cfg(feature = "embed")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum UpdateTarget {
+    /// Direct by-UUID — no `resolve_by_uri` round-trip.
+    Id(uuid::Uuid),
+    /// Legacy scoped slug — resolved via `resolve_by_uri`.
+    Scoped {
+        owner: String,
+        context: String,
+        doctype: String,
+        slug: String,
+    },
+}
+
+/// Discriminate an `UpdateResource` command's `ResourceRef` into an
+/// [`UpdateTarget`]. Mirrors [`resolve_delete_target`].
+#[cfg(feature = "embed")]
+pub(crate) fn resolve_update_target(
+    cmd: &temper_core::operations::UpdateResource,
+    fallback_owner: &str,
+) -> Result<UpdateTarget> {
+    use temper_core::operations::ResourceRef;
+    match &cmd.resource {
+        ResourceRef::Uuid { id } => Ok(UpdateTarget::Id(uuid::Uuid::from(*id))),
+        ResourceRef::Scoped {
+            owner,
+            context,
+            doctype,
+            slug,
+        } => {
+            let owner = if owner.is_empty() {
+                fallback_owner
+            } else {
+                owner.as_str()
+            };
+            Ok(UpdateTarget::Scoped {
+                owner: owner.to_string(),
+                context: context.clone(),
+                doctype: doctype.clone(),
+                slug: slug.clone(),
+            })
+        }
     }
 }
 

@@ -50,15 +50,15 @@ mod embed_impl {
     use async_trait::async_trait;
     use temper_core::operations::{
         AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent,
-        FoldRelationship, ListResources, ResourceRef, RetypeRelationship, ReweightRelationship,
-        SearchResources, ShowResource, UpdateResource,
+        FoldRelationship, ListResources, RetypeRelationship, ReweightRelationship, SearchResources,
+        ShowResource, UpdateResource,
     };
     use temper_core::operations::{ResourceSummary, SearchHit};
     use temper_core::types::resource::ResourceRow;
 
     use super::super::translators::{
-        cmd_to_delete_args, cmd_to_ingest_payload, cmd_to_resource_update_request,
-        wire_resource_to_resource_row,
+        cmd_to_ingest_payload, cmd_to_resource_update_request, resolve_delete_target,
+        resolve_update_target, wire_resource_to_resource_row, DeleteTarget, UpdateTarget,
     };
     use super::CloudBackend;
     use crate::error::TemperError;
@@ -87,18 +87,30 @@ mod embed_impl {
             &self,
             cmd: UpdateResource,
         ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-            let (owner, ctx, doctype, slug) = extract_scoped_update_components(&cmd, &self.owner)?;
-            let resolved = self
-                .client
-                .resources()
-                .resolve_by_uri(owner, ctx, doctype, slug)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
             let req = cmd_to_resource_update_request(&cmd)?;
+            // A Uuid ref dispatches straight to the by-id PATCH; a Scoped ref
+            // resolves via resolve_by_uri first (removed in a later task).
+            let id = match resolve_update_target(&cmd, &self.owner)? {
+                UpdateTarget::Id(id) => id,
+                UpdateTarget::Scoped {
+                    owner,
+                    context,
+                    doctype,
+                    slug,
+                } => {
+                    let resolved = self
+                        .client
+                        .resources()
+                        .resolve_by_uri(&owner, &context, &doctype, &slug)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
+                    *resolved.id
+                }
+            };
             let updated = self
                 .client
                 .resources()
-                .update(*resolved.id, &req)
+                .update(id, &req)
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)?;
             let resource_id = updated.id;
@@ -112,26 +124,47 @@ mod embed_impl {
             &self,
             cmd: DeleteResource,
         ) -> Result<CommandOutput<()>, TemperError> {
-            let (owner, ctx, doctype, slug) = cmd_to_delete_args(&cmd, &self.owner)?;
-            let resolved = self
-                .client
-                .resources()
-                .resolve_by_uri(owner, ctx, doctype, slug)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            let resource_id = resolved.id;
-            // Use the structured `commands::client_err` mapper (not the lossy
-            // `client_err_to_temper` collapser) so a server-returned
-            // `SystemAccessRequired` is preserved as
+            // A Uuid ref dispatches straight to the by-id delete; a Scoped ref
+            // resolves via resolve_by_uri first (removed in a later task).
+            //
+            // The delete call uses the structured `commands::client_err` mapper
+            // (not the lossy `client_err_to_temper` collapser) so a
+            // server-returned `SystemAccessRequired` is preserved as
             // `TemperError::SystemAccessRequired { details }` and main.rs
             // renders the rich CLI UI (email, join-request status, request URL,
             // CLI hint). The pre-Phase-5 `delete_cloud` used `client_err` here
             // for this reason; CloudBackend now mirrors that on the delete step.
-            self.client
-                .resources()
-                .delete(*resource_id)
-                .await
-                .map_err(crate::commands::client_err)?;
+            // The Scoped resolve-by-uri step keeps `client_err_to_temper`.
+            let resource_id = match resolve_delete_target(&cmd, &self.owner)? {
+                DeleteTarget::Id(id) => {
+                    self.client
+                        .resources()
+                        .delete(id)
+                        .await
+                        .map_err(crate::commands::client_err)?;
+                    temper_core::types::ids::ResourceId::from(id)
+                }
+                DeleteTarget::Scoped {
+                    owner,
+                    context,
+                    doctype,
+                    slug,
+                } => {
+                    let resolved = self
+                        .client
+                        .resources()
+                        .resolve_by_uri(&owner, &context, &doctype, &slug)
+                        .await
+                        .map_err(crate::actions::runtime::client_err_to_temper)?;
+                    let resource_id = resolved.id;
+                    self.client
+                        .resources()
+                        .delete(*resource_id)
+                        .await
+                        .map_err(crate::commands::client_err)?;
+                    resource_id
+                }
+            };
             Ok(CommandOutput {
                 value: (),
                 events: vec![DomainEvent::RemoteSynced { resource_id }],
@@ -209,13 +242,17 @@ mod embed_impl {
 
     /// Helper: extract URI components from an UpdateResource cmd's ResourceRef.
     ///
-    /// Mirrors `cmd_to_delete_args` shape but for UpdateResource. Lives here
-    /// rather than in translators.rs because it's an inherent helper for
-    /// the trait impl, not a pure translation.
+    /// Mirrors `cmd_to_delete_args` shape but for UpdateResource. The live
+    /// `update_resource` path now dispatches through `resolve_update_target`;
+    /// this legacy scoped-only extractor is retained solely for the tests that
+    /// pin its behavior until a later task deletes it, so it is gated to test
+    /// builds to avoid shipping dead code.
+    #[cfg(test)]
     fn extract_scoped_update_components<'a>(
         cmd: &'a UpdateResource,
         fallback_owner: &'a str,
     ) -> Result<(&'a str, &'a str, &'a str, &'a str), TemperError> {
+        use temper_core::operations::ResourceRef;
         match &cmd.resource {
             ResourceRef::Scoped {
                 owner,
@@ -348,6 +385,88 @@ mod embed_impl {
             assert!(
                 format!("{err:?}").contains("scoped ResourceRef"),
                 "expected scoped-ref error, got: {err:?}"
+            );
+        }
+
+        #[test]
+        fn delete_uuid_ref_dispatches_by_id() {
+            use temper_core::operations::{DeleteResource, ResourceRef};
+            use temper_core::types::ids::ResourceId;
+
+            let id = ResourceId(uuid::Uuid::now_v7());
+            let cmd = DeleteResource {
+                resource: ResourceRef::Uuid { id },
+                force: false,
+                origin: Surface::CliCloud,
+            };
+            // A Uuid ref resolves to the by-id target — no resolve-by-uri.
+            assert_eq!(
+                resolve_delete_target(&cmd, "fallback").unwrap(),
+                DeleteTarget::Id(uuid::Uuid::from(id))
+            );
+        }
+
+        #[test]
+        fn delete_scoped_ref_carries_uri_components() {
+            use temper_core::operations::{DeleteResource, ResourceRef};
+
+            let cmd = DeleteResource {
+                resource: ResourceRef::scoped("", "temper", "task", "my-slug"),
+                force: false,
+                origin: Surface::CliCloud,
+            };
+            assert_eq!(
+                resolve_delete_target(&cmd, "fallback-owner").unwrap(),
+                DeleteTarget::Scoped {
+                    owner: "fallback-owner".to_string(),
+                    context: "temper".to_string(),
+                    doctype: "task".to_string(),
+                    slug: "my-slug".to_string(),
+                }
+            );
+        }
+
+        #[test]
+        fn update_uuid_ref_dispatches_by_id() {
+            use temper_core::operations::{ResourceRef, UpdateResource};
+            use temper_core::types::ids::ResourceId;
+
+            let id = ResourceId(uuid::Uuid::now_v7());
+            let cmd = UpdateResource {
+                resource: ResourceRef::Uuid { id },
+                body: None,
+                managed_meta: None,
+                open_meta: None,
+                move_to: None,
+                origin: Surface::CliCloud,
+            };
+            // A Uuid ref resolves to the by-id target — no resolve-by-uri.
+            assert_eq!(
+                resolve_update_target(&cmd, "fallback").unwrap(),
+                UpdateTarget::Id(uuid::Uuid::from(id))
+            );
+        }
+
+        #[test]
+        fn update_scoped_ref_carries_uri_components() {
+            use temper_core::operations::{ResourceRef, UpdateResource};
+
+            let cmd = UpdateResource {
+                resource: ResourceRef::scoped("", "temper", "task", "my-slug"),
+                body: None,
+                managed_meta: None,
+                open_meta: None,
+                move_to: None,
+                origin: Surface::CliCloud,
+            };
+            assert_eq!(
+                resolve_update_target(&cmd, "fallback-owner").unwrap(),
+                UpdateTarget::Scoped {
+                    owner: "fallback-owner".to_string(),
+                    context: "temper".to_string(),
+                    doctype: "task".to_string(),
+                    slug: "my-slug".to_string(),
+                }
             );
         }
     }
