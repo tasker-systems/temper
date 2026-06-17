@@ -146,9 +146,15 @@ args = [
 ]
 
 [tasks.rust-docs]
-description = "Check documentation builds"
+description = "Check documentation builds (RUSTDOCFLAGS=-D warnings, matching CI)"
 command = "cargo"
 args = ["doc", "--workspace", "--no-deps", "--document-private-items"]
+# Match CI's code-quality job: rustdoc warnings (broken intra-doc links, bare
+# URLs, etc.) fail the build locally before they reach CI. The global
+# SQLX_OFFLINE=true keeps temper-next's namespaced macros resolving from its
+# per-crate .sqlx cache, so a single --workspace pass suffices (mirrors how
+# rust-clippy is run locally; CI splits temper-next only to avoid double-linting).
+env = { RUSTDOCFLAGS = "-D warnings" }
 
 [tasks.rust-machete]
 description = "Check for unused Cargo dependencies"
