@@ -77,9 +77,15 @@ mod tests {
 
     #[test]
     fn sluggify_lowercases_and_dashes() {
-        assert_eq!(sluggify("Hello, World!"), "hello-world");
-        assert_eq!(sluggify("  Trim --Me-- "), "trim-me");
-        assert_eq!(sluggify("Café déjà"), "caf-d-j"); // non-ascii alnum dropped
+        // Behavior is IDENTICAL to the legacy `slug_from_title`: each
+        // non-alphanumeric, non-dash char → `-` (runs are NOT collapsed),
+        // unicode letters are KEPT (is_alphanumeric is unicode-aware),
+        // ends trimmed. The slug half of a ref is cosmetic (ignored on
+        // parse), so exact prettiness doesn't matter — fidelity to the
+        // existing contract does.
+        assert_eq!(sluggify("Hello, World!"), "hello--world");
+        assert_eq!(sluggify("  Trim --Me-- "), "trim---me");
+        assert_eq!(sluggify("Café déjà"), "café-déjà");
     }
 
     #[test]
@@ -174,7 +180,7 @@ pub fn parse_ref(s: &str) -> Result<ResourceId, TemperError> {
 }
 ```
 
-Note for the implementer: `sluggify`'s non-ascii behavior matches the existing `slug_from_title` (`char::is_alphanumeric` is unicode-aware in lowercasing but the replace predicate drops non-ascii-alnum the same way the original did — keep behavior identical; the `caf-d-j` assertion pins it).
+Note for the implementer: `sluggify` is byte-for-byte the existing `slug_from_title` body — `char::is_alphanumeric` is unicode-aware so accented letters are KEPT, and separator runs are NOT collapsed (`Hello, World!` → `hello--world`). Keep this behavior identical (the `café-déjà` / `hello--world` / `trim---me` assertions pin it); the slug half of a ref is cosmetic and ignored on parse, so fidelity to the existing contract matters more than prettiness.
 
 - [ ] **Step 4: Wire the module** in `crates/temper-core/src/operations/mod.rs`
 
