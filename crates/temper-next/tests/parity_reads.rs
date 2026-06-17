@@ -66,6 +66,58 @@ async fn synthesis_preserves_production_profile_ids(pool: sqlx::PgPool) {
     );
 }
 
+/// WS2 — the wired read path is scoped to the principal. P2 (`ORIGINATOR_PROFILE`) originated only
+/// R2 (task-doc); it neither owns nor originated R1/R3/R5 and holds no grant, so
+/// `resources_visible_to(P2) = {R2}`. A principal-scoped `readback::list` returns exactly that, the
+/// owner P1 still sees all 4, and a single-resource read of a not-visible resource is denied (the
+/// read selector maps that to 404 — never 403). Uses the prod-shape fixture because its resources
+/// carry the `doc_type` the list/show reads require (the bare access-scenario world does not).
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn reads_are_scoped_to_principal(pool: sqlx::PgPool) {
+    common::seed_and_synthesize(&pool).await;
+    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+    let r1 = ids
+        .to_new(fixture_ids::RESOURCE_GOAL)
+        .expect("R1 synthesized");
+    let r2 = ids
+        .to_new(fixture_ids::RESOURCE_TASK)
+        .expect("R2 synthesized");
+
+    // list(P2): exactly the one resource P2 originated.
+    let p2_uris: Vec<String> = readback::list(&pool, fixture_ids::ORIGINATOR_PROFILE)
+        .await
+        .expect("list(P2)")
+        .into_iter()
+        .map(|r| r.origin_uri)
+        .collect();
+    assert_eq!(
+        p2_uris,
+        vec!["temper://fixture/task-doc".to_string()],
+        "P2 (originator of only R2) sees exactly R2 via the scoped list"
+    );
+
+    // list(P1): the owner still sees all 4 active resources — scoping admits the owner.
+    let p1_count = readback::list(&pool, fixture_ids::OWNER_PROFILE)
+        .await
+        .expect("list(P1)")
+        .len();
+    assert_eq!(p1_count, 4, "P1 owns all 4 active resources");
+
+    // Deny: P2 cannot read R1 (neither owns nor originated, no grant); CAN read R2.
+    assert!(
+        readback::resource_row(&pool, fixture_ids::ORIGINATOR_PROFILE, r1)
+            .await
+            .is_err(),
+        "P2 is denied R1 (not visible) — the selector maps this to 404"
+    );
+    assert!(
+        readback::resource_row(&pool, fixture_ids::ORIGINATOR_PROFILE, r2)
+            .await
+            .is_ok(),
+        "P2 can read R2 (originated it)"
+    );
+}
+
 /// The projected list-row tuple compared across the two read paths, keyed by `origin_uri`.
 type ListProjection = (
     String,         // title
@@ -115,17 +167,18 @@ async fn list_parity(pool: sqlx::PgPool) {
         .collect();
 
     // Readback over temper_next.*.
-    let next_by_uri: BTreeMap<String, ListProjection> = readback::list(&pool)
-        .await
-        .expect("readback::list")
-        .into_iter()
-        .map(|r| {
-            (
-                r.origin_uri,
-                (r.title, r.doc_type, r.stage, r.mode, r.effort),
-            )
-        })
-        .collect();
+    let next_by_uri: BTreeMap<String, ListProjection> =
+        readback::list(&pool, fixture_ids::OWNER_PROFILE)
+            .await
+            .expect("readback::list")
+            .into_iter()
+            .map(|r| {
+                (
+                    r.origin_uri,
+                    (r.title, r.doc_type, r.stage, r.mode, r.effort),
+                )
+            })
+            .collect();
 
     assert_eq!(
         prod_by_uri.len(),
@@ -245,7 +298,9 @@ async fn show_and_meta_parity(pool: sqlx::PgPool) {
             expected_managed.remove(*k);
         }
 
-        let rb = readback::meta(&pool, new_id).await.expect("readback::meta");
+        let rb = readback::meta(&pool, fixture_ids::OWNER_PROFILE, new_id)
+            .await
+            .expect("readback::meta");
 
         assert_eq!(
             rb.managed, expected_managed,
@@ -354,7 +409,9 @@ async fn body_read_parity(pool: sqlx::PgPool) {
             .markdown;
 
         // Readback body: reconstructed from temper_next chunks via the shared §8 assembler.
-        let rb = readback::body(&pool, new_id).await.expect("readback::body");
+        let rb = readback::body(&pool, fixture_ids::OWNER_PROFILE, new_id)
+            .await
+            .expect("readback::body");
 
         assert_eq!(
             rb, prod,
@@ -367,7 +424,7 @@ async fn body_read_parity(pool: sqlx::PgPool) {
     let r2_new = ids
         .to_new(fixture_ids::RESOURCE_TASK)
         .expect("R2 (task) has a synthesized id");
-    let r2_body = readback::body(&pool, r2_new)
+    let r2_body = readback::body(&pool, fixture_ids::OWNER_PROFILE, r2_new)
         .await
         .expect("readback::body R2");
     assert_eq!(
@@ -444,11 +501,12 @@ async fn fts_parity(pool: sqlx::PgPool) {
                 .map(|r| r.origin_uri)
                 .collect();
 
-        let rb_set: BTreeSet<String> = readback::fts_search(&pool, query)
-            .await
-            .expect("readback::fts_search")
-            .into_iter()
-            .collect();
+        let rb_set: BTreeSet<String> =
+            readback::fts_search(&pool, fixture_ids::OWNER_PROFILE, query)
+                .await
+                .expect("readback::fts_search")
+                .into_iter()
+                .collect();
 
         let expected_set: BTreeSet<String> = expected.iter().map(|s| (*s).to_string()).collect();
 
@@ -469,7 +527,7 @@ async fn fts_parity(pool: sqlx::PgPool) {
     }
 
     // Non-vacuous spot-check: "body" appears in every active body, so both sides find exactly 4.
-    let body_hits = readback::fts_search(&pool, "body")
+    let body_hits = readback::fts_search(&pool, fixture_ids::OWNER_PROFILE, "body")
         .await
         .expect("readback::fts_search body");
     assert_eq!(
@@ -521,7 +579,7 @@ async fn vector_parity(pool: sqlx::PgPool) {
         .map(|r| r.origin_uri)
         .collect();
 
-    let rb_order: Vec<String> = readback::vector_search(&pool, &q)
+    let rb_order: Vec<String> = readback::vector_search(&pool, fixture_ids::OWNER_PROFILE, &q)
         .await
         .expect("readback::vector_search");
 
@@ -715,7 +773,7 @@ async fn resource_row_parity(pool: sqlx::PgPool) {
             .to_string();
         let old_id = ids.to_old(new_id).expect("maps back to prod");
 
-        let rb = readback::resource_row(&pool, new_id)
+        let rb = readback::resource_row(&pool, fixture_ids::OWNER_PROFILE, new_id)
             .await
             .expect("readback::resource_row");
         // Production oracle: get_visible returns the full ResourceRow for the owner profile.
@@ -776,7 +834,7 @@ async fn show_through_next_backend_preserves_invariants(pool: sqlx::PgPool) {
             .expect("NextBackend::show_resource");
 
         // The wiring must reproduce readback::resource_row's invariant fields.
-        let direct = readback::resource_row(&pool, new_id)
+        let direct = readback::resource_row(&pool, fixture_ids::OWNER_PROFILE, new_id)
             .await
             .expect("readback::resource_row");
         assert_eq!(

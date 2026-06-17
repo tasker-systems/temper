@@ -110,9 +110,10 @@ pub(crate) async fn doc_type_id_by_name(
 /// `NextBackend::show_resource` and the read selector's full-row `list`.
 pub(crate) async fn reconstruct_resource_row(
     pool: &PgPool,
+    principal: uuid::Uuid,
     new_id: uuid::Uuid,
 ) -> Result<ResourceRow, TemperError> {
-    let p = readback::resource_row(pool, new_id)
+    let p = readback::resource_row(pool, principal, new_id)
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
     let kb_doc_type_id = doc_type_id_by_name(pool, &p.doc_type_name).await?;
@@ -224,7 +225,7 @@ impl Backend for NextBackend {
         .await
         .map_err(api_err)?;
 
-        let row = reconstruct_resource_row(&self.pool, new_id.uuid()).await?;
+        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id.uuid()).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -233,7 +234,7 @@ impl Backend for NextBackend {
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         let new_id = self.resolve_new_id(&cmd.resource).await?;
-        let row = reconstruct_resource_row(&self.pool, new_id).await?;
+        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -296,7 +297,7 @@ impl Backend for NextBackend {
         .await
         .map_err(api_err)?;
 
-        let row = reconstruct_resource_row(&self.pool, new_id).await?;
+        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -322,7 +323,7 @@ impl Backend for NextBackend {
         &self,
         _cmd: ListResources,
     ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-        let rows = readback::list(&self.pool)
+        let rows = readback::list(&self.pool, *self.profile_id)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let summaries = rows
@@ -345,7 +346,7 @@ impl Backend for NextBackend {
     ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
         // 4b: FTS only (the text query). Vector search needs a query embedding this layer does not
         // carry; the HTTP search selector handles vector mode directly (read selector, Task 6/8).
-        let uris = readback::fts_search(&self.pool, &cmd.query.query)
+        let uris = readback::fts_search(&self.pool, *self.profile_id, &cmd.query.query)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let hits = uris

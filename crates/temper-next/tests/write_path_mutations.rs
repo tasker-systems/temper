@@ -607,7 +607,9 @@ async fn writes_create_then_update_reflected_in_readback() {
     .await
     .unwrap();
 
-    let row = readback::resource_row(&pool, r.uuid()).await.unwrap();
+    let row = readback::resource_row(&pool, owner.uuid(), r.uuid())
+        .await
+        .unwrap();
     assert_eq!(row.title, "Renamed", "title updated");
     assert_eq!(
         row.stage.as_deref(),

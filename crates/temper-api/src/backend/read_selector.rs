@@ -9,8 +9,9 @@
 //! on legacy under `next`; re-addressing the endpoint is a post-flip surface concern.
 //!
 //! The `Next` arms are feature-gated behind `next-backend`; without the feature they return the same
-//! `NotImplemented` gate as `select_backend`. Reads are visibility-UNSCOPED at the §9 floor
-//! (access-scoping over `temper_next` is a named flip prerequisite, WS2).
+//! `NotImplemented` gate as `select_backend`. Reads are visibility-SCOPED to the caller's profile (WS2 —
+//! the readbacks gate through `temper_next.resources_visible_to`, CONFORMing to production's scoped
+//! reads; the auth'd profile id is preserved by synthesis, so it is the `temper_next` principal directly).
 
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -34,7 +35,7 @@ pub async fn list_select(
 ) -> ApiResult<ResourceListResponse> {
     match selection {
         BackendSelection::Legacy => resource_service::list_visible(pool, profile_id, params).await,
-        BackendSelection::Next => next_impl::list(pool).await,
+        BackendSelection::Next => next_impl::list(pool, profile_id).await,
     }
 }
 
@@ -49,7 +50,7 @@ pub async fn get_content_select(
         BackendSelection::Legacy => {
             resource_service::get_content(pool, profile_id, resource_id).await
         }
-        BackendSelection::Next => next_impl::get_content(pool, resource_id).await,
+        BackendSelection::Next => next_impl::get_content(pool, profile_id, resource_id).await,
     }
 }
 
@@ -62,7 +63,9 @@ pub async fn get_meta_select(
 ) -> ApiResult<ResourceMetaResponse> {
     match selection {
         BackendSelection::Legacy => meta_service::get_meta(pool, profile_id, resource_id).await,
-        BackendSelection::Next => next_impl::get_meta(pool, Uuid::from(resource_id)).await,
+        BackendSelection::Next => {
+            next_impl::get_meta(pool, Uuid::from(profile_id), Uuid::from(resource_id)).await
+        }
     }
 }
 
@@ -75,7 +78,7 @@ pub async fn search_select(
 ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
     match selection {
         BackendSelection::Legacy => search_service::search(pool, profile_id, params).await,
-        BackendSelection::Next => next_impl::search(pool, params).await,
+        BackendSelection::Next => next_impl::search(pool, profile_id, params).await,
     }
 }
 
@@ -95,17 +98,18 @@ mod next_impl {
             "next backend requires the `next-backend` build feature".into(),
         )))
     }
-    pub(super) async fn list(_: &PgPool) -> ApiResult<ResourceListResponse> {
+    pub(super) async fn list(_: &PgPool, _: Uuid) -> ApiResult<ResourceListResponse> {
         gate()
     }
-    pub(super) async fn get_content(_: &PgPool, _: Uuid) -> ApiResult<ContentResponse> {
+    pub(super) async fn get_content(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ContentResponse> {
         gate()
     }
-    pub(super) async fn get_meta(_: &PgPool, _: Uuid) -> ApiResult<ResourceMetaResponse> {
+    pub(super) async fn get_meta(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ResourceMetaResponse> {
         gate()
     }
     pub(super) async fn search(
         _: &PgPool,
+        _: Uuid,
         _: SearchParams,
     ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
         gate()
@@ -127,15 +131,24 @@ mod next_impl {
         ApiError::from(TemperError::Api(e.to_string()))
     }
 
-    /// `list` over `temper_next`: reconstruct a full `ResourceRow` per synthesized resource (the §9
-    /// floor is unscoped — every active resource — so no filter/pagination is applied; the asserted
-    /// invariant is the row SET + projected fields, not order or page bounds). `total` = row count;
-    /// `facets.doc_type` = the doctype histogram.
-    pub(super) async fn list(pool: &PgPool) -> ApiResult<ResourceListResponse> {
-        let ids = readback::ResolvedIds::load(pool).await.map_err(api_err)?;
-        let mut rows: Vec<ResourceRow> = Vec::with_capacity(ids.len());
-        for new_id in ids.new_ids() {
-            rows.push(reconstruct_resource_row(pool, new_id).await?);
+    /// `list` over `temper_next`: reconstruct a full `ResourceRow` per resource VISIBLE to the principal
+    /// (WS2 — `resources_visible_to`, CONFORMing to production's scoped list). No pagination; the asserted
+    /// invariant is the visible row SET + projected fields, not order or page bounds. `total` = row count;
+    /// `facets.doc_type` = the doctype histogram over the visible set.
+    pub(super) async fn list(pool: &PgPool, principal: Uuid) -> ApiResult<ResourceListResponse> {
+        // WS2: only resources visible to the principal. `resources_visible_to` returns synthesized
+        // (`temper_next`) ids directly (profile ids are preserved by synthesis), so we filter the set
+        // up front — a not-visible id never enters the loop, where `reconstruct_resource_row`'s gate
+        // would otherwise error. The per-row gate inside re-checks harmlessly (defense in depth).
+        let visible: Vec<Uuid> =
+            sqlx::query_scalar("SELECT resource_id FROM temper_next.resources_visible_to($1)")
+                .bind(principal)
+                .fetch_all(pool)
+                .await
+                .map_err(api_err)?;
+        let mut rows: Vec<ResourceRow> = Vec::with_capacity(visible.len());
+        for new_id in visible {
+            rows.push(reconstruct_resource_row(pool, principal, new_id).await?);
         }
         let mut doc_type: HashMap<String, i64> = HashMap::new();
         for r in &rows {
@@ -151,9 +164,21 @@ mod next_impl {
 
     /// `get_content` over `temper_next`: reconstruct the markdown body (§9 body floor). `managed_meta`
     /// / `open_meta` are left `None` — the body markdown is the floor; the meta tier is `get_meta`.
-    pub(super) async fn get_content(pool: &PgPool, prod_id: Uuid) -> ApiResult<ContentResponse> {
+    pub(super) async fn get_content(
+        pool: &PgPool,
+        principal: Uuid,
+        prod_id: Uuid,
+    ) -> ApiResult<ContentResponse> {
         let new_id = resolve_new_id(pool, prod_id).await?;
-        let markdown = readback::body(pool, new_id).await.map_err(api_err)?;
+        // `readback::body` gates visibility (WS2). After a successful `resolve_new_id` the resource
+        // exists in `temper_next`, so a gate error here is "not visible" → NotFound, CONFORMing to
+        // production's not-visible→NotFound collapse (never 403; no existence-leak oracle). A rare DB
+        // fault in the gate also maps here — an accepted tradeoff on this gated read surface.
+        let markdown = readback::body(pool, principal, new_id).await.map_err(|_| {
+            ApiError::from(TemperError::NotFound(format!(
+                "resource {prod_id} not found"
+            )))
+        })?;
         Ok(ContentResponse {
             resource_id: ResourceId::from(new_id),
             markdown,
@@ -165,9 +190,19 @@ mod next_impl {
     /// `get_meta` over `temper_next`: reconstruct the managed/open split (`readback::meta`, the §7
     /// inverse fate). `managed_hash`/`open_hash` are §7-dissolved (no manifest in `temper_next`) — they
     /// are emitted empty (non-invariant; the §9 floor does not assert them).
-    pub(super) async fn get_meta(pool: &PgPool, prod_id: Uuid) -> ApiResult<ResourceMetaResponse> {
+    pub(super) async fn get_meta(
+        pool: &PgPool,
+        principal: Uuid,
+        prod_id: Uuid,
+    ) -> ApiResult<ResourceMetaResponse> {
         let new_id = resolve_new_id(pool, prod_id).await?;
-        let rb = readback::meta(pool, new_id).await.map_err(api_err)?;
+        // `readback::meta` gates visibility (WS2); a gate error after a successful resolve is
+        // "not visible" → NotFound (CONFORM to production's collapse; never 403).
+        let rb = readback::meta(pool, principal, new_id).await.map_err(|_| {
+            ApiError::from(TemperError::NotFound(format!(
+                "resource {prod_id} not found"
+            )))
+        })?;
         let managed: ManagedMeta =
             serde_json::from_value(serde_json::Value::Object(rb.managed)).map_err(api_err)?;
         Ok(ResourceMetaResponse {
@@ -185,18 +220,23 @@ mod next_impl {
     /// (title + doctype). `slug` is §7-dissolved (emitted empty).
     pub(super) async fn search(
         pool: &PgPool,
+        principal: Uuid,
         params: SearchParams,
     ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
+        // WS2: the search readbacks JOIN `resources_visible_to(principal)`, so the result set is
+        // already visibility-scoped (a not-visible match never surfaces).
         let (origin_uris, origin) = if let Some(embedding) = params.embedding.as_ref() {
             (
-                readback::vector_search(pool, embedding)
+                readback::vector_search(pool, principal, embedding)
                     .await
                     .map_err(api_err)?,
                 "vector",
             )
         } else if let Some(query) = params.query.as_ref() {
             (
-                readback::fts_search(pool, query).await.map_err(api_err)?,
+                readback::fts_search(pool, principal, query)
+                    .await
+                    .map_err(api_err)?,
                 "fts",
             )
         } else {
@@ -211,7 +251,7 @@ mod next_impl {
             else {
                 continue;
             };
-            let row = reconstruct_resource_row(pool, new_id).await?;
+            let row = reconstruct_resource_row(pool, principal, new_id).await?;
             hits.push(UnifiedSearchResultRow {
                 resource_id: new_id,
                 title: row.title,
