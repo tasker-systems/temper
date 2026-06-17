@@ -12,6 +12,29 @@ use temper_core::operations::CreateResource;
 #[cfg(feature = "embed")]
 use temper_core::types::ingest::IngestPayload;
 
+/// Resolve the body content for a create.
+///
+/// The caller-provided body is used **verbatim** when non-empty; only an
+/// absent/empty body falls back to a synthesized `# {title}\n` placeholder.
+///
+/// The title is deliberately *not* prepended to a user-supplied body: the
+/// canonical title lives in frontmatter (`temper-title`), and a body that
+/// already opens with its own H1 must not receive a second one. This guards
+/// the historical duplicate-H1 bug where an older create path concatenated
+/// `# {title}` ahead of a body that already started with `# {title}`,
+/// mashing `# X# X` onto one line.
+///
+/// Pure (no ONNX), so the H1 behavior is regression-tested in normal CI
+/// without requiring the `embed` runtime. Compiled when its callers exist:
+/// `cmd_to_ingest_payload` (embed) or the test module.
+#[cfg(any(feature = "embed", test))]
+fn resolve_create_body(body: Option<&temper_core::operations::BodyUpdate>, title: &str) -> String {
+    match body {
+        Some(b) if !b.content.is_empty() => b.content.clone(),
+        _ => format!("# {title}\n"),
+    }
+}
+
 /// Translate a `CreateResource` command into an `IngestPayload` wire
 /// payload suitable for `POST /api/ingest`.
 ///
@@ -35,11 +58,8 @@ use temper_core::types::ingest::IngestPayload;
 pub(crate) fn cmd_to_ingest_payload(cmd: &CreateResource) -> Result<IngestPayload> {
     use temper_core::operations::ensure_managed_identity_keys;
 
-    // Resolve body content.
-    let content = match &cmd.body {
-        Some(b) if !b.content.is_empty() => b.content.clone(),
-        _ => format!("# {}\n", cmd.title),
-    };
+    // Resolve body content (verbatim when provided; placeholder otherwise).
+    let content = resolve_create_body(cmd.body.as_ref(), &cmd.title);
 
     // Body-trio computation: short-circuit if pre-computed, else embed.
     let (content_hash, chunks_packed) = match &cmd.body {
@@ -533,6 +553,78 @@ mod tests {
         assert!(
             format!("{err:?}").contains("scoped ResourceRef"),
             "error message should mention scoped ResourceRef, got: {err:?}"
+        );
+    }
+}
+
+/// Ungated tests for `resolve_create_body` — no `embed`/ONNX needed, so the
+/// duplicate-H1 regression runs in normal CI.
+#[cfg(test)]
+mod body_resolution_tests {
+    use super::resolve_create_body;
+    use temper_core::operations::BodyUpdate;
+
+    fn body(content: &str) -> BodyUpdate {
+        BodyUpdate {
+            content: content.to_string(),
+            content_hash: None,
+            chunks_packed: None,
+        }
+    }
+
+    #[test]
+    fn body_with_h1_matching_title_is_not_double_prepended() {
+        // The historical bug: `# X# X` mashed onto one line. The body must be
+        // used verbatim, carrying exactly one H1 — not the title prepended on
+        // top of the body's own matching H1.
+        let title = "Unify resource delete";
+        let user_body = "# Unify resource delete\n\nCloud-first, explicit-only.\n";
+        let resolved = resolve_create_body(Some(&body(user_body)), title);
+        assert_eq!(resolved, user_body, "body must be used verbatim");
+        assert_eq!(
+            resolved.matches("# Unify resource delete").count(),
+            1,
+            "exactly one H1; no doubled title"
+        );
+        assert!(
+            !resolved.contains("delete# "),
+            "no two H1s mashed onto one line"
+        );
+    }
+
+    #[test]
+    fn body_with_nonmatching_h1_is_respected() {
+        let resolved = resolve_create_body(
+            Some(&body("# A different heading\n\nText.\n")),
+            "Task title",
+        );
+        assert_eq!(resolved, "# A different heading\n\nText.\n");
+        assert!(
+            !resolved.contains("Task title"),
+            "title is not injected into a body that already has its own H1"
+        );
+    }
+
+    #[test]
+    fn body_without_h1_is_used_verbatim_not_title_prepended() {
+        // Cloud-only design: the canonical title lives in frontmatter, so a
+        // body lacking an H1 is passed through unchanged rather than having
+        // `# {title}` prepended.
+        let resolved =
+            resolve_create_body(Some(&body("Just a paragraph, no heading.\n")), "Some title");
+        assert_eq!(resolved, "Just a paragraph, no heading.\n");
+    }
+
+    #[test]
+    fn absent_body_synthesizes_title_h1_placeholder() {
+        assert_eq!(resolve_create_body(None, "My title"), "# My title\n");
+    }
+
+    #[test]
+    fn empty_body_synthesizes_title_h1_placeholder() {
+        assert_eq!(
+            resolve_create_body(Some(&body("")), "My title"),
+            "# My title\n"
         );
     }
 }
