@@ -22,19 +22,22 @@ Per the flip-readiness bar (no flip-with-a-gap, adoption-grade): every lossy `Ne
 > - **Identity out:** everything that prints a resource prints the decorated form. Vault projection filenames become `sluggify(title)-<uuid>.md` — every filename self-resolving.
 > - **One resolver:** a single resolve affordance (UUID | decorated → resource), consumed by CLI, MCP, and the skill.
 
-This spec implements that contract; it does not re-litigate it.
+This spec implements that contract — except the **vault-projection-filename** clause of identity-out, which it consciously defers (see §4); it does not re-litigate the contract otherwise.
 
 ## 1. Scope & the A/B seam
 
 **In Spec A:**
 - Collapse `ResourceRef::Scoped`; one `parse_ref` resolver in `temper-core::operations`.
 - Surface simplification: CLI `show`/`update`/`delete`/`edge`, MCP `get_resource` + relationship tools.
-- Identity-out: a `decorated_ref(title, id)` helper; `ref` field at each surface's output boundary; vault projection filenames.
+- Identity-out **rendering**: a `decorated_ref(title, id)` helper; a `ref` field at each surface's output boundary (the copy→paste loop).
 - Native-id write addressing in `NextBackend` (the `NotImplemented` arms disappear).
 
 **Deferred to Spec B (named, not done here):**
 - `by_uri`'s `temper_next` readback arm.
 - MCP `get_resource`/`list_resources` relationship-enrichment over `temper_next`.
+
+**Deferred beyond this PR (named, not resolved):**
+- The Adjudication-5 **vault-filename** clause (`<slug>.md` → decorated) and, behind it, the larger question of whether the local vault projection survives as a feature at all. Not forced until the flip (slug-dissolved readback rows); see §4.
 
 **The seam (load-bearing for A's coherence):** the `resolve_by_uri` *service* (`crates/temper-api/src/services/resource_service.rs:388`) and the `/api/resources/by-uri` endpoint (`crates/temper-api/src/handlers/resources.rs:102`) **stay** on legacy in Spec A. Spec A removes only the *CLI/MCP construction of scoped refs* and the API translator's scoped-ref arm (`crates/temper-api/src/backend/translators.rs:188`). A UUID ref resolves directly by id; nothing in Spec A needs the slug-scoped lookup path. Spec B owns routing the surviving by-uri/enrichment reads through readback.
 
@@ -48,7 +51,7 @@ This spec implements that contract; it does not re-litigate it.
 - anything else (a fragment, an empty string, a non-UUID tail) → typed error. **No fuzzy fallback** (contract: no ambiguous input is ever a ref).
 - Migrates to `temper-workflow` at post-cutover crate extraction (tracked, not now).
 
-**Decorated-form helper.** `temper-core::operations::decorated_ref(title: &str, id: ResourceId) -> String` = `format!("{}-{}", sluggify(title), id)`. Consolidates today's scattered forms: `ingest::slug_from_title` (`crates/temper-cli/src/projection.rs:231`) and `Vault::canonical_uri` (`crates/temper-core/src/vault.rs:106`). `sluggify` lands as the shared title→slug function both `parse_ref`'s inverse and the projector use.
+**Decorated-form helper.** `temper-core::operations::decorated_ref(title: &str, id: ResourceId) -> String` = `format!("{}-{}", sluggify(title), id)`, consumed by the output-rendering boundaries (§4). `sluggify` is the shared title→slug function (today's `ingest::slug_from_title`, `crates/temper-cli/src/projection.rs:231`, promoted to `temper-core`); `Vault::canonical_uri` (`crates/temper-core/src/vault.rs:106`) is the decorated-form lineage. The projector keeps its existing slug-based filename path untouched (§4 defers the filename rename), so it is **not** a consumer of `decorated_ref` in Spec A.
 
 ## 3. Surface simplification (CLI + MCP)
 
@@ -62,11 +65,16 @@ This spec implements that contract; it does not re-litigate it.
 - `update_resource` / `delete_resource`: already id-only — accept decorated/UUID through `parse_ref`.
 - Relationship tools (`relationships.rs`): scoped-ref construction replaced by decorated/UUID refs.
 
-## 4. Identity-out (rendering + filenames)
+## 4. Identity-out (rendering)
 
-**`ref` at the output boundary.** Both surfaces emit `decorated_ref(title, id)` as a `ref` field where they print a resource — CLI output rows for `list`/`search`/`show`; MCP `EnrichedResource` (`crates/temper-mcp/src/tools/resources.rs:183`). **Not** added to the shared `ResourceRow` wire type — `ref` is derived from `title`+`id`, and the wire type stays clean (the same discipline that keeps `slug`/hashes off the §9 floor). Each surface computes it at serialization.
+**`ref` at the output boundary.** Both surfaces emit `decorated_ref(title, id)` as a `ref` field where they print a resource — CLI output rows for `list`/`search`/`show`; MCP `EnrichedResource` (`crates/temper-mcp/src/tools/resources.rs:183`). **Not** added to the shared `ResourceRow` wire type — `ref` is derived from `title`+`id`, and the wire type stays clean (the same discipline that keeps `slug`/hashes off the §9 floor). Each surface computes it at serialization. This is the load-bearing half of identity-out: it is how a caller *obtains* a decorated ref to paste back into a `show`/`update`/`delete` (the copy→paste loop the contract names).
 
-**Vault projection filenames.** `Vault::doc_file(owner, context, doc_type, slug)` (`crates/temper-cli/src/projection.rs:251,292`) changes its terminal segment from `<slug>.md` to `decorated_ref(title, id).md`; the `owner/context/doctype` **directory** hierarchy is unchanged (browsable organization; only the filename must self-resolve). The projector already has `title` and `id` in the row. The existing stale-file sweep (`crates/temper-cli/src/projection.rs:151-173`) walks `*.md` and removes files for resources *no longer present* — but it keys on the resource set, so an old `<slug>.md` for a resource that is still present (just renamed to the decorated form) is **not** an orphan it would catch as-is. Plan-time call: either the sweep is extended to remove files whose name ≠ the resource's current expected filename, or the writer removes the prior-named file when it writes the decorated name. Goal either way: a re-pull converges the vault to decorated names with no manual cleanup. (No code outside the vault reads these filenames — they are a projection cache — so this is cosmetic-convergence, not a correctness gate.)
+**Vault projection filenames — consciously deferred (Adjudication 5 clause not implemented here).** Adjudication 5 also says projected filenames become `sluggify(title)-<uuid>.md`. Spec A **does not** touch the projection filename writer (`Vault::doc_file`, `crates/temper-cli/src/projection.rs:251,292`); `<slug>.md` is left as-is. Rationale:
+- No current workflow addresses a resource *via* its projected filename. The primary edit loop is `temper resource show` → a **temp path** → `cat tmpfile.md | temper resource update` (CLAUDE.md's show-edit-cat idiom), not the `temper pull`-materialized vault file. Renaming projected files makes a read-only cache prettier that no path reads.
+- It is not forced by Spec A: on the **legacy** backend (all of Spec A) `row.slug` still exists, so the projector keeps working unchanged.
+- The genuine forcing function is the **flip**, not now: `temper_next` readback rows are §7-slug-dissolved, so `temper pull` over the next backend has no slug for a filename. That is when the larger question — *does the local vault projection still make sense as a feature?* — must be answered. It is a bigger decision than this spec should swallow (it touches whether `pull`/materialization survives at all), so it is named and left open, to be taken with the chunk-5 flip work or a dedicated projection-relevance decision, not guessed here.
+
+Identity-*in* (accepting decorated refs) and the one-resolver are fully implemented in Spec A; only the projected-filename half of identity-*out* is deferred. The `ref`-rendering above already gives every surface a self-resolving decorated identifier to copy.
 
 ## 5. Native-id write addressing (`NextBackend`)
 
@@ -92,6 +100,7 @@ No new `temper_next` SQL; this is purely the consequence of the type collapse on
 ## Out of scope
 
 - `by_uri` readback arm + MCP enrichment routing — **Spec B** (same PR).
+- Vault-projection-filename rename + the local-vault-projection-relevance question — deferred beyond this PR; forced by the flip, not now (§4).
 - `correlation_id`→edge-handle rename and `ManagedMeta` genericization — non-gating §5 hygiene per the flip-readiness strategy; ride along whenever, not here.
 - Crate extraction (`temper-workflow`) — post-cutover, last. The resolver lives in `temper-core::operations` until then.
 - Re-mint-vs-preserve-id decision — temperkb-local, orthogonal (flip-readiness strategy § "one orthogonal call").
