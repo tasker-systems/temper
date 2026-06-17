@@ -759,13 +759,16 @@ pub struct AssertRelationship {
 - [ ] **Step 4: Update the API consumers (resolve target as an id, not a slug)**
 
 - `handlers/edges.rs:60-75`: pass `target: req.target` (a `ResourceId`) into the command instead of `target_slug: req.target_slug`.
-- `db_backend.rs:240-325`: the assert path builds `TargetEndpoint::Resource(uuid::Uuid::from(cmd.target))` unconditionally; **delete** the `None => TargetEndpoint::Slug(cmd.target_slug)` arm (`:323`) and the resolve-or-slug selection above it.
-- `next_backend.rs:433-477`: replace the `public` slug-in-context target lookup (`:458-474`) with `let target_pub = uuid::Uuid::from(cmd.target);` then the existing `ids.to_new(target_pub)` map. Replace the `Scoped { .. } => NotImplemented` source arm with the source `ResourceId` (after Task 7 the match is gone; here, since `source` is still `ResourceRef`, build `let source_pub = match &cmd.source { ResourceRef::Uuid { id } => (*id).into(), ResourceRef::Scoped { .. } => unreachable!("surfaces build uuid refs") }` — Task 7 removes the dead arm).
+- `db_backend.rs:218-360` (assert): the target is now PRE-RESOLVED — set `let target_id = uuid::Uuid::from(cmd.target);` once, near the top after the source resolve. Then:
+  - **Delete** the `source_context_id` query (`:239-246`) and BOTH slug resolutions (`find_slug_in_context_pool` at `:248-254` and `find_slug_in_context` inside the tx at `:316-326`) — `target_id` replaces what they computed.
+  - **Preserve the idempotency divert** (`:256-313`): it currently guards on `if let Some(target_id) = pre_target_id`. With a resolved id that guard is unconditional — call `find_active_edge(self.pool(), source_resource_id, target_id, cmd.edge_kind, &cmd.label, cmd.polarity)` directly; if an active non-folded edge exists, divert to the reweight exactly as today (this behavior MUST stay — assert-over-existing-edge = reweight under the same correlation chain).
+  - The payload's `target` (`:327+`) becomes `TargetEndpoint::Resource(target_id)` unconditionally; the `None => TargetEndpoint::Slug(cmd.target_slug)` branch is gone. `relationship_service::{find_slug_in_context, find_slug_in_context_pool}` lose their db_backend caller — leave the functions (replay/other callers may use them; only stop calling them here).
+- `next_backend.rs:433-477` (assert): the target is pre-resolved. Set `let target_pub = uuid::Uuid::from(cmd.target);` and feed the existing `ids.to_new(target_pub)` map; **delete** the `src_ctx_pub` query (`:458-463`) and the `public.kb_resources WHERE slug=…` target lookup (`:464-474`) — both only existed to resolve the slug. Keep the `Scoped { .. } => NotImplemented` source arm as-is for now (source is still `ResourceRef` until Task 7, which removes it).
 - `edge_service.rs:240-256`: `asserted_payload_slug` is now unused by the live path — remove it (and any now-dead `TargetEndpoint::Slug` *construction* in the live assert). Keep `relationship_service.rs:222-223` (`TargetEndpoint::Slug` **replay** arm) untouched — historical events still carry slug targets.
 
 - [ ] **Step 5: Update the surfaces to send resolved target ids**
 
-- CLI `edge.rs:36-70`: the Assert arm takes a single `source` ref and a single `target` ref (clap args in `cli.rs`: replace `source_owner/context/doctype/source_slug` + `target` with `source: String` + `target: String`). Build:
+- CLI edge Assert (`cli.rs:457-485` `EdgeAction::Assert`): replace the four `#[arg(long)] source_owner/source_context/source_doctype/source_slug` fields with positional `source: String`; `target: String` stays but is now a ref (update its doc comment — no longer "resolved within source's context"). Keep `kind`/`polarity`/`label`/`weight`. Update the `main.rs` dispatch + `edge.rs:36-70` `run()` Assert arm. Build:
   ```rust
   let source = ResourceRef::Uuid { id: temper_core::operations::parse_ref(&source)? };
   let target = temper_core::operations::parse_ref(&target)?;
