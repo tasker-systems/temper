@@ -124,6 +124,17 @@ async fn exchange_code(
 // ---------------------------------------------------------------------------
 
 pub async fn login(config: &OAuthConfig, store: &dyn auth::TokenStore) -> Result<StoredAuth> {
+    // An empty callback URL produces an empty `redirect_uri` in the authorize
+    // request, which Auth0 rejects with an opaque "Oops, something went wrong"
+    // page. Catch it before opening a browser so the user gets an actionable
+    // message. This is the unconfigured-cloud regression: the callback default
+    // is empty until `temper init` derives one from the instance URL.
+    if config.callback_url.is_empty() {
+        return Err(ClientError::NotConfigured(
+            "OAuth callback URL is not configured — run `temper init`".to_string(),
+        ));
+    }
+
     let (code_verifier, code_challenge) = generate_pkce_pair();
 
     // Bind to a random port on localhost.
@@ -405,5 +416,30 @@ mod tests {
     fn decode_jwt_rejects_malformed() {
         assert!(decode_jwt_claims("not.a.valid-jwt").is_err());
         assert!(decode_jwt_claims("only-one-part").is_err());
+    }
+
+    #[tokio::test]
+    async fn login_with_empty_callback_returns_not_configured() {
+        // Regression: an unconfigured callback URL must fail fast with an
+        // actionable message rather than opening a browser to a broken Auth0
+        // authorize URL (empty redirect_uri → Auth0 "Oops" page).
+        let config = OAuthConfig {
+            authorize_url: "https://example.com/authorize".to_string(),
+            token_url: "https://example.com/token".to_string(),
+            client_id: "test".to_string(),
+            audience: None,
+            callback_url: String::new(),
+            scopes: vec!["openid".to_string()],
+        };
+        let store = auth::MemoryTokenStore::empty();
+        let err = login(&config, &store)
+            .await
+            .expect_err("empty callback URL must error before opening a browser");
+        match err {
+            ClientError::NotConfigured(msg) => {
+                assert!(msg.contains("temper init"), "got: {msg}");
+            }
+            other => panic!("expected NotConfigured, got {other:?}"),
+        }
     }
 }
