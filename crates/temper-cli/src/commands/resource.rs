@@ -47,6 +47,29 @@ pub(crate) struct EdgesReport {
     pub incoming: Vec<temper_core::types::graph::GraphEdgeRow>,
 }
 
+/// Insert a derived `ref` key (the decorated, self-resolving identifier)
+/// into a serialized resource row, computed from its id + `title`. The
+/// `ref` is render-time only — never persisted, never on the wire type.
+/// Reads the anchor id from `id` (ResourceRow) OR `resource_id`
+/// (UnifiedSearchResultRow). No-op if the id is absent or unparseable.
+pub(crate) fn inject_ref(row: &mut serde_json::Value) {
+    let id = row
+        .get("id")
+        .or_else(|| row.get("resource_id"))
+        .and_then(|v| v.as_str());
+    let Some(id) = id else { return };
+    let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    if let Ok(uuid) = uuid::Uuid::parse_str(id) {
+        let decorated = temper_core::operations::decorated_ref(
+            title,
+            temper_core::types::ids::ResourceId(uuid),
+        );
+        if let Some(obj) = row.as_object_mut() {
+            obj.insert("ref".to_string(), serde_json::Value::String(decorated));
+        }
+    }
+}
+
 /// Require a context, returning an error if none specified.
 ///
 /// temper is cloud-only: there are no context directories on disk to
@@ -442,6 +465,13 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     let mut envelope = serde_json::to_value(&response)
         .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
 
+    // Identity-out: every printed row carries its decorated `ref`.
+    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
+        for row in rows.iter_mut() {
+            inject_ref(row);
+        }
+    }
+
     if !fields_owned.is_empty() {
         let rows = envelope
             .get_mut("rows")
@@ -657,9 +687,10 @@ fn show_meta_only(
 
     let value = serde_json::to_value(&meta)
         .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
-    let filtered =
+    let mut filtered =
         temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
             .map_err(map_projection_error)?;
+    inject_ref(&mut filtered);
     let rendered = crate::format::render(&filtered, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -736,8 +767,9 @@ fn show_generic(
         })
     })?;
 
-    let metadata = serde_json::to_value(&row)
+    let mut metadata = serde_json::to_value(&row)
         .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
+    inject_ref(&mut metadata);
     let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;
     println!("{rendered}");
     Ok(())
@@ -1637,6 +1669,22 @@ mod list_meta_only_tests {
             );
             assert!(row.get("managed_hash").is_none(), "hash should be dropped");
         }
+    }
+}
+
+#[cfg(test)]
+mod inject_ref_tests {
+    #[test]
+    fn inject_ref_adds_decorated_form_from_title_and_id() {
+        let mut row = serde_json::json!({
+            "id": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "title": "My Task",
+        });
+        super::inject_ref(&mut row);
+        assert_eq!(
+            row.get("ref").and_then(|v| v.as_str()),
+            Some("my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2")
+        );
     }
 }
 

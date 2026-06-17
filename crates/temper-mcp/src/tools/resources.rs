@@ -188,6 +188,8 @@ pub struct EnrichedResource {
     pub doc_type_name: String,
     pub owner: String,
     pub origin_uri: String,
+    /// Decorated, self-resolving identifier: `sluggify(title)-<uuid>`.
+    pub r#ref: String,
     pub is_active: bool,
     pub created: chrono::DateTime<chrono::Utc>,
     pub updated: chrono::DateTime<chrono::Utc>,
@@ -228,6 +230,7 @@ async fn build_enriched(
         doc_type_name,
         owner: "@me".to_string(),
         origin_uri: row.origin_uri.clone(),
+        r#ref: temper_core::operations::decorated_ref(&row.title, row.id),
         is_active: row.is_active,
         created: row.created,
         updated: row.updated,
@@ -887,6 +890,16 @@ mod fields_projection_tests {
             offset: None,
             fields: Some(vec!["managed_meta".to_string()]),
         };
+    }
+
+    #[test]
+    fn enriched_resource_carries_decorated_ref() {
+        let id = uuid::Uuid::parse_str("019e84ab-26ba-7560-9d34-c60d74a9fbe2").unwrap();
+        let got = temper_core::operations::decorated_ref(
+            "My Task",
+            temper_core::types::ids::ResourceId(id),
+        );
+        assert_eq!(got, "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
     }
 
     #[test]

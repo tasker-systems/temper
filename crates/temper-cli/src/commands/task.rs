@@ -54,8 +54,9 @@ pub fn show(
         })
     })?;
 
-    let metadata = serde_json::to_value(&row)
+    let mut metadata = serde_json::to_value(&row)
         .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
+    crate::commands::resource::inject_ref(&mut metadata);
     let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;
     println!("{rendered}");
     Ok(())
