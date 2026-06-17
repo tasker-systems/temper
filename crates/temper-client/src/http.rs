@@ -16,6 +16,42 @@ use tracing::Instrument;
 use crate::auth::TokenStore;
 use crate::error::{ClientError, Result};
 
+/// Total attempts (initial request + retries) for safe, idempotent requests
+/// that fail transiently. Mirrors the retry convention in `temper-llm`'s
+/// providers. Absorbs a Vercel cold-start / Neon compute-resume blip — the
+/// failure mode where a cold serverless instance 500s (or never answers) until
+/// it warms — without masking persistent server faults.
+const MAX_ATTEMPTS: u32 = 3;
+
+/// Base backoff before the first retry, in milliseconds; doubled each
+/// subsequent retry (200ms before retry #2, 400ms before retry #3). Short
+/// enough not to noticeably slow a genuine failure, long enough to let a cold
+/// instance/DB finish warming between attempts.
+const RETRY_BASE_DELAY_MS: u64 = 200;
+
+/// Backoff to wait after `after_attempt` (1-indexed) has failed, before the
+/// next attempt. Doubles each retry. Pure so the schedule is unit-testable.
+fn retry_delay(after_attempt: u32) -> Duration {
+    Duration::from_millis(RETRY_BASE_DELAY_MS << (after_attempt - 1))
+}
+
+/// Whether a failed request is safe to retry.
+///
+/// Only **safe** methods (GET/HEAD — no server-side effects) are retried, so a
+/// retry can never duplicate a write. Within those, retries fire only on
+/// transient failures: a transport error (the cold serverless function never
+/// answered) or an HTTP 5xx (e.g. a cold-start / cold-DB-resume 500). Every
+/// 4xx, auth, conflict, and rate-limit error is permanent and propagates
+/// immediately.
+fn should_retry(method: &reqwest::Method, err: &ClientError) -> bool {
+    let safe = matches!(*method, reqwest::Method::GET | reqwest::Method::HEAD);
+    safe && match err {
+        ClientError::Network(_) => true,
+        ClientError::Server { status, .. } => *status >= 500,
+        _ => false,
+    }
+}
+
 /// Wraps a `reqwest::Client` with base URL and optional device identity.
 ///
 /// All request methods prepend `base_url` to the given path and inject the
@@ -177,6 +213,8 @@ impl HttpClient {
         );
 
         async move {
+            // Inject bearer auth once; the resulting builder is cloned per
+            // attempt so retries replay an identical request.
             let req = if let Some(tok) = token {
                 let value = HeaderValue::from_str(&format!("Bearer {tok}"))
                     .map_err(|e| ClientError::Other(format!("invalid token header: {e}")))?;
@@ -185,27 +223,34 @@ impl HttpClient {
                 req
             };
 
-            let start = Instant::now();
-            let resp = req.send().await?;
-            let status = resp.status();
-            let latency_ms = start.elapsed().as_millis() as u64;
-
-            tracing::Span::current().record("status", status.as_u16());
-            tracing::Span::current().record("latency_ms", latency_ms);
-
-            if status.is_success() {
-                return Ok(resp);
+            let mut attempt = 0u32;
+            loop {
+                attempt += 1;
+                // Clone so a transient failure can be retried. A non-cloneable
+                // (streaming) body can't be replayed — send it directly; such
+                // bodies only occur on non-safe methods, which never retry.
+                let Some(this_attempt) = req.try_clone() else {
+                    return send_once(req).await;
+                };
+                match send_once(this_attempt).await {
+                    Ok(resp) => return Ok(resp),
+                    Err(err) => {
+                        if attempt < MAX_ATTEMPTS && should_retry(method, &err) {
+                            let delay = retry_delay(attempt);
+                            tracing::warn!(
+                                attempt,
+                                max_attempts = MAX_ATTEMPTS,
+                                delay_ms = delay.as_millis() as u64,
+                                error = %err,
+                                "transient request failure, retrying",
+                            );
+                            tokio::time::sleep(delay).await;
+                            continue;
+                        }
+                        return Err(err);
+                    }
+                }
             }
-
-            let body_text = resp.text().await.unwrap_or_default();
-            let err = map_status_to_error(status, &body_text);
-            tracing::warn!(
-                status = status.as_u16(),
-                latency_ms,
-                error = %err,
-                "request failed",
-            );
-            Err(err)
         }
         .instrument(span)
         .await
@@ -224,6 +269,35 @@ impl HttpClient {
         let value: T = serde_json::from_slice(&bytes)?;
         Ok(value)
     }
+}
+
+/// Issue a single attempt of an already-prepared request and map the outcome.
+///
+/// Records status/latency on the current tracing span and returns the mapped
+/// [`ClientError`] for any non-success status. The retry loop in
+/// [`HttpClient::send`] calls this once per attempt.
+async fn send_once(req: RequestBuilder) -> Result<Response> {
+    let start = Instant::now();
+    let resp = req.send().await?;
+    let status = resp.status();
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    tracing::Span::current().record("status", status.as_u16());
+    tracing::Span::current().record("latency_ms", latency_ms);
+
+    if status.is_success() {
+        return Ok(resp);
+    }
+
+    let body_text = resp.text().await.unwrap_or_default();
+    let err = map_status_to_error(status, &body_text);
+    tracing::warn!(
+        status = status.as_u16(),
+        latency_ms,
+        error = %err,
+        "request failed",
+    );
+    Err(err)
 }
 
 /// Maps an HTTP status code and raw response body to a [`ClientError`].
@@ -465,6 +539,65 @@ mod tests {
             .resolve_token()
             .expect_err("no override, no store → NotAuthenticated");
         assert!(matches!(err, ClientError::NotAuthenticated));
+    }
+
+    fn server_err(status: u16) -> ClientError {
+        ClientError::Server {
+            status,
+            message: "boom".to_owned(),
+        }
+    }
+
+    #[test]
+    fn should_retry_safe_methods_on_5xx() {
+        assert!(should_retry(&reqwest::Method::GET, &server_err(500)));
+        assert!(should_retry(&reqwest::Method::GET, &server_err(503)));
+        assert!(should_retry(&reqwest::Method::HEAD, &server_err(502)));
+    }
+
+    #[test]
+    fn should_not_retry_safe_methods_below_500() {
+        // 422 is mapped to ClientError::Server but is a permanent client error.
+        assert!(!should_retry(&reqwest::Method::GET, &server_err(422)));
+    }
+
+    #[test]
+    fn should_not_retry_safe_methods_on_permanent_errors() {
+        assert!(!should_retry(
+            &reqwest::Method::GET,
+            &ClientError::NotFound {
+                resource: "x".to_owned()
+            }
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::GET,
+            &ClientError::Forbidden
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::GET,
+            &ClientError::NotAuthenticated
+        ));
+        assert!(!should_retry(
+            &reqwest::Method::GET,
+            &ClientError::RateLimited {
+                retry_after: Duration::from_secs(1)
+            }
+        ));
+    }
+
+    #[test]
+    fn should_not_retry_unsafe_methods_even_on_5xx() {
+        // Retrying a write could duplicate a server-side effect.
+        assert!(!should_retry(&reqwest::Method::POST, &server_err(500)));
+        assert!(!should_retry(&reqwest::Method::PATCH, &server_err(503)));
+        assert!(!should_retry(&reqwest::Method::PUT, &server_err(500)));
+        assert!(!should_retry(&reqwest::Method::DELETE, &server_err(500)));
+    }
+
+    #[test]
+    fn retry_delay_doubles_each_attempt() {
+        assert_eq!(retry_delay(1), Duration::from_millis(200));
+        assert_eq!(retry_delay(2), Duration::from_millis(400));
     }
 
     #[test]
