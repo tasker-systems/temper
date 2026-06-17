@@ -109,9 +109,10 @@ pub(crate) async fn doc_type_id_by_name(
 /// `NextBackend::show_resource` and the read selector's full-row `list`.
 pub(crate) async fn reconstruct_resource_row(
     pool: &PgPool,
+    principal: uuid::Uuid,
     new_id: uuid::Uuid,
 ) -> Result<ResourceRow, TemperError> {
-    let p = readback::resource_row(pool, new_id)
+    let p = readback::resource_row(pool, principal, new_id)
         .await
         .map_err(|e| TemperError::Api(e.to_string()))?;
     let kb_doc_type_id = doc_type_id_by_name(pool, &p.doc_type_name).await?;
@@ -174,6 +175,49 @@ impl NextBackend {
             )),
         }
     }
+
+    /// Auth-before-writes gate (WS2): the caller (`self.profile_id`, a production profile id that
+    /// synthesis preserves verbatim into `temper_next`, so it resolves directly as the principal) must
+    /// be able to modify the target `temper_next` resource. Returns `Forbidden` otherwise. CONFORMs to
+    /// production's `check_can_modify`. Runtime, schema-unqualified query inside a `SET LOCAL search_path`
+    /// txn: `can_modify_resource`'s body calls `profile_effective_teams`/`team_ancestors` UNQUALIFIED, so
+    /// they resolve against the connection search_path — `public` on the bare pool, where the
+    /// `temper_next` helpers do not exist (the readback gate-call discipline, WS2 Task 2).
+    async fn check_can_modify_next(&self, new_id: uuid::Uuid) -> Result<(), TemperError> {
+        let mut tx = self.pool.begin().await.map_err(api_err)?;
+        sqlx::query("SET LOCAL search_path TO temper_next, public")
+            .execute(&mut *tx)
+            .await
+            .map_err(api_err)?;
+        let can: Option<bool> = sqlx::query_scalar("SELECT can_modify_resource($1, $2)")
+            .bind(*self.profile_id)
+            .bind(new_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)?;
+        if can.unwrap_or(false) {
+            Ok(())
+        } else {
+            Err(TemperError::Forbidden)
+        }
+    }
+
+    /// The source resource an edge mutation is authorized against. Production gates edge
+    /// retype/reweight/fold on "can modify the SOURCE resource" (`handlers::edges` → 403 "Cannot modify
+    /// source resource"); the parity-era write path only ever asserts resource→resource edges, so the
+    /// source is always a `kb_resources` endpoint.
+    async fn edge_source_resource(&self, edge_id: uuid::Uuid) -> Result<uuid::Uuid, TemperError> {
+        sqlx::query_scalar::<_, uuid::Uuid>(
+            "SELECT source_id FROM temper_next.kb_edges \
+             WHERE id = $1 AND source_table = 'kb_resources'",
+        )
+        .bind(edge_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(api_err)?
+        .ok_or_else(|| TemperError::NotFound(format!("edge {edge_id} not found")))
+    }
 }
 
 #[async_trait]
@@ -223,7 +267,7 @@ impl Backend for NextBackend {
         .await
         .map_err(api_err)?;
 
-        let row = reconstruct_resource_row(&self.pool, new_id.uuid()).await?;
+        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id.uuid()).await?;
         Ok(CommandOutput::new(row))
     }
 
@@ -232,7 +276,14 @@ impl Backend for NextBackend {
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         let new_id = self.resolve_new_id(&cmd.resource).await?;
-        let row = reconstruct_resource_row(&self.pool, new_id).await?;
+        // `reconstruct_resource_row` gates visibility (WS2). After a successful `resolve_new_id` the
+        // resource exists in `temper_next`, so an error here is "not visible" → NotFound, CONFORMing to
+        // production's not-visible→404 collapse (never 403/500; no existence-leak oracle) and matching
+        // the read_selector get_content/get_meta arms. A rare DB fault in the gate also maps here — the
+        // accepted tradeoff on this gated read surface.
+        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id)
+            .await
+            .map_err(|_| TemperError::NotFound(format!("resource {new_id} not found")))?;
         Ok(CommandOutput::new(row))
     }
 
@@ -243,6 +294,8 @@ impl Backend for NextBackend {
         // Address the target by its public id via ResolvedIds (the transitional parity model 4b reads
         // use; native-id addressing without a legacy twin is a chunk-5 flip concern).
         let new_id = self.resolve_new_id(&cmd.resource).await?;
+        // Auth before any write (WS2): the caller must be able to modify this resource.
+        self.check_can_modify_next(new_id).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -295,12 +348,14 @@ impl Backend for NextBackend {
         .await
         .map_err(api_err)?;
 
-        let row = reconstruct_resource_row(&self.pool, new_id).await?;
+        let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
         Ok(CommandOutput::new(row))
     }
 
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
         let new_id = self.resolve_new_id(&cmd.resource).await?;
+        // Auth before any write (WS2).
+        self.check_can_modify_next(new_id).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -321,7 +376,7 @@ impl Backend for NextBackend {
         &self,
         _cmd: ListResources,
     ) -> Result<CommandOutput<Vec<ResourceSummary>>, TemperError> {
-        let rows = readback::list(&self.pool)
+        let rows = readback::list(&self.pool, *self.profile_id)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let summaries = rows
@@ -344,7 +399,7 @@ impl Backend for NextBackend {
     ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
         // 4b: FTS only (the text query). Vector search needs a query embedding this layer does not
         // carry; the HTTP search selector handles vector mode directly (read selector, Task 6/8).
-        let uris = readback::fts_search(&self.pool, &cmd.query.query)
+        let uris = readback::fts_search(&self.pool, *self.profile_id, &cmd.query.query)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
         let hits = uris
@@ -382,6 +437,9 @@ impl Backend for NextBackend {
         let src_next = ids.to_new(source_pub).ok_or_else(|| {
             TemperError::NotFound(format!("source {source_pub} not in temper_next"))
         })?;
+        // Auth before any write (WS2): edge mutations gate on the SOURCE resource (production's
+        // "Cannot modify source resource"). Gate before resolving the target / writing the edge.
+        self.check_can_modify_next(src_next).await?;
 
         // Resolve the target by slug in the source's (public) context, then map to its temper_next id —
         // slug is §7-dissolved in temper_next, so resolution stays in `public` during the parity era.
@@ -447,6 +505,9 @@ impl Backend for NextBackend {
         cmd: RetypeRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
         // The edge handle on the next backend IS the temper_next edge id (returned by assert).
+        // Auth before any write (WS2): gate on the edge's source resource.
+        let src = self.edge_source_resource(cmd.correlation_id).await?;
+        self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -469,6 +530,9 @@ impl Backend for NextBackend {
         &self,
         cmd: ReweightRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        // Auth before any write (WS2): gate on the edge's source resource.
+        let src = self.edge_source_resource(cmd.correlation_id).await?;
+        self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;
@@ -490,6 +554,9 @@ impl Backend for NextBackend {
         &self,
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
+        // Auth before any write (WS2): gate on the edge's source resource.
+        let src = self.edge_source_resource(cmd.correlation_id).await?;
+        self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
             .map_err(api_err)?;

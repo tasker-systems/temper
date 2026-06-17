@@ -205,10 +205,15 @@ async fn insert_profile(
     handle: &str,
     display_name: &str,
 ) -> Result<ProfileId> {
+    // WS2 (spec D2): preserve the production profile id verbatim (PR#124 identity-as-input) so
+    // `resources_visible_to(prod_profile)` resolves directly with no read-time bimap. The explicit
+    // `id` overrides the column's `DEFAULT uuid_generate_v7()`; `old_id` is unique per production
+    // profile, so the disambiguated-handle fallback below cannot collide on the PK either.
     let inserted: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO temper_next.kb_profiles (handle, display_name) VALUES ($1, $2) \
+        "INSERT INTO temper_next.kb_profiles (id, handle, display_name) VALUES ($1, $2, $3) \
          ON CONFLICT (handle) DO NOTHING RETURNING id",
     )
+    .bind(old_id)
     .bind(handle)
     .bind(display_name)
     .fetch_optional(&mut *conn)
@@ -218,9 +223,10 @@ async fn insert_profile(
         None => {
             let disambiguated = format!("{handle}-{}", &old_id.simple().to_string()[..8]);
             sqlx::query_scalar(
-                "INSERT INTO temper_next.kb_profiles (handle, display_name) VALUES ($1, $2) \
+                "INSERT INTO temper_next.kb_profiles (id, handle, display_name) VALUES ($1, $2, $3) \
                  RETURNING id",
             )
+            .bind(old_id)
             .bind(disambiguated)
             .bind(display_name)
             .fetch_one(&mut *conn)

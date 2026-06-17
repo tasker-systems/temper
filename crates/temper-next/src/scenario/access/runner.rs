@@ -115,6 +115,21 @@ async fn eval_access_check(pool: &PgPool, loaded: &LoadedAccess, c: &AccessCheck
                 bail!("charter_blocks_visible: cogmap {cogmap} / profile {profile} = {n} blocks, expected {expect_count}");
             }
         }
+        AccessCheck::CanModify {
+            profile,
+            resource,
+            expect,
+        } => {
+            let p = profile_id(loaded, profile)?;
+            let r = resource_id(loaded, resource)?;
+            let got = sqlx::query_scalar!("SELECT can_modify_resource($1, $2)", p, r)
+                .fetch_one(pool)
+                .await?
+                .unwrap_or(false);
+            if got != *expect {
+                bail!("can_modify: profile {profile} / resource {resource} = {got}, expected {expect}");
+            }
+        }
     }
     Ok(())
 }

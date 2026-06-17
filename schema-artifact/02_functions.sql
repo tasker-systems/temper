@@ -147,6 +147,43 @@ RETURNS TABLE(resource_id uuid) LANGUAGE sql STABLE AS $$
 $$;
 
 -- ============================================================================
+-- WRITE AXIS — can_modify_resource(profile, resource)   (WS2)
+-- ============================================================================
+-- A person may MODIFY a resource if they own/originated it (the home row's
+-- principals), hold a direct profile-anchored WRITE grant, or hold a team-anchored
+-- WRITE grant on a reachable (self-or-ancestor) team. Context-share is deliberately
+-- NOT a write path: it is a READ-reach mechanism (it enters resources_visible_to /
+-- vis(T)), so a context-shared reader cannot write. Writing always requires an
+-- explicit can_write grant or ownership (the capability model). Modeled on
+-- resources_visible_to's reachability CTE, swapping can_read → can_write and
+-- dropping the context-share UNION.
+CREATE FUNCTION can_modify_resource(p_profile uuid, p_resource uuid)
+RETURNS boolean LANGUAGE sql STABLE AS $$
+    WITH reachable_teams AS (
+        SELECT DISTINCT a.team_id
+        FROM profile_effective_teams(p_profile) e
+        CROSS JOIN LATERAL team_ancestors(e.team_id) a
+    )
+    SELECT EXISTS (
+        -- owned / originated (the home confers modify to its principals)
+        SELECT 1 FROM kb_resource_homes h
+         WHERE h.resource_id = p_resource
+           AND (h.owner_profile_id = p_profile OR h.originator_profile_id = p_profile)
+        UNION ALL
+        -- direct profile-anchored WRITE grant
+        SELECT 1 FROM kb_resource_access ra
+         WHERE ra.resource_id = p_resource
+           AND ra.anchor_table = 'kb_profiles' AND ra.anchor_id = p_profile AND ra.can_write
+        UNION ALL
+        -- team-anchored WRITE grant on a reachable (self-or-ancestor) team
+        SELECT 1 FROM kb_resource_access ra
+         JOIN reachable_teams rt ON ra.anchor_id = rt.team_id
+         WHERE ra.resource_id = p_resource
+           AND ra.anchor_table = 'kb_teams' AND ra.can_write
+    );
+$$;
+
+-- ============================================================================
 -- PRODUCER AXIS — resources_accessible_to_cogmap(M) = ⋂ vis(T) over teams(M)
 -- ============================================================================
 

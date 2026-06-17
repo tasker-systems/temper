@@ -14,6 +14,7 @@
 
 mod common;
 
+use temper_core::error::TemperError;
 use temper_core::operations::{
     Backend, CreateResource, DeleteResource, ResourceRef, Surface, UpdateResource,
 };
@@ -327,4 +328,183 @@ async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
     let (_, _, _, _, n_folded) = next_edge(&app.pool, edge_n).await;
     assert!(l_folded, "legacy edge folded");
     assert!(n_folded, "next edge folded");
+}
+
+// ── WS2 write gate: a non-owner/non-granted caller is Forbidden ──────────────────
+
+/// A principal that neither owns/originated nor holds a WRITE grant on the target. The gate is a pure
+/// `can_modify_resource` SELECT, so a phantom production id (not even synthesized) is a valid non-owner —
+/// it matches no home row and no grant.
+const INTRUDER_PROFILE_ID: &str = "00000000-0000-0000-00cc-0000000000ff";
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn next_resource_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    let owner = ProfileId::from(uuid::Uuid::parse_str(common::SYSTEM_PROFILE_ID).unwrap());
+    let intruder = ProfileId::from(uuid::Uuid::parse_str(INTRUDER_PROFILE_ID).unwrap());
+
+    // Manifest the seed resource so synthesis carries it; own the temper context with the synthesized
+    // SYSTEM profile so create's home resolves.
+    sqlx::query(
+        "INSERT INTO kb_resource_manifests (resource_id, managed_meta, open_meta) \
+         VALUES ($1::uuid, '{}'::jsonb, '{}'::jsonb) ON CONFLICT (resource_id) DO NOTHING",
+    )
+    .bind(SEED_RESOURCE_ID)
+    .execute(&app.pool)
+    .await
+    .expect("seed manifest");
+    sqlx::query(
+        "UPDATE kb_contexts SET kb_owner_table='kb_profiles', kb_owner_id=$1::uuid WHERE id=$2::uuid",
+    )
+    .bind(common::SYSTEM_PROFILE_ID)
+    .bind(common::TEMPER_CONTEXT_ID)
+    .execute(&app.pool)
+    .await
+    .expect("own temper context");
+
+    // A resource owned by SYSTEM, created in public then synthesized — so it carries a public twin the
+    // next-backend update addresses through (ResolvedIds), and a temper_next home owned by the
+    // synthesized SYSTEM profile (preserved id, WS2 Task 1).
+    let legacy = DbBackend::new(app.pool.clone(), owner, "dev".into(), Surface::CliCloud);
+    let row = legacy
+        .create_resource(create_cmd("test://gate-doc"))
+        .await
+        .expect("owner create")
+        .value;
+    temper_next::synthesis::run(&app.pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run");
+    let owner_backend = NextBackend::new(app.pool.clone(), owner);
+
+    let upd = |id: temper_core::types::ids::ResourceId| UpdateResource {
+        resource: ResourceRef::Uuid { id },
+        body: None,
+        managed_meta: Some(ManagedMeta {
+            title: Some("Gate v2".into()),
+            ..Default::default()
+        }),
+        open_meta: None,
+        move_to: None,
+        origin: Surface::CliCloud,
+    };
+    let del = |id: temper_core::types::ids::ResourceId| DeleteResource {
+        resource: ResourceRef::Uuid { id },
+        force: false,
+        origin: Surface::CliCloud,
+    };
+
+    // Positive control: the owner is admitted (the gate is not blanket-deny).
+    owner_backend
+        .update_resource(upd(row.id))
+        .await
+        .expect("owner update admitted");
+
+    // The intruder is Forbidden on both update and delete (the resource gate path).
+    let intruder_backend = NextBackend::new(app.pool.clone(), intruder);
+    let upd_err = intruder_backend
+        .update_resource(upd(row.id))
+        .await
+        .expect_err("non-owner update must be Forbidden");
+    assert!(
+        matches!(upd_err, TemperError::Forbidden),
+        "non-owner update must be Forbidden, got {upd_err:?}"
+    );
+    let del_err = intruder_backend
+        .delete_resource(del(row.id))
+        .await
+        .expect_err("non-owner delete must be Forbidden");
+    assert!(
+        matches!(del_err, TemperError::Forbidden),
+        "non-owner delete must be Forbidden, got {del_err:?}"
+    );
+
+    // The resource is untouched: still active (the denied delete never ran). Address by the preserved
+    // origin_uri — the temper_next id is re-minted, so the public `row.id` won't match there.
+    let active: bool =
+        sqlx::query_scalar("SELECT is_active FROM temper_next.kb_resources WHERE origin_uri=$1")
+            .bind("test://gate-doc")
+            .fetch_one(&app.pool)
+            .await
+            .expect("is_active");
+    assert!(active, "denied writes must not have mutated the resource");
+}
+
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn next_relationship_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    let owner = ProfileId::from(uuid::Uuid::parse_str(common::SYSTEM_PROFILE_ID).unwrap());
+    let intruder = ProfileId::from(uuid::Uuid::parse_str(INTRUDER_PROFILE_ID).unwrap());
+    sqlx::query(
+        "UPDATE kb_contexts SET kb_owner_table='kb_profiles', kb_owner_id=$1::uuid WHERE id=$2::uuid",
+    )
+    .bind(common::SYSTEM_PROFILE_ID)
+    .bind(common::TEMPER_CONTEXT_ID)
+    .execute(&app.pool)
+    .await
+    .expect("own temper context");
+
+    let legacy = DbBackend::new(app.pool.clone(), owner, "dev".into(), Surface::CliCloud);
+    let owner_backend = NextBackend::new(app.pool.clone(), owner);
+
+    // Two endpoints owned by SYSTEM; assert an edge as the owner.
+    let mut a_cmd = create_cmd("test://edge-a");
+    a_cmd.slug = "edge-a".into();
+    a_cmd.title = "Edge A".into();
+    let mut b_cmd = create_cmd("test://edge-b");
+    b_cmd.slug = "edge-b".into();
+    b_cmd.title = "Edge B".into();
+    let a = legacy.create_resource(a_cmd).await.expect("create A").value;
+    let _b = legacy.create_resource(b_cmd).await.expect("create B").value;
+    temper_next::synthesis::run(&app.pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis::run");
+    let edge_n = owner_backend
+        .assert_relationship(AssertRelationship {
+            source: ResourceRef::Uuid { id: a.id },
+            target_slug: "edge-b".into(),
+            edge_kind: EdgeKind::LeadsTo,
+            polarity: Polarity::Forward,
+            label: "operationalized_by".into(),
+            weight: 1.0,
+            origin: Surface::CliCloud,
+        })
+        .await
+        .expect("owner assert")
+        .value;
+
+    // The intruder cannot modify the edge — the gate resolves the edge's SOURCE resource and denies.
+    let intruder_backend = NextBackend::new(app.pool.clone(), intruder);
+    let retype_err = intruder_backend
+        .retype_relationship(RetypeRelationship {
+            correlation_id: edge_n,
+            edge_kind: EdgeKind::Contains,
+            polarity: Polarity::Forward,
+            origin: Surface::CliCloud,
+        })
+        .await
+        .expect_err("non-owner retype must be Forbidden");
+    assert!(
+        matches!(retype_err, TemperError::Forbidden),
+        "non-owner retype must be Forbidden, got {retype_err:?}"
+    );
+    let fold_err = intruder_backend
+        .fold_relationship(FoldRelationship {
+            correlation_id: edge_n,
+            reason: None,
+            origin: Surface::CliCloud,
+        })
+        .await
+        .expect_err("non-owner fold must be Forbidden");
+    assert!(
+        matches!(fold_err, TemperError::Forbidden),
+        "non-owner fold must be Forbidden, got {fold_err:?}"
+    );
+
+    // The edge is untouched: still LeadsTo and not folded.
+    let (kind, _, _, _, folded) = next_edge(&app.pool, edge_n).await;
+    assert_eq!(
+        kind, "leads_to",
+        "denied retype must not have changed the edge kind"
+    );
+    assert!(!folded, "denied fold must not have folded the edge");
 }

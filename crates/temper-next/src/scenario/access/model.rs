@@ -214,6 +214,13 @@ pub enum AccessCheck {
         profile: String,
         expect_count: i64,
     },
+    /// S6 — write axis (WS2): `can_modify_resource(profile, resource)`. Owner/originator or an explicit
+    /// WRITE grant ⇒ true; a context-share reader (read-reach only) or a no-access profile ⇒ false.
+    CanModify {
+        profile: String,
+        resource: String,
+        expect: bool,
+    },
 }
 
 #[cfg(test)]
@@ -259,6 +266,7 @@ checks:
   - { check: edge_visible_to, profile: alice, edge: "c->d", expect: true }
   - { check: cogmaps_share_team, a: side-map, b: onb, expect: true }
   - { check: charter_blocks_visible, cogmap: onb, profile: nomad, expect_count: 0 }
+  - { check: can_modify, profile: alice, resource: c, expect: true }
 "#;
 
     #[test]
@@ -291,7 +299,7 @@ checks:
             &s.world.edges[0].home,
             EdgeHomeDef::Cogmap { name } if name == "side-map"
         ));
-        assert_eq!(s.checks.len(), 5);
+        assert_eq!(s.checks.len(), 6);
         assert!(matches!(
             s.checks[0],
             AccessCheck::VisibleTo { expect: true, .. }
@@ -302,6 +310,10 @@ checks:
                 expect_count: 0,
                 ..
             }
+        ));
+        assert!(matches!(
+            s.checks[5],
+            AccessCheck::CanModify { expect: true, .. }
         ));
     }
 

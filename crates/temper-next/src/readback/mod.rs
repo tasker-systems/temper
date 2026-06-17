@@ -4,14 +4,15 @@
 //! the synthesized substrate so each can be asserted against the production read for the same logical
 //! query (the parity-read harness in `tests/parity_reads.rs`).
 //!
-//! **Scope: this harness proves data/projection parity, NOT access parity.** The readback reads are
-//! deliberately **visibility-unscoped** — they return every synthesized resource, where production's
-//! oracles scope through `resources_visible_to(profile)` (list) or a `visible` CTE (FTS/vector). Access
-//! over `temper_next` is WS2's concern (the producer-intersection model), not this §9 floor. The parity
-//! tests hold because the prod-shape fixture makes every active resource visible to its owner P1, so the
-//! production and readback result SETS coincide. Leaving readback unscoped is the SAFE direction: an
-//! unscoped read is strictly more inclusive, so a synthesis bug producing an extra or wrong-owner row
-//! makes the set comparison FAIL loudly — it can never mask a defect as a false pass.
+//! **Access scoping (WS2).** The single-resource and set reads (`list`/`resource_row`/`meta`/`body`/
+//! `fts_search`/`vector_search`) take a `principal` and gate through `temper_next.resources_visible_to`,
+//! CONFORMing to production's `resources_visible_to(profile)` JOIN and its not-visible→404 deny. A
+//! not-visible single-resource read errors (the read selector maps that to NotFound, never 403); the set
+//! reads JOIN-filter to the visible set. `neighbors` is the lone exception — deliberately UNSCOPED, as it
+//! has no surface caller yet (see its note); the graph-neighbor scoping lands with that surface.
+//! The prod-shape parity tests pass `OWNER_PROFILE` (who owns all 4 active resources), so the scoped
+//! and production result SETS still coincide; a separate test drives a non-owner principal to prove the
+//! gate denies.
 //!
 //! All reads are runtime, schema-qualified `sqlx::query` (NEVER the `query!`/`query_as!` macros), same
 //! discipline as [`crate::synthesis::source`] and [`crate::synthesis::parity`]: the temper-next macro
@@ -145,7 +146,46 @@ pub struct ListRow {
 /// fields are.
 ///
 /// Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the module-level note.
-pub async fn list(pool: &PgPool) -> Result<Vec<ListRow>> {
+/// WS2 consumer-axis gate for single-resource reads: error unless `new_id` is visible to
+/// `principal` under `temper_next.resources_visible_to`. The set reads (`list`/`fts_search`/
+/// `vector_search`/`neighbors`) instead JOIN the function directly (a set can't be pre-checked).
+/// The caller (read_selector) maps this error to a 404 — denying existence, never 403 (no
+/// existence-leak oracle), CONFORMing to production's NotFound-on-not-visible (resource_service).
+async fn ensure_visible(pool: &PgPool, principal: Uuid, new_id: Uuid) -> Result<()> {
+    // `resources_visible_to`'s body calls `profile_effective_teams`/`team_ancestors` UNQUALIFIED,
+    // so they resolve against the connection's search_path — which on a bare pool is `public`,
+    // where the `temper_next` helpers do not exist. Run inside a `SET LOCAL search_path` txn (the
+    // synthesis/bootstrap discipline) so the function and its nested calls all resolve in
+    // `temper_next`. (The other reads qualify every TABLE, but a FUNCTION pulls in its own
+    // unqualified internals — hence the search_path here and in the other gate-calling reads.)
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+    let visible: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
+    )
+    .bind(principal)
+    .bind(new_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    if visible {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "resource {new_id} not visible to {principal}"
+        ))
+    }
+}
+
+pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
+    // SET LOCAL search_path so `resources_visible_to`'s unqualified internals resolve (see
+    // `ensure_visible`). Qualified table names below still work under the widened search_path.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
     let rows = sqlx::query(
         "SELECT r.origin_uri,
                 r.title,
@@ -154,6 +194,7 @@ pub async fn list(pool: &PgPool) -> Result<Vec<ListRow>> {
                 md.property_value #>> '{}' AS mode,
                 ef.property_value #>> '{}' AS effort
            FROM temper_next.kb_resources r
+           JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
            JOIN temper_next.kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
@@ -168,8 +209,10 @@ pub async fn list(pool: &PgPool) -> Result<Vec<ListRow>> {
             AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
           ORDER BY r.origin_uri",
     )
-    .fetch_all(pool)
+    .bind(principal)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(rows
         .iter()
@@ -218,7 +261,8 @@ pub struct ReconstructedMeta {
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn meta(pool: &PgPool, new_id: Uuid) -> Result<ReconstructedMeta> {
+pub async fn meta(pool: &PgPool, principal: Uuid, new_id: Uuid) -> Result<ReconstructedMeta> {
+    ensure_visible(pool, principal, new_id).await?;
     let rows = sqlx::query(
         "SELECT property_key, property_value
            FROM temper_next.kb_properties
@@ -313,7 +357,12 @@ pub struct ResourceRowParity {
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn resource_row(pool: &PgPool, new_id: Uuid) -> Result<ResourceRowParity> {
+pub async fn resource_row(
+    pool: &PgPool,
+    principal: Uuid,
+    new_id: Uuid,
+) -> Result<ResourceRowParity> {
+    ensure_visible(pool, principal, new_id).await?;
     let row = sqlx::query(
         "SELECT r.id              AS re_minted_id,
                 r.origin_uri,
@@ -407,7 +456,8 @@ pub async fn resource_id_by_origin_uri(pool: &PgPool, origin_uri: &str) -> Resul
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn body(pool: &PgPool, new_id: Uuid) -> Result<String> {
+pub async fn body(pool: &PgPool, principal: Uuid, new_id: Uuid) -> Result<String> {
+    ensure_visible(pool, principal, new_id).await?;
     let origin_uri: String =
         sqlx::query("SELECT origin_uri FROM temper_next.kb_resources WHERE id = $1")
             .bind(new_id)
@@ -441,7 +491,12 @@ pub async fn body(pool: &PgPool, new_id: Uuid) -> Result<String> {
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn fts_search(pool: &PgPool, query: &str) -> Result<Vec<String>> {
+pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<Vec<String>> {
+    // search-path txn so `resources_visible_to`'s internals resolve (see `ensure_visible`).
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
     let rows = sqlx::query(
         "WITH doc AS (
            SELECT r.id,
@@ -450,6 +505,7 @@ pub async fn fts_search(pool: &PgPool, query: &str) -> Result<Vec<String>> {
                   setweight(to_tsvector('english', COALESCE(string_agg(cc.content, ' '), '')), 'B')
                     AS search_vector
              FROM temper_next.kb_resources r
+             JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
              LEFT JOIN temper_next.kb_chunks c
                ON c.resource_id = r.id AND c.is_current
              LEFT JOIN temper_next.kb_chunk_content cc
@@ -458,12 +514,14 @@ pub async fn fts_search(pool: &PgPool, query: &str) -> Result<Vec<String>> {
          )
          SELECT origin_uri
            FROM doc
-          WHERE search_vector @@ plainto_tsquery('english', $1)
-          ORDER BY ts_rank(search_vector, plainto_tsquery('english', $1)) DESC",
+          WHERE search_vector @@ plainto_tsquery('english', $2)
+          ORDER BY ts_rank(search_vector, plainto_tsquery('english', $2)) DESC",
     )
+    .bind(principal)
     .bind(query)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(rows
         .iter()
@@ -501,19 +559,31 @@ fn format_pgvector(v: &[f32]) -> String {
 /// macros don't support the `::vector` cast).
 ///
 /// Read-only; no writes. Schema-qualified throughout — see the module-level note.
-pub async fn vector_search(pool: &PgPool, query_embedding: &[f32]) -> Result<Vec<String>> {
+pub async fn vector_search(
+    pool: &PgPool,
+    principal: Uuid,
+    query_embedding: &[f32],
+) -> Result<Vec<String>> {
     let embedding_text = format_pgvector(query_embedding);
+    // search-path txn so `resources_visible_to`'s internals resolve (see `ensure_visible`).
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
     let rows = sqlx::query(
         "SELECT r.origin_uri
            FROM temper_next.kb_resources r
+           JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
            JOIN temper_next.kb_chunks c
              ON c.resource_id = r.id AND c.is_current
           GROUP BY r.id, r.origin_uri
-          ORDER BY MIN(c.embedding <=> $1::vector) ASC",
+          ORDER BY MIN(c.embedding <=> $2::vector) ASC",
     )
+    .bind(principal)
     .bind(embedding_text)
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(rows
         .iter()
@@ -558,6 +628,16 @@ pub struct Neighbor {
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
 pub async fn neighbors(pool: &PgPool, new_id: Uuid) -> Result<Vec<Neighbor>> {
+    // WS2 NOTE — deliberately UNSCOPED (no principal). `neighbors` has no surface caller yet (only
+    // the §9 data-parity test reads it), so visibility-scoping it now protects nothing (SG-5: no
+    // speculative surface). The leak-safe gate is `edges_visible_to(principal)` (edge-home + both
+    // endpoints), but that surfaced a real access-model gap: `anchor_readable_by_profile` gates a
+    // context-homed edge ONLY by a `kb_team_contexts` share, and synthesis auto-shares only
+    // TEAM-owned contexts — so an owner cannot traverse edges homed in their own PROFILE-owned
+    // context even though `resources_visible_to` returns the resources. Closing that (a personal-team
+    // share for profile-owned contexts, or an ownership branch in `anchor_readable_by_profile`) is an
+    // access-model amendment that lands with the graph-neighbor SURFACE wiring — tracked, not silent
+    // (no surface reads this today).
     let rows = sqlx::query(
         "SELECT t.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
                 e.polarity::text AS polarity, e.label \
