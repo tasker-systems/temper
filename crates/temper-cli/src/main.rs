@@ -88,11 +88,33 @@ fn run(cli: Cli, output_format: OutputFormat) -> temper_cli::error::Result<()> {
         Commands::Init {
             path,
             no_interactive,
+            instance_url,
+            auth_domain,
+            auth_client_id,
+            auth_audience,
         } => {
             let vault_path = path
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| ".".into()));
-            temper_cli::commands::init::run(&vault_path, no_interactive, true, output_format)
+            // clap's `requires_all` guarantees these are all-or-nothing.
+            let self_host = match (instance_url, auth_domain, auth_client_id, auth_audience) {
+                (Some(instance_url), Some(auth_domain), Some(client_id), Some(audience)) => {
+                    Some(temper_cli::commands::init::SelfHostConfig {
+                        instance_url: instance_url.trim_end_matches('/').to_string(),
+                        auth_domain,
+                        client_id,
+                        audience,
+                    })
+                }
+                _ => None,
+            };
+            temper_cli::commands::init::run(
+                &vault_path,
+                no_interactive,
+                true,
+                output_format,
+                self_host,
+            )
         }
         Commands::Check { quiet } => {
             let config = temper_cli::config::load(cli.vault.as_deref())?;

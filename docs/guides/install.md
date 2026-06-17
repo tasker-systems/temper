@@ -150,3 +150,10 @@ temper --version
 ls -la ~/.local/share/temper/     # macOS / Linux
 dir %LOCALAPPDATA%\Programs\temper # Windows
 ```
+
+## Running your own instance
+
+The steps above install the `temper` CLI and (by default) leave it
+unconfigured. To point it at the hosted service, run `temper init` and choose
+the hosted option. To stand up your **own** Temper instance on Vercel + Neon +
+Auth0 (API + MCP + CLI), see [Self-Hosting](./self-hosting.md).

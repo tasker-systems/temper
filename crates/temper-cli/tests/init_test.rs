@@ -10,6 +10,7 @@ fn test_init_creates_vault_structure() {
         true,
         false,
         temper_cli::format::OutputFormat::Json,
+        None,
     )
     .unwrap();
 

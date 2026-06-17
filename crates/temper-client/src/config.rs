@@ -157,25 +157,21 @@ mod tests {
     // --- load_cloud_config ---
 
     #[test]
-    fn returns_defaults_when_file_absent() {
+    fn default_config_has_no_usable_provider() {
+        let config = TemperConfig::default();
+        assert_eq!(config.auth.provider, "none");
+        assert!(config.auth.providers.is_empty());
+        assert_eq!(config.cloud.api_url, "");
+    }
+
+    #[test]
+    fn returns_unconfigured_defaults_when_file_absent() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("config.toml");
         let config = load_cloud_config_from(&path).unwrap();
-        assert_eq!(config.auth.provider, "auth0");
-        assert_eq!(config.cloud.api_url, "https://temperkb.io");
-        let provider = find_provider(&config, "auth0");
-        assert_eq!(
-            provider.authorize_url,
-            "https://temperkb.us.auth0.com/authorize"
-        );
-        assert_eq!(
-            provider.token_url,
-            "https://temperkb.us.auth0.com/oauth/token"
-        );
-        assert_eq!(
-            provider.callback_url,
-            "https://temperkb.io/api/auth/cli-callback"
-        );
+        assert_eq!(config.auth.provider, "none");
+        assert!(config.auth.providers.is_empty());
+        assert_eq!(config.cloud.api_url, "");
     }
 
     #[test]
@@ -220,19 +216,17 @@ api_url = "https://api.example.com"
     // --- api_url ---
 
     #[test]
-    fn api_url_uses_config_by_default() {
-        let config = TemperConfig::default();
-        let url = temp_env::with_var("TEMPER_API_URL", None::<&str>, || api_url(&config));
-        assert_eq!(url, "https://temperkb.io");
-    }
-
-    #[test]
     fn api_url_env_var_takes_priority() {
-        let config = TemperConfig::default();
-        let url = temp_env::with_var("TEMPER_API_URL", Some("https://localhost:3000"), || {
-            api_url(&config)
-        });
-        assert_eq!(url, "https://localhost:3000");
+        let mut config = TemperConfig::default();
+        config.cloud.api_url = "https://config-host.example.com".to_string();
+        let url = temp_env::with_var(
+            "TEMPER_API_URL",
+            Some("https://env-host.example.com"),
+            || api_url(&config),
+        );
+        assert_eq!(url, "https://env-host.example.com");
+        let url = temp_env::with_var("TEMPER_API_URL", None::<&str>, || api_url(&config));
+        assert_eq!(url, "https://config-host.example.com");
     }
 
     // --- auth_path ---
@@ -353,26 +347,17 @@ scopes        = ["openid"]
         );
     }
 
-    // --- default provider tests ---
-
     #[test]
-    fn default_provider_is_auth0_with_config() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("config.toml");
-        let config = load_cloud_config_from(&path).unwrap();
-        assert_eq!(config.auth.provider, "auth0");
-        let provider = find_provider(&config, "auth0");
-        assert_eq!(
-            provider.authorize_url,
-            "https://temperkb.us.auth0.com/authorize"
+    fn oauth_config_errors_for_unconfigured_default() {
+        // A fresh, unconfigured vault cannot build an OAuth config — the caller
+        // is told to run `temper init`.
+        let config = TemperConfig::default();
+        let err = oauth_config(&config).expect_err("unconfigured config has no provider");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("cloud sync is disabled") || msg.contains("temper init"),
+            "expected a 'run temper init' style error, got: {msg}"
         );
-        assert_eq!(
-            provider.token_url,
-            "https://temperkb.us.auth0.com/oauth/token"
-        );
-        assert_eq!(provider.client_id, "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF");
-        assert_eq!(provider.audience, "https://temperkb.io/api");
-        assert!(provider.scopes.contains(&"offline_access".to_string()));
     }
 
     #[test]

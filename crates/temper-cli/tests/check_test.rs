@@ -8,6 +8,7 @@ fn test_check_valid_vault() {
         true,
         false,
         temper_cli::format::OutputFormat::Json,
+        None,
     )
     .unwrap();
 

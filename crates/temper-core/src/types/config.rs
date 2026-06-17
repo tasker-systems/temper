@@ -129,7 +129,11 @@ pub struct AuthProvider {
 }
 
 fn default_callback_url() -> String {
-    "https://temperkb.io/api/auth/cli-callback".to_string()
+    // No baked-in host. `temper init` always writes an explicit callback_url
+    // (derived from the instance URL); this fallback only applies to a
+    // hand-edited config that omits the field, where empty surfaces a clear
+    // "callback not configured" failure rather than silently using temperkb.
+    String::new()
 }
 
 /// Auth configuration.
@@ -148,27 +152,14 @@ pub struct AuthConfig {
 }
 
 fn default_auth_provider() -> String {
-    "auth0".to_string()
+    "none".to_string()
 }
 
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
             provider: default_auth_provider(),
-            providers: vec![AuthProvider {
-                name: "auth0".to_string(),
-                authorize_url: "https://temperkb.us.auth0.com/authorize".to_string(),
-                token_url: "https://temperkb.us.auth0.com/oauth/token".to_string(),
-                client_id: "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF".to_string(),
-                audience: "https://temperkb.io/api".to_string(),
-                callback_url: default_callback_url(),
-                scopes: vec![
-                    "openid".to_string(),
-                    "profile".to_string(),
-                    "email".to_string(),
-                    "offline_access".to_string(),
-                ],
-            }],
+            providers: Vec::new(),
             path: None,
         }
     }
@@ -275,8 +266,9 @@ pub struct CliSection {
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 pub struct CloudSection {
     /// API base URL (overridden by `TEMPER_API_URL` environment variable).
+    /// Empty means "unconfigured" — set by `temper init`.
     #[serde(default = "default_api_url")]
-    #[validate(url(message = "api_url must be a valid URL"))]
+    #[validate(custom(function = "validate_optional_api_url"))]
     pub api_url: String,
 }
 
@@ -289,7 +281,19 @@ impl Default for CloudSection {
 }
 
 fn default_api_url() -> String {
-    "https://temperkb.io".to_string()
+    String::new()
+}
+
+/// Allow an empty `api_url` (the unconfigured default) while still rejecting a
+/// non-empty value that isn't a valid URL. validator 0.20 exposes
+/// `ValidateUrl::validate_url` for `&str`.
+fn validate_optional_api_url(value: &str) -> Result<(), validator::ValidationError> {
+    use validator::ValidateUrl;
+    if value.is_empty() || value.validate_url() {
+        Ok(())
+    } else {
+        Err(validator::ValidationError::new("api_url_invalid"))
+    }
 }
 
 /// Canonical temper config — `~/.config/temper/config.toml`.
@@ -591,18 +595,25 @@ api_url = "https://temperkb.io"
     }
 
     #[test]
-    fn auth_providers_lookup_by_name() {
-        let cfg = TemperConfig::default();
-        let active = cfg
-            .auth
-            .providers
-            .iter()
-            .find(|p| p.name == cfg.auth.provider);
+    fn default_config_is_unconfigured_for_cloud() {
+        // No baked-in default: a fresh binary must not point at the hosted SaaS.
+        let config = TemperConfig::default();
+        assert_eq!(config.auth.provider, "none");
         assert!(
-            active.is_some(),
-            "default config should have its active provider"
+            config.auth.providers.is_empty(),
+            "default config must ship with no auth providers"
         );
-        assert_eq!(active.unwrap().name, "auth0");
+        assert_eq!(config.cloud.api_url, "", "api_url must be unset by default");
+    }
+
+    #[test]
+    fn default_config_validates() {
+        // The unconfigured default (empty api_url) must still pass validation,
+        // so commands that load-then-validate don't choke before `temper init`.
+        use validator::Validate;
+        TemperConfig::default()
+            .validate()
+            .expect("unconfigured default config must validate");
     }
 
     #[test]
@@ -620,17 +631,11 @@ path = "~/vault"
         let config: TemperConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.vault.path, "~/vault");
         assert!(config.sync.subscriptions.contexts.is_empty());
-        assert_eq!(config.auth.provider, "auth0");
-        // Cloud section defaults
-        assert_eq!(config.cloud.api_url, "https://temperkb.io");
-        // When `[auth]` is omitted entirely, `AuthConfig::default()` is used,
-        // which seeds the built-in auth0 provider.
-        assert_eq!(config.auth.providers.len(), 1);
-        assert_eq!(config.auth.providers[0].name, "auth0");
-        assert_eq!(
-            config.auth.providers[0].callback_url,
-            "https://temperkb.io/api/auth/cli-callback"
-        );
+        // When `[auth]` is omitted entirely, `AuthConfig::default()` is used → unconfigured.
+        assert_eq!(config.auth.provider, "none");
+        assert!(config.auth.providers.is_empty());
+        // Cloud section defaults to unconfigured — no baked-in host.
+        assert_eq!(config.cloud.api_url, "");
     }
 
     // --- validator rules ---
@@ -660,7 +665,15 @@ path = "~/vault"
     #[test]
     fn validate_rejects_malformed_authorize_url_in_provider_vec() {
         let mut cfg = TemperConfig::default();
-        cfg.auth.providers[0].authorize_url = "nope".to_string();
+        cfg.auth.providers.push(AuthProvider {
+            name: "example".to_string(),
+            authorize_url: "nope".to_string(), // invalid — should fail
+            token_url: "https://example.com/oauth/token".to_string(),
+            client_id: "test-client-id".to_string(),
+            audience: "https://example.com/api".to_string(),
+            callback_url: "https://example.com/callback".to_string(),
+            scopes: vec![],
+        });
         let err = cfg.validate().unwrap_err();
         let s = format!("{err}");
         assert!(
@@ -672,7 +685,15 @@ path = "~/vault"
     #[test]
     fn validate_rejects_empty_provider_client_id() {
         let mut cfg = TemperConfig::default();
-        cfg.auth.providers[0].client_id = String::new();
+        cfg.auth.providers.push(AuthProvider {
+            name: "example".to_string(),
+            authorize_url: "https://example.com/authorize".to_string(),
+            token_url: "https://example.com/oauth/token".to_string(),
+            client_id: String::new(), // empty — should fail validation
+            audience: "https://example.com/api".to_string(),
+            callback_url: "https://example.com/callback".to_string(),
+            scopes: vec![],
+        });
         assert!(cfg.validate().is_err());
     }
 }

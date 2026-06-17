@@ -13,3 +13,4 @@ target/
 node_modules
 .neon
 .logs
+.env*
