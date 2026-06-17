@@ -18,10 +18,12 @@ mod common;
 use chrono::{Duration, Utc};
 use temper_client::auth::{Provider, StoredAuth};
 
-/// Resolve a resource's addressing ref from its slug by querying the test DB.
-/// Cloud addressing is by id (decorated ref or bare UUID); a bare UUID is a
-/// valid ref, so tests resolve the slug they created to the resource's uuid.
-async fn resource_ref_for_slug(pool: &sqlx::PgPool, slug: &str) -> String {
+/// Test setup: recover the server-assigned id of a resource created earlier
+/// in this test (keyed on the slug we gave it). NOT an addressing path —
+/// production addresses by id via `parse_ref`; the slug is display/write-back
+/// only. Used where the creating path under test (CLI `resource::create`)
+/// returns no id in-process.
+async fn created_id_for_slug(pool: &sqlx::PgPool, slug: &str) -> String {
     sqlx::query_scalar::<_, String>(
         "SELECT id::text FROM kb_resources WHERE slug = $1 AND is_active \
          ORDER BY created DESC LIMIT 1",
@@ -29,7 +31,7 @@ async fn resource_ref_for_slug(pool: &sqlx::PgPool, slug: &str) -> String {
     .bind(slug)
     .fetch_one(pool)
     .await
-    .unwrap_or_else(|e| panic!("resource_ref_for_slug({slug}): {e}"))
+    .unwrap_or_else(|e| panic!("created_id_for_slug({slug}): {e}"))
 }
 
 /// Write a `StoredAuth` JSON to `path` so `DiskTokenStore::at(path)` and the
@@ -187,7 +189,7 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
     let global_config_str2 = global_config.to_str().unwrap().to_string();
     let cli_config2 = app.cli_config.clone();
 
-    let ref_for_show = resource_ref_for_slug(&pool, &slug).await;
+    let ref_for_show = created_id_for_slug(&pool, &slug).await;
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::show(
@@ -258,7 +260,8 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -286,7 +289,7 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
     // pre-Phase-5 cloud path bypassed validate_update_args. Phase 5
     // unification surfaces that constraint correctly. Test intent is
     // partial-merge semantics — any single field swap works.
-    let ref_for_update = resource_ref_for_slug(&pool, "meta-only-update-test").await;
+    let ref_for_update = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
@@ -415,7 +418,8 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -436,7 +440,7 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
     // Update --title (a base field valid for all doctypes); --stage was the
     // pre-Phase-5 choice but stage is task-only per the schema. Phase 5
     // unification correctly enforces this.
-    let ref_for_update = resource_ref_for_slug(&pool, "body-and-meta-update-test").await;
+    let ref_for_update = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
@@ -569,7 +573,8 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -587,7 +592,7 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
     let token2 = token.clone();
     let global_config_str2 = global_config_str.clone();
 
-    let ref_for_update = resource_ref_for_slug(&pool, "body-only-update-test").await;
+    let ref_for_update = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
@@ -710,7 +715,8 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -727,7 +733,7 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
     let token2 = token.clone();
     let global_config_str2 = global_config_str.clone();
 
-    let ref_for_update = resource_ref_for_slug(&pool, "body-empty-guard-test").await;
+    let ref_for_update = seeded.id.to_string();
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
@@ -879,7 +885,7 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
     let api_url3 = api_url.clone();
     let token3 = token.clone();
     let global_config_str3 = global_config_str.clone();
-    let ref_for_update = resource_ref_for_slug(&pool, &slug).await;
+    let ref_for_update = created_id_for_slug(&pool, &slug).await;
 
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config_str3), || {
@@ -1224,7 +1230,7 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
 
     // Step 3: Drive a meta-only update (title change, no body) on a blocking
     // thread. No `test-embed` required — meta-only updates do not touch chunks.
-    let ref_for_update = resource_ref_for_slug(&pool, &slug).await;
+    let ref_for_update = created_id_for_slug(&pool, &slug).await;
 
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
@@ -1361,7 +1367,7 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
     let token3 = token.clone();
     let global_config_str3 = global_config_str.clone();
     let cli_config3 = cli_config.clone();
-    let ref_for_delete = resource_ref_for_slug(&pool, &slug).await;
+    let ref_for_delete = created_id_for_slug(&pool, &slug).await;
 
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config_str3), || {
@@ -1426,7 +1432,8 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
 
     // Seed the resource via the API client (no CLI, no manifest written).
     use temper_core::types::ingest::{pack_chunks, IngestPayload};
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&IngestPayload {
             title: "Edges Resolve Test".to_string(),
@@ -1454,7 +1461,7 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
     let global_config_str = global_config.to_str().unwrap().to_string();
     let cli_config = app.cli_config.clone();
 
-    let ref_for_show = resource_ref_for_slug(&pool, "edges-resolve-test").await;
+    let ref_for_show = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
             temper_cli::commands::resource::show(
