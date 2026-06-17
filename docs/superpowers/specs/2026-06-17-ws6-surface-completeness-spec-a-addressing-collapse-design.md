@@ -56,14 +56,26 @@ This spec implements that contract — except the **vault-projection-filename** 
 ## 3. Surface simplification (CLI + MCP)
 
 **CLI (`crates/temper-cli/src/commands/`).**
-- `show` / `update` / `delete`: a single decorated-ref-or-UUID positional, resolved by `parse_ref`. `--type` / `--context` / `--owner` **removed** from these commands (they existed only to scope a slug lookup; a global id needs no scope). Non-addressing flags (`--stage`, `--mode`, body input, etc.) are unchanged.
-- `edge` source/target (`crates/temper-cli/src/commands/edge.rs:50`): decorated-ref-or-UUID positionals; the per-endpoint owner/context/doctype slug-scoping is removed.
+- `show` / `update` / `delete`: a single decorated-ref-or-UUID positional, resolved by `parse_ref`. `--type` / `--context` / `--owner` **removed** from these commands (they existed only to scope a slug lookup; a global id needs no scope). Non-addressing flags (`--stage`, `--mode`, body input, etc.) are unchanged. **Caveat:** these commands use `--type` for more than addressing — `show` dispatches its render path on doctype (task/session/generic), `update` validates flags against the doctype schema, `delete` builds the projection-file path from owner/context/doctype/slug. With the flag gone, that doctype/context now comes from the **resolved row** (resolve the id → fetch the row → branch on `row.doc_type_name`), not from a flag.
+- `edge` source/target: decorated-ref-or-UUID positionals — see §3a (full edge addressing collapse).
 - `create` keeps `--context` / `--type` (it creates *into* a context); `list` keeps them as **filters** (not addressing) — unchanged.
 
 **MCP (`crates/temper-mcp/src/tools/`).**
 - `get_resource` (`resources.rs:420`): collapses to id-only (decorated/UUID via `parse_ref`). The `slug + context_name` arm (`resources.rs:435-455`) and the `GetResourceInput.slug`/`context_name` fields are deleted.
 - `update_resource` / `delete_resource`: already id-only — accept decorated/UUID through `parse_ref`.
-- Relationship tools (`relationships.rs`): scoped-ref construction replaced by decorated/UUID refs.
+- Relationship tools (`relationships.rs`): scoped-ref construction replaced by decorated/UUID refs (source) and a decorated/UUID target ref (§3a).
+
+### 3a. Full edge addressing collapse (source **and** target)
+
+The edge surface carries two slug-addressing paths; both collapse:
+- **Source** — `AssertRelationship.source: ResourceRef` → `ResourceId` (the main collapse).
+- **Target** — `AssertRelationship.target_slug: String` → `target: ResourceId`. Today the target is a slug resolved server-side within the source's context, with `TargetEndpoint::Slug` enabling **forward-reference edges** (assert to a not-yet-created target, bound later when it appears). That capability is **legacy-only and already absent from the new model**: the artifact `relationship_assert` (`schema-artifact/02_functions.sql:782-819`) takes the target as a resolved `{table,id}` `AnchorRef` — no slug variant — and synthesis drops any forward reference whose target isn't live (`crates/temper-next/src/synthesis/mod.rs:354`; `synthesis/source.rs:145-149` carries only edges with both endpoints active). Collapsing target to a resolved `ResourceId` therefore *conforms* to the artifact; it regresses no capability `temper_next` has.
+
+Consequences:
+- CLI/MCP parse a decorated/uuid **target** ref via `parse_ref`; the per-endpoint `source-owner/context/doctype` and `target` slug inputs become single ref positionals.
+- `db_backend` assert builds `TargetEndpoint::Resource(target_id)` unconditionally (the `None => TargetEndpoint::Slug(..)` arm at `crates/temper-api/src/backend/db_backend.rs:323` is removed).
+- `next_backend` assert maps the target id directly through the `ResolvedIds` bimap; the `public` slug-in-context lookup (`crates/temper-api/src/backend/next_backend.rs:464-474`) is removed, and the `Scoped` source arm (`:440-444`) disappears with the collapse.
+- `TargetEndpoint::Slug` **stays in the event-payload type** (`crates/temper-core/src/types/relationship_events.rs:18`) and its replay arm (`crates/temper-api/src/services/relationship_service.rs:222-223`) — historical legacy events still carry slug targets and must replay identically. Only the *new-assert* live path stops producing it.
 
 ## 4. Identity-out (rendering)
 
@@ -114,7 +126,16 @@ No new `temper_next` SQL; this is purely the consequence of the type collapse on
 - `crates/temper-api/src/handlers/resources.rs:102-107` — `/api/resources/by-uri` handler (stays for Spec B).
 - `crates/temper-cli/src/commands/resource.rs:543,986` ; `commands/edge.rs:50` — CLI scoped-ref construction sites.
 - `crates/temper-mcp/src/tools/resources.rs:420,435-455` — MCP `get_resource` slug+context arm; `:183` `EnrichedResource`.
-- `crates/temper-mcp/src/tools/relationships.rs` — relationship scoped refs.
+- `crates/temper-mcp/src/tools/relationships.rs:28-49,104-148` — `AssertRelationshipInput` source slug fields + `target_slug`; `assert_relationship` scoped-source construction.
+- `crates/temper-core/src/operations/commands.rs:119-127` — `AssertRelationship { source: ResourceRef, target_slug: String, .. }` (both collapse).
+- `crates/temper-api/src/backend/db_backend.rs:99-126,317-323` — `show_resource` Scoped arm; assert `TargetEndpoint::{Resource,Slug}` selection.
+- `crates/temper-api/src/backend/next_backend.rs:433-477` — assert: Scoped source arm + `public` slug-in-context target lookup (both removed).
+- `crates/temper-api/src/services/edge_service.rs:240-256` ; `services/relationship_service.rs:222-223` — `asserted_payload_slug` (live path, removed) ; `TargetEndpoint::Slug` replay arm (kept for history).
+- `crates/temper-core/src/types/relationship_events.rs:18` — `TargetEndpoint` enum (kept).
+- `schema-artifact/02_functions.sql:782-819` ; `crates/temper-next/src/synthesis/mod.rs:354` ; `synthesis/source.rs:145-149` ; `payloads.rs:274` — artifact requires a resolved target `AnchorRef`; forward-reference-by-slug is legacy-only.
+- `crates/temper-cli/src/cli.rs:255-380` — `show`/`update`/`delete` clap arg structs (positional slug + `--type`/`--context`/`--owner`/`--force`).
+- `crates/temper-cli/src/cloud_backend/translators.rs:200-234` ; `cloud_backend/backend.rs` — `cmd_to_delete_args` / `extract_scoped_update_components` (resolve-by-uri round-trip, removed under uuid addressing).
+- `crates/temper-cli/src/format.rs:82-114` ; `commands/resource.rs:376-458` — render path (`render`, `render_resource_show`, list envelope) where the `ref` field is added.
 - `crates/temper-cli/src/projection.rs:151-173,231,251,292` — projection filename construction + stale-file sweep.
 - `crates/temper-core/src/vault.rs:106` — `canonical_uri` (decorated-form lineage).
 - `~30 ResourceRef::Scoped / ::scoped(` call sites across CLI, MCP, API, core (`commands.rs`, `actions.rs`) — the collapse blast radius.
