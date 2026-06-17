@@ -50,12 +50,8 @@ pub struct CreateResourceInput {
 /// MCP input for get_resource.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetResourceInput {
-    /// UUID of the resource. Provide either id or slug (not both).
-    pub id: Option<Uuid>,
-    /// Slug of the resource. Requires context_name for disambiguation.
-    pub slug: Option<String>,
-    /// Context name. Required when looking up by slug.
-    pub context_name: Option<String>,
+    /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
+    pub id: String,
     /// If true, includes the full reconstituted markdown content.
     pub include_content: Option<bool>,
     /// Subselect top-level response keys. Anchor key `id` is always
@@ -428,47 +424,13 @@ pub async fn get_resource(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
-    // Validate input: exactly one of id or slug
-    let row = match (input.id, input.slug.as_deref()) {
-        (Some(id), None) => resource_service::get_visible(pool, profile.id, id)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-            })?,
-        (None, Some(slug)) => {
-            let context_name = input.context_name.as_deref().ok_or_else(|| {
-                rmcp::ErrorData::invalid_params(
-                    "context_name is required when looking up by slug".to_string(),
-                    None,
-                )
-            })?;
-            let context = context_service::resolve_by_name(pool, profile_id, context_name)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(
-                        format!("Context '{context_name}' not found: {e}"),
-                        None,
-                    )
-                })?;
-            resource_service::get_by_slug(pool, profile.id, slug, context.id.into())
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-                })?
-        }
-        (Some(_), Some(_)) => {
-            return Err(rmcp::ErrorData::invalid_params(
-                "Provide either id or slug, not both".to_string(),
-                None,
-            ));
-        }
-        (None, None) => {
-            return Err(rmcp::ErrorData::invalid_params(
-                "Provide either id or slug".to_string(),
-                None,
-            ));
-        }
-    };
+    let id = temper_core::operations::parse_ref(&input.id)
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+    let row = resource_service::get_visible(pool, profile.id, id.into())
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+        })?;
 
     let (enriched, body_markdown) = if input.include_content.unwrap_or(false) {
         // get_content already returns managed_meta + open_meta alongside the
@@ -834,12 +796,17 @@ mod fields_projection_tests {
     use super::*;
 
     #[test]
+    fn get_resource_input_is_ref_only() {
+        let raw = serde_json::json!({ "id": "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2" });
+        let input: GetResourceInput = serde_json::from_value(raw).unwrap();
+        assert_eq!(input.id, "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
+    }
+
+    #[test]
     fn get_resource_input_accepts_fields() {
-        // Compile-time check that GetResourceInput grows the field.
+        // Compile-time check that GetResourceInput carries the field.
         let _input = GetResourceInput {
-            id: None,
-            slug: Some("x".to_string()),
-            context_name: Some("y".to_string()),
+            id: "x".to_string(),
             include_content: Some(false),
             fields: Some(vec!["managed_meta".to_string()]),
         };
