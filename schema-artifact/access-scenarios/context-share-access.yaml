@@ -55,6 +55,11 @@ world:
     - { key: pub2, title: "public concept 2", origin_uri: "temper://pub2",
         home: { anchor: context }, owner: alice,
         grants: [{ to: { anchor: team, slug: temper-system }, can_read: true }] }
+    # write-axis probe (WS2): owned by alice, but bob holds an explicit profile WRITE grant.
+    # Homed in `scratch` (unshared) so nobody else reaches it — isolates the grant branch.
+    - { key: wdoc, title: "write-granted doc", origin_uri: "temper://wdoc",
+        home: { anchor: context, name: scratch }, owner: alice,
+        grants: [{ to: { anchor: profile, handle: bob }, can_read: true, can_write: true }] }
   edges:
     # context-homed edge between PUBLIC endpoints — the §3 re-proof: bob reads both
     # endpoints (root grant) but NOT the edge (home context unshared to team-b).
@@ -81,3 +86,9 @@ checks:
   - { check: edge_visible_to, profile: alice, edge: "pub1~pub2(research)", expect: true }
   - { check: edge_visible_to, profile: bob,   edge: "pub1~pub2(research)", expect: false }  # endpoints public, HOME unshared
   - { check: edge_visible_to, profile: alice, edge: "rdoc->rnote", expect: true }           # cogmap-homed control
+  # S6 — write axis (WS2): can_modify_resource. Context-share is read-reach only, NOT a write path.
+  - { check: can_modify, profile: carol, resource: rdoc, expect: true }    # owner can modify
+  - { check: can_modify, profile: alice, resource: rdoc, expect: false }   # reaches rdoc for READ via the share, no write grant
+  - { check: can_modify, profile: bob,   resource: rdoc, expect: false }   # cannot even see rdoc
+  - { check: can_modify, profile: bob,   resource: wdoc, expect: true }    # explicit profile WRITE grant
+  - { check: can_modify, profile: carol, resource: wdoc, expect: false }   # no grant, not owner, scratch unshared

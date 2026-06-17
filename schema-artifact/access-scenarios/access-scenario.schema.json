@@ -652,6 +652,31 @@
             "profile",
             "expect_count"
           ]
+        },
+        {
+          "description": "S6 — write axis (WS2): `can_modify_resource(profile, resource)`. Owner/originator or an explicit\nWRITE grant ⇒ true; a context-share reader (read-reach only) or a no-access profile ⇒ false.",
+          "type": "object",
+          "properties": {
+            "profile": {
+              "type": "string"
+            },
+            "resource": {
+              "type": "string"
+            },
+            "expect": {
+              "type": "boolean"
+            },
+            "check": {
+              "type": "string",
+              "const": "can_modify"
+            }
+          },
+          "required": [
+            "check",
+            "profile",
+            "resource",
+            "expect"
+          ]
         }
       ]
     }
