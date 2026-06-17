@@ -63,7 +63,7 @@ pub enum Commands {
         /// Skip interactive prompts
         #[arg(long)]
         no_interactive: bool,
-        /// Self-host: instance base URL (e.g. https://temper.acme.com)
+        /// Self-host: instance base URL (e.g. <https://temper.acme.com>)
         #[arg(long, requires_all = ["auth_domain", "auth_client_id", "auth_audience"])]
         instance_url: Option<String>,
         /// Self-host: Auth0 tenant domain (e.g. acme.us.auth0.com)
@@ -72,7 +72,7 @@ pub enum Commands {
         /// Self-host: Auth0 CLI application client_id
         #[arg(long)]
         auth_client_id: Option<String>,
-        /// Self-host: API audience (e.g. https://temper.acme.com/api)
+        /// Self-host: API audience (e.g. <https://temper.acme.com/api>)
         #[arg(long)]
         auth_audience: Option<String>,
     },
