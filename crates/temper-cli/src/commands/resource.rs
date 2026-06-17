@@ -2,7 +2,6 @@ use chrono::Local;
 use temper_core::schema;
 
 use crate::config::Config;
-use crate::discovery::{self, Event};
 use crate::error::{Result, TemperError};
 use crate::output;
 use crate::vault;
@@ -241,39 +240,12 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
     // Projection refresh: write the new resource to its canonical
     // projection path so the local copy reflects server state at once.
     // Best-effort — a projection write failure must not fail the create.
-    let projection_path = match runtime.block_on(crate::projection::write_resource_file(
+    if let Err(e) = runtime.block_on(crate::projection::write_resource_file(
         &client,
         &config.vault_root,
         &output.value,
     )) {
-        Ok(path) => Some(path),
-        Err(e) => {
-            output::warning(format!("could not write projection file: {e}"));
-            None
-        }
-    };
-
-    // Discovery event for non-Concept/Decision doctypes (Concept and
-    // Decision were never emitted pre-Phase 5; preserve that parity).
-    if !matches!(
-        doctype_enum,
-        temper_core::frontmatter::DocType::Concept | temper_core::frontmatter::DocType::Decision
-    ) {
-        let rel_path = projection_path
-            .as_deref()
-            .and_then(|p| p.strip_prefix(&config.vault_root).ok())
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        let event = Event::ResourceCreate {
-            ts: Local::now().to_rfc3339(),
-            doc_type: doc_type.to_string(),
-            title: title.to_string(),
-            path: rel_path,
-            context: ctx.to_string(),
-        };
-        if let Err(e) = discovery::append_event(&config.state_dir, &event) {
-            tracing::warn!("Failed to append discovery event: {e}");
-        }
+        output::warning(format!("could not write projection file: {e}"));
     }
 
     // Session→task linking. Only reached for sessions (validated fail-fast
