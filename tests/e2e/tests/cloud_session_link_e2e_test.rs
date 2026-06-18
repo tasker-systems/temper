@@ -70,6 +70,31 @@ fn session_slug(title: &str) -> String {
     format!("{date_prefix}-{base}")
 }
 
+/// Resolve a created resource's row by slug (verification helper). Replaces the
+/// deleted `resolve_by_uri` client method — these legacy-backend tests still
+/// address by slug, so list-and-filter is the faithful substitute.
+async fn resolve_by_slug(
+    client: &temper_client::TemperClient,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+) -> temper_core::types::resource::ResourceRow {
+    let params = temper_core::types::resource::ResourceListParams {
+        context_name: Some(context.to_string()),
+        doc_type_name: Some(doc_type.to_string()),
+        ..Default::default()
+    };
+    let resp = client
+        .resources()
+        .list(&params)
+        .await
+        .expect("list for slug resolve");
+    resp.rows
+        .into_iter()
+        .find(|r| r.slug.as_deref() == Some(slug))
+        .unwrap_or_else(|| panic!("no {doc_type} with slug '{slug}' in context '{context}'"))
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: --task creates exactly one session→task "advances" edge
 // ---------------------------------------------------------------------------
@@ -127,15 +152,9 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
     .expect("spawn_blocking joined");
 
     // Resolve the created session's id and query its edges via the client.
-    let owner = app.cli_config.owner_for_context("myapp");
     let slug = session_slug(title);
 
-    let session_row = app
-        .client
-        .resources()
-        .resolve_by_uri(&owner, "myapp", "session", &slug)
-        .await
-        .expect("resolve created session by uri");
+    let session_row = resolve_by_slug(&app.client, "myapp", "session", &slug).await;
     let session_id = *session_row.id.as_uuid();
 
     let edges = app
@@ -172,12 +191,7 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
     );
 
     // The task is the target: its incoming edge points back at the session.
-    let task_row = app
-        .client
-        .resources()
-        .resolve_by_uri(&owner, "myapp", "task", "implement-widget")
-        .await
-        .expect("resolve task by uri");
+    let task_row = resolve_by_slug(&app.client, "myapp", "task", "implement-widget").await;
     // The id-based link must target the seeded task's resource id directly.
     assert_eq!(
         outgoing[0].peer_resource_id,
@@ -259,14 +273,8 @@ async fn create_session_without_task_has_no_edge(pool: sqlx::PgPool) {
     .await
     .expect("spawn_blocking joined");
 
-    let owner = app.cli_config.owner_for_context("myapp");
     let slug = session_slug(title);
-    let session_row = app
-        .client
-        .resources()
-        .resolve_by_uri(&owner, "myapp", "session", &slug)
-        .await
-        .expect("resolve created session by uri");
+    let session_row = resolve_by_slug(&app.client, "myapp", "session", &slug).await;
 
     let edges = app
         .client
@@ -338,14 +346,8 @@ async fn create_session_with_unknown_task_succeeds_without_edge(pool: sqlx::PgPo
     );
 
     // The session exists.
-    let owner = app.cli_config.owner_for_context("myapp");
     let slug = session_slug(title);
-    let session_row = app
-        .client
-        .resources()
-        .resolve_by_uri(&owner, "myapp", "session", &slug)
-        .await
-        .expect("session must exist even though task link was skipped");
+    let session_row = resolve_by_slug(&app.client, "myapp", "session", &slug).await;
 
     // No edge was asserted.
     let edges = app
@@ -484,14 +486,8 @@ async fn create_session_with_ambiguous_task_succeeds_without_edge(pool: sqlx::Pg
         "an ambiguous --task lookup must not fail the create; got {result:?}"
     );
 
-    let owner = app.cli_config.owner_for_context("myapp");
     let slug = session_slug(title);
-    let session_row = app
-        .client
-        .resources()
-        .resolve_by_uri(&owner, "myapp", "session", &slug)
-        .await
-        .expect("session must exist even though task link was skipped");
+    let session_row = resolve_by_slug(&app.client, "myapp", "session", &slug).await;
 
     let edges = app
         .client

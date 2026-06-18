@@ -26,7 +26,7 @@ fn backend(pool: PgPool, profile: Uuid) -> DbBackend {
 }
 
 /// Create a resource in the given context (not the system context) so that
-/// `resolve_by_uri` with `owner = "@me"` can find it for the given profile.
+/// it is visible to and modifiable by the given profile.
 async fn create_resource_in_context(
     pool: &PgPool,
     owner_id: Uuid,
@@ -100,8 +100,8 @@ async fn assert_relationship_projects_edge(pool: PgPool) {
     common::fixtures::clean_and_seed(&pool).await;
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-assert@test.com").await;
-    // Create resources in the profile's own "temper" context so
-    // resolve_by_uri with owner="@me" can find them.
+    // Create resources in the profile's own "temper" context so they are
+    // visible to and modifiable by the profile.
     let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-assert-a").await;
     let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-assert-b").await;
 

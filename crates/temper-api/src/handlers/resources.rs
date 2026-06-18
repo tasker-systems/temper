@@ -7,8 +7,8 @@ use crate::backend::select_backend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::resource_service::{
-    self, ResolveByUriParams, ResourceCreateRequest, ResourceListParams, ResourceListResponse,
-    ResourceRow, ResourceUpdateRequest,
+    self, ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
+    ResourceUpdateRequest,
 };
 use crate::services::{context_service, ingest_service};
 use crate::state::AppState;
@@ -85,28 +85,6 @@ pub async fn list(
         .await?;
         Ok(ListResourcesResponse::Default(response))
     }
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/resources/by-uri",
-    tag = "Resources",
-    params(ResolveByUriParams),
-    security(("bearer_auth" = [])),
-    responses(
-        (status = 200, description = "Resolved resource", body = ResourceRow),
-        (status = 401, description = "Unauthorized", body = ErrorBody),
-        (status = 404, description = "Not found", body = ErrorBody),
-    )
-)]
-pub async fn by_uri(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Query(params): Query<ResolveByUriParams>,
-) -> ApiResult<Json<ResourceRow>> {
-    resource_service::resolve_by_uri(&state.pool, auth.0.profile.id, &params)
-        .await
-        .map(Json)
 }
 
 #[utoipa::path(
