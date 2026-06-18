@@ -6,7 +6,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::{read_selector, select_backend};
-use temper_api::services::{context_service, ingest_service, meta_service, resource_service};
+use temper_api::services::{meta_service, resource_service};
 use temper_core::error::TemperError;
 use temper_core::operations::{BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -458,53 +458,26 @@ pub async fn list_resources(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
+    let sel = svc.api_state.backend_selection;
 
-    // Resolve names to IDs
-    let context_id = if let Some(ref name) = input.context_name {
-        Some(
-            context_service::resolve_by_name(pool, profile_id, name)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(
-                        format!("Context '{name}' not found: {e}"),
-                        None,
-                    )
-                })?
-                .id
-                .into(),
-        )
-    } else {
-        None
-    };
+    // One backend-agnostic selector returns the rows + their managed/open meta
+    // (Legacy: resolve filter names → ids → list_visible + get_meta_batch; Next:
+    // readback::enriched_list filtered in SQL). MCP has no cfg branch — both
+    // backends flow through the single `build_enriched` assembler below.
+    let rows = read_selector::list_enriched_select(
+        sel,
+        pool,
+        profile.id,
+        input.context_name.as_deref(),
+        input.doc_type_name.as_deref(),
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None))?;
 
-    let doc_type_id = if let Some(ref name) = input.doc_type_name {
-        Some(
-            ingest_service::resolve_doc_type(pool, name)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(format!("Unknown doc_type '{name}': {e}"), None)
-                })?,
-        )
-    } else {
-        None
-    };
-
-    let params = resource_service::ResourceListParams {
-        kb_context_id: context_id,
-        kb_doc_type_id: doc_type_id,
-        limit: input.limit,
-        offset: input.offset,
-        ..Default::default()
-    };
-
-    let response = resource_service::list_visible(pool, profile.id, params)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
-        })?;
-
-    let enriched = enrich_resources(pool, &response.rows).await?;
+    let enriched: Vec<EnrichedResource> = rows
+        .iter()
+        .map(|(row, managed, open)| build_enriched(row, managed.clone(), open.clone()))
+        .collect();
 
     let array_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;

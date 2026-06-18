@@ -21,9 +21,9 @@ use temper_core::types::ids::{ProfileId, ResourceId};
 use crate::backend::selection::BackendSelection;
 use crate::error::ApiResult;
 use crate::services::resource_service::{self, ResourceListParams, ResourceListResponse};
-use crate::services::{meta_service, search_service};
+use crate::services::{context_service, ingest_service, meta_service, search_service};
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::managed_meta::ResourceMetaResponse;
+use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
 use temper_core::types::resource::{ContentResponse, ResourceRow};
 
 /// `list` — list visible resources.
@@ -95,6 +95,61 @@ pub async fn search_select(
     }
 }
 
+/// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
+/// `doc_type`, over BOTH backends. Returns always-compiled temper-core types
+/// (`Vec<(ResourceRow, Option<ManagedMeta>, Option<Value>)>`) so the consumer (MCP) needs no
+/// `next-backend` feature; the Next path is gated inside `next_impl`. The single `build_enriched`
+/// assembler then maps each tuple on either backend (no second assembler). Legacy resolves the name
+/// filters to ids then `list_visible` + `get_meta_batch`; Next filters by name in SQL via
+/// `readback::enriched_list` (slug/timestamps are §9 non-invariants — Next stamps None/now()).
+pub async fn list_enriched_select(
+    selection: BackendSelection,
+    pool: &PgPool,
+    profile_id: Uuid,
+    context_name: Option<&str>,
+    doc_type: Option<&str>,
+) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
+    match selection {
+        BackendSelection::Legacy => {
+            let context_id = match context_name {
+                Some(name) => Some(
+                    context_service::resolve_by_name(pool, ProfileId::from(profile_id), name)
+                        .await?
+                        .id
+                        .into(),
+                ),
+                None => None,
+            };
+            let doc_type_id = match doc_type {
+                Some(name) => Some(ingest_service::resolve_doc_type(pool, name).await?),
+                None => None,
+            };
+            let params = ResourceListParams {
+                kb_context_id: context_id,
+                kb_doc_type_id: doc_type_id,
+                ..Default::default()
+            };
+            let response = resource_service::list_visible(pool, profile_id, params).await?;
+            let ids: Vec<ResourceId> = response.rows.iter().map(|r| r.id).collect();
+            let mut meta = meta_service::get_meta_batch(pool, &ids).await?;
+            Ok(response
+                .rows
+                .into_iter()
+                .map(|row| {
+                    let (m, o) = meta
+                        .remove(&row.id)
+                        .map(|x| (x.managed_meta, x.open_meta))
+                        .unwrap_or((None, None));
+                    (row, m, o)
+                })
+                .collect())
+        }
+        BackendSelection::Next => {
+            next_impl::list_enriched(pool, profile_id, context_name, doc_type).await
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Next arms — feature-gated. Without `next-backend`, each gates with the same
 // NotImplemented as `select_backend`; with it, each maps `temper_next` readback.
@@ -128,6 +183,14 @@ mod next_impl {
         _: Uuid,
         _: SearchParams,
     ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
+        gate()
+    }
+    pub(super) async fn list_enriched(
+        _: &PgPool,
+        _: Uuid,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
         gate()
     }
 }
@@ -306,6 +369,57 @@ mod next_impl {
             });
         }
         Ok(hits)
+    }
+
+    /// `list_enriched` over `temper_next`: the batched, context/doctype-filtered list projection
+    /// (`readback::enriched_list`, WS2-scoped via `resources_visible_to`), each lean `EnrichedListRow`
+    /// mapped to a full `ResourceRow` carrying ONLY the fields `build_enriched` reads (id/title/
+    /// context_name/doc_type_name/origin_uri/is_active/created/updated, plus the workflow projections);
+    /// the rest are §7-dissolved (`slug`/hashes), re-minted (the context/doctype/profile ids), or
+    /// synthesis-collapsed (`created`/`updated` → now()) — all §9 non-invariants. The managed map is
+    /// deserialized back into the typed `ManagedMeta`; open is carried verbatim.
+    pub(super) async fn list_enriched(
+        pool: &PgPool,
+        principal: Uuid,
+        context_name: Option<&str>,
+        doc_type: Option<&str>,
+    ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
+        use temper_core::types::ids::{ContextId, DocTypeId};
+        let rows = readback::enriched_list(pool, principal, context_name, doc_type)
+            .await
+            .map_err(api_err)?;
+        let now = chrono::Utc::now();
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let row = ResourceRow {
+                id: ResourceId::from(r.new_id),
+                kb_context_id: ContextId::from(uuid::Uuid::nil()), // re-minted; unused by build_enriched
+                kb_doc_type_id: DocTypeId::from(uuid::Uuid::nil()), // re-minted; name is authoritative
+                origin_uri: r.origin_uri,
+                title: r.title,
+                slug: None, // §7-dissolved
+                originator_profile_id: ProfileId::from(uuid::Uuid::nil()),
+                owner_profile_id: ProfileId::from(uuid::Uuid::nil()),
+                is_active: r.is_active,
+                created: now, // synthesis-collapsed (non-invariant)
+                updated: now,
+                context_name: r.context_name,
+                doc_type_name: r.doc_type,
+                owner_handle: "@me".to_string(),
+                stage: r.stage,
+                seq: None,
+                mode: r.mode,
+                effort: r.effort,
+                body_hash: None,
+                managed_hash: None,
+                open_hash: None,
+            };
+            let managed: Option<ManagedMeta> =
+                serde_json::from_value(serde_json::Value::Object(r.managed)).ok();
+            let open = Some(serde_json::Value::Object(r.open));
+            out.push((row, managed, open));
+        }
+        Ok(out)
     }
 
     /// Map a production resource id to its synthesized counterpart (by `origin_uri`, via the bimap).

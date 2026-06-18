@@ -952,11 +952,13 @@ async fn show_through_next_backend_preserves_invariants(pool: sqlx::PgPool) {
 async fn read_selector_next_matches_legacy(pool: sqlx::PgPool) {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use serde_json::Value;
     use temper_api::backend::read_selector;
     use temper_api::backend::BackendSelection;
     use temper_core::types::api::SearchParams;
     use temper_core::types::ids::{ProfileId, ResourceId};
-    use temper_core::types::resource::{ResourceListParams, ResourceListResponse};
+    use temper_core::types::managed_meta::ManagedMeta;
+    use temper_core::types::resource::{ResourceListParams, ResourceListResponse, ResourceRow};
 
     common::seed_and_synthesize(&pool).await;
     let p1 = fixture_ids::OWNER_PROFILE;
@@ -1098,5 +1100,98 @@ async fn read_selector_next_matches_legacy(pool: sqlx::PgPool) {
     assert_eq!(
         leg_s, nxt_s,
         "search_select Next origin_uri set == Legacy for query 'task'"
+    );
+
+    // --- list_enriched (Task 6): enrichment tuples, §9 floor (set + display fields + meta tier) ---
+    type LeRows = Vec<(ResourceRow, Option<ManagedMeta>, Option<Value>)>;
+    let leg_le: LeRows =
+        read_selector::list_enriched_select(BackendSelection::Legacy, &pool, p1, None, None)
+            .await
+            .expect("legacy list_enriched");
+    let nxt_le: LeRows =
+        read_selector::list_enriched_select(BackendSelection::Next, &pool, p1, None, None)
+            .await
+            .expect("next list_enriched");
+    // Invariant per-row projection keyed by origin_uri (the row SET + display fields). Ids/slug/
+    // hashes/timestamps are NON-invariants and are NOT asserted.
+    let project_le = |rows: &LeRows| -> BTreeMap<String, (String, String, String)> {
+        rows.iter()
+            .map(|(row, _, _)| {
+                (
+                    row.origin_uri.clone(),
+                    (
+                        row.title.clone(),
+                        row.context_name.clone(),
+                        row.doc_type_name.clone(),
+                    ),
+                )
+            })
+            .collect()
+    };
+    assert_eq!(
+        project_le(&leg_le),
+        project_le(&nxt_le),
+        "list_enriched_select Next matches Legacy invariant projection (set + display fields per origin_uri)"
+    );
+    // Meta tier — mirror the get_meta block: for the rich row R2, open carries verbatim and managed
+    // is reconstructed (Some) under Next.
+    let r2_uri = "temper://fixture/task-doc";
+    let leg_r2 = leg_le
+        .iter()
+        .find(|(row, _, _)| row.origin_uri == r2_uri)
+        .expect("legacy list_enriched has R2");
+    let nxt_r2 = nxt_le
+        .iter()
+        .find(|(row, _, _)| row.origin_uri == r2_uri)
+        .expect("next list_enriched has R2");
+    assert_eq!(
+        leg_r2.2, nxt_r2.2,
+        "list_enriched_select R2 open_meta Next == Legacy (open keys carry verbatim)"
+    );
+    assert!(
+        nxt_r2.1.is_some(),
+        "next list_enriched reconstructs R2 managed_meta from kb_properties"
+    );
+
+    // A doctype filter narrows the set identically under BOTH backends (exactly R2 is a task).
+    let leg_tasks: LeRows = read_selector::list_enriched_select(
+        BackendSelection::Legacy,
+        &pool,
+        p1,
+        None,
+        Some("task"),
+    )
+    .await
+    .expect("legacy list_enriched doctype=task");
+    let nxt_tasks: LeRows =
+        read_selector::list_enriched_select(BackendSelection::Next, &pool, p1, None, Some("task"))
+            .await
+            .expect("next list_enriched doctype=task");
+    let task_uris = |rows: &LeRows| -> BTreeSet<String> {
+        rows.iter()
+            .map(|(row, _, _)| row.origin_uri.clone())
+            .collect()
+    };
+    assert_eq!(
+        task_uris(&leg_tasks),
+        task_uris(&nxt_tasks),
+        "list_enriched_select doctype=task set matches across backends"
+    );
+    assert_eq!(
+        task_uris(&nxt_tasks),
+        BTreeSet::from(["temper://fixture/task-doc".to_string()]),
+        "doctype=task narrows to exactly R2"
+    );
+    assert!(
+        leg_tasks
+            .iter()
+            .all(|(row, _, _)| row.doc_type_name == "task"),
+        "legacy doctype filter yields only task rows"
+    );
+    assert!(
+        nxt_tasks
+            .iter()
+            .all(|(row, _, _)| row.doc_type_name == "task"),
+        "next doctype filter yields only task rows"
     );
 }
