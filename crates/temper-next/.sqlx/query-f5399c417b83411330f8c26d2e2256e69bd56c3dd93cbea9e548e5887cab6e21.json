@@ -1,17 +1,16 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT resource_create($1,$2,$3)",
+  "query": "SELECT invocation_close($1,$2)",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "resource_create",
+        "name": "invocation_close",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Jsonb",
         "Jsonb",
         "Uuid"
       ]
@@ -20,5 +19,5 @@
       null
     ]
   },
-  "hash": "d1be7ae14d49c94e930dbd65873e639cb61d2c983174851241e51b84e610b703"
+  "hash": "f5399c417b83411330f8c26d2e2256e69bd56c3dd93cbea9e548e5887cab6e21"
 }

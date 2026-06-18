@@ -6,7 +6,8 @@
 mod common;
 
 use temper_next::substrate;
-use temper_next::events::{fire, SeedAction, Fired};
+use temper_next::events::{fire, fire_with, EventContext, SeedAction};
+use temper_next::payloads::{AgentAuthorship, ConfidenceBand};
 use temper_next::ids::{ProfileId, EntityId, CogmapId};
 use temper_next::content::{PreparedBlock, PreparedChunk};
 use temper_next::ids::{BlockId, ChunkId};
@@ -210,4 +211,47 @@ async fn authored_resource_create_stamps_metadata_and_invocation_sql() {
     assert_eq!(meta["reasoning"], "AUTHORSHIP_SENTINEL");
     assert_eq!(meta["confidence"], "probable");
     assert_eq!(got_inv, Some(inv));
+}
+
+#[tokio::test]
+async fn fire_with_authorship_stamps_metadata_via_rust_path() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-rust").await;
+    let inv = temper_next::ids::InvocationId::from(Uuid::now_v7());
+
+    // Open the invocation through the typed Rust path.
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL search_path TO temper_next, public").execute(&mut *tx).await.unwrap();
+    let opened = fire(&mut tx, SeedAction::InvocationOpen {
+        invocation: inv, trigger_kind: "manual", originating: cog, parent: None,
+        scoped_entity: emitter, emitter,
+    }).await.unwrap().invocation().unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(opened, inv);
+
+    // Author a resource under the invocation with authorship metadata.
+    let blocks = vec![one_chunk_block("concept body")];
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL search_path TO temper_next, public").execute(&mut *tx).await.unwrap();
+    fire_with(&mut tx, SeedAction::ResourceCreate {
+        title: "C", origin_uri: "temper://c",
+        home: temper_next::payloads::AnchorRef::cogmap(cog),
+        owner, originator: None, blocks: &blocks, doc_type: Some("concept"), emitter,
+    }, EventContext {
+        authorship: Some(AgentAuthorship {
+            reasoning: Some("RUST_SENTINEL".into()), confidence: ConfidenceBand::Confident,
+            rationale: None, persona: Some("steward".into()), model: None,
+        }),
+        invocation: Some(inv),
+    }).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let (meta, got_inv): (serde_json::Value, Option<Uuid>) = sqlx::query_as(
+        "SELECT metadata, invocation_id FROM kb_events \
+         WHERE event_type_id=(SELECT id FROM kb_event_types WHERE name='resource_created')",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(meta["reasoning"], "RUST_SENTINEL");
+    assert_eq!(meta["confidence"], "confident");
+    assert_eq!(got_inv, Some(inv.uuid()));
 }
