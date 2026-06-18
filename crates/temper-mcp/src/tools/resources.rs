@@ -472,7 +472,22 @@ pub async fn list_resources(
         input.doc_type_name.as_deref(),
     )
     .await
-    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None))?;
+    .map_err(|e| match e {
+        // A bad filter is a caller error (invalid_params, 400-class), not a server fault —
+        // preserving the pre-unification contract. An unknown `context_name` resolves to
+        // `NotFound` (a unit variant), an unknown `doc_type_name` to `BadRequest(msg)` (carrying
+        // the specific "unknown doc_type: '…'" message).
+        temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
+            format!("unknown filter: no context named {:?}", input.context_name),
+            None,
+        ),
+        temper_api::error::ApiError::BadRequest(msg) => {
+            rmcp::ErrorData::invalid_params(msg, None)
+        }
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to list resources: {other}"), None)
+        }
+    })?;
 
     let enriched: Vec<EnrichedResource> = rows
         .iter()

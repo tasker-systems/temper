@@ -414,8 +414,11 @@ mod next_impl {
                 managed_hash: None,
                 open_hash: None,
             };
-            let managed: Option<ManagedMeta> =
-                serde_json::from_value(serde_json::Value::Object(r.managed)).ok();
+            // Propagate a genuine deser failure (parity with `get_meta`'s `?`), don't swallow it
+            // to `None` — a malformed managed shape is a fault, not "no meta".
+            let managed: Option<ManagedMeta> = Some(
+                serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?,
+            );
             let open = Some(serde_json::Value::Object(r.open));
             out.push((row, managed, open));
         }

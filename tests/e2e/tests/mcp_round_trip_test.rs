@@ -1243,4 +1243,29 @@ async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
         row["open_meta"]["tags"][0], "list-selector-research",
         "open_meta sourced via list_enriched_select"
     );
+
+    // I1 regression: an unknown doc_type filter is a caller error (invalid_params / 400-class),
+    // NOT internal_error (500-class). Filter-id resolution moved behind list_enriched_select, so
+    // its NotFound must be re-mapped to invalid_params at the MCP boundary.
+    let bad = temper_mcp::tools::resources::list_resources(
+        &svc,
+        temper_mcp::tools::resources::ListResourcesInput {
+            context_name: Some("list-selector".to_string()),
+            doc_type_name: Some("no-such-doctype".to_string()),
+            limit: None,
+            offset: None,
+            fields: None,
+        },
+    )
+    .await
+    .expect_err("unknown doc_type filter must error");
+    // The internal_error (I1-regression) path prefixes "Failed to list resources: …"; the
+    // invalid_params (caller-error) path does not. The bad doc_type resolves to BadRequest →
+    // invalid_params carrying the specific "unknown doc_type: '…'" message.
+    assert!(
+        !bad.message.contains("Failed to list resources")
+            && bad.message.contains("unknown doc_type"),
+        "bad filter must map to invalid_params (not the internal_error path); got: {}",
+        bad.message
+    );
 }
