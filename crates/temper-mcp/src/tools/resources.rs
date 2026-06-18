@@ -481,9 +481,7 @@ pub async fn list_resources(
             format!("unknown filter: no context named {:?}", input.context_name),
             None,
         ),
-        temper_api::error::ApiError::BadRequest(msg) => {
-            rmcp::ErrorData::invalid_params(msg, None)
-        }
+        temper_api::error::ApiError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
         other => {
             rmcp::ErrorData::internal_error(format!("Failed to list resources: {other}"), None)
         }

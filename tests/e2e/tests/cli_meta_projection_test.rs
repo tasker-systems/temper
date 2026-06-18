@@ -38,18 +38,15 @@ async fn show_meta_only_returns_meta_response_shape(pool: sqlx::PgPool) {
         chunks_packed: Some(pack_chunks(&[]).unwrap()),
     };
 
-    let _ = app.client.ingest().create(&payload).await.expect("ingest");
+    let created = app.client.ingest().create(&payload).await.expect("ingest");
+    let id = created.id.as_uuid().to_string();
 
     let output = common::run_temper_cli(
         &app,
         &[
             "resource",
             "show",
-            "show-meta-test",
-            "--type",
-            "task",
-            "--context",
-            "meta-cli",
+            id.as_str(),
             "--meta-only",
             "--format",
             "json",
@@ -107,18 +104,15 @@ async fn show_meta_only_with_fields_filters_response(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).unwrap()),
     };
-    app.client.ingest().create(&payload).await.expect("ingest");
+    let created = app.client.ingest().create(&payload).await.expect("ingest");
+    let id = created.id.as_uuid().to_string();
 
     let output = common::run_temper_cli(
         &app,
         &[
             "resource",
             "show",
-            "fields-filter-test",
-            "--type",
-            "task",
-            "--context",
-            "meta-cli",
+            id.as_str(),
             "--meta-only",
             "--fields",
             "managed_meta",
@@ -173,18 +167,15 @@ async fn show_meta_only_with_dotted_path_errors(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).unwrap()),
     };
-    app.client.ingest().create(&payload).await.expect("ingest");
+    let created = app.client.ingest().create(&payload).await.expect("ingest");
+    let id = created.id.as_uuid().to_string();
 
     let output = common::run_temper_cli(
         &app,
         &[
             "resource",
             "show",
-            "dotted-path-test",
-            "--type",
-            "task",
-            "--context",
-            "meta-cli",
+            id.as_str(),
             "--meta-only",
             "--fields",
             "managed_meta.stage",
