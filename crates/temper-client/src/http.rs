@@ -199,6 +199,17 @@ impl HttpClient {
         req: RequestBuilder,
         token: Option<&str>,
     ) -> Result<Response> {
+        // An empty base URL would join to a relative path (`/api/...`), which
+        // reqwest rejects at send time with an opaque "builder error". Catch it
+        // here and tell the user how to fix it. This is the unconfigured-cloud
+        // regression: the API URL default is empty until `temper init` writes one.
+        if self.base_url.is_empty() {
+            return Err(ClientError::NotConfigured(
+                "cloud API URL is not configured — run `temper init` (or set TEMPER_API_URL)"
+                    .to_string(),
+            ));
+        }
+
         let api_req = ApiRequest {
             method,
             path,
@@ -530,6 +541,24 @@ mod tests {
         let body = r#"{"error":{"code":"FORBIDDEN","message":"Forbidden"}}"#;
         let err = map_status_to_error(status(403), body);
         assert!(matches!(err, ClientError::Forbidden));
+    }
+
+    #[tokio::test]
+    async fn empty_base_url_returns_not_configured() {
+        // Regression: an unconfigured cloud (empty api_url) must surface an
+        // actionable "run `temper init`" error, not reqwest's opaque builder error.
+        let client = HttpClient::new("", None, None);
+        let req = client.get("/api/resources");
+        let err = client
+            .send(&reqwest::Method::GET, "/api/resources", req, None)
+            .await
+            .expect_err("empty base URL must error before sending");
+        match err {
+            ClientError::NotConfigured(msg) => {
+                assert!(msg.contains("temper init"), "got: {msg}");
+            }
+            other => panic!("expected NotConfigured, got {other:?}"),
+        }
     }
 
     #[test]

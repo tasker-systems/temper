@@ -28,6 +28,15 @@ pub enum ClientError {
     #[error("server error ({status}): {message}")]
     Server { status: u16, message: String },
 
+    /// A required cloud-configuration field (API URL, OAuth callback URL) is
+    /// empty. Surfaced before any network attempt so the user gets an
+    /// actionable "run `temper init`" message instead of a cryptic reqwest
+    /// "builder error" (empty base URL) or an Auth0 "Oops" page (empty
+    /// `redirect_uri`). See the regression from baked-in defaults being
+    /// removed in favor of per-instance config.
+    #[error("{0}")]
+    NotConfigured(String),
+
     #[error("network error: {0}")]
     Network(#[from] reqwest::Error),
 
