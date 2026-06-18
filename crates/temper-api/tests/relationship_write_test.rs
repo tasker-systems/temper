@@ -238,7 +238,7 @@ async fn retype_changes_edge_kind(pool: PgPool) {
 
     // Retype to Contains.
     let retype = RetypeRelationship {
-        correlation_id,
+        edge_handle: correlation_id,
         edge_kind: EdgeKind::Contains,
         polarity: Polarity::Forward,
         origin: Surface::ApiHttp,
@@ -303,7 +303,7 @@ async fn reweight_changes_weight(pool: PgPool) {
     let correlation_id = output.value;
 
     let reweight = ReweightRelationship {
-        correlation_id,
+        edge_handle: correlation_id,
         weight: 5.5,
         origin: Surface::ApiHttp,
     };
@@ -357,7 +357,7 @@ async fn fold_marks_row_folded(pool: PgPool) {
     let correlation_id = output.value;
 
     let fold = FoldRelationship {
-        correlation_id,
+        edge_handle: correlation_id,
         reason: Some("test fold".to_string()),
         origin: Surface::ApiHttp,
     };
@@ -436,7 +436,7 @@ async fn retype_unauthorized(pool: PgPool) {
 
     // Q tries to retype — should fail.
     let retype = RetypeRelationship {
-        correlation_id,
+        edge_handle: correlation_id,
         edge_kind: EdgeKind::Contains,
         polarity: Polarity::Forward,
         origin: Surface::ApiHttp,
@@ -626,7 +626,7 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
 
     // Fold the edge.
     let fold = FoldRelationship {
-        correlation_id: first_correlation_id,
+        edge_handle: first_correlation_id,
         reason: Some("test fold before re-assert".to_string()),
         origin: Surface::ApiHttp,
     };
@@ -712,7 +712,7 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
 
     // Verify the new chain is healthy: folding via new_correlation_id actually folds the row.
     let fold2 = FoldRelationship {
-        correlation_id: new_correlation_id,
+        edge_handle: new_correlation_id,
         reason: None,
         origin: Surface::ApiHttp,
     };

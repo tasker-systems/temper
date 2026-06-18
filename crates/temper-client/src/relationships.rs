@@ -36,42 +36,42 @@ impl<'a> RelationshipClient<'a> {
             .await
     }
 
-    /// POST /api/relationships/{correlation_id}/retype — change kind/polarity.
+    /// POST /api/relationships/{edge_handle}/retype — change kind/polarity.
     pub async fn retype(
         &self,
-        correlation_id: Uuid,
+        edge_handle: Uuid,
         request: &RetypeRelationshipRequest,
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{correlation_id}/retype");
+        let path = format!("/api/relationships/{edge_handle}/retype");
         let req = self.http.post(&path).json(request);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 
-    /// POST /api/relationships/{correlation_id}/reweight — change weight.
+    /// POST /api/relationships/{edge_handle}/reweight — change weight.
     pub async fn reweight(
         &self,
-        correlation_id: Uuid,
+        edge_handle: Uuid,
         request: &ReweightRelationshipRequest,
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{correlation_id}/reweight");
+        let path = format!("/api/relationships/{edge_handle}/reweight");
         let req = self.http.post(&path).json(request);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
             .await
     }
 
-    /// POST /api/relationships/{correlation_id}/fold — retract.
+    /// POST /api/relationships/{edge_handle}/fold — retract.
     pub async fn fold(
         &self,
-        correlation_id: Uuid,
+        edge_handle: Uuid,
         request: &FoldRelationshipRequest,
     ) -> Result<RelationshipAck> {
         let token = self.http.resolve_token()?;
-        let path = format!("/api/relationships/{correlation_id}/fold");
+        let path = format!("/api/relationships/{edge_handle}/fold");
         let req = self.http.post(&path).json(request);
         self.http
             .send_json(&Method::POST, &path, req, Some(&token))
