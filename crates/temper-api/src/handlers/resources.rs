@@ -13,7 +13,7 @@ use crate::services::resource_service::{
 use crate::services::{context_service, ingest_service};
 use crate::state::AppState;
 
-use temper_core::operations::{CreateResource, DeleteResource, ResourceRef, Surface};
+use temper_core::operations::{CreateResource, DeleteResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
 use temper_core::types::resource::{ContentResponse, DeleteResponse};
@@ -126,13 +126,11 @@ pub async fn get(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ResourceRow>> {
-    use temper_core::operations::{ResourceRef, ShowResource, Surface};
+    use temper_core::operations::{ShowResource, Surface};
     use temper_core::types::ids::ResourceId;
 
     let cmd = ShowResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(resource_id),
-        },
+        resource: ResourceId::from(resource_id),
         origin: Surface::ApiHttp,
     };
     // Reads don't write audit, so device_id is "api" (not threaded through).
@@ -260,7 +258,7 @@ pub async fn update(
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
-    use temper_core::operations::{BodyUpdate, ResourceRef, UpdateResource};
+    use temper_core::operations::{BodyUpdate, UpdateResource};
     use temper_core::types::ids::ResourceId;
 
     let device_id = device_id
@@ -291,9 +289,7 @@ pub async fn update(
     };
 
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(resource_id),
-        },
+        resource: ResourceId::from(resource_id),
         body,
         managed_meta,
         open_meta: req.open_meta,
@@ -336,9 +332,7 @@ pub async fn delete(
         .unwrap_or_else(|| "api".to_string());
 
     let cmd = DeleteResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(resource_id),
-        },
+        resource: ResourceId::from(resource_id),
         force: false,
         origin: Surface::ApiHttp,
     };

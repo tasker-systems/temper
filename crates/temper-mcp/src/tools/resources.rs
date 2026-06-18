@@ -590,7 +590,7 @@ pub async fn update_resource(
     }
 
     let cmd = temper_core::operations::UpdateResource {
-        resource: temper_core::operations::ResourceRef::Uuid { id: resource_id },
+        resource: resource_id,
         body: input.content.map(BodyUpdate::new),
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -649,7 +649,7 @@ pub async fn update_resource_meta(
     // server-side (Phase 5: caller-supplied hashes are no longer trusted),
     // emits the update_meta audit, and reconciles edges.
     let cmd = temper_core::operations::UpdateResource {
-        resource: temper_core::operations::ResourceRef::Uuid { id: resource_id },
+        resource: resource_id,
         body: None,
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
@@ -698,9 +698,7 @@ pub async fn delete_resource(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = temper_core::operations::DeleteResource {
-        resource: temper_core::operations::ResourceRef::Uuid {
-            id: ResourceId::from(input.id),
-        },
+        resource: ResourceId::from(input.id),
         // CLI-side concern; DbBackend ignores per spec (force=true is only
         // relevant when a CLI surface presents a confirmation prompt).
         force: false,

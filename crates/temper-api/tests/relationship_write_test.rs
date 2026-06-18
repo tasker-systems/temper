@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use temper_api::backend::DbBackend;
 use temper_core::operations::{
-    AssertRelationship, Backend, DomainEvent, FoldRelationship, ResourceRef, RetypeRelationship,
+    AssertRelationship, Backend, DomainEvent, FoldRelationship, RetypeRelationship,
     ReweightRelationship, Surface,
 };
 use temper_core::types::graph::{EdgeKind, Polarity};
@@ -55,37 +55,8 @@ async fn create_resource_in_context(
     id
 }
 
-/// Build an `AssertRelationship` command using `ResourceRef::Scoped` for the
-/// source. The source resource must live in a profile-owned "temper" context.
-/// The target is a pre-resolved resource id (edge addressing is id-based).
-fn assert_cmd_scoped(
-    context: &str,
-    source_slug: &str,
-    target_id: Uuid,
-    edge_kind: EdgeKind,
-    polarity: Polarity,
-    label: &str,
-    weight: f64,
-) -> AssertRelationship {
-    AssertRelationship {
-        source: ResourceRef::Scoped {
-            owner: "@me".to_string(),
-            context: context.to_string(),
-            doctype: "research".to_string(),
-            slug: source_slug.to_string(),
-        },
-        target: target_id.into(),
-        edge_kind,
-        polarity,
-        label: label.to_string(),
-        weight,
-        origin: Surface::ApiHttp,
-    }
-}
-
-/// Build an `AssertRelationship` command using `ResourceRef::Uuid` for the
-/// source — bypasses ownership-based resolution, useful for auth tests where
-/// a different profile tries to assert on a resource it doesn't own.
+/// Build an `AssertRelationship` command from pre-resolved source + target
+/// resource ids (edge addressing is id-based on both endpoints).
 fn assert_cmd_uuid(
     source_id: Uuid,
     target_id: Uuid,
@@ -95,9 +66,7 @@ fn assert_cmd_uuid(
     weight: f64,
 ) -> AssertRelationship {
     AssertRelationship {
-        source: ResourceRef::Uuid {
-            id: source_id.into(),
-        },
+        source: source_id.into(),
         target: target_id.into(),
         edge_kind,
         polarity,
@@ -136,9 +105,8 @@ async fn assert_relationship_projects_edge(pool: PgPool) {
     let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-assert-a").await;
     let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-assert-b").await;
 
-    let cmd = assert_cmd_scoped(
-        "temper",
-        "rw-assert-a",
+    let cmd = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -197,8 +165,8 @@ async fn assert_relationship_projects_edge(pool: PgPool) {
 // ─── Test 2: unauthorized profile cannot assert ──────────────────────────────
 
 /// Profile Q tries to assert a relationship from resource A (owned by P).
-/// `ResourceRef::Uuid` is used so resolve succeeds, but `check_can_modify` must
-/// reject Q's write attempt.
+/// The source id resolves fine, but `check_can_modify` must reject Q's write
+/// attempt.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
 async fn assert_relationship_unauthorized_profile(pool: PgPool) {
     common::fixtures::clean_and_seed(&pool).await;
@@ -242,12 +210,11 @@ async fn retype_changes_edge_kind(pool: PgPool) {
     common::fixtures::clean_and_seed(&pool).await;
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-retype@test.com").await;
-    let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-retype-a").await;
+    let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-retype-a").await;
     let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-retype-b").await;
 
-    let cmd = assert_cmd_scoped(
-        "temper",
-        "rw-retype-a",
+    let cmd = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -318,12 +285,11 @@ async fn reweight_changes_weight(pool: PgPool) {
     common::fixtures::clean_and_seed(&pool).await;
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-reweight@test.com").await;
-    let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-reweight-a").await;
+    let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-reweight-a").await;
     let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-reweight-b").await;
 
-    let cmd = assert_cmd_scoped(
-        "temper",
-        "rw-reweight-a",
+    let cmd = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -376,9 +342,8 @@ async fn fold_marks_row_folded(pool: PgPool) {
     let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-fold-a").await;
     let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-fold-b").await;
 
-    let cmd = assert_cmd_scoped(
-        "temper",
-        "rw-fold-a",
+    let cmd = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -444,13 +409,12 @@ async fn retype_unauthorized(pool: PgPool) {
         common::fixtures::create_test_profile_with_context(&pool, "rw-rauth-p@test.com").await;
     let (profile_q, _) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-rauth-q@test.com").await;
-    let _a = create_resource_in_context(&pool, profile_p, context_p, "Doc A", "rw-rauth-a").await;
+    let a = create_resource_in_context(&pool, profile_p, context_p, "Doc A", "rw-rauth-a").await;
     let b = create_resource_in_context(&pool, profile_p, context_p, "Doc B", "rw-rauth-b").await;
 
     // P asserts A→B.
-    let cmd = assert_cmd_scoped(
-        "temper",
-        "rw-rauth-a",
+    let cmd = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -506,13 +470,12 @@ async fn reassert_active_edge_converts_to_reweight(pool: PgPool) {
     common::fixtures::clean_and_seed(&pool).await;
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-reassert@test.com").await;
-    let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-reassert-a").await;
+    let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-reassert-a").await;
     let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-reassert-b").await;
 
     // First assertion (weight=1.0).
-    let first_cmd = assert_cmd_scoped(
-        "temper",
-        "rw-reassert-a",
+    let first_cmd = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -537,9 +500,8 @@ async fn reassert_active_edge_converts_to_reweight(pool: PgPool) {
     assert_eq!(original_asserted_by, first_correlation_id);
 
     // Second "assertion" with weight=3.0 — same key, edge is active.
-    let second_cmd = assert_cmd_scoped(
-        "temper",
-        "rw-reassert-a",
+    let second_cmd = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -581,7 +543,7 @@ async fn reassert_active_edge_converts_to_reweight(pool: PgPool) {
             WHERE et.name = 'relationship_asserted'
               AND (ev.payload->>'source_resource_id')::uuid = $1"#,
     )
-    .bind(_a)
+    .bind(a)
     .fetch_one(&pool)
     .await
     .expect("assert count");
@@ -644,13 +606,12 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
     common::fixtures::clean_and_seed(&pool).await;
     let (profile, context_id) =
         common::fixtures::create_test_profile_with_context(&pool, "rw-refold@test.com").await;
-    let _a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-refold-a").await;
+    let a = create_resource_in_context(&pool, profile, context_id, "Doc A", "rw-refold-a").await;
     let b = create_resource_in_context(&pool, profile, context_id, "Doc B", "rw-refold-b").await;
 
     // First assertion.
-    let cmd1 = assert_cmd_scoped(
-        "temper",
-        "rw-refold-a",
+    let cmd1 = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -675,9 +636,8 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
         .expect("fold");
 
     // Re-assert with weight=2.0 — edge is folded, so a new chain starts.
-    let cmd2 = assert_cmd_scoped(
-        "temper",
-        "rw-refold-a",
+    let cmd2 = assert_cmd_uuid(
+        a,
         b,
         EdgeKind::LeadsTo,
         Polarity::Forward,
@@ -712,7 +672,7 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
             WHERE et.name = 'relationship_asserted'
               AND (ev.payload->>'source_resource_id')::uuid = $1"#,
     )
-    .bind(_a)
+    .bind(a)
     .fetch_one(&pool)
     .await
     .expect("assert event count");
@@ -729,7 +689,7 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
                   last_event_id         AS "last_event_id!: Uuid"
              FROM kb_resource_edges
             WHERE source_resource_id = $1"#,
-        _a,
+        a,
     )
     .fetch_one(&pool)
     .await
@@ -763,7 +723,7 @@ async fn reassert_folded_edge_starts_new_chain(pool: PgPool) {
 
     let is_folded_now: bool =
         sqlx::query_scalar("SELECT is_folded FROM kb_resource_edges WHERE source_resource_id = $1")
-            .bind(_a)
+            .bind(a)
             .fetch_one(&pool)
             .await
             .expect("is_folded after second fold");

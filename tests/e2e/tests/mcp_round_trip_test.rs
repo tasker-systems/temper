@@ -4,7 +4,7 @@ mod common;
 
 use temper_api::backend::DbBackend;
 use temper_api::services::{context_service, event_service, ingest_service, resource_service};
-use temper_core::operations::{Backend, BodyUpdate, ResourceRef, Surface, UpdateResource};
+use temper_core::operations::{Backend, BodyUpdate, Surface, UpdateResource};
 use temper_core::types::api::EventListParams;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -425,7 +425,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     let updated_hash = format!("sha256:{}", sha2_hex(updated_content));
 
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid { id: resource.id },
+        resource: resource.id,
         body: Some(BodyUpdate {
             content: updated_content.to_string(),
             content_hash: Some(updated_hash.clone()),
@@ -578,9 +578,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     };
     let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(new_managed),
         open_meta: Some(new_open),
@@ -711,9 +709,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
 
     // Partial update: change ONLY the stage.
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("done".to_string()),
@@ -806,9 +802,7 @@ async fn list_events_managed_meta_update_surfaces_changed_keys(pool: sqlx::PgPoo
 
     // Change exactly one managed_meta key: temper-stage.
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("done".to_string()),
@@ -916,9 +910,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 
     // Update with a temper-stage value outside the task schema's enum.
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("not-a-real-stage".to_string()),

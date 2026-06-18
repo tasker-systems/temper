@@ -7,7 +7,6 @@ mod common;
 
 use sqlx::PgPool;
 use temper_api::MIGRATOR;
-use temper_core::operations::ResourceRef;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::relationship_requests::{
@@ -251,7 +250,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         .client
         .relationships()
         .assert(&AssertRelationshipRequest {
-            source: ResourceRef::uuid(alpha_id),
+            source: alpha_id,
             target: beta_id,
             edge_kind: EdgeKind::Near,
             polarity: Polarity::Forward,
@@ -267,7 +266,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         .client
         .relationships()
         .assert(&AssertRelationshipRequest {
-            source: ResourceRef::uuid(alpha_id),
+            source: alpha_id,
             target: gamma_id,
             edge_kind: EdgeKind::Contains,
             polarity: Polarity::Forward,
@@ -283,7 +282,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         .client
         .relationships()
         .assert(&AssertRelationshipRequest {
-            source: ResourceRef::uuid(alpha_id),
+            source: alpha_id,
             target: delta_id,
             edge_kind: EdgeKind::Near,
             polarity: Polarity::Forward,

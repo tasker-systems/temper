@@ -21,7 +21,7 @@ mod common;
 use reqwest::StatusCode;
 use temper_api::backend::{BackendSelection, NextBackend};
 use temper_core::error::TemperError;
-use temper_core::operations::{Backend, ResourceRef, ShowResource, Surface};
+use temper_core::operations::{Backend, ShowResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 
 /// The metadata-only resource `common::clean_and_seed` inserts (`test://seed-resource`).
@@ -171,9 +171,7 @@ async fn seed_and_synthesize(pool: &sqlx::PgPool) -> uuid::Uuid {
 
 fn show_seed() -> ShowResource {
     ShowResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(uuid::Uuid::parse_str(SEED_RESOURCE_ID).unwrap()),
-        },
+        resource: ResourceId::from(uuid::Uuid::parse_str(SEED_RESOURCE_ID).unwrap()),
         origin: Surface::CliCloud,
     }
 }

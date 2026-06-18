@@ -6,7 +6,6 @@
 use crate::cli::{CliEdgeKind, CliPolarity, EdgeAction};
 use crate::error::Result;
 use crate::output;
-use temper_core::operations::ResourceRef;
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::relationship_requests::{
     AssertRelationshipRequest, FoldRelationshipRequest, RelationshipAck, RetypeRelationshipRequest,
@@ -43,9 +42,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
             label,
             weight,
         } => {
-            let source = ResourceRef::Uuid {
-                id: temper_core::operations::parse_ref(&source)?,
-            };
+            let source = temper_core::operations::parse_ref(&source)?;
             let target = temper_core::operations::parse_ref(&target)?;
             let req = AssertRelationshipRequest {
                 source,

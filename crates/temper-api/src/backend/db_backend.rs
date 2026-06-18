@@ -8,8 +8,8 @@ use uuid::Uuid;
 use temper_core::error::TemperError;
 use temper_core::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, DomainEvent,
-    FoldRelationship, ListResources, ResourceRef, ResourceSummary, RetypeRelationship,
-    ReweightRelationship, SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
+    FoldRelationship, ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship,
+    SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_core::types::ids::ProfileId;
 use temper_core::types::relationship_events::{
@@ -100,29 +100,9 @@ impl Backend for DbBackend {
         &self,
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        let row = match cmd.resource {
-            ResourceRef::Uuid { id } => {
-                resource_service::get_visible(self.pool(), *self.profile_id(), *id)
-                    .await
-                    .map_err(TemperError::from)?
-            }
-            ResourceRef::Scoped {
-                owner,
-                context,
-                doctype,
-                slug,
-            } => {
-                let params = resource_service::ResolveByUriParams {
-                    owner,
-                    context,
-                    doc_type: doctype,
-                    ident: slug,
-                };
-                resource_service::resolve_by_uri(self.pool(), *self.profile_id(), &params)
-                    .await
-                    .map_err(TemperError::from)?
-            }
-        };
+        let row = resource_service::get_visible(self.pool(), *self.profile_id(), *cmd.resource)
+            .await
+            .map_err(TemperError::from)?;
         Ok(CommandOutput::new(row))
     }
 
@@ -130,12 +110,7 @@ impl Backend for DbBackend {
         &self,
         cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        let resource_id = super::translators::resolve_resource_ref(
-            self.pool(),
-            self.profile_id(),
-            cmd.resource.clone(),
-        )
-        .await?;
+        let resource_id = cmd.resource;
         let req = super::translators::update_resource_to_request(cmd)?;
         let row = resource_service::update(
             self.pool(),
@@ -153,9 +128,7 @@ impl Backend for DbBackend {
     }
 
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
-        let resource_id =
-            super::translators::resolve_resource_ref(self.pool(), self.profile_id(), cmd.resource)
-                .await?;
+        let resource_id = cmd.resource;
         resource_service::delete(
             self.pool(),
             self.profile_id(),
@@ -216,10 +189,8 @@ impl Backend for DbBackend {
         &self,
         cmd: AssertRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
-        // 1. Resolve source.
-        let source_resource_id =
-            *super::translators::resolve_resource_ref(self.pool(), self.profile_id(), cmd.source)
-                .await?;
+        // 1. Source is pre-resolved.
+        let source_resource_id = uuid::Uuid::from(cmd.source);
 
         // 2. Auth before write.
         resource_service::check_can_modify(self.pool(), *self.profile_id(), source_resource_id)

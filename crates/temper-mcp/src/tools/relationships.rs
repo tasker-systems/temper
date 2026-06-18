@@ -3,8 +3,7 @@
 //! Each tool mirrors one HTTP endpoint from `temper-api/src/handlers/edges.rs`
 //! and dispatches through `DbBackend` — the same write path the HTTP handlers
 //! use. Both endpoints are decorated refs (a UUID or the `slug-<uuid>` form)
-//! resolved via `parse_ref`; the source builds a `ResourceRef::Uuid`, the
-//! target a `ResourceId`.
+//! resolved via `parse_ref` into a `ResourceId`.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
@@ -14,8 +13,7 @@ use uuid::Uuid;
 use temper_api::backend::select_backend;
 use temper_core::error::TemperError;
 use temper_core::operations::{
-    AssertRelationship, FoldRelationship, ResourceRef, RetypeRelationship, ReweightRelationship,
-    Surface,
+    AssertRelationship, FoldRelationship, RetypeRelationship, ReweightRelationship, Surface,
 };
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::ProfileId;
@@ -103,10 +101,8 @@ pub async fn assert_relationship(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
-    let source = ResourceRef::Uuid {
-        id: temper_core::operations::parse_ref(&input.source)
-            .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?,
-    };
+    let source = temper_core::operations::parse_ref(&input.source)
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
     let target = temper_core::operations::parse_ref(&input.target)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 

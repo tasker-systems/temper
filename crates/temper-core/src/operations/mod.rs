@@ -13,7 +13,6 @@ mod events;
 mod inputs;
 mod output;
 mod refs;
-mod resource_ref;
 mod surface;
 
 pub use actions::{
@@ -31,7 +30,6 @@ pub use events::{DomainEvent, PushDeferReason};
 pub use inputs::{BodyUpdate, ListFilter, SearchQuery};
 pub use output::CommandOutput;
 pub use refs::{decorated_ref, parse_ref, sluggify};
-pub use resource_ref::ResourceRef;
 pub use surface::Surface;
 
 #[cfg(test)]

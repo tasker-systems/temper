@@ -135,15 +135,9 @@ pub(crate) fn cmd_to_resource_update_request(
     let managed_meta_opt = if managed_meta == ManagedMeta::default() {
         None
     } else {
-        // Symmetric defense (CLAUDE.md "Phase 5's symmetric defense pattern"):
-        // when emitting managed_meta, sync its `temper-slug` from the URI's
-        // typed source (`ResourceRef::Scoped.slug`) so the embedded slug
-        // can never drift from the URI's slug. Title is its own typed source
-        // when present; no defense is possible for partial updates that
-        // don't touch title (no canonical title to derive).
-        if let temper_core::operations::ResourceRef::Scoped { slug, .. } = &cmd.resource {
-            managed_meta.slug = Some(slug.clone());
-        }
+        // The resource is addressed by a `ResourceId` now — there is no slug in
+        // the command to defend against, so `managed_meta.slug` is left as the
+        // caller supplied it (the server reconciles slug from the resolved row).
         Some(managed_meta)
     };
 
@@ -184,166 +178,11 @@ pub(crate) fn wire_resource_to_resource_row(
     resource.clone()
 }
 
-/// Extract the URI components needed to dispatch a cloud-mode delete.
-///
-/// Cloud-mode delete is a two-step operation: resolve slug → UUID via
-/// `client.resources().resolve_by_uri(owner, ctx, dt, slug)`, then
-/// `client.resources().delete(uuid)`. This translator extracts the four
-/// URI components from a `DeleteResource` command's `ResourceRef`.
-///
-/// Returns `(owner, context, doctype, slug)` as string slices borrowing
-/// from `cmd` and `fallback_owner` (which comes from `CloudBackendCtx`).
-///
-/// Errors on `ResourceRef::Uuid` — cloud-mode delete requires a scoped
-/// ref because the resolve-by-URI endpoint needs all four components.
-///
-/// The live delete path now dispatches through `resolve_delete_target`; this
-/// legacy extractor is retained solely for the tests that pin its behavior
-/// until a later task deletes it, so it is gated to test builds to avoid
-/// shipping dead code.
-#[cfg(feature = "embed")]
-#[cfg(test)]
-pub(crate) fn cmd_to_delete_args<'a>(
-    cmd: &'a temper_core::operations::DeleteResource,
-    fallback_owner: &'a str,
-) -> Result<(&'a str, &'a str, &'a str, &'a str)> {
-    use temper_core::operations::ResourceRef;
-    match &cmd.resource {
-        ResourceRef::Scoped {
-            owner,
-            context,
-            doctype,
-            slug,
-        } => {
-            // owner is String (not Option<String>) — use it directly.
-            // fallback_owner is available for callers that construct a
-            // Scoped ref without an owner, but since the type guarantees
-            // a non-empty String, we always use the ref's owner field.
-            let resolved_owner: &str = if owner.is_empty() {
-                fallback_owner
-            } else {
-                owner.as_str()
-            };
-            Ok((
-                resolved_owner,
-                context.as_str(),
-                doctype.as_str(),
-                slug.as_str(),
-            ))
-        }
-        ResourceRef::Uuid { .. } => Err(TemperError::Project(
-            "cloud-mode delete requires a scoped ResourceRef (context+doctype+slug); \
-             uuid-only refs not supported"
-                .to_string(),
-        )),
-    }
-}
-
-/// How a delete command addresses its target resource.
-///
-/// A `Uuid` ref dispatches straight to the by-id delete endpoint; a legacy
-/// `Scoped` ref still resolves through `resolve_by_uri` first. The `Scoped`
-/// arm is removed in a later task once every surface builds uuid refs.
-#[cfg(feature = "embed")]
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum DeleteTarget {
-    /// Direct by-UUID — no `resolve_by_uri` round-trip.
-    Id(uuid::Uuid),
-    /// Legacy scoped slug — resolved via `resolve_by_uri`.
-    Scoped {
-        owner: String,
-        context: String,
-        doctype: String,
-        slug: String,
-    },
-}
-
-/// Discriminate a `DeleteResource` command's `ResourceRef` into a
-/// [`DeleteTarget`]. A `Uuid` ref maps to the by-id fast path; a `Scoped`
-/// ref carries the four URI components (with `fallback_owner` substituted
-/// for an empty owner) for the resolve-by-uri path.
-#[cfg(feature = "embed")]
-pub(crate) fn resolve_delete_target(
-    cmd: &temper_core::operations::DeleteResource,
-    fallback_owner: &str,
-) -> Result<DeleteTarget> {
-    use temper_core::operations::ResourceRef;
-    match &cmd.resource {
-        ResourceRef::Uuid { id } => Ok(DeleteTarget::Id(uuid::Uuid::from(*id))),
-        ResourceRef::Scoped {
-            owner,
-            context,
-            doctype,
-            slug,
-        } => {
-            let owner = if owner.is_empty() {
-                fallback_owner
-            } else {
-                owner.as_str()
-            };
-            Ok(DeleteTarget::Scoped {
-                owner: owner.to_string(),
-                context: context.clone(),
-                doctype: doctype.clone(),
-                slug: slug.clone(),
-            })
-        }
-    }
-}
-
-/// How an update command addresses its target resource. Parallel to
-/// [`DeleteTarget`] — a `Uuid` ref dispatches by id, a `Scoped` ref resolves
-/// through `resolve_by_uri` first. The `Scoped` arm is removed in a later task.
-#[cfg(feature = "embed")]
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum UpdateTarget {
-    /// Direct by-UUID — no `resolve_by_uri` round-trip.
-    Id(uuid::Uuid),
-    /// Legacy scoped slug — resolved via `resolve_by_uri`.
-    Scoped {
-        owner: String,
-        context: String,
-        doctype: String,
-        slug: String,
-    },
-}
-
-/// Discriminate an `UpdateResource` command's `ResourceRef` into an
-/// [`UpdateTarget`]. Mirrors [`resolve_delete_target`].
-#[cfg(feature = "embed")]
-pub(crate) fn resolve_update_target(
-    cmd: &temper_core::operations::UpdateResource,
-    fallback_owner: &str,
-) -> Result<UpdateTarget> {
-    use temper_core::operations::ResourceRef;
-    match &cmd.resource {
-        ResourceRef::Uuid { id } => Ok(UpdateTarget::Id(uuid::Uuid::from(*id))),
-        ResourceRef::Scoped {
-            owner,
-            context,
-            doctype,
-            slug,
-        } => {
-            let owner = if owner.is_empty() {
-                fallback_owner
-            } else {
-                owner.as_str()
-            };
-            Ok(UpdateTarget::Scoped {
-                owner: owner.to_string(),
-                context: context.clone(),
-                doctype: doctype.clone(),
-                slug: slug.clone(),
-            })
-        }
-    }
-}
-
 #[cfg(feature = "embed")]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use temper_core::operations::{MoveSpec, ResourceRef, Surface, UpdateResource};
+    use temper_core::operations::{MoveSpec, Surface, UpdateResource};
     use temper_core::types::ManagedMeta;
 
     #[cfg(feature = "test-embed")]
@@ -456,7 +295,7 @@ mod tests {
 
     fn sample_update() -> UpdateResource {
         UpdateResource {
-            resource: ResourceRef::scoped("@me", "temper", "task", "test-slug"),
+            resource: temper_core::types::ids::ResourceId(uuid::Uuid::nil()),
             body: None,
             managed_meta: None,
             open_meta: None,
@@ -488,27 +327,21 @@ mod tests {
         let mm = req.managed_meta.expect("synthesized from move_to");
         assert_eq!(mm.context.as_deref(), Some("knowledge"));
         assert_eq!(mm.doc_type.as_deref(), Some("concept"));
-        // Symmetric defense: slug injected from URI when managed_meta is sent.
-        assert_eq!(mm.slug.as_deref(), Some("test-slug"));
     }
 
     #[test]
-    fn cmd_to_resource_update_request_injects_slug_from_uri_into_managed_meta() {
-        // When managed_meta is being sent and caller's managed_meta.slug differs
-        // from the URI's slug, the URI's slug wins (defense against drift).
+    fn cmd_to_resource_update_request_preserves_caller_managed_meta() {
+        // The resource is addressed by id, so caller-supplied managed_meta
+        // (including slug + title) flows through unchanged.
         let mut cmd = sample_update();
         cmd.managed_meta = Some(ManagedMeta {
-            slug: Some("drift-slug".to_string()),
+            slug: Some("caller-slug".to_string()),
             title: Some("New Title".to_string()),
             ..ManagedMeta::default()
         });
         let req = cmd_to_resource_update_request(&cmd).expect("should succeed");
         let mm = req.managed_meta.expect("present");
-        assert_eq!(
-            mm.slug.as_deref(),
-            Some("test-slug"),
-            "URI slug wins over caller-supplied managed_meta.slug"
-        );
+        assert_eq!(mm.slug.as_deref(), Some("caller-slug"));
         // Title from managed_meta is preserved (the typed field is the source).
         assert_eq!(mm.title.as_deref(), Some("New Title"));
     }
@@ -550,7 +383,6 @@ mod tests {
 
     // ── Task 4 tests ─────────────────────────────────────────────────────────
 
-    use temper_core::operations::DeleteResource;
     use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
     use temper_core::types::resource::ResourceRow;
     use uuid::Uuid;
@@ -593,52 +425,5 @@ mod tests {
         assert_eq!(row.doc_type_name, "task");
         assert_eq!(row.body_hash, Some("abc123".to_string()));
         assert_eq!(row.owner_handle, "@me");
-    }
-
-    #[test]
-    fn cmd_to_delete_args_extracts_scoped_components() {
-        let cmd = DeleteResource {
-            resource: ResourceRef::scoped("@me", "temper", "task", "test-slug"),
-            force: false,
-            origin: Surface::CliCloud,
-        };
-        let (owner, ctx, dt, slug) =
-            cmd_to_delete_args(&cmd, "fallback-owner").expect("should succeed");
-        assert_eq!(owner, "@me");
-        assert_eq!(ctx, "temper");
-        assert_eq!(dt, "task");
-        assert_eq!(slug, "test-slug");
-    }
-
-    #[test]
-    fn cmd_to_delete_args_uses_fallback_owner_when_scoped_owner_is_empty() {
-        // When ResourceRef::Scoped has an explicit owner, we use it directly.
-        // (owner is String, not Option — this test just documents the behavior
-        // that whatever is in the Scoped owner field is returned verbatim.)
-        let cmd = DeleteResource {
-            resource: ResourceRef::scoped("+team-acme", "engineering", "doc", "design-spec"),
-            force: false,
-            origin: Surface::CliCloud,
-        };
-        let (owner, ctx, dt, slug) =
-            cmd_to_delete_args(&cmd, "fallback-owner").expect("should succeed");
-        assert_eq!(owner, "+team-acme");
-        assert_eq!(ctx, "engineering");
-        assert_eq!(dt, "doc");
-        assert_eq!(slug, "design-spec");
-    }
-
-    #[test]
-    fn cmd_to_delete_args_errors_on_uuid_ref() {
-        let cmd = DeleteResource {
-            resource: ResourceRef::uuid(ResourceId(Uuid::nil())),
-            force: false,
-            origin: Surface::CliCloud,
-        };
-        let err = cmd_to_delete_args(&cmd, "fallback").unwrap_err();
-        assert!(
-            format!("{err:?}").contains("scoped ResourceRef"),
-            "error message should mention scoped ResourceRef, got: {err:?}"
-        );
     }
 }

@@ -4,9 +4,8 @@
 //! tool params, HTTP body) into a command; backends consume commands and
 //! emit `CommandOutput`.
 //!
-//! Resource-action commands (`Show`, `Update`, `Delete`) carry a `ResourceRef`,
-//! not a bare slug — slug uniqueness is scoped to (owner, context, doctype),
-//! UUID is globally unique. `Create` carries the new resource's identity
+//! Resource-action commands (`Show`, `Update`, `Delete`) carry a `ResourceId`
+//! (globally unique). `Create` carries the new resource's identity
 //! directly. `List` and `Search` carry filter/query inputs.
 
 use serde::{Deserialize, Serialize};
@@ -17,12 +16,11 @@ use crate::types::managed_meta::ManagedMeta;
 
 use super::{
     inputs::{BodyUpdate, ListFilter, SearchQuery},
-    resource_ref::ResourceRef,
     surface::Surface,
 };
 
 /// Create a new resource. The resource's identity is specified directly
-/// (not via `ResourceRef`) since it doesn't exist yet.
+/// (not via a `ResourceId`) since it doesn't exist yet.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CreateResource {
     pub slug: String,
@@ -56,7 +54,7 @@ pub struct CreateResource {
 /// Show a single resource.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ShowResource {
-    pub resource: ResourceRef,
+    pub resource: ResourceId,
     pub origin: Surface,
 }
 
@@ -78,7 +76,7 @@ pub struct MoveSpec {
 /// open_meta may be supplied.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UpdateResource {
-    pub resource: ResourceRef,
+    pub resource: ResourceId,
     pub body: Option<BodyUpdate>,
     pub managed_meta: Option<ManagedMeta>,
     pub open_meta: Option<Value>,
@@ -94,7 +92,7 @@ pub struct UpdateResource {
 /// server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeleteResource {
-    pub resource: ResourceRef,
+    pub resource: ResourceId,
     /// Bypass the local-file confirmation prompt (required for non-TTY).
     pub force: bool,
     pub origin: Surface,
@@ -116,13 +114,12 @@ pub struct SearchResources {
 
 /// Assert a new relationship from `source` to `target`. Cloud-only —
 /// emits a `relationship_asserted` event and projects an edge row. Both
-/// endpoints are pre-resolved ids: the target is a `ResourceId`, the source
-/// a `ResourceRef` (collapses to `ResourceId` in the final ref sweep).
+/// endpoints are pre-resolved `ResourceId`s.
 /// Forward-reference-by-slug targets are no longer expressible here — that
 /// legacy capability lives only in the frontmatter-declaration ingest path.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssertRelationship {
-    pub source: ResourceRef,
+    pub source: ResourceId,
     pub target: ResourceId,
     pub edge_kind: crate::types::graph::EdgeKind,
     pub polarity: crate::types::graph::Polarity,
@@ -163,19 +160,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn show_resource_carries_resource_ref() {
+    fn show_resource_carries_resource_id() {
+        let id = ResourceId(uuid::Uuid::now_v7());
         let cmd = ShowResource {
-            resource: ResourceRef::scoped("@me", "temper", "task", "hello"),
+            resource: id,
             origin: Surface::CliCloud,
         };
         // Exercises the type compiles + the field is reachable.
-        assert!(matches!(cmd.resource, ResourceRef::Scoped { .. }));
+        assert_eq!(cmd.resource, id);
     }
 
     #[test]
     fn update_resource_all_optional_fields_default_none() {
         let cmd = UpdateResource {
-            resource: ResourceRef::scoped("@me", "temper", "task", "x"),
+            resource: ResourceId(uuid::Uuid::now_v7()),
             body: None,
             managed_meta: None,
             open_meta: None,
@@ -220,7 +218,7 @@ mod tests {
     #[test]
     fn assert_relationship_command_round_trips() {
         let cmd = AssertRelationship {
-            source: ResourceRef::scoped("@me", "temper", "task", "a"),
+            source: ResourceId(uuid::Uuid::now_v7()),
             target: ResourceId(uuid::Uuid::now_v7()),
             edge_kind: crate::types::graph::EdgeKind::LeadsTo,
             polarity: crate::types::graph::Polarity::Inverse,
@@ -235,9 +233,7 @@ mod tests {
     #[test]
     fn assert_relationship_carries_resolved_target_id() {
         let cmd = AssertRelationship {
-            source: ResourceRef::Uuid {
-                id: ResourceId(uuid::Uuid::nil()),
-            },
+            source: ResourceId(uuid::Uuid::nil()),
             target: ResourceId(uuid::Uuid::now_v7()),
             edge_kind: crate::types::graph::EdgeKind::Near,
             polarity: crate::types::graph::Polarity::Forward,

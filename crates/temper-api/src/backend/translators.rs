@@ -6,18 +6,13 @@
 //!
 //! Translators are added incrementally as their consumers come online.
 
-use sqlx::PgPool;
 use temper_core::error::TemperError;
 use temper_core::operations::{
-    CreateResource, ListFilter, ResourceRef, ResourceSummary, SearchHit, SearchQuery,
-    UpdateResource,
+    CreateResource, ListFilter, ResourceSummary, SearchHit, SearchQuery, UpdateResource,
 };
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::resource::{ResourceListParams, ResourceRow, ResourceUpdateRequest};
-
-use crate::services::resource_service;
 
 /// Translate `CreateResource` → `IngestPayload` for `ingest_service::ingest`.
 ///
@@ -167,38 +162,6 @@ pub(crate) fn unified_hit_to_search_hit(row: &UnifiedSearchResultRow) -> SearchH
     }
 }
 
-/// Resolve a `ResourceRef` to a concrete `ResourceId`.
-///
-/// `Uuid` short-circuits without I/O; `Scoped` queries via `resolve_by_uri`
-/// with the ref's `owner` (today always `@me` for solo use; future team
-/// callers pass a `+team-...` handle).
-pub(crate) async fn resolve_resource_ref(
-    pool: &PgPool,
-    profile_id: ProfileId,
-    rref: ResourceRef,
-) -> Result<ResourceId, TemperError> {
-    match rref {
-        ResourceRef::Uuid { id } => Ok(id),
-        ResourceRef::Scoped {
-            owner,
-            context,
-            doctype,
-            slug,
-        } => {
-            let params = resource_service::ResolveByUriParams {
-                owner,
-                context,
-                doc_type: doctype,
-                ident: slug,
-            };
-            let row = resource_service::resolve_by_uri(pool, *profile_id, &params)
-                .await
-                .map_err(TemperError::from)?;
-            Ok(row.id)
-        }
-    }
-}
-
 /// Compute `(content_hash, chunks_packed)` for an update-resource body. Mirrors
 /// the in-place pipeline at `ingest_service::ingest:663-682` (body-trio
 /// computation) so DbBackend's `update_resource` can populate the trio when
@@ -256,14 +219,12 @@ mod tests {
 
     #[test]
     fn update_translator_meta_branch_leaves_body_fields_none() {
-        use temper_core::operations::{ResourceRef, Surface, UpdateResource};
+        use temper_core::operations::{Surface, UpdateResource};
         use temper_core::types::ids::ResourceId;
         use temper_core::types::managed_meta::ManagedMeta;
 
         let cmd = UpdateResource {
-            resource: ResourceRef::Uuid {
-                id: ResourceId(uuid::Uuid::new_v4()),
-            },
+            resource: ResourceId(uuid::Uuid::new_v4()),
             body: None,
             managed_meta: Some(ManagedMeta::default()),
             open_meta: Some(serde_json::json!({"tags": ["x"]})),
@@ -280,13 +241,11 @@ mod tests {
 
     #[test]
     fn update_translator_meta_branch_rejects_unknown_open_key() {
-        use temper_core::operations::{ResourceRef, Surface, UpdateResource};
+        use temper_core::operations::{Surface, UpdateResource};
         use temper_core::types::ids::ResourceId;
 
         let cmd = UpdateResource {
-            resource: ResourceRef::Uuid {
-                id: ResourceId(uuid::Uuid::new_v4()),
-            },
+            resource: ResourceId(uuid::Uuid::new_v4()),
             body: None,
             managed_meta: None,
             open_meta: Some(serde_json::json!({"totally_made_up": 1})),
@@ -306,13 +265,11 @@ mod tests {
     #[cfg(feature = "ingest-pipeline")]
     #[test]
     fn update_translator_body_branch_populates_trio_for_empty_body() {
-        use temper_core::operations::{BodyUpdate, ResourceRef, Surface, UpdateResource};
+        use temper_core::operations::{BodyUpdate, Surface, UpdateResource};
         use temper_core::types::ids::ResourceId;
 
         let cmd = UpdateResource {
-            resource: ResourceRef::Uuid {
-                id: ResourceId(uuid::Uuid::new_v4()),
-            },
+            resource: ResourceId(uuid::Uuid::new_v4()),
             body: Some(BodyUpdate::new(String::new())),
             managed_meta: None,
             open_meta: None,

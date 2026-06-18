@@ -311,7 +311,6 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         // mode warns and the create still succeeds.
         match crate::actions::task::find_task(config, task_slug, Some(&ctx)) {
             Ok(Some(task_info)) => {
-                use temper_core::operations::ResourceRef;
                 use temper_core::types::graph::{EdgeKind, Polarity};
                 use temper_core::types::relationship_requests::AssertRelationshipRequest;
 
@@ -326,7 +325,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                         .await
                         .map_err(crate::commands::client_err)?;
                     let req = AssertRelationshipRequest {
-                        source: ResourceRef::uuid(source_id),
+                        source: source_id,
                         target: target.id,
                         edge_kind: EdgeKind::LeadsTo,
                         polarity: Polarity::Forward,
@@ -568,7 +567,7 @@ pub fn delete(
     force: bool,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
-    use temper_core::operations::{DeleteResource, ResourceRef};
+    use temper_core::operations::DeleteResource;
 
     let id = temper_core::operations::parse_ref(r#ref)?;
 
@@ -585,7 +584,7 @@ pub fn delete(
     })?;
 
     let cmd = DeleteResource {
-        resource: ResourceRef::Uuid { id },
+        resource: id,
         force,
         origin: temper_core::operations::Surface::CliCloud,
     };
@@ -909,7 +908,7 @@ fn build_move_spec_from_args(
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_core::operations::{BodyUpdate, ResourceRef, UpdateResource};
+    use temper_core::operations::{BodyUpdate, UpdateResource};
 
     // 1. Resolve the ref to an id, then a context-free read to learn the
     //    current doctype (for per-flag schema validation) and context (for
@@ -943,7 +942,7 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
 
     // 4. Build the UpdateResource cmd.
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid { id },
+        resource: id,
         body: resolved_body.map(BodyUpdate::new),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),

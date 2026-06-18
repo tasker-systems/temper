@@ -15,9 +15,7 @@
 mod common;
 
 use temper_core::error::TemperError;
-use temper_core::operations::{
-    Backend, CreateResource, DeleteResource, ResourceRef, Surface, UpdateResource,
-};
+use temper_core::operations::{Backend, CreateResource, DeleteResource, Surface, UpdateResource};
 use temper_core::types::ids::ProfileId;
 use temper_core::types::managed_meta::ManagedMeta;
 use temper_core::types::resource::ResourceRow;
@@ -110,7 +108,7 @@ async fn create_update_delete_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
 
     // ── update (title + stage), addressed by the public id (ResolvedIds maps to the next row) ──
     let upd = |id: temper_core::types::ids::ResourceId| UpdateResource {
-        resource: ResourceRef::Uuid { id },
+        resource: id,
         body: None,
         managed_meta: Some(ManagedMeta {
             title: Some("RT Doc v2".into()),
@@ -141,7 +139,7 @@ async fn create_update_delete_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
 
     // ── delete (soft) ──
     let del = |id: temper_core::types::ids::ResourceId| DeleteResource {
-        resource: ResourceRef::Uuid { id },
+        resource: id,
         force: false,
         origin: Surface::CliCloud,
     };
@@ -236,7 +234,7 @@ async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
         .expect("synthesis::run");
 
     let assert_cmd = || AssertRelationship {
-        source: ResourceRef::Uuid { id: a.id },
+        source: a.id,
         target: b.id,
         edge_kind: EdgeKind::LeadsTo,
         polarity: Polarity::Forward,
@@ -377,7 +375,7 @@ async fn next_resource_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
     let owner_backend = NextBackend::new(app.pool.clone(), owner);
 
     let upd = |id: temper_core::types::ids::ResourceId| UpdateResource {
-        resource: ResourceRef::Uuid { id },
+        resource: id,
         body: None,
         managed_meta: Some(ManagedMeta {
             title: Some("Gate v2".into()),
@@ -388,7 +386,7 @@ async fn next_resource_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
         origin: Surface::CliCloud,
     };
     let del = |id: temper_core::types::ids::ResourceId| DeleteResource {
-        resource: ResourceRef::Uuid { id },
+        resource: id,
         force: false,
         origin: Surface::CliCloud,
     };
@@ -460,7 +458,7 @@ async fn next_relationship_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
         .expect("synthesis::run");
     let edge_n = owner_backend
         .assert_relationship(AssertRelationship {
-            source: ResourceRef::Uuid { id: a.id },
+            source: a.id,
             target: b.id,
             edge_kind: EdgeKind::LeadsTo,
             polarity: Polarity::Forward,

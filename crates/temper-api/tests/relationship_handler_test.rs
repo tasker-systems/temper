@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 // ─── Fixture helpers ─────────────────────────────────────────────────────────
 
-/// Create a resource in the test profile's context so that
-/// `ResourceRef::Scoped` with `owner = "@me"` can resolve it.
+/// Create a resource in the test profile's context, returning its id for
+/// id-based edge addressing.
 async fn insert_resource(
     pool: &PgPool,
     owner_id: Uuid,
@@ -59,17 +59,11 @@ async fn assert_relationship_returns_ack(pool: PgPool) {
     let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
 
-    insert_resource(&pool, profile_id, context_id, "Doc A", "rh-assert-a").await;
+    let source_a = insert_resource(&pool, profile_id, context_id, "Doc A", "rh-assert-a").await;
     let target_b = insert_resource(&pool, profile_id, context_id, "Doc B", "rh-assert-b").await;
 
     let body = json!({
-        "source": {
-            "kind": "scoped",
-            "owner": "@me",
-            "context": "temper",
-            "doctype": "research",
-            "slug": "rh-assert-a"
-        },
+        "source": source_a.to_string(),
         "target": target_b.to_string(),
         "edge_kind": "leads_to",
         "polarity": "forward",
@@ -139,13 +133,7 @@ async fn assert_relationship_without_auth_returns_401(pool: PgPool) {
     let app = common::setup_test_app(pool).await;
 
     let body = json!({
-        "source": {
-            "kind": "scoped",
-            "owner": "@me",
-            "context": "temper",
-            "doctype": "research",
-            "slug": "some-resource"
-        },
+        "source": Uuid::new_v4().to_string(),
         "target": Uuid::new_v4().to_string(),
         "edge_kind": "near",
         "polarity": "forward",
@@ -189,12 +177,9 @@ async fn assert_relationship_on_other_profile_resource_returns_403(pool: PgPool)
     let sub_q = format!("test|{profile_q}");
     let token_q = common::generate_test_jwt(&sub_q, &email_q);
 
-    // Q uses UUID ref to bypass resolve but hits check_can_modify.
+    // Q uses the source id to bypass resolve but hits check_can_modify.
     let body = json!({
-        "source": {
-            "kind": "uuid",
-            "resource_id": resource_p.to_string()
-        },
+        "source": resource_p.to_string(),
         "target": Uuid::new_v4().to_string(),
         "edge_kind": "near",
         "polarity": "forward",
@@ -231,18 +216,12 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
     let sub = format!("test|{profile_id}");
     let token = common::generate_test_jwt(&sub, &email);
 
-    insert_resource(&pool, profile_id, context_id, "Doc A", "rh-fold-a").await;
+    let source_a = insert_resource(&pool, profile_id, context_id, "Doc A", "rh-fold-a").await;
     let target_b = insert_resource(&pool, profile_id, context_id, "Doc B", "rh-fold-b").await;
 
     // First, assert the relationship.
     let assert_body = json!({
-        "source": {
-            "kind": "scoped",
-            "owner": "@me",
-            "context": "temper",
-            "doctype": "research",
-            "slug": "rh-fold-a"
-        },
+        "source": source_a.to_string(),
         "target": target_b.to_string(),
         "edge_kind": "leads_to",
         "polarity": "forward",

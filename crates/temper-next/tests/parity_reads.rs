@@ -814,7 +814,7 @@ async fn resource_row_parity(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_next::MIGRATOR")]
 async fn show_through_next_backend_preserves_invariants(pool: sqlx::PgPool) {
     use temper_api::backend::NextBackend;
-    use temper_core::operations::{Backend, ResourceRef, ShowResource, Surface};
+    use temper_core::operations::{Backend, ShowResource, Surface};
     use temper_core::types::ids::{ProfileId, ResourceId};
 
     common::seed_and_synthesize(&pool).await;
@@ -825,9 +825,7 @@ async fn show_through_next_backend_preserves_invariants(pool: sqlx::PgPool) {
         let old_id = ids.to_old(new_id).expect("maps back to prod");
         let out = backend
             .show_resource(ShowResource {
-                resource: ResourceRef::Uuid {
-                    id: ResourceId::from(old_id),
-                },
+                resource: ResourceId::from(old_id),
                 origin: Surface::ApiHttp,
             })
             .await
