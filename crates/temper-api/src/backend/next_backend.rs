@@ -15,8 +15,8 @@ use sqlx::{PgPool, Row};
 use temper_core::error::TemperError;
 use temper_core::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
-    ListResources, ResourceRef, ResourceSummary, RetypeRelationship, ReweightRelationship,
-    SearchHit, SearchResources, ShowResource, Surface, UpdateResource,
+    ListResources, ResourceSummary, RetypeRelationship, ReweightRelationship, SearchHit,
+    SearchResources, ShowResource, Surface, UpdateResource,
 };
 use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
@@ -172,23 +172,14 @@ impl NextBackend {
         Self { pool, profile_id }
     }
 
-    /// Resolve the new-substrate resource id for a `ResourceRef`. 4b supports `Uuid` refs only (the
-    /// HTTP show path always passes a `Uuid`); the production id is mapped to the synthesized id by
-    /// `origin_uri`. `Scoped` refs land in 4c alongside the write paths that need them.
-    async fn resolve_new_id(&self, refr: &ResourceRef) -> Result<uuid::Uuid, TemperError> {
-        match refr {
-            ResourceRef::Uuid { id } => {
-                let ids = readback::ResolvedIds::load(&self.pool)
-                    .await
-                    .map_err(|e| TemperError::Api(e.to_string()))?;
-                ids.to_new(uuid::Uuid::from(*id)).ok_or_else(|| {
-                    TemperError::NotFound(format!("resource {id} not in temper_next"))
-                })
-            }
-            ResourceRef::Scoped { .. } => Err(TemperError::NotImplemented(
-                "scoped resource refs on the next backend (WS6 4c)".into(),
-            )),
-        }
+    /// Resolve the new-substrate resource id for a `ResourceId`. The production
+    /// id is mapped to the synthesized id by `origin_uri`.
+    async fn resolve_new_id(&self, id: ResourceId) -> Result<uuid::Uuid, TemperError> {
+        let ids = readback::ResolvedIds::load(&self.pool)
+            .await
+            .map_err(|e| TemperError::Api(e.to_string()))?;
+        ids.to_new(uuid::Uuid::from(id))
+            .ok_or_else(|| TemperError::NotFound(format!("resource {id} not in temper_next")))
     }
 
     /// Auth-before-writes gate (WS2): the caller (`self.profile_id`, a production profile id that
@@ -290,7 +281,7 @@ impl Backend for NextBackend {
         &self,
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        let new_id = self.resolve_new_id(&cmd.resource).await?;
+        let new_id = self.resolve_new_id(cmd.resource).await?;
         // `reconstruct_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
         // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
         // existence-leak oracle), a genuine fault → Api (500). The earlier blanket `|_| NotFound`
@@ -305,7 +296,7 @@ impl Backend for NextBackend {
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
         // Address the target by its public id via ResolvedIds (the transitional parity model 4b reads
         // use; native-id addressing without a legacy twin is a chunk-5 flip concern).
-        let new_id = self.resolve_new_id(&cmd.resource).await?;
+        let new_id = self.resolve_new_id(cmd.resource).await?;
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(new_id).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
@@ -365,7 +356,7 @@ impl Backend for NextBackend {
     }
 
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
-        let new_id = self.resolve_new_id(&cmd.resource).await?;
+        let new_id = self.resolve_new_id(cmd.resource).await?;
         // Auth before any write (WS2).
         self.check_can_modify_next(new_id).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
@@ -434,15 +425,8 @@ impl Backend for NextBackend {
         &self,
         cmd: AssertRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
-        // Source public id (the ref carries it; Scoped lands with by_uri, chunk-5).
-        let source_pub = match &cmd.source {
-            ResourceRef::Uuid { id } => uuid::Uuid::from(*id),
-            ResourceRef::Scoped { .. } => {
-                return Err(TemperError::NotImplemented(
-                    "scoped source ref on next assert (by_uri, chunk-5)".into(),
-                ))
-            }
-        };
+        // Source is pre-resolved.
+        let source_pub = uuid::Uuid::from(cmd.source);
         let ids = readback::ResolvedIds::load(&self.pool)
             .await
             .map_err(api_err)?;
@@ -453,25 +437,8 @@ impl Backend for NextBackend {
         // "Cannot modify source resource"). Gate before resolving the target / writing the edge.
         self.check_can_modify_next(src_next).await?;
 
-        // Resolve the target by slug in the source's (public) context, then map to its temper_next id —
-        // slug is §7-dissolved in temper_next, so resolution stays in `public` during the parity era.
-        let src_ctx_pub: uuid::Uuid =
-            sqlx::query_scalar("SELECT kb_context_id FROM public.kb_resources WHERE id=$1")
-                .bind(source_pub)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| TemperError::Api(e.to_string()))?;
-        let target_pub: uuid::Uuid = sqlx::query_scalar(
-            "SELECT id FROM public.kb_resources WHERE slug=$1 AND kb_context_id=$2 AND is_active",
-        )
-        .bind(&cmd.target_slug)
-        .bind(src_ctx_pub)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| TemperError::Api(e.to_string()))?
-        .ok_or_else(|| {
-            TemperError::NotFound(format!("target slug {:?} not found", cmd.target_slug))
-        })?;
+        // The target is pre-resolved — map its public id to its temper_next id.
+        let target_pub = uuid::Uuid::from(cmd.target);
         let tgt_next = ids.to_new(target_pub).ok_or_else(|| {
             TemperError::NotFound(format!("target {target_pub} not in temper_next"))
         })?;

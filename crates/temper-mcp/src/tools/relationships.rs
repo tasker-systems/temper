@@ -2,9 +2,8 @@
 //!
 //! Each tool mirrors one HTTP endpoint from `temper-api/src/handlers/edges.rs`
 //! and dispatches through `DbBackend` — the same write path the HTTP handlers
-//! use. The source resource is specified via four flat fields that map to a
-//! `ResourceRef::Scoped` at dispatch time. `ResourceRef` has no `JsonSchema`
-//! derive, so it cannot be exposed directly in an MCP input struct.
+//! use. Both endpoints are decorated refs (a UUID or the `slug-<uuid>` form)
+//! resolved via `parse_ref` into a `ResourceId`.
 
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
@@ -14,8 +13,7 @@ use uuid::Uuid;
 use temper_api::backend::select_backend;
 use temper_core::error::TemperError;
 use temper_core::operations::{
-    AssertRelationship, FoldRelationship, ResourceRef, RetypeRelationship, ReweightRelationship,
-    Surface,
+    AssertRelationship, FoldRelationship, RetypeRelationship, ReweightRelationship, Surface,
 };
 use temper_core::types::graph::{EdgeKind, Polarity};
 use temper_core::types::ids::ProfileId;
@@ -28,16 +26,10 @@ use crate::service::TemperMcpService;
 /// MCP input for assert_relationship.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct AssertRelationshipInput {
-    /// Owner of the source resource (e.g. `@me` or `+team-acme`).
-    pub source_owner: String,
-    /// Context name of the source resource (e.g. `temper`).
-    pub source_context: String,
-    /// Doc-type name of the source resource (e.g. `task`, `research`).
-    pub source_doctype: String,
-    /// Slug of the source resource.
-    pub source_slug: String,
-    /// Slug of the target resource (resolved within the source's context).
-    pub target_slug: String,
+    /// Source resource ref: a UUID or the decorated `slug-<uuid>` form.
+    pub source: String,
+    /// Target resource ref: a UUID or the decorated `slug-<uuid>` form.
+    pub target: String,
     /// Structural edge kind — one of `express`, `contains`, `leads_to`, `near`.
     pub edge_kind: EdgeKind,
     /// Edge direction sign — `forward` or `inverse`.
@@ -109,16 +101,14 @@ pub async fn assert_relationship(
     let pool = &svc.api_state.pool;
     let profile_id = ProfileId::from(profile.id);
 
-    let source = ResourceRef::scoped(
-        input.source_owner,
-        input.source_context,
-        input.source_doctype,
-        input.source_slug,
-    );
+    let source = temper_core::operations::parse_ref(&input.source)
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
+    let target = temper_core::operations::parse_ref(&input.target)
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
     let cmd = AssertRelationship {
         source,
-        target_slug: input.target_slug,
+        target,
         edge_kind: input.edge_kind,
         polarity: input.polarity,
         label: input.label,
@@ -262,22 +252,16 @@ mod tests {
     #[test]
     fn assert_relationship_input_deserializes() {
         let json = serde_json::json!({
-            "source_owner": "@me",
-            "source_context": "temper",
-            "source_doctype": "task",
-            "source_slug": "foo",
-            "target_slug": "bar",
+            "source": "foo-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "target": "019e84ab-26ba-7560-9d34-c60d74a9fbe3",
             "edge_kind": "leads_to",
             "polarity": "inverse",
             "label": "depends_on",
             "weight": 1.0
         });
         let input: AssertRelationshipInput = serde_json::from_value(json).unwrap();
-        assert_eq!(input.source_slug, "foo");
-        assert_eq!(input.source_owner, "@me");
-        assert_eq!(input.source_context, "temper");
-        assert_eq!(input.source_doctype, "task");
-        assert_eq!(input.target_slug, "bar");
+        assert_eq!(input.source, "foo-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
+        assert_eq!(input.target, "019e84ab-26ba-7560-9d34-c60d74a9fbe3");
         assert_eq!(input.edge_kind, EdgeKind::LeadsTo);
         assert_eq!(input.polarity, Polarity::Inverse);
         assert_eq!(input.label, "depends_on");
@@ -406,11 +390,8 @@ mod tests {
             ("near", EdgeKind::Near),
         ] {
             let json = serde_json::json!({
-                "source_owner": "@me",
-                "source_context": "ctx",
-                "source_doctype": "task",
-                "source_slug": "s",
-                "target_slug": "t",
+                "source": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+                "target": "019e84ab-26ba-7560-9d34-c60d74a9fbe3",
                 "edge_kind": kind_str,
                 "polarity": "forward",
                 "label": "test",

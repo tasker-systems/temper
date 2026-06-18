@@ -18,6 +18,22 @@ mod common;
 use chrono::{Duration, Utc};
 use temper_client::auth::{Provider, StoredAuth};
 
+/// Test setup: recover the server-assigned id of a resource created earlier
+/// in this test (keyed on the slug we gave it). NOT an addressing path —
+/// production addresses by id via `parse_ref`; the slug is display/write-back
+/// only. Used where the creating path under test (CLI `resource::create`)
+/// returns no id in-process.
+async fn created_id_for_slug(pool: &sqlx::PgPool, slug: &str) -> String {
+    sqlx::query_scalar::<_, String>(
+        "SELECT id::text FROM kb_resources WHERE slug = $1 AND is_active \
+         ORDER BY created DESC LIMIT 1",
+    )
+    .bind(slug)
+    .fetch_one(pool)
+    .await
+    .unwrap_or_else(|e| panic!("created_id_for_slug({slug}): {e}"))
+}
+
 /// Write a `StoredAuth` JSON to `path` so `DiskTokenStore::at(path)` and the
 /// uniform path resolver find real credentials.  Only used where local-mode
 /// auth is needed (e.g., the `write_auth_json` helper is kept here in case a
@@ -173,15 +189,13 @@ async fn cloud_create_session_round_trip_via_show(pool: sqlx::PgPool) {
     let global_config_str2 = global_config.to_str().unwrap().to_string();
     let cli_config2 = app.cli_config.clone();
 
-    let slug_for_show = slug.clone();
+    let ref_for_show = created_id_for_slug(&pool, &slug).await;
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::show(
                 &cli_config2,
                 temper_cli::commands::resource::ShowParams {
-                    doc_type: "session",
-                    slug: &slug_for_show,
-                    context: Some("myapp"),
+                    r#ref: &ref_for_show,
                     format: temper_cli::format::OutputFormat::Json,
                     edges: false,
                     meta_only: false,
@@ -246,7 +260,8 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -274,16 +289,14 @@ async fn cloud_update_meta_only_partial_managed_meta(pool: sqlx::PgPool) {
     // pre-Phase-5 cloud path bypassed validate_update_args. Phase 5
     // unification surfaces that constraint correctly. Test intent is
     // partial-merge semantics — any single field swap works.
+    let ref_for_update = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
-                    slug: "meta-only-update-test",
-                    doc_type: Some("session"),
-                    type_from: None,
+                    r#ref: &ref_for_update,
                     type_to: None,
-                    context: Some("myapp"),
                     context_to: None,
                     title: Some("Updated Title"),
                     tags: &[],
@@ -405,7 +418,8 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -426,16 +440,14 @@ async fn cloud_update_body_and_meta_in_one_request(pool: sqlx::PgPool) {
     // Update --title (a base field valid for all doctypes); --stage was the
     // pre-Phase-5 choice but stage is task-only per the schema. Phase 5
     // unification correctly enforces this.
+    let ref_for_update = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
-                    slug: "body-and-meta-update-test",
-                    doc_type: Some("session"),
-                    type_from: None,
+                    r#ref: &ref_for_update,
                     type_to: None,
-                    context: Some("myapp"),
                     context_to: None,
                     title: Some("Updated Title"),
                     tags: &[],
@@ -561,7 +573,8 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -579,16 +592,14 @@ async fn cloud_update_body_only_no_managed_meta(pool: sqlx::PgPool) {
     let token2 = token.clone();
     let global_config_str2 = global_config_str.clone();
 
+    let ref_for_update = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
-                    slug: "body-only-update-test",
-                    doc_type: Some("session"),
-                    type_from: None,
+                    r#ref: &ref_for_update,
                     type_to: None,
-                    context: Some("myapp"),
                     context_to: None,
                     title: None,
                     tags: &[],
@@ -704,7 +715,8 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
         open_meta: None,
         chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
     };
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&payload)
         .await
@@ -721,16 +733,14 @@ async fn cloud_update_body_at_empty_file_errors_and_does_not_mutate(pool: sqlx::
     let token2 = token.clone();
     let global_config_str2 = global_config_str.clone();
 
+    let ref_for_update = seeded.id.to_string();
     let result = tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url2, &token2, &global_config_str2), || {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
-                    slug: "body-empty-guard-test",
-                    doc_type: Some("session"),
-                    type_from: None,
+                    r#ref: &ref_for_update,
                     type_to: None,
-                    context: Some("myapp"),
                     context_to: None,
                     title: None,
                     tags: &[],
@@ -875,18 +885,15 @@ async fn cloud_update_chunk_dedupe_skips_unchanged(pool: sqlx::PgPool) {
     let api_url3 = api_url.clone();
     let token3 = token.clone();
     let global_config_str3 = global_config_str.clone();
-    let slug_for_update = slug.clone();
+    let ref_for_update = created_id_for_slug(&pool, &slug).await;
 
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config_str3), || {
             temper_cli::commands::resource::update(
                 &cli_config2,
                 &temper_cli::commands::resource::UpdateParams {
-                    slug: &slug_for_update,
-                    doc_type: Some("session"),
-                    type_from: None,
+                    r#ref: &ref_for_update,
                     type_to: None,
-                    context: Some("myapp"),
                     context_to: None,
                     title: None,
                     tags: &[],
@@ -1223,18 +1230,15 @@ async fn update_rewrites_projection_file_on_success(pool: sqlx::PgPool) {
 
     // Step 3: Drive a meta-only update (title change, no body) on a blocking
     // thread. No `test-embed` required — meta-only updates do not touch chunks.
-    let slug_for_update = slug.clone();
+    let ref_for_update = created_id_for_slug(&pool, &slug).await;
 
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
             temper_cli::commands::resource::update(
                 &cli_config,
                 &temper_cli::commands::resource::UpdateParams {
-                    slug: &slug_for_update,
-                    doc_type: Some("task"),
-                    type_from: None,
+                    r#ref: &ref_for_update,
                     type_to: None,
-                    context: Some("myapp"),
                     context_to: None,
                     title: Some("Updated Projection Title"),
                     tags: &[],
@@ -1363,15 +1367,13 @@ async fn delete_removes_the_projection_file(pool: sqlx::PgPool) {
     let token3 = token.clone();
     let global_config_str3 = global_config_str.clone();
     let cli_config3 = cli_config.clone();
-    let slug_for_delete = slug.clone();
+    let ref_for_delete = created_id_for_slug(&pool, &slug).await;
 
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url3, &token3, &global_config_str3), || {
             temper_cli::commands::resource::delete(
                 &cli_config3,
-                "task",
-                &slug_for_delete,
-                Some("myapp"),
+                &ref_for_delete,
                 true, // force — accepted for CLI compatibility; cloud delete is non-interactive
                 temper_cli::format::OutputFormat::Json,
             )
@@ -1430,7 +1432,8 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
 
     // Seed the resource via the API client (no CLI, no manifest written).
     use temper_core::types::ingest::{pack_chunks, IngestPayload};
-    app.client
+    let seeded = app
+        .client
         .ingest()
         .create(&IngestPayload {
             title: "Edges Resolve Test".to_string(),
@@ -1458,14 +1461,13 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
     let global_config_str = global_config.to_str().unwrap().to_string();
     let cli_config = app.cli_config.clone();
 
+    let ref_for_show = seeded.id.to_string();
     tokio::task::spawn_blocking(move || {
         temp_env::with_vars(cloud_env(&api_url, &token, &global_config_str), || {
             temper_cli::commands::resource::show(
                 &cli_config,
                 temper_cli::commands::resource::ShowParams {
-                    doc_type: "research",
-                    slug: "edges-resolve-test",
-                    context: Some("edgesctx"),
+                    r#ref: &ref_for_show,
                     format: temper_cli::format::OutputFormat::Json,
                     edges: true, // edges — the path under test
                     meta_only: false,
@@ -1480,4 +1482,140 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
     })
     .await
     .expect("spawn_blocking joined");
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: decorated ref + stale slug-half both resolve via show
+// ---------------------------------------------------------------------------
+
+/// The addressing collapse (Adjudication 5): a resource is addressed by a bare
+/// UUID or the decorated form `sluggify(title)-<uuid>`. Resolution is
+/// trailing-UUID-only — the slug half is parsed off and ignored, so a stale or
+/// wrong decoration is harmless. Unit tests cover `parse_ref` in isolation and
+/// bare-uuid CRUD is covered by the other e2e tests in this file; this closes
+/// the one end-to-end gap (decoration handling) by driving the real stack
+/// (CLI → Axum → Postgres) via `temper resource show` for THREE refs that must
+/// all resolve to the same seeded resource:
+///   1. the decorated form `decorated_ref(&title, id)`,
+///   2. a stale/wrong decoration (right uuid, wrong slug half),
+///   3. the bare uuid (control).
+/// Plus a negative case: a garbage ref with no trailing uuid must error,
+/// exercising `parse_ref`'s reject path end-to-end.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    // Seed one resource via the client so we capture the server-assigned id and
+    // its canonical title.
+    use temper_core::types::ingest::{pack_chunks, IngestPayload};
+    let seeded = app
+        .client
+        .ingest()
+        .create(&IngestPayload {
+            title: "Decorated Ref Target".to_string(),
+            origin_uri: "kb://myapp/research/decorated-ref-target".to_string(),
+            context_name: "myapp".to_string(),
+            doc_type_name: "research".to_string(),
+            content_hash: None,
+            slug: "decorated-ref-target".to_string(),
+            content: String::new(),
+            metadata: None,
+            managed_meta: Some(serde_json::json!({
+                "temper-title": "Decorated Ref Target"
+            })),
+            open_meta: None,
+            chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        })
+        .await
+        .expect("seed resource via client");
+
+    let id = seeded.id;
+    let title = seeded.title.clone();
+    let uuid = uuid::Uuid::from(id);
+
+    // Three refs that must all resolve to the same resource:
+    //   - decorated form: `decorated-ref-target-<uuid>`
+    //   - stale/wrong decoration: right uuid, deliberately wrong slug half
+    //   - bare uuid (control)
+    let decorated = temper_core::operations::decorated_ref(&title, id);
+    assert_eq!(
+        decorated,
+        format!("decorated-ref-target-{uuid}"),
+        "decorated_ref must be sluggify(title)-<uuid>"
+    );
+    let stale = format!("totally-wrong-slug-{uuid}");
+    let bare = uuid.to_string();
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+
+    // Each `show` read uses an inner tokio runtime — drive each on a fresh
+    // `spawn_blocking` thread (must not nest), with per-thread clones.
+    for the_ref in [decorated.clone(), stale.clone(), bare.clone()] {
+        let cli_config = app.cli_config.clone();
+        let api_url_t = api_url.clone();
+        let token_t = token.clone();
+        let global_config_t = global_config_str.clone();
+        let ref_label = the_ref.clone();
+        tokio::task::spawn_blocking(move || {
+            temp_env::with_vars(cloud_env(&api_url_t, &token_t, &global_config_t), || {
+                temper_cli::commands::resource::show(
+                    &cli_config,
+                    temper_cli::commands::resource::ShowParams {
+                        r#ref: &the_ref,
+                        format: temper_cli::format::OutputFormat::Json,
+                        edges: false,
+                        meta_only: false,
+                        fields: &[],
+                    },
+                )
+                .unwrap_or_else(|e| {
+                    panic!("show must resolve trailing-uuid-only for ref {ref_label:?}: {e}")
+                })
+            })
+        })
+        .await
+        .expect("spawn_blocking joined");
+    }
+
+    // ---- Negative: a garbage ref (no trailing uuid) must error ----
+    // Exercises `parse_ref`'s reject path end-to-end (no fuzzy fallback).
+    let cli_config = app.cli_config.clone();
+    let api_url_t = api_url.clone();
+    let token_t = token.clone();
+    let global_config_t = global_config_str.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url_t, &token_t, &global_config_t), || {
+            temper_cli::commands::resource::show(
+                &cli_config,
+                temper_cli::commands::resource::ShowParams {
+                    r#ref: "not-a-ref",
+                    format: temper_cli::format::OutputFormat::Json,
+                    edges: false,
+                    meta_only: false,
+                    fields: &[],
+                },
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    assert!(
+        result.is_err(),
+        "a garbage ref with no trailing uuid must error (parse_ref reject path); got: {result:?}"
+    );
 }

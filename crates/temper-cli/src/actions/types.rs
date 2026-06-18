@@ -1,8 +1,14 @@
 use serde::{Deserialize, Serialize};
+use temper_core::types::ids::ResourceId;
 
 /// Task metadata parsed from frontmatter.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TaskInfo {
+    /// The resource id, carried from the list row's top level (not a
+    /// frontmatter key). Skipped in (de)serialization of `TaskInfo` itself —
+    /// it is threaded in from the listing, not parsed from managed_meta.
+    #[serde(skip)]
+    pub id: ResourceId,
     #[serde(rename = "temper-title")]
     pub title: String,
     #[serde(rename = "temper-slug")]

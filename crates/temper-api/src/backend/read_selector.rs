@@ -21,10 +21,10 @@ use temper_core::types::ids::{ProfileId, ResourceId};
 use crate::backend::selection::BackendSelection;
 use crate::error::ApiResult;
 use crate::services::resource_service::{self, ResourceListParams, ResourceListResponse};
-use crate::services::{meta_service, search_service};
+use crate::services::{context_service, ingest_service, meta_service, search_service};
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::managed_meta::ResourceMetaResponse;
-use temper_core::types::resource::ContentResponse;
+use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
+use temper_core::types::resource::{ContentResponse, ResourceRow};
 
 /// `list` — list visible resources.
 pub async fn list_select(
@@ -36,6 +36,19 @@ pub async fn list_select(
     match selection {
         BackendSelection::Legacy => resource_service::list_visible(pool, profile_id, params).await,
         BackendSelection::Next => next_impl::list(pool, profile_id).await,
+    }
+}
+
+/// `show` — full resource row by id.
+pub async fn show_select(
+    selection: BackendSelection,
+    pool: &PgPool,
+    profile_id: Uuid,
+    id: Uuid,
+) -> ApiResult<ResourceRow> {
+    match selection {
+        BackendSelection::Legacy => resource_service::get_visible(pool, profile_id, id).await,
+        BackendSelection::Next => next_impl::show(pool, profile_id, id).await,
     }
 }
 
@@ -82,6 +95,61 @@ pub async fn search_select(
     }
 }
 
+/// `list_resources` enrichment — full rows + their managed/open meta, filtered by `context_name` +
+/// `doc_type`, over BOTH backends. Returns always-compiled temper-core types
+/// (`Vec<(ResourceRow, Option<ManagedMeta>, Option<Value>)>`) so the consumer (MCP) needs no
+/// `next-backend` feature; the Next path is gated inside `next_impl`. The single `build_enriched`
+/// assembler then maps each tuple on either backend (no second assembler). Legacy resolves the name
+/// filters to ids then `list_visible` + `get_meta_batch`; Next filters by name in SQL via
+/// `readback::enriched_list` (slug/timestamps are §9 non-invariants — Next stamps None/now()).
+pub async fn list_enriched_select(
+    selection: BackendSelection,
+    pool: &PgPool,
+    profile_id: Uuid,
+    context_name: Option<&str>,
+    doc_type: Option<&str>,
+) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
+    match selection {
+        BackendSelection::Legacy => {
+            let context_id = match context_name {
+                Some(name) => Some(
+                    context_service::resolve_by_name(pool, ProfileId::from(profile_id), name)
+                        .await?
+                        .id
+                        .into(),
+                ),
+                None => None,
+            };
+            let doc_type_id = match doc_type {
+                Some(name) => Some(ingest_service::resolve_doc_type(pool, name).await?),
+                None => None,
+            };
+            let params = ResourceListParams {
+                kb_context_id: context_id,
+                kb_doc_type_id: doc_type_id,
+                ..Default::default()
+            };
+            let response = resource_service::list_visible(pool, profile_id, params).await?;
+            let ids: Vec<ResourceId> = response.rows.iter().map(|r| r.id).collect();
+            let mut meta = meta_service::get_meta_batch(pool, &ids).await?;
+            Ok(response
+                .rows
+                .into_iter()
+                .map(|row| {
+                    let (m, o) = meta
+                        .remove(&row.id)
+                        .map(|x| (x.managed_meta, x.open_meta))
+                        .unwrap_or((None, None));
+                    (row, m, o)
+                })
+                .collect())
+        }
+        BackendSelection::Next => {
+            next_impl::list_enriched(pool, profile_id, context_name, doc_type).await
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Next arms — feature-gated. Without `next-backend`, each gates with the same
 // NotImplemented as `select_backend`; with it, each maps `temper_next` readback.
@@ -101,6 +169,9 @@ mod next_impl {
     pub(super) async fn list(_: &PgPool, _: Uuid) -> ApiResult<ResourceListResponse> {
         gate()
     }
+    pub(super) async fn show(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ResourceRow> {
+        gate()
+    }
     pub(super) async fn get_content(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ContentResponse> {
         gate()
     }
@@ -112,6 +183,14 @@ mod next_impl {
         _: Uuid,
         _: SearchParams,
     ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
+        gate()
+    }
+    pub(super) async fn list_enriched(
+        _: &PgPool,
+        _: Uuid,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
         gate()
     }
 }
@@ -140,12 +219,24 @@ mod next_impl {
         // (`temper_next`) ids directly (profile ids are preserved by synthesis), so we filter the set
         // up front — a not-visible id never enters the loop, where `reconstruct_resource_row`'s gate
         // would otherwise error. The per-row gate inside re-checks harmlessly (defense in depth).
+        //
+        // `resources_visible_to`'s body calls `profile_effective_teams`/`team_ancestors` UNQUALIFIED,
+        // so they resolve against the connection search_path — bare-pool default `public`, where the
+        // `temper_next` helpers do not exist. Run the visible-set query inside a `SET LOCAL search_path`
+        // txn (the synthesis/readback discipline; see `readback::ensure_visible`). The per-row
+        // `reconstruct_resource_row` calls below gate via `readback`, which sets its own search_path.
+        let mut tx = pool.begin().await.map_err(api_err)?;
+        sqlx::query("SET LOCAL search_path TO temper_next, public")
+            .execute(&mut *tx)
+            .await
+            .map_err(api_err)?;
         let visible: Vec<Uuid> =
             sqlx::query_scalar("SELECT resource_id FROM temper_next.resources_visible_to($1)")
                 .bind(principal)
-                .fetch_all(pool)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)?;
         let mut rows: Vec<ResourceRow> = Vec::with_capacity(visible.len());
         for new_id in visible {
             rows.push(reconstruct_resource_row(pool, principal, new_id).await?);
@@ -160,6 +251,23 @@ mod next_impl {
             total,
             facets: ResourceFacets { doc_type },
         })
+    }
+
+    /// `show` over `temper_next`: reconstruct the full production-shaped `ResourceRow` (§9 invariant
+    /// floor) via the shared `reconstruct_resource_row` — the same path `NextBackend::show_resource` and
+    /// the full-row `list` arm use. `resolve_new_id` bridges the parity-test prod id → new id (under
+    /// `flag=next` callers pass next-minted ids directly, consistent with `get_content`/`get_meta`).
+    /// Visibility is gated inside `reconstruct_resource_row` (WS2); the typed `ReadbackError` is split by
+    /// `map_readback_err` (not-visible → NotFound/404, genuine fault → Api/500) before reaching here.
+    pub(super) async fn show(
+        pool: &PgPool,
+        principal: Uuid,
+        prod_id: Uuid,
+    ) -> ApiResult<ResourceRow> {
+        let new_id = resolve_new_id(pool, prod_id).await?;
+        reconstruct_resource_row(pool, principal, new_id)
+            .await
+            .map_err(ApiError::from)
     }
 
     /// `get_content` over `temper_next`: reconstruct the markdown body (§9 body floor). `managed_meta`
@@ -261,6 +369,60 @@ mod next_impl {
             });
         }
         Ok(hits)
+    }
+
+    /// `list_enriched` over `temper_next`: the batched, context/doctype-filtered list projection
+    /// (`readback::enriched_list`, WS2-scoped via `resources_visible_to`), each lean `EnrichedListRow`
+    /// mapped to a full `ResourceRow` carrying ONLY the fields `build_enriched` reads (id/title/
+    /// context_name/doc_type_name/origin_uri/is_active/created/updated, plus the workflow projections);
+    /// the rest are §7-dissolved (`slug`/hashes), re-minted (the context/doctype/profile ids), or
+    /// synthesis-collapsed (`created`/`updated` → now()) — all §9 non-invariants. The managed map is
+    /// deserialized back into the typed `ManagedMeta`; open is carried verbatim.
+    pub(super) async fn list_enriched(
+        pool: &PgPool,
+        principal: Uuid,
+        context_name: Option<&str>,
+        doc_type: Option<&str>,
+    ) -> ApiResult<Vec<(ResourceRow, Option<ManagedMeta>, Option<serde_json::Value>)>> {
+        use temper_core::types::ids::{ContextId, DocTypeId};
+        let rows = readback::enriched_list(pool, principal, context_name, doc_type)
+            .await
+            .map_err(api_err)?;
+        let now = chrono::Utc::now();
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            let row = ResourceRow {
+                id: ResourceId::from(r.new_id),
+                kb_context_id: ContextId::from(uuid::Uuid::nil()), // re-minted; unused by build_enriched
+                kb_doc_type_id: DocTypeId::from(uuid::Uuid::nil()), // re-minted; name is authoritative
+                origin_uri: r.origin_uri,
+                title: r.title,
+                slug: None, // §7-dissolved
+                originator_profile_id: ProfileId::from(uuid::Uuid::nil()),
+                owner_profile_id: ProfileId::from(uuid::Uuid::nil()),
+                is_active: r.is_active,
+                created: now, // synthesis-collapsed (non-invariant)
+                updated: now,
+                context_name: r.context_name,
+                doc_type_name: r.doc_type,
+                owner_handle: "@me".to_string(),
+                stage: r.stage,
+                seq: None,
+                mode: r.mode,
+                effort: r.effort,
+                body_hash: None,
+                managed_hash: None,
+                open_hash: None,
+            };
+            // Propagate a genuine deser failure (parity with `get_meta`'s `?`), don't swallow it
+            // to `None` — a malformed managed shape is a fault, not "no meta".
+            let managed: Option<ManagedMeta> = Some(
+                serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?,
+            );
+            let open = Some(serde_json::Value::Object(r.open));
+            out.push((row, managed, open));
+        }
+        Ok(out)
     }
 
     /// Map a production resource id to its synthesized counterpart (by `origin_uri`, via the bimap).

@@ -19,15 +19,6 @@ pub use temper_core::types::resource::{
     ResourceListResponse, ResourceRow, ResourceSortField, ResourceUpdateRequest, SortOrder,
 };
 
-/// Query parameters for resolving a resource by its URI components.
-#[derive(Debug, serde::Deserialize, utoipa::IntoParams)]
-pub struct ResolveByUriParams {
-    pub owner: String,
-    pub context: String,
-    pub doc_type: String,
-    pub ident: String,
-}
-
 // ---------------------------------------------------------------------------
 // FilterBuilder — collects dynamic WHERE conditions
 // ---------------------------------------------------------------------------
@@ -375,50 +366,6 @@ pub async fn get_by_slug(
         .bind(profile_id)
         .bind(slug)
         .bind(context_id)
-        .fetch_optional(pool)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-
-    Ok(row)
-}
-
-/// Resolve a resource by its URI components (owner, context, doc_type, ident).
-///
-/// `ident` can be a UUID (matched against `id`) or a slug.
-pub async fn resolve_by_uri(
-    pool: &PgPool,
-    profile_id: Uuid,
-    params: &ResolveByUriParams,
-) -> ApiResult<ResourceRow> {
-    // Determine if ident is a UUID or slug
-    let by_id = Uuid::parse_str(&params.ident).ok();
-
-    let mut fb = FilterBuilder::new();
-
-    // Owner filter
-    fb.push_owner(&params.owner, profile_id);
-
-    // Context name
-    fb.push_text("vb.context_name", &params.context);
-
-    // Doc type name
-    fb.push_text("vb.doc_type_name", &params.doc_type);
-
-    // Ident — UUID or slug
-    if let Some(id) = by_id {
-        fb.push_uuid("vb.id", id);
-    } else {
-        fb.push_text("vb.slug", &params.ident);
-    }
-
-    let where_clause = fb.where_clause();
-    let sql = format!(
-        "SELECT {cols}\n  FROM vault_resources_browse vb\n  JOIN resources_visible_to($1) rv ON rv.resource_id = vb.id\n {where_clause}",
-        cols = select_columns(),
-    );
-
-    let row = fb
-        .bind_all(sqlx::query_as::<_, ResourceRow>(&sql).bind(profile_id))
         .fetch_optional(pool)
         .await?
         .ok_or(ApiError::NotFound)?;

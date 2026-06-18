@@ -11,8 +11,8 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::operations::{
-    Backend, CreateResource, DeleteResource, DomainEvent, ListFilter, ListResources, ResourceRef,
-    ShowResource, Surface, UpdateResource,
+    Backend, CreateResource, DeleteResource, DomainEvent, ListFilter, ListResources, ShowResource,
+    Surface, UpdateResource,
 };
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -117,9 +117,7 @@ async fn show_resource_by_uuid_returns_row(pool: PgPool) {
         .unwrap();
 
     let cmd = ShowResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId(*created.value.id),
-        },
+        resource: ResourceId(*created.value.id),
         origin: Surface::ApiHttp,
     };
     let out = backend.show_resource(cmd).await.expect("show succeeds");
@@ -128,85 +126,10 @@ async fn show_resource_by_uuid_returns_row(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "crate::MIGRATOR")]
-async fn show_resource_by_scoped_slug_returns_row(pool: PgPool) {
-    let backend = make_backend(pool);
-
-    backend
-        .create_resource(CreateResource {
-            slug: "show-by-slug".to_string(),
-            doctype: "task".to_string(),
-            context: TEMPER_CONTEXT_NAME.to_string(),
-            title: "Show by slug".to_string(),
-            body: None,
-            managed_meta: ManagedMeta::default(),
-            open_meta: None,
-            origin_uri: None,
-            chunks_packed: None,
-            content_hash: None,
-            origin: Surface::ApiHttp,
-        })
-        .await
-        .unwrap();
-
-    let cmd = ShowResource {
-        resource: ResourceRef::scoped("@me", TEMPER_CONTEXT_NAME, "task", "show-by-slug"),
-        origin: Surface::ApiHttp,
-    };
-    let out = backend.show_resource(cmd).await.expect("show succeeds");
-    assert_eq!(out.value.slug.as_deref(), Some("show-by-slug"));
-}
-
-/// Phase 4-prep regression guard: a `ResourceRef::Scoped` carrying a non-`@me`
-/// owner must reach `resolve_by_uri` with that owner value (not the previously
-/// hardcoded `@me`). The existing seed creates a resource owned by `@me`; the
-/// query targets the same slug under `+team-acme`. If the owner field is
-/// honored, the lookup misses and returns NotFound. If anything still defaults
-/// the lookup owner to `@me`, the row is found and this test fails.
-#[sqlx::test(migrator = "crate::MIGRATOR")]
-async fn show_resource_uses_resource_ref_owner_for_resolve(pool: PgPool) {
-    let backend = make_backend(pool);
-
-    backend
-        .create_resource(CreateResource {
-            slug: "team-owner-probe".to_string(),
-            doctype: "task".to_string(),
-            context: TEMPER_CONTEXT_NAME.to_string(),
-            title: "Owned by @me".to_string(),
-            body: None,
-            managed_meta: ManagedMeta::default(),
-            open_meta: None,
-            origin_uri: None,
-            chunks_packed: None,
-            content_hash: None,
-            origin: Surface::ApiHttp,
-        })
-        .await
-        .unwrap();
-
-    let cmd = ShowResource {
-        resource: ResourceRef::scoped(
-            "+team-acme",
-            TEMPER_CONTEXT_NAME,
-            "task",
-            "team-owner-probe",
-        ),
-        origin: Surface::ApiHttp,
-    };
-    let err = backend.show_resource(cmd).await.unwrap_err();
-    use temper_core::error::TemperError;
-    assert!(
-        matches!(err, TemperError::NotFound(_)),
-        "expected NotFound for team-owner mismatch; got {err:?}",
-    );
-}
-
-#[sqlx::test(migrator = "crate::MIGRATOR")]
 async fn show_resource_missing_uuid_returns_not_found(pool: PgPool) {
     let backend = make_backend(pool);
     let cmd = ShowResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId(Uuid::new_v4()),
-        },
+        resource: ResourceId(Uuid::new_v4()),
         origin: Surface::ApiHttp,
     };
     let err = backend.show_resource(cmd).await.unwrap_err();
@@ -236,9 +159,7 @@ async fn update_resource_changes_title_and_emits_event(pool: PgPool) {
         .unwrap();
 
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: created.value.id,
-        },
+        resource: created.value.id,
         body: None,
         managed_meta: Some(ManagedMeta {
             title: Some("New title".to_string()),
@@ -264,9 +185,7 @@ async fn update_resource_changes_title_and_emits_event(pool: PgPool) {
 async fn update_resource_unknown_uuid_returns_not_found(pool: PgPool) {
     let backend = make_backend(pool);
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId(Uuid::new_v4()),
-        },
+        resource: ResourceId(Uuid::new_v4()),
         body: None,
         managed_meta: None,
         open_meta: None,
@@ -305,9 +224,7 @@ async fn delete_resource_soft_deletes_and_emits_event(pool: PgPool) {
         .unwrap();
 
     let cmd = DeleteResource {
-        resource: ResourceRef::Uuid {
-            id: created.value.id,
-        },
+        resource: created.value.id,
         force: false,
         origin: Surface::ApiHttp,
     };
@@ -323,9 +240,7 @@ async fn delete_resource_soft_deletes_and_emits_event(pool: PgPool) {
     // Confirm the row is no longer visible.
     let show_err = backend
         .show_resource(ShowResource {
-            resource: ResourceRef::Uuid {
-                id: created.value.id,
-            },
+            resource: created.value.id,
             origin: Surface::ApiHttp,
         })
         .await
@@ -338,9 +253,7 @@ async fn delete_resource_soft_deletes_and_emits_event(pool: PgPool) {
 async fn delete_resource_unknown_uuid_returns_error(pool: PgPool) {
     let backend = make_backend(pool);
     let cmd = DeleteResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId(Uuid::new_v4()),
-        },
+        resource: ResourceId(Uuid::new_v4()),
         force: false,
         origin: Surface::ApiHttp,
     };

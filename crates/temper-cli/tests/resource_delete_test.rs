@@ -1,7 +1,9 @@
 //! Pre-API behavior tests for `temper resource delete`.
 //!
-//! Tests in this file exercise the early-return guard: the invalid-doctype
-//! check fires before any state matters or network call is made.
+//! Tests in this file exercise the early-return guard: an unparseable ref is
+//! rejected by `parse_ref` before any state matters or network call is made.
+//! (Under decorated-ref addressing, delete no longer validates a doctype
+//! string — doctype is read from the resolved server row.)
 //!
 //! Full cloud delete behavior (server-side soft-delete + projection-file
 //! removal) is covered end-to-end in:
@@ -29,25 +31,23 @@ fn test_config(dir: &TempDir) -> temper_cli::config::Config {
 }
 
 #[test]
-fn rejects_invalid_doctype() {
+fn rejects_unparseable_ref() {
     let dir = TempDir::new().unwrap();
     let config = test_config(&dir);
 
-    // `force=true` so the only thing that can fail before a network call
-    // is `DocType::from_str` rejecting the unknown doctype.
+    // `force=true` so the only thing that can fail before a network call is
+    // `parse_ref` rejecting a string with no trailing UUID.
     let result = temper_cli::commands::resource::delete(
         &config,
-        "widget",
-        "any-slug",
-        Some("myapp"),
+        "not-a-ref",
         true,
         temper_cli::format::OutputFormat::Json,
     );
 
-    let err = result.expect_err("invalid doctype must error before the API call");
+    let err = result.expect_err("an unparseable ref must error before the API call");
     let msg = format!("{err}");
     assert!(
-        msg.contains("unknown doctype") && msg.contains("widget"),
-        "expected DocType::from_str rejection, got: {msg}"
+        msg.contains("not a resource ref"),
+        "expected parse_ref rejection, got: {msg}"
     );
 }

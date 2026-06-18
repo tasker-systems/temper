@@ -46,6 +46,29 @@ pub(crate) struct EdgesReport {
     pub incoming: Vec<temper_core::types::graph::GraphEdgeRow>,
 }
 
+/// Insert a derived `ref` key (the decorated, self-resolving identifier)
+/// into a serialized resource row, computed from its id + `title`. The
+/// `ref` is render-time only — never persisted, never on the wire type.
+/// Reads the anchor id from `id` (ResourceRow) OR `resource_id`
+/// (UnifiedSearchResultRow). No-op if the id is absent or unparseable.
+pub(crate) fn inject_ref(row: &mut serde_json::Value) {
+    let id = row
+        .get("id")
+        .or_else(|| row.get("resource_id"))
+        .and_then(|v| v.as_str());
+    let Some(id) = id else { return };
+    let title = row.get("title").and_then(|v| v.as_str()).unwrap_or("");
+    if let Ok(uuid) = uuid::Uuid::parse_str(id) {
+        let decorated = temper_core::operations::decorated_ref(
+            title,
+            temper_core::types::ids::ResourceId(uuid),
+        );
+        if let Some(obj) = row.as_object_mut() {
+            obj.insert("ref".to_string(), serde_json::Value::String(decorated));
+        }
+    }
+}
+
 /// Require a context, returning an error if none specified.
 ///
 /// temper is cloud-only: there are no context directories on disk to
@@ -260,25 +283,30 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
         // mode warns and the create still succeeds.
         match crate::actions::task::find_task(config, task_slug, Some(&ctx)) {
             Ok(Some(task_info)) => {
-                use temper_core::operations::ResourceRef;
                 use temper_core::types::graph::{EdgeKind, Polarity};
                 use temper_core::types::relationship_requests::AssertRelationshipRequest;
 
-                let req = AssertRelationshipRequest {
-                    source: ResourceRef::uuid(output.value.id),
-                    target_slug: task_info.slug.clone(),
-                    edge_kind: EdgeKind::LeadsTo,
-                    polarity: Polarity::Forward,
-                    label: "advances".to_string(),
-                    weight: 1.0,
-                };
-                match runtime.block_on(async {
+                // Edge addressing is id-based now: `find_task` carried the task's
+                // resource id off the listing row, so the link asserts by that
+                // held id directly — no slug→id round-trip.
+                let source_id = output.value.id;
+                let target_id = task_info.id;
+                let result = runtime.block_on(async {
+                    let req = AssertRelationshipRequest {
+                        source: source_id,
+                        target: target_id,
+                        edge_kind: EdgeKind::LeadsTo,
+                        polarity: Polarity::Forward,
+                        label: "advances".to_string(),
+                        weight: 1.0,
+                    };
                     client
                         .relationships()
                         .assert(&req)
                         .await
                         .map_err(crate::commands::client_err)
-                }) {
+                });
+                match result {
                     Ok(_) => output::success(format!("Linked session → task {}", task_info.slug)),
                     Err(e) => tracing::warn!(
                         task = task_slug,
@@ -320,9 +348,7 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
 /// signature compact (and clippy happy).
 #[derive(Debug, Clone, Copy)]
 pub struct ShowParams<'a> {
-    pub doc_type: &'a str,
-    pub slug: &'a str,
-    pub context: Option<&'a str>,
+    pub r#ref: &'a str,
     pub format: crate::format::OutputFormat,
     pub edges: bool,
     pub meta_only: bool,
@@ -414,6 +440,13 @@ pub fn list(config: &Config, params: ListParams<'_>) -> Result<()> {
     let mut envelope = serde_json::to_value(&response)
         .map_err(|e| TemperError::Api(format!("list serialize: {e}")))?;
 
+    // Identity-out: every printed row carries its decorated `ref`.
+    if let Some(rows) = envelope.get_mut("rows").and_then(|r| r.as_array_mut()) {
+        for row in rows.iter_mut() {
+            inject_ref(row);
+        }
+    }
+
     if !fields_owned.is_empty() {
         let rows = envelope
             .get_mut("rows")
@@ -498,43 +531,51 @@ fn list_meta_only(config: &Config, params: ListParams<'_>) -> Result<()> {
 /// non-interactive at the surface.
 pub fn delete(
     config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
+    r#ref: &str,
     force: bool,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
-    use temper_core::operations::{DeleteResource, ResourceRef};
+    use temper_core::operations::DeleteResource;
 
-    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
+    let id = temper_core::operations::parse_ref(r#ref)?;
 
-    let ctx = require_context(context)?;
-    let owner = config.owner_for_context(&ctx);
+    // Context-free read: fetch the row by id to learn its context (for the
+    // write backend), doctype + slug (for projection removal + result shape).
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .get(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
 
     let cmd = DeleteResource {
-        resource: ResourceRef::scoped(&owner, &ctx, doc_type, slug),
+        resource: id,
         force,
         origin: temper_core::operations::Surface::CliCloud,
     };
 
-    let (runtime, backend, _client) = crate::backend_select::build_backend(config, &ctx)?;
+    let (runtime, backend, _client) =
+        crate::backend_select::build_backend(config, &row.context_name)?;
     let output = runtime.block_on(backend.delete_resource(cmd))?;
 
     // Projection refresh: remove the resource's projection file. Best-effort
     // — a removal failure must not fail the (already-committed) delete.
     if let Err(e) =
-        crate::projection::remove_resource_file(&config.vault_root, &owner, &ctx, doc_type, slug)
+        crate::projection::remove_resource_file_for_row(&config.vault_root, config, &row)
     {
         output::warning(format!("could not remove projection file: {e}"));
     }
 
     // `delete_resource` returns `CommandOutput<()>` — no row in scope.
-    // Emit slug + doc_type from the inputs (Task 9 flat result shape).
+    // Emit slug + doc_type from the fetched row (Task 9 flat result shape).
     let _ = output;
     let result = DeleteActionResult {
         status: "ok",
-        slug: slug.to_string(),
-        doc_type: doc_type.to_string(),
+        slug: row.slug.clone().unwrap_or_default(),
+        doc_type: row.doc_type_name.clone(),
     };
     let rendered = crate::format::render(&result, fmt)?;
     println!("{rendered}");
@@ -543,37 +584,53 @@ pub fn delete(
 }
 
 /// Show a resource's content.
+///
+/// Cloud-only and context-free: the ref resolves to a `ResourceId`, the row +
+/// content are fetched by id (no `resolve_by_uri`, no doctype dispatch — the
+/// three former per-doctype shows rendered identically), the canonical
+/// projection file is refreshed best-effort, and the row+body is rendered.
 pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
-    let _ = temper_core::frontmatter::DocType::from_str(params.doc_type)?;
+    let id = temper_core::operations::parse_ref(params.r#ref)?;
 
     if params.meta_only {
-        return show_meta_only(
-            config,
-            params.doc_type,
-            params.slug,
-            params.context,
-            params.format,
-            params.fields,
-        );
+        return show_meta_only(config, id, params.format, params.fields);
     }
 
-    match params.doc_type {
-        "task" => crate::commands::task::show(config, params.slug, params.context, params.format),
-        "session" => {
-            crate::commands::session::show(config, params.slug, params.context, params.format)
-        }
-        _ => show_generic(
-            config,
-            params.doc_type,
-            params.slug,
-            params.context,
-            params.format,
-        ),
-    }?;
+    let config_clone = config.clone();
+    let (mut metadata, body) = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            let row = client
+                .resources()
+                .get(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+            let resp = client
+                .resources()
+                .content(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)?;
+
+            // Per-resource projection refresh — best-effort.
+            if let Err(e) = crate::projection::write_resource_file_from_parts(
+                &config_clone.vault_root,
+                &row,
+                &resp,
+            ) {
+                crate::output::warning(format!("could not refresh projection file: {e}"));
+            }
+
+            let metadata = serde_json::to_value(&row)
+                .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
+            Ok((metadata, resp.markdown))
+        })
+    })?;
+
+    inject_ref(&mut metadata);
+    let rendered = crate::format::render_resource_show(&metadata, &body, params.format)?;
+    println!("{rendered}");
 
     if params.edges {
-        let ctx = require_context(params.context)?;
-        show_edges(config, &ctx, params.doc_type, params.slug, params.format)?;
+        show_edges(config, id, params.format)?;
     }
 
     Ok(())
@@ -583,52 +640,34 @@ pub fn show(config: &Config, params: ShowParams<'_>) -> Result<()> {
 /// ResourceMetaResponse shape under the chosen format. Applies the
 /// shared top-level projection filter when `fields` is non-empty.
 ///
-/// Cloud-only: resolves the resource id via `resolve_by_uri` using
-/// the same (owner, context, doc_type, slug) quadruple `show_generic`
-/// uses, then calls `get_meta` instead of `content`.
+/// Cloud-only and context-free: the id was already resolved from the ref by
+/// `show`; this calls `get_meta` by id directly (no `resolve_by_uri`).
 fn show_meta_only(
-    config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
+    _config: &Config,
+    id: temper_core::types::ids::ResourceId,
     fmt: crate::format::OutputFormat,
     fields: &[String],
 ) -> Result<()> {
     use crate::actions::runtime;
 
-    let _ = temper_core::frontmatter::DocType::from_str(doc_type)?;
-
-    let config_clone = config.clone();
-    let doc_type_inner = doc_type.to_string();
-    let slug_inner = slug.to_string();
-    let ctx_inner = context.map(str::to_string);
     let fields_inner = fields.to_vec();
 
     let meta = runtime::with_client(|client| {
         Box::pin(async move {
-            let ctx = ctx_inner
-                .as_deref()
-                .ok_or_else(|| {
-                    TemperError::Project("no context specified — use --context <name>".into())
-                })?
-                .to_string();
-            let owner = config_clone.owner_for_context(&ctx);
-            let row = client
+            client
                 .resources()
-                .resolve_by_uri(&owner, &ctx, &doc_type_inner, &slug_inner)
+                .get_meta(uuid::Uuid::from(id))
                 .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            let meta = client
-                .resources()
-                .get_meta(*row.id.as_uuid())
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            Ok(meta)
+                .map_err(crate::actions::runtime::client_err_to_temper)
         })
     })?;
 
-    let value = serde_json::to_value(&meta)
+    let mut value = serde_json::to_value(&meta)
         .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
+    // Inject `ref` before the `--fields` filter (parity with `list`): the
+    // anchor `resource_id` is always preserved, and `ref` is kept only when
+    // requested — so `--fields` controls its visibility consistently.
+    inject_ref(&mut value);
     let filtered =
         temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
             .map_err(map_projection_error)?;
@@ -649,107 +688,22 @@ fn map_projection_error(err: temper_core::projection::ProjectionError) -> Temper
     }
 }
 
-/// Show a generic resource (goal, research, concept, decision).
-///
-/// Cloud-only: resolves the id via `resolve_by_uri`, fetches content,
-/// renders it, and writes the canonical projection file (per-resource
-/// refresh — best-effort).
-fn show_generic(
-    config: &Config,
-    doc_type: &str,
-    slug: &str,
-    context: Option<&str>,
-    fmt: crate::format::OutputFormat,
-) -> Result<()> {
-    use crate::actions::runtime;
-
-    let slug_s = slug.to_string();
-    let context_owned = context.map(str::to_string);
-
-    let config_clone = config.clone();
-    let doc_type_inner = doc_type.to_string();
-    let slug_inner = slug_s.clone();
-    let ctx_inner = context_owned.clone();
-
-    let (row, body) = runtime::with_client(|client| {
-        Box::pin(async move {
-            let ctx = ctx_inner
-                .as_deref()
-                .ok_or_else(|| {
-                    TemperError::Project("no context specified — use --context <name>".into())
-                })?
-                .to_string();
-            let owner = config_clone.owner_for_context(&ctx);
-            let row = client
-                .resources()
-                .resolve_by_uri(&owner, &ctx, &doc_type_inner, &slug_inner)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            let resp = client
-                .resources()
-                .content(*row.id.as_uuid())
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-
-            // Per-resource projection refresh: write the fetched resource
-            // to its canonical projection path. Best-effort — a write
-            // failure must not stop `show` from displaying.
-            if let Err(e) = crate::projection::write_resource_file_from_parts(
-                &config_clone.vault_root,
-                &row,
-                &resp,
-            ) {
-                crate::output::warning(format!(
-                    "could not refresh projection file for '{slug_inner}': {e}"
-                ));
-            }
-
-            Ok((row, resp.markdown))
-        })
-    })?;
-
-    let metadata = serde_json::to_value(&row)
-        .map_err(|e| TemperError::Api(format!("metadata serialize: {e}")))?;
-    let rendered = crate::format::render_resource_show(&metadata, &body, fmt)?;
-    println!("{rendered}");
-    Ok(())
-}
-
 /// Fetch and display edges for a resource via the API.
 ///
-/// Cloud-only: resolves the resource id via `resolve_by_uri` using the
-/// same `(owner, context, doc_type, slug)` quadruple the `show` path uses,
-/// then fetches and renders the edge list. No manifest access needed.
+/// Cloud-only and context-free: the id was already resolved from the ref by
+/// `show`; this fetches and renders the edge list by id directly.
 fn show_edges(
-    config: &Config,
-    context: &str,
-    doc_type: &str,
-    slug: &str,
+    _config: &Config,
+    id: temper_core::types::ids::ResourceId,
     fmt: crate::format::OutputFormat,
 ) -> Result<()> {
     use crate::actions::runtime;
-
-    let owner_inner = config.owner_for_context(context);
-    let context_inner = context.to_string();
-    let doc_type_inner = doc_type.to_string();
-    let slug_inner = slug.to_string();
-
-    let resource_id = runtime::with_client(|client| {
-        Box::pin(async move {
-            let row = client
-                .resources()
-                .resolve_by_uri(&owner_inner, &context_inner, &doc_type_inner, &slug_inner)
-                .await
-                .map_err(crate::actions::runtime::client_err_to_temper)?;
-            Ok(*row.id.as_uuid())
-        })
-    })?;
 
     let edges: Vec<temper_core::types::graph::GraphEdgeRow> = runtime::with_client(|client| {
         Box::pin(async move {
             client
                 .resources()
-                .edges(resource_id)
+                .edges(uuid::Uuid::from(id))
                 .await
                 .map_err(crate::actions::runtime::client_err_to_temper)
         })
@@ -774,11 +728,8 @@ fn show_edges(
 
 /// Parameters for resource update.
 pub struct UpdateParams<'a> {
-    pub slug: &'a str,
-    pub doc_type: Option<&'a str>,
-    pub type_from: Option<&'a str>,
+    pub r#ref: &'a str,
     pub type_to: Option<&'a str>,
-    pub context: Option<&'a str>,
     pub context_to: Option<&'a str>,
     // Base schema fields
     pub title: Option<&'a str>,
@@ -928,20 +879,29 @@ fn build_move_spec_from_args(
 pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     use std::io::IsTerminal;
 
-    use temper_core::operations::{BodyUpdate, ResourceRef, UpdateResource};
+    use temper_core::operations::{BodyUpdate, UpdateResource};
 
-    // 1. Resolve current type from --type or --type-from (one is required).
-    let current_type = params
-        .doc_type
-        .or(params.type_from)
-        .ok_or_else(|| TemperError::Project("--type or --type-from is required".into()))?;
-    let _ = temper_core::frontmatter::DocType::from_str(current_type)?;
+    // 1. Resolve the ref to an id, then a context-free read to learn the
+    //    current doctype (for per-flag schema validation) and context (for
+    //    the write backend).
+    let id = temper_core::operations::parse_ref(params.r#ref)?;
+    let row = crate::actions::runtime::with_client(|client| {
+        Box::pin(async move {
+            client
+                .resources()
+                .get(uuid::Uuid::from(id))
+                .await
+                .map_err(crate::actions::runtime::client_err_to_temper)
+        })
+    })?;
+    let current_type = row.doc_type_name.clone();
+    let _ = temper_core::frontmatter::DocType::from_str(&current_type)?;
     if let Some(tt) = params.type_to {
         let _ = temper_core::frontmatter::DocType::from_str(tt)?;
     }
 
-    // 2. Per-flag schema validation.
-    validate_update_args(params, current_type)?;
+    // 2. Per-flag schema validation, keyed by the resolved doctype.
+    validate_update_args(params, &current_type)?;
 
     // 3. --body resolution.
     let stdin_is_tty = std::io::stdin().is_terminal();
@@ -951,16 +911,9 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
         std::io::stdin(),
     )?;
 
-    let ctx = require_context(params.context)?;
-
     // 4. Build the UpdateResource cmd.
     let cmd = UpdateResource {
-        resource: ResourceRef::scoped(
-            config.owner_for_context(&ctx),
-            &ctx,
-            current_type,
-            params.slug,
-        ),
+        resource: id,
         body: resolved_body.map(BodyUpdate::new),
         managed_meta: build_partial_managed_meta_from_args(params),
         open_meta: build_partial_open_meta_from_args(params),
@@ -969,7 +922,8 @@ pub fn update(config: &Config, params: &UpdateParams<'_>) -> Result<()> {
     };
 
     // 5. Acquire the cloud backend + client and dispatch the update.
-    let (runtime, backend, client) = crate::backend_select::build_backend(config, &ctx)?;
+    let (runtime, backend, client) =
+        crate::backend_select::build_backend(config, &row.context_name)?;
     let output = runtime.block_on(backend.update_resource(cmd))?;
 
     // 6. Projection refresh: rewrite the affected projection file from
@@ -1055,13 +1009,10 @@ mod build_helpers_tests {
 
     /// Construct an `UpdateParams` with all optional/list fields defaulted.
     /// Tests override only the fields they exercise.
-    fn empty_update_params<'a>(slug: &'a str) -> UpdateParams<'a> {
+    fn empty_update_params(r#ref: &str) -> UpdateParams<'_> {
         UpdateParams {
-            slug,
-            doc_type: None,
-            type_from: None,
+            r#ref,
             type_to: None,
-            context: None,
             context_to: None,
             title: None,
             tags: &[],
@@ -1609,6 +1560,22 @@ mod list_meta_only_tests {
             );
             assert!(row.get("managed_hash").is_none(), "hash should be dropped");
         }
+    }
+}
+
+#[cfg(test)]
+mod inject_ref_tests {
+    #[test]
+    fn inject_ref_adds_decorated_form_from_title_and_id() {
+        let mut row = serde_json::json!({
+            "id": "019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+            "title": "My Task",
+        });
+        super::inject_ref(&mut row);
+        assert_eq!(
+            row.get("ref").and_then(|v| v.as_str()),
+            Some("my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2")
+        );
     }
 }
 

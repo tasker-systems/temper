@@ -282,8 +282,8 @@ temper resource create --type session --title "smoke test"
 # List to confirm it landed
 temper resource list --type session
 
-# Retrieve it by slug
-temper resource show <slug>
+# Retrieve it by ref (UUID or decorated slug-<uuid>, printed as `ref`)
+temper resource show <ref>
 ```
 
 A successful round-trip confirms that the API, database writes, and read-back path are all working against your instance.

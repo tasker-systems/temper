@@ -276,6 +276,38 @@ pub async fn write_resource_file(
     write_resource_file_from_parts(vault_root, row, &content)
 }
 
+/// Remove a resource's projection file given a server [`ResourceRow`].
+///
+/// A by-row convenience over [`remove_resource_file`] for the id-addressed
+/// `temper resource delete` path: derives `owner` from the row's context
+/// subscription (`config.owner_for_context`) and `context`/`doctype`/`slug`
+/// from the row. A row with no slug falls back to the title-derived slug so
+/// the path matches what the projection writer would have produced.
+pub fn remove_resource_file_for_row(
+    vault_root: &Path,
+    config: &crate::config::Config,
+    row: &ResourceRow,
+) -> Result<()> {
+    use crate::actions::ingest;
+
+    let owner = config.owner_for_context(&row.context_name);
+    let slug_owned;
+    let slug: &str = match row.slug.as_deref() {
+        Some(s) if !s.is_empty() => s,
+        _ => {
+            slug_owned = ingest::slug_from_title(&row.title);
+            slug_owned.as_str()
+        }
+    };
+    remove_resource_file(
+        vault_root,
+        &owner,
+        &row.context_name,
+        &row.doc_type_name,
+        slug,
+    )
+}
+
 /// Remove a resource's projection file at its canonical vault path.
 ///
 /// A best-effort counterpart to [`write_resource_file_from_parts`], used

@@ -206,7 +206,7 @@ self-inflicted cache miss.
 To actually delete a resource, use:
 
 ```bash
-temper resource delete <slug> --type <doc_type> [--context <ctx>] [--force]
+temper resource delete <ref> [--force]   # ref = UUID or decorated slug-<uuid>
 ```
 
 ```mermaid
@@ -279,7 +279,7 @@ This is correct whether the projected file was removed by `rm`, never existed on
 this device, or drifted stale. `pull_context` re-lists the context, re-fetches
 each body, re-writes every file to its canonical path, and prunes anything the
 server no longer returns. No server mutation occurs during a pull — it is a pure
-read-and-materialize. For a single resource, `temper resource show <slug>` also
+read-and-materialize. For a single resource, `temper resource show <ref>` also
 rewrites that one file as a side effect (see above).
 
 ## Staleness (advisory only)
