@@ -7,6 +7,7 @@ mod common;
 
 use temper_next::substrate;
 use temper_next::events::{fire, fire_with, EventContext, SeedAction};
+use temper_next::replay;
 use temper_next::payloads::{AgentAuthorship, ConfidenceBand};
 use temper_next::ids::{ProfileId, EntityId, CogmapId};
 use temper_next::content::{PreparedBlock, PreparedChunk};
@@ -254,4 +255,36 @@ async fn fire_with_authorship_stamps_metadata_via_rust_path() {
     assert_eq!(meta["reasoning"], "RUST_SENTINEL");
     assert_eq!(meta["confidence"], "confident");
     assert_eq!(got_inv, Some(inv.uuid()));
+}
+
+#[tokio::test]
+async fn invocation_and_authorship_survive_replay() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-replay").await;
+    let inv = temper_next::ids::InvocationId::from(Uuid::now_v7());
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL search_path TO temper_next, public").execute(&mut *tx).await.unwrap();
+    fire(&mut tx, SeedAction::InvocationOpen {
+        invocation: inv, trigger_kind: "manual", originating: cog, parent: None,
+        scoped_entity: emitter, emitter,
+    }).await.unwrap();
+    fire(&mut tx, SeedAction::InvocationClose {
+        invocation: inv, disposition: temper_next::payloads::Disposition::Completed,
+        outcome: serde_json::json!({"concepts": 0}), originating: cog, emitter,
+    }).await.unwrap();
+    tx.commit().await.unwrap();
+
+    let before = replay::dump_projections(&pool).await.unwrap();
+    let snap = replay::snapshot(&pool).await.unwrap();
+    common::reset_artifact();
+    let pool2 = substrate::connect().await.unwrap();
+    replay::replay(&pool2, &snap).await.unwrap();
+    let after = replay::dump_projections(&pool2).await.unwrap();
+
+    let inv_before = before.iter().find(|(t, _)| t == "kb_invocations").map(|(_, v)| v);
+    let inv_after = after.iter().find(|(t, _)| t == "kb_invocations").map(|(_, v)| v);
+    assert!(inv_before.is_some(), "kb_invocations must be in the projection dump set");
+    assert_eq!(inv_before, inv_after, "kb_invocations must replay byte-identically");
 }
