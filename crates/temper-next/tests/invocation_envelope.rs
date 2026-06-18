@@ -6,6 +6,11 @@
 mod common;
 
 use temper_next::substrate;
+use temper_next::events::{fire, SeedAction, Fired};
+use temper_next::ids::{ProfileId, EntityId, CogmapId};
+use temper_next::content::{PreparedBlock, PreparedChunk};
+use temper_next::ids::{BlockId, ChunkId};
+use uuid::Uuid;
 
 /// Reset the artifact (01+02), connect, boot-seed the system actor. Standard write-path preamble.
 async fn setup() -> sqlx::PgPool {
@@ -63,4 +68,88 @@ async fn event_append_persists_metadata_and_invocation() {
     .fetch_one(&pool).await.unwrap();
     assert_eq!(meta["reasoning"], "SENTINEL");
     assert_eq!(got_inv, Some(inv));
+}
+
+async fn system_actor(pool: &sqlx::PgPool) -> (ProfileId, EntityId) {
+    let p: Uuid = sqlx::query_scalar("SELECT id FROM kb_profiles WHERE handle='system'")
+        .fetch_one(pool).await.unwrap();
+    let e: Uuid = sqlx::query_scalar("SELECT id FROM kb_entities WHERE profile_id=$1 AND name='system'")
+        .bind(p).fetch_one(pool).await.unwrap();
+    (ProfileId::from(p), EntityId::from(e))
+}
+
+fn one_chunk_block(content: &str) -> PreparedBlock {
+    let mut embedding = vec![0.0_f32; 768];
+    embedding[0] = 1.0;
+    PreparedBlock {
+        block_id: BlockId::from(Uuid::now_v7()),
+        seq: 0,
+        role: None,
+        chunks: vec![PreparedChunk {
+            chunk_id: ChunkId::from(Uuid::now_v7()),
+            chunk_index: 0,
+            content_hash: format!("{:064x}", Uuid::now_v7().as_u128()),
+            content: content.to_string(),
+            embedding,
+            header_path: None,
+            heading_depth: None,
+        }],
+    }
+}
+
+/// Genesis a cogmap, returning its id (the telos resource is created inside).
+async fn genesis(pool: &sqlx::PgPool, owner: ProfileId, emitter: EntityId, name: &str) -> CogmapId {
+    let charter = vec![one_chunk_block("telos charter statement")];
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL search_path TO temper_next, public").execute(&mut *tx).await.unwrap();
+    let (cogmap, _telos) = fire(&mut tx, SeedAction::CogmapGenesis {
+        name, telos_title: "Telos", charter: &charter, owner, emitter,
+    }).await.unwrap().cogmap_genesis().unwrap();
+    tx.commit().await.unwrap();
+    cogmap
+}
+
+#[tokio::test]
+async fn invocation_open_projects_open_row() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-a").await;
+    let inv = Uuid::now_v7();
+
+    let returned: Uuid = sqlx::query_scalar("SELECT invocation_open($1::jsonb, $2)")
+        .bind(serde_json::json!({
+            "invocation_id": inv, "trigger_kind": "manual",
+            "originating_cogmap_id": cog.uuid(), "scoped_entity_id": emitter.uuid(),
+        }))
+        .bind(emitter.uuid())
+        .fetch_one(&pool).await.unwrap();
+    assert_eq!(returned, inv, "invocation_open returns the invocation id");
+
+    let (status, trig, orig, telos_present): (String, String, Uuid, bool) = sqlx::query_as(
+        "SELECT status, trigger_kind, originating_cogmap_id, telos_resource_id IS NOT NULL \
+         FROM kb_invocations WHERE id=$1",
+    ).bind(inv).fetch_one(&pool).await.unwrap();
+    assert_eq!(status, "open");
+    assert_eq!(trig, "manual");
+    assert_eq!(orig, cog.uuid());
+    assert!(telos_present, "telos resolved from the cogmap");
+}
+
+#[tokio::test]
+async fn delegation_gate_blocks_unshared_cogmaps() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let parent = genesis(&pool, owner, emitter, "parent").await;
+    let child = genesis(&pool, owner, emitter, "child").await; // no shared team
+    let inv = Uuid::now_v7();
+    let res = sqlx::query_scalar::<_, Uuid>("SELECT invocation_open($1::jsonb, $2)")
+        .bind(serde_json::json!({
+            "invocation_id": inv, "trigger_kind": "delegated",
+            "originating_cogmap_id": child.uuid(), "parent_cogmap_id": parent.uuid(),
+            "scoped_entity_id": emitter.uuid(),
+        }))
+        .bind(emitter.uuid())
+        .fetch_one(&pool).await;
+    let err = res.expect_err("delegation gate must reject cogmaps with no shared team");
+    assert!(err.to_string().contains("delegation gate"), "got: {err}");
 }

@@ -1207,6 +1207,41 @@ BEGIN
 END;
 $$;
 
+-- ── Invocation envelope (open) ───────────────────────────────────────────────
+-- Opens an agentic-workflow run: emits `delegated_launch`, projects an `open` kb_invocations row.
+-- Delegation contract 1 (the launch gate): a DELEGATED launch (parent_cogmap_id present) is rejected
+-- unless the two cogmaps share a team. A top-level launch (no parent) needs no gate. Identity-as-input:
+-- the run's id arrives in the payload.
+CREATE FUNCTION invocation_open(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_inv uuid := (p_payload->>'invocation_id')::uuid;
+        v_orig uuid := (p_payload->>'originating_cogmap_id')::uuid;
+        v_parent uuid := (p_payload->>'parent_cogmap_id')::uuid;
+        v_ev uuid;
+BEGIN
+    IF v_parent IS NOT NULL AND NOT cogmaps_share_a_team(v_parent, v_orig) THEN
+        RAISE EXCEPTION 'delegation gate: cogmaps % and % share no team', v_parent, v_orig;
+    END IF;
+    v_ev := _event_append('delegated_launch', p_emitter, 'kb_cogmaps', v_orig, p_payload,
+                          p_invocation => v_inv);
+    PERFORM _project_delegated_launch(v_ev, p_payload);
+    RETURN v_inv;
+END;
+$$;
+
+CREATE FUNCTION _project_delegated_launch(p_event uuid, p_payload jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
+    INSERT INTO kb_invocations (id, opened_by_event_id, status, trigger_kind,
+        originating_cogmap_id, parent_cogmap_id, scoped_entity_id, telos_resource_id, opened_at)
+    SELECT (p_payload->>'invocation_id')::uuid, p_event, 'open', p_payload->>'trigger_kind',
+           (p_payload->>'originating_cogmap_id')::uuid, (p_payload->>'parent_cogmap_id')::uuid,
+           (p_payload->>'scoped_entity_id')::uuid, c.telos_resource_id, v_occurred
+    FROM kb_cogmaps c WHERE c.id = (p_payload->>'originating_cogmap_id')::uuid;
+END;
+$$;
+
 -- ============================================================================
 -- End of 02_functions.sql. Seed → 03_seed.sql; scenarios → 04_scenarios.sql.
 -- ============================================================================
