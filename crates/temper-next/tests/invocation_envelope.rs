@@ -288,3 +288,45 @@ async fn invocation_and_authorship_survive_replay() {
     assert!(inv_before.is_some(), "kb_invocations must be in the projection dump set");
     assert_eq!(inv_before, inv_after, "kb_invocations must replay byte-identically");
 }
+
+#[tokio::test]
+async fn authorship_is_invisible_to_affinity_inputs() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-invis").await;
+    let inv = temper_next::ids::InvocationId::from(Uuid::now_v7());
+
+    let mut tx = pool.begin().await.unwrap();
+    sqlx::query("SET LOCAL search_path TO temper_next, public").execute(&mut *tx).await.unwrap();
+    fire(&mut tx, SeedAction::InvocationOpen {
+        invocation: inv, trigger_kind: "manual", originating: cog, parent: None,
+        scoped_entity: emitter, emitter,
+    }).await.unwrap();
+    let blocks = vec![one_chunk_block("invisibility body")];
+    fire_with(&mut tx, SeedAction::ResourceCreate {
+        title: "Z", origin_uri: "temper://z",
+        home: temper_next::payloads::AnchorRef::cogmap(cog),
+        owner, originator: None, blocks: &blocks, doc_type: Some("concept"), emitter,
+    }, EventContext {
+        authorship: Some(AgentAuthorship {
+            reasoning: Some("INVIS_SENTINEL".into()), confidence: ConfidenceBand::Tentative,
+            rationale: Some("INVIS_SENTINEL".into()), persona: None, model: None,
+        }),
+        invocation: Some(inv),
+    }).await.unwrap();
+    tx.commit().await.unwrap();
+
+    // Authorship IS in the ledger metadata.
+    let in_meta: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kb_events WHERE metadata->>'reasoning' = 'INVIS_SENTINEL'",
+    ).fetch_one(&pool).await.unwrap();
+    assert!(in_meta >= 1, "authorship must be recorded in kb_events.metadata");
+
+    // Authorship is NOT in ANY affinity-input projection (resources / edges / properties).
+    for table in ["kb_resources", "kb_edges", "kb_properties"] {
+        let leaked: i64 = sqlx::query_scalar(&format!(
+            "SELECT count(*) FROM {table} t WHERE to_jsonb(t)::text LIKE '%INVIS_SENTINEL%'",
+        )).fetch_one(&pool).await.unwrap();
+        assert_eq!(leaked, 0, "{table} must not contain authorship text (invisible to affinity)");
+    }
+}
