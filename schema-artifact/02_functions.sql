@@ -740,12 +740,14 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION resource_create(p_payload jsonb, p_content jsonb, p_emitter uuid)
+CREATE FUNCTION resource_create(p_payload jsonb, p_content jsonb, p_emitter uuid,
+                                p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid;
 BEGIN
     v_ev := _event_append('resource_created', p_emitter,
-                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_resource_created(v_ev, p_payload, p_content);
 END;
 $$;
@@ -761,7 +763,9 @@ CREATE FUNCTION _event_append(
     p_payload jsonb,
     p_references jsonb DEFAULT '[]'::jsonb,
     p_correlation uuid DEFAULT NULL,
-    p_payload_version int DEFAULT 1
+    p_payload_version int DEFAULT 1,
+    p_metadata jsonb DEFAULT '{}'::jsonb,
+    p_invocation uuid DEFAULT NULL
 ) RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_et uuid; v_ev uuid := uuid_generate_v7();
 BEGIN
@@ -769,9 +773,11 @@ BEGIN
     IF v_et IS NULL THEN RAISE EXCEPTION 'event_type % not seeded', p_type_name; END IF;
     INSERT INTO kb_events (id, event_type_id, emitter_entity_id,
                            producing_anchor_table, producing_anchor_id,
-                           payload, "references", payload_version, correlation_id)
+                           payload, "references", payload_version, correlation_id,
+                           metadata, invocation_id)
     VALUES (v_ev, v_et, p_emitter, p_anchor_table, p_anchor_id,
-            p_payload, p_references, p_payload_version, COALESCE(p_correlation, v_ev));
+            p_payload, p_references, p_payload_version, COALESCE(p_correlation, v_ev),
+            p_metadata, p_invocation);
     RETURN v_ev;
 END;
 $$;
@@ -810,12 +816,14 @@ END;
 $$;
 
 -- Assert a typed edge, homed per the payload. Emits `relationship_asserted` + projects, one txn.
-CREATE FUNCTION relationship_assert(p_payload jsonb, p_emitter uuid)
+CREATE FUNCTION relationship_assert(p_payload jsonb, p_emitter uuid,
+                                    p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid;
 BEGIN
     v_ev := _event_append('relationship_asserted', p_emitter,
-                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_relationship_asserted(v_ev, p_payload);
 END;
 $$;
@@ -837,7 +845,8 @@ $$;
 
 -- Fold a declared edge (retire the relationship). The producing anchor is an ENVELOPE concern read
 -- from the edge's own home (never payload data) — the same discipline as facet_set.
-CREATE FUNCTION relationship_fold(p_payload jsonb, p_emitter uuid)
+CREATE FUNCTION relationship_fold(p_payload jsonb, p_emitter uuid,
+                                  p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid; v_edge uuid := (p_payload->>'edge_id')::uuid;
         v_home_tbl text; v_home uuid;
@@ -847,7 +856,8 @@ BEGIN
     IF v_home IS NULL THEN
         RAISE EXCEPTION 'relationship_fold: edge % not found', v_edge;
     END IF;
-    v_ev := _event_append('relationship_folded', p_emitter, v_home_tbl, v_home, p_payload);
+    v_ev := _event_append('relationship_folded', p_emitter, v_home_tbl, v_home, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_relationship_folded(v_ev, p_payload);
 END;
 $$;
@@ -872,7 +882,8 @@ $$;
 -- Set a property per the payload. Emits `property_asserted`. The producing anchor is an ENVELOPE
 -- concern derived from the owner resource's home (cogmap OR context — both in the kb_events CHECK
 -- set), preferring a cogmap home — never payload data. A homeless resource is an error.
-CREATE FUNCTION facet_set(p_payload jsonb, p_emitter uuid)
+CREATE FUNCTION facet_set(p_payload jsonb, p_emitter uuid,
+                          p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid; v_anchor_tbl text; v_anchor uuid;
         v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
@@ -882,7 +893,8 @@ BEGIN
     IF v_anchor IS NULL THEN
         RAISE EXCEPTION 'facet_set: resource % has no home to anchor the property event', v_owner;
     END IF;
-    v_ev := _event_append('property_asserted', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    v_ev := _event_append('property_asserted', p_emitter, v_anchor_tbl, v_anchor, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_property_asserted(v_ev, p_payload);
 END;
 $$;
@@ -1200,6 +1212,78 @@ BEGIN
     IF v_home IS NULL THEN RAISE EXCEPTION 'relationship_reweight: edge % not found', v_edge; END IF;
     v_ev := _event_append('relationship_reweighted', p_emitter, v_home_tbl, v_home, p_payload);
     RETURN _project_relationship_reweighted(v_ev, p_payload);
+END;
+$$;
+
+-- ── Invocation envelope (open) ───────────────────────────────────────────────
+-- Opens an agentic-workflow run: emits `delegated_launch`, projects an `open` kb_invocations row.
+-- Delegation contract 1 (the launch gate): a DELEGATED launch (parent_cogmap_id present) is rejected
+-- unless the two cogmaps share a team. A top-level launch (no parent) needs no gate. Identity-as-input:
+-- the run's id arrives in the payload.
+CREATE FUNCTION invocation_open(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_inv uuid := (p_payload->>'invocation_id')::uuid;
+        v_orig uuid := (p_payload->>'originating_cogmap_id')::uuid;
+        v_parent uuid := (p_payload->>'parent_cogmap_id')::uuid;
+        v_ev uuid;
+BEGIN
+    IF v_parent IS NOT NULL AND NOT cogmaps_share_a_team(v_parent, v_orig) THEN
+        RAISE EXCEPTION 'delegation gate: cogmaps % and % share no team', v_parent, v_orig;
+    END IF;
+    v_ev := _event_append('delegated_launch', p_emitter, 'kb_cogmaps', v_orig, p_payload,
+                          p_invocation => v_inv);
+    PERFORM _project_delegated_launch(v_ev, p_payload);
+    RETURN v_inv;
+END;
+$$;
+
+CREATE FUNCTION _project_delegated_launch(p_event uuid, p_payload jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
+    INSERT INTO kb_invocations (id, opened_by_event_id, status, trigger_kind,
+        originating_cogmap_id, parent_cogmap_id, scoped_entity_id, telos_resource_id, opened_at)
+    SELECT (p_payload->>'invocation_id')::uuid, p_event, 'open', p_payload->>'trigger_kind',
+           (p_payload->>'originating_cogmap_id')::uuid, (p_payload->>'parent_cogmap_id')::uuid,
+           (p_payload->>'scoped_entity_id')::uuid, c.telos_resource_id, v_occurred
+    FROM kb_cogmaps c WHERE c.id = (p_payload->>'originating_cogmap_id')::uuid;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'delegated_launch: originating cogmap % not found',
+            (p_payload->>'originating_cogmap_id')::uuid;
+    END IF;
+END;
+$$;
+
+-- ── Invocation envelope (close) ──────────────────────────────────────────────
+-- Closes the run with a terminal disposition + outcome counts. `disposition` must be one of the
+-- non-open status values (the kb_invocations CHECK enforces it). Emits `invocation_closed`.
+CREATE FUNCTION invocation_close(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_inv uuid := (p_payload->>'invocation_id')::uuid;
+        v_orig uuid; v_ev uuid;
+BEGIN
+    SELECT originating_cogmap_id INTO v_orig FROM kb_invocations WHERE id = v_inv;
+    IF v_orig IS NULL THEN RAISE EXCEPTION 'invocation_close: unknown invocation %', v_inv; END IF;
+    IF p_payload->>'disposition' NOT IN ('completed','failed','abandoned') THEN
+        RAISE EXCEPTION 'invocation_close: invalid disposition %', p_payload->>'disposition';
+    END IF;
+    v_ev := _event_append('invocation_closed', p_emitter, 'kb_cogmaps', v_orig, p_payload,
+                          p_invocation => v_inv);
+    PERFORM _project_invocation_closed(v_ev, p_payload);
+    RETURN v_ev;
+END;
+$$;
+
+CREATE FUNCTION _project_invocation_closed(p_event uuid, p_payload jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
+    UPDATE kb_invocations
+       SET status = p_payload->>'disposition',
+           outcome = p_payload->'outcome',
+           closed_by_event_id = p_event,
+           closed_at = v_occurred
+     WHERE id = (p_payload->>'invocation_id')::uuid;
 END;
 $$;
 

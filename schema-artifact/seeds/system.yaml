@@ -32,6 +32,7 @@ event_types:
   - cogmap_seeded
   - region_materialized
   - delegated_launch
+  - invocation_closed
   - lens_created
 lenses:
   - { name: telos-default,           w_express: 1.0, w_contains: 1.0, w_leads_to: 0.6, w_near: 0.3, w_prop: 0.4, s_telos: 0.5, s_ref: 0.3, s_central: 0.2, resolution: 0.5 }

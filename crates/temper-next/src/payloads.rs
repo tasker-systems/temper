@@ -14,8 +14,8 @@
 use crate::affinity::EdgeKind;
 use crate::content::PreparedBlock;
 use crate::ids::{
-    BlockId, ChunkId, CogmapId, ContextId, EdgeId, EventId, LensId, ProfileId, PropertyId,
-    RegionId, ResourceId,
+    BlockId, ChunkId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, LensId,
+    ProfileId, PropertyId, RegionId, ResourceId,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -471,6 +471,68 @@ pub struct BlockProvenanceCorrected {
     pub scar: String,
 }
 
+// ── invocation envelope + agent-authorship payloads ─────────────────────────
+
+/// The agent's SUBJECTIVE self-assessment of an authored act — a graded band, not a false-precision
+/// scalar. Ordinal: Tentative < Probable < Confident.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ConfidenceBand {
+    Tentative,
+    Probable,
+    Confident,
+}
+
+/// Per-event agent-authorship metadata — rides in `kb_events.metadata`, NOT the payload, so it is
+/// invisible to projections (and thus to affinity math) by construction. `reasoning` is required on
+/// structural acts at the AGENT layer (the substrate stores whatever is supplied).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct AgentAuthorship {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning: Option<String>,
+    pub confidence: ConfidenceBand,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// Terminal disposition of an invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum Disposition {
+    Completed,
+    Failed,
+    Abandoned,
+}
+
+/// `delegated_launch` payload — opens an invocation envelope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct DelegatedLaunch {
+    pub invocation_id: InvocationId,
+    pub trigger_kind: String,
+    pub originating_cogmap_id: CogmapId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_cogmap_id: Option<CogmapId>,
+    pub scoped_entity_id: EntityId,
+}
+
+/// `invocation_closed` payload — closes an invocation with a terminal outcome.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
+pub struct InvocationClosed {
+    pub invocation_id: InvocationId,
+    pub disposition: Disposition,
+    #[serde(default)]
+    pub outcome: serde_json::Value,
+}
+
 /// The 15 typed event names — the registry-stamping and snapshot surfaces iterate this.
 pub const TYPED_EVENT_NAMES: [&str; 15] = [
     "cogmap_seeded",
@@ -619,6 +681,21 @@ mod tests {
         let v = serde_json::to_value(r).unwrap();
         assert_eq!(v["rel"], "derived_from");
         assert_eq!(v["target"]["kind"], "block");
+    }
+
+    #[test]
+    fn authorship_serializes_confidence_band() {
+        let a = AgentAuthorship {
+            reasoning: Some("because X".into()),
+            confidence: ConfidenceBand::Probable,
+            rationale: None,
+            persona: None,
+            model: None,
+        };
+        let v = serde_json::to_value(&a).unwrap();
+        assert_eq!(v["confidence"], "probable");
+        let back: AgentAuthorship = serde_json::from_value(v).unwrap();
+        assert_eq!(back.confidence, ConfidenceBand::Probable);
     }
 
     #[test]

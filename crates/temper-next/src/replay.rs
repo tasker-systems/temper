@@ -64,6 +64,10 @@ const PROJECTION_DUMPS: &[(&str, &str)] = &[
         "kb_cogmap_lenses",
         "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_cogmap_lenses t",
     ),
+    (
+        "kb_invocations",
+        "SELECT coalesce(jsonb_agg(to_jsonb(t) ORDER BY t.id), '[]'::jsonb) FROM kb_invocations t",
+    ),
 ];
 
 /// Non-projected input tables, copied verbatim into the replay namespace. Restore order respects FK
@@ -311,6 +315,20 @@ pub async fn replay(pool: &PgPool, snap: &LedgerSnapshot) -> Result<()> {
             }
             "resource_rehomed" => {
                 sqlx::query("SELECT _project_resource_rehomed($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            "delegated_launch" => {
+                sqlx::query("SELECT _project_delegated_launch($1,$2)")
+                    .bind(id)
+                    .bind(&payload)
+                    .execute(pool)
+                    .await?;
+            }
+            "invocation_closed" => {
+                sqlx::query("SELECT _project_invocation_closed($1,$2)")
                     .bind(id)
                     .bind(&payload)
                     .execute(pool)

@@ -21,8 +21,8 @@
 use crate::affinity::EdgeKind;
 use crate::content::{PreparedBlock, PreparedChunk};
 use crate::ids::{
-    BlockId, CogmapId, ContextId, EdgeId, EntityId, EventId, LensId, ProfileId, PropertyId,
-    RegionId, ResourceId,
+    BlockId, CogmapId, ContextId, EdgeId, EntityId, EventId, InvocationId, LensId, ProfileId,
+    PropertyId, RegionId, ResourceId,
 };
 use crate::payloads;
 use crate::scenario::model::LensDef;
@@ -49,6 +49,8 @@ pub enum EventKind {
     RegionMaterialized,
     RelationshipFolded,
     BlockMutated,
+    DelegatedLaunch,
+    InvocationClosed,
 }
 
 impl EventKind {
@@ -69,6 +71,8 @@ impl EventKind {
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
             EventKind::BlockMutated => "block_mutated",
+            EventKind::DelegatedLaunch => "delegated_launch",
+            EventKind::InvocationClosed => "invocation_closed",
         }
     }
 }
@@ -211,6 +215,21 @@ pub enum SeedAction<'a> {
         weight: f64,
         emitter: EntityId,
     },
+    InvocationOpen {
+        invocation: InvocationId,
+        trigger_kind: &'a str,
+        originating: CogmapId,
+        parent: Option<CogmapId>,
+        scoped_entity: EntityId,
+        emitter: EntityId,
+    },
+    InvocationClose {
+        invocation: InvocationId,
+        disposition: payloads::Disposition,
+        outcome: serde_json::Value,
+        originating: CogmapId,
+        emitter: EntityId,
+    },
 }
 
 impl SeedAction<'_> {
@@ -232,6 +251,8 @@ impl SeedAction<'_> {
             SeedAction::ResourceRehome { .. } => EventKind::ResourceRehomed,
             SeedAction::RelationshipRetype { .. } => EventKind::RelationshipRetyped,
             SeedAction::RelationshipReweight { .. } => EventKind::RelationshipReweighted,
+            SeedAction::InvocationOpen { .. } => EventKind::DelegatedLaunch,
+            SeedAction::InvocationClose { .. } => EventKind::InvocationClosed,
         }
     }
 }
@@ -250,6 +271,7 @@ pub enum Fired {
     Lens(LensId),
     Materialize(EventId),
     Block(BlockId),
+    Invocation(InvocationId),
 }
 
 impl Fired {
@@ -296,11 +318,53 @@ impl Fired {
             other => anyhow::bail!("expected Fired::Block, got {other:?}"),
         }
     }
+
+    /// Extract the invocation id an `InvocationOpen` fire produced.
+    pub fn invocation(self) -> Result<InvocationId> {
+        match self {
+            Fired::Invocation(id) => Ok(id),
+            other => anyhow::bail!("expected Fired::Invocation, got {other:?}"),
+        }
+    }
+}
+
+/// Per-fire authored-act context: the agent's authorship metadata (→ kb_events.metadata) and the
+/// invocation it is acting under (→ kb_events.invocation_id). Default = a keyboard-holder/system act
+/// (no authorship, no invocation), so `fire` callers are unchanged.
+#[derive(Debug, Default)]
+pub struct EventContext {
+    pub authorship: Option<payloads::AgentAuthorship>,
+    pub invocation: Option<InvocationId>,
+}
+
+impl EventContext {
+    fn metadata_json(&self) -> Result<serde_json::Value> {
+        Ok(match &self.authorship {
+            Some(a) => serde_json::to_value(a)?,
+            None => serde_json::json!({}),
+        })
+    }
+    fn invocation_uuid(&self) -> Option<Uuid> {
+        self.invocation.map(InvocationId::uuid)
+    }
 }
 
 /// Fire one seeding action: dispatch it to its SQL function (event + projection, one txn) and return the
 /// produced ids. The caller threads a transaction (`&mut *tx`) so a run of fires commits atomically.
 pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Result<Fired> {
+    fire_with(conn, action, EventContext::default()).await
+}
+
+/// Fire one seeding action under an explicit [`EventContext`] (authorship + invocation). The four
+/// authored-act arms thread `ctx` into their SQL calls (→ `kb_events.metadata`/`invocation_id`); all
+/// other arms ignore it. [`fire`] is the `EventContext::default()` delegate.
+pub async fn fire_with(
+    conn: &mut sqlx::PgConnection,
+    action: SeedAction<'_>,
+    ctx: EventContext,
+) -> Result<Fired> {
+    let ctx_meta = ctx.metadata_json()?;
+    let ctx_inv = ctx.invocation_uuid();
     match action {
         SeedAction::CogmapGenesis {
             name,
@@ -363,10 +427,12 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             };
             let sidecar = serde_json::to_value(payloads::content_sidecar(blocks))?;
             let id = sqlx::query_scalar!(
-                "SELECT resource_create($1,$2,$3)",
+                "SELECT resource_create($1,$2,$3,$4,$5)",
                 serde_json::to_value(&payload)?,
                 sidecar,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -395,9 +461,11 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 home: home.anchor_ref(),
             };
             let id = sqlx::query_scalar!(
-                "SELECT relationship_assert($1,$2)",
+                "SELECT relationship_assert($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -419,9 +487,11 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 weight,
             };
             let id = sqlx::query_scalar!(
-                "SELECT facet_set($1,$2)",
+                "SELECT facet_set($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -555,9 +625,11 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
                 reason: reason.map(str::to_owned),
             };
             let id = sqlx::query_scalar!(
-                "SELECT relationship_fold($1,$2)",
+                "SELECT relationship_fold($1,$2,$3,$4)",
                 serde_json::to_value(&payload)?,
                 emitter.uuid(),
+                ctx_meta,
+                ctx_inv,
             )
             .fetch_one(&mut *conn)
             .await?
@@ -686,6 +758,54 @@ pub async fn fire(conn: &mut sqlx::PgConnection, action: SeedAction<'_>) -> Resu
             .await?
             .context("relationship_reweight returned null")?;
             Ok(Fired::Relationship(EdgeId::from(id)))
+        }
+
+        SeedAction::InvocationOpen {
+            invocation,
+            trigger_kind,
+            originating,
+            parent,
+            scoped_entity,
+            emitter,
+        } => {
+            let payload = payloads::DelegatedLaunch {
+                invocation_id: invocation,
+                trigger_kind: trigger_kind.to_owned(),
+                originating_cogmap_id: originating,
+                parent_cogmap_id: parent,
+                scoped_entity_id: scoped_entity,
+            };
+            let id = sqlx::query_scalar!(
+                "SELECT invocation_open($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .context("invocation_open returned null")?;
+            Ok(Fired::Invocation(InvocationId::from(id)))
+        }
+
+        SeedAction::InvocationClose {
+            invocation,
+            disposition,
+            outcome,
+            originating: _,
+            emitter,
+        } => {
+            let payload = payloads::InvocationClosed {
+                invocation_id: invocation,
+                disposition,
+                outcome,
+            };
+            sqlx::query_scalar!(
+                "SELECT invocation_close($1,$2)",
+                serde_json::to_value(&payload)?,
+                emitter.uuid(),
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+            Ok(Fired::Invocation(invocation))
         }
     }
 }
