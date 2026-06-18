@@ -42,50 +42,35 @@
 
 ### Task 1: CLI session→task link asserts by id; `TaskInfo` carries `id`
 
+> **GROUNDED NOTE (corrects the plan):** the session→task link already has thorough e2e coverage in `tests/e2e/tests/cloud_session_link_e2e_test.rs` (5 tests; `create_session_with_task_asserts_advances_edge` already asserts the `advances` edge target via `peer_slug`). This task is a **refactor** (link by held id instead of a `resolve_by_uri` round-trip) — behavior is unchanged — so the guard is that existing suite, *tightened* to assert the edge target **by resource id**. `ResourceId` impls `Default` (via the `define_id!` macro, `ids.rs:28`), so a `#[serde(skip)]` `id` field needs no extra handling.
+
 **Files:**
 - Modify: `crates/temper-cli/src/actions/types.rs:5` (`TaskInfo`)
 - Modify: `crates/temper-cli/src/actions/task.rs:108-130` (`task_info_from_meta`), `:88-95` (call site in `load_tasks`)
 - Modify: `crates/temper-cli/src/commands/resource.rs:307-345` (session→task link)
-- Test: `tests/e2e/tests/cloud_writes.rs` (session→task edge link, next to the existing decorated-ref test)
+- Test: `tests/e2e/tests/cloud_session_link_e2e_test.rs` (tighten the existing `create_session_with_task_asserts_advances_edge`)
 
 **Interfaces:**
-- Consumes: `client.resources().list_meta(&ResourceListParams)` returns `ResourceListResponse { rows, .. }`; each `row` has `row.id: ResourceId` and `row.managed_meta: Option<ManagedMeta>`.
+- Consumes: `client.resources().list_meta(&ResourceListParams)` (via `load_tasks`) returns rows each with `row.id: ResourceId` and `row.managed_meta: Option<ManagedMeta>`. `GraphEdgeRow` carries `peer_resource_id: Uuid`, `direction: String`.
 - Produces: `TaskInfo.id: temper_core::types::ids::ResourceId`; `find_task(..) -> Result<Option<TaskInfo>>` (unchanged signature) now yields the id.
 
-- [ ] **Step 1: Write the failing e2e test**
+- [ ] **Step 1: Tighten the existing e2e test to assert the edge target by resource id**
 
-In `tests/e2e/tests/cloud_writes.rs`, add a test that creates a task, then creates a session linked to it, and asserts the `advances` edge points at the task's id. Mirror the harness setup of the existing `cloud_writes` tests (real Axum + Postgres + CLI code paths).
+In `tests/e2e/tests/cloud_session_link_e2e_test.rs::create_session_with_task_asserts_advances_edge`, the test already resolves `task_row` (the seeded task). Add an assertion that the outgoing edge's `peer_resource_id` equals the task's id — directly proving the id-based link targets the right resource:
 
 ```rust
-#[tokio::test]
-async fn session_task_link_asserts_edge_by_resource_id() {
-    let h = TestHarness::spawn().await; // existing harness in this file
-    let ctx = h.unique_context("link").await;
-
-    // Create a task; capture its decorated ref / id.
-    let task = h.create_resource(&ctx, "task", "Wire the widget").await;
-
-    // Create a session linked by task slug (the user-facing affordance).
-    let session = h
-        .run_cli(&["resource", "create", "--type", "session", "--context", &ctx,
-                   "--title", "Session A", "--task", &task.slug])
-        .await
-        .expect("session create");
-
-    // The advances edge must target the task's resource id (not a re-resolved row).
-    let edges = h.edges_for(session.id).await;
-    assert!(
-        edges.iter().any(|e| e.target == task.id
-            && e.label == "advances"),
-        "expected an `advances` edge from the session to the task id, got: {edges:?}"
-    );
-}
+// (after `task_row` is resolved, near the existing peer_slug assertion)
+assert_eq!(
+    outgoing[0].peer_resource_id,
+    *task_row.id.as_uuid(),
+    "outgoing advances edge must target the seeded task's resource id"
+);
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 2: Run the suite to confirm it passes today (refactor baseline)**
 
-Run: `cargo test -p temper-e2e --features test-db --test cloud_writes session_task_link_asserts_edge_by_resource_id -- --nocapture`
-Expected: FAIL (compile error — `TaskInfo` has no `id`, or the link still routes through `resolve_by_uri`). If the harness helpers (`create_resource`, `edges_for`, `unique_context`) don't exist by these names, adapt to the actual helpers in `cloud_writes.rs` / `common/`.
+Run: `cargo test -p temper-e2e --features test-db --test cloud_session_link_e2e_test -- --nocapture`
+Expected: PASS (the slug-resolved link already targets the task; this locks the target-id contract before the refactor). This is the regression guard the refactor must keep green.
 
 - [ ] **Step 3: Add `id` to `TaskInfo`**
 
@@ -155,10 +140,10 @@ let result = runtime.block_on(async {
 
 Remove the now-unused `owner` binding (`config.owner_for_context(&task_info.context)`) and the `client.resources()` import if it becomes unused in this function.
 
-- [ ] **Step 6: Run the test to verify it passes**
+- [ ] **Step 6: Run the e2e suite to verify the refactor holds**
 
-Run: `cargo test -p temper-e2e --features test-db --test cloud_writes session_task_link_asserts_edge_by_resource_id -- --nocapture`
-Expected: PASS.
+Run: `cargo test -p temper-e2e --features test-db --test cloud_session_link_e2e_test -- --nocapture`
+Expected: PASS — all 5 tests, including the tightened target-id assertion. (The link now uses `task_info.id`; the edge still targets the task, and no `resolve_by_uri` call is made on the link path.)
 
 - [ ] **Step 7: Run the temper-cli unit suite + check**
 
@@ -168,7 +153,7 @@ Expected: PASS / exit 0. (Fix any other `TaskInfo { .. }` constructors the compi
 - [ ] **Step 8: Commit**
 
 ```bash
-git add crates/temper-cli tests/e2e/tests/cloud_writes.rs
+git add crates/temper-cli tests/e2e/tests/cloud_session_link_e2e_test.rs
 git commit -m "feat(cli): session→task link asserts edge by held resource id, not by_uri slug lookup"
 ```
 
@@ -183,10 +168,13 @@ git commit -m "feat(cli): session→task link asserts edge by held resource id, 
 - Modify: `crates/temper-api/src/routes.rs:50` — delete the route
 - Modify: `crates/temper-api/src/openapi.rs:27` (path registration), `:133` (test assertion) — delete
 - Modify: `crates/temper-client/src/resources.rs:104-120` (`resolve_by_uri` method) — delete
-- Modify: `crates/temper-api/tests/relationship_write_test.rs:29,104` — rewrite the verification helper
+- Modify: `crates/temper-api/tests/relationship_write_test.rs:29,104` — rewrite the verification helper (uses the **service** fn)
+- Modify: `tests/e2e/tests/cloud_session_link_e2e_test.rs` — replace **5** `resolve_by_uri` verification sites (the **client** method) with a local list+filter helper
+
+> **GROUNDED NOTE (corrects the plan):** the client `.resolve_by_uri(` method has exactly **2** callers — the CLI link (removed in Task 1) and 5 sites in `cloud_session_link_e2e_test.rs`. Deleting the client method requires rewriting those 5 e2e sites first (Step 1b), or the e2e crate won't compile. `temper-client` exposes `resources().list(&ResourceListParams) -> ResourceListResponse` whose rows are `ResourceRow` (carry `.slug: Option<String>` and `.id`), so a slug→id helper is a list+filter (fine for these legacy-backend tests).
 
 **Interfaces:**
-- Consumes: nothing new (deletion task).
+- Consumes: `client.resources().list(&ResourceListParams)` for the e2e helper; `resource_service::get_visible` for the api-test helper.
 - Produces: removal of `resolve_by_uri` / `ResolveByUriParams` / the `/api/resources/by-uri` route from every crate.
 
 - [ ] **Step 1: Rewrite the `relationship_write_test` verification first (so the suite stays green through deletion)**
@@ -203,6 +191,38 @@ assert_eq!(row.id, ResourceId::from(resource_id));
 
 Run: `cargo nextest run -p temper-api --features test-db --test relationship_write_test`
 Expected: PASS (still using `resolve_by_uri`'s replacement).
+
+- [ ] **Step 1b: Rewrite the 5 e2e verification sites in `cloud_session_link_e2e_test.rs`**
+
+Add a local helper near the file's other helpers and replace every `app.client.resources().resolve_by_uri(&owner, ctx, doctype, slug).await` with `resolve_by_slug(&app.client, ctx, doctype, slug).await`:
+
+```rust
+/// Resolve a created resource's row by slug (verification helper). Replaces the
+/// deleted `resolve_by_uri` client method — these legacy-backend tests still
+/// address by slug, so list-and-filter is the faithful substitute.
+async fn resolve_by_slug(
+    client: &temper_client::TemperClient,
+    context: &str,
+    doc_type: &str,
+    slug: &str,
+) -> temper_core::types::resource::ResourceRow {
+    let params = temper_core::types::api::ResourceListParams {
+        context_name: Some(context.to_string()),
+        doc_type_name: Some(doc_type.to_string()),
+        ..Default::default()
+    };
+    let resp = client.resources().list(&params).await.expect("list for slug resolve");
+    resp.rows
+        .into_iter()
+        .find(|r| r.slug.as_deref() == Some(slug))
+        .unwrap_or_else(|| panic!("no {doc_type} with slug '{slug}' in context '{context}'"))
+}
+```
+
+Each call site loses the `&owner` argument (slug+context+doctype suffice). The `owner` bindings in those tests become unused — delete them. Confirm `ResourceListParams`'s actual module path and field names against `crates/temper-core/src/types/api.rs` (it is the same params type `list`/`list_meta` already take in this file's imports).
+
+Run: `cargo test -p temper-e2e --features test-db --test cloud_session_link_e2e_test`
+Expected: PASS (all 5 tests, now resolving via list+filter; still using the *service* `resolve_by_uri` nowhere — only the client method is being retired here).
 
 - [ ] **Step 2: Delete the endpoint test file**
 
@@ -224,10 +244,15 @@ In `crates/temper-api/src/services/resource_service.rs`, delete `pub struct Reso
 
 In `crates/temper-client/src/resources.rs`, delete `pub async fn resolve_by_uri(…) { … }` (`:104-120`). Remove any now-unused imports.
 
-- [ ] **Step 6: Build + run the api suite + check**
+- [ ] **Step 6: Build + run the api + e2e suites + check**
 
-Run: `cargo nextest run -p temper-api --features test-db --test relationship_write_test` then `cargo make check`
-Expected: PASS / exit 0. The compiler will flag any other reference to the deleted symbols — remove each. (Expected zero remaining live callers; Task 1 removed the CLI one.)
+Run:
+```
+cargo nextest run -p temper-api --features test-db --test relationship_write_test
+cargo test -p temper-e2e --features test-db --test cloud_session_link_e2e_test
+cargo make check
+```
+Expected: PASS / exit 0. The compiler will flag any other reference to the deleted symbols — remove each. (Expected zero remaining callers after Task 1 + Step 1b.)
 
 - [ ] **Step 7: Commit**
 
