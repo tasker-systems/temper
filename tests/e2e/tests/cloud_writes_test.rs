@@ -1483,3 +1483,139 @@ async fn cloud_show_edges_resolves_without_manifest(pool: sqlx::PgPool) {
     .await
     .expect("spawn_blocking joined");
 }
+
+// ---------------------------------------------------------------------------
+// Test 12: decorated ref + stale slug-half both resolve via show
+// ---------------------------------------------------------------------------
+
+/// The addressing collapse (Adjudication 5): a resource is addressed by a bare
+/// UUID or the decorated form `sluggify(title)-<uuid>`. Resolution is
+/// trailing-UUID-only — the slug half is parsed off and ignored, so a stale or
+/// wrong decoration is harmless. Unit tests cover `parse_ref` in isolation and
+/// bare-uuid CRUD is covered by the other e2e tests in this file; this closes
+/// the one end-to-end gap (decoration handling) by driving the real stack
+/// (CLI → Axum → Postgres) via `temper resource show` for THREE refs that must
+/// all resolve to the same seeded resource:
+///   1. the decorated form `decorated_ref(&title, id)`,
+///   2. a stale/wrong decoration (right uuid, wrong slug half),
+///   3. the bare uuid (control).
+/// Plus a negative case: a garbage ref with no trailing uuid must error,
+/// exercising `parse_ref`'s reject path end-to-end.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn decorated_and_stale_ref_resolve_via_show(pool: sqlx::PgPool) {
+    let app = common::setup(pool.clone()).await;
+
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    app.client
+        .contexts()
+        .create("myapp")
+        .await
+        .expect("create myapp context");
+
+    // Seed one resource via the client so we capture the server-assigned id and
+    // its canonical title.
+    use temper_core::types::ingest::{pack_chunks, IngestPayload};
+    let seeded = app
+        .client
+        .ingest()
+        .create(&IngestPayload {
+            title: "Decorated Ref Target".to_string(),
+            origin_uri: "kb://myapp/research/decorated-ref-target".to_string(),
+            context_name: "myapp".to_string(),
+            doc_type_name: "research".to_string(),
+            content_hash: None,
+            slug: "decorated-ref-target".to_string(),
+            content: String::new(),
+            metadata: None,
+            managed_meta: Some(serde_json::json!({
+                "temper-title": "Decorated Ref Target"
+            })),
+            open_meta: None,
+            chunks_packed: Some(pack_chunks(&[]).expect("encode empty chunks")),
+        })
+        .await
+        .expect("seed resource via client");
+
+    let id = seeded.id;
+    let title = seeded.title.clone();
+    let uuid = uuid::Uuid::from(id);
+
+    // Three refs that must all resolve to the same resource:
+    //   - decorated form: `decorated-ref-target-<uuid>`
+    //   - stale/wrong decoration: right uuid, deliberately wrong slug half
+    //   - bare uuid (control)
+    let decorated = temper_core::operations::decorated_ref(&title, id);
+    assert_eq!(
+        decorated,
+        format!("decorated-ref-target-{uuid}"),
+        "decorated_ref must be sluggify(title)-<uuid>"
+    );
+    let stale = format!("totally-wrong-slug-{uuid}");
+    let bare = uuid.to_string();
+
+    let global_config = app.vault_dir.path().join("no-such-config.toml");
+    let api_url = format!("http://{}", app.addr);
+    let token = app.token.clone();
+    let global_config_str = global_config.to_str().unwrap().to_string();
+
+    // Each `show` read uses an inner tokio runtime — drive each on a fresh
+    // `spawn_blocking` thread (must not nest), with per-thread clones.
+    for the_ref in [decorated.clone(), stale.clone(), bare.clone()] {
+        let cli_config = app.cli_config.clone();
+        let api_url_t = api_url.clone();
+        let token_t = token.clone();
+        let global_config_t = global_config_str.clone();
+        let ref_label = the_ref.clone();
+        tokio::task::spawn_blocking(move || {
+            temp_env::with_vars(cloud_env(&api_url_t, &token_t, &global_config_t), || {
+                temper_cli::commands::resource::show(
+                    &cli_config,
+                    temper_cli::commands::resource::ShowParams {
+                        r#ref: &the_ref,
+                        format: temper_cli::format::OutputFormat::Json,
+                        edges: false,
+                        meta_only: false,
+                        fields: &[],
+                    },
+                )
+                .unwrap_or_else(|e| {
+                    panic!("show must resolve trailing-uuid-only for ref {ref_label:?}: {e}")
+                })
+            })
+        })
+        .await
+        .expect("spawn_blocking joined");
+    }
+
+    // ---- Negative: a garbage ref (no trailing uuid) must error ----
+    // Exercises `parse_ref`'s reject path end-to-end (no fuzzy fallback).
+    let cli_config = app.cli_config.clone();
+    let api_url_t = api_url.clone();
+    let token_t = token.clone();
+    let global_config_t = global_config_str.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        temp_env::with_vars(cloud_env(&api_url_t, &token_t, &global_config_t), || {
+            temper_cli::commands::resource::show(
+                &cli_config,
+                temper_cli::commands::resource::ShowParams {
+                    r#ref: "not-a-ref",
+                    format: temper_cli::format::OutputFormat::Json,
+                    edges: false,
+                    meta_only: false,
+                    fields: &[],
+                },
+            )
+        })
+    })
+    .await
+    .expect("spawn_blocking joined");
+
+    assert!(
+        result.is_err(),
+        "a garbage ref with no trailing uuid must error (parse_ref reject path); got: {result:?}"
+    );
+}
