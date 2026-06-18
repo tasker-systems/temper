@@ -158,6 +158,10 @@ BEGIN
            (p_payload->>'originating_cogmap_id')::uuid, (p_payload->>'parent_cogmap_id')::uuid,
            (p_payload->>'scoped_entity_id')::uuid, c.telos_resource_id, v_occurred
     FROM kb_cogmaps c WHERE c.id = (p_payload->>'originating_cogmap_id')::uuid;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'delegated_launch: originating cogmap % not found',
+            (p_payload->>'originating_cogmap_id')::uuid;
+    END IF;
 END;
 $$;
 
@@ -169,6 +173,9 @@ DECLARE v_inv uuid := (p_payload->>'invocation_id')::uuid;
 BEGIN
     SELECT originating_cogmap_id INTO v_orig FROM kb_invocations WHERE id = v_inv;
     IF v_orig IS NULL THEN RAISE EXCEPTION 'invocation_close: unknown invocation %', v_inv; END IF;
+    IF p_payload->>'disposition' NOT IN ('completed','failed','abandoned') THEN
+        RAISE EXCEPTION 'invocation_close: invalid disposition %', p_payload->>'disposition';
+    END IF;
     v_ev := _event_append('invocation_closed', p_emitter, 'kb_cogmaps', v_orig, p_payload,
                           p_invocation => v_inv);
     PERFORM _project_invocation_closed(v_ev, p_payload);

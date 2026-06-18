@@ -5,11 +5,12 @@
 
 mod common;
 
+use temper_next::affinity::EdgeKind;
 use temper_next::content::{PreparedBlock, PreparedChunk};
-use temper_next::events::{fire, fire_with, EventContext, SeedAction};
+use temper_next::events::{fire, fire_with, EdgeHome, EventContext, SeedAction};
 use temper_next::ids::{BlockId, ChunkId};
 use temper_next::ids::{CogmapId, EntityId, ProfileId};
-use temper_next::payloads::{AgentAuthorship, ConfidenceBand};
+use temper_next::payloads::{AgentAuthorship, ConfidenceBand, EdgePolarity};
 use temper_next::replay;
 use temper_next::substrate;
 use uuid::Uuid;
@@ -236,6 +237,38 @@ async fn invocation_close_sets_terminal_status() {
 }
 
 #[tokio::test]
+async fn invocation_close_rejects_open_disposition() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-reject").await;
+    let inv = Uuid::now_v7();
+    sqlx::query_scalar::<_, Uuid>("SELECT invocation_open($1::jsonb, $2)")
+        .bind(serde_json::json!({
+            "invocation_id": inv, "trigger_kind": "manual",
+            "originating_cogmap_id": cog.uuid(), "scoped_entity_id": emitter.uuid(),
+        }))
+        .bind(emitter.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+    // A non-terminal disposition must be rejected before any event is appended.
+    let res = sqlx::query_scalar::<_, Uuid>("SELECT invocation_close($1::jsonb, $2)")
+        .bind(serde_json::json!({
+            "invocation_id": inv, "disposition": "open",
+            "outcome": {"concepts": 0},
+        }))
+        .bind(emitter.uuid())
+        .fetch_one(&pool)
+        .await;
+    let err = res.expect_err("invocation_close must reject a non-terminal disposition");
+    assert!(
+        err.to_string().contains("invalid disposition"),
+        "got: {err}"
+    );
+}
+
+#[tokio::test]
 async fn authored_resource_create_stamps_metadata_and_invocation_sql() {
     let pool = setup().await;
     let (owner, emitter) = system_actor(&pool).await;
@@ -347,6 +380,7 @@ async fn fire_with_authorship_stamps_metadata_via_rust_path() {
 
 #[tokio::test]
 async fn invocation_and_authorship_survive_replay() {
+    const REPLAY_SENTINEL: &str = "REPLAY_AUTHORSHIP_SENTINEL";
     let pool = setup().await;
     let (owner, emitter) = system_actor(&pool).await;
     let cog = genesis(&pool, owner, emitter, "map-replay").await;
@@ -370,12 +404,39 @@ async fn invocation_and_authorship_survive_replay() {
     )
     .await
     .unwrap();
+    // Author a real act UNDER the invocation so the replay actually exercises authorship metadata.
+    let blocks = vec![one_chunk_block("replayed concept body")];
+    fire_with(
+        &mut tx,
+        SeedAction::ResourceCreate {
+            title: "R",
+            origin_uri: "temper://r",
+            home: temper_next::payloads::AnchorRef::cogmap(cog),
+            owner,
+            originator: None,
+            blocks: &blocks,
+            doc_type: Some("concept"),
+            emitter,
+        },
+        EventContext {
+            authorship: Some(AgentAuthorship {
+                reasoning: Some(REPLAY_SENTINEL.into()),
+                confidence: ConfidenceBand::Confident,
+                rationale: None,
+                persona: None,
+                model: None,
+            }),
+            invocation: Some(inv),
+        },
+    )
+    .await
+    .unwrap();
     fire(
         &mut tx,
         SeedAction::InvocationClose {
             invocation: inv,
             disposition: temper_next::payloads::Disposition::Completed,
-            outcome: serde_json::json!({"concepts": 0}),
+            outcome: serde_json::json!({"concepts": 1}),
             originating: cog,
             emitter,
         },
@@ -407,6 +468,18 @@ async fn invocation_and_authorship_survive_replay() {
         inv_before, inv_after,
         "kb_invocations must replay byte-identically"
     );
+
+    // The authored act's metadata must survive replay onto the fresh pool.
+    let survived: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM kb_events WHERE metadata->>'reasoning' = $1")
+            .bind(REPLAY_SENTINEL)
+            .fetch_one(&pool2)
+            .await
+            .unwrap();
+    assert!(
+        survived >= 1,
+        "authorship metadata must survive replay onto the rebuilt pool"
+    );
 }
 
 #[tokio::test]
@@ -434,8 +507,17 @@ async fn authorship_is_invisible_to_affinity_inputs() {
     )
     .await
     .unwrap();
-    let blocks = vec![one_chunk_block("invisibility body")];
-    fire_with(
+    // The same authorship rides every authored act below so each affinity-input projection
+    // (resources, edges, properties) is non-empty when we later assert the sentinel is absent.
+    let authorship = AgentAuthorship {
+        reasoning: Some("INVIS_SENTINEL".into()),
+        confidence: ConfidenceBand::Tentative,
+        rationale: Some("INVIS_SENTINEL".into()),
+        persona: None,
+        model: None,
+    };
+    let blocks_a = vec![one_chunk_block("invisibility body a")];
+    let res_a = fire_with(
         &mut tx,
         SeedAction::ResourceCreate {
             title: "Z",
@@ -443,24 +525,73 @@ async fn authorship_is_invisible_to_affinity_inputs() {
             home: temper_next::payloads::AnchorRef::cogmap(cog),
             owner,
             originator: None,
-            blocks: &blocks,
+            blocks: &blocks_a,
             doc_type: Some("concept"),
             emitter,
         },
         EventContext {
-            authorship: Some(AgentAuthorship {
-                reasoning: Some("INVIS_SENTINEL".into()),
-                confidence: ConfidenceBand::Tentative,
-                rationale: Some("INVIS_SENTINEL".into()),
-                persona: None,
-                model: None,
-            }),
+            authorship: Some(authorship.clone()),
+            invocation: Some(inv),
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap();
+    // A second resource in the same cogmap so the edge arm has a real target.
+    let blocks_b = vec![one_chunk_block("invisibility body b")];
+    let res_b = fire_with(
+        &mut tx,
+        SeedAction::ResourceCreate {
+            title: "Z2",
+            origin_uri: "temper://z2",
+            home: temper_next::payloads::AnchorRef::cogmap(cog),
+            owner,
+            originator: None,
+            blocks: &blocks_b,
+            doc_type: Some("concept"),
+            emitter,
+        },
+        EventContext {
+            authorship: Some(authorship.clone()),
+            invocation: Some(inv),
+        },
+    )
+    .await
+    .unwrap()
+    .resource()
+    .unwrap();
+    // An edge between them, carrying the SAME authorship — makes the kb_edges arm non-vacuous.
+    fire_with(
+        &mut tx,
+        SeedAction::RelationshipAssert {
+            src: res_a,
+            tgt: res_b,
+            kind: EdgeKind::LeadsTo,
+            polarity: EdgePolarity::Forward,
+            label: None,
+            weight: 1.0,
+            home: EdgeHome::Cogmap(cog),
+            emitter,
+        },
+        EventContext {
+            authorship: Some(authorship.clone()),
             invocation: Some(inv),
         },
     )
     .await
     .unwrap();
     tx.commit().await.unwrap();
+
+    // The kb_edges arm below is only meaningful if a row actually exists.
+    let edge_rows: i64 = sqlx::query_scalar("SELECT count(*) FROM kb_edges")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(
+        edge_rows >= 1,
+        "kb_edges must be non-empty for a non-vacuous invisibility check"
+    );
 
     // Authorship IS in the ledger metadata.
     let in_meta: i64 = sqlx::query_scalar(
