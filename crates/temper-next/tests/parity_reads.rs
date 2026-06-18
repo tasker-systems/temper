@@ -963,6 +963,34 @@ async fn read_selector_next_matches_legacy(pool: sqlx::PgPool) {
         "next get_meta reconstructs managed_meta from kb_properties"
     );
 
+    // --- show (R2): full row, §9 invariant floor (ids/slug/hashes/timestamps are NON-invariants) ---
+    let leg_sh = read_selector::show_select(BackendSelection::Legacy, &pool, p1, r2)
+        .await
+        .expect("legacy show");
+    let nxt_sh = read_selector::show_select(BackendSelection::Next, &pool, p1, r2)
+        .await
+        .expect("next show");
+    assert_eq!(
+        leg_sh.origin_uri, nxt_sh.origin_uri,
+        "show_select Next origin_uri == Legacy"
+    );
+    assert_eq!(
+        leg_sh.title, nxt_sh.title,
+        "show_select Next title == Legacy"
+    );
+    assert_eq!(
+        leg_sh.context_name, nxt_sh.context_name,
+        "show_select Next context_name == Legacy"
+    );
+    assert_eq!(
+        leg_sh.doc_type_name, nxt_sh.doc_type_name,
+        "show_select Next doc_type_name == Legacy"
+    );
+    assert_eq!(
+        leg_sh.is_active, nxt_sh.is_active,
+        "show_select Next is_active == Legacy"
+    );
+
     // --- search: the matching origin_uri SET must match (scores are not invariants) ---
     let sp = SearchParams {
         query: Some("task".to_string()),

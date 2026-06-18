@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::select_backend;
+use temper_api::backend::{read_selector, select_backend};
 use temper_api::services::{context_service, ingest_service, meta_service, resource_service};
 use temper_core::error::TemperError;
 use temper_core::operations::{BodyUpdate, CreateResource, Surface};
@@ -392,43 +392,46 @@ fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::Erro
     }
 }
 
-// WS6 4b note: `get_resource` / `list_resources` stay on the legacy services under `flag=next`.
-// They layer relationship enrichment (`enrich_resources` / `build_enriched`) — reads over
-// `public.kb_resource_edges` keyed by resource id — on top of the base read. The new substrate
-// re-mints ids, so routing only the base read through `read_selector` would leave the enrichment
-// querying `public` with ids that don't exist there (mixed-substrate, incorrect). The enrichment
-// layer is beyond the §9 read floor; routing these tools waits on porting relationship reads
-// (alongside 4c writes). The MCP `search` tool, which has no enrichment, IS routed (see search.rs).
+// WS6 Spec B: `get_resource` routes the base read through `read_selector`, so it answers from
+// `temper_next` under `flag=next` (and the legacy services otherwise). The row comes from
+// `show_select`, meta from `get_meta_select`, and body (when requested) from `get_content_select` —
+// uniform across backends. Sourcing meta via `get_meta_select` (not the legacy "`get_content` returns
+// meta" coupling) is what lets the Next path work: its `get_content` returns `None` meta. The §9 read
+// floor (row + managed/open) is exactly what `build_enriched` assembles; relationship enrichment is a
+// separate, post-floor concern not layered here. The MCP `search` tool is likewise routed (see search.rs).
 pub async fn get_resource(
     svc: &TemperMcpService,
     input: GetResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
+    let sel = svc.api_state.backend_selection;
 
     let id = temper_core::operations::parse_ref(&input.id)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
-    let row = resource_service::get_visible(pool, profile.id, id.into())
+
+    let row = read_selector::show_select(sel, pool, profile.id, id.into())
         .await
         .map_err(|e| {
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
 
-    let (enriched, body_markdown) = if input.include_content.unwrap_or(false) {
-        // get_content already returns managed_meta + open_meta alongside the
-        // body, so feed those straight into build_enriched — no extra meta query.
-        let content = resource_service::get_content(pool, profile.id, row.id.into())
+    let meta = read_selector::get_meta_select(sel, pool, ProfileId::from(profile.id), row.id)
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
+
+    let body_markdown = if input.include_content.unwrap_or(false) {
+        let content = read_selector::get_content_select(sel, pool, profile.id, row.id.into())
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
             })?;
-
-        let enriched = build_enriched(&row, content.managed_meta, content.open_meta);
-
-        (enriched, Some(content.markdown))
+        Some(content.markdown)
     } else {
-        (enrich_resource(pool, &row).await?, None)
+        None
     };
+
+    let enriched = build_enriched(&row, meta.managed_meta, meta.open_meta);
 
     let enriched_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;

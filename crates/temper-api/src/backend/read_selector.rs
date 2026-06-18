@@ -24,7 +24,7 @@ use crate::services::resource_service::{self, ResourceListParams, ResourceListRe
 use crate::services::{meta_service, search_service};
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
 use temper_core::types::managed_meta::ResourceMetaResponse;
-use temper_core::types::resource::ContentResponse;
+use temper_core::types::resource::{ContentResponse, ResourceRow};
 
 /// `list` — list visible resources.
 pub async fn list_select(
@@ -36,6 +36,19 @@ pub async fn list_select(
     match selection {
         BackendSelection::Legacy => resource_service::list_visible(pool, profile_id, params).await,
         BackendSelection::Next => next_impl::list(pool, profile_id).await,
+    }
+}
+
+/// `show` — full resource row by id.
+pub async fn show_select(
+    selection: BackendSelection,
+    pool: &PgPool,
+    profile_id: Uuid,
+    id: Uuid,
+) -> ApiResult<ResourceRow> {
+    match selection {
+        BackendSelection::Legacy => resource_service::get_visible(pool, profile_id, id).await,
+        BackendSelection::Next => next_impl::show(pool, profile_id, id).await,
     }
 }
 
@@ -101,6 +114,9 @@ mod next_impl {
     pub(super) async fn list(_: &PgPool, _: Uuid) -> ApiResult<ResourceListResponse> {
         gate()
     }
+    pub(super) async fn show(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ResourceRow> {
+        gate()
+    }
     pub(super) async fn get_content(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ContentResponse> {
         gate()
     }
@@ -160,6 +176,23 @@ mod next_impl {
             total,
             facets: ResourceFacets { doc_type },
         })
+    }
+
+    /// `show` over `temper_next`: reconstruct the full production-shaped `ResourceRow` (§9 invariant
+    /// floor) via the shared `reconstruct_resource_row` — the same path `NextBackend::show_resource` and
+    /// the full-row `list` arm use. `resolve_new_id` bridges the parity-test prod id → new id (under
+    /// `flag=next` callers pass next-minted ids directly, consistent with `get_content`/`get_meta`).
+    /// Visibility is gated inside `reconstruct_resource_row` (WS2); the typed `ReadbackError` is split by
+    /// `map_readback_err` (not-visible → NotFound/404, genuine fault → Api/500) before reaching here.
+    pub(super) async fn show(
+        pool: &PgPool,
+        principal: Uuid,
+        prod_id: Uuid,
+    ) -> ApiResult<ResourceRow> {
+        let new_id = resolve_new_id(pool, prod_id).await?;
+        reconstruct_resource_row(pool, principal, new_id)
+            .await
+            .map_err(ApiError::from)
     }
 
     /// `get_content` over `temper_next`: reconstruct the markdown body (§9 body floor). `managed_meta`
