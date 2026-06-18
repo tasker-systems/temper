@@ -42,7 +42,16 @@ pub fn run(
         Box::pin(async move { search_actions::search_api(client, params).await })
     })?;
 
-    let rendered = crate::format::render(&results, fmt)?;
+    // Identity-out: every printed search row carries its decorated `ref`
+    // (read from `resource_id` for search rows).
+    let mut results_value = serde_json::to_value(&results)
+        .map_err(|e| crate::error::TemperError::Api(format!("search serialize: {e}")))?;
+    if let Some(arr) = results_value.as_array_mut() {
+        for row in arr.iter_mut() {
+            crate::commands::resource::inject_ref(row);
+        }
+    }
+    let rendered = crate::format::render(&results_value, fmt)?;
     crate::output::plain(rendered);
 
     Ok(())

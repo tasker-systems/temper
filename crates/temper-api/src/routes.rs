@@ -47,7 +47,6 @@ pub fn create_app(state: AppState) -> Router {
             "/api/resources",
             get(handlers::resources::list).post(handlers::resources::create),
         )
-        .route("/api/resources/by-uri", get(handlers::resources::by_uri))
         .route(
             "/api/resources/{id}",
             get(handlers::resources::get)

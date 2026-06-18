@@ -4,7 +4,7 @@ mod common;
 
 use temper_api::backend::DbBackend;
 use temper_api::services::{context_service, ingest_service, resource_service};
-use temper_core::operations::{Backend, BodyUpdate, ResourceRef, Surface, UpdateResource};
+use temper_core::operations::{Backend, BodyUpdate, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 
 /// Helper: SHA256 hex digest of content.
@@ -395,9 +395,7 @@ async fn update_resource_from_markdown_replaces_chunks(pool: sqlx::PgPool) {
         temper_core::types::ingest::pack_chunks(&updated_chunks).expect("pack updated chunks");
 
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: Some(BodyUpdate {
             content: updated_content.to_string(),
             content_hash: Some(format!("sha256:{}", sha2_hex(updated_content))),
@@ -714,9 +712,7 @@ async fn update_resource_rejects_tier2_fields_in_managed_meta(pool: sqlx::PgPool
     // message format mirrors the original IngestError::StructuralMoveNotSupported.
     let empty_chunks = temper_core::types::ingest::pack_chunks(&[]).expect("pack empty chunks");
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: Some(BodyUpdate {
             content: content.to_string(),
             content_hash: Some(body_hash.clone()),

@@ -108,7 +108,7 @@ async fn enrich_resource_round_trips_managed_and_open(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, profile_id, &row)
+    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, &row)
         .await
         .expect("enrich_resource");
 
@@ -148,7 +148,7 @@ async fn enrich_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, profile_id, &row)
+    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, &row)
         .await
         .expect("enrich_resource");
 
@@ -194,10 +194,9 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched =
-        temper_mcp::tools::resources::enrich_resources(&pool, profile_id, &[row_a, row_b])
-            .await
-            .expect("enrich_resources");
+    let enriched = temper_mcp::tools::resources::enrich_resources(&pool, &[row_a, row_b])
+        .await
+        .expect("enrich_resources");
 
     assert_eq!(enriched.len(), 2);
     let stage_of = |slug: &str| -> Option<String> {

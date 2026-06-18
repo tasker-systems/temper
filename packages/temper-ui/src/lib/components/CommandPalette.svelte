@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { decoratedRef } from '$lib/ref';
 	import type { ResourceRow } from '$lib/types';
 
 	let open = $state(false);
@@ -58,7 +59,7 @@
 			if (focused < results.length) {
 				const row = results[focused];
 				goto(
-					`/vault/${row.owner_handle}/${row.context_name}/${row.doc_type_name}/${row.slug ?? row.id}`
+					`/vault/${row.owner_handle}/${row.context_name}/${row.doc_type_name}/${decoratedRef(row.slug, row.id)}`
 				);
 				open = false;
 			} else if (query.trim()) {
@@ -100,7 +101,7 @@
 						       {i === focused ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}"
 						onclick={() => {
 							goto(
-								`/vault/${row.owner_handle}/${row.context_name}/${row.doc_type_name}/${row.slug ?? row.id}`
+								`/vault/${row.owner_handle}/${row.context_name}/${row.doc_type_name}/${decoratedRef(row.slug, row.id)}`
 							);
 							open = false;
 						}}

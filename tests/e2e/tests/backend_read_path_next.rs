@@ -19,9 +19,9 @@
 mod common;
 
 use reqwest::StatusCode;
-use temper_api::backend::{BackendSelection, NextBackend};
+use temper_api::backend::{read_selector, BackendSelection, NextBackend};
 use temper_core::error::TemperError;
-use temper_core::operations::{Backend, ResourceRef, ShowResource, Surface};
+use temper_core::operations::{Backend, ShowResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 
 /// The metadata-only resource `common::clean_and_seed` inserts (`test://seed-resource`).
@@ -171,9 +171,7 @@ async fn seed_and_synthesize(pool: &sqlx::PgPool) -> uuid::Uuid {
 
 fn show_seed() -> ShowResource {
     ShowResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(uuid::Uuid::parse_str(SEED_RESOURCE_ID).unwrap()),
-        },
+        resource: ResourceId::from(uuid::Uuid::parse_str(SEED_RESOURCE_ID).unwrap()),
         origin: Surface::CliCloud,
     }
 }
@@ -238,4 +236,33 @@ async fn next_read_genuine_fault_returns_api_error(pool: sqlx::PgPool) {
         matches!(err, TemperError::Api(_)),
         "genuine fault must be Api (500), not NotFound (404), got {err:?}"
     );
+}
+
+/// WS6 Spec B Task 4: the `read_selector::show_select` Next arm (which backs the rewritten MCP
+/// `get_resource`) reconstructs the same §9-invariant-floor row as the Legacy arm. Drives the selector
+/// directly over the synthesized fixture (full `temper_api::MIGRATOR`, so the WS2 visibility helpers
+/// `resources_visible_to`/`profile_effective_teams` exist — unlike the temper-next artifact migrator).
+/// Both arms take the production id; the Next arm bridges prod→new via `resolve_new_id` then
+/// `reconstruct_resource_row`. Non-invariants (re-minted ids / §7-dissolved slug+hashes /
+/// synthesis-collapsed timestamps) are NOT asserted equal.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn show_select_next_matches_legacy_at_floor(pool: sqlx::PgPool) {
+    let app = common::setup(pool).await;
+    seed_and_synthesize(&app.pool).await;
+
+    let owner = uuid::Uuid::parse_str(common::SYSTEM_PROFILE_ID).unwrap();
+    let prod_id = uuid::Uuid::parse_str(SEED_RESOURCE_ID).unwrap();
+
+    let legacy = read_selector::show_select(BackendSelection::Legacy, &app.pool, owner, prod_id)
+        .await
+        .expect("legacy show");
+    let next = read_selector::show_select(BackendSelection::Next, &app.pool, owner, prod_id)
+        .await
+        .expect("next show");
+
+    assert_eq!(legacy.origin_uri, next.origin_uri, "origin_uri");
+    assert_eq!(legacy.title, next.title, "title");
+    assert_eq!(legacy.context_name, next.context_name, "context_name");
+    assert_eq!(legacy.doc_type_name, next.doc_type_name, "doc_type_name");
+    assert_eq!(legacy.is_active, next.is_active, "is_active");
 }

@@ -5,10 +5,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
-use temper_api::backend::select_backend;
-use temper_api::services::{
-    context_service, doc_type_service, ingest_service, meta_service, resource_service,
-};
+use temper_api::backend::{read_selector, select_backend};
+use temper_api::services::{meta_service, resource_service};
 use temper_core::error::TemperError;
 use temper_core::operations::{BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -50,12 +48,8 @@ pub struct CreateResourceInput {
 /// MCP input for get_resource.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetResourceInput {
-    /// UUID of the resource. Provide either id or slug (not both).
-    pub id: Option<Uuid>,
-    /// Slug of the resource. Requires context_name for disambiguation.
-    pub slug: Option<String>,
-    /// Context name. Required when looking up by slug.
-    pub context_name: Option<String>,
+    /// Resource ref: a UUID or the decorated `slug-<uuid>` form.
+    pub id: String,
     /// If true, includes the full reconstituted markdown content.
     pub include_content: Option<bool>,
     /// Subselect top-level response keys. Anchor key `id` is always
@@ -188,6 +182,8 @@ pub struct EnrichedResource {
     pub doc_type_name: String,
     pub owner: String,
     pub origin_uri: String,
+    /// Decorated, self-resolving identifier: `sluggify(title)-<uuid>`.
+    pub r#ref: String,
     pub is_active: bool,
     pub created: chrono::DateTime<chrono::Utc>,
     pub updated: chrono::DateTime<chrono::Utc>,
@@ -198,42 +194,32 @@ pub struct EnrichedResource {
 }
 
 /// Assemble an [`EnrichedResource`] from a row plus its already-fetched
-/// meta. Meta is a required, explicit input — there is no hidden DB
-/// fetch here, so every caller decides where meta comes from (a batch
-/// query for lists, `get_content`'s response for the content path).
-async fn build_enriched(
-    pool: &sqlx::PgPool,
-    profile_id: ProfileId,
+/// meta. Pure assembly — `context_name`/`doc_type_name` are read off the
+/// row (both schemas' full-row reads populate them via the browse view /
+/// readback reconstruction), so there is no per-row context/doc_type DB
+/// round-trip. Meta is a required, explicit input, so every caller decides
+/// where it comes from (a batch query for lists, `get_content`'s response
+/// for the content path).
+fn build_enriched(
     row: &temper_core::types::resource::ResourceRow,
     managed_meta: Option<ManagedMeta>,
     open_meta: Option<serde_json::Value>,
-) -> Result<EnrichedResource, rmcp::ErrorData> {
-    let context = context_service::get_visible(pool, profile_id, row.kb_context_id)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to resolve context: {e}"), None)
-        })?;
-
-    let doc_type_name = doc_type_service::get_name_by_id(pool, row.kb_doc_type_id.into())
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to resolve doc_type: {e}"), None)
-        })?;
-
-    Ok(EnrichedResource {
+) -> EnrichedResource {
+    EnrichedResource {
         id: row.id.into(),
         title: row.title.clone(),
         slug: row.slug.clone(),
-        context_name: context.name,
-        doc_type_name,
+        context_name: row.context_name.clone(),
+        doc_type_name: row.doc_type_name.clone(),
         owner: "@me".to_string(),
         origin_uri: row.origin_uri.clone(),
+        r#ref: temper_core::operations::decorated_ref(&row.title, row.id),
         is_active: row.is_active,
         created: row.created,
         updated: row.updated,
         managed_meta,
         open_meta,
-    })
+    }
 }
 
 /// Enrich a batch of resource rows, each with its `managed_meta` /
@@ -244,7 +230,6 @@ async fn build_enriched(
 /// per-row visibility check.
 pub async fn enrich_resources(
     pool: &sqlx::PgPool,
-    profile_id: ProfileId,
     rows: &[temper_core::types::resource::ResourceRow],
 ) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
     let ids: Vec<ResourceId> = rows.iter().map(|row| row.id).collect();
@@ -258,7 +243,7 @@ pub async fn enrich_resources(
             .remove(&row.id)
             .map(|m| (m.managed_meta, m.open_meta))
             .unwrap_or((None, None));
-        enriched.push(build_enriched(pool, profile_id, row, managed_meta, open_meta).await?);
+        enriched.push(build_enriched(row, managed_meta, open_meta));
     }
     Ok(enriched)
 }
@@ -267,15 +252,12 @@ pub async fn enrich_resources(
 /// single-row wrapper over [`enrich_resources`].
 pub async fn enrich_resource(
     pool: &sqlx::PgPool,
-    profile_id: ProfileId,
     row: &temper_core::types::resource::ResourceRow,
 ) -> Result<EnrichedResource, rmcp::ErrorData> {
-    Ok(
-        enrich_resources(pool, profile_id, std::slice::from_ref(row))
-            .await?
-            .pop()
-            .expect("enrich_resources returns one row per input row"),
-    )
+    Ok(enrich_resources(pool, std::slice::from_ref(row))
+        .await?
+        .pop()
+        .expect("enrich_resources returns one row per input row"))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -382,7 +364,7 @@ pub async fn create_resource(
     })?;
     let resource = out.value;
 
-    let enriched = enrich_resource(pool, profile_id, &resource).await?;
+    let enriched = enrich_resource(pool, &resource).await?;
     let response = CreateResourceResponse {
         resource: enriched,
         status: CreateStatus::Created,
@@ -410,85 +392,46 @@ fn map_projection_err(e: temper_core::projection::ProjectionError) -> rmcp::Erro
     }
 }
 
-// WS6 4b note: `get_resource` / `list_resources` stay on the legacy services under `flag=next`.
-// They layer relationship enrichment (`enrich_resources` / `build_enriched`) — reads over
-// `public.kb_resource_edges` keyed by resource id — on top of the base read. The new substrate
-// re-mints ids, so routing only the base read through `read_selector` would leave the enrichment
-// querying `public` with ids that don't exist there (mixed-substrate, incorrect). The enrichment
-// layer is beyond the §9 read floor; routing these tools waits on porting relationship reads
-// (alongside 4c writes). The MCP `search` tool, which has no enrichment, IS routed (see search.rs).
+// WS6 Spec B: `get_resource` routes the base read through `read_selector`, so it answers from
+// `temper_next` under `flag=next` (and the legacy services otherwise). The row comes from
+// `show_select`, meta from `get_meta_select`, and body (when requested) from `get_content_select` —
+// uniform across backends. Sourcing meta via `get_meta_select` (not the legacy "`get_content` returns
+// meta" coupling) is what lets the Next path work: its `get_content` returns `None` meta. The §9 read
+// floor (row + managed/open) is exactly what `build_enriched` assembles; relationship enrichment is a
+// separate, post-floor concern not layered here. The MCP `search` tool is likewise routed (see search.rs).
 pub async fn get_resource(
     svc: &TemperMcpService,
     input: GetResourceInput,
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
+    let sel = svc.api_state.backend_selection;
 
-    // Validate input: exactly one of id or slug
-    let row = match (input.id, input.slug.as_deref()) {
-        (Some(id), None) => resource_service::get_visible(pool, profile.id, id)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-            })?,
-        (None, Some(slug)) => {
-            let context_name = input.context_name.as_deref().ok_or_else(|| {
-                rmcp::ErrorData::invalid_params(
-                    "context_name is required when looking up by slug".to_string(),
-                    None,
-                )
-            })?;
-            let context = context_service::resolve_by_name(pool, profile_id, context_name)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(
-                        format!("Context '{context_name}' not found: {e}"),
-                        None,
-                    )
-                })?;
-            resource_service::get_by_slug(pool, profile.id, slug, context.id.into())
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
-                })?
-        }
-        (Some(_), Some(_)) => {
-            return Err(rmcp::ErrorData::invalid_params(
-                "Provide either id or slug, not both".to_string(),
-                None,
-            ));
-        }
-        (None, None) => {
-            return Err(rmcp::ErrorData::invalid_params(
-                "Provide either id or slug".to_string(),
-                None,
-            ));
-        }
-    };
+    let id = temper_core::operations::parse_ref(&input.id)
+        .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
 
-    let (enriched, body_markdown) = if input.include_content.unwrap_or(false) {
-        // get_content already returns managed_meta + open_meta alongside the
-        // body, so feed those straight into build_enriched — no extra meta query.
-        let content = resource_service::get_content(pool, profile.id, row.id.into())
+    let row = read_selector::show_select(sel, pool, profile.id, id.into())
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
+        })?;
+
+    let meta = read_selector::get_meta_select(sel, pool, ProfileId::from(profile.id), row.id)
+        .await
+        .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
+
+    let body_markdown = if input.include_content.unwrap_or(false) {
+        let content = read_selector::get_content_select(sel, pool, profile.id, row.id.into())
             .await
             .map_err(|e| {
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
             })?;
-
-        let enriched = build_enriched(
-            pool,
-            profile_id,
-            &row,
-            content.managed_meta,
-            content.open_meta,
-        )
-        .await?;
-
-        (enriched, Some(content.markdown))
+        Some(content.markdown)
     } else {
-        (enrich_resource(pool, profile_id, &row).await?, None)
+        None
     };
+
+    let enriched = build_enriched(&row, meta.managed_meta, meta.open_meta);
 
     let enriched_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
@@ -515,53 +458,39 @@ pub async fn list_resources(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
+    let sel = svc.api_state.backend_selection;
 
-    // Resolve names to IDs
-    let context_id = if let Some(ref name) = input.context_name {
-        Some(
-            context_service::resolve_by_name(pool, profile_id, name)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(
-                        format!("Context '{name}' not found: {e}"),
-                        None,
-                    )
-                })?
-                .id
-                .into(),
-        )
-    } else {
-        None
-    };
+    // One backend-agnostic selector returns the rows + their managed/open meta
+    // (Legacy: resolve filter names → ids → list_visible + get_meta_batch; Next:
+    // readback::enriched_list filtered in SQL). MCP has no cfg branch — both
+    // backends flow through the single `build_enriched` assembler below.
+    let rows = read_selector::list_enriched_select(
+        sel,
+        pool,
+        profile.id,
+        input.context_name.as_deref(),
+        input.doc_type_name.as_deref(),
+    )
+    .await
+    .map_err(|e| match e {
+        // A bad filter is a caller error (invalid_params, 400-class), not a server fault —
+        // preserving the pre-unification contract. An unknown `context_name` resolves to
+        // `NotFound` (a unit variant), an unknown `doc_type_name` to `BadRequest(msg)` (carrying
+        // the specific "unknown doc_type: '…'" message).
+        temper_api::error::ApiError::NotFound => rmcp::ErrorData::invalid_params(
+            format!("unknown filter: no context named {:?}", input.context_name),
+            None,
+        ),
+        temper_api::error::ApiError::BadRequest(msg) => rmcp::ErrorData::invalid_params(msg, None),
+        other => {
+            rmcp::ErrorData::internal_error(format!("Failed to list resources: {other}"), None)
+        }
+    })?;
 
-    let doc_type_id = if let Some(ref name) = input.doc_type_name {
-        Some(
-            ingest_service::resolve_doc_type(pool, name)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::invalid_params(format!("Unknown doc_type '{name}': {e}"), None)
-                })?,
-        )
-    } else {
-        None
-    };
-
-    let params = resource_service::ResourceListParams {
-        kb_context_id: context_id,
-        kb_doc_type_id: doc_type_id,
-        limit: input.limit,
-        offset: input.offset,
-        ..Default::default()
-    };
-
-    let response = resource_service::list_visible(pool, profile.id, params)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
-        })?;
-
-    let enriched = enrich_resources(pool, profile_id, &response.rows).await?;
+    let enriched: Vec<EnrichedResource> = rows
+        .iter()
+        .map(|(row, managed, open)| build_enriched(row, managed.clone(), open.clone()))
+        .collect();
 
     let array_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
@@ -625,7 +554,7 @@ pub async fn update_resource(
     }
 
     let cmd = temper_core::operations::UpdateResource {
-        resource: temper_core::operations::ResourceRef::Uuid { id: resource_id },
+        resource: resource_id,
         body: input.content.map(BodyUpdate::new),
         managed_meta: Some(managed_meta),
         open_meta: input.open_meta,
@@ -662,7 +591,7 @@ pub async fn update_resource(
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
 
-    let enriched = enrich_resource(pool, profile_id, &row).await?;
+    let enriched = enrich_resource(pool, &row).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
     )]))
@@ -684,7 +613,7 @@ pub async fn update_resource_meta(
     // server-side (Phase 5: caller-supplied hashes are no longer trusted),
     // emits the update_meta audit, and reconciles edges.
     let cmd = temper_core::operations::UpdateResource {
-        resource: temper_core::operations::ResourceRef::Uuid { id: resource_id },
+        resource: resource_id,
         body: None,
         managed_meta: Some(input.managed_meta),
         open_meta: Some(input.open_meta),
@@ -733,9 +662,7 @@ pub async fn delete_resource(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = temper_core::operations::DeleteResource {
-        resource: temper_core::operations::ResourceRef::Uuid {
-            id: ResourceId::from(input.id),
-        },
+        resource: ResourceId::from(input.id),
         // CLI-side concern; DbBackend ignores per spec (force=true is only
         // relevant when a CLI surface presents a confirmation prompt).
         force: false,
@@ -827,16 +754,67 @@ mod tests {
 }
 
 #[cfg(test)]
+mod build_enriched_tests {
+    use super::*;
+
+    fn sample_row() -> temper_core::types::resource::ResourceRow {
+        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+        use temper_core::types::resource::ResourceRow;
+        let nil = uuid::Uuid::nil();
+        ResourceRow {
+            id: ResourceId::from(uuid::Uuid::now_v7()),
+            kb_context_id: ContextId::from(nil),
+            kb_doc_type_id: DocTypeId::from(nil),
+            origin_uri: "temper://fixture/task-doc".to_string(),
+            title: "Wire the widget".to_string(),
+            slug: Some("wire-the-widget".to_string()),
+            originator_profile_id: ProfileId::from(nil),
+            owner_profile_id: ProfileId::from(nil),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            context_name: "temper".to_string(),
+            doc_type_name: "task".to_string(),
+            owner_handle: "@me".to_string(),
+            stage: Some("in-progress".to_string()),
+            seq: None,
+            mode: None,
+            effort: None,
+            body_hash: None,
+            managed_hash: None,
+            open_hash: None,
+        }
+    }
+
+    #[test]
+    fn build_enriched_uses_row_names_and_decorated_ref() {
+        let row = sample_row();
+        let e = build_enriched(&row, None, None);
+        assert_eq!(e.context_name, "temper");
+        assert_eq!(e.doc_type_name, "task");
+        assert_eq!(
+            e.r#ref,
+            temper_core::operations::decorated_ref(&row.title, row.id)
+        );
+    }
+}
+
+#[cfg(test)]
 mod fields_projection_tests {
     use super::*;
 
     #[test]
+    fn get_resource_input_is_ref_only() {
+        let raw = serde_json::json!({ "id": "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2" });
+        let input: GetResourceInput = serde_json::from_value(raw).unwrap();
+        assert_eq!(input.id, "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
+    }
+
+    #[test]
     fn get_resource_input_accepts_fields() {
-        // Compile-time check that GetResourceInput grows the field.
+        // Compile-time check that GetResourceInput carries the field.
         let _input = GetResourceInput {
-            id: None,
-            slug: Some("x".to_string()),
-            context_name: Some("y".to_string()),
+            id: "x".to_string(),
             include_content: Some(false),
             fields: Some(vec!["managed_meta".to_string()]),
         };
@@ -887,6 +865,16 @@ mod fields_projection_tests {
             offset: None,
             fields: Some(vec!["managed_meta".to_string()]),
         };
+    }
+
+    #[test]
+    fn enriched_resource_carries_decorated_ref() {
+        let id = uuid::Uuid::parse_str("019e84ab-26ba-7560-9d34-c60d74a9fbe2").unwrap();
+        let got = temper_core::operations::decorated_ref(
+            "My Task",
+            temper_core::types::ids::ResourceId(id),
+        );
+        assert_eq!(got, "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2");
     }
 
     #[test]

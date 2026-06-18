@@ -8,7 +8,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::state::AppState;
 
-use temper_core::operations::{BodyUpdate, CreateResource, ResourceRef, Surface, UpdateResource};
+use temper_core::operations::{BodyUpdate, CreateResource, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::ingest::IngestPayload;
 use temper_core::types::managed_meta::ManagedMeta;
@@ -123,9 +123,7 @@ pub async fn update(
     };
 
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(resource_id),
-        },
+        resource: ResourceId::from(resource_id),
         body,
         managed_meta,
         open_meta: payload.open_meta,

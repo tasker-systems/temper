@@ -14,7 +14,6 @@ use crate::frontmatter::fields::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
 use crate::types::managed_meta::ManagedMeta;
 
 use super::commands::{CreateResource, UpdateResource};
-use super::resource_ref::ResourceRef;
 
 /// Errors that can arise during pure-action execution.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -386,26 +385,12 @@ pub fn validate_create(cmd: &CreateResource) -> Result<(), ActionError> {
 
 /// Pre-flight validation for an `UpdateResource` command.
 ///
-/// Checks the `ResourceRef` is well-formed. Field-level validation of the
+/// The resource is addressed by a `ResourceId`, which is always well-formed,
+/// so there is nothing to validate pre-flight. Field-level validation of the
 /// patch payload (managed_meta enums, etc.) is the backend's responsibility
 /// after merging onto the resolved resource.
-pub fn validate_update(cmd: &UpdateResource) -> Result<(), ActionError> {
-    match &cmd.resource {
-        ResourceRef::Uuid { .. } => Ok(()),
-        ResourceRef::Scoped {
-            slug,
-            doctype,
-            context,
-            ..
-        } => {
-            validate_slug(slug)?;
-            validate_doctype(doctype)?;
-            if context.is_empty() {
-                return Err(ActionError::MissingRequiredField("context".to_string()));
-            }
-            Ok(())
-        }
-    }
+pub fn validate_update(_cmd: &UpdateResource) -> Result<(), ActionError> {
+    Ok(())
 }
 
 /// Validate every top-level key in `open_meta` against the
@@ -726,7 +711,7 @@ mod tests {
     #[test]
     fn validate_update_accepts_uuid_ref() {
         let cmd = UpdateResource {
-            resource: ResourceRef::uuid(ResourceId(Uuid::nil())),
+            resource: ResourceId(Uuid::nil()),
             body: None,
             managed_meta: None,
             open_meta: None,
@@ -734,22 +719,6 @@ mod tests {
             origin: super::super::Surface::CliCloud,
         };
         assert!(validate_update(&cmd).is_ok());
-    }
-
-    #[test]
-    fn validate_update_validates_scoped_ref() {
-        let cmd = UpdateResource {
-            resource: ResourceRef::scoped("@me", "temper", "task", "INVALID"),
-            body: None,
-            managed_meta: None,
-            open_meta: None,
-            move_to: None,
-            origin: super::super::Surface::CliCloud,
-        };
-        assert!(matches!(
-            validate_update(&cmd),
-            Err(ActionError::InvalidSlug(_))
-        ));
     }
 
     #[test]

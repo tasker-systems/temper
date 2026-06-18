@@ -289,6 +289,167 @@ pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
         .collect())
 }
 
+/// One enriched list row over `temper_next.*` — the readback counterpart of MCP's `EnrichedResource`
+/// list projection (Task 6 assembles `EnrichedResource` from this). Like [`ListRow`] it carries the
+/// row's display fields + the three workflow keys as typed columns, PLUS the full reconstructed
+/// managed/open frontmatter split (so the MCP enrichment needs no per-row meta round-trip — the §7
+/// managed/open split, same as [`meta`], rides along here in batch). The re-minted `new_id` is carried
+/// for `EnrichedResource.id`; it is a §-non-invariant (never asserted equal across legacy↔next).
+#[derive(Debug, Clone)]
+pub struct EnrichedListRow {
+    /// The synthesized resource id (re-minted; non-invariant; carried for `EnrichedResource.id`).
+    pub new_id: Uuid,
+    /// Verbatim-carried, UNIQUE `origin_uri` (the join key both schemas share).
+    pub origin_uri: String,
+    /// The resource title (`temper_next.kb_resources.title`).
+    pub title: String,
+    /// Active flag — always true here (synthesis carries only active resources).
+    pub is_active: bool,
+    /// Home context display name.
+    pub context_name: String,
+    /// The authoritative doctype (the `doc_type` property the resource pass stamps).
+    pub doc_type: String,
+    /// `temper-stage`, if present.
+    pub stage: Option<String>,
+    /// `temper-mode`, if present.
+    pub mode: Option<String>,
+    /// `temper-effort`, if present.
+    pub effort: Option<String>,
+    /// Surviving managed (workflow + provenance) keys, verbatim (same §7 split as [`meta`]).
+    pub managed: Map<String, Value>,
+    /// Open (user-defined) keys, verbatim.
+    pub open: Map<String, Value>,
+}
+
+/// Batched, context/doctype-filtered list projection for MCP enrichment — two queries, no N+1:
+/// (1) the visible set (`resources_visible_to($1)`) with row + display fields + the `doc_type`
+/// property (an INNER JOIN that also serves the doctype filter) and the three workflow keys as typed
+/// columns; (2) one `owner_id = ANY($ids)` property scan to reconstruct the managed/open split per row
+/// (the §7 inverse fate, reusing [`is_managed_property_key`], exactly as [`meta`] does for a single
+/// resource). Both queries run inside ONE `SET LOCAL search_path TO temper_next, public` txn so
+/// `resources_visible_to`'s unqualified internals (`profile_effective_teams`/`team_ancestors`) resolve
+/// (the same `ensure_visible` search_path discipline the single-resource reads use).
+///
+/// `doc_type` is surfaced as the typed column ONLY, never duplicated into managed/open — parity with
+/// [`meta`], which reconciles it to the authoritative doctype field. The workflow keys
+/// (`temper-stage`/`-mode`/`-effort`) DO appear in both the typed columns and the managed map (they are
+/// managed keys that survive §7) — consistent with production's `ResourceRow` columns + `ManagedMeta`.
+///
+/// Filters are applied in SQL: `context_name` matches the home context's name, `doc_type` matches the
+/// `doc_type` property value (both NULL-passthrough — a `None` filter matches every row). Ordered by
+/// `origin_uri` (verbatim, UNIQUE) for determinism, matching [`list`].
+///
+/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
+/// module-level note.
+pub async fn enriched_list(
+    pool: &PgPool,
+    principal: Uuid,
+    context_name: Option<&str>,
+    doc_type: Option<&str>,
+) -> Result<Vec<EnrichedListRow>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+
+    // Query 1: the visible, filtered set with display fields + doc_type (INNER JOIN) + workflow keys.
+    let set_rows = sqlx::query(
+        "SELECT r.id AS new_id,
+                r.origin_uri,
+                r.title,
+                r.is_active,
+                c.name AS context_name,
+                dt.property_value #>> '{}' AS doc_type,
+                st.property_value #>> '{}' AS stage,
+                md.property_value #>> '{}' AS mode,
+                ef.property_value #>> '{}' AS effort
+           FROM temper_next.kb_resources r
+           JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
+           JOIN temper_next.kb_resource_homes h ON h.resource_id = r.id
+           JOIN temper_next.kb_contexts c
+             ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
+           JOIN temper_next.kb_properties dt
+             ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
+            AND dt.property_key = 'doc_type' AND NOT dt.is_folded
+           LEFT JOIN temper_next.kb_properties st
+             ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
+            AND st.property_key = 'temper-stage' AND NOT st.is_folded
+           LEFT JOIN temper_next.kb_properties md
+             ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
+            AND md.property_key = 'temper-mode' AND NOT md.is_folded
+           LEFT JOIN temper_next.kb_properties ef
+             ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
+            AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
+          WHERE ($2::text IS NULL OR c.name = $2)
+            AND ($3::text IS NULL OR dt.property_value #>> '{}' = $3)
+          ORDER BY r.origin_uri",
+    )
+    .bind(principal)
+    .bind(context_name)
+    .bind(doc_type)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let ids: Vec<Uuid> = set_rows
+        .iter()
+        .map(|r| r.get::<Uuid, _>("new_id"))
+        .collect();
+
+    // Query 2: one batched property scan for the surviving ids → managed/open reconstruction.
+    let prop_rows = sqlx::query(
+        "SELECT owner_id, property_key, property_value
+           FROM temper_next.kb_properties
+          WHERE owner_table = 'kb_resources'
+            AND owner_id = ANY($1)
+            AND NOT is_folded",
+    )
+    .bind(&ids)
+    .fetch_all(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    // Group properties by owner; reuse the §7 managed/open inverse fate (same split as `meta`).
+    // (managed, open) maps per owner.
+    type MetaSplit = (Map<String, Value>, Map<String, Value>);
+    let mut by_owner: HashMap<Uuid, MetaSplit> = HashMap::new();
+    for pr in &prop_rows {
+        let owner: Uuid = pr.get("owner_id");
+        let key: String = pr.get("property_key");
+        let value: Value = pr.get("property_value");
+        if key == "doc_type" {
+            // Surfaced as the typed column, not in managed/open (parity with `meta`).
+            continue;
+        }
+        let entry = by_owner.entry(owner).or_default();
+        if is_managed_property_key(&key) {
+            entry.0.insert(key, value);
+        } else {
+            entry.1.insert(key, value);
+        }
+    }
+
+    Ok(set_rows
+        .iter()
+        .map(|r| {
+            let new_id: Uuid = r.get("new_id");
+            let (managed, open) = by_owner.remove(&new_id).unwrap_or_default();
+            EnrichedListRow {
+                new_id,
+                origin_uri: r.get("origin_uri"),
+                title: r.get("title"),
+                is_active: r.get("is_active"),
+                context_name: r.get("context_name"),
+                doc_type: r.get("doc_type"),
+                stage: r.get("stage"),
+                mode: r.get("mode"),
+                effort: r.get("effort"),
+                managed,
+                open,
+            }
+        })
+        .collect())
+}
+
 /// Reconstructed frontmatter for one synthesized resource, the inverse of the §7 fate table over
 /// `temper_next.kb_properties`. Mirrors production `get_meta`'s managed/open split, EXCEPT the §7-died
 /// keys (`temper-title`/`-slug`/`-id`/`-context`) never reappear (their state lives authoritatively in

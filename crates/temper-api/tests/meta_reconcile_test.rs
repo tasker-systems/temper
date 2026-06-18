@@ -13,7 +13,7 @@ mod common;
 use serde_json::json;
 use sqlx::PgPool;
 use temper_api::backend::DbBackend;
-use temper_core::operations::{Backend, ResourceRef, Surface, UpdateResource};
+use temper_core::operations::{Backend, Surface, UpdateResource};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
 
@@ -27,9 +27,7 @@ async fn meta_only_update(
     open_meta: serde_json::Value,
 ) {
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(resource_id),
-        },
+        resource: ResourceId::from(resource_id),
         body: None,
         managed_meta: Some(ManagedMeta::default()),
         open_meta: Some(open_meta),

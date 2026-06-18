@@ -4,7 +4,7 @@ mod common;
 
 use temper_api::backend::DbBackend;
 use temper_api::services::{context_service, event_service, ingest_service, resource_service};
-use temper_core::operations::{Backend, BodyUpdate, ResourceRef, Surface, UpdateResource};
+use temper_core::operations::{Backend, BodyUpdate, Surface, UpdateResource};
 use temper_core::types::api::EventListParams;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
@@ -425,7 +425,7 @@ async fn mcp_update_resource_changes_content_and_reindexes(pool: sqlx::PgPool) {
     let updated_hash = format!("sha256:{}", sha2_hex(updated_content));
 
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid { id: resource.id },
+        resource: resource.id,
         body: Some(BodyUpdate {
             content: updated_content.to_string(),
             content_hash: Some(updated_hash.clone()),
@@ -578,9 +578,7 @@ async fn mcp_update_resource_meta_preserves_chunks_and_body_hash(pool: sqlx::PgP
     };
     let new_open = serde_json::json!({"tags": ["mcp", "parity", "updated"]});
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(new_managed),
         open_meta: Some(new_open),
@@ -711,9 +709,7 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
 
     // Partial update: change ONLY the stage.
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("done".to_string()),
@@ -806,9 +802,7 @@ async fn list_events_managed_meta_update_surfaces_changed_keys(pool: sqlx::PgPoo
 
     // Change exactly one managed_meta key: temper-stage.
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("done".to_string()),
@@ -916,9 +910,7 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
 
     // Update with a temper-stage value outside the task schema's enum.
     let cmd = UpdateResource {
-        resource: ResourceRef::Uuid {
-            id: ResourceId::from(*resource.id),
-        },
+        resource: ResourceId::from(*resource.id),
         body: None,
         managed_meta: Some(ManagedMeta {
             stage: Some("not-a-real-stage".to_string()),
@@ -952,5 +944,328 @@ async fn mcp_update_resource_meta_rejects_schema_invalid_field(pool: sqlx::PgPoo
     assert_eq!(
         managed["temper-stage"], "backlog",
         "a rejected update must leave stored managed_meta untouched",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// WS6 Spec B Task 4: get_resource routes through read_selector (legacy regression)
+// ---------------------------------------------------------------------------
+
+/// Drive the production MCP `get_resource` tool fn end-to-end on the legacy backend after the Spec B
+/// rewrite (row via `show_select`, meta via `get_meta_select`, body via `get_content_select`, assembled
+/// by `build_enriched`). Proves the rewrite preserves the legacy contract through the *production caller*
+/// (`TemperMcpService` → `require_profile` → `get_resource`): the response carries managed_meta +
+/// open_meta off the meta selector, plus a second body part under `include_content`.
+///
+/// The Next-arm readback proof is the api-level `show_select`/`get_meta_select` parity
+/// (`backend_read_path_next::show_select_next_matches_legacy_at_floor`). A flag=next MCP-service e2e is
+/// disproportionate: the service's profile cache is only seeded via `ensure_profile_from_parts`, and no
+/// flag=next MCP harness exists — the selector-level parity already proves the data get_resource sources.
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mcp_get_resource_routes_through_selector_legacy(pool: sqlx::PgPool) {
+    use temper_api::backend::BackendSelection;
+    use temper_api::config::ApiConfig;
+    use temper_api::state::{AppState, JwksKeyStore};
+
+    let app = common::setup(pool.clone()).await;
+    // Provision the e2e-test-user profile (auto-created on first profile read).
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let profile_id = resolve_test_profile(&pool).await;
+
+    // Seed a resource (owned by the caller) with managed + open meta + a real chunk body.
+    context_service::create(&pool, profile_id, "selector-route")
+        .await
+        .expect("context create");
+    let context = context_service::resolve_by_name(&pool, profile_id, "selector-route")
+        .await
+        .expect("context resolve");
+    let doc_type_id = ingest_service::resolve_doc_type(&pool, "research")
+        .await
+        .expect("doc_type");
+    let body = "Selector routing keeps the legacy contract intact.";
+    let content = format!("# Selector Route\n\n{body}");
+    let packed = temper_core::types::ingest::pack_chunks(&[fake_chunk(0, "Selector Route", body)])
+        .expect("pack chunks");
+    let body_hash = format!("sha256:{}", sha2_hex(&content));
+    let managed = serde_json::json!({"temper-type": "research", "temper-stage": "in-progress"});
+    let open = serde_json::json!({"tags": ["selector", "route"]});
+    let resource = ingest_service::create_resource_with_manifest(
+        &pool,
+        &ingest_service::CreateResourceParams {
+            id: ResourceId::new(),
+            profile_id,
+            device_id: "mcp-selector",
+            context_id: context.id,
+            doc_type_id,
+            doc_type_name: "research",
+            title: "Selector Route Doc",
+            slug: Some("selector-route-doc"),
+            origin_uri: "mcp://test/selector-route",
+            content_hash: &body_hash,
+            managed_meta: &managed,
+            open_meta: &open,
+            chunks_packed: Some(&packed),
+        },
+    )
+    .await
+    .expect("create resource");
+
+    // Build a legacy-backed MCP service and seed its profile cache from synthetic JWT claims — the
+    // production caller path (`ensure_profile_from_parts` → `require_profile`).
+    let decoding_key =
+        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
+            .expect("decoding key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
+    let api_config = ApiConfig {
+        database_url: "unused".to_string(),
+        jwks_url: "unused".to_string(),
+        auth_issuer: "test-issuer".to_string(),
+        auth_audience: None,
+        auth_provider_name: "test-provider".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+    };
+    let state = AppState::new(pool.clone(), jwks_store, api_config)
+        .with_backend_selection(BackendSelection::Legacy);
+    let svc = temper_mcp::service::TemperMcpService::new(state);
+
+    let req = axum::http::Request::builder()
+        .extension(temper_mcp::middleware::McpClaims {
+            sub: "e2e-test-user".to_string(),
+            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+        })
+        .body(())
+        .expect("build request");
+    let (req_parts, ()) = req.into_parts();
+    svc.ensure_profile_from_parts(&req_parts)
+        .await
+        .expect("seed profile cache");
+
+    let result = temper_mcp::tools::resources::get_resource(
+        &svc,
+        temper_mcp::tools::resources::GetResourceInput {
+            id: (*resource.id).to_string(),
+            include_content: Some(true),
+            fields: None,
+        },
+    )
+    .await
+    .expect("get_resource ok");
+
+    // Serialize the CallToolResult to inspect its content parts robustly.
+    let v = serde_json::to_value(&result).expect("serialize result");
+    let parts = v["content"].as_array().expect("content array");
+    assert_eq!(
+        parts.len(),
+        2,
+        "include_content=true yields the enriched json + a body part"
+    );
+    let enriched: serde_json::Value =
+        serde_json::from_str(parts[0]["text"].as_str().expect("first part text"))
+            .expect("parse enriched json");
+    assert_eq!(
+        enriched["doc_type_name"], "research",
+        "doc_type_name read off the row"
+    );
+    assert_eq!(
+        enriched["context_name"], "selector-route",
+        "context_name read off the row"
+    );
+    assert!(
+        enriched.get("managed_meta").is_some(),
+        "managed_meta sourced via get_meta_select"
+    );
+    assert_eq!(
+        enriched["open_meta"]["tags"][0], "selector",
+        "open_meta sourced via get_meta_select"
+    );
+    let body_text = parts[1]["text"].as_str().expect("body part text");
+    assert!(
+        body_text.contains("Selector routing keeps the legacy contract"),
+        "body via get_content_select, got: {body_text}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// WS6 Spec B Task 6: list_resources routes through list_enriched_select (legacy regression)
+// ---------------------------------------------------------------------------
+
+/// Drive the production MCP `list_resources` tool fn end-to-end on the legacy backend after the Spec B
+/// rewrite (rows + meta via the single backend-agnostic `read_selector::list_enriched_select`, each
+/// assembled by the pure `build_enriched`). Proves the rewrite preserves the legacy contract through the
+/// *production caller* (`TemperMcpService` → `require_profile` → `list_resources`): the doctype filter
+/// narrows the array to matching rows, and every row carries managed_meta + a non-empty context_name.
+///
+/// The Next-arm readback proof is the api-level `list_enriched_select` parity
+/// (`parity_reads::read_selector_next_matches_legacy`, extended with a `list_enriched` block). A flag=next
+/// MCP-service e2e is disproportionate for the same reason Task 4 documented (no flag=next MCP harness;
+/// the selector-level parity already proves the data the tool sources).
+#[sqlx::test(migrator = "temper_api::MIGRATOR")]
+async fn mcp_list_resources_routes_through_selector_legacy(pool: sqlx::PgPool) {
+    use temper_api::backend::BackendSelection;
+    use temper_api::config::ApiConfig;
+    use temper_api::state::{AppState, JwksKeyStore};
+
+    let app = common::setup(pool.clone()).await;
+    app.client
+        .profile()
+        .get()
+        .await
+        .expect("profile pre-flight");
+    let profile_id = resolve_test_profile(&pool).await;
+
+    // Seed two resources in one context with distinct doctypes (research + task), each with managed
+    // + open meta, so the doctype filter has something to narrow.
+    context_service::create(&pool, profile_id, "list-selector")
+        .await
+        .expect("context create");
+    let context = context_service::resolve_by_name(&pool, profile_id, "list-selector")
+        .await
+        .expect("context resolve");
+
+    for (doc_type_name, title, slug, origin_uri) in [
+        (
+            "research",
+            "List Selector Research",
+            "list-selector-research",
+            "mcp://test/list-selector-research",
+        ),
+        (
+            "task",
+            "List Selector Task",
+            "list-selector-task",
+            "mcp://test/list-selector-task",
+        ),
+    ] {
+        let doc_type_id = ingest_service::resolve_doc_type(&pool, doc_type_name)
+            .await
+            .expect("doc_type");
+        let content = format!("# {title}\n\nbody for {slug}");
+        let body_hash = format!("sha256:{}", sha2_hex(&content));
+        let managed =
+            serde_json::json!({"temper-type": doc_type_name, "temper-stage": "in-progress"});
+        let open = serde_json::json!({"tags": [slug]});
+        ingest_service::create_resource_with_manifest(
+            &pool,
+            &ingest_service::CreateResourceParams {
+                id: ResourceId::new(),
+                profile_id,
+                device_id: "mcp-list-selector",
+                context_id: context.id,
+                doc_type_id,
+                doc_type_name,
+                title,
+                slug: Some(slug),
+                origin_uri,
+                content_hash: &body_hash,
+                managed_meta: &managed,
+                open_meta: &open,
+                chunks_packed: None,
+            },
+        )
+        .await
+        .expect("create resource");
+    }
+
+    // Build a legacy-backed MCP service and seed its profile cache (the production caller path).
+    let decoding_key =
+        jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("fixtures/test_rsa.pub"))
+            .expect("decoding key");
+    let jwks_store = JwksKeyStore::with_static_key(decoding_key);
+    let api_config = ApiConfig {
+        database_url: "unused".to_string(),
+        jwks_url: "unused".to_string(),
+        auth_issuer: "test-issuer".to_string(),
+        auth_audience: None,
+        auth_provider_name: "test-provider".to_string(),
+        cors_origins: vec![],
+        port: 0,
+        enable_swagger: false,
+    };
+    let state = AppState::new(pool.clone(), jwks_store, api_config)
+        .with_backend_selection(BackendSelection::Legacy);
+    let svc = temper_mcp::service::TemperMcpService::new(state);
+
+    let req = axum::http::Request::builder()
+        .extension(temper_mcp::middleware::McpClaims {
+            sub: "e2e-test-user".to_string(),
+            exp: (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp(),
+        })
+        .body(())
+        .expect("build request");
+    let (req_parts, ()) = req.into_parts();
+    svc.ensure_profile_from_parts(&req_parts)
+        .await
+        .expect("seed profile cache");
+
+    // Filter by doctype=research → only the research row, enriched.
+    let result = temper_mcp::tools::resources::list_resources(
+        &svc,
+        temper_mcp::tools::resources::ListResourcesInput {
+            context_name: Some("list-selector".to_string()),
+            doc_type_name: Some("research".to_string()),
+            limit: None,
+            offset: None,
+            fields: None,
+        },
+    )
+    .await
+    .expect("list_resources ok");
+
+    let v = serde_json::to_value(&result).expect("serialize result");
+    let text = v["content"][0]["text"].as_str().expect("content text");
+    let rows: serde_json::Value = serde_json::from_str(text).expect("parse rows array");
+    let rows = rows.as_array().expect("rows is an array");
+    assert_eq!(
+        rows.len(),
+        1,
+        "doctype=research filter narrows to exactly the one research row"
+    );
+    let row = &rows[0];
+    assert_eq!(
+        row["doc_type_name"], "research",
+        "filtered row is the research doctype"
+    );
+    assert_eq!(
+        row["context_name"], "list-selector",
+        "context_name read off the row"
+    );
+    assert!(
+        row.get("managed_meta").is_some(),
+        "managed_meta sourced via list_enriched_select (get_meta_batch)"
+    );
+    assert_eq!(
+        row["open_meta"]["tags"][0], "list-selector-research",
+        "open_meta sourced via list_enriched_select"
+    );
+
+    // I1 regression: an unknown doc_type filter is a caller error (invalid_params / 400-class),
+    // NOT internal_error (500-class). Filter-id resolution moved behind list_enriched_select, so
+    // its NotFound must be re-mapped to invalid_params at the MCP boundary.
+    let bad = temper_mcp::tools::resources::list_resources(
+        &svc,
+        temper_mcp::tools::resources::ListResourcesInput {
+            context_name: Some("list-selector".to_string()),
+            doc_type_name: Some("no-such-doctype".to_string()),
+            limit: None,
+            offset: None,
+            fields: None,
+        },
+    )
+    .await
+    .expect_err("unknown doc_type filter must error");
+    // The internal_error (I1-regression) path prefixes "Failed to list resources: …"; the
+    // invalid_params (caller-error) path does not. The bad doc_type resolves to BadRequest →
+    // invalid_params carrying the specific "unknown doc_type: '…'" message.
+    assert!(
+        !bad.message.contains("Failed to list resources")
+            && bad.message.contains("unknown doc_type"),
+        "bad filter must map to invalid_params (not the internal_error path); got: {}",
+        bad.message
     );
 }

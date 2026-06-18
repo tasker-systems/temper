@@ -7,7 +7,6 @@ pub mod init;
 pub mod pull;
 pub mod resource;
 pub mod search_cmd;
-pub mod session;
 pub mod skill;
 pub mod status;
 pub mod task;

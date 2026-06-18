@@ -12,12 +12,12 @@ use crate::error::{Result, TemperError};
 // ---------------------------------------------------------------------------
 
 /// Slugify a title for use in URIs and slugs.
+///
+/// Delegates to `temper_core::operations::sluggify` — the one slug function,
+/// shared with decorated-ref decoration so URIs/filenames and ref decorations
+/// can never drift apart.
 pub fn slug_from_title(title: &str) -> String {
-    title
-        .to_lowercase()
-        .replace(|c: char| !c.is_alphanumeric() && c != '-', "-")
-        .trim_matches('-')
-        .to_owned()
+    temper_core::operations::sluggify(title)
 }
 
 /// Body trio extracted from raw markdown — the chunk + hash output that

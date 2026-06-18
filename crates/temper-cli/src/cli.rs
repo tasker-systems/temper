@@ -246,14 +246,8 @@ pub enum ResourceAction {
     },
     /// Show a resource's content
     Show {
-        /// Resource slug
-        slug: String,
-        /// Resource type (task, goal, session, research, concept, decision)
-        #[arg(long)]
-        r#type: String,
-        /// Filter by context
-        #[arg(long)]
-        context: Option<String>,
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
         /// Show graph edges connected to this resource
         #[arg(long)]
         edges: bool,
@@ -274,20 +268,11 @@ pub enum ResourceAction {
     /// body trio (content + content_hash + chunks_packed) is PATCHed alongside
     /// any frontmatter changes in a single API call.
     Update {
-        /// Resource slug
-        slug: String,
-        /// Current resource type (for lookup)
-        #[arg(long)]
-        r#type: Option<String>,
-        /// Current resource type when changing type (use with --type-to)
-        #[arg(long)]
-        type_from: Option<String>,
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
         /// New resource type (converts the resource)
         #[arg(long)]
         type_to: Option<String>,
-        /// Context to search in
-        #[arg(long)]
-        context: Option<String>,
         /// Move resource to a new context
         #[arg(long)]
         context_to: Option<String>,
@@ -359,14 +344,8 @@ pub enum ResourceAction {
     /// prompt. `--force` is vestigial (a no-op holdover from the pre-cloud
     /// local-mode TTY gate); it is accepted for clarity but changes nothing.
     Delete {
-        /// Resource slug
-        slug: String,
-        /// Resource type (task, goal, session, research, concept, decision)
-        #[arg(long)]
-        r#type: String,
-        /// Filter by context
-        #[arg(long)]
-        context: Option<String>,
+        /// Resource ref: a UUID or the decorated `slug-<uuid>` form
+        r#ref: String,
         /// Skip the local-file confirmation prompt
         #[arg(long)]
         force: bool,
@@ -469,20 +448,9 @@ pub enum EdgeAction {
     /// Sends a `POST /api/relationships` request. Returns a `correlation_id`
     /// that identifies the relationship chain for subsequent retype/reweight/fold.
     Assert {
-        /// Owner of the source resource (e.g. "@me" or "+team-acme")
-        #[arg(long)]
-        source_owner: String,
-        /// Context of the source resource
-        #[arg(long)]
-        source_context: String,
-        /// Doc type of the source resource (e.g. "task", "goal")
-        #[arg(long)]
-        source_doctype: String,
-        /// Slug of the source resource
-        #[arg(long)]
-        source_slug: String,
-        /// Slug of the target resource (resolved within source's context)
-        #[arg(long)]
+        /// Source resource ref: a UUID or the decorated `slug-<uuid>` form
+        source: String,
+        /// Target resource ref: a UUID or the decorated `slug-<uuid>` form
         target: String,
         /// Edge kind (express, contains, leads-to, near)
         #[arg(long, value_enum)]
@@ -544,11 +512,7 @@ mod meta_only_flag_tests {
             "temper",
             "resource",
             "show",
-            "my-slug",
-            "--type",
-            "task",
-            "--context",
-            "temper",
+            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
             "--meta-only",
             "--fields",
             "managed_meta,open_meta",
@@ -567,13 +531,29 @@ mod meta_only_flag_tests {
             "temper",
             "resource",
             "show",
-            "my-slug",
-            "--type",
-            "task",
+            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
             "--meta-only",
             "--edges",
         ]);
         assert!(m.is_err(), "--meta-only and --edges must conflict");
+    }
+
+    #[test]
+    fn show_accepts_bare_ref_and_rejects_type_flag() {
+        use clap::Parser;
+        // A single ref positional parses.
+        assert!(Cli::try_parse_from([
+            "temper",
+            "resource",
+            "show",
+            "my-task-019e84ab-26ba-7560-9d34-c60d74a9fbe2",
+        ])
+        .is_ok());
+        // The removed --type flag is now an unknown arg → parse error.
+        assert!(
+            Cli::try_parse_from(["temper", "resource", "show", "some-ref", "--type", "task",])
+                .is_err()
+        );
     }
 
     #[test]
