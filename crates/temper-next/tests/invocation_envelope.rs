@@ -153,3 +153,31 @@ async fn delegation_gate_blocks_unshared_cogmaps() {
     let err = res.expect_err("delegation gate must reject cogmaps with no shared team");
     assert!(err.to_string().contains("delegation gate"), "got: {err}");
 }
+
+#[tokio::test]
+async fn invocation_close_sets_terminal_status() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-c").await;
+    let inv = Uuid::now_v7();
+    sqlx::query_scalar::<_, Uuid>("SELECT invocation_open($1::jsonb, $2)")
+        .bind(serde_json::json!({
+            "invocation_id": inv, "trigger_kind": "manual",
+            "originating_cogmap_id": cog.uuid(), "scoped_entity_id": emitter.uuid(),
+        }))
+        .bind(emitter.uuid()).fetch_one(&pool).await.unwrap();
+
+    sqlx::query_scalar::<_, Uuid>("SELECT invocation_close($1::jsonb, $2)")
+        .bind(serde_json::json!({
+            "invocation_id": inv, "disposition": "completed",
+            "outcome": {"concepts": 3, "edges": 2},
+        }))
+        .bind(emitter.uuid()).fetch_one(&pool).await.unwrap();
+
+    let (status, outcome, closed): (String, serde_json::Value, bool) = sqlx::query_as(
+        "SELECT status, outcome, closed_at IS NOT NULL FROM kb_invocations WHERE id=$1",
+    ).bind(inv).fetch_one(&pool).await.unwrap();
+    assert_eq!(status, "completed");
+    assert_eq!(outcome["concepts"], 3);
+    assert!(closed, "closed_at set");
+}

@@ -1242,6 +1242,36 @@ BEGIN
 END;
 $$;
 
+-- ── Invocation envelope (close) ──────────────────────────────────────────────
+-- Closes the run with a terminal disposition + outcome counts. `disposition` must be one of the
+-- non-open status values (the kb_invocations CHECK enforces it). Emits `invocation_closed`.
+CREATE FUNCTION invocation_close(p_payload jsonb, p_emitter uuid)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE v_inv uuid := (p_payload->>'invocation_id')::uuid;
+        v_orig uuid; v_ev uuid;
+BEGIN
+    SELECT originating_cogmap_id INTO v_orig FROM kb_invocations WHERE id = v_inv;
+    IF v_orig IS NULL THEN RAISE EXCEPTION 'invocation_close: unknown invocation %', v_inv; END IF;
+    v_ev := _event_append('invocation_closed', p_emitter, 'kb_cogmaps', v_orig, p_payload,
+                          p_invocation => v_inv);
+    PERFORM _project_invocation_closed(v_ev, p_payload);
+    RETURN v_ev;
+END;
+$$;
+
+CREATE FUNCTION _project_invocation_closed(p_event uuid, p_payload jsonb)
+RETURNS void LANGUAGE plpgsql AS $$
+DECLARE v_occurred timestamptz := (SELECT occurred_at FROM kb_events WHERE id = p_event);
+BEGIN
+    UPDATE kb_invocations
+       SET status = p_payload->>'disposition',
+           outcome = p_payload->'outcome',
+           closed_by_event_id = p_event,
+           closed_at = v_occurred
+     WHERE id = (p_payload->>'invocation_id')::uuid;
+END;
+$$;
+
 -- ============================================================================
 -- End of 02_functions.sql. Seed → 03_seed.sql; scenarios → 04_scenarios.sql.
 -- ============================================================================
