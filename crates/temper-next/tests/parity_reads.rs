@@ -805,6 +805,87 @@ async fn resource_row_parity(pool: sqlx::PgPool) {
     }
 }
 
+/// WS6 Spec B Task 5 — `readback::enriched_list` batched, filtered list projection. Over the
+/// prod-shape fixture for the owner profile P1 (who sees all 4 active resources): the unfiltered call
+/// returns the visible set with non-empty `context_name`/`doc_type` and managed populated for the rich
+/// resource (R2); a `doc_type` filter narrows to matching rows; a `context_name` filter narrows to
+/// that context. Uses the fixture's real contexts/doctypes (`fixture-context-one`/`task`), not the
+/// plan-sketch placeholders.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn enriched_list_filters_by_context_and_doctype(pool: sqlx::PgPool) {
+    use std::collections::BTreeSet;
+
+    common::seed_and_synthesize(&pool).await;
+    let p1 = fixture_ids::OWNER_PROFILE;
+
+    // Unfiltered: every visible synthesized resource (P1 owns all 4 active).
+    let all = readback::enriched_list(&pool, p1, None, None)
+        .await
+        .expect("enriched_list unfiltered");
+    assert_eq!(all.len(), 4, "P1 sees all 4 active fixture resources");
+    assert!(
+        all.iter()
+            .all(|r| !r.context_name.is_empty() && !r.doc_type.is_empty()),
+        "every row carries a non-empty context_name + doc_type"
+    );
+    // R2 (task) carries the surviving managed workflow keys → managed non-empty for at least one row.
+    assert!(
+        all.iter().any(|r| !r.managed.is_empty()),
+        "at least one row (R2) has reconstructed managed keys"
+    );
+
+    // Filter by doctype → only task rows (exactly R2).
+    let tasks = readback::enriched_list(&pool, p1, None, Some("task"))
+        .await
+        .expect("enriched_list doctype=task");
+    assert!(!tasks.is_empty(), "the task filter is non-vacuous");
+    assert!(
+        tasks.iter().all(|r| r.doc_type == "task"),
+        "doctype filter yields only task rows"
+    );
+    assert_eq!(
+        tasks
+            .iter()
+            .map(|r| r.origin_uri.as_str())
+            .collect::<Vec<_>>(),
+        vec!["temper://fixture/task-doc"],
+        "exactly R2 is a task"
+    );
+    // R2's typed workflow columns + reconstructed managed/open carry verbatim.
+    let r2 = &tasks[0];
+    assert_eq!(r2.stage.as_deref(), Some("doing"), "R2 stage");
+    assert_eq!(r2.mode.as_deref(), Some("build"), "R2 mode");
+    assert_eq!(r2.effort.as_deref(), Some("M"), "R2 effort");
+    assert!(!r2.managed.is_empty(), "R2 managed populated");
+    assert!(
+        r2.open.contains_key("custom-key"),
+        "R2 open keys carried verbatim"
+    );
+
+    // Filter by context → only rows homed in fixture-context-one (R1 concept + R2 task).
+    let in_ctx = readback::enriched_list(&pool, p1, Some("fixture-context-one"), None)
+        .await
+        .expect("enriched_list context=fixture-context-one");
+    assert!(
+        in_ctx
+            .iter()
+            .all(|r| r.context_name == "fixture-context-one"),
+        "context filter yields only that context's rows"
+    );
+    let ctx_uris: BTreeSet<&str> = in_ctx.iter().map(|r| r.origin_uri.as_str()).collect();
+    assert_eq!(
+        ctx_uris,
+        ["temper://fixture/goal-doc", "temper://fixture/task-doc"]
+            .into_iter()
+            .collect::<BTreeSet<&str>>(),
+        "fixture-context-one homes R1 (goal) + R2 (task)"
+    );
+    assert!(
+        in_ctx.iter().any(|r| !r.managed.is_empty()),
+        "managed populated for at least one row in the context"
+    );
+}
+
 /// §9 — the wiring proof (spec proof gate 1): drive `show` through temper-api's `NextBackend` (the
 /// trait layer the HTTP show path uses) rather than `readback::*` directly, and assert it reconstructs
 /// the same invariant fields as `readback::resource_row`. Confirms the wiring layer preserves the §9
