@@ -37,15 +37,19 @@ All keyed by re-minted ids / context-ids that don't exist in `public` after synt
 
 ## 1. The two parts
 
-### Part 1 — Retire the slug-keyed `by_uri` caller (ships **live**, backend-agnostic)
+### Part 1 — Retire the slug-keyed caller and delete the `by_uri` surface (ships **live**, backend-agnostic)
 
 This is not gated behind `next-backend` / `flag=next`. It is correct on the legacy backend today (the id comes from `list_meta`, which works on `public.*`) and is a prerequisite for `next` (where slug resolution is impossible). It is the addressing-model completion, finishing Spec A's narrative.
 
 - Add `id: ResourceId` to `TaskInfo` (`crates/temper-cli/src/actions/types.rs:5`), populated from the `list_meta` `row.id` that `load_tasks` (`crates/temper-cli/src/actions/task.rs:50-95`) already fetches. `task_info_from_meta` (`task.rs:108`) gains the id as a parameter (it lives on the list row's top level, not in `managed_meta`).
 - CLI session→task link (`resource.rs:307-340`): assert the `advances` edge with `task_info.id` directly. **Delete the `resolve_by_uri` round-trip** (`resource.rs:321-326`) — one fewer network call on session create.
-- `by_uri` endpoint (`crates/temper-api/src/handlers/resources.rs:102-110`), `resource_service::resolve_by_uri`, the `temper-client` method (`crates/temper-client/src/resources.rs:104-120`), and the route/openapi entries: **left as legacy/test-only** — not routed to Next, not deleted. After this change nothing live resolves by slug; the endpoint persists only for its two tests and `relationship_write_test.rs`'s verification helper. Deleting it is a clean follow-up (vestigial post-Spec-A), explicitly **out of scope** for this spec.
+- **Delete the `by_uri` surface entirely** — it is the last slug-scoped addressing affordance, vestigial once its caller is retired, and would break at the flip (it queries `public.vault_resources_browse`, renamed aside). Deleting it finishes Spec A's addressing collapse rather than leaving a latent broken endpoint. Blast radius:
+  - `resource_service::resolve_by_uri` + `ResolveByUriParams` (`crates/temper-api/src/services/resource_service.rs:24,388-427`).
+  - The HTTP handler (`crates/temper-api/src/handlers/resources.rs:102-110`) + its `ResolveByUriParams` import (`resources.rs:10`), the route (`crates/temper-api/src/routes.rs:50`), and the openapi registration (`crates/temper-api/src/openapi.rs:27`) + the openapi test asserting the path (`openapi.rs:133`).
+  - The `temper-client` method (`crates/temper-client/src/resources.rs:104-120`).
+  - Tests: delete `crates/temper-api/tests/resources_by_uri_test.rs` (its two endpoint tests); rewrite `relationship_write_test.rs`'s verification helper (`relationship_write_test.rs:104`) to confirm the asserted edge by resource id / `origin_uri` (the test created the resources, so it holds the ids) instead of via `resolve_by_uri`.
 
-**Net:** nothing live resolves by slug; the substrate's slug-less addressing is honored end-to-end; the session→task link is one round-trip cheaper.
+**Net:** nothing resolves by slug anywhere; the substrate's slug-less addressing is honored end-to-end; the session→task link is one round-trip cheaper; no surface is left that can only be answered from `public.*`.
 
 ### Part 2 — MCP `get_resource` / `list_resources`: full-fidelity Next routing (**gated**)
 
@@ -61,6 +65,12 @@ Behind the `next-backend` feature + in-DB `flag=next`, **gated OFF** by default 
   - Next: a **new batched readback projection** in temper-next — `readback::enriched_list` — returning, per row, `{re_minted_id, origin_uri, title, is_active, context_name, doc_type, stage, mode, effort, managed_meta, open_meta}`, visibility-scoped via `temper_next.resources_visible_to($principal)`, with `WHERE` filters on `context_name` + `doc_type` applied in SQL. One query, no N+1 (the existing `readback::list` — `mod.rs:244-290` — is the starting shape; it must additionally carry the resource id + `context_name` via the `kb_resource_homes → kb_contexts` join `resource_row` already uses, the per-row managed/open meta reconstruction, and the two filters). Assemble `Vec<EnrichedResource>`.
 - **Exposure boundary:** add `read_selector` functions in temper-api (matching the `search_select` precedent at `crates/temper-api/src/backend/read_selector.rs:73-83`) that return the per-backend enrichment-ready data. `EnrichedResource` assembly stays in temper-mcp (the type lives there); temper-mcp stays at the "delegate to temper-api services" boundary. The Next arms of these selector functions are `#[cfg(feature = "next-backend")]`; without the feature they gate with the same `NotImplemented` as the existing selector arms.
 
+**Query efficiency & indexing (`enriched_list`).** `EnrichedResource` carries full `managed_meta`/`open_meta` per row (the legacy list populates them via `get_meta_batch`), and `readback::meta` (`mod.rs:326-370`) reconstructs them by scanning **all** of a resource's properties. A naive port — `readback::list` then per-row `readback::meta` — is N+1. The required shape is **two batched queries**:
+1. The visible resource set with `{id, origin_uri, title, is_active, context_name}` via `resources_visible_to($principal)` + the `kb_resource_homes → kb_contexts` join, INNER-joining the `doc_type` property so the **`context_name` + `doc_type` filters apply in SQL** (`WHERE` on the joined columns).
+2. A single `WHERE owner_table='kb_resources' AND owner_id = ANY($surviving_ids) AND NOT is_folded` scan over `kb_properties`, grouped by `owner_id` in Rust to reconstruct managed/open/stage/mode/effort per row.
+
+Existing artifact indexes cover this: `idx_kb_properties_owner ON kb_properties(owner_table, owner_id) WHERE NOT is_folded` (the owner-keyed scans in both queries), `idx_kb_resource_homes_anchor`, `idx_kb_contexts_owner`. Whether a composite `(owner_table, owner_id, property_key)` index helps query 1's `doc_type`-property join is a **measure-before-adding** question — per-resource property cardinality is low, so the partial owner index is likely sufficient; the plan should not add an index speculatively. Any index added lives in the append-only `temper_next` forward-migration lineage (never an in-place edit of a merged migration — the chunk-4c critical), single-sourced from the `01_schema` artifact body, and must survive the semantic drift guard.
+
 **Fidelity note (why full, not §9-floor):** `context_name` is a §9 **invariant** (carried verbatim by `resource_row`) and doctype is a reconstructable property, so faithful context/doctype **filtering** under `next` is achievable — unlike chunk-4b's CLI `list` Next path (`readback::list`), which intentionally stayed at the floor (ignores filters, empty `context`, `ResourceSummary` carries 6 fields). Leaving `list_resources` at that floor would silently ignore its two filters under `next` — a behavioral gap "no-flip-with-a-gap" would force a revisit before chunk-5. Spec B closes it now.
 
 ## 2. Testing
@@ -75,8 +85,7 @@ Behind the `next-backend` feature + in-DB `flag=next`, **gated OFF** by default 
 ## 3. Non-goals
 
 - **Relationship / graph enrichment in MCP** — does not exist (`EnrichedResource` has no edge fields); not invented here.
-- **A `by_uri` Next arm** — unportable (slug §7-dissolved); the caller is retired instead.
-- **Deleting the `by_uri` endpoint / `resolve_by_uri` service** — vestigial after Part 1, but a clean separate follow-up; kept legacy/test-only here.
+- **A `by_uri` Next arm** — unportable (slug §7-dissolved); the surface is deleted (Part 1), not ported.
 - **Vault-projection-filename rename** (Adjudication-5 identity-out clause) — deferred to the flip with Spec A; behind it, whether the local vault projection survives as a feature at all.
 - **Access-fidelity re-derivation under lenses, deployed-adapter `next-backend` enable, the chunk-5 flip** — downstream of this PR.
 
