@@ -300,6 +300,9 @@ CREATE TABLE kb_events (
     -- Which registered schema version this row's payload conforms to.
     payload_version        INT   NOT NULL DEFAULT 1,
     metadata               JSONB NOT NULL DEFAULT '{}'::jsonb,
+    -- Coarser-than-correlation grouping: the agentic-invocation this event was emitted under
+    -- (NULL for keyboard-holder / system acts). correlation_id stays act-grain; this is run-grain.
+    invocation_id          UUID,
     occurred_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
     created                TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- both-null-or-both-set for the polymorphic producing anchor
@@ -308,6 +311,7 @@ CREATE TABLE kb_events (
 CREATE INDEX idx_kb_events_emitter     ON kb_events(emitter_entity_id, occurred_at DESC);
 CREATE INDEX idx_kb_events_type        ON kb_events(event_type_id);
 CREATE INDEX idx_kb_events_correlation ON kb_events(correlation_id);
+CREATE INDEX idx_kb_events_invocation  ON kb_events(invocation_id);
 CREATE INDEX idx_kb_events_references  ON kb_events USING GIN ("references" jsonb_path_ops);
 
 -- Append-only enforcement (parity with production 20260522000001): supersession and correction are
@@ -322,6 +326,28 @@ $$;
 CREATE TRIGGER kb_events_append_only
     BEFORE UPDATE OR DELETE ON kb_events
     FOR EACH ROW EXECUTE FUNCTION kb_events_append_only();
+
+-- ── Invocation envelope (accountability-grain model of an agentic-workflow run) ───────────────
+-- Projected from `delegated_launch` (open) + `invocation_closed` (close). The runtime owns
+-- orchestration (steps/retries/checkpoints); the substrate records only intent, the delegation
+-- binding, the telos/scope, and the terminal outcome. `id` is identity-as-input (the run's own id).
+CREATE TABLE kb_invocations (
+    id                     UUID PRIMARY KEY,
+    opened_by_event_id     UUID NOT NULL REFERENCES kb_events(id),
+    status                 TEXT NOT NULL DEFAULT 'open'
+                               CHECK (status IN ('open','completed','failed','abandoned')),
+    trigger_kind           TEXT NOT NULL,
+    originating_cogmap_id  UUID NOT NULL REFERENCES kb_cogmaps(id),
+    parent_cogmap_id       UUID REFERENCES kb_cogmaps(id),   -- set for delegated launches (gate-checked)
+    scoped_entity_id       UUID NOT NULL REFERENCES kb_entities(id),
+    telos_resource_id      UUID NOT NULL REFERENCES kb_resources(id),
+    outcome                JSONB,                            -- filled at close: {disposition, counts, note}
+    opened_at              TIMESTAMPTZ NOT NULL,
+    closed_by_event_id     UUID REFERENCES kb_events(id),
+    closed_at              TIMESTAMPTZ
+);
+CREATE INDEX idx_kb_invocations_cogmap ON kb_invocations(originating_cogmap_id);
+CREATE INDEX idx_kb_invocations_status ON kb_invocations(status);
 
 -- Deferred FK from kb_cogmaps to the ledger (table created after kb_cogmaps).
 ALTER TABLE kb_cogmaps
