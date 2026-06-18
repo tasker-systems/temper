@@ -761,7 +761,9 @@ CREATE FUNCTION _event_append(
     p_payload jsonb,
     p_references jsonb DEFAULT '[]'::jsonb,
     p_correlation uuid DEFAULT NULL,
-    p_payload_version int DEFAULT 1
+    p_payload_version int DEFAULT 1,
+    p_metadata jsonb DEFAULT '{}'::jsonb,
+    p_invocation uuid DEFAULT NULL
 ) RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_et uuid; v_ev uuid := uuid_generate_v7();
 BEGIN
@@ -769,9 +771,11 @@ BEGIN
     IF v_et IS NULL THEN RAISE EXCEPTION 'event_type % not seeded', p_type_name; END IF;
     INSERT INTO kb_events (id, event_type_id, emitter_entity_id,
                            producing_anchor_table, producing_anchor_id,
-                           payload, "references", payload_version, correlation_id)
+                           payload, "references", payload_version, correlation_id,
+                           metadata, invocation_id)
     VALUES (v_ev, v_et, p_emitter, p_anchor_table, p_anchor_id,
-            p_payload, p_references, p_payload_version, COALESCE(p_correlation, v_ev));
+            p_payload, p_references, p_payload_version, COALESCE(p_correlation, v_ev),
+            p_metadata, p_invocation);
     RETURN v_ev;
 END;
 $$;

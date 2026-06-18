@@ -38,3 +38,29 @@ async fn schema_has_invocations_table_and_event_column() {
     .unwrap();
     assert_eq!(tbl.as_deref(), Some("kb_invocations"), "kb_invocations table must exist");
 }
+
+#[tokio::test]
+async fn event_append_persists_metadata_and_invocation() {
+    let pool = setup().await;
+    let emitter: uuid::Uuid =
+        sqlx::query_scalar("SELECT id FROM kb_entities WHERE name='system'")
+            .fetch_one(&pool).await.unwrap();
+    let inv = uuid::Uuid::now_v7();
+    // Call _event_append directly with named args for the two new params.
+    let ev: uuid::Uuid = sqlx::query_scalar(
+        "SELECT _event_append('cogmap_seeded', $1, NULL, NULL, '{}'::jsonb, \
+                p_metadata => $2::jsonb, p_invocation => $3)",
+    )
+    .bind(emitter)
+    .bind(serde_json::json!({"reasoning": "SENTINEL"}))
+    .bind(inv)
+    .fetch_one(&pool).await.unwrap();
+
+    let (meta, got_inv): (serde_json::Value, Option<uuid::Uuid>) = sqlx::query_as(
+        "SELECT metadata, invocation_id FROM kb_events WHERE id=$1",
+    )
+    .bind(ev)
+    .fetch_one(&pool).await.unwrap();
+    assert_eq!(meta["reasoning"], "SENTINEL");
+    assert_eq!(got_inv, Some(inv));
+}
