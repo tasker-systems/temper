@@ -6,9 +6,7 @@ use serde::Deserialize;
 use uuid::Uuid;
 
 use temper_api::backend::select_backend;
-use temper_api::services::{
-    context_service, doc_type_service, ingest_service, meta_service, resource_service,
-};
+use temper_api::services::{context_service, ingest_service, meta_service, resource_service};
 use temper_core::error::TemperError;
 use temper_core::operations::{BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -196,34 +194,23 @@ pub struct EnrichedResource {
 }
 
 /// Assemble an [`EnrichedResource`] from a row plus its already-fetched
-/// meta. Meta is a required, explicit input — there is no hidden DB
-/// fetch here, so every caller decides where meta comes from (a batch
-/// query for lists, `get_content`'s response for the content path).
-async fn build_enriched(
-    pool: &sqlx::PgPool,
-    profile_id: ProfileId,
+/// meta. Pure assembly — `context_name`/`doc_type_name` are read off the
+/// row (both schemas' full-row reads populate them via the browse view /
+/// readback reconstruction), so there is no per-row context/doc_type DB
+/// round-trip. Meta is a required, explicit input, so every caller decides
+/// where it comes from (a batch query for lists, `get_content`'s response
+/// for the content path).
+fn build_enriched(
     row: &temper_core::types::resource::ResourceRow,
     managed_meta: Option<ManagedMeta>,
     open_meta: Option<serde_json::Value>,
-) -> Result<EnrichedResource, rmcp::ErrorData> {
-    let context = context_service::get_visible(pool, profile_id, row.kb_context_id)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to resolve context: {e}"), None)
-        })?;
-
-    let doc_type_name = doc_type_service::get_name_by_id(pool, row.kb_doc_type_id.into())
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to resolve doc_type: {e}"), None)
-        })?;
-
-    Ok(EnrichedResource {
+) -> EnrichedResource {
+    EnrichedResource {
         id: row.id.into(),
         title: row.title.clone(),
         slug: row.slug.clone(),
-        context_name: context.name,
-        doc_type_name,
+        context_name: row.context_name.clone(),
+        doc_type_name: row.doc_type_name.clone(),
         owner: "@me".to_string(),
         origin_uri: row.origin_uri.clone(),
         r#ref: temper_core::operations::decorated_ref(&row.title, row.id),
@@ -232,7 +219,7 @@ async fn build_enriched(
         updated: row.updated,
         managed_meta,
         open_meta,
-    })
+    }
 }
 
 /// Enrich a batch of resource rows, each with its `managed_meta` /
@@ -243,7 +230,6 @@ async fn build_enriched(
 /// per-row visibility check.
 pub async fn enrich_resources(
     pool: &sqlx::PgPool,
-    profile_id: ProfileId,
     rows: &[temper_core::types::resource::ResourceRow],
 ) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
     let ids: Vec<ResourceId> = rows.iter().map(|row| row.id).collect();
@@ -257,7 +243,7 @@ pub async fn enrich_resources(
             .remove(&row.id)
             .map(|m| (m.managed_meta, m.open_meta))
             .unwrap_or((None, None));
-        enriched.push(build_enriched(pool, profile_id, row, managed_meta, open_meta).await?);
+        enriched.push(build_enriched(row, managed_meta, open_meta));
     }
     Ok(enriched)
 }
@@ -266,15 +252,12 @@ pub async fn enrich_resources(
 /// single-row wrapper over [`enrich_resources`].
 pub async fn enrich_resource(
     pool: &sqlx::PgPool,
-    profile_id: ProfileId,
     row: &temper_core::types::resource::ResourceRow,
 ) -> Result<EnrichedResource, rmcp::ErrorData> {
-    Ok(
-        enrich_resources(pool, profile_id, std::slice::from_ref(row))
-            .await?
-            .pop()
-            .expect("enrich_resources returns one row per input row"),
-    )
+    Ok(enrich_resources(pool, std::slice::from_ref(row))
+        .await?
+        .pop()
+        .expect("enrich_resources returns one row per input row"))
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -381,7 +364,7 @@ pub async fn create_resource(
     })?;
     let resource = out.value;
 
-    let enriched = enrich_resource(pool, profile_id, &resource).await?;
+    let enriched = enrich_resource(pool, &resource).await?;
     let response = CreateResourceResponse {
         resource: enriched,
         status: CreateStatus::Created,
@@ -422,7 +405,6 @@ pub async fn get_resource(
 ) -> Result<CallToolResult, rmcp::ErrorData> {
     let profile = svc.require_profile().await?;
     let pool = &svc.api_state.pool;
-    let profile_id = ProfileId::from(profile.id);
 
     let id = temper_core::operations::parse_ref(&input.id)
         .map_err(|e| rmcp::ErrorData::invalid_params(e.to_string(), None))?;
@@ -441,18 +423,11 @@ pub async fn get_resource(
                 rmcp::ErrorData::internal_error(format!("Failed to get content: {e}"), None)
             })?;
 
-        let enriched = build_enriched(
-            pool,
-            profile_id,
-            &row,
-            content.managed_meta,
-            content.open_meta,
-        )
-        .await?;
+        let enriched = build_enriched(&row, content.managed_meta, content.open_meta);
 
         (enriched, Some(content.markdown))
     } else {
-        (enrich_resource(pool, profile_id, &row).await?, None)
+        (enrich_resource(pool, &row).await?, None)
     };
 
     let enriched_value = serde_json::to_value(&enriched)
@@ -526,7 +501,7 @@ pub async fn list_resources(
             rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
         })?;
 
-    let enriched = enrich_resources(pool, profile_id, &response.rows).await?;
+    let enriched = enrich_resources(pool, &response.rows).await?;
 
     let array_value = serde_json::to_value(&enriched)
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to serialize: {e}"), None))?;
@@ -627,7 +602,7 @@ pub async fn update_resource(
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
 
-    let enriched = enrich_resource(pool, profile_id, &row).await?;
+    let enriched = enrich_resource(pool, &row).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
     )]))
@@ -785,6 +760,52 @@ mod tests {
         assert!(
             json.contains("ManagedMeta"),
             "managed_meta should reference the typed ManagedMeta schema: {json}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod build_enriched_tests {
+    use super::*;
+
+    fn sample_row() -> temper_core::types::resource::ResourceRow {
+        use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
+        use temper_core::types::resource::ResourceRow;
+        let nil = uuid::Uuid::nil();
+        ResourceRow {
+            id: ResourceId::from(uuid::Uuid::now_v7()),
+            kb_context_id: ContextId::from(nil),
+            kb_doc_type_id: DocTypeId::from(nil),
+            origin_uri: "temper://fixture/task-doc".to_string(),
+            title: "Wire the widget".to_string(),
+            slug: Some("wire-the-widget".to_string()),
+            originator_profile_id: ProfileId::from(nil),
+            owner_profile_id: ProfileId::from(nil),
+            is_active: true,
+            created: chrono::Utc::now(),
+            updated: chrono::Utc::now(),
+            context_name: "temper".to_string(),
+            doc_type_name: "task".to_string(),
+            owner_handle: "@me".to_string(),
+            stage: Some("in-progress".to_string()),
+            seq: None,
+            mode: None,
+            effort: None,
+            body_hash: None,
+            managed_hash: None,
+            open_hash: None,
+        }
+    }
+
+    #[test]
+    fn build_enriched_uses_row_names_and_decorated_ref() {
+        let row = sample_row();
+        let e = build_enriched(&row, None, None);
+        assert_eq!(e.context_name, "temper");
+        assert_eq!(e.doc_type_name, "task");
+        assert_eq!(
+            e.r#ref,
+            temper_core::operations::decorated_ref(&row.title, row.id)
         );
     }
 }
