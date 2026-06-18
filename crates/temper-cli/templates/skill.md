@@ -32,17 +32,22 @@ User-created guidance files. Read and apply any files found here.
 
 ## On Task Start
 
+> **Addressing**: resources are addressed by **ref** — a UUID or the decorated
+> `sluggify(title)-<uuid>` form (resolution is trailing-UUID-only; the slug half is
+> presentation, a stale slug half is harmless). Every `resource list`/`search`/`show`
+> row carries a `ref` field — copy it. `resource show`/`update`/`delete` take a single
+> `<ref>` (no `--type`/`--context`). `resource create` and `resource list` still take
+> `--type`/`--context` (create writes *into* a context; list filters by them).
+>
 > **CLI sequence**: There is no `task start` command. To start a task:
-> 1. `temper resource show <slug> --type task --context <ctx>` — read the task content
-> 2. `temper resource update <slug> --type task --context <ctx> --stage in-progress` — mark it active
+> 1. `temper resource list --type task --context <ctx>` — find the task, copy its `ref`
+> 2. `temper resource show <ref>` — read the task content
+> 3. `temper resource update <ref> --stage in-progress` — mark it active
 >
 > Stages are: `backlog`, `in-progress`, `done`, `cancelled` (not "active").
-> `resource update`, `resource create`, and `resource show` REQUIRE
-> `--context`. `resource list` does not (omitting `--context` lists
-> across all contexts).
 
-1. Read the task content via `temper resource show <slug> --type task --context <ctx>` — extract mode and effort
-2. Move the task to in-progress: `temper resource update <slug> --type task --context <ctx> --stage in-progress`
+1. Resolve the task's ref: `temper resource list --type task --context <ctx>`, find the row matching `<slug>`, copy its `ref`. Read it via `temper resource show <ref>` — extract mode and effort
+2. Move the task to in-progress: `temper resource update <ref> --stage in-progress`
 3. If mode or effort is missing, ask: "What mode (plan/build) and effort (small/medium/large)?"
 4. Infer or ask the domain: "What kind of work is this? (a) Software development, (b) Writing/documentation, (c) Research/analysis, (d) Design/architecture, (e) Something else"
 5. Check for `guidance/fundamentals.md`:
@@ -56,17 +61,16 @@ User-created guidance files. Read and apply any files found here.
 ## On Task Resume
 
 > **CLI sequence**: To resume a task from a previous session:
-> 1. `temper resource show <slug> --type task --context <ctx>` — reload the task content
-> 2. `temper resource list --type session --context <ctx>` — find the most recent session
-> 3. `temper resource show <title-slug> --type session --context <ctx>` — read the session's "Next Steps"
+> 1. `temper resource list --type task --context <ctx>` — find the task, copy its `ref`; `temper resource show <ref>` — reload the task content
+> 2. `temper resource list --type session --context <ctx>` — find the most recent session, copy its `ref`
+> 3. `temper resource show <ref>` — read the session's "Next Steps"
 > 4. Continue from the workflow file for this task's mode/effort
 
-1. Read the task content via `temper resource show <slug> --type task --context <ctx>` — extract mode, effort, and context
+1. Resolve the task's ref via `temper resource list --type task --context <ctx>`, then `temper resource show <ref>` — extract mode, effort, and context
 2. List recent sessions: `temper resource list --type session --context <ctx>`
-3. Read the most recent session note: `temper resource show <title-slug> --type session --context <ctx>`
-   - The slug is the title column from `resource list` output
-   - Supports partial matching — a unique substring of the slug is enough
-4. If the task is not already in-progress, move it: `temper resource update <slug> --type task --context <ctx> --stage in-progress`
+3. Read the most recent session note: copy the `ref` of the most recent session row, then `temper resource show <ref>`
+   - Match the session by its `slug`/`title` column in the `resource list` output (a unique substring is enough), then copy that row's `ref`
+4. If the task is not already in-progress, move it: `temper resource update <ref> --stage in-progress`
 5. Check for `guidance/fundamentals.md` — read if it exists
 6. Check auto-memory for user plugin preferences
 7. Scan for installed skills and plugins: check `~/.claude/skills/` for skills and `~/.claude/plugins/installed_plugins.json` for plugins (e.g. superpowers, LSP plugins, vercel-plugin)
@@ -139,14 +143,14 @@ When you need to peek at a resource or scan a list without paying for the full
 body, use the projection flags. They make orientation reads dramatically
 cheaper, both in tokens and in API work:
 
-- `temper resource show <slug> --type <t> --meta-only` — frontmatter (managed +
+- `temper resource show <ref> --meta-only` — frontmatter (managed +
   open) and hashes only; no body. Calls `GET /api/resources/<id>/meta`.
 - `temper resource list --type <t> --context <ctx> --meta-only` — meta tier per
   row instead of full row payloads.
 - `--fields <a,b,c>` on either of the above — subselect top-level response
   keys (the anchor key — `id` or `resource_id` — is always preserved). For
   nested projection, pipe through `jq`.
-- `temper resource show <slug> --type <t> --edges` — adds the graph edges
+- `temper resource show <ref> --edges` — adds the graph edges
   connected to this resource. Cannot be combined with `--meta-only`.
 
 Reach for these first when triaging a context, comparing a few resources, or
@@ -164,7 +168,7 @@ temper pull <context>
 
 Deleting a projected file with `rm` has no server effect — it just creates a
 local cache miss. To actually delete a resource, use `temper resource delete
-<slug> --type <t> --context <ctx> [--force]`.
+<ref> [--force]` (the `<ref>` is the resource's `ref` field from `list`/`show`).
 
 ## Subagent Dispatch
 

@@ -77,10 +77,10 @@ deciding whether to read more deeply.
 
 | Pattern | What it returns |
 |---------|-----------------|
-| `temper resource show <slug> --type <t> --meta-only` | Frontmatter (managed + open) and hashes; no body. Calls `GET /api/resources/<id>/meta`. |
+| `temper resource show <ref> --meta-only` | Frontmatter (managed + open) and hashes; no body. Calls `GET /api/resources/<id>/meta`. |
 | `temper resource list --type <t> --context <ctx> --meta-only` | Meta-tier rows instead of full row payloads. |
 | `--fields <a,b,c>` on either of the above | Subselects top-level response keys. The anchor key (`id` or `resource_id`) is always preserved. Pipe through `jq` for nested projection. |
-| `temper resource show <slug> --type <t> --edges` | Adds the graph edges connected to this resource. Mutually exclusive with `--meta-only`. |
+| `temper resource show <ref> --edges` | Adds the graph edges connected to this resource. Mutually exclusive with `--meta-only`. |
 
 ## Vault Projection (local cache)
 
@@ -93,7 +93,7 @@ temper pull <context>
 
 `rm`'ing a projected file has no server effect — it just creates a local cache
 miss. To actually delete a resource server-side, run `temper resource delete
-<slug> --type <t> --context <ctx> [--force]`.
+<ref> [--force]` (the `<ref>` is the resource's `ref` field from `list`/`show`).
 
 ## Context Requirement
 

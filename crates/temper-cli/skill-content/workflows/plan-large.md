@@ -12,7 +12,7 @@ learn, evolve the roadmap, create the next task.
 
 ## Steps
 
-1. **Read the task** — run `temper resource show <slug> --type task` to load the full task content.
+1. **Read the task** — find it via `temper resource list --type task` (copy its `ref`), then run `temper resource show <ref>` to load the full task content.
 2. **Deep discovery** — cast a wide net:
    - `temper search "<relevant terms>"` across multiple angles
    - `temper context` to review the current context landscape
@@ -67,7 +67,7 @@ Related tasks, concepts, or contexts touched
 What to pick up next session
 EOF
 
-temper resource update <slug> --type task --context <ctx> --stage done
+temper resource update <ref> --stage done
 ```
 
 If the roadmap is complete and the first task is created, the plan/large task is done even

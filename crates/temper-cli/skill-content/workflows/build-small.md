@@ -8,7 +8,7 @@ a CLI flag, fixing a known bug, writing a utility function, updating a configura
 
 ## Steps
 
-1. **Read the task** — run `temper resource show <slug> --type task` to load the full task content.
+1. **Read the task** — find it via `temper resource list --type task` (copy its `ref`), then run `temper resource show <ref>` to load the full task content.
 2. **Read project fundamentals** — if `guidance/fundamentals.md` exists in the skill
    directory, read it for project-specific conventions, test commands, and lint rules.
 3. **Read subagent guidance** — read `subagent-guidance.md` and apply all principles
@@ -42,5 +42,5 @@ Related tasks, concepts, or contexts touched
 What to pick up next session
 EOF
 
-temper resource update <slug> --type task --context <ctx> --stage done
+temper resource update <ref> --stage done
 ```

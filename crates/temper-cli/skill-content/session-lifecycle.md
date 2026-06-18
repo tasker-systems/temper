@@ -39,7 +39,7 @@ EOF
 
 Link the session to a task by updating the task's stage after saving:
 ```bash
-temper resource update <task-slug> --type task --context <ctx> --stage done
+temper resource update <ref> --stage done
 ```
 
 ## Mid-Session Drift Detection
@@ -55,7 +55,7 @@ Watch for mismatches between assigned mode/effort and actual work:
 
 On confirmation, update the task:
 ```bash
-temper resource update <slug> --type task --context <ctx> --mode <new> --effort <new>
+temper resource update <ref> --mode <new> --effort <new>
 ```
 
 ## Checkpoint Pattern
