@@ -95,6 +95,10 @@ id_newtype!(
     /// A `kb_cogmap_regions` row (one materialized region).
     RegionId
 );
+id_newtype!(
+    /// A `kb_invocations` row (an agentic-workflow run, accountability grain).
+    InvocationId
+);
 
 #[cfg(test)]
 mod tests {

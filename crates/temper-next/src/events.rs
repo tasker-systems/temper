@@ -49,6 +49,8 @@ pub enum EventKind {
     RegionMaterialized,
     RelationshipFolded,
     BlockMutated,
+    DelegatedLaunch,
+    InvocationClosed,
 }
 
 impl EventKind {
@@ -69,6 +71,8 @@ impl EventKind {
             EventKind::RegionMaterialized => "region_materialized",
             EventKind::RelationshipFolded => "relationship_folded",
             EventKind::BlockMutated => "block_mutated",
+            EventKind::DelegatedLaunch => "delegated_launch",
+            EventKind::InvocationClosed => "invocation_closed",
         }
     }
 }
