@@ -18,6 +18,17 @@
     "owner_profile_id": {
       "$ref": "#/$defs/ProfileId"
     },
+    "originator_profile_id": {
+      "description": "The home's originator (§2: \"carrying its current originator/owner\"). Absent ⇒ the projector\nCOALESCEs it to `owner_profile_id` (the scenario path, where originator≡owner). Synthesis sets\nit explicitly so a production row whose originator differs from its owner survives the carry.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ProfileId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "doc_type": {
       "type": [
         "string",
