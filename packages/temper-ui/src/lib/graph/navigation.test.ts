@@ -18,27 +18,31 @@ function makeNode(partial: Partial<GraphNode>): GraphNode {
 }
 
 describe('resourceHref', () => {
-	it('builds a vault path using owner, context, doc_type, and slug', () => {
+	// Nodes use the default fixture id; the final segment carries the decorated
+	// ref `<slug>-<id>` so the route can resolve trailing-UUID-only.
+	const ID = '00000000-0000-0000-0000-000000000000';
+
+	it('builds a vault path using owner, context, doc_type, and decorated ref', () => {
 		const href = resourceHref(
 			'@me',
 			'temper',
 			makeNode({ doc_type: 'concept', slug: 'idempotency-keys' })
 		);
-		expect(href).toBe('/vault/@me/temper/concept/idempotency-keys');
+		expect(href).toBe(`/vault/@me/temper/concept/idempotency-keys-${ID}`);
 	});
 
 	it('uses the exact doc_type from the node', () => {
 		expect(
 			resourceHref('@me', 'temper', makeNode({ doc_type: 'task', slug: 'auth' }))
-		).toBe('/vault/@me/temper/task/auth');
+		).toBe(`/vault/@me/temper/task/auth-${ID}`);
 		expect(
 			resourceHref('@me', 'temper', makeNode({ doc_type: 'session', slug: 's1' }))
-		).toBe('/vault/@me/temper/session/s1');
+		).toBe(`/vault/@me/temper/session/s1-${ID}`);
 	});
 
 	it('URL-encodes owner and context params', () => {
 		// Defensive: if the context ever contains a space, we don't break the URL.
 		const href = resourceHref('alice', 'my context', makeNode({ slug: 'foo' }));
-		expect(href).toBe('/vault/alice/my%20context/research/foo');
+		expect(href).toBe(`/vault/alice/my%20context/research/foo-${ID}`);
 	});
 });
