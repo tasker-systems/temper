@@ -181,3 +181,33 @@ async fn invocation_close_sets_terminal_status() {
     assert_eq!(outcome["concepts"], 3);
     assert!(closed, "closed_at set");
 }
+
+#[tokio::test]
+async fn authored_resource_create_stamps_metadata_and_invocation_sql() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-auth").await;
+    let inv = Uuid::now_v7();
+    let res_id = Uuid::now_v7();
+    // resource_create with the two new args (named) — minimal payload + empty content sidecar.
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT resource_create($1::jsonb, '{}'::jsonb, $2, p_metadata => $3::jsonb, p_invocation => $4)",
+    )
+    .bind(serde_json::json!({
+        "resource_id": res_id, "title": "Concept X", "origin_uri": "temper://x",
+        "home": {"table": "kb_cogmaps", "id": cog.uuid()},
+        "owner_profile_id": owner.uuid(), "blocks": [],
+    }))
+    .bind(emitter.uuid())
+    .bind(serde_json::json!({"reasoning": "AUTHORSHIP_SENTINEL", "confidence": "probable"}))
+    .bind(inv)
+    .fetch_one(&pool).await.unwrap();
+
+    let (meta, got_inv): (serde_json::Value, Option<Uuid>) = sqlx::query_as(
+        "SELECT metadata, invocation_id FROM kb_events \
+         WHERE event_type_id = (SELECT id FROM kb_event_types WHERE name='resource_created')",
+    ).fetch_one(&pool).await.unwrap();
+    assert_eq!(meta["reasoning"], "AUTHORSHIP_SENTINEL");
+    assert_eq!(meta["confidence"], "probable");
+    assert_eq!(got_inv, Some(inv));
+}

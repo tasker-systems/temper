@@ -740,12 +740,14 @@ BEGIN
 END;
 $$;
 
-CREATE FUNCTION resource_create(p_payload jsonb, p_content jsonb, p_emitter uuid)
+CREATE FUNCTION resource_create(p_payload jsonb, p_content jsonb, p_emitter uuid,
+                                p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid;
 BEGIN
     v_ev := _event_append('resource_created', p_emitter,
-                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_resource_created(v_ev, p_payload, p_content);
 END;
 $$;
@@ -814,12 +816,14 @@ END;
 $$;
 
 -- Assert a typed edge, homed per the payload. Emits `relationship_asserted` + projects, one txn.
-CREATE FUNCTION relationship_assert(p_payload jsonb, p_emitter uuid)
+CREATE FUNCTION relationship_assert(p_payload jsonb, p_emitter uuid,
+                                    p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid;
 BEGIN
     v_ev := _event_append('relationship_asserted', p_emitter,
-                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload);
+                          p_payload#>>'{home,table}', (p_payload#>>'{home,id}')::uuid, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_relationship_asserted(v_ev, p_payload);
 END;
 $$;
@@ -841,7 +845,8 @@ $$;
 
 -- Fold a declared edge (retire the relationship). The producing anchor is an ENVELOPE concern read
 -- from the edge's own home (never payload data) — the same discipline as facet_set.
-CREATE FUNCTION relationship_fold(p_payload jsonb, p_emitter uuid)
+CREATE FUNCTION relationship_fold(p_payload jsonb, p_emitter uuid,
+                                  p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid; v_edge uuid := (p_payload->>'edge_id')::uuid;
         v_home_tbl text; v_home uuid;
@@ -851,7 +856,8 @@ BEGIN
     IF v_home IS NULL THEN
         RAISE EXCEPTION 'relationship_fold: edge % not found', v_edge;
     END IF;
-    v_ev := _event_append('relationship_folded', p_emitter, v_home_tbl, v_home, p_payload);
+    v_ev := _event_append('relationship_folded', p_emitter, v_home_tbl, v_home, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_relationship_folded(v_ev, p_payload);
 END;
 $$;
@@ -876,7 +882,8 @@ $$;
 -- Set a property per the payload. Emits `property_asserted`. The producing anchor is an ENVELOPE
 -- concern derived from the owner resource's home (cogmap OR context — both in the kb_events CHECK
 -- set), preferring a cogmap home — never payload data. A homeless resource is an error.
-CREATE FUNCTION facet_set(p_payload jsonb, p_emitter uuid)
+CREATE FUNCTION facet_set(p_payload jsonb, p_emitter uuid,
+                          p_metadata jsonb DEFAULT '{}'::jsonb, p_invocation uuid DEFAULT NULL)
 RETURNS uuid LANGUAGE plpgsql AS $$
 DECLARE v_ev uuid; v_anchor_tbl text; v_anchor uuid;
         v_owner uuid := (p_payload#>>'{owner,id}')::uuid;
@@ -886,7 +893,8 @@ BEGIN
     IF v_anchor IS NULL THEN
         RAISE EXCEPTION 'facet_set: resource % has no home to anchor the property event', v_owner;
     END IF;
-    v_ev := _event_append('property_asserted', p_emitter, v_anchor_tbl, v_anchor, p_payload);
+    v_ev := _event_append('property_asserted', p_emitter, v_anchor_tbl, v_anchor, p_payload,
+                          p_metadata => p_metadata, p_invocation => p_invocation);
     RETURN _project_property_asserted(v_ev, p_payload);
 END;
 $$;
