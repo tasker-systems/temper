@@ -156,12 +156,24 @@ mod next_impl {
         // (`temper_next`) ids directly (profile ids are preserved by synthesis), so we filter the set
         // up front — a not-visible id never enters the loop, where `reconstruct_resource_row`'s gate
         // would otherwise error. The per-row gate inside re-checks harmlessly (defense in depth).
+        //
+        // `resources_visible_to`'s body calls `profile_effective_teams`/`team_ancestors` UNQUALIFIED,
+        // so they resolve against the connection search_path — bare-pool default `public`, where the
+        // `temper_next` helpers do not exist. Run the visible-set query inside a `SET LOCAL search_path`
+        // txn (the synthesis/readback discipline; see `readback::ensure_visible`). The per-row
+        // `reconstruct_resource_row` calls below gate via `readback`, which sets its own search_path.
+        let mut tx = pool.begin().await.map_err(api_err)?;
+        sqlx::query("SET LOCAL search_path TO temper_next, public")
+            .execute(&mut *tx)
+            .await
+            .map_err(api_err)?;
         let visible: Vec<Uuid> =
             sqlx::query_scalar("SELECT resource_id FROM temper_next.resources_visible_to($1)")
                 .bind(principal)
-                .fetch_all(pool)
+                .fetch_all(&mut *tx)
                 .await
                 .map_err(api_err)?;
+        tx.commit().await.map_err(api_err)?;
         let mut rows: Vec<ResourceRow> = Vec::with_capacity(visible.len());
         for new_id in visible {
             rows.push(reconstruct_resource_row(pool, principal, new_id).await?);
