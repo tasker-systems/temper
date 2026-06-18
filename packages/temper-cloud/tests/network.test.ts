@@ -1,6 +1,7 @@
 import type { TestContext } from "vitest";
 import { describe, expect, it } from "vitest";
 import {
+  isHubThrottleError,
   isNetworkConnectivityError,
   runOrSkipOnNetworkFlake,
 } from "./integration/helpers/network.js";
@@ -62,6 +63,19 @@ describe("runOrSkipOnNetworkFlake", () => {
     expect(ctx.skips).toHaveLength(1);
   });
 
+  it("skips when the HuggingFace Hub throttles the download (HTTP 429)", async () => {
+    const ctx = fakeCtx();
+    // The exact shape transformers.js throws on a rate-limited model pull.
+    const throttle = new Error(
+      'Error (429) occurred while trying to load file: "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json".',
+    );
+    const err = await runOrSkipOnNetworkFlake(ctx, "embedding model pull", () =>
+      Promise.reject(throttle),
+    ).catch((e) => e);
+    expect(skipReason(err)).toMatch(/throttled/i);
+    expect(ctx.skips).toHaveLength(1);
+  });
+
   it("rethrows a non-network error without skipping", async () => {
     const ctx = fakeCtx();
     const boom = new Error("assertion blew up");
@@ -88,5 +102,32 @@ describe("isNetworkConnectivityError", () => {
 
   it("is false for an ordinary error", () => {
     expect(isNetworkConnectivityError(new Error("expected 768, got 384"))).toBe(false);
+  });
+});
+
+describe("isHubThrottleError", () => {
+  it("is true for a transformers.js 429 model-load error", () => {
+    const err = new Error(
+      'Error (429) occurred while trying to load file: "https://huggingface.co/BAAI/bge-base-en-v1.5/resolve/main/tokenizer.json".',
+    );
+    expect(isHubThrottleError(err)).toBe(true);
+  });
+
+  it("is true for a 503 wrapped in a cause chain", () => {
+    const err = Object.assign(new Error("model pull failed"), {
+      cause: new Error(
+        'Error (503) occurred while trying to load file: "https://huggingface.co/x".',
+      ),
+    });
+    expect(isHubThrottleError(err)).toBe(true);
+  });
+
+  it("is false for a 429 unrelated to the Hub", () => {
+    // A 429 from our own API is a real signal, not an infra flake to skip.
+    expect(isHubThrottleError(new Error("server error (429): rate limited"))).toBe(false);
+  });
+
+  it("is false for an ordinary assertion error", () => {
+    expect(isHubThrottleError(new Error("expected 768, got 384"))).toBe(false);
   });
 });
