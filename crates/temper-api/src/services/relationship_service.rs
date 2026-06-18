@@ -50,30 +50,6 @@ pub async fn find_slug_in_context(
     Ok(id)
 }
 
-/// Pool-accepting variant of [`find_slug_in_context`] for pre-transaction
-/// read paths (e.g. the active-edge detection check in `assert_relationship`).
-pub async fn find_slug_in_context_pool(
-    pool: &sqlx::PgPool,
-    context_id: Uuid,
-    slug: &str,
-) -> ApiResult<Option<Uuid>> {
-    let id = sqlx::query_scalar!(
-        r#"
-        SELECT id AS "id!: Uuid"
-          FROM kb_resources
-         WHERE kb_context_id = $1
-           AND slug = $2
-           AND is_active
-         LIMIT 1
-        "#,
-        context_id,
-        slug,
-    )
-    .fetch_optional(pool)
-    .await?;
-    Ok(id)
-}
-
 /// Minimal row shape for auth + retype lookup from `kb_resource_edges`.
 pub struct EdgeAuthRow {
     pub source_resource_id: Uuid,

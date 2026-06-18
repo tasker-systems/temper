@@ -276,12 +276,6 @@ pub async fn write_resource_file(
     write_resource_file_from_parts(vault_root, row, &content)
 }
 
-/// Remove a resource's projection file at its canonical vault path.
-///
-/// A best-effort counterpart to [`write_resource_file_from_parts`], used
-/// by `temper resource delete` after a successful server-side delete. An
-/// already-absent file is a silent success — the projection is
-/// derivative, so "the file is gone" is the desired end state either way.
 /// Remove a resource's projection file given a server [`ResourceRow`].
 ///
 /// A by-row convenience over [`remove_resource_file`] for the id-addressed
@@ -314,6 +308,12 @@ pub fn remove_resource_file_for_row(
     )
 }
 
+/// Remove a resource's projection file at its canonical vault path.
+///
+/// A best-effort counterpart to [`write_resource_file_from_parts`], used
+/// by `temper resource delete` after a successful server-side delete. An
+/// already-absent file is a silent success — the projection is
+/// derivative, so "the file is gone" is the desired end state either way.
 pub fn remove_resource_file(
     vault_root: &Path,
     owner: &str,

@@ -694,12 +694,15 @@ fn show_meta_only(
         })
     })?;
 
-    let value = serde_json::to_value(&meta)
+    let mut value = serde_json::to_value(&meta)
         .map_err(|e| TemperError::Api(format!("meta serialize: {e}")))?;
-    let mut filtered =
+    // Inject `ref` before the `--fields` filter (parity with `list`): the
+    // anchor `resource_id` is always preserved, and `ref` is kept only when
+    // requested — so `--fields` controls its visibility consistently.
+    inject_ref(&mut value);
+    let filtered =
         temper_core::projection::apply_top_level_filter(value, &fields_inner, "resource_id")
             .map_err(map_projection_error)?;
-    inject_ref(&mut filtered);
     let rendered = crate::format::render(&filtered, fmt)?;
     println!("{rendered}");
     Ok(())
