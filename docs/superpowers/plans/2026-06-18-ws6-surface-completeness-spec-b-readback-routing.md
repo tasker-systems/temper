@@ -683,10 +683,9 @@ pub async fn enriched_list(
                 ef.property_value #>> '{}' AS effort
            FROM temper_next.kb_resources r
            JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
-           JOIN temper_next.kb_resource_homes h
-             ON h.resource_id = r.id
+           JOIN temper_next.kb_resource_homes h ON h.resource_id = r.id
            JOIN temper_next.kb_contexts c
-             ON c.owner_table = h.anchor_table AND c.owner_id = h.anchor_id
+             ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
            JOIN temper_next.kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
@@ -788,11 +787,13 @@ git commit -m "feat(temper-next): readback::enriched_list — batched, context/d
 
 ### Task 6: Route `list_resources` through one backend-agnostic selector
 
-**Design:** follow the dominant `read_selector` pattern — one `list_enriched_select` over **both** backends, returning **always-compiled temper-core types** (`Vec<(ResourceRow, Option<ManagedMeta>, Option<Value>)>`), with the Next path gated *inside* the `next_impl` cfg module (exactly like `list_select`/`search_select`). MCP then has **no cfg branch** and reuses the single `build_enriched` assembler for both backends — so the legacy `enrich_resources`/`enrich_resource` helpers become dead and are removed. This avoids a feature-gated type at the crate boundary (which would force a `next-backend` feature into temper-mcp).
+**Design:** follow the dominant `read_selector` pattern — one `list_enriched_select` over **both** backends, returning **always-compiled temper-core types** (`Vec<(ResourceRow, Option<ManagedMeta>, Option<Value>)>`), with the Next path gated *inside* the `next_impl` cfg module (exactly like `list_select`/`search_select`). MCP then has **no cfg branch** and reuses the single `build_enriched` assembler for both backends. This avoids a feature-gated type at the crate boundary (which would force a `next-backend` feature into temper-mcp).
+
+> **GROUNDED NOTE (corrects the plan):** `enrich_resources`/`enrich_resource` (`crates/temper-mcp/src/tools/resources.rs:231-260`) are **NOT dead** after this task — `create_resource` (`:367`) and `update_resource` (`:608`) still call `enrich_resource`. **Do NOT delete them.** Only the `list_resources` call site (`:507`) is replaced. Drop imports only if the compiler/clippy genuinely flags them unused in this file (the filter-id resolution moves to the read_selector legacy arm, so `context_service`/`ingest_service` *may* become unused here — let clippy decide).
 
 **Files:**
 - Modify: `crates/temper-api/src/backend/read_selector.rs` — add `list_enriched_select` + its `next_impl::list_enriched` arms (both cfg variants)
-- Modify: `crates/temper-mcp/src/tools/resources.rs:477-544` (`list_resources`) — call the selector, map via `build_enriched`; delete now-dead `enrich_resources`/`enrich_resource`
+- Modify: `crates/temper-mcp/src/tools/resources.rs:477-544` (`list_resources`) — call the selector, map via `build_enriched`. **Keep** `enrich_resources`/`enrich_resource` (create/update still use them).
 - Test: `tests/e2e/tests/mcp_round_trip.rs` (or `mcp_read_path_next.rs` sibling) — e2e `list_resources` parity + filter assertion under `next-backend`
 
 **Interfaces:**
@@ -976,7 +977,7 @@ pub async fn list_resources(
 }
 ```
 
-Then delete `enrich_resources` (`:244-263`) and `enrich_resource` (`:267-278`) — `list_resources` was their last caller (`get_resource` now uses `build_enriched` directly after Task 4). Let the compiler confirm no other callers; if `enrich_resource` is referenced by a test, point that test at `build_enriched`. Drop any imports (`meta_service`, `context_service`, `ingest_service`) that become unused in this file.
+**Keep `enrich_resources`/`enrich_resource`** — `create_resource` (`:367`) and `update_resource` (`:608`) still call `enrich_resource`. Only the `list_resources` call site changed. After the rewrite, run `cargo clippy -p temper-mcp` and drop ONLY the imports it flags as genuinely unused in this file (`context_service`/`ingest_service` likely become unused here since filter-id resolution moved to the read_selector legacy arm; `meta_service` is still used by `enrich_resources`). Do not remove anything clippy doesn't flag.
 
 > The MCP tool no longer needs `input.limit`/`input.offset` plumbing for Next (the §9 floor asserts the set, and `enriched_list` is unpaginated, matching `next_impl::list`). Legacy pagination via `ResourceListParams` is dropped here too for symmetry — if a consumer depends on MCP list pagination, raise it in review rather than silently preserving a backend-asymmetric limit. (Spec §9: list ordering/bounds are not migration invariants.)
 
@@ -995,7 +996,7 @@ Expected: PASS / exit 0.
 
 ```bash
 git add crates/temper-api/src/backend/read_selector.rs crates/temper-mcp/src/tools/resources.rs tests/e2e/tests/
-git commit -m "feat(mcp): route list_resources through one backend-agnostic list_enriched_select; Next arm via readback::enriched_list (filters); drop dead enrich helpers"
+git commit -m "feat(mcp): route list_resources through one backend-agnostic list_enriched_select; Next arm via readback::enriched_list (context/doctype filters)"
 ```
 
 ---
