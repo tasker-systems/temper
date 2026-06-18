@@ -1,3 +1,4 @@
+use temper_core::types::ids::ResourceId;
 use temper_core::types::managed_meta::ManagedMeta;
 use temper_core::types::resource::{ResourceListParams, ResourceSortField, SortOrder};
 
@@ -86,7 +87,7 @@ pub fn load_tasks(
                 // skip it rather than fabricate a partial TaskInfo.
                 continue;
             };
-            let info = task_info_from_meta(meta, &ctx_for_query)?;
+            let info = task_info_from_meta(row.resource_id, meta, &ctx_for_query)?;
             if let Some(gs) = goal_slug {
                 if info.goal.as_deref() != Some(gs) {
                     continue;
@@ -106,7 +107,7 @@ pub fn load_tasks(
 /// than a silent skip. `temper-seq` is stored as `i64` in `ManagedMeta`;
 /// `TaskInfo` uses `u32`, so negative or out-of-range values clamp to `None`
 /// (treated as unsequenced, sorting last).
-fn task_info_from_meta(meta: ManagedMeta, context: &str) -> Result<TaskInfo> {
+fn task_info_from_meta(id: ResourceId, meta: ManagedMeta, context: &str) -> Result<TaskInfo> {
     let title = meta
         .title
         .ok_or_else(|| TemperError::Api("task managed_meta missing temper-title".to_string()))?;
@@ -114,6 +115,7 @@ fn task_info_from_meta(meta: ManagedMeta, context: &str) -> Result<TaskInfo> {
         .slug
         .ok_or_else(|| TemperError::Api("task managed_meta missing temper-slug".to_string()))?;
     Ok(TaskInfo {
+        id,
         title,
         slug,
         context: context.to_string(),

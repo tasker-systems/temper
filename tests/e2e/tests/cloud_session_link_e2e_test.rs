@@ -178,6 +178,13 @@ async fn create_session_with_task_asserts_advances_edge(pool: sqlx::PgPool) {
         .resolve_by_uri(&owner, "myapp", "task", "implement-widget")
         .await
         .expect("resolve task by uri");
+    // The id-based link must target the seeded task's resource id directly.
+    assert_eq!(
+        outgoing[0].peer_resource_id,
+        *task_row.id.as_uuid(),
+        "outgoing advances edge must target the seeded task's resource id"
+    );
+
     let task_edges = app
         .client
         .resources()

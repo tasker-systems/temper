@@ -314,19 +314,15 @@ pub fn create(config: &Config, args: CreateResourceArgs<'_>) -> Result<()> {
                 use temper_core::types::graph::{EdgeKind, Polarity};
                 use temper_core::types::relationship_requests::AssertRelationshipRequest;
 
-                // Edge addressing is id-based now: resolve the task slug to its
-                // resource id surface-side before asserting the link.
-                let owner = config.owner_for_context(&task_info.context);
+                // Edge addressing is id-based now: `find_task` carried the task's
+                // resource id off the listing row, so the link asserts by that
+                // held id directly — no slug→id round-trip.
                 let source_id = output.value.id;
+                let target_id = task_info.id;
                 let result = runtime.block_on(async {
-                    let target = client
-                        .resources()
-                        .resolve_by_uri(&owner, &task_info.context, "task", &task_info.slug)
-                        .await
-                        .map_err(crate::commands::client_err)?;
                     let req = AssertRelationshipRequest {
                         source: source_id,
-                        target: target.id,
+                        target: target_id,
                         edge_kind: EdgeKind::LeadsTo,
                         polarity: Polarity::Forward,
                         label: "advances".to_string(),
