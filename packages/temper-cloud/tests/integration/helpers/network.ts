@@ -35,6 +35,30 @@ export function isNetworkConnectivityError(err: unknown): boolean {
   return false;
 }
 
+/**
+ * Does this error (or anything in its `.cause` chain) look like the HuggingFace
+ * Hub throttling or briefly refusing a model-file download — HTTP 429
+ * (rate-limited) or 503 (temporarily unavailable)? transformers.js surfaces
+ * these as `Error (429) occurred while trying to load file: "https://huggingface.co/...">`,
+ * which carries no `.code` and whose message doesn't match the connectivity
+ * patterns above, so it would otherwise slip through as a hard failure. Like a
+ * connectivity failure this is infra flake (the Hub is up but shedding load),
+ * not a defect, so the guard skips rather than fails the build.
+ */
+export function isHubThrottleError(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < 5 && current instanceof Error; depth++) {
+    if (
+      /\b(429|503)\b/.test(current.message) &&
+      /huggingface\.co|trying to load file/i.test(current.message)
+    ) {
+      return true;
+    }
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 /** Internal sentinel: the operation outran its network budget. */
 class NetworkBudgetExceeded extends Error {
   constructor(label: string, budgetMs: number) {
@@ -44,11 +68,12 @@ class NetworkBudgetExceeded extends Error {
 }
 
 /**
- * Run a network-dependent operation, degrading both flake modes to a *skip*
+ * Run a network-dependent operation, degrading each flake mode to a *skip*
  * rather than a failure:
  *
- * - the operation **hangs** past `budgetMs` (our timer wins the race), or
- * - the operation **throws** a network connectivity error.
+ * - the operation **hangs** past `budgetMs` (our timer wins the race),
+ * - the operation **throws** a network connectivity error, or
+ * - the HuggingFace Hub **throttles** the download (HTTP 429/503).
  *
  * Either way the test is skipped via `ctx.skip(reason)` (which aborts by
  * throwing vitest's skip signal). A genuine resolution returns the value so the
@@ -83,6 +108,11 @@ export async function runOrSkipOnNetworkFlake<T>(
     }
     if (isNetworkConnectivityError(err)) {
       ctx.skip(`${label}: HuggingFace Hub unreachable — model could not be pulled`);
+    }
+    if (isHubThrottleError(err)) {
+      ctx.skip(
+        `${label}: HuggingFace Hub throttled the download (429/503) — treating as infra flake`,
+      );
     }
     throw err;
   } finally {
