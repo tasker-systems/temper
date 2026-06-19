@@ -66,7 +66,7 @@
     <div class="pathway">
       <div class="pathway-icon">$</div>
       <div class="pathway-name">CLI</div>
-      <div class="pathway-desc"><span class="cmd-inline">temper warmup</span>, <span class="cmd-inline">temper search</span>, <span class="cmd-inline">temper session save</span> — agents that can run shell commands get full vault access. Claude Code hooks call <span class="cmd-inline">temper warmup</span> automatically at session start.</div>
+      <div class="pathway-desc"><span class="cmd-inline">temper warmup</span>, <span class="cmd-inline">temper search</span>, <span class="cmd-inline">temper resource create</span> — agents that can run shell commands get full vault access. Claude Code hooks call <span class="cmd-inline">temper warmup</span> automatically at session start.</div>
     </div>
     <div class="pathway">
       <div class="pathway-icon">⟡</div>
@@ -113,32 +113,32 @@
 <Section label="MCP server">
   <h2>Direct agent <em>integration</em></h2>
   <p>The MCP server exposes the vault as a set of structured tools that any MCP-compatible agent can call. No file system access needed — the agent queries the vault through the protocol and gets structured results back.</p>
+  <p class="mcp-ref">The full tool list and the connection config live in <a href="/using-temper">Using Temper</a>.</p>
   <div class="mcp-demo">
     <div class="transcript">
       <div class="message">
         <div class="role">agent <span class="role-via">via mcp</span></div>
-        <div class="content agent-code">temper.warmup({'{'} context: "myapp" {'}'})</div>
+        <div class="content agent-code">list_resources({'{'} context: "myapp", doc_type: "session", limit: 4 {'}'})</div>
       </div>
       <div class="message">
         <div class="role">vault</div>
         <div class="content">
           <div class="context-block">
-            <div class="context-line"><span class="context-key">goal</span> api-v2-migration <span class="dim">(3 tasks, 2 complete)</span></div>
-            <div class="context-line"><span class="context-key">active</span> client-sdk-update <span class="tag-sm tag-mode-sm">build</span> <span class="tag-sm tag-effort-sm">medium</span></div>
-            <div class="context-line"><span class="context-key">prior</span> 4 sessions <span class="dim">(last: auth middleware, Mar 28)</span></div>
-            <div class="context-line"><span class="context-key">decided</span> REST over GraphQL, JWT rotation</div>
-            <div class="context-line"><span class="context-key">deferred</span> rate limiting, webhook signatures</div>
+            <div class="context-line"><span class="context-key">session</span> auth-middleware <span class="dim">(Mar 28 — chose JWT rotation)</span></div>
+            <div class="context-line"><span class="context-key">session</span> api-v2-planning <span class="dim">(Mar 26 — REST over GraphQL)</span></div>
+            <div class="context-line"><span class="context-key">session</span> client-sdk-update <span class="dim">(Mar 25 — in progress)</span></div>
+            <div class="context-line"><span class="context-key">session</span> rate-limit-spike <span class="dim">(Mar 22 — deferred)</span></div>
           </div>
         </div>
       </div>
       <div class="message">
         <div class="role">agent <span class="role-via">via mcp</span></div>
-        <div class="content agent-code">temper.session_save({'{'} title: "Client SDK v2 migration", decisions: ["Kept backward compat for v1 clients"], next: "Integration tests for v1 → v2 upgrade path" {'}'})</div>
+        <div class="content agent-code">create_resource({'{'} doc_type: "session", context: "myapp", title: "Client SDK v2 migration", content: "## Decisions\nKept backward compat for v1 clients\n## Next\nIntegration tests for the v1 → v2 upgrade path" {'}'})</div>
       </div>
       <div class="message">
         <div class="role">vault</div>
         <div class="content">
-          <div class="mcp-confirm">Session saved. Vault updated. Next warmup will include this context.</div>
+          <div class="mcp-confirm">Resource created. Indexed and searchable — the next session's recall will include it.</div>
         </div>
       </div>
     </div>
@@ -204,9 +204,6 @@
   .context-block { font-size: 0.65rem; line-height: 1.8; }
   .context-line { color: rgba(255, 255, 255, 0.45); }
   .context-key { color: var(--temper-blue-dim); display: inline-block; min-width: 64px; }
-  .tag-sm { font-size: 0.55rem; padding: 0 0.3rem; border: 1px solid; letter-spacing: 0.03em; }
-  .tag-mode-sm { border-color: rgba(126, 184, 218, 0.3); color: var(--temper-blue); }
-  .tag-effort-sm { border-color: rgba(255, 255, 255, 0.12); color: var(--graphite); }
   .dim { color: rgba(255, 255, 255, 0.25); }
   .pathways { display: flex; flex-direction: column; gap: 1.5rem; margin-top: 1.5rem; }
   .pathway { display: grid; grid-template-columns: 32px 1fr; grid-template-rows: auto auto; gap: 0 1rem; align-items: start; }
@@ -224,6 +221,9 @@
   .inject-item { display: flex; align-items: baseline; gap: 0.8rem; font-family: var(--font-serif); font-size: 0.88rem; color: var(--chalk); }
   .inject-dot { width: 4px; height: 4px; background: var(--temper-blue); border-radius: 50%; flex-shrink: 0; margin-top: 0.45rem; }
   .mcp-demo { margin-top: 1.5rem; }
+  .mcp-ref { font-family: var(--font-serif); font-size: 0.85rem !important; font-style: italic; color: var(--graphite); margin-top: -0.3rem; }
+  .mcp-ref a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }
+  .mcp-ref a:hover { color: var(--parchment); }
   .cli-output { margin-top: 0.5rem; }
   .skill-line { font-size: 0.7rem; color: rgba(255, 255, 255, 0.5); line-height: 1.8; }
   .skill-line.dim { color: rgba(255, 255, 255, 0.25); }
