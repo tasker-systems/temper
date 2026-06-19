@@ -73,12 +73,13 @@ async fn synthesizes_resources_homes_and_single_block(pool: sqlx::PgPool) {
         "fixture-originator",
         "home originator carried distinct from owner (COALESCE, not collapsed)"
     );
-    // The anchor is the REMAPPED temper_next context id, never the production id.
+    // The anchor is the synthesized temper_next context, whose id is the production id PRESERVED
+    // verbatim (id-continuity: contexts carry their prod id through, same as profiles/resources).
     let anchor: Uuid = row.get("anchor_id");
-    assert_ne!(
+    assert_eq!(
         anchor,
         fixture_ids::CONTEXT_ONE,
-        "home anchors the remapped context id, not the production one"
+        "home anchors the synthesized context, which preserves the production context id verbatim"
     );
     let anchor_exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM temper_next.kb_contexts WHERE id = $1)")
@@ -233,6 +234,105 @@ async fn synthesizes_properties_from_manifest_keys(pool: sqlx::PgPool) {
         props.get("doc_type").map(String::as_str),
         Some("task"),
         "doc_type property (from resource_create) carries the authoritative doctype"
+    );
+}
+
+/// Regression — WS6 flip Neon-branch rehearsal finding: a manifest key carried in BOTH `managed_meta`
+/// (Property-fated) and `open_meta` with the SAME value must synthesize as ONE property, not violate
+/// `uq_kb_properties_active` (whose active grain is `owner + property_key + property_value`).
+/// Production has this: four learning-maths resources carry a `date` key in both manifests with an
+/// equal value. The property pass fires from both sources, so it must dedup identical `(key, value)`
+/// pairs per resource — while still letting DISTINCT values for a repeated key both fire (multi-valued
+/// keys are preserved). The shared fixture is left untouched; the duplicate is injected into R2 here.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesizes_dedups_duplicate_property_across_managed_and_open(pool: sqlx::PgPool) {
+    common::seed_prod_shape_fixture(&pool).await;
+
+    // Carry the same (key, value) in BOTH manifest blobs of R2 (the task) — the production shape that
+    // collides on `uq_kb_properties_active` when the property pass fires each source separately.
+    sqlx::query(
+        "UPDATE public.kb_resource_manifests \
+         SET managed_meta = managed_meta || '{\"dup-key\": \"dup-value\"}'::jsonb, \
+             open_meta    = open_meta    || '{\"dup-key\": \"dup-value\"}'::jsonb \
+         WHERE resource_id = $1",
+    )
+    .bind(fixture_ids::RESOURCE_TASK)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    temper_next::synthesis::run(&pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect(
+            "synthesis must dedup the duplicate (key,value), not error on uq_kb_properties_active",
+        );
+
+    // Exactly one active property row for the deduped pair.
+    let dup_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM temper_next.kb_properties p \
+         JOIN temper_next.kb_resources r ON r.id = p.owner_id \
+         WHERE p.owner_table = 'kb_resources' AND r.origin_uri = 'temper://fixture/task-doc' \
+           AND p.property_key = 'dup-key' AND NOT p.is_folded",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        dup_rows, 1,
+        "a (key, value) carried in both managed_meta and open_meta synthesizes as one property"
+    );
+}
+
+/// Regression — WS6 flip Neon-branch rehearsal finding: `origin_uri` is NOT a unique key in
+/// production (CLI/agent-created resources carry an empty `origin_uri`; the real corpus has 166 of
+/// 1214). The §8 body-parity gate and the §9 `readback::body` read must therefore key on the preserved
+/// resource id, never `origin_uri` — otherwise every empty-`origin_uri` resource reads a concatenation
+/// of all of them, the gate false-flags them, and synthesis refuses to complete. Here TWO active
+/// resources are forced to share an empty `origin_uri`; synthesis must still pass the gate, and each
+/// resource's body must read back as its own distinct content.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesizes_with_nonunique_empty_origin_uri(pool: sqlx::PgPool) {
+    common::seed_prod_shape_fixture(&pool).await;
+
+    // R1 (goal) and R3 (decision) now collide on origin_uri='' — the production shape an
+    // origin_uri-keyed parity gate / body read silently mishandles.
+    sqlx::query("UPDATE public.kb_resources SET origin_uri = '' WHERE id = ANY($1)")
+        .bind(vec![
+            fixture_ids::RESOURCE_GOAL,
+            fixture_ids::RESOURCE_DECISION,
+        ])
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    // The §8 gate (run inside synthesis::run) must still pass — matched by preserved id, not the
+    // now-ambiguous origin_uri.
+    temper_next::synthesis::run(&pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis must pass the §8 gate keyed on resource id, not non-unique origin_uri");
+
+    // The §9 body read returns each resource's OWN body, not a concatenation of the empty-origin_uri set.
+    let goal_body = temper_next::readback::body(
+        &pool,
+        fixture_ids::OWNER_PROFILE,
+        fixture_ids::RESOURCE_GOAL,
+    )
+    .await
+    .expect("readback::body goal");
+    let decision_body = temper_next::readback::body(
+        &pool,
+        fixture_ids::OWNER_PROFILE,
+        fixture_ids::RESOURCE_DECISION,
+    )
+    .await
+    .expect("readback::body decision");
+    assert_eq!(
+        goal_body, "Goal body text.",
+        "empty-origin_uri goal reads its own body"
+    );
+    assert_eq!(
+        decision_body, "Decision body text.",
+        "empty-origin_uri decision reads its own body (distinct from the goal's)"
     );
 }
 
@@ -441,8 +541,9 @@ async fn body_parity_gate_passes_and_detects_corruption(pool: sqlx::PgPool) {
     assert!(!report.is_clean(), "corruption must be detected");
     assert_eq!(report.mismatches.len(), 1, "exactly one resource diverges");
     assert_eq!(
-        report.mismatches[0].origin_uri, "temper://fixture/team-doc",
-        "the gate flags precisely the corrupted resource"
+        report.mismatches[0].resource_id,
+        fixture_ids::RESOURCE_TEAM,
+        "the gate flags precisely the corrupted resource (by its preserved id)"
     );
 
     // The mismatch carries both bodies for diagnosis — production's intact body vs the corrupted one.

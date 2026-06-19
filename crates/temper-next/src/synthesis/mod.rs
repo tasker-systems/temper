@@ -54,6 +54,29 @@ pub struct SynthState {
     pub resource_id_by_old: HashMap<Uuid, ResourceId>,
 }
 
+/// Begin a synthesis write transaction with the two shared session settings every pass needs:
+///
+/// 1. `search_path = temper_next, public` — so the SQL mutation functions + triggers resolve their
+///    unqualified references into `temper_next` (same discipline as `bootstrap::run`).
+/// 2. `idle_in_transaction_session_timeout = 0` — each pass is one atomic transaction over the full
+///    corpus driven by sequential per-item round-trips (one `resource_create` / `facet_set` /
+///    `relationship_assert` per statement). Against a managed Postgres that reaps idle-in-transaction
+///    sessions (Neon caps the timeout at 5min), the transaction sits "idle in transaction" between
+///    statements and gets killed mid-pass. That timeout guards against *leaked interactive*
+///    transactions, not a deliberate, explicitly-invoked bulk migration — so disable it here.
+///    Discovered by the WS6 flip Neon-branch rehearsal (the §D final synthesis would have failed
+///    identically over the production corpus).
+async fn begin_synthesis_tx(pool: &PgPool) -> Result<sqlx::Transaction<'static, sqlx::Postgres>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("SET LOCAL idle_in_transaction_session_timeout = 0")
+        .execute(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
 /// Synthesize the `temper_next` substrate from current `public.*` state.
 ///
 /// WS6 chunk-2: bootstrap (§1/§2) + the resource pass (§8/§2/§1c). Each active resource backfills as
@@ -88,10 +111,7 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
     // All temper_next writes run in one transaction with `search_path = temper_next, public` so the
     // SQL functions + triggers resolve their unqualified references into temper_next (same discipline
     // as bootstrap::run). Each `resource_create` fires through the single `events::fire` surface.
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = begin_synthesis_tx(pool).await?;
 
     for (r, chunks) in selected.iter().zip(&chunk_sets) {
         let block = single_block_from_chunks(chunks);
@@ -159,10 +179,7 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
     // resource's home (erroring if homeless), and the homes are now durable. A fresh transaction (homes
     // already committed) mirrors the resource-pass search_path discipline so the SQL functions resolve
     // their unqualified references into `temper_next`.
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = begin_synthesis_tx(pool).await?;
 
     for r in selected {
         let new_id = *state.resource_id_by_old.get(&r.id).with_context(|| {
@@ -172,18 +189,24 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
             )
         })?;
 
-        // Managed keys flow through the §7 fate table; only `Property`-fated keys become rows. `Die`
-        // (title/slug/id/context), `Edge` (temper-goal → edge pass, Task 8), and `ReconcileToDocType`
-        // (temper-type → the doc_type column already a property) are skipped.
-        for (key, value) in manifest_entries(&r.managed_meta) {
-            if key_fate::key_fate(key) != key_fate::KeyFate::Property {
+        // §7 property sources, in order: managed keys flow through the fate table (only `Property`-fated
+        // keys become rows — `Die` title/slug/id/context, `Edge` temper-goal, and `ReconcileToDocType`
+        // temper-type are skipped); then every `open_meta` key verbatim (no fate consultation).
+        let managed = manifest_entries(&r.managed_meta)
+            .filter(|(key, _)| key_fate::key_fate(key) == key_fate::KeyFate::Property);
+        // Dedup identical `(key, value)` pairs across the two sources: `kb_properties`' active grain is
+        // `(owner, property_key, property_value)`, so the SAME assertion appearing in both manifests
+        // (observed in production: a `date` key carried in both `managed_meta` and `open_meta` with an
+        // equal value) is ONE property, not a `uq_kb_properties_active` violation. Distinct values for a
+        // repeated key are different pairs and still both fire — multi-valued keys are preserved. Linear
+        // scan over a per-resource list (a handful of keys); `serde_json::Value` is not `Hash`, but its
+        // `PartialEq` is the same semantic JSONB equality the constraint enforces.
+        let mut fired: Vec<(&str, &serde_json::Value)> = Vec::new();
+        for (key, value) in managed.chain(manifest_entries(&r.open_meta)) {
+            if fired.iter().any(|(k, v)| *k == key && *v == value) {
                 continue;
             }
-            fire_property(&mut tx, new_id, key, value, maps.migration_entity).await?;
-            report.properties += 1;
-        }
-        // Every `open_meta` key is a property verbatim (§7) — no fate-table consultation.
-        for (key, value) in manifest_entries(&r.open_meta) {
+            fired.push((key, value));
             fire_property(&mut tx, new_id, key, value, maps.migration_entity).await?;
             report.properties += 1;
         }
@@ -214,10 +237,7 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
     // temper-goal edge already present as a materialized `kb_resource_edges` row is not double-created.
     let mut seen: HashSet<(Uuid, Uuid, EdgeKind, Option<String>)> = HashSet::new();
 
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
+    let mut tx = begin_synthesis_tx(pool).await?;
 
     for e in &source_edges {
         // `source::edges` already restricts to active↔active; an endpoint can still be absent here only
@@ -345,7 +365,7 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
             "body-text parity gate failed (§8): {} of {} synthesized resources diverge from production: {:?}",
             parity.mismatches.len(),
             parity.checked,
-            parity.mismatched_uris(),
+            parity.mismatched_ids(),
         );
     }
 
