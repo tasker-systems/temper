@@ -17,8 +17,7 @@ use crate::auth::TokenStore;
 use crate::error::{ClientError, Result};
 
 /// Total attempts (initial request + retries) for safe, idempotent requests
-/// that fail transiently. Mirrors the retry convention in `temper-llm`'s
-/// providers. Absorbs a Vercel cold-start / Neon compute-resume blip — the
+/// that fail transiently. Absorbs a Vercel cold-start / Neon compute-resume blip — the
 /// failure mode where a cold serverless instance 500s (or never answers) until
 /// it warms — without masking persistent server faults.
 const MAX_ATTEMPTS: u32 = 3;
