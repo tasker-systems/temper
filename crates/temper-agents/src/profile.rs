@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 
 /// Which agent runtime this deployment binds to. (WS7 decision #1.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "deployment_profile.ts")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeBinding {
     /// Vercel Eve durable agents.
@@ -19,6 +24,11 @@ pub enum RuntimeBinding {
 /// offer both (Eve: Vercel-managed vs docker/self-deploy; CMA: cloud vs
 /// self-hosted). This is WS7's "stratum" made concrete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "deployment_profile.ts")
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Residency {
     /// Runtime-operator-hosted sandbox (Vercel sandbox / CMA cloud env).
@@ -30,6 +40,11 @@ pub enum Residency {
 /// How an agent binding is deployed and paced. Carried by the binding layer;
 /// never read by the substrate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
+#[cfg_attr(
+    feature = "typescript",
+    ts(export, export_to = "deployment_profile.ts")
+)]
 pub struct DeploymentProfile {
     pub runtime: RuntimeBinding,
     pub residency: Residency,
