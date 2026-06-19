@@ -87,15 +87,15 @@ pub async fn assert(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     }))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/relationships/{correlation_id}/retype",
+    path = "/api/relationships/{edge_handle}/retype",
     tag = "Relationships",
-    params(("correlation_id" = Uuid, Path, description = "Relationship correlation ID")),
+    params(("edge_handle" = Uuid, Path, description = "Relationship edge handle")),
     security(("bearer_auth" = [])),
     request_body = RetypeRelationshipRequest,
     responses(
@@ -110,14 +110,14 @@ pub async fn retype(
     State(state): State<AppState>,
     auth: AuthUser,
     device_id: Option<Extension<DeviceId>>,
-    Path(correlation_id): Path<Uuid>,
+    Path(edge_handle): Path<Uuid>,
     Json(req): Json<RetypeRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
     let cmd = RetypeRelationship {
-        correlation_id,
+        edge_handle,
         edge_kind: req.edge_kind,
         polarity: req.polarity,
         origin: Surface::ApiHttp,
@@ -135,15 +135,15 @@ pub async fn retype(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     }))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/relationships/{correlation_id}/reweight",
+    path = "/api/relationships/{edge_handle}/reweight",
     tag = "Relationships",
-    params(("correlation_id" = Uuid, Path, description = "Relationship correlation ID")),
+    params(("edge_handle" = Uuid, Path, description = "Relationship edge handle")),
     security(("bearer_auth" = [])),
     request_body = ReweightRelationshipRequest,
     responses(
@@ -158,14 +158,14 @@ pub async fn reweight(
     State(state): State<AppState>,
     auth: AuthUser,
     device_id: Option<Extension<DeviceId>>,
-    Path(correlation_id): Path<Uuid>,
+    Path(edge_handle): Path<Uuid>,
     Json(req): Json<ReweightRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
     let cmd = ReweightRelationship {
-        correlation_id,
+        edge_handle,
         weight: req.weight,
         origin: Surface::ApiHttp,
     };
@@ -182,15 +182,15 @@ pub async fn reweight(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     }))
 }
 
 #[utoipa::path(
     post,
-    path = "/api/relationships/{correlation_id}/fold",
+    path = "/api/relationships/{edge_handle}/fold",
     tag = "Relationships",
-    params(("correlation_id" = Uuid, Path, description = "Relationship correlation ID")),
+    params(("edge_handle" = Uuid, Path, description = "Relationship edge handle")),
     security(("bearer_auth" = [])),
     request_body = FoldRelationshipRequest,
     responses(
@@ -205,14 +205,14 @@ pub async fn fold(
     State(state): State<AppState>,
     auth: AuthUser,
     device_id: Option<Extension<DeviceId>>,
-    Path(correlation_id): Path<Uuid>,
+    Path(edge_handle): Path<Uuid>,
     Json(req): Json<FoldRelationshipRequest>,
 ) -> ApiResult<Json<RelationshipAck>> {
     let device_id = device_id
         .map(|d| d.0 .0.clone())
         .unwrap_or_else(|| "api".to_string());
     let cmd = FoldRelationship {
-        correlation_id,
+        edge_handle,
         reason: req.reason,
         origin: Surface::ApiHttp,
     };
@@ -229,6 +229,6 @@ pub async fn fold(
         .await
         .map_err(ApiError::from)?;
     Ok(Json(RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     }))
 }

@@ -198,7 +198,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Assert a directed relationship from a source resource to a target slug. Specify the source by owner/context/doctype/slug. Returns a correlation_id that identifies this relationship for future retype, reweight, or fold calls."
+        description = "Assert a directed relationship from a source resource to a target slug. Specify the source by owner/context/doctype/slug. Returns a edge_handle that identifies this relationship for future retype, reweight, or fold calls."
     )]
     async fn assert_relationship(
         &self,
@@ -210,7 +210,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Change the edge_kind and polarity of an existing relationship. Use the correlation_id returned by assert_relationship to identify the relationship."
+        description = "Change the edge_kind and polarity of an existing relationship. Use the edge_handle returned by assert_relationship to identify the relationship."
     )]
     async fn retype_relationship(
         &self,
@@ -222,7 +222,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Update the weight of an existing relationship. Use the correlation_id returned by assert_relationship to identify the relationship."
+        description = "Update the weight of an existing relationship. Use the edge_handle returned by assert_relationship to identify the relationship."
     )]
     async fn reweight_relationship(
         &self,
@@ -234,7 +234,7 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "Retract (fold) an existing relationship, marking it inactive. Optionally provide a human-readable reason. Use the correlation_id returned by assert_relationship to identify the relationship."
+        description = "Retract (fold) an existing relationship, marking it inactive. Optionally provide a human-readable reason. Use the edge_handle returned by assert_relationship to identify the relationship."
     )]
     async fn fold_relationship(
         &self,

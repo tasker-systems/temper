@@ -445,7 +445,7 @@ pub enum ConfigAction {
 pub enum EdgeAction {
     /// Assert a new relationship between two resources.
     ///
-    /// Sends a `POST /api/relationships` request. Returns a `correlation_id`
+    /// Sends a `POST /api/relationships` request. Returns a `edge_handle`
     /// that identifies the relationship chain for subsequent retype/reweight/fold.
     Assert {
         /// Source resource ref: a UUID or the decorated `slug-<uuid>` form
@@ -467,10 +467,10 @@ pub enum EdgeAction {
     },
     /// Change the kind and polarity of an existing relationship.
     ///
-    /// Sends `POST /api/relationships/{correlation_id}/retype`.
+    /// Sends `POST /api/relationships/{edge_handle}/retype`.
     Retype {
         /// Correlation ID of the relationship to retype
-        correlation_id: uuid::Uuid,
+        edge_handle: uuid::Uuid,
         /// New edge kind
         #[arg(long, value_enum)]
         kind: CliEdgeKind,
@@ -480,20 +480,20 @@ pub enum EdgeAction {
     },
     /// Adjust the weight of an existing relationship.
     ///
-    /// Sends `POST /api/relationships/{correlation_id}/reweight`.
+    /// Sends `POST /api/relationships/{edge_handle}/reweight`.
     Reweight {
         /// Correlation ID of the relationship to reweight
-        correlation_id: uuid::Uuid,
+        edge_handle: uuid::Uuid,
         /// New weight value
         #[arg(long)]
         weight: f64,
     },
     /// Retract (soft-delete) an existing relationship.
     ///
-    /// Sends `POST /api/relationships/{correlation_id}/fold`.
+    /// Sends `POST /api/relationships/{edge_handle}/fold`.
     Fold {
         /// Correlation ID of the relationship to fold
-        correlation_id: uuid::Uuid,
+        edge_handle: uuid::Uuid,
         /// Optional human-readable reason for folding
         #[arg(long)]
         reason: Option<String>,

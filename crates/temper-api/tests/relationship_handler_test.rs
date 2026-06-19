@@ -100,15 +100,13 @@ async fn assert_relationship_returns_ack(pool: PgPool) {
         .expect("expected JSON ack");
 
     assert!(
-        ack["correlation_id"].is_string(),
-        "RelationshipAck must contain correlation_id string; got {ack}"
+        ack["edge_handle"].is_string(),
+        "RelationshipAck must contain edge_handle string; got {ack}"
     );
 
-    // Verify the correlation_id parses as a valid UUID.
-    let cid_str = ack["correlation_id"]
-        .as_str()
-        .expect("correlation_id is string");
-    Uuid::parse_str(cid_str).expect("correlation_id should be a valid UUID");
+    // Verify the edge_handle parses as a valid UUID.
+    let cid_str = ack["edge_handle"].as_str().expect("edge_handle is string");
+    Uuid::parse_str(cid_str).expect("edge_handle should be a valid UUID");
 
     // Verify edge row was projected.
     let edge_count: i64 = sqlx::query_scalar(
@@ -241,14 +239,14 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
         .await
         .expect("assert JSON");
 
-    let correlation_id = assert_resp["correlation_id"]
+    let edge_handle = assert_resp["edge_handle"]
         .as_str()
-        .expect("correlation_id in assert response");
+        .expect("edge_handle in assert response");
 
     // Now fold it.
     let fold_resp = app
         .client
-        .post(app.url(&format!("/api/relationships/{correlation_id}/fold")))
+        .post(app.url(&format!("/api/relationships/{edge_handle}/fold")))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({ "reason": "test fold via HTTP" }))
         .send()
@@ -264,7 +262,7 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
 
     let fold_ack: Value = app
         .client
-        .post(app.url(&format!("/api/relationships/{correlation_id}/fold")))
+        .post(app.url(&format!("/api/relationships/{edge_handle}/fold")))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({ "reason": "test fold via HTTP second pass" }))
         .send()
@@ -275,12 +273,12 @@ async fn fold_relationship_marks_edge_folded(pool: PgPool) {
         .expect("fold ack JSON");
 
     assert!(
-        fold_ack["correlation_id"].is_string(),
-        "fold ack must contain correlation_id; got {fold_ack}"
+        fold_ack["edge_handle"].is_string(),
+        "fold ack must contain edge_handle; got {fold_ack}"
     );
 
     // Verify edge is marked folded in the DB.
-    let cid_uuid = Uuid::parse_str(correlation_id).expect("valid uuid");
+    let cid_uuid = Uuid::parse_str(edge_handle).expect("valid uuid");
     let is_folded: bool = sqlx::query_scalar(
         "SELECT is_folded FROM kb_resource_edges WHERE asserted_by_event_id = $1",
     )

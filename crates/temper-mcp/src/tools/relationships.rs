@@ -44,7 +44,7 @@ pub struct AssertRelationshipInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct RetypeRelationshipInput {
     /// Relationship correlation ID returned by assert_relationship.
-    pub correlation_id: Uuid,
+    pub edge_handle: Uuid,
     /// New structural edge kind.
     pub edge_kind: EdgeKind,
     /// New edge direction sign.
@@ -55,7 +55,7 @@ pub struct RetypeRelationshipInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ReweightRelationshipInput {
     /// Relationship correlation ID returned by assert_relationship.
-    pub correlation_id: Uuid,
+    pub edge_handle: Uuid,
     /// New edge weight.
     pub weight: f64,
 }
@@ -64,7 +64,7 @@ pub struct ReweightRelationshipInput {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FoldRelationshipInput {
     /// Relationship correlation ID returned by assert_relationship.
-    pub correlation_id: Uuid,
+    pub edge_handle: Uuid,
     /// Optional human-readable reason for retracting the relationship.
     pub reason: Option<String>,
 }
@@ -130,7 +130,7 @@ pub async fn assert_relationship(
         .map_err(|e| map_err(e, "assert_relationship"))?;
 
     let ack = RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -146,7 +146,7 @@ pub async fn retype_relationship(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = RetypeRelationship {
-        correlation_id: input.correlation_id,
+        edge_handle: input.edge_handle,
         edge_kind: input.edge_kind,
         polarity: input.polarity,
         origin: Surface::Mcp,
@@ -166,7 +166,7 @@ pub async fn retype_relationship(
         .map_err(|e| map_err(e, "retype_relationship"))?;
 
     let ack = RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -182,7 +182,7 @@ pub async fn reweight_relationship(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = ReweightRelationship {
-        correlation_id: input.correlation_id,
+        edge_handle: input.edge_handle,
         weight: input.weight,
         origin: Surface::Mcp,
     };
@@ -201,7 +201,7 @@ pub async fn reweight_relationship(
         .map_err(|e| map_err(e, "reweight_relationship"))?;
 
     let ack = RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -217,7 +217,7 @@ pub async fn fold_relationship(
     let profile_id = ProfileId::from(profile.id);
 
     let cmd = FoldRelationship {
-        correlation_id: input.correlation_id,
+        edge_handle: input.edge_handle,
         reason: input.reason,
         origin: Surface::Mcp,
     };
@@ -236,7 +236,7 @@ pub async fn fold_relationship(
         .map_err(|e| map_err(e, "fold_relationship"))?;
 
     let ack = RelationshipAck {
-        correlation_id: out.value,
+        edge_handle: out.value,
     };
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&ack),
@@ -272,12 +272,12 @@ mod tests {
     fn retype_relationship_input_deserializes() {
         let id = Uuid::new_v4();
         let json = serde_json::json!({
-            "correlation_id": id.to_string(),
+            "edge_handle": id.to_string(),
             "edge_kind": "near",
             "polarity": "forward"
         });
         let input: RetypeRelationshipInput = serde_json::from_value(json).unwrap();
-        assert_eq!(input.correlation_id, id);
+        assert_eq!(input.edge_handle, id);
         assert_eq!(input.edge_kind, EdgeKind::Near);
         assert_eq!(input.polarity, Polarity::Forward);
     }
@@ -286,11 +286,11 @@ mod tests {
     fn reweight_relationship_input_deserializes() {
         let id = Uuid::new_v4();
         let json = serde_json::json!({
-            "correlation_id": id.to_string(),
+            "edge_handle": id.to_string(),
             "weight": 0.5
         });
         let input: ReweightRelationshipInput = serde_json::from_value(json).unwrap();
-        assert_eq!(input.correlation_id, id);
+        assert_eq!(input.edge_handle, id);
         assert_eq!(input.weight, 0.5);
     }
 
@@ -298,11 +298,11 @@ mod tests {
     fn fold_relationship_input_deserializes_with_reason() {
         let id = Uuid::new_v4();
         let json = serde_json::json!({
-            "correlation_id": id.to_string(),
+            "edge_handle": id.to_string(),
             "reason": "no longer relevant"
         });
         let input: FoldRelationshipInput = serde_json::from_value(json).unwrap();
-        assert_eq!(input.correlation_id, id);
+        assert_eq!(input.edge_handle, id);
         assert_eq!(input.reason, Some("no longer relevant".to_string()));
     }
 
@@ -310,10 +310,10 @@ mod tests {
     fn fold_relationship_input_deserializes_without_reason() {
         let id = Uuid::new_v4();
         let json = serde_json::json!({
-            "correlation_id": id.to_string()
+            "edge_handle": id.to_string()
         });
         let input: FoldRelationshipInput = serde_json::from_value(json).unwrap();
-        assert_eq!(input.correlation_id, id);
+        assert_eq!(input.edge_handle, id);
         assert_eq!(input.reason, None);
     }
 

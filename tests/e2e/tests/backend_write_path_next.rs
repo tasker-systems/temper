@@ -263,7 +263,7 @@ async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
     // ── retype (kind LeadsTo → Contains) ──
     legacy
         .retype_relationship(RetypeRelationship {
-            correlation_id: corr_l,
+            edge_handle: corr_l,
             edge_kind: EdgeKind::Contains,
             polarity: Polarity::Forward,
             origin: Surface::CliCloud,
@@ -271,7 +271,7 @@ async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
         .await
         .expect("legacy retype");
     next.retype_relationship(RetypeRelationship {
-        correlation_id: edge_n,
+        edge_handle: edge_n,
         edge_kind: EdgeKind::Contains,
         polarity: Polarity::Forward,
         origin: Surface::CliCloud,
@@ -287,14 +287,14 @@ async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
     // ── reweight ──
     legacy
         .reweight_relationship(ReweightRelationship {
-            correlation_id: corr_l,
+            edge_handle: corr_l,
             weight: 2.5,
             origin: Surface::CliCloud,
         })
         .await
         .expect("legacy reweight");
     next.reweight_relationship(ReweightRelationship {
-        correlation_id: edge_n,
+        edge_handle: edge_n,
         weight: 2.5,
         origin: Surface::CliCloud,
     })
@@ -309,14 +309,14 @@ async fn relationship_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
     // ── fold ──
     legacy
         .fold_relationship(FoldRelationship {
-            correlation_id: corr_l,
+            edge_handle: corr_l,
             reason: None,
             origin: Surface::CliCloud,
         })
         .await
         .expect("legacy fold");
     next.fold_relationship(FoldRelationship {
-        correlation_id: edge_n,
+        edge_handle: edge_n,
         reason: None,
         origin: Surface::CliCloud,
     })
@@ -474,7 +474,7 @@ async fn next_relationship_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
     let intruder_backend = NextBackend::new(app.pool.clone(), intruder);
     let retype_err = intruder_backend
         .retype_relationship(RetypeRelationship {
-            correlation_id: edge_n,
+            edge_handle: edge_n,
             edge_kind: EdgeKind::Contains,
             polarity: Polarity::Forward,
             origin: Surface::CliCloud,
@@ -487,7 +487,7 @@ async fn next_relationship_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
     );
     let fold_err = intruder_backend
         .fold_relationship(FoldRelationship {
-            correlation_id: edge_n,
+            edge_handle: edge_n,
             reason: None,
             origin: Surface::CliCloud,
         })

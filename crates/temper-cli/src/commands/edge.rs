@@ -65,7 +65,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
             })
         }
         EdgeAction::Retype {
-            correlation_id,
+            edge_handle,
             kind,
             polarity,
         } => {
@@ -77,7 +77,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                 Box::pin(async move {
                     let ack = client
                         .relationships()
-                        .retype(correlation_id, &req)
+                        .retype(edge_handle, &req)
                         .await
                         .map_err(crate::commands::client_err)?;
                     print_ack("retyped", &ack);
@@ -86,7 +86,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
             })
         }
         EdgeAction::Reweight {
-            correlation_id,
+            edge_handle,
             weight,
         } => {
             let req = ReweightRelationshipRequest { weight };
@@ -94,7 +94,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                 Box::pin(async move {
                     let ack = client
                         .relationships()
-                        .reweight(correlation_id, &req)
+                        .reweight(edge_handle, &req)
                         .await
                         .map_err(crate::commands::client_err)?;
                     print_ack("reweighted", &ack);
@@ -103,7 +103,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
             })
         }
         EdgeAction::Fold {
-            correlation_id,
+            edge_handle,
             reason,
         } => {
             let req = FoldRelationshipRequest { reason };
@@ -111,7 +111,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
                 Box::pin(async move {
                     let ack = client
                         .relationships()
-                        .fold(correlation_id, &req)
+                        .fold(edge_handle, &req)
                         .await
                         .map_err(crate::commands::client_err)?;
                     print_ack("folded", &ack);
@@ -124,7 +124,7 @@ pub fn run(action: EdgeAction) -> Result<()> {
 
 fn print_ack(verb: &str, ack: &RelationshipAck) {
     output::success(format!("Relationship {}.", verb));
-    output::dim(format!("  correlation_id: {}", ack.correlation_id));
+    output::dim(format!("  edge_handle: {}", ack.edge_handle));
 }
 
 #[cfg(test)]
@@ -197,12 +197,12 @@ mod tests {
 
     #[test]
     fn edge_retype_parses() {
-        let correlation_id = uuid::Uuid::nil();
+        let edge_handle = uuid::Uuid::nil();
         let cli = Cli::try_parse_from([
             "temper",
             "edge",
             "retype",
-            &correlation_id.to_string(),
+            &edge_handle.to_string(),
             "--kind=contains",
             "--polarity=forward",
         ])
@@ -212,12 +212,12 @@ mod tests {
             Commands::Edge {
                 action:
                     EdgeAction::Retype {
-                        correlation_id: cid,
+                        edge_handle: cid,
                         kind,
                         polarity,
                     },
             } => {
-                assert_eq!(cid, correlation_id);
+                assert_eq!(cid, edge_handle);
                 assert_eq!(kind, CliEdgeKind::Contains);
                 assert_eq!(polarity, CliPolarity::Forward);
             }
@@ -227,12 +227,12 @@ mod tests {
 
     #[test]
     fn edge_reweight_parses() {
-        let correlation_id = uuid::Uuid::nil();
+        let edge_handle = uuid::Uuid::nil();
         let cli = Cli::try_parse_from([
             "temper",
             "edge",
             "reweight",
-            &correlation_id.to_string(),
+            &edge_handle.to_string(),
             "--weight=2.5",
         ])
         .expect("parse should succeed");
@@ -241,11 +241,11 @@ mod tests {
             Commands::Edge {
                 action:
                     EdgeAction::Reweight {
-                        correlation_id: cid,
+                        edge_handle: cid,
                         weight,
                     },
             } => {
-                assert_eq!(cid, correlation_id);
+                assert_eq!(cid, edge_handle);
                 assert!((weight - 2.5).abs() < f64::EPSILON);
             }
             _ => panic!("expected Commands::Edge / EdgeAction::Reweight"),
@@ -254,12 +254,12 @@ mod tests {
 
     #[test]
     fn edge_fold_parses() {
-        let correlation_id = uuid::Uuid::nil();
+        let edge_handle = uuid::Uuid::nil();
         let cli = Cli::try_parse_from([
             "temper",
             "edge",
             "fold",
-            &correlation_id.to_string(),
+            &edge_handle.to_string(),
             "--reason=outdated",
         ])
         .expect("parse should succeed");
@@ -268,11 +268,11 @@ mod tests {
             Commands::Edge {
                 action:
                     EdgeAction::Fold {
-                        correlation_id: cid,
+                        edge_handle: cid,
                         reason,
                     },
             } => {
-                assert_eq!(cid, correlation_id);
+                assert_eq!(cid, edge_handle);
                 assert_eq!(reason, Some("outdated".to_string()));
             }
             _ => panic!("expected Commands::Edge / EdgeAction::Fold"),
@@ -281,8 +281,8 @@ mod tests {
 
     #[test]
     fn edge_fold_parses_without_reason() {
-        let correlation_id = uuid::Uuid::nil();
-        let cli = Cli::try_parse_from(["temper", "edge", "fold", &correlation_id.to_string()])
+        let edge_handle = uuid::Uuid::nil();
+        let cli = Cli::try_parse_from(["temper", "edge", "fold", &edge_handle.to_string()])
             .expect("parse should succeed");
 
         match cli.command {

@@ -8,7 +8,11 @@ cargo fmt --all -- --check
 echo "  ✓ Formatting OK"
 
 echo "  Running Clippy..."
-cargo clippy --all-targets --all-features -- -D warnings
+# SQLX_OFFLINE: --all-features pulls temper-next's query! macros, which resolve
+# against the `temper_next` namespace, not the dev DB's default `public`
+# search_path — live validation collapses to E0282. Use the committed .sqlx
+# caches instead (matches CI's code-quality job and all `cargo make` tasks).
+SQLX_OFFLINE=true cargo clippy --all-targets --all-features -- -D warnings
 echo "  ✓ Clippy OK"
 
 echo "  Checking docs..."

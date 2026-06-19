@@ -485,7 +485,7 @@ impl Backend for NextBackend {
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
         // The edge handle on the next backend IS the temper_next edge id (returned by assert).
         // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(cmd.correlation_id).await?;
+        let src = self.edge_source_resource(cmd.edge_handle).await?;
         self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
@@ -495,14 +495,14 @@ impl Backend for NextBackend {
             .map_err(api_err)?;
         writes::retype_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.correlation_id),
+            temper_next::ids::EdgeId::from(cmd.edge_handle),
             map_edge_kind(cmd.edge_kind),
             map_polarity(cmd.polarity),
             emitter,
         )
         .await
         .map_err(api_err)?;
-        Ok(CommandOutput::new(cmd.correlation_id))
+        Ok(CommandOutput::new(cmd.edge_handle))
     }
 
     async fn reweight_relationship(
@@ -510,7 +510,7 @@ impl Backend for NextBackend {
         cmd: ReweightRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
         // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(cmd.correlation_id).await?;
+        let src = self.edge_source_resource(cmd.edge_handle).await?;
         self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
@@ -520,13 +520,13 @@ impl Backend for NextBackend {
             .map_err(api_err)?;
         writes::reweight_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.correlation_id),
+            temper_next::ids::EdgeId::from(cmd.edge_handle),
             cmd.weight,
             emitter,
         )
         .await
         .map_err(api_err)?;
-        Ok(CommandOutput::new(cmd.correlation_id))
+        Ok(CommandOutput::new(cmd.edge_handle))
     }
 
     async fn fold_relationship(
@@ -534,7 +534,7 @@ impl Backend for NextBackend {
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
         // Auth before any write (WS2): gate on the edge's source resource.
-        let src = self.edge_source_resource(cmd.correlation_id).await?;
+        let src = self.edge_source_resource(cmd.edge_handle).await?;
         self.check_can_modify_next(src).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
             .await
@@ -544,13 +544,13 @@ impl Backend for NextBackend {
             .map_err(api_err)?;
         writes::fold_relationship(
             &self.pool,
-            temper_next::ids::EdgeId::from(cmd.correlation_id),
+            temper_next::ids::EdgeId::from(cmd.edge_handle),
             cmd.reason.as_deref(),
             emitter,
         )
         .await
         .map_err(api_err)?;
-        Ok(CommandOutput::new(cmd.correlation_id))
+        Ok(CommandOutput::new(cmd.edge_handle))
     }
 }
 
