@@ -2,18 +2,21 @@
   /**
    * The /cognitive-maps index, drawn as the thing it describes: a small curated
    * field of concepts where the page links ARE the vertices and their prose
-   * cross-references are the edges. Two clusters keep the structural genre split
-   * legible — the upper field is *shown from the schema*, the lower is the
-   * *invitation* to operating Temper. Nodes are real <a> links (SSR/SEO/a11y);
-   * the layout is hand-placed and deterministic, not force-directed.
+   * cross-references are the edges. The upper field is *shown from the schema*;
+   * from it the reader can ascend to the *theory* cluster (the why, reached by
+   * ascent) or take the *invitation* outward to the promoted /operating tier via
+   * the operating-Temper bridge. Nodes are real <a> links (SSR/SEO/a11y); the
+   * layout is hand-placed and deterministic, not force-directed.
    *
-   * Coordinates are curated for legibility. Hrefs match the tier routes in
-   * ./nav.ts; labels are short concept-handles ("name the thing").
+   * Coordinates are curated for legibility. Labels are short concept-handles
+   * ("name the thing"). The operating set is no longer drawn here as a sub-arc —
+   * it is its own top-level tier, reached through the bridge node.
    */
 
   type NodeKey =
     | 'what-is' | 'substrate' | 'lives' | 'grows' | 'relate' | 'visible'
-    | 'operating' | 'deployment' | 'governance' | 'observability' | 'insights';
+    | 'theory' | 'ontology' | 'perspectives'
+    | 'operating';
 
   interface GraphNode {
     href: string;
@@ -22,27 +25,29 @@
     cy: number;
     hub?: boolean;
     /** The recommended entry point — drawn green with a "start here" tag so the
-        eye lands here, not on the higher-density operating-Temper hub. */
+        eye lands here, not on a denser hub. */
     start?: boolean;
   }
 
   const NODES: Record<NodeKey, GraphNode> = {
-    'what-is':       { href: '/cognitive-maps/what-a-cognitive-map-is',   label: 'what a map is',   cx: 150, cy: 108, start: true },
-    substrate:       { href: '/cognitive-maps/the-substrate-beneath-it',  label: 'the substrate',   cx: 372, cy: 88 },
-    lives:           { href: '/cognitive-maps/what-lives-in-a-map',       label: 'what lives in it', cx: 108, cy: 226 },
-    grows:           { href: '/cognitive-maps/how-a-map-grows',           label: 'how it grows',    cx: 300, cy: 214 },
-    relate:          { href: '/cognitive-maps/how-maps-relate',           label: 'how maps relate', cx: 540, cy: 156 },
-    visible:         { href: '/cognitive-maps/whats-visible-from-here',   label: "what's visible",  cx: 486, cy: 272 },
-    operating:       { href: '/cognitive-maps/operating-temper',          label: 'operating Temper', cx: 360, cy: 400, hub: true },
-    deployment:      { href: '/operating/deployment',                 label: 'deployment',    cx: 132, cy: 504 },
-    governance:      { href: '/operating/governance-and-administration', label: 'governance',  cx: 300, cy: 516 },
-    observability:   { href: '/operating/observability-and-audit',     label: 'observability', cx: 470, cy: 516 },
-    insights:        { href: '/operating/insights',                    label: 'insights',      cx: 612, cy: 504 },
+    'what-is':     { href: '/cognitive-maps/what-a-cognitive-map-is',  label: 'what a map is',    cx: 150, cy: 108, start: true },
+    substrate:     { href: '/cognitive-maps/the-substrate-beneath-it', label: 'the substrate',    cx: 372, cy: 88 },
+    lives:         { href: '/cognitive-maps/what-lives-in-a-map',      label: 'what lives in it', cx: 108, cy: 226 },
+    grows:         { href: '/cognitive-maps/how-a-map-grows',          label: 'how it grows',     cx: 300, cy: 214 },
+    relate:        { href: '/cognitive-maps/how-maps-relate',          label: 'how maps relate',  cx: 540, cy: 156 },
+    visible:       { href: '/cognitive-maps/whats-visible-from-here',  label: "what's visible",   cx: 486, cy: 272 },
+    // The theory cluster — the why, reached by ascent from the concrete.
+    theory:        { href: '/theory',              label: 'theory',       cx: 150, cy: 444, hub: true },
+    ontology:      { href: '/theory/ontology',     label: 'ontology',     cx: 66,  cy: 524 },
+    perspectives:  { href: '/theory/perspectives', label: 'perspectives', cx: 238, cy: 524 },
+    // The bridge outward to the promoted /operating tier.
+    operating:     { href: '/cognitive-maps/operating-temper', label: 'operating Temper', cx: 552, cy: 452, hub: true },
   };
 
   // Edges = the conceptual cross-references the prose actually draws.
-  // kind 'flow' is a within-arc link; 'bridge' crosses show → invite (dashed).
-  const EDGES: { from: NodeKey; to: NodeKey; kind: 'flow' | 'bridge' }[] = [
+  // 'flow' is a within-cluster link; 'bridge' is the invitation outward to
+  // /operating (dashed blue); 'ascent' rises to the theory cluster (dashed green).
+  const EDGES: { from: NodeKey; to: NodeKey; kind: 'flow' | 'bridge' | 'ascent' }[] = [
     { from: 'what-is', to: 'substrate', kind: 'flow' },
     { from: 'what-is', to: 'lives', kind: 'flow' },
     { from: 'what-is', to: 'grows', kind: 'flow' },
@@ -52,31 +57,31 @@
     { from: 'lives', to: 'grows', kind: 'flow' },
     { from: 'grows', to: 'relate', kind: 'flow' },
     { from: 'relate', to: 'visible', kind: 'flow' },
+    { from: 'what-is', to: 'theory', kind: 'ascent' },
+    { from: 'lives', to: 'theory', kind: 'ascent' },
+    { from: 'theory', to: 'ontology', kind: 'flow' },
+    { from: 'theory', to: 'perspectives', kind: 'flow' },
     { from: 'grows', to: 'operating', kind: 'bridge' },
     { from: 'visible', to: 'operating', kind: 'bridge' },
-    { from: 'operating', to: 'deployment', kind: 'flow' },
-    { from: 'operating', to: 'governance', kind: 'flow' },
-    { from: 'operating', to: 'observability', kind: 'flow' },
-    { from: 'operating', to: 'insights', kind: 'flow' },
-    { from: 'governance', to: 'observability', kind: 'flow' },
-    { from: 'observability', to: 'insights', kind: 'flow' },
   ];
 
   const showKeys: NodeKey[] = ['what-is', 'substrate', 'lives', 'grows', 'relate', 'visible'];
-  const inviteKeys: NodeKey[] = ['operating', 'deployment', 'governance', 'observability', 'insights'];
+  const ascentKeys: NodeKey[] = ['theory', 'ontology', 'perspectives'];
+  const inviteKeys: NodeKey[] = ['operating'];
 </script>
 
 <figure class="concept-graph">
   <svg
-    viewBox="0 0 720 580"
+    viewBox="0 0 720 560"
     xmlns="http://www.w3.org/2000/svg"
     role="group"
-    aria-label="The cognitive-maps page set as a concept graph: six pages shown from the schema, and an invitation arc of five pages on operating Temper"
+    aria-label="The cognitive-maps page set as a concept graph: six pages shown from the schema, an ascent to the theory cluster, and a bridge outward to the promoted operating-Temper tier"
   >
     <!-- Cluster band labels -->
     <text x="40" y="40" font-family="var(--font-mono)" font-size="10" letter-spacing="2.5" fill="rgba(255,255,255,0.4)">SHOWN FROM THE SCHEMA</text>
-    <line x1="40" y1="332" x2="680" y2="332" stroke="var(--rule)" stroke-width="1" stroke-dasharray="2 6" />
-    <text x="40" y="362" font-family="var(--font-mono)" font-size="10" letter-spacing="2.5" fill="rgba(126,184,218,0.6)">AN INVITATION · OPERATING TEMPER</text>
+    <line x1="40" y1="344" x2="680" y2="344" stroke="var(--rule)" stroke-width="1" stroke-dasharray="2 6" />
+    <text x="40" y="374" font-family="var(--font-mono)" font-size="10" letter-spacing="2.5" fill="rgba(130,201,154,0.6)">REACHED BY ASCENT · THEORY</text>
+    <text x="448" y="374" font-family="var(--font-mono)" font-size="10" letter-spacing="2.5" fill="rgba(126,184,218,0.6)">AN INVITATION · OPERATING</text>
 
     <!-- Edges first, under the nodes -->
     <g>
@@ -90,7 +95,7 @@
     </g>
 
     <!-- Nodes as links -->
-    {#each [...showKeys, ...inviteKeys] as key (key)}
+    {#each [...showKeys, ...ascentKeys, ...inviteKeys] as key (key)}
       {@const n = NODES[key]}
       <a href={n.href} class="node" class:hub={n.hub} class:start={n.start} aria-label={n.label}>
         {#if n.start}
@@ -130,6 +135,11 @@
     stroke-dasharray: 4 4;
     stroke: rgba(126, 184, 218, 0.4);
   }
+  /* The ascent to theory — green, echoing the start node, to read as "up to the why". */
+  .edge.ascent {
+    stroke-dasharray: 4 4;
+    stroke: rgba(130, 201, 154, 0.4);
+  }
 
   .node circle {
     fill: var(--obsidian);
@@ -154,7 +164,7 @@
   }
 
   /* The recommended entry point — a soft green node + halo so the eye starts
-     here rather than on the denser operating-Temper hub. */
+     here rather than on a denser hub. */
   .node.start circle {
     fill: rgba(130, 201, 154, 0.16);
     stroke: #82c99a;
