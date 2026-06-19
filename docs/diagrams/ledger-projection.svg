@@ -1,0 +1,84 @@
+<svg viewBox="0 0 680 640" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="An append-only event ledger at the base; events rise off it into a graph of resource-nodes and typed edges, two region glows converging while an isolate stays separate — the cognitive map as a projection materialized from the ledger.">
+<title>The event ledger rising into a cognitive map</title>
+<defs>
+  <marker id="up" viewBox="0 0 10 10" refX="5" refY="2" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M0,8 L5,1 L10,8" fill="none" stroke="#7eb8da" stroke-width="1.3"/></marker>
+  <radialGradient id="glowA" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="rgba(126,184,218,0.36)"/><stop offset="55%" stop-color="rgba(126,184,218,0.13)"/><stop offset="100%" stop-color="rgba(126,184,218,0)"/></radialGradient>
+  <radialGradient id="glowB" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="rgba(130,201,154,0.26)"/><stop offset="60%" stop-color="rgba(130,201,154,0.08)"/><stop offset="100%" stop-color="rgba(130,201,154,0)"/></radialGradient>
+  <radialGradient id="weather" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="rgba(126,184,218,0.05)"/><stop offset="100%" stop-color="rgba(126,184,218,0)"/></radialGradient>
+  <filter id="fog" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="3.6"/></filter>
+</defs>
+<rect x="0" y="0" width="680" height="640" rx="8" fill="#0c0c11"/>
+<text x="40" y="30" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="10.5" letter-spacing="2" fill="rgba(255,255,255,0.45)">PROJECTION · MATERIALIZED AT READ TIME · THE GRAPH RISES AS THE LEDGER GROWS</text>
+<ellipse cx="340" cy="230" rx="300" ry="170" fill="url(#weather)"/>
+<g><ellipse cx="250" cy="232" rx="132" ry="104" fill="url(#glowA)"/>
+<text x="250" y="132" text-anchor="middle" font-family="Georgia, serif" font-size="14" fill="#e8e4df">&#8220;first-week confidence&#8221;</text>
+<text x="250" y="149" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8.5" letter-spacing="0.5" fill="rgba(255,255,255,0.45)">converged · salience high · cohesion tight · &#8776;3 fogged</text></g>
+<g opacity="0.85"><ellipse cx="468" cy="250" rx="116" ry="94" fill="url(#glowB)"/>
+<text x="468" y="160" text-anchor="middle" font-family="Georgia, serif" font-size="13" fill="rgba(232,228,223,0.9)">&#8220;deployment&#8221;</text>
+<text x="468" y="176" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" letter-spacing="0.5" fill="rgba(255,255,255,0.45)">forming · bound by facet, not content</text></g>
+<g opacity="0.5" filter="url(#fog)" fill="#7eb8da"><circle cx="214" cy="220" r="5.5" opacity="0.85"/><circle cx="276" cy="206" r="5" opacity="0.8"/><circle cx="252" cy="256" r="5.5" opacity="0.82"/></g>
+<g opacity="0.45" filter="url(#fog)" fill="#82c99a"><circle cx="442" cy="238" r="4.5" opacity="0.7"/><circle cx="494" cy="252" r="4.5" opacity="0.68"/><circle cx="466" cy="282" r="4" opacity="0.62"/><circle cx="470" cy="222" r="4" opacity="0.6"/></g>
+<g opacity="0.585"><line x1="232" y1="214" x2="276" y2="206" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="2 4"/></g>
+<g opacity="0.631"><line x1="252" y1="256" x2="232" y2="214" stroke="#7eb8da" stroke-width="1.4"/></g>
+<g opacity="0.815"><line x1="442" y1="238" x2="494" y2="252" stroke="#82c99a" stroke-width="1.3" stroke-dasharray="7 4"/></g>
+<g opacity="0.815"><line x1="494" y1="252" x2="470" y2="284" stroke="#82c99a" stroke-width="1.3" stroke-dasharray="7 4"/></g>
+<g opacity="0.631"><line x1="318" y1="330" x2="252" y2="256" stroke="#d48ac7" stroke-width="1.3" stroke-dasharray="1 4"/></g>
+<g opacity="0.446"><circle cx="318" cy="330" r="9" fill="#0a0a0f" stroke="#7eb8da" stroke-width="2.2"/><text x="318" y="352" text-anchor="middle" fill="#e8e4df" font-family="Georgia, serif" font-size="11">telos charter</text><text x="318" y="313" text-anchor="middle" fill="rgba(126,184,218,0.85)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8">genesis_event_id</text></g>
+<g opacity="0.492"><circle cx="232" cy="214" r="7" fill="#0a0a0f" stroke="#7eb8da" stroke-width="1.7"/><text x="232" y="197" text-anchor="middle" fill="#e8e4df" font-family="Georgia, serif" font-size="10">pair-on-first-PR</text></g>
+<g opacity="0.538"><circle cx="276" cy="206" r="6.5" fill="#0a0a0f" stroke="#7eb8da" stroke-width="1.5"/></g>
+<g opacity="0.723"><circle cx="442" cy="238" r="6.5" fill="#0a0a0f" stroke="#82c99a" stroke-width="1.5"/><text x="442" y="221" text-anchor="middle" fill="rgba(232,228,223,0.85)" font-family="Georgia, serif" font-size="9.5">staging</text></g>
+<g opacity="0.769"><circle cx="494" cy="252" r="6" fill="#0a0a0f" stroke="#82c99a" stroke-width="1.4"/></g>
+<g opacity="0.769"><circle cx="470" cy="284" r="6" fill="#0a0a0f" stroke="#82c99a" stroke-width="1.4"/></g>
+<g opacity="0.25"><circle cx="372" cy="300" r="6.5" fill="none" stroke="rgba(126,184,218,0.3)" stroke-width="1.2" stroke-dasharray="2 2"/></g>
+<g opacity="0.862"><circle cx="582" cy="330" r="6" fill="#0a0a0f" stroke="rgba(255,255,255,0.35)" stroke-width="1.3"/><text x="582" y="312" text-anchor="middle" fill="rgba(255,255,255,0.65)" font-family="Georgia, serif" font-size="9.5">solo-retro</text><text x="582" y="349" text-anchor="middle" fill="rgba(255,255,255,0.45)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7.5">no facet · no edge</text></g>
+<g fill="none">
+  <line x1="135" y1="396" x2="318" y2="339" stroke="#7eb8da" stroke-width="0.7" opacity="0.143" marker-end="url(#up)"/>
+  <line x1="152" y1="406.6" x2="232" y2="221" stroke="#7eb8da" stroke-width="0.7" opacity="0.166" marker-end="url(#up)"/>
+  <line x1="169" y1="417.2" x2="276" y2="212.5" stroke="#7eb8da" stroke-width="0.7" opacity="0.189" marker-end="url(#up)"/>
+  <line x1="220" y1="449" x2="372" y2="306.5" stroke="#7eb8da" stroke-width="0.7" opacity="0.258" marker-end="url(#up)"/>
+  <line x1="237" y1="459.6" x2="442" y2="244.5" stroke="#7eb8da" stroke-width="0.7" opacity="0.282" marker-end="url(#up)"/>
+  <line x1="254" y1="470.2" x2="494" y2="258" stroke="#7eb8da" stroke-width="0.7" opacity="0.305" marker-end="url(#up)"/>
+  <line x1="288" y1="491.4" x2="582" y2="336" stroke="#7eb8da" stroke-width="0.7" opacity="0.351" marker-end="url(#up)"/>
+</g>
+<polygon points="118,388 562,388 632,520 48,520" fill="rgba(126,184,218,0.045)" stroke="rgba(126,184,218,0.22)" stroke-width="1"/>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8">
+  <g opacity="0.538"><rect x="60" y="390" width="150" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="66" y="399" fill="rgba(126,184,218,0.92)" font-size="8">cogmap_seeded</text></g>
+  <g opacity="0.577"><rect x="64" y="400.6" width="176" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="70" y="409.6" fill="rgba(126,184,218,0.92)" font-size="8">resource_created</text></g>
+  <g opacity="0.615"><rect x="68" y="411.2" width="202" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="74" y="420.2" fill="rgba(126,184,218,0.92)" font-size="8">resource_created</text></g>
+  <g opacity="0.654"><rect x="72" y="421.8" width="228" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="78" y="430.8" fill="rgba(126,184,218,0.92)" font-size="8">relationship_asserted</text></g>
+  <g opacity="0.692"><rect x="76" y="432.4" width="254" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="82" y="441.4" fill="rgba(126,184,218,0.92)" font-size="8">relationship_asserted</text></g>
+  <g opacity="0.731"><rect x="80" y="443" width="280" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="86" y="452" fill="rgba(126,184,218,0.92)" font-size="8">resource_created</text></g>
+  <g opacity="0.769"><rect x="84" y="453.6" width="306" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="90" y="462.6" fill="rgba(126,184,218,0.92)" font-size="8">resource_created</text></g>
+  <g opacity="0.808"><rect x="88" y="464.2" width="332" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="94" y="473.2" fill="rgba(126,184,218,0.92)" font-size="8">resource_created</text></g>
+  <g opacity="0.846"><rect x="92" y="474.8" width="358" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="98" y="483.8" fill="rgba(126,184,218,0.92)" font-size="8">relationship_asserted</text></g>
+  <g opacity="0.885"><rect x="96" y="485.4" width="384" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="102" y="494.4" fill="rgba(126,184,218,0.92)" font-size="8">resource_created</text></g>
+  <g opacity="0.923"><rect x="100" y="496" width="410" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="106" y="505" fill="rgba(126,184,218,0.92)" font-size="8">region_materialized</text></g>
+  <g opacity="0.962"><rect x="104" y="506.6" width="436" height="11" rx="2" fill="rgba(126,184,218,0.08)" stroke="rgba(126,184,218,0.25)" stroke-width="0.7"/><text x="110" y="515.6" fill="rgba(126,184,218,0.92)" font-size="8">region_materialized</text></g>
+</g>
+<line x1="48" y1="536" x2="600" y2="536" stroke="#7eb8da" stroke-width="1.5"/><polygon points="612,536 598,531 598,541" fill="#7eb8da"/>
+<line x1="56" y1="530" x2="56" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="98" y1="530" x2="98" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="140" y1="530" x2="140" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="182" y1="530" x2="182" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="224" y1="530" x2="224" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="266" y1="530" x2="266" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="308" y1="530" x2="308" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="350" y1="530" x2="350" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="392" y1="530" x2="392" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="434" y1="530" x2="434" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="476" y1="530" x2="476" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="518" y1="530" x2="518" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<line x1="560" y1="530" x2="560" y2="542" stroke="#7eb8da" stroke-width="1.4"/>
+<text x="612" y="554" text-anchor="end" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" letter-spacing="1.5" fill="rgba(255,255,255,0.45)">time →</text>
+<text x="48" y="572" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="11" letter-spacing="0.5" fill="#7eb8da">kb_events</text>
+<text x="48" y="587" font-family="Georgia, serif" font-size="11" font-style="italic" fill="#e8e4df">the source of truth — append-only</text>
+<text x="48" y="606" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="7.5" fill="rgba(255,255,255,0.45)">emitter_entity_id · event_type_id · payload · producing_anchor_* · occurred_at</text>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="8" opacity="0.92">
+  <line x1="486" y1="600" x2="506" y2="600" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="1 4"/><text x="512" y="603" fill="rgba(255,255,255,0.45)">express</text>
+  <line x1="486" y1="612" x2="506" y2="612" stroke="#7eb8da" stroke-width="1.4"/><text x="512" y="615" fill="rgba(255,255,255,0.45)">contains</text>
+  <line x1="560" y1="600" x2="580" y2="600" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="7 4"/><text x="586" y="603" fill="rgba(255,255,255,0.45)">leads_to</text>
+  <line x1="560" y1="612" x2="580" y2="612" stroke="#7eb8da" stroke-width="1.4" stroke-dasharray="2 4"/><text x="586" y="615" fill="rgba(255,255,255,0.45)">near</text>
+  <circle cx="491" cy="624" r="4" fill="none" stroke="rgba(126,184,218,0.3)" stroke-width="1.1" stroke-dasharray="2 2"/><text x="512" y="627" fill="rgba(255,255,255,0.45)">folded / superseded</text>
+  <text x="586" y="589" fill="rgba(255,255,255,0.45)">opacity = recency</text>
+</g>
+</svg>

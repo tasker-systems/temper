@@ -12,6 +12,11 @@ Temper is an **event-sourced coordination substrate** whose organizing purpose i
   <a href="https://temperkb.io">temperkb.io</a> · <a href="https://temperkb.io/cognitive-maps">Cognitive maps</a> · <a href="https://temperkb.io/operating">Operating</a> · <a href="https://temperkb.io/theory">Theory</a>
 </p>
 
+<p align="center">
+  <img src="docs/diagrams/ledger-projection.svg" alt="An append-only kb_events ledger at the base; events rise off it into a materialized graph of resource-nodes, typed edges, and regions — the cognitive map as a projection of the ledger" width="760" />
+</p>
+<p align="center"><sub>The ledger is the source of truth. Every higher surface — the graph, the regions, the personal-knowledge view — is a projection materialized at read time.</sub></p>
+
 ## Substrate, and one projection over it
 
 Temper is a coordination substrate first. The conceptual frame — what a cognitive map is, what the architecture fixes versus what a deployment shapes, and the commitments underneath — lives on the site: start with [cognitive maps](https://temperkb.io/cognitive-maps) (the concrete on-ramp), [operating](https://temperkb.io/operating) (running it, for the evaluator), and [theory](https://temperkb.io/theory) (the why).
