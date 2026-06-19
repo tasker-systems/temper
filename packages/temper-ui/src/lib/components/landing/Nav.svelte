@@ -1,5 +1,6 @@
 <script lang="ts">
   let scrolled = $state(false);
+  let conceptsOpen = $state(false);
   let usingOpen = $state(false);
 
   function handleScroll() {
@@ -18,8 +19,29 @@
     <span class="nav-wordmark">temper</span>
   </a>
   <div class="nav-links">
-    <a href="/cognitive-maps">Cognitive maps</a>
-    <a href="/operating">Operating</a>
+    <div
+      class="nav-group"
+      onmouseenter={() => (conceptsOpen = true)}
+      onmouseleave={() => (conceptsOpen = false)}
+      onfocusin={() => (conceptsOpen = true)}
+      onfocusout={() => (conceptsOpen = false)}
+      role="none"
+    >
+      <button
+        type="button"
+        class="nav-group-trigger"
+        aria-haspopup="true"
+        aria-expanded={conceptsOpen}
+        onclick={() => (conceptsOpen = !conceptsOpen)}
+      >
+        Concepts<span class="nav-caret" aria-hidden="true">▾</span>
+      </button>
+      <div class="nav-menu" class:open={conceptsOpen}>
+        <a href="/cognitive-maps">Cognitive maps</a>
+        <a href="/manifesto">Attention manifesto</a>
+        <a href="/theory">Theory</a>
+      </div>
+    </div>
     <div
       class="nav-group"
       onmouseenter={() => (usingOpen = true)}
@@ -40,10 +62,11 @@
       <div class="nav-menu" class:open={usingOpen}>
         <a href="/builders">Builders</a>
         <a href="/agents">Agents</a>
+        <a href="/operating">Operating</a>
         <a href="/using-temper">Reference</a>
       </div>
     </div>
-    <a href="/theory">Theory</a>
+    <a href="https://github.com/tasker-systems/temper" target="_blank" rel="noopener">GitHub</a>
     <a href="/auth/login" class="cta">Get Started</a>
   </div>
 </nav>

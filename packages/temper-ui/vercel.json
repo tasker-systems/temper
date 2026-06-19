@@ -2,7 +2,8 @@
 	"installCommand": "bun install",
 	"redirects": [
 		{ "source": "/docs", "destination": "/using-temper", "permanent": true },
-		{ "source": "/docs/:path*", "destination": "/using-temper", "permanent": true }
+		{ "source": "/docs/:path*", "destination": "/using-temper", "permanent": true },
+		{ "source": "/how-it-works", "destination": "/builders", "permanent": true }
 	],
 	"rewrites": [
 		{ "source": "/mcp", "destination": "https://temper-cloud.vercel.app/mcp" },
