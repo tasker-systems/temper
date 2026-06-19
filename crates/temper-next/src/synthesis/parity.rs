@@ -25,6 +25,7 @@
 
 use anyhow::Result;
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 /// One chunk as the body reconstruction sees it: ordering index, heading breadcrumb, heading level, and
 /// prose. Mirrors the `ContentChunk` shape production's `get_content` selects from `kb_current_chunks`.
@@ -70,7 +71,7 @@ pub fn reconstruct_body(chunks: &[ReadChunk]) -> String {
 /// a caller can diagnose the divergence (the gate refuses cutover, so a non-empty list is fatal).
 #[derive(Debug, Clone)]
 pub struct BodyMismatch {
-    pub origin_uri: String,
+    pub resource_id: Uuid,
     pub production_body: String,
     pub new_body: String,
 }
@@ -89,40 +90,40 @@ impl ParityReport {
         self.mismatches.is_empty()
     }
 
-    /// The origin_uris that diverged — the per-resource list §8 says blocks cutover.
-    pub fn mismatched_uris(&self) -> Vec<&str> {
-        self.mismatches
-            .iter()
-            .map(|m| m.origin_uri.as_str())
-            .collect()
+    /// The resource ids that diverged — the per-resource list §8 says blocks cutover.
+    pub fn mismatched_ids(&self) -> Vec<Uuid> {
+        self.mismatches.iter().map(|m| m.resource_id).collect()
     }
 }
 
 /// Compare, per synthesized resource, the body reconstructed from `temper_next` against the body the
-/// production read path serves today (`public.kb_current_chunks`). Resources are matched by `origin_uri`
-/// (carried verbatim, UNIQUE in both schemas). Returns the per-resource mismatch list (§8).
+/// production read path serves today (`public.kb_current_chunks`). Resources are matched by their
+/// **resource id**, which synthesis preserves verbatim from production (PR#124 identity-as-input) —
+/// the only key that is UNIQUE in both schemas. (`origin_uri` is NOT: CLI/agent-created resources carry
+/// an empty `origin_uri`, so matching on it silently compares every empty-`origin_uri` resource against
+/// the same ambiguous chunk set. This was found by the WS6 flip real-corpus rehearsal, where 166 of
+/// 1214 active resources have an empty `origin_uri`.) Returns the per-resource mismatch list (§8).
 pub async fn body_parity_report(pool: &PgPool) -> Result<ParityReport> {
     // Every synthesized resource is in scope (synthesis covers active state only, §0). Ordered for a
     // stable report.
-    let uris: Vec<String> =
-        sqlx::query("SELECT origin_uri FROM temper_next.kb_resources ORDER BY origin_uri")
-            .fetch_all(pool)
-            .await?
-            .iter()
-            .map(|r| r.get::<String, _>("origin_uri"))
-            .collect();
+    let ids: Vec<Uuid> = sqlx::query("SELECT id FROM temper_next.kb_resources ORDER BY id")
+        .fetch_all(pool)
+        .await?
+        .iter()
+        .map(|r| r.get::<Uuid, _>("id"))
+        .collect();
 
     let mut report = ParityReport {
-        checked: uris.len(),
+        checked: ids.len(),
         mismatches: Vec::new(),
     };
 
-    for uri in &uris {
-        let production_body = reconstruct_body(&production_chunks(pool, uri).await?);
-        let new_body = reconstruct_body(&new_substrate_chunks(pool, uri).await?);
+    for id in &ids {
+        let production_body = reconstruct_body(&production_chunks(pool, *id).await?);
+        let new_body = reconstruct_body(&new_substrate_chunks(pool, *id).await?);
         if production_body != new_body {
             report.mismatches.push(BodyMismatch {
-                origin_uri: uri.clone(),
+                resource_id: *id,
                 production_body,
                 new_body,
             });
@@ -133,16 +134,16 @@ pub async fn body_parity_report(pool: &PgPool) -> Result<ParityReport> {
 }
 
 /// The production read source for a resource's body: `public.kb_current_chunks` (the same view + order
-/// `get_content` uses), matched to the resource by `origin_uri`.
-async fn production_chunks(pool: &PgPool, origin_uri: &str) -> Result<Vec<ReadChunk>> {
+/// `get_content` uses), matched to the resource by its id (synthesis preserves it verbatim, so the same
+/// id keys both schemas — unlike the non-unique `origin_uri`).
+async fn production_chunks(pool: &PgPool, resource_id: Uuid) -> Result<Vec<ReadChunk>> {
     let rows = sqlx::query(
         "SELECT cc.chunk_index, cc.header_path, cc.heading_depth, cc.content \
          FROM public.kb_current_chunks cc \
-         JOIN public.kb_resources r ON r.id = cc.resource_id \
-         WHERE r.origin_uri = $1 \
+         WHERE cc.resource_id = $1 \
          ORDER BY cc.chunk_index",
     )
-    .bind(origin_uri)
+    .bind(resource_id)
     .fetch_all(pool)
     .await?;
     Ok(rows.iter().map(read_chunk).collect())
@@ -154,19 +155,20 @@ async fn production_chunks(pool: &PgPool, origin_uri: &str) -> Result<Vec<ReadCh
 /// production's NOT-NULL `''`/`0` defaults verbatim; coalescing keeps reconstruction well-defined.
 ///
 /// Also the read-surface chunk reader for [`crate::readback::body`] (WS6 §9): the §8 cutover gate and
-/// the §9 body read share this one reader so they exercise the same chunk source + order (SG-3).
-pub async fn new_substrate_chunks(pool: &PgPool, origin_uri: &str) -> Result<Vec<ReadChunk>> {
+/// the §9 body read share this one reader so they exercise the same chunk source + order (SG-3). Keyed
+/// by `resource_id` (the preserved, schema-shared, UNIQUE id) — `origin_uri` is not unique, so keying on
+/// it returned a concatenation of every empty-`origin_uri` resource's chunks (WS6 rehearsal finding).
+pub async fn new_substrate_chunks(pool: &PgPool, resource_id: Uuid) -> Result<Vec<ReadChunk>> {
     let rows = sqlx::query(
         "SELECT c.chunk_index, COALESCE(c.header_path, '') AS header_path, \
                 COALESCE(c.heading_depth, 0::smallint) AS heading_depth, cc.content \
          FROM temper_next.kb_chunks c \
          JOIN temper_next.kb_content_blocks b ON b.id = c.block_id \
          JOIN temper_next.kb_chunk_content cc ON cc.chunk_id = c.id \
-         JOIN temper_next.kb_resources r ON r.id = c.resource_id \
-         WHERE r.origin_uri = $1 AND c.is_current \
+         WHERE c.resource_id = $1 AND c.is_current \
          ORDER BY b.seq, c.chunk_index",
     )
-    .bind(origin_uri)
+    .bind(resource_id)
     .fetch_all(pool)
     .await?;
     Ok(rows.iter().map(read_chunk).collect())

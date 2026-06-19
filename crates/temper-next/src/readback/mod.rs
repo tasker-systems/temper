@@ -678,8 +678,10 @@ pub async fn resource_id_by_origin_uri(pool: &PgPool, origin_uri: &str) -> Resul
 /// over the shared [`crate::synthesis::parity::new_substrate_chunks`] reader, so the read surface and
 /// the §8 synthesis gate share one algorithm (CONFORM, no second body assembler).
 ///
-/// Resolves `new_id` → `origin_uri` (the join key both schemas share, carried verbatim) so the shared
-/// reader — keyed by `origin_uri` — can fetch the resource's current chunks.
+/// Keys the shared reader by `new_id` directly — the synthesized resource id (preserved verbatim from
+/// production). The reader was previously keyed by `origin_uri`, which is NOT unique (empty for
+/// CLI/agent-created resources), so it returned a concatenation of every empty-`origin_uri` resource's
+/// chunks; keying on the id is correct for every resource (WS6 flip real-corpus rehearsal finding).
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
@@ -689,14 +691,7 @@ pub async fn body(
     new_id: Uuid,
 ) -> std::result::Result<String, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
-    let origin_uri: String =
-        sqlx::query("SELECT origin_uri FROM temper_next.kb_resources WHERE id = $1")
-            .bind(new_id)
-            .fetch_one(pool)
-            .await?
-            .get("origin_uri");
-
-    let chunks = crate::synthesis::parity::new_substrate_chunks(pool, &origin_uri).await?;
+    let chunks = crate::synthesis::parity::new_substrate_chunks(pool, new_id).await?;
     Ok(crate::synthesis::parity::reconstruct_body(&chunks))
 }
 

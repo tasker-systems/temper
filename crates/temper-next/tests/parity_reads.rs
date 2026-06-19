@@ -98,6 +98,38 @@ async fn synthesis_preserves_production_resource_ids(pool: sqlx::PgPool) {
     }
 }
 
+/// Chunk-5 flip prerequisite (id continuity): synthesis must preserve the production CONTEXT id
+/// verbatim, not re-mint it. User-facing URLs key on context *name*, but API-internal surfaces key on
+/// the id (`/api/contexts/{id}`, the per-context event-sync cursor `/api/events/{kb_context_id}/cursor`)
+/// and projected vault frontmatter carries `kb_context_id`; re-minting would dangle all of them at the
+/// hard cutover. UUIDv7 PKs let the prod id carry through verbatim — the same identity-as-input
+/// mechanism `insert_profile`/`insert_resource` already use. Both profile-owned (CONTEXT_ONE/TWO) and
+/// team-owned (CONTEXT_TEAM) contexts preserve; only the owning teams themselves re-mint (no external
+/// surface keys on a team id). Mirrors `synthesis_preserves_production_resource_ids`.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesis_preserves_production_context_ids(pool: sqlx::PgPool) {
+    common::seed_and_synthesize(&pool).await;
+
+    for prod_id in [
+        fixture_ids::CONTEXT_ONE,
+        fixture_ids::CONTEXT_TWO,
+        fixture_ids::CONTEXT_TEAM,
+    ] {
+        let preserved: Option<uuid::Uuid> =
+            sqlx::query_scalar("SELECT id FROM temper_next.kb_contexts WHERE id = $1")
+                .bind(prod_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("query temper_next.kb_contexts by preserved id");
+
+        assert_eq!(
+            preserved,
+            Some(prod_id),
+            "synthesis must preserve production context id {prod_id} verbatim (not re-mint it)"
+        );
+    }
+}
+
 /// WS2 — the wired read path is scoped to the principal. P2 (`ORIGINATOR_PROFILE`) originated only
 /// R2 (task-doc); it neither owns nor originated R1/R3/R5 and holds no grant, so
 /// `resources_visible_to(P2) = {R2}`. A principal-scoped `readback::list` returns exactly that, the
