@@ -6,8 +6,9 @@
   <h1>Reference</h1>
   <p class="lede">
     The operational reference for the temper CLI, cloud sync, and MCP server.
-    For the conceptual frame — what Temper is, and why — see
-    <a href="/theory">Theory</a>.
+    For the conceptual frame — what Temper is, and why — start with
+    <a href="/cognitive-maps">cognitive maps</a>, or read the commitments in
+    <a href="/theory">theory</a>.
   </p>
 
   <!-- ── Install ───────────────────────────────────────────────────── -->
