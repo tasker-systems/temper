@@ -5,8 +5,13 @@
 //!
 //! Covered in 4b: `list` / `get_content` (body) / `get_meta` / `search`. **`by_uri` is NOT covered** —
 //! it resolves a resource by `slug` (`ResolveByUriParams.ident`), and slug is §7-dissolved in
-//! `temper_next` (the addressing key does not exist there; `origin_uri` is the substrate key). It stays
-//! on legacy under `next`; re-addressing the endpoint is a post-flip surface concern.
+//! `temper_next` (the addressing key does not exist there; `origin_uri` is the substrate key).
+//!
+//! Chunk-5 flip adjudication: this does NOT gate the cutover. No live surface resolves a resource by
+//! URI/slug — the addressing collapse (Spec A, PR #147) made resolution trailing-UUID-only across HTTP,
+//! MCP, and CLI (all reads here are by-id: `show`/`get_content`/`get_meta`/`list`/`search`). With no
+//! caller, renaming legacy `public.*` aside at the cutover breaks nothing; re-addressing by URI is a
+//! latent post-flip surface concern only if such an endpoint is ever (re)introduced.
 //!
 //! The `Next` arms are feature-gated behind `next-backend`; without the feature they return the same
 //! `NotImplemented` gate as `select_backend`. Reads are visibility-SCOPED to the caller's profile (WS2 —

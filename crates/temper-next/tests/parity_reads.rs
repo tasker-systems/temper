@@ -66,6 +66,38 @@ async fn synthesis_preserves_production_profile_ids(pool: sqlx::PgPool) {
     );
 }
 
+/// Chunk-5 flip prerequisite (id continuity): synthesis must preserve the production resource id
+/// verbatim, not re-mint it. The decorated `ref` addressing (`sluggify(title)-<uuid>`) embeds this
+/// id, so re-minting at the hard cutover would dangle every externally-held ref (session notes,
+/// memory, UI URLs, MCP `get_resource(id)`). Mirrors `synthesis_preserves_production_profile_ids`;
+/// the same PR#124 identity-as-input mechanism carries the id through the `resource_created` payload.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn synthesis_preserves_production_resource_ids(pool: sqlx::PgPool) {
+    common::seed_and_synthesize(&pool).await;
+
+    // Every ACTIVE prod-shape resource id must survive verbatim into temper_next.kb_resources
+    // (R4 `deleted-doc` is excluded by the §0 active-only filter, so it is not synthesized).
+    for prod_id in [
+        fixture_ids::RESOURCE_GOAL,
+        fixture_ids::RESOURCE_TASK,
+        fixture_ids::RESOURCE_DECISION,
+        fixture_ids::RESOURCE_TEAM,
+    ] {
+        let preserved: Option<uuid::Uuid> =
+            sqlx::query_scalar("SELECT id FROM temper_next.kb_resources WHERE id = $1")
+                .bind(prod_id)
+                .fetch_optional(&pool)
+                .await
+                .expect("query temper_next.kb_resources by preserved id");
+
+        assert_eq!(
+            preserved,
+            Some(prod_id),
+            "synthesis must preserve production resource id {prod_id} verbatim (not re-mint it)"
+        );
+    }
+}
+
 /// WS2 — the wired read path is scoped to the principal. P2 (`ORIGINATOR_PROFILE`) originated only
 /// R2 (task-doc); it neither owns nor originated R1/R3/R5 and holds no grant, so
 /// `resources_visible_to(P2) = {R2}`. A principal-scoped `readback::list` returns exactly that, the
