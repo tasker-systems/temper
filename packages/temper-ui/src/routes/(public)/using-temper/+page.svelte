@@ -1,12 +1,13 @@
 <svelte:head>
-  <title>Docs — temper</title>
+  <title>Reference — temper</title>
 </svelte:head>
 
 <div class="docs">
-  <h1>Docs</h1>
+  <h1>Reference</h1>
   <p class="lede">
-    Temper gives your work a throughline — the connective thread across sessions,
-    decisions, and evolving understanding. Everything resolves to markdown.
+    The operational reference for the temper CLI, cloud sync, and MCP server.
+    For the conceptual frame — what Temper is, and why — see
+    <a href="/theory">Theory</a>.
   </p>
 
   <!-- ── Install ───────────────────────────────────────────────────── -->
