@@ -110,6 +110,11 @@ pub enum SeedAction<'a> {
     ResourceCreate {
         title: &'a str,
         origin_uri: &'a str,
+        /// The id to mint the resource under (PR#124 identity-as-input; the projection reads
+        /// `resource_id` from the payload). `None` ⇒ a fresh `Uuid::now_v7()` is minted (the scenario
+        /// path — every seeded resource is genuinely new). Synthesis passes `Some(prod_id)` so the
+        /// production resource id survives the flip verbatim and externally-held `ref`s do not dangle.
+        resource_id: Option<ResourceId>,
         /// The resource's home anchor — polymorphic per `AnchorRef` (`kb_cogmaps` for the scenario
         /// path; `kb_contexts` for synthesized, context-homed resources, §2).
         home: payloads::AnchorRef,
@@ -408,6 +413,7 @@ pub async fn fire_with(
         SeedAction::ResourceCreate {
             title,
             origin_uri,
+            resource_id,
             home,
             owner,
             originator,
@@ -416,7 +422,7 @@ pub async fn fire_with(
             emitter,
         } => {
             let payload = payloads::ResourceCreated {
-                resource_id: ResourceId::from(Uuid::now_v7()),
+                resource_id: resource_id.unwrap_or_else(|| ResourceId::from(Uuid::now_v7())),
                 title: title.to_owned(),
                 origin_uri: origin_uri.to_owned(),
                 home,

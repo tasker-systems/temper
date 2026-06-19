@@ -129,6 +129,10 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
             SeedAction::ResourceCreate {
                 title: &r.title,
                 origin_uri: &r.origin_uri,
+                // Preserve the production resource id verbatim (PR#124 identity-as-input) so the
+                // decorated `ref` (which embeds this id) survives the hard cutover — re-minting
+                // here would dangle every externally-held ref at the flip.
+                resource_id: Some(ResourceId::from(r.id)),
                 home: payloads::AnchorRef::context(ctx),
                 owner,
                 originator: Some(originator),

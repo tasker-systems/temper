@@ -104,6 +104,7 @@ pub async fn load_seed(pool: &PgPool, s: &Seed) -> Result<Loaded> {
             SeedAction::ResourceCreate {
                 title: &title,
                 origin_uri: &r.origin_uri,
+                resource_id: None,
                 home: crate::payloads::AnchorRef::cogmap(cogmap),
                 owner,
                 originator: None,

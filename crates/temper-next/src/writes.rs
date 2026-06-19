@@ -112,6 +112,8 @@ pub async fn create_resource(pool: &PgPool, p: CreateParams<'_>) -> Result<Resou
         SeedAction::ResourceCreate {
             title: p.title,
             origin_uri: p.origin_uri,
+            // A genuinely new resource created through the live write path — mint a fresh id.
+            resource_id: None,
             home: AnchorRef::context(p.home),
             owner: p.owner,
             originator: Some(p.originator),

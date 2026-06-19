@@ -344,6 +344,7 @@ async fn fire_with_authorship_stamps_metadata_via_rust_path() {
         SeedAction::ResourceCreate {
             title: "C",
             origin_uri: "temper://c",
+            resource_id: None,
             home: temper_next::payloads::AnchorRef::cogmap(cog),
             owner,
             originator: None,
@@ -411,6 +412,7 @@ async fn invocation_and_authorship_survive_replay() {
         SeedAction::ResourceCreate {
             title: "R",
             origin_uri: "temper://r",
+            resource_id: None,
             home: temper_next::payloads::AnchorRef::cogmap(cog),
             owner,
             originator: None,
@@ -522,6 +524,7 @@ async fn authorship_is_invisible_to_affinity_inputs() {
         SeedAction::ResourceCreate {
             title: "Z",
             origin_uri: "temper://z",
+            resource_id: None,
             home: temper_next::payloads::AnchorRef::cogmap(cog),
             owner,
             originator: None,
@@ -545,6 +548,7 @@ async fn authorship_is_invisible_to_affinity_inputs() {
         SeedAction::ResourceCreate {
             title: "Z2",
             origin_uri: "temper://z2",
+            resource_id: None,
             home: temper_next::payloads::AnchorRef::cogmap(cog),
             owner,
             originator: None,

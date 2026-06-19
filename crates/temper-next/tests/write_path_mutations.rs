@@ -88,6 +88,7 @@ async fn make_resource(
         SeedAction::ResourceCreate {
             title: origin_uri,
             origin_uri,
+            resource_id: None,
             home: AnchorRef::context(ctx),
             owner,
             originator: None,

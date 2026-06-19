@@ -193,6 +193,7 @@ pub async fn fire_resource_with_headed_chunk(
         SeedAction::ResourceCreate {
             title: "Headed Resource",
             origin_uri: "temper://heading-carry/r",
+            resource_id: None,
             home: temper_next::payloads::AnchorRef::cogmap(cogmap),
             owner,
             originator: None,
