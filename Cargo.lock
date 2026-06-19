@@ -4955,6 +4955,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-agents"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "temper-next",
+ "ts-rs",
+]
+
+[[package]]
 name = "temper-api"
 version = "0.1.0"
 dependencies = [

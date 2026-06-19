@@ -1,0 +1,25 @@
+[package]
+name = "temper-agents"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+temper-next = { path = "../temper-next" }
+serde = { version = "1", features = ["derive"] }
+ts-rs = { version = "10", features = [
+  "chrono-impl",
+  "serde-json-impl",
+  "uuid-impl",
+], optional = true }
+
+[features]
+typescript = ["ts-rs"]
+
+[dev-dependencies]
+serde_json = "1"
+
+[package.metadata.cargo-machete]
+# temper-next: used by Tasks 2-4 (not yet imported in this scaffold task)
+# ts-rs: optional dep, gated on the `typescript` feature — machete cannot see feature-gated use
+ignored = ["temper-next", "ts-rs"]
