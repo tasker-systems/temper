@@ -49,7 +49,7 @@ changes_match() {
 }
 
 CLI_CHANGED=false
-if changes_match '^crates/(temper-cli|temper-core|temper-client|temper-ingest|temper-llm)/'; then
+if changes_match '^crates/(temper-cli|temper-core|temper-client|temper-ingest)/'; then
     CLI_CHANGED=true
 fi
 

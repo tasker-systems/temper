@@ -96,7 +96,9 @@ jobs:
         # the feature — no runtime exclusion needed here.
         # temper-next is excluded: its sqlx! macros target the temper_next artifact namespace, not the
         # migrated public schema this job validates against; it is compiled+tested offline in unit-tests.
-        run: cargo nextest run --workspace --exclude temper-next --exclude temper-cloud --features test-db --locked --no-fail-fast
+        # temper-agents is excluded for the same reason: it depends on temper-next unconditionally (the
+        # envelope re-export), so building it here would compile temper-next's macros live and fail.
+        run: cargo nextest run --workspace --exclude temper-next --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast
 
   test-rust-embed:
     name: Embed & MCP Round-Trip Tests
@@ -237,7 +239,8 @@ jobs:
         # unit + DB integration + e2e. No ONNX: instrumentation only compiles
         # the embed feature, it never initializes ort at runtime here.
         # temper-next excluded (temper_next-namespace sqlx! macros; offline-validated in unit-tests).
-        run: cargo llvm-cov nextest --workspace --exclude temper-next --exclude temper-cloud --features test-db --locked --no-fail-fast --lcov --output-path lcov.info
+        # temper-agents excluded too: unconditional temper-next dep (envelope re-export) would compile those macros live here.
+        run: cargo llvm-cov nextest --workspace --exclude temper-next --exclude temper-cloud --exclude temper-agents --features test-db --locked --no-fail-fast --lcov --output-path lcov.info
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

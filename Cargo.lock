@@ -4955,6 +4955,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "temper-agents"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "temper-next",
+ "ts-rs",
+]
+
+[[package]]
 name = "temper-api"
 version = "0.1.0"
 dependencies = [
@@ -5146,36 +5156,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokenizers",
  "tokio",
-]
-
-[[package]]
-name = "temper-llm"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "reqwest 0.12.28",
- "schemars",
- "serde",
- "serde_json",
- "temp-env",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "wiremock",
-]
-
-[[package]]
-name = "temper-llm-smoke"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "schemars",
- "serde_json",
- "temper-llm",
- "tokio",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

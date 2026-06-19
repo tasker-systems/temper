@@ -35,7 +35,7 @@ cargo make release-prepare
 This:
 
 1. Verifies preconditions — clean working tree, on `main`, up-to-date with `origin/main`, `gh` CLI present.
-2. Detects whether `temper-cli` or any of its workspace deps (`temper-core`, `temper-client`, `temper-ingest`, `temper-llm`) or release/installer tooling changed since the last `v*` tag. If nothing changed, it exits cleanly — no release needed.
+2. Detects whether `temper-cli` or any of its workspace deps (`temper-core`, `temper-client`, `temper-ingest`) or release/installer tooling changed since the last `v*` tag. If nothing changed, it exits cleanly — no release needed.
 3. Calculates the next version based on the current `VERSION` file and the bump level (`patch` by default). Bump variants:
    ```sh
    cargo make release-prepare           # patch: 0.1.0 → 0.1.1
