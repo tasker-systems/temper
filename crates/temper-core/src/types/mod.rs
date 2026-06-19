@@ -21,6 +21,8 @@ pub mod graph;
 pub mod ids;
 pub mod ingest;
 pub mod invitation;
+pub mod invocation;
+pub mod invocation_requests;
 pub mod managed_meta;
 pub mod merge;
 pub mod ownership;
