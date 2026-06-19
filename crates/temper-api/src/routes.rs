@@ -60,15 +60,15 @@ pub fn create_app(state: AppState) -> Router {
         .route("/api/resources/{id}/edges", get(handlers::edges::list))
         .route("/api/relationships", post(handlers::edges::assert))
         .route(
-            "/api/relationships/{correlation_id}/retype",
+            "/api/relationships/{edge_handle}/retype",
             post(handlers::edges::retype),
         )
         .route(
-            "/api/relationships/{correlation_id}/reweight",
+            "/api/relationships/{edge_handle}/reweight",
             post(handlers::edges::reweight),
         )
         .route(
-            "/api/relationships/{correlation_id}/fold",
+            "/api/relationships/{edge_handle}/fold",
             post(handlers::edges::fold),
         )
         .route("/api/graph/subgraph", get(handlers::graph::get_subgraph))

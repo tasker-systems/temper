@@ -128,11 +128,11 @@ pub struct AssertRelationship {
     pub origin: Surface,
 }
 
-/// Retype an existing relationship (identified by its assertion's
-/// `correlation_id`) — changes `edge_kind` / `polarity`.
+/// Retype an existing relationship (identified by its `edge_handle` — the
+/// backend-opaque edge handle from `assert`) — changes `edge_kind` / `polarity`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RetypeRelationship {
-    pub correlation_id: uuid::Uuid,
+    pub edge_handle: uuid::Uuid,
     pub edge_kind: crate::types::graph::EdgeKind,
     pub polarity: crate::types::graph::Polarity,
     pub origin: Surface,
@@ -141,7 +141,7 @@ pub struct RetypeRelationship {
 /// Reweight an existing relationship — changes `weight`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ReweightRelationship {
-    pub correlation_id: uuid::Uuid,
+    pub edge_handle: uuid::Uuid,
     pub weight: f64,
     pub origin: Surface,
 }
@@ -150,7 +150,7 @@ pub struct ReweightRelationship {
 /// Optional human-readable reason for audit.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct FoldRelationship {
-    pub correlation_id: uuid::Uuid,
+    pub edge_handle: uuid::Uuid,
     pub reason: Option<String>,
     pub origin: Surface,
 }

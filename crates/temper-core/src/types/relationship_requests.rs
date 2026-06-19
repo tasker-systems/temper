@@ -26,7 +26,7 @@ pub struct AssertRelationshipRequest {
     pub weight: f64,
 }
 
-/// Request body for `POST /api/relationships/{correlation_id}/retype`.
+/// Request body for `POST /api/relationships/{edge_handle}/retype`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct RetypeRelationshipRequest {
@@ -34,14 +34,14 @@ pub struct RetypeRelationshipRequest {
     pub polarity: Polarity,
 }
 
-/// Request body for `POST /api/relationships/{correlation_id}/reweight`.
+/// Request body for `POST /api/relationships/{edge_handle}/reweight`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct ReweightRelationshipRequest {
     pub weight: f64,
 }
 
-/// Request body for `POST /api/relationships/{correlation_id}/fold`.
+/// Request body for `POST /api/relationships/{edge_handle}/fold`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct FoldRelationshipRequest {
@@ -50,10 +50,12 @@ pub struct FoldRelationshipRequest {
 
 /// Acknowledgement returned by all relationship write endpoints.
 ///
-/// Carries the `correlation_id` that identifies the relationship chain.
-/// Future revisions may add the projected edge id or event id.
+/// Carries the `edge_handle` — the backend-opaque handle that identifies the
+/// relationship (correlation_id under DbBackend, edge_id under NextBackend) and
+/// is fed back into retype/reweight/fold. Future revisions may add the
+/// projected edge id or event id.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
 pub struct RelationshipAck {
-    pub correlation_id: Uuid,
+    pub edge_handle: Uuid,
 }

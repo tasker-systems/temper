@@ -313,7 +313,7 @@ impl Backend for DbBackend {
         cmd: RetypeRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
         // 1. Find source resource for auth check.
-        let edge = relationship_service::edge_auth_row(self.pool(), cmd.correlation_id)
+        let edge = relationship_service::edge_auth_row(self.pool(), cmd.edge_handle)
             .await
             .map_err(TemperError::from)?;
 
@@ -342,7 +342,7 @@ impl Backend for DbBackend {
             declaration_topic_id,
             Self::public_scope_id(),
             payload,
-            cmd.correlation_id,
+            cmd.edge_handle,
             Utc::now(),
         );
         write.metadata = Self::explicit_intent_metadata();
@@ -356,9 +356,9 @@ impl Backend for DbBackend {
 
         // 7. Return.
         Ok(CommandOutput::with_events(
-            cmd.correlation_id,
+            cmd.edge_handle,
             vec![DomainEvent::DbRelationshipRetyped {
-                correlation_id: cmd.correlation_id,
+                correlation_id: cmd.edge_handle,
             }],
         ))
     }
@@ -370,7 +370,7 @@ impl Backend for DbBackend {
         cmd: ReweightRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
         // 1. Find source resource for auth check.
-        let edge = relationship_service::edge_auth_row(self.pool(), cmd.correlation_id)
+        let edge = relationship_service::edge_auth_row(self.pool(), cmd.edge_handle)
             .await
             .map_err(TemperError::from)?;
 
@@ -396,7 +396,7 @@ impl Backend for DbBackend {
             declaration_topic_id,
             Self::public_scope_id(),
             payload,
-            cmd.correlation_id,
+            cmd.edge_handle,
             Utc::now(),
         );
         write.metadata = Self::explicit_intent_metadata();
@@ -410,9 +410,9 @@ impl Backend for DbBackend {
 
         // 7. Return.
         Ok(CommandOutput::with_events(
-            cmd.correlation_id,
+            cmd.edge_handle,
             vec![DomainEvent::DbRelationshipReweighted {
-                correlation_id: cmd.correlation_id,
+                correlation_id: cmd.edge_handle,
             }],
         ))
     }
@@ -424,7 +424,7 @@ impl Backend for DbBackend {
         cmd: FoldRelationship,
     ) -> Result<CommandOutput<Uuid>, TemperError> {
         // 1. Find source resource for auth check.
-        let edge = relationship_service::edge_auth_row(self.pool(), cmd.correlation_id)
+        let edge = relationship_service::edge_auth_row(self.pool(), cmd.edge_handle)
             .await
             .map_err(TemperError::from)?;
 
@@ -452,7 +452,7 @@ impl Backend for DbBackend {
             deformation_topic_id,
             Self::public_scope_id(),
             payload,
-            cmd.correlation_id,
+            cmd.edge_handle,
             Utc::now(),
         );
         write.metadata = Self::explicit_intent_metadata();
@@ -466,9 +466,9 @@ impl Backend for DbBackend {
 
         // 7. Return.
         Ok(CommandOutput::with_events(
-            cmd.correlation_id,
+            cmd.edge_handle,
             vec![DomainEvent::DbRelationshipFolded {
-                correlation_id: cmd.correlation_id,
+                correlation_id: cmd.edge_handle,
             }],
         ))
     }

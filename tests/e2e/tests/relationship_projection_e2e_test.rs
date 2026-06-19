@@ -259,7 +259,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         })
         .await
         .expect("assert alpha→beta");
-    let corr_ab = ack_ab.correlation_id;
+    let corr_ab = ack_ab.edge_handle;
 
     // Assert alpha → gamma (contains / parent_of / weight 1.0)
     let ack_ag = app
@@ -275,7 +275,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         })
         .await
         .expect("assert alpha→gamma");
-    let corr_ag = ack_ag.correlation_id;
+    let corr_ag = ack_ag.edge_handle;
 
     // Assert alpha → delta (near / references / weight 0.5) — will be folded
     let ack_ad = app
@@ -291,7 +291,7 @@ async fn rebuild_edge_projection_yields_identical_traversal(pool: PgPool) {
         })
         .await
         .expect("assert alpha→delta");
-    let corr_ad = ack_ad.correlation_id;
+    let corr_ad = ack_ad.edge_handle;
 
     // Reweight alpha→beta from 0.8 to 0.9
     app.client
