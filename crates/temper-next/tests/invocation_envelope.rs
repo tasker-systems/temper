@@ -623,3 +623,50 @@ async fn authorship_is_invisible_to_affinity_inputs() {
         );
     }
 }
+
+#[tokio::test]
+async fn writes_open_then_close_round_trips() {
+    let pool = setup().await;
+    let (owner, emitter) = system_actor(&pool).await;
+    let cog = genesis(&pool, owner, emitter, "map-writes").await;
+
+    let inv = temper_next::writes::open_invocation(
+        &pool,
+        temper_next::writes::OpenParams {
+            trigger_kind: "manual".to_string(),
+            originating: cog,
+            parent: None,
+            scoped_entity: emitter,
+            emitter,
+        },
+    )
+    .await
+    .unwrap();
+
+    let status: String = sqlx::query_scalar("SELECT status FROM kb_invocations WHERE id=$1")
+        .bind(inv.uuid())
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(status, "open");
+
+    temper_next::writes::close_invocation(
+        &pool,
+        inv,
+        cog,
+        temper_next::payloads::Disposition::Completed,
+        serde_json::json!({"concepts": 2}),
+        emitter,
+    )
+    .await
+    .unwrap();
+
+    let (status, closed): (String, bool) =
+        sqlx::query_as("SELECT status, closed_at IS NOT NULL FROM kb_invocations WHERE id=$1")
+            .bind(inv.uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "completed");
+    assert!(closed, "closed_at set");
+}
