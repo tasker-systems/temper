@@ -41,6 +41,17 @@
   </div>
 </section>
 
+<div class="projection-frame">
+  <p>
+    You're looking at the <strong>agent's view</strong> of Temper — one projection
+    over the coordination substrate, the way agents reach into it through the CLI,
+    the MCP server, and a generated skill. A true and useful view, but not the
+    whole story: the substrate is the trunk, and this is one branch of it. For what
+    it's a view <em>of</em>, see <a href="/cognitive-maps">cognitive maps</a> or
+    <a href="/">what Temper is</a>.
+  </p>
+</div>
+
 <Section label="The problem">
   <h2>Powerful but <em>forgetful</em></h2>
   <p>Claude Code, Cursor, Windsurf, Copilot — these tools can write code, analyze architecture, and plan implementations. But they carry nothing between sessions. No memory of yesterday's decision. No awareness of the constraint that shaped today's approach. No sense of where the project is headed or what's already been tried.</p>
@@ -157,7 +168,7 @@
 </Section>
 
 <div class="cross-sell">
-  <p>Agents work best when <a href="/builders">humans temper the context</a>. Temper's session-over-session workflow gives builders and agents the same throughline — what we're building, why, what's decided, and what comes next.</p>
+  <p>This page is one view over the substrate. To see what it's a view of — telos-seeded regions where humans and agents grow a shared understanding together — start with <a href="/cognitive-maps">cognitive maps</a>, or read the trunk in <a href="/theory">theory</a>.</p>
 </div>
 
 <Footer />
@@ -216,6 +227,12 @@
   .cli-output { margin-top: 0.5rem; }
   .skill-line { font-size: 0.7rem; color: rgba(255, 255, 255, 0.5); line-height: 1.8; }
   .skill-line.dim { color: rgba(255, 255, 255, 0.25); }
+  .projection-frame { max-width: 800px; margin: 0 auto; padding: 2.5rem 2.5rem 0; }
+  .projection-frame p { font-family: var(--font-serif); font-size: 0.9rem; color: var(--graphite); line-height: 1.8; border-left: 2px solid var(--temper-blue-border); padding-left: 1.25rem; font-style: italic; }
+  .projection-frame strong { color: var(--parchment); font-weight: 400; font-style: normal; }
+  .projection-frame em { color: var(--temper-blue); }
+  .projection-frame a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }
+  .projection-frame a:hover { color: var(--parchment); }
   .cross-sell { max-width: 800px; margin: 0 auto; padding: 3rem 2.5rem; border-top: 1px solid var(--rule); }
   .cross-sell p { font-family: var(--font-serif); font-size: 0.95rem; color: var(--graphite); font-style: italic; text-align: center; line-height: 1.8; }
   .cross-sell a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }
