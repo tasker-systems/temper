@@ -105,23 +105,23 @@
   </p>
   <ul>
     <li>
-      <strong><a href="/cognitive-maps/operating-temper/deployment">Deployment</a></strong>
+      <strong><a href="/operating/deployment">Deployment</a></strong>
       — topology, tenancy, and how new maps, integrations, and agents come
       online. The dimension where one organization's Temper diverges most from
       another's.
     </li>
     <li>
-      <strong><a href="/cognitive-maps/operating-temper/governance-and-administration">Governance &amp; administration</a></strong>
+      <strong><a href="/operating/governance-and-administration">Governance &amp; administration</a></strong>
       — who may create a map, and who may reshape the teams and grants beneath
       it. How guarded that second power must be depends on the organization.
     </li>
     <li>
-      <strong><a href="/cognitive-maps/operating-temper/observability-and-audit">Observability &amp; audit</a></strong>
+      <strong><a href="/operating/observability-and-audit">Observability &amp; audit</a></strong>
       — how an operator sees the system is healthy, plus the audit the ledger
       gives for free. Which metrics matter is an organizational call.
     </li>
     <li>
-      <strong><a href="/cognitive-maps/operating-temper/insights">Insights</a></strong>
+      <strong><a href="/operating/insights">Insights</a></strong>
       — what becomes <em>possible</em> once agents leave correlated, reasoned
       traces. There's a payoff hiding in the operating layer — the exhaust from
       running Temper is one of the more interesting things it produces — and what

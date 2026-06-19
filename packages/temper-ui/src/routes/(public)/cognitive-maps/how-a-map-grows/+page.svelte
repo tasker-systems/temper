@@ -201,7 +201,7 @@
     cadence, salience crossing a floor. It's the same seam the opening raised
     about re-materializing shape, and it matters enough to be one of the explicit
     "help us decide" forks in
-    <a href="/cognitive-maps/operating-temper/deployment">deployment</a> (the
+    <a href="/operating/deployment">deployment</a> (the
     <em>"temper-system dreaming"</em> question). We mark it here rather than
     pretend the cadence is solved.
   </p>

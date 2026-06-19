@@ -34,10 +34,10 @@
     relate:          { href: '/cognitive-maps/how-maps-relate',           label: 'how maps relate', cx: 540, cy: 156 },
     visible:         { href: '/cognitive-maps/whats-visible-from-here',   label: "what's visible",  cx: 486, cy: 272 },
     operating:       { href: '/cognitive-maps/operating-temper',          label: 'operating Temper', cx: 360, cy: 400, hub: true },
-    deployment:      { href: '/cognitive-maps/operating-temper/deployment',                 label: 'deployment',    cx: 132, cy: 504 },
-    governance:      { href: '/cognitive-maps/operating-temper/governance-and-administration', label: 'governance',  cx: 300, cy: 516 },
-    observability:   { href: '/cognitive-maps/operating-temper/observability-and-audit',     label: 'observability', cx: 470, cy: 516 },
-    insights:        { href: '/cognitive-maps/operating-temper/insights',                    label: 'insights',      cx: 612, cy: 504 },
+    deployment:      { href: '/operating/deployment',                 label: 'deployment',    cx: 132, cy: 504 },
+    governance:      { href: '/operating/governance-and-administration', label: 'governance',  cx: 300, cy: 516 },
+    observability:   { href: '/operating/observability-and-audit',     label: 'observability', cx: 470, cy: 516 },
+    insights:        { href: '/operating/insights',                    label: 'insights',      cx: 612, cy: 504 },
   };
 
   // Edges = the conceptual cross-references the prose actually draws.

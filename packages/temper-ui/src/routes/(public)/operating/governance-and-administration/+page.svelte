@@ -13,14 +13,14 @@
 </svelte:head>
 
 <section class="hero">
-  <div class="hero-label t-label">/cognitive-maps/operating-temper/governance-and-administration</div>
+  <div class="hero-label t-label">/operating/governance-and-administration</div>
   <h1 class="t-hero-title">Governance &amp; <em>administration</em></h1>
   <p class="tagline t-tagline">
     Authoring is built; the admin surface is org-shaped.
   </p>
 </section>
 
-<div class="cognitive-maps-page">
+<div class="operating-page">
 
 <blockquote class="epigraph">
   Dave is a maintainer of org-common. Carol owns directors. Someone made those
@@ -113,7 +113,7 @@
       boundary</strong>: below the application, you're in the domain of database
       controls and infrastructure policy, not Temper's ledger. (The same line is
       drawn from the other side in
-      <a href="/cognitive-maps/operating-temper/observability-and-audit">observability &amp; audit</a>.)
+      <a href="/operating/observability-and-audit">observability &amp; audit</a>.)
     </li>
   </ul>
 </Section>
@@ -168,7 +168,7 @@
     margin: 0 auto 1rem;
     padding: 0.5rem 2.5rem 0.5rem 3.75rem;
   }
-  :global(.cognitive-maps-page .epigraph) {
+  :global(.operating-page .epigraph) {
     border-left: 2px solid var(--temper-blue-border);
     font-family: var(--font-serif);
     font-style: italic;

@@ -192,7 +192,7 @@
     can leave a <a href="/cognitive-maps/how-a-map-grows">scar</a>, a fold can preserve instead of
     delete, and the question the second engineer asked — <em>why does the map say this?</em> —
     always has an answer the system can compute, across system boundaries even, which the
-    <a href="/cognitive-maps/operating-temper/insights">insights</a> story returns to. The honesty
+    <a href="/operating/insights">insights</a> story returns to. The honesty
     about its own history that <code>/theory</code> asked for isn't a feature added on top; it's
     what's left when nothing is overwritten.
   </p>
