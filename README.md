@@ -42,7 +42,7 @@ This isn't a ticketing system competing with Linear. It's a structured vault of 
 
 Every new session starts with `temper warmup`, which injects active tasks, recent session summaries, and the last session's full content. The agent resumes where you left off instead of starting from scratch.
 
-At the end of each session, `temper session save` captures what happened — decisions made, tasks updated, next steps identified — and writes it back through the cloud to the substrate. The next session reads it. Context compounds instead of decaying.
+At the end of each session, a session note (`temper resource create --type session`) captures what happened — decisions made, tasks updated, next steps identified — written straight through the cloud to the substrate. The next session reads it. Context compounds instead of decaying.
 
 <p align="center">
   <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the vault" width="700" />
@@ -60,7 +60,7 @@ Temper gives you two building blocks:
 
 Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach the vault three ways:
 
-- **CLI** — `temper warmup`, `temper search`, `temper session save`. Claude Code hooks call `temper warmup` automatically at session start.
+- **CLI** — `temper warmup`, `temper search`, `temper resource create`. Claude Code hooks call `temper warmup` automatically at session start.
 - **MCP Server** — vault operations exposed as structured tools. Agents query, read, and write through the Model Context Protocol.
 - **Skill File** — `temper skill install` generates a Claude Code skill that teaches the agent your vault's structure and workflow conventions.
 
@@ -108,8 +108,8 @@ temper search "authentication decisions"
 # Generate and install the Claude Code skill
 temper skill install
 
-# Save a session
-temper session save "Implemented auth flow, chose JWT rotation"
+# Write a session note (body via --body @file or piped stdin)
+temper resource create --type session --context myapp --title "Implemented auth flow, chose JWT rotation"
 ```
 
 ## The Vault
@@ -130,26 +130,24 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper init` | Initialize a new vault |
 | `temper check` | Verify vault integrity and tool health |
 | `temper status` | Vault overview |
-| `temper events` | Show recent vault events |
-| `temper warmup` | Context primer for new sessions |
-| `temper normalize` | Repair vault structure drift |
+| `temper warmup [--context <ctx>]` | Context primer for new sessions |
+| `temper pull <ctx>` | Materialize a context's projection from the cloud |
 
 ### Search
 
 | Command | Description |
 |---------|-------------|
-| `temper search <query>` | Semantic search across the knowledge base |
-| `temper context <n>` | Show topic with related context |
+| `temper search <query>` | Hybrid full-text + semantic search |
+| `temper search <query> --edge-type <k> --depth <n>` | Search with graph expansion along typed edges |
 
 ### Content
 
 | Command | Description |
 |---------|-------------|
-| `temper note create <type> <title>` | Create note from template |
-| `temper session save [title]` | Create/update session note |
-| `temper session list` | List recent sessions |
-| `temper research save <title>` | Create research note |
-| `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, and store via cloud pipeline) |
+| `temper resource create --type <t> --title <t>` | Create a resource (goal, task, session, research, decision, concept) |
+| `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, store via the cloud pipeline) |
+| `temper resource list --type <t>` | List resources of a type |
+| `temper resource show <ref>` | Show a resource by ref |
 
 ### Goals and Tasks
 
@@ -158,9 +156,17 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper resource create --type task --title <t> --context <ctx>` | Create a task |
 | `temper resource create --type goal --title <t> --context <ctx>` | Create a goal |
 | `temper resource list --type task [--context <ctx>]` | List tasks (or any doc type) |
-| `temper resource update <slug> --type task --context <ctx> --stage done` | Mark a task done |
+| `temper resource update <ref> --stage done` | Mark a task done |
 
-> `temper resource create` and `temper resource update` require `--context`.
+> `temper resource create` writes *into* a context (`--context`). `temper resource update`, `show`, and `delete` take a single **ref** — a UUID or the decorated `slug-<uuid>` form — and need no `--type`/`--context`.
+
+### Relationships
+
+| Command | Description |
+|---------|-------------|
+| `temper edge assert <source> <target> --kind <k> --polarity <p> --label <l>` | Assert a typed edge (kinds: express, contains, leads-to, near; polarity forward/inverse) |
+| `temper edge reweight <edge-handle> --weight <n>` | Change an edge's weight |
+| `temper edge fold <edge-handle>` | Fold (supersede) an edge |
 
 ### Contexts and Skills
 
@@ -177,7 +183,7 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 |---------|-------------|
 | `temper auth` | Authenticate with temper cloud |
 | `temper pull <context>` | Materialize a local projection of a context |
-| `temper resource delete <slug>` | Delete a resource from the cloud (soft-delete) |
+| `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |
 
 ## Semantic Search
 
@@ -237,9 +243,21 @@ The remote MCP server exposes vault operations as structured tools over [Streama
 | `list_resources` | List resources, optionally filtered by context |
 | `get_resource` | Get a resource by ID, optionally with full content |
 | `create_resource` | Create a new resource in a context |
-| `search` | Semantic vector search across the knowledge base |
+| `update_resource` | Update a resource's title, slug, or content |
+| `update_resource_meta` | Update frontmatter without touching the body |
+| `delete_resource` | Soft-delete a resource by ID |
+| `assert_relationship` | Assert a typed edge between two resources |
+| `retype_relationship` | Change an edge's kind and polarity |
+| `reweight_relationship` | Change an edge's weight |
+| `fold_relationship` | Fold (supersede) an edge |
+| `search` | Full-text + semantic search across the knowledge base |
 | `list_contexts` | List available contexts (workspaces) |
 | `get_context` | Get details of a specific context |
+| `create_context` | Create a new context |
+| `list_doc_types` | List available document types |
+| `describe_doc_type` | Describe a doc type's schema |
+| `list_events` | List events, optionally filtered by resource or type |
+| `get_profile` | Get the authenticated user's profile |
 
 **Connect from Claude Desktop or Claude Code:**
 
