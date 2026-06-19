@@ -7,10 +7,12 @@
     <span class="footer-wordmark">temper</span>
   </a>
   <div class="footer-links">
-    <a href="/how-it-works">How it works</a>
+    <a href="/cognitive-maps">Cognitive maps</a>
+    <a href="/operating">Operating</a>
     <a href="/builders">Builders</a>
     <a href="/agents">Agents</a>
-    <a href="/docs">Docs</a>
+    <a href="/using-temper">Reference</a>
+    <a href="/theory">Theory</a>
   </div>
 </footer>
 
