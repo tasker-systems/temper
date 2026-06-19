@@ -9,7 +9,7 @@ export type DeploymentProfile = { runtime: RuntimeBinding, residency: Residency,
  * Token-denominated budget — neither runtime exposes a managed dollar
  * budget, so spend governance is expressed in tokens. `None` = runtime default.
  */
-token_budget: bigint | null, };
+token_budget: number | null, };
 
 /**
  * Where tool execution runs. Orthogonal to [`RuntimeBinding`] — both runtimes

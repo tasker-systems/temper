@@ -50,7 +50,7 @@ pub struct DeploymentProfile {
     pub residency: Residency,
     /// Token-denominated budget — neither runtime exposes a managed dollar
     /// budget, so spend governance is expressed in tokens. `None` = runtime default.
-    pub token_budget: Option<u64>,
+    pub token_budget: Option<u32>,
 }
 
 #[cfg(test)]
