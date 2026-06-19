@@ -6,13 +6,19 @@
   <strong>/ˈtempər/</strong> — <em>to make stronger and more resilient through a deliberate process</em>
 </p>
 
-A knowledge base for builders. Temper gives your work a throughline — the connective thread across sessions, decisions, and evolving understanding that turns scattered context into a navigable history. Everything resolves to markdown. The system gets out of the way.
+Temper is an **event-sourced coordination substrate** whose organizing purpose is to be economical with attention. A **cognitive map** is a telos-seeded region of that substrate where humans and agents grow a shared, situated understanding together — and everything else, personal knowledge management included, is a projection over it. Everything resolves to markdown; the system gets out of the way.
 
 <p align="center">
-  <a href="https://temperkb.io">temperkb.io</a> · <a href="https://temperkb.io/builders">For builders</a> · <a href="https://temperkb.io/agents">For agents</a>
+  <a href="https://temperkb.io">temperkb.io</a> · <a href="https://temperkb.io/cognitive-maps">Cognitive maps</a> · <a href="https://temperkb.io/operating">Operating</a> · <a href="https://temperkb.io/theory">Theory</a>
 </p>
 
-## The Problem
+## Substrate, and one projection over it
+
+Temper is a coordination substrate first. The conceptual frame — what a cognitive map is, what the architecture fixes versus what a deployment shapes, and the commitments underneath — lives on the site: start with [cognitive maps](https://temperkb.io/cognitive-maps) (the concrete on-ramp), [operating](https://temperkb.io/operating) (running it, for the evaluator), and [theory](https://temperkb.io/theory) (the why).
+
+The rest of this README is the **personal-knowledge projection** — the view a solo builder or small team uses to keep an agent's context coherent across sessions. A true and useful view, not the whole story.
+
+## The problem it solves
 
 AI coding agents are powerful but forgetful. Every session starts blank — no memory of yesterday's decisions, no awareness of in-flight work, no sense of what matters next. The industry calls this [context rot](https://www.understandingai.org/p/context-rot-the-emerging-challenge): the progressive degradation of an agent's understanding as work spans sessions.
 
@@ -20,13 +26,11 @@ AI coding agents are powerful but forgetful. Every session starts blank — no m
   <img src="docs/diagrams/context-rot.svg" alt="Context rot: without a knowledge base, understanding degrades; with one, it compounds" width="720" />
 </p>
 
-Developers compensate by re-explaining context, pasting old chat logs, and manually steering agents through decisions the agent should already know about. This tax grows with every session.
-
-The deeper issue isn't memory — it's **throughline**. Knowing what's been done, what's up next, what decisions have been made and which are still open. This is the connective tissue that turns a pile of documents into a navigable development history. Without it, each session reinvents context from scratch. With it, sessions build on each other.
+Developers compensate by re-explaining context, pasting old chat logs, and manually steering agents through decisions the agent should already know about. This tax grows with every session. The fix is **throughline** — knowing what's been done, what's up next, what's decided and what's still open.
 
 ## Throughline
 
-Temper embeds throughline directly into how you work. Goals hold the vision. Tasks carry the work. Sessions record what happened. Each layer provides context for the layer below, and each session's conclusions feed back up — refining the goals, sharpening the path forward.
+In the personal-knowledge projection, goals hold the vision, tasks carry the work, and sessions record what happened. Each layer provides context for the layer below, and each session's conclusions feed back up — refining the goals, sharpening the path forward. (Underneath, each of those is an event on the substrate; the projection is one honest view of the ledger.)
 
 <p align="center">
   <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from goals through tasks down to sessions" width="700" />
@@ -34,17 +38,17 @@ Temper embeds throughline directly into how you work. Goals hold the vision. Tas
 
 This isn't a ticketing system competing with Linear. It's a structured vault of markdown files where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.
 
-## Session Continuity
+## Session continuity
 
 Every new session starts with `temper warmup`, which injects active tasks, recent session summaries, and the last session's full content. The agent resumes where you left off instead of starting from scratch.
 
-At the end of each session, `temper session save` captures what happened — decisions made, tasks updated, next steps identified — and writes it back to the vault. The next session reads it. Context compounds instead of decaying.
+At the end of each session, `temper session save` captures what happened — decisions made, tasks updated, next steps identified — and writes it back through the cloud to the substrate. The next session reads it. Context compounds instead of decaying.
 
 <p align="center">
   <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the vault" width="700" />
 </p>
 
-## Goals and Tasks
+## Goals and tasks
 
 Temper gives you two building blocks:
 
@@ -52,7 +56,7 @@ Temper gives you two building blocks:
 
 **Tasks** are units of work toward a goal. Every task has a **mode** — `build` or `plan` — and an expected **effort** — `small`, `medium`, or `large`. Your workflow preferences (set during `temper init`) shape how these translate into process — temper carries the throughline regardless of what tools and ceremonies you prefer.
 
-## For Humans and Agents
+## For humans and agents
 
 Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach the vault three ways:
 
