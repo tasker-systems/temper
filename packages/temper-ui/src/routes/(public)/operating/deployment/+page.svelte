@@ -43,7 +43,7 @@
     The elegant property: that first seed isn't a special bootstrap script. It's the same
     <code>temper-system</code> root team and <code>system-default</code> map the seed file already
     creates — the public floor every later team descends from and every enabled profile joins. The
-    0→1 picture is literally the seed you've been reading; the system's first act is to describe
+    0→1 picture is literally that seed file; the system's first act is to describe
     itself in its own terms. That much is invariant — it looks identical on every deployment.
   </p>
   <p>
@@ -59,13 +59,13 @@
 
 <Section label="One to many">
   <p>
-    Growth from there has three motions, visible already in the cast:
+    Growth from there has three motions:
   </p>
   <ul>
     <li>
       <strong>New maps, by authoring.</strong> A telos and its charter come into being through
-      <code>cogmap_genesis</code>, reachable over MCP — exactly how the onboarding map was born. A
-      solved, callable act.
+      <code>cogmap_genesis</code>, reachable over MCP — the same act that authored the public
+      deployment's own first map. A solved, callable act.
     </li>
     <li>
       <strong>Raw events, by integration.</strong> A GitHub webhook writes events into the ledger
@@ -178,7 +178,7 @@
     <strong>The event-shape data contract.</strong> This is the boundary where Temper becomes
     infrastructure your other systems emit into. The architecture fixes its floor — every external
     writer is an entity, <code>emitter_entity_id</code> is never null, so a GitHub source is a row
-    of the same kind as <code>onboarding-agent#1</code>. What a <em>deployment</em> settles is the
+    of the same kind as any agent entity. What a <em>deployment</em> settles is the
     rest: what an event must carry to be admissible, how raw a webhook may be before a triage agent
     has to make sense of it, and how the whole thing is partitioned per tenant. It sets how far
     Temper reaches into the tools your organization already runs.
@@ -186,8 +186,8 @@
   <p>
     <strong>What wakes an agent.</strong> A triage session is triggered by <em>something</em> —
     event volume past a threshold, a time cadence, salience accumulating past a floor — and the
-    broader rhythm of sweeping a map to keep it coherent (the <em>temper-system dreaming</em> we
-    keep naming) is undecided on purpose. Too eager and the system thrashes; too lazy and maps go
+    broader rhythm of sweeping a map to keep it coherent (a periodic <em>temper-system dreaming</em>)
+    is undecided on purpose. Too eager and the system thrashes; too lazy and maps go
     stale. The right cadence depends on the map, the traffic, and the organization's tolerances —
     which is why it's a dial you set and re-set, not a constant the project ships.
   </p>

@@ -23,28 +23,28 @@
 <div class="operating-page">
 
 <blockquote class="epigraph">
-  Dave is a maintainer of org-common. Carol owns directors. Someone made those
-  things true — added a person to a team, created the team, joined it into the
-  right place. That isn't the same act as <em>authoring a map</em>, and how
-  guarded it needs to be is one of the most organization-shaped decisions here.
-  What <em>is</em> settled: every one of those administrative acts is an event,
-  on the ledger, auditable by construction.
+  Someone maintains one team; someone else owns another. Making those things
+  true — adding a person to a team, creating the team, joining it into the right
+  place — isn't the same act as <em>authoring a map</em>, and how guarded it
+  needs to be is one of the most organization-shaped decisions here. What
+  <em>is</em> settled: every one of those administrative acts is an event, on the
+  ledger, auditable by construction.
 </blockquote>
 
 <Section label="Two different powers">
   <p>
-    Look closely at what it took to set the cast up, and two distinct powers
-    come apart.
+    Look closely at what it takes to set an organization up, and two distinct
+    powers come apart.
   </p>
   <p>
     One is <strong>authoring</strong> — bringing a telos and its map into being.
     That's built and invariant: <code>cogmap_genesis</code>, reachable over MCP,
-    is the act that created the onboarding map. Authoring is creative and
+    is the act that brings a map into being. Authoring is creative and
     relatively safe; the worst a bad map does is exist until it's folded.
   </p>
   <p>
-    The other is <strong>administration</strong> — adding dave to org-common,
-    creating the directors team, joining a team to a map, disabling a profile.
+    The other is <strong>administration</strong> — adding a person to a team,
+    creating a team, joining a team to a map, disabling a profile.
     These reshape <em>who can see what</em> across the whole system. They
     shouldn't share a surface with authoring: the power to create a map and the
     power to rewrite the access graph beneath every map differ in kind, and the

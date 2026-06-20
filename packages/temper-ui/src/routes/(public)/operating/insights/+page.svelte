@@ -8,7 +8,7 @@
   <title>Insights — temper</title>
   <meta
     name="description"
-    content="A PR merged on one team; minutes later a map had new regulation — and the causal chain between them is recorded and queryable, across system boundaries. Analytics is the how; the insight is the why-it-matters — a provenance of how understanding formed. What you'd ask of it is organization-shaped; the forward-exciting close to the set."
+    content="A PR merged on one team; minutes later a map had new regulation — and the causal chain between them is recorded and queryable, across system boundaries. Analytics is the how; the insight is the why-it-matters — a provenance of how understanding formed. What you'd ask of it is organization-shaped; the forward-looking close to the operating story."
   />
 </svelte:head>
 
@@ -23,7 +23,7 @@
 <div class="operating-page">
 
 <blockquote class="epigraph">
-  A PR merged on team-a. Minutes later, the onboarding map had a new piece of
+  A PR merged on one team. Minutes later, a map had a new piece of
   regulation. Those two facts are connected — and the connection is
   <em>recorded</em>. You can follow it: the merge woke a triage agent, the agent
   reasoned about it, the reasoning changed a concept, the change reinforced a
@@ -42,7 +42,7 @@
   <p>
     Here's the chain, concretely. A webhook event arrives — <em>PR #123
     merged</em> — carrying a correlation id. A triage agent watching that topic
-    wakes. It reads the onboarding charter, decides the merge bears on
+    wakes. It reads the charter, decides the merge bears on
     <em>"where are the sharp edges that scar newcomers,"</em> and emits a
     mutation event — <strong>with its reasoning in the payload</strong> — that
     writes a new regulation and reinforces that question. Every one of those
@@ -67,7 +67,7 @@
   <p>
     The analytics are what you'd assume: resource and event lifecycle metrics,
     how maps grow, which concepts churn, where attention concentrates. Useful,
-    ordinary, and good to have — but not the reason this page closes the set.
+    ordinary, and good to have — but not the most interesting thing here.
   </p>
   <p>
     The insight is the chain above — the <strong>provenance graph of how
@@ -131,7 +131,7 @@
   </p>
 </Section>
 
-<Section label="Why this is the closing note">
+<Section label="Where the design pays off">
   <p>
     This is where the whole design pays off in a single direction. Event-primary
     made every change answerable. Homed boundaries kept the answers honest.

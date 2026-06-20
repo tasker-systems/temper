@@ -95,7 +95,7 @@
 <Section label="The throughline">
   <h2>Context that <em>compounds</em></h2>
   <p>Temper embeds <strong>throughline</strong> directly into how you work. Not a task tracker competing with Linear. Not a doc tool competing with Notion. A cloud-backed knowledge base that projects to markdown, where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.</p>
-  <p>The vault grows richer with each session. Decisions persist. Research accumulates. The agent that starts your next session reads what you decided, what you deferred, and what comes next — not because you re-explained it, but because the vault holds the thread.</p>
+  <p>The vault grows richer with each session — decisions persist, research accumulates. The next session's agent reads what you decided, deferred, and planned because the vault holds the thread, not because you re-explained it.</p>
 </Section>
 
 <Section label="Session continuity">

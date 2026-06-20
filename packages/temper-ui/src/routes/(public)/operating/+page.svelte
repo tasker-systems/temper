@@ -21,23 +21,22 @@
 <div class="operating-page">
 
 <blockquote class="epigraph">
-  You came to answer a practical question: what do I run, what do I get out of
-  the box, and what's still mine to decide? This page answers it without asking
-  you to read the conceptual walkthrough first — where a term needs its grounding
-  it links back to it. The short version is one sentence: the 0→1 is invariant,
-  and everything after it is shaped.
+  Running Temper raises a practical question — what do I run, what do I get out
+  of the box, and what's still mine to decide? This page answers it from a cold
+  start: no conceptual walkthrough assumed, with links back where a term needs
+  its grounding. The short version is one sentence: the 0→1 is invariant, and
+  everything after it is shaped.
 </blockquote>
 
 <Section label="Three tiers, kept separate">
   <p>
-    The honest way to answer "is it all handled?" is to refuse the question's
-    framing. An evaluator is better served by three things kept visibly apart
-    than by a flat claim that blurs them — and keeping them apart is exactly what
-    makes the rest of this trustworthy. So everything below sorts into one of
-    three tiers: what the architecture <strong>fixes</strong>, what it makes
-    <strong>extensible</strong> (with the edges still being found), and what is
-    <strong>genuinely yours</strong>. The same separation runs through the four
-    dimension pages this hub leads into.
+    Rather than a flat "it's all handled," everything below sorts into three
+    tiers kept visibly apart: what the architecture <strong>fixes</strong>, what
+    it makes <strong>extensible</strong> (with the edges still being found), and
+    what is <strong>genuinely yours</strong>. An evaluator is better served by
+    that separation than by a claim that blurs them — and keeping them apart is
+    exactly what makes the rest of this trustworthy. The same separation runs
+    through the four dimension pages this hub leads into.
   </p>
   <p>
     The vocabulary — telos, cognitive map, an event-sourced substrate — is
@@ -105,15 +104,13 @@
   </ul>
 </Section>
 
-<Section label="Keeping the columns honest">
+<Section label="Reading the tiers honestly">
   <p>
-    One temptation worth naming, so the page doesn't drift into it: now that there
-    are clean plans and a POC within reach, it would be easy to let tier 2 pass
-    for tier 1 — "what we run" presented as "what Temper is." The evaluator is
-    better served by the unblurred version: <em>this is invariant; this is what we
-    happen to run and you can swap it; this is genuinely yours.</em> Where this
-    page can only point at a finding and a contract rather than a shipped fact, it
-    says so.
+    Where this page can only point at a finding and a contract rather than a
+    shipped fact, it says so — tier 2 is named as tier 2, never quietly promoted
+    to tier 1. The unblurred version is the one worth holding to: <em>this is
+    invariant; this is what we happen to run, and you can swap it; this is
+    genuinely yours.</em>
   </p>
 </Section>
 
