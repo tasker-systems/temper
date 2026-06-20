@@ -23,8 +23,8 @@
 <div class="operating-page">
 
 <blockquote class="epigraph">
-  The onboarding agent woke, read a charter, and wrote a regulation. Two fair
-  operator questions follow: is the system that did this <em>healthy</em> — and,
+  An agent woke, read a charter, and wrote a regulation. Two fair operator
+  questions follow: is the system that did this <em>healthy</em> — and,
   separately, can we reconstruct <em>what it knew and why it changed its
   mind</em>? Those are two different kinds of audit, in two different homes. The
   mechanism for each is known; <em>what</em> to capture is the part your
