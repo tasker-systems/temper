@@ -347,6 +347,7 @@ pub async fn fold_relationship(
 /// Parameters for opening an invocation. The invocation id is minted here and
 /// returned (server-mint v1; caller-supplied ids for byte-exact durable-resume
 /// re-issue are a deferred runtime concern).
+#[derive(Debug)]
 pub struct OpenParams {
     pub trigger_kind: String,
     pub originating: CogmapId,
