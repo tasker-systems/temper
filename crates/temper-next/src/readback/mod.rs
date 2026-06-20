@@ -461,9 +461,10 @@ pub async fn meta(
 /// for the full-row reads (`show` / `by_uri`). Excludes the non-invariant fields by construction:
 /// re-minted identity UUIDs (resource id / context id / profile ids), §7-dissolved
 /// `slug`/`managed_hash`/`open_hash`, and the synthesis-collapsed `created`/`updated`. The caller
-/// (`NextBackend::show_resource`) supplies those from elsewhere (re-minted ids verbatim, a transitional
-/// `public.kb_doc_types` lookup for the doctype id, `None` for the dissolved fields, `Utc::now()` for
-/// the timestamps). See the WS6 4b spec parity-floor amendment.
+/// (`NextBackend::show_resource`) supplies those from elsewhere (re-minted ids verbatim, a re-minted
+/// nil `kb_doc_type_id` since §7 dissolved the typed id and `doc_type_name` is authoritative, `None`
+/// for the dissolved fields, `Utc::now()` for the timestamps). See the WS6 4b spec parity-floor
+/// amendment.
 ///
 /// The re-minted ids (`re_minted_id` / `re_minted_context_id` / `owner_profile_id` /
 /// `originator_profile_id`) are carried so the caller can populate `ResourceRow`'s non-optional UUID
