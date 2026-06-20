@@ -39,9 +39,9 @@ use crate::synthesis::key_fate::is_managed_property_key;
 ///   maps it to **500**. Collapsing it into NotVisible — the pre-typing behavior — masked real faults
 ///   as 404.
 ///
-/// The set reads (`list`/`fts_search`/`vector_search`/`neighbors`/`resource_id_by_origin_uri`) JOIN-filter
-/// the visible set instead of pre-checking one id, so they have no not-visible signal and stay
-/// `anyhow::Result` (any error there is a genuine fault → 500).
+/// The set reads (`list`/`fts_search`/`vector_search`/`neighbors`) JOIN-filter the visible set instead
+/// of pre-checking one id, so they have no not-visible signal and stay `anyhow::Result` (any error
+/// there is a genuine fault → 500).
 #[derive(Debug)]
 pub enum ReadbackError {
     /// The resource is not visible to the principal under `resources_visible_to` → surface 404.
@@ -81,82 +81,6 @@ impl From<anyhow::Error> for ReadbackError {
     }
 }
 
-/// A bidirectional map between a production resource id (`public.kb_resources.id`, active only) and its
-/// synthesized counterpart (`temper_next.kb_resources.id`), keyed by the shared `origin_uri` (carried
-/// verbatim, UNIQUE in both schemas). Built once per parity read so a test can resolve a known fixture
-/// resource across the two schemas.
-#[derive(Debug, Clone, Default)]
-pub struct ResolvedIds {
-    /// production id → synthesized id.
-    old_to_new: HashMap<Uuid, Uuid>,
-    /// synthesized id → production id.
-    new_to_old: HashMap<Uuid, Uuid>,
-    /// synthesized id → its `origin_uri` (handy for later read ports).
-    origin_uri_by_new: HashMap<Uuid, String>,
-}
-
-impl ResolvedIds {
-    /// Load the bimap by reading `(id, origin_uri)` from `public.kb_resources WHERE is_active` and from
-    /// `temper_next.kb_resources`, then joining in Rust on `origin_uri`. Only `origin_uri`s present in
-    /// both schemas (the synthesized active set) become entries.
-    pub async fn load(pool: &PgPool) -> Result<Self> {
-        let old_by_uri: HashMap<String, Uuid> =
-            sqlx::query("SELECT id, origin_uri FROM public.kb_resources WHERE is_active")
-                .fetch_all(pool)
-                .await?
-                .iter()
-                .map(|r| (r.get::<String, _>("origin_uri"), r.get::<Uuid, _>("id")))
-                .collect();
-
-        let new_rows = sqlx::query("SELECT id, origin_uri FROM temper_next.kb_resources")
-            .fetch_all(pool)
-            .await?;
-
-        let mut resolved = ResolvedIds::default();
-        for row in &new_rows {
-            let origin_uri: String = row.get("origin_uri");
-            let new_id: Uuid = row.get("id");
-            let Some(&old_id) = old_by_uri.get(&origin_uri) else {
-                continue;
-            };
-            resolved.old_to_new.insert(old_id, new_id);
-            resolved.new_to_old.insert(new_id, old_id);
-            resolved.origin_uri_by_new.insert(new_id, origin_uri);
-        }
-        Ok(resolved)
-    }
-
-    /// The synthesized id for a production id, if it was synthesized (active resources only).
-    pub fn to_new(&self, public_id: Uuid) -> Option<Uuid> {
-        self.old_to_new.get(&public_id).copied()
-    }
-
-    /// The production id for a synthesized id.
-    pub fn to_old(&self, new_id: Uuid) -> Option<Uuid> {
-        self.new_to_old.get(&new_id).copied()
-    }
-
-    /// The `origin_uri` for a synthesized id (the join key both schemas share).
-    pub fn origin_uri_for_new(&self, new_id: Uuid) -> Option<&str> {
-        self.origin_uri_by_new.get(&new_id).map(String::as_str)
-    }
-
-    /// The set of synthesized resource ids covered by the bimap.
-    pub fn new_ids(&self) -> impl Iterator<Item = Uuid> + '_ {
-        self.new_to_old.keys().copied()
-    }
-
-    /// The number of resolved (old↔new) resource pairs.
-    pub fn len(&self) -> usize {
-        self.new_to_old.len()
-    }
-
-    /// True iff no resources resolved.
-    pub fn is_empty(&self) -> bool {
-        self.new_to_old.is_empty()
-    }
-}
-
 /// One projected list row over `temper_next.*` — the readback counterpart of production's
 /// `ResourceRow` for the fields the resource-list projection surfaces (`temper-api`'s
 /// `resource_service::list_visible` via the `vault_resources_browse` view): the resource's
@@ -166,7 +90,8 @@ impl ResolvedIds {
 /// `managed_meta->>'…'` NULL for an absent key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListRow {
-    /// The verbatim-carried, UNIQUE `origin_uri` (the join key both schemas share).
+    /// The verbatim-carried `origin_uri` (a provenance marker, NOT unique — empty for CLI/agent-created
+    /// resources; the resource id is the stable identity).
     pub origin_uri: String,
     /// The resource title (`temper_next.kb_resources.title`).
     pub title: String,
@@ -191,7 +116,8 @@ pub struct ListRow {
 /// without them comes back with `NULL` (not dropped). Property values are JSON scalars, extracted to
 /// text with `#>> '{}'` (the same extraction `synthesis::run`'s property test uses).
 ///
-/// Ordered by `origin_uri` (verbatim, UNIQUE) so the result is deterministic. It is deliberately NOT
+/// Ordered by `(origin_uri, id)` so the result is deterministic — `origin_uri` alone is NOT unique
+/// (empty for CLI/agent-created resources), so the resource id is the tiebreaker. It is deliberately NOT
 /// ordered by `updated`: synthesis sources `kb_resources.created`/`updated` from the genesis event's
 /// `occurred_at`, which is `now()` = transaction-start time and therefore identical across every row
 /// written in the single synthesis transaction. Absolute recency ordering is not a migration-time
@@ -269,7 +195,7 @@ pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
            LEFT JOIN temper_next.kb_properties ef
              ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
             AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
-          ORDER BY r.origin_uri",
+          ORDER BY r.origin_uri, r.id",
     )
     .bind(principal)
     .fetch_all(&mut *tx)
@@ -299,7 +225,8 @@ pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
 pub struct EnrichedListRow {
     /// The synthesized resource id (re-minted; non-invariant; carried for `EnrichedResource.id`).
     pub new_id: Uuid,
-    /// Verbatim-carried, UNIQUE `origin_uri` (the join key both schemas share).
+    /// Verbatim-carried `origin_uri` (a provenance marker, NOT unique — empty for CLI/agent-created
+    /// resources; the resource id is the stable identity).
     pub origin_uri: String,
     /// The resource title (`temper_next.kb_resources.title`).
     pub title: String,
@@ -337,7 +264,7 @@ pub struct EnrichedListRow {
 ///
 /// Filters are applied in SQL: `context_name` matches the home context's name, `doc_type` matches the
 /// `doc_type` property value (both NULL-passthrough — a `None` filter matches every row). Ordered by
-/// `origin_uri` (verbatim, UNIQUE) for determinism, matching [`list`].
+/// `(origin_uri, id)` for determinism (origin_uri is NOT unique — id is the tiebreaker), matching [`list`].
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
@@ -382,7 +309,7 @@ pub async fn enriched_list(
             AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
           WHERE ($2::text IS NULL OR c.name = $2)
             AND ($3::text IS NULL OR dt.property_value #>> '{}' = $3)
-          ORDER BY r.origin_uri",
+          ORDER BY r.origin_uri, r.id",
     )
     .bind(principal)
     .bind(context_name)
@@ -552,7 +479,7 @@ pub struct ResourceRowParity {
     pub owner_profile_id: Uuid,
     /// The synthesized originator profile id (re-minted; not a parity invariant).
     pub originator_profile_id: Uuid,
-    /// Verbatim-carried, UNIQUE origin_uri (invariant).
+    /// Verbatim-carried origin_uri (invariant; a provenance marker, NOT unique).
     pub origin_uri: String,
     /// Resource title (invariant).
     pub title: String,
@@ -659,20 +586,6 @@ pub async fn resource_row(
     })
 }
 
-/// Resolve a synthesized resource id from its `origin_uri` (the verbatim-carried, UNIQUE key both
-/// schemas share). `None` when no synthesized resource carries that uri. Used by read surfaces that
-/// hold an `origin_uri` (e.g. search results) and need the row id for a follow-up reconstruction.
-///
-/// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
-/// module-level note.
-pub async fn resource_id_by_origin_uri(pool: &PgPool, origin_uri: &str) -> Result<Option<Uuid>> {
-    let row = sqlx::query("SELECT id FROM temper_next.kb_resources WHERE origin_uri = $1")
-        .bind(origin_uri)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.map(|r| r.get::<Uuid, _>("id")))
-}
-
 /// Reconstruct a synthesized resource's markdown body from `temper_next` chunks — the §9 body read
 /// floor. Reuses [`crate::synthesis::parity::reconstruct_body`] (the production `get_content` assembly)
 /// over the shared [`crate::synthesis::parity::new_substrate_chunks`] reader, so the read surface and
@@ -697,7 +610,14 @@ pub async fn body(
 
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
 /// search read floor. Builds, per resource, the §9-REBUILT weighted tsvector and returns the matching
-/// `origin_uri`s ranked by `ts_rank DESC`.
+/// resource **ids** ranked by `ts_rank DESC`.
+///
+/// Returns the preserved resource id (not `origin_uri`): `origin_uri` is NOT unique (empty for
+/// CLI/agent-created resources — 166/1214 in the production corpus), so an origin_uri-keyed result
+/// collapses every empty-`origin_uri` match onto one indistinguishable handle and the caller cannot
+/// recover which resource matched. Synthesis preserves the production id verbatim, so the id is the
+/// stable identity for every resource (WS6 flip real-corpus rehearsal finding — same root cause the
+/// body path fixed by keying `readback::body` on the id).
 ///
 /// The tsvector is `setweight(to_tsvector('english', title), 'A') || setweight(..body.., 'B')` —
 /// title-only weight-A, body weight-B. This deliberately DIVERGES from production's
@@ -717,7 +637,7 @@ pub async fn body(
 ///
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
-pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<Vec<String>> {
+pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<Vec<Uuid>> {
     // search-path txn so `resources_visible_to`'s internals resolve (see `ensure_visible`).
     let mut tx = pool.begin().await?;
     sqlx::query("SET LOCAL search_path TO temper_next, public")
@@ -726,7 +646,6 @@ pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<V
     let rows = sqlx::query(
         "WITH doc AS (
            SELECT r.id,
-                  r.origin_uri,
                   setweight(to_tsvector('english', r.title), 'A') ||
                   setweight(to_tsvector('english', COALESCE(string_agg(cc.content, ' '), '')), 'B')
                     AS search_vector
@@ -736,9 +655,9 @@ pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<V
                ON c.resource_id = r.id AND c.is_current
              LEFT JOIN temper_next.kb_chunk_content cc
                ON cc.chunk_id = c.id
-            GROUP BY r.id, r.origin_uri, r.title
+            GROUP BY r.id, r.title
          )
-         SELECT origin_uri
+         SELECT id
            FROM doc
           WHERE search_vector @@ plainto_tsquery('english', $2)
           ORDER BY ts_rank(search_vector, plainto_tsquery('english', $2)) DESC",
@@ -749,10 +668,7 @@ pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<V
     .await?;
     tx.commit().await?;
 
-    Ok(rows
-        .iter()
-        .map(|r| r.get::<String, _>("origin_uri"))
-        .collect())
+    Ok(rows.iter().map(|r| r.get::<Uuid, _>("id")).collect())
 }
 
 /// Format a `Vec<f32>` as a pgvector text literal (`[a,b,c]`) for binding into a `::vector` cast — the
@@ -779,6 +695,10 @@ fn format_pgvector(v: &[f32]) -> String {
 /// verbatim from production (§8), so this ordered output matches production's vector search bit-for-bit
 /// (contrast `fts_search`, where production's slug@A weight makes only the matching SET an invariant).
 ///
+/// Returns the preserved resource **id** (not `origin_uri`) for the same reason as [`fts_search`]:
+/// `origin_uri` is non-unique (empty for CLI/agent-created resources), so an origin_uri-keyed result
+/// cannot identify which resource matched. The id is preserved verbatim by synthesis.
+///
 /// The query embedding is formatted to a pgvector text literal and bound into a `$1::vector` cast.
 /// Runtime `sqlx::query` with the `::vector` cast is the ESTABLISHED pgvector-macro exception —
 /// production's own `unified_search` uses runtime `query_as` for exactly this reason (the `query!`
@@ -789,7 +709,7 @@ pub async fn vector_search(
     pool: &PgPool,
     principal: Uuid,
     query_embedding: &[f32],
-) -> Result<Vec<String>> {
+) -> Result<Vec<Uuid>> {
     let embedding_text = format_pgvector(query_embedding);
     // search-path txn so `resources_visible_to`'s internals resolve (see `ensure_visible`).
     let mut tx = pool.begin().await?;
@@ -797,12 +717,12 @@ pub async fn vector_search(
         .execute(&mut *tx)
         .await?;
     let rows = sqlx::query(
-        "SELECT r.origin_uri
+        "SELECT r.id
            FROM temper_next.kb_resources r
            JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
            JOIN temper_next.kb_chunks c
              ON c.resource_id = r.id AND c.is_current
-          GROUP BY r.id, r.origin_uri
+          GROUP BY r.id
           ORDER BY MIN(c.embedding <=> $2::vector) ASC",
     )
     .bind(principal)
@@ -811,10 +731,7 @@ pub async fn vector_search(
     .await?;
     tx.commit().await?;
 
-    Ok(rows
-        .iter()
-        .map(|r| r.get::<String, _>("origin_uri"))
-        .collect())
+    Ok(rows.iter().map(|r| r.get::<Uuid, _>("id")).collect())
 }
 
 /// One 1-hop graph neighbor of a resource: the OTHER endpoint's origin_uri plus the connecting edge's
@@ -825,7 +742,7 @@ pub async fn vector_search(
 /// edge with no label surfaces here as `None` (never `Some("")`).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Neighbor {
-    /// The neighbor (other endpoint) resource's verbatim-carried, UNIQUE `origin_uri`.
+    /// The neighbor (other endpoint) resource's verbatim-carried `origin_uri` (NOT unique).
     pub origin_uri: String,
     /// The connecting edge's kind (`edge_kind::text`).
     pub edge_kind: String,

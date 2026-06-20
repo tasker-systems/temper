@@ -9,39 +9,45 @@ use std::collections::BTreeMap;
 
 use common::fixture_ids;
 use serde_json::{Map, Value};
-use temper_next::readback::{self, ResolvedIds};
+use temper_next::readback;
+
+/// The synthesized ACTIVE resources as `(id, origin_uri)`, ordered by id. Synthesis preserves
+/// production resource ids verbatim (PR #152), so the `temper_next` id IS the production fixture id —
+/// there is no `old↔new` bimap (the prior `ResolvedIds`, retired with the origin_uri remap that
+/// collapsed empty-`origin_uri` resources). Tests that used to enumerate the bimap read the active set
+/// straight from `temper_next` instead; `id == old == new` everywhere.
+async fn synthesized_active(pool: &sqlx::PgPool) -> Vec<(uuid::Uuid, String)> {
+    sqlx::query_as::<_, (uuid::Uuid, String)>(
+        "SELECT id, origin_uri FROM temper_next.kb_resources ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await
+    .expect("read synthesized active resources")
+}
 
 /// Smoke test: the chunk-3 harness composes. Seed the prod-shape fixture into `public.*`, synthesize
-/// into `temper_next.*`, then build the `old↔new` id bimap by `origin_uri`. The synthesized id set is
-/// the 4 ACTIVE fixture resources (R4 `temper://fixture/deleted-doc` is excluded, §0 active-only), and
-/// the bimap round-trips for a known fixture resource.
+/// into `temper_next.*`. The synthesized active set is the 4 ACTIVE fixture resources (R4
+/// `temper://fixture/deleted-doc` is excluded, §0 active-only), and a known fixture resource carries
+/// its PRESERVED id (synthesis carries resource ids verbatim — the synthesized id IS the prod id).
 #[sqlx::test(migrator = "temper_next::MIGRATOR")]
 async fn parity_harness_setup_synthesizes(pool: sqlx::PgPool) {
     common::seed_and_synthesize(&pool).await;
 
-    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
-
-    let new_ids: Vec<_> = ids.new_ids().collect();
-    assert!(!new_ids.is_empty(), "synthesized id set is non-empty");
+    let active = synthesized_active(&pool).await;
     assert_eq!(
-        ids.len(),
+        active.len(),
         4,
         "4 active fixture resources synthesized (R4 deleted-doc excluded, §0 active-only)"
     );
 
-    // The bimap round-trips for a known fixture resource (R2, the task).
-    let new = ids
-        .to_new(fixture_ids::RESOURCE_TASK)
-        .expect("R2 (task) has a synthesized id");
+    // R2 (task) is synthesized under its PRESERVED production id, carrying its origin_uri verbatim.
+    let r2 = active
+        .iter()
+        .find(|(id, _)| *id == fixture_ids::RESOURCE_TASK)
+        .expect("R2 (task) synthesized under its preserved id");
     assert_eq!(
-        ids.to_old(new),
-        Some(fixture_ids::RESOURCE_TASK),
-        "old→new→old round-trips for R2"
-    );
-    assert_eq!(
-        ids.origin_uri_for_new(new),
-        Some("temper://fixture/task-doc"),
-        "the synthesized id resolves back to R2's origin_uri"
+        r2.1, "temper://fixture/task-doc",
+        "R2's preserved id carries its origin_uri verbatim"
     );
 }
 
@@ -139,13 +145,9 @@ async fn synthesis_preserves_production_context_ids(pool: sqlx::PgPool) {
 #[sqlx::test(migrator = "temper_next::MIGRATOR")]
 async fn reads_are_scoped_to_principal(pool: sqlx::PgPool) {
     common::seed_and_synthesize(&pool).await;
-    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
-    let r1 = ids
-        .to_new(fixture_ids::RESOURCE_GOAL)
-        .expect("R1 synthesized");
-    let r2 = ids
-        .to_new(fixture_ids::RESOURCE_TASK)
-        .expect("R2 synthesized");
+    // Resource ids are preserved by synthesis, so the fixture ids ARE the temper_next ids.
+    let r1 = fixture_ids::RESOURCE_GOAL;
+    let r2 = fixture_ids::RESOURCE_TASK;
 
     // list(P2): exactly the one resource P2 originated.
     let p2_uris: Vec<String> = readback::list(&pool, fixture_ids::ORIGINATOR_PROFILE)
@@ -196,7 +198,7 @@ type ListProjection = (
 /// over `public.*` for the owner profile P1 (which owns all 4 active fixture resources, so the
 /// filterless call returns exactly those 4).
 ///
-/// Compared as a SET keyed by `origin_uri` (a verbatim-carried UNIQUE key), NOT in order: ordered-by-
+/// Compared as a SET keyed by `origin_uri` (distinct per resource in this fixture), NOT in order: ordered-by-
 /// `updated` parity is deliberately NOT asserted. Synthesis sources `kb_resources.updated` from the
 /// genesis event's `occurred_at`, which is `now()` = transaction-start time, constant within the single
 /// synthesis transaction — so every synthesized row shares one identical `updated` and `ORDER BY updated
@@ -325,20 +327,15 @@ async fn show_and_meta_parity(pool: sqlx::PgPool) {
 
     common::seed_and_synthesize(&pool).await;
 
-    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
-    assert_eq!(ids.len(), 4, "4 active fixture resources synthesized");
+    let active = synthesized_active(&pool).await;
+    assert_eq!(active.len(), 4, "4 active fixture resources synthesized");
 
     // Keyed by origin_uri so the per-resource spot-checks can find R1/R2 regardless of iteration order.
     let mut rb_by_uri: BTreeMap<String, readback::ReconstructedMeta> = BTreeMap::new();
 
-    for new_id in ids.new_ids() {
-        let origin_uri = ids
-            .origin_uri_for_new(new_id)
-            .expect("synthesized id has an origin_uri")
-            .to_string();
-        let old_id = ids
-            .to_old(new_id)
-            .expect("synthesized id maps back to prod");
+    for (new_id, origin_uri) in active {
+        // Resource ids are preserved, so the production id == the synthesized id.
+        let old_id = new_id;
 
         // Production read (auth-gated by get_visible inside get_meta) for the owner profile P1.
         let prod = meta_service::get_meta(
@@ -454,17 +451,12 @@ async fn body_read_parity(pool: sqlx::PgPool) {
 
     common::seed_and_synthesize(&pool).await;
 
-    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
-    assert_eq!(ids.len(), 4, "4 active fixture resources synthesized");
+    let active = synthesized_active(&pool).await;
+    assert_eq!(active.len(), 4, "4 active fixture resources synthesized");
 
-    for new_id in ids.new_ids() {
-        let origin_uri = ids
-            .origin_uri_for_new(new_id)
-            .expect("synthesized id has an origin_uri")
-            .to_string();
-        let old_id = ids
-            .to_old(new_id)
-            .expect("synthesized id maps back to prod");
+    for (new_id, origin_uri) in active {
+        // Resource ids are preserved, so the production id == the synthesized id.
+        let old_id = new_id;
 
         // Production body: get_content's assembled markdown (auth-gated for owner P1).
         let prod = resource_service::get_content(&pool, fixture_ids::OWNER_PROFILE, old_id)
@@ -484,10 +476,8 @@ async fn body_read_parity(pool: sqlx::PgPool) {
     }
 
     // Spot-assert R2 (task-doc): the non-vacuous multi-chunk + heading case — an unheaded preamble
-    // chunk followed by a depth-2 headed chunk, joined with a blank line.
-    let r2_new = ids
-        .to_new(fixture_ids::RESOURCE_TASK)
-        .expect("R2 (task) has a synthesized id");
+    // chunk followed by a depth-2 headed chunk, joined with a blank line. R2's id is preserved.
+    let r2_new = fixture_ids::RESOURCE_TASK;
     let r2_body = readback::body(&pool, fixture_ids::OWNER_PROFILE, r2_new)
         .await
         .expect("readback::body R2");
@@ -502,8 +492,8 @@ async fn body_read_parity(pool: sqlx::PgPool) {
 /// space-joined) must find the SAME resources as production FTS (`search_service::search`, FTS-only)
 /// over the synthesized prod-shape fixture.
 ///
-/// The parity floor is the MATCHING SET (a `BTreeSet` of origin_uris), NOT the ordered list, for three
-/// independent reasons:
+/// The parity floor is the MATCHING SET (a `BTreeSet` of preserved resource ids), NOT the ordered list,
+/// for three independent reasons:
 ///   1. Production's tsvector is `setweight(title,'A') || setweight(slug,'A') || setweight(body,'B')`
 ///      (`rebuild_resource_search_vector`, migration 20260405000001) — slug is weight-A. §7 dissolved
 ///      slug, so §9 explicitly REBUILDS FTS title-only weight-A. Production can rank a slug match at A;
@@ -522,25 +512,26 @@ async fn fts_parity(pool: sqlx::PgPool) {
 
     common::seed_and_synthesize(&pool).await;
 
-    // Each query → the set of origin_uris it should find (same set both sides). "body" is in every
-    // active resource's body text, so it finds all 4. "task" hits R2's title + body only. "goal" hits
-    // R1's title "Goal Doc" AND R2's body "Task goals section body." — the english config STEMS
-    // "goals" → "goal", so the body match pulls R2 in on BOTH sides (production via its body@B,
-    // readback via the same raw-chunk body@B); the parity floor (prod set == readback set) is what
-    // matters, and it holds for the stemmed two-hit case too.
-    let cases: &[(&str, &[&str])] = &[
+    // Each query → the set of resources it should find, by PRESERVED id (same set both sides).
+    // `readback::fts_search` returns resource ids (origin_uri is non-unique — empty for CLI/agent
+    // resources — so the read identifies by id); production `resource_id` is the same preserved id.
+    // "body" is in every active resource's body text, so it finds all 4. "task" hits R2's title + body
+    // only. "goal" hits R1's title "Goal Doc" AND R2's body "Task goals section body." — the english
+    // config STEMS "goals" → "goal", so the body match pulls R2 in on BOTH sides; the parity floor
+    // (prod set == readback set) holds for the stemmed two-hit case too.
+    let cases: &[(&str, &[uuid::Uuid])] = &[
         (
             "goal",
-            &["temper://fixture/goal-doc", "temper://fixture/task-doc"],
+            &[fixture_ids::RESOURCE_GOAL, fixture_ids::RESOURCE_TASK],
         ),
-        ("task", &["temper://fixture/task-doc"]),
+        ("task", &[fixture_ids::RESOURCE_TASK]),
         (
             "body",
             &[
-                "temper://fixture/goal-doc",
-                "temper://fixture/task-doc",
-                "temper://fixture/decision-doc",
-                "temper://fixture/team-doc",
+                fixture_ids::RESOURCE_GOAL,
+                fixture_ids::RESOURCE_TASK,
+                fixture_ids::RESOURCE_DECISION,
+                fixture_ids::RESOURCE_TEAM,
             ],
         ),
     ];
@@ -557,22 +548,22 @@ async fn fts_parity(pool: sqlx::PgPool) {
             limit: Some(50),
             ..Default::default()
         };
-        let prod_set: BTreeSet<String> =
+        let prod_set: BTreeSet<uuid::Uuid> =
             search_service::search(&pool, fixture_ids::OWNER_PROFILE, params)
                 .await
                 .expect("production FTS search")
                 .into_iter()
-                .map(|r| r.origin_uri)
+                .map(|r| r.resource_id)
                 .collect();
 
-        let rb_set: BTreeSet<String> =
+        let rb_set: BTreeSet<uuid::Uuid> =
             readback::fts_search(&pool, fixture_ids::OWNER_PROFILE, query)
                 .await
                 .expect("readback::fts_search")
                 .into_iter()
                 .collect();
 
-        let expected_set: BTreeSet<String> = expected.iter().map(|s| (*s).to_string()).collect();
+        let expected_set: BTreeSet<uuid::Uuid> = expected.iter().copied().collect();
 
         // The load-bearing parity floor: production FTS and readback find the SAME resources.
         assert_eq!(
@@ -598,6 +589,55 @@ async fn fts_parity(pool: sqlx::PgPool) {
         body_hits.len(),
         4,
         "\"body\" is in every active body text → exactly 4 hits (non-vacuous)"
+    );
+}
+
+/// §9 — FTS search must IDENTIFY each match by its preserved resource id, never `origin_uri`. WS6
+/// flip real-corpus finding: `origin_uri` is NOT unique (166/1214 production resources carry an empty
+/// `origin_uri`). A search read that returns `origin_uri` collapses every empty-`origin_uri` match onto
+/// one indistinguishable handle, so the surface (which remapped `origin_uri` → id via the now-retired
+/// bimap) returned one ARBITRARY resource for all of them. `fts_search` must therefore return the
+/// preserved resource id directly. Here R1 (goal) and R3 (decision) are forced to share an empty
+/// `origin_uri` (the production shape `synthesizes_with_nonunique_empty_origin_uri` exercises for the
+/// body path); a query matching BOTH must come back as their two DISTINCT ids, never collapsed.
+#[sqlx::test(migrator = "temper_next::MIGRATOR")]
+async fn fts_search_identifies_empty_origin_uri_resources_by_id(pool: sqlx::PgPool) {
+    use std::collections::BTreeSet;
+
+    common::seed_prod_shape_fixture(&pool).await;
+
+    // R1 (goal) and R3 (decision) now collide on origin_uri='' — the production shape (166/1214 empty).
+    sqlx::query("UPDATE public.kb_resources SET origin_uri = '' WHERE id = ANY($1)")
+        .bind(vec![
+            fixture_ids::RESOURCE_GOAL,
+            fixture_ids::RESOURCE_DECISION,
+        ])
+        .execute(&pool)
+        .await
+        .unwrap();
+    temper_next::synthesis::run(&pool, temper_next::synthesis::RunOpts::default())
+        .await
+        .expect("synthesis over the empty-origin_uri shape");
+
+    // "body" appears in every active body (goal + decision among them). The result must carry both
+    // empty-origin_uri resources as their OWN distinct ids — an origin_uri-keyed return would collapse
+    // the two empties onto one handle, dropping the set from 4 to 3.
+    let hits: BTreeSet<uuid::Uuid> =
+        readback::fts_search(&pool, fixture_ids::OWNER_PROFILE, "body")
+            .await
+            .expect("readback::fts_search")
+            .into_iter()
+            .collect();
+
+    assert!(
+        hits.contains(&fixture_ids::RESOURCE_GOAL)
+            && hits.contains(&fixture_ids::RESOURCE_DECISION),
+        "both empty-origin_uri resources are returned as their own distinct preserved ids"
+    );
+    assert_eq!(
+        hits.len(),
+        4,
+        "all 4 active resources surface as distinct ids — no collapse onto a shared empty handle"
     );
 }
 
@@ -636,14 +676,16 @@ async fn vector_parity(pool: sqlx::PgPool) {
         limit: Some(50),
         ..Default::default()
     };
-    let prod_order: Vec<String> = search_service::search(&pool, fixture_ids::OWNER_PROFILE, params)
-        .await
-        .expect("production vector search")
-        .into_iter()
-        .map(|r| r.origin_uri)
-        .collect();
+    // Production and readback both identify hits by the PRESERVED resource id (origin_uri is non-unique).
+    let prod_order: Vec<uuid::Uuid> =
+        search_service::search(&pool, fixture_ids::OWNER_PROFILE, params)
+            .await
+            .expect("production vector search")
+            .into_iter()
+            .map(|r| r.resource_id)
+            .collect();
 
-    let rb_order: Vec<String> = readback::vector_search(&pool, fixture_ids::OWNER_PROFILE, &q)
+    let rb_order: Vec<uuid::Uuid> = readback::vector_search(&pool, fixture_ids::OWNER_PROFILE, &q)
         .await
         .expect("readback::vector_search");
 
@@ -657,10 +699,10 @@ async fn vector_parity(pool: sqlx::PgPool) {
     // ...and that shared order is the expected, non-vacuous anchor: per-resource MIN distance picks
     // R2's closer chunk1 (@0.25), placing R2 ahead of R1 (@0.1) but behind R3 (@0.3) and R5 (@0.5).
     let expected = vec![
-        "temper://fixture/team-doc".to_string(),
-        "temper://fixture/decision-doc".to_string(),
-        "temper://fixture/task-doc".to_string(),
-        "temper://fixture/goal-doc".to_string(),
+        fixture_ids::RESOURCE_TEAM,
+        fixture_ids::RESOURCE_DECISION,
+        fixture_ids::RESOURCE_TASK,
+        fixture_ids::RESOURCE_GOAL,
     ];
     assert_eq!(
         rb_order, expected,
@@ -702,7 +744,7 @@ async fn graph_parity(pool: sqlx::PgPool) {
 
     common::seed_and_synthesize(&pool).await;
 
-    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+    // Resource ids are preserved, so prod ids and temper_next ids coincide (no bimap).
 
     // Production oracle: the symmetric direct 1-hop neighbor read over public.kb_resource_edges (both
     // directions, NOT is_folded), joining to kb_resources for the OTHER endpoint's origin_uri. The
@@ -755,9 +797,7 @@ async fn graph_parity(pool: sqlx::PgPool) {
     };
 
     // --- R2 (task-doc): minted parent_of included, folded near→decision-doc excluded. ---
-    let r2_new = ids
-        .to_new(fixture_ids::RESOURCE_TASK)
-        .expect("R2 (task) synthesized");
+    let r2_new = fixture_ids::RESOURCE_TASK;
     let r2_prod = prod_neighbors(fixture_ids::RESOURCE_TASK).await;
     let r2_rb = readback_neighbors(r2_new).await;
 
@@ -786,9 +826,7 @@ async fn graph_parity(pool: sqlx::PgPool) {
     );
 
     // --- R1 (goal-doc): multi-neighbor + inverse polarity. ---
-    let r1_new = ids
-        .to_new(fixture_ids::RESOURCE_GOAL)
-        .expect("R1 (goal) synthesized");
+    let r1_new = fixture_ids::RESOURCE_GOAL;
     let r1_prod = prod_neighbors(fixture_ids::RESOURCE_GOAL).await;
     let r1_rb = readback_neighbors(r1_new).await;
 
@@ -827,15 +865,12 @@ async fn resource_row_parity(pool: sqlx::PgPool) {
     use temper_api::services::resource_service;
 
     common::seed_and_synthesize(&pool).await;
-    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
-    assert_eq!(ids.len(), 4, "4 active fixture resources synthesized");
+    let active = synthesized_active(&pool).await;
+    assert_eq!(active.len(), 4, "4 active fixture resources synthesized");
 
-    for new_id in ids.new_ids() {
-        let origin_uri = ids
-            .origin_uri_for_new(new_id)
-            .expect("origin_uri")
-            .to_string();
-        let old_id = ids.to_old(new_id).expect("maps back to prod");
+    for (new_id, origin_uri) in active {
+        // Resource ids are preserved, so the production id == the synthesized id.
+        let old_id = new_id;
 
         let rb = readback::resource_row(&pool, fixture_ids::OWNER_PROFILE, new_id)
             .await
@@ -963,11 +998,12 @@ async fn show_through_next_backend_preserves_invariants(pool: sqlx::PgPool) {
     use temper_core::types::ids::{ProfileId, ResourceId};
 
     common::seed_and_synthesize(&pool).await;
-    let ids = ResolvedIds::load(&pool).await.expect("ResolvedIds::load");
+    let active = synthesized_active(&pool).await;
     let backend = NextBackend::new(pool.clone(), ProfileId::from(fixture_ids::OWNER_PROFILE));
 
-    for new_id in ids.new_ids() {
-        let old_id = ids.to_old(new_id).expect("maps back to prod");
+    for (new_id, _origin_uri) in active {
+        // Resource ids are preserved, so the inbound (production) id == the synthesized id.
+        let old_id = new_id;
         let out = backend
             .show_resource(ShowResource {
                 resource: ResourceId::from(old_id),
