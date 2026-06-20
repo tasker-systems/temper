@@ -4,13 +4,14 @@
 //!
 //! The full-row read (`show_resource`) reconstructs the migration-invariant subset of `ResourceRow`
 //! from `temper_next.*` (`readback::resource_row`) and fills the non-invariant fields best-effort:
-//! re-minted ids verbatim, `kb_doc_type_id` via a transitional `public.kb_doc_types` name→id lookup,
+//! re-minted ids verbatim, `kb_doc_type_id` re-minted nil (the doc_type NAME is authoritative — §7
+//! dissolved the typed `DocTypeId`, so the substrate keeps only the name; no cross-namespace read),
 //! `slug`/`managed_hash`/`open_hash` = `None`, `created`/`updated` = read-time `Utc::now()`. See the
 //! 4b spec parity-floor amendment.
 
 use async_trait::async_trait;
 use chrono::Utc;
-use sqlx::{PgPool, Row};
+use sqlx::PgPool;
 
 use temper_core::error::TemperError;
 use temper_core::operations::{
@@ -102,26 +103,13 @@ fn properties_from_meta(
     out
 }
 
-/// Transitional `public.kb_doc_types` name→id lookup (valid during the migration window; `public`
-/// still exists pre-flip). §7 dissolved the typed `DocTypeId`; the substrate keeps only the name.
-/// Free function so both `NextBackend` and the read selector (full-row `list`) can reuse it.
-pub(crate) async fn doc_type_id_by_name(
-    pool: &PgPool,
-    name: &str,
-) -> Result<DocTypeId, TemperError> {
-    let row = sqlx::query("SELECT id FROM public.kb_doc_types WHERE name = $1")
-        .bind(name)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| TemperError::Api(format!("doc_type lookup for {name:?}: {e}")))?;
-    Ok(DocTypeId::from(row.get::<uuid::Uuid, _>("id")))
-}
-
 /// Reconstruct a full production-shaped `ResourceRow` from a synthesized (`temper_next`) resource id,
 /// at the §9 invariant floor. The invariant fields come from `readback::resource_row`; the
-/// non-invariant fields are filled best-effort (re-minted ids verbatim, `kb_doc_type_id` via the
-/// transitional `public` lookup, `slug`/hashes `None`, timestamps read-time `now()`). Shared by
-/// `NextBackend::show_resource` and the read selector's full-row `list`.
+/// non-invariant fields are filled best-effort (re-minted ids verbatim, `kb_doc_type_id` re-minted nil
+/// — the doc_type NAME is authoritative, §7 dissolved the typed id — `slug`/hashes `None`, timestamps
+/// read-time `now()`). No `public.*` read: the readback path is wholly `temper_next.*`, so it survives
+/// the chunk-5 cutover renaming `public.*` aside. Shared by `NextBackend::show_resource` and the read
+/// selector's full-row `list`/`search`. CONFORMs to the `list_enriched` Next arm's same nil fill.
 pub(crate) async fn reconstruct_resource_row(
     pool: &PgPool,
     principal: uuid::Uuid,
@@ -130,12 +118,12 @@ pub(crate) async fn reconstruct_resource_row(
     let p = readback::resource_row(pool, principal, new_id)
         .await
         .map_err(map_readback_err)?;
-    let kb_doc_type_id = doc_type_id_by_name(pool, &p.doc_type_name).await?;
     let now = Utc::now();
     Ok(ResourceRow {
         id: ResourceId::from(p.re_minted_id),
         kb_context_id: ContextId::from(p.re_minted_context_id),
-        kb_doc_type_id,
+        // §7-dissolved typed DocTypeId → re-minted nil; `doc_type_name` (below) is authoritative.
+        kb_doc_type_id: DocTypeId::from(uuid::Uuid::nil()),
         origin_uri: p.origin_uri,
         title: p.title,
         slug: None,
