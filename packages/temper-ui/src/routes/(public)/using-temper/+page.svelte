@@ -1,12 +1,14 @@
 <svelte:head>
-  <title>Docs — temper</title>
+  <title>Reference — temper</title>
 </svelte:head>
 
 <div class="docs">
-  <h1>Docs</h1>
+  <h1>Reference</h1>
   <p class="lede">
-    Temper gives your work a throughline — the connective thread across sessions,
-    decisions, and evolving understanding. Everything resolves to markdown.
+    The operational reference for the temper CLI, cloud sync, and MCP server.
+    For the conceptual frame — what Temper is, and why — start with
+    <a href="/cognitive-maps">cognitive maps</a>, or read the commitments in
+    <a href="/theory">theory</a>.
   </p>
 
   <!-- ── Install ───────────────────────────────────────────────────── -->
@@ -56,27 +58,31 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
   <section>
     <h2>Getting started</h2>
     <p>
-      A vault is a directory of markdown files with YAML frontmatter. Temper
-      resolves its config from <code>~/.config/temper/config.toml</code> or
-      a per-project <code>.temper/config.toml</code>.
+      The local vault is a directory of markdown files with YAML frontmatter — a
+      read-only <em>projection</em> of cloud state, not the source of truth (see
+      <a href="#cloud">Cloud</a>). Temper resolves its config from
+      <code>~/.config/temper/config.toml</code> or a per-project
+      <code>.temper/config.toml</code>.
     </p>
     <table>
       <tbody>
         <tr><td><code>temper init</code></td><td>Initialise a new vault — asks how you work, writes config.</td></tr>
         <tr><td><code>temper context add &lt;name&gt;</code></td><td>Subscribe to a context (project). Contexts keep resources scoped.</td></tr>
-        <tr><td><code>temper add &lt;path&gt; --context &lt;ctx&gt;</code></td><td>Import a file, URL, or directory into the vault. Extracts markdown and adds frontmatter.</td></tr>
-        <tr><td><code>temper add &lt;path&gt; --dir --context &lt;ctx&gt;</code></td><td>Import every file in a directory.</td></tr>
         <tr><td><code>temper warmup --context &lt;ctx&gt;</code></td><td>Session primer — recent work, open tasks, recent decisions. Pipe into an agent's first prompt.</td></tr>
+        <tr><td><code>temper pull &lt;ctx&gt;</code></td><td>Re-materialise a context's projection from the cloud into the local vault.</td></tr>
         <tr><td><code>temper status</code></td><td>Vault overview: contexts, resource counts, recent activity.</td></tr>
         <tr><td><code>temper check</code></td><td>Verify vault integrity and tool health.</td></tr>
-        <tr><td><code>temper doctor</code></td><td>Validate frontmatter across the vault; repair drift.</td></tr>
-        <tr><td><code>temper events</code></td><td>Show recent vault events.</td></tr>
       </tbody>
     </table>
+    <p>
+      To add content, create a resource and pipe in a body —
+      <code>temper resource create --type research --title "…" --body @notes.md</code>.
+      See <a href="#resources">Resources</a>.
+    </p>
   </section>
 
   <!-- ── Resources ─────────────────────────────────────────────────── -->
-  <section>
+  <section id="resources">
     <h2>Resources</h2>
     <p>
       Every piece of knowledge in temper is a <em>resource</em> — a markdown
@@ -94,20 +100,27 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
       </tbody>
     </table>
 
-    <h3>Create · list · show · update</h3>
+    <p>
+      Resources are addressed by <strong>ref</strong> — a UUID, or the decorated
+      <code>slug-&lt;uuid&gt;</code> form (resolved by the trailing UUID; the slug
+      half is presentation, so a stale slug is harmless). Every
+      <code>list</code> / <code>show</code> / <code>search</code> row prints a
+      <code>ref</code> field — copy it, paste it.
+    </p>
+    <h3>Create · list · show · update · delete</h3>
     <table>
       <tbody>
-        <tr><td><code>temper resource create --type &lt;t&gt; --title &lt;title&gt;</code></td><td>Create a new resource of any type.</td></tr>
-        <tr><td><code>temper resource list</code></td><td>List all resources across types and contexts.</td></tr>
-        <tr><td><code>temper resource list --type task</code></td><td>Filter by type (goals show task stage counts).</td></tr>
-        <tr><td><code>temper resource show &lt;id&gt;</code></td><td>Show a resource. Accepts slug, slug suffix, or task sequence number.</td></tr>
-        <tr><td><code>temper resource update &lt;id&gt; --title &lt;t&gt;</code></td><td>Update the title.</td></tr>
-        <tr><td><code>temper resource update &lt;id&gt; --context-to &lt;ctx&gt;</code></td><td>Move the resource to a different context.</td></tr>
-        <tr><td><code>temper resource update &lt;id&gt; --stage &lt;s&gt;</code></td><td>Task stage: <code>backlog</code>, <code>in-progress</code>, <code>done</code>, <code>cancelled</code>.</td></tr>
-        <tr><td><code>temper resource update &lt;id&gt; --mode &lt;m&gt;</code></td><td>Task mode: <code>plan</code>, <code>build</code>.</td></tr>
-        <tr><td><code>temper resource update &lt;id&gt; --effort &lt;e&gt;</code></td><td>Task effort: <code>small</code>, <code>medium</code>, <code>large</code>.</td></tr>
-        <tr><td><code>temper resource update &lt;id&gt; --relates-to &lt;slug&gt;</code></td><td>Add a relationship. Repeatable. Similar flags: <code>--references</code>, <code>--depends-on</code>, <code>--extends</code>, <code>--preceded-by</code>, <code>--derived-from</code>.</td></tr>
-        <tr><td><code>temper resource update &lt;id&gt; --branch &lt;name&gt; --pr &lt;url&gt;</code></td><td>Task-specific metadata: attach a git branch or PR URL.</td></tr>
+        <tr><td><code>temper resource create --type &lt;t&gt; --title &lt;title&gt;</code></td><td>Create a resource. Add <code>--body @file.md</code> (or pipe markdown via stdin) for content; <code>--context</code>, <code>--goal</code>, <code>--mode</code>, <code>--effort</code> as needed.</td></tr>
+        <tr><td><code>temper resource list --type &lt;t&gt;</code></td><td>List resources of a type (<code>--type</code> is required). Filters: <code>--context</code>, <code>--stage</code>, <code>--goal</code>, <code>--limit</code>; <code>--meta-only</code> / <code>--fields</code> for cheaper reads.</td></tr>
+        <tr><td><code>temper resource show &lt;ref&gt;</code></td><td>Show a resource by ref. Add <code>--edges</code> for its graph edges, or <code>--meta-only</code> for frontmatter without the body.</td></tr>
+        <tr><td><code>temper resource update &lt;ref&gt; --title &lt;t&gt;</code></td><td>Update the title. (Body: <code>--body @file.md</code> or pipe markdown via stdin.)</td></tr>
+        <tr><td><code>temper resource update &lt;ref&gt; --context-to &lt;ctx&gt;</code></td><td>Move the resource to a different context.</td></tr>
+        <tr><td><code>temper resource update &lt;ref&gt; --stage &lt;s&gt;</code></td><td>Task stage: <code>backlog</code>, <code>in-progress</code>, <code>done</code>, <code>cancelled</code>.</td></tr>
+        <tr><td><code>temper resource update &lt;ref&gt; --mode &lt;m&gt;</code></td><td>Task mode: <code>plan</code>, <code>build</code>.</td></tr>
+        <tr><td><code>temper resource update &lt;ref&gt; --effort &lt;e&gt;</code></td><td>Task effort: <code>small</code>, <code>medium</code>, <code>large</code>.</td></tr>
+        <tr><td><code>temper resource update &lt;ref&gt; --relates-to &lt;ref&gt;</code></td><td>Add a relationship. Repeatable. Similar: <code>--references</code>, <code>--depends-on</code>, <code>--extends</code>, <code>--preceded-by</code>, <code>--derived-from</code>.</td></tr>
+        <tr><td><code>temper resource update &lt;ref&gt; --branch &lt;name&gt; --pr &lt;url&gt;</code></td><td>Task metadata: attach a git branch or PR URL.</td></tr>
+        <tr><td><code>temper resource delete &lt;ref&gt;</code></td><td>Soft-delete on the server (the authoritative action; the row is preserved server-side). <code>--force</code> is accepted but vestigial — deletion is non-interactive.</td></tr>
       </tbody>
     </table>
   </section>
@@ -127,39 +140,45 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
         <tr><td><code>--doc-type &lt;type&gt;</code></td><td>Filter by doc type.</td></tr>
         <tr><td><code>--limit &lt;n&gt;</code></td><td>Cap results (default 10).</td></tr>
         <tr><td><code>--text-only</code></td><td>Skip semantic search (no local embedding needed).</td></tr>
-        <tr><td><code>--seed &lt;id&gt;</code></td><td>Explicit seed resource for graph expansion. Repeatable.</td></tr>
+        <tr><td><code>--seed &lt;uuid&gt;</code></td><td>Explicit seed resource for graph expansion. Repeatable.</td></tr>
+        <tr><td><code>--edge-type &lt;kind&gt;</code></td><td>Restrict graph expansion to one or more edge kinds. Repeatable.</td></tr>
         <tr><td><code>--depth &lt;n&gt;</code></td><td>Max hops for graph traversal (default 2, max 10).</td></tr>
-        <tr><td><code>--no-graph</code></td><td>Disable graph expansion.</td></tr>
       </tbody>
     </table>
   </section>
 
-  <!-- ── Knowledge graph ───────────────────────────────────────────── -->
+  <!-- ── Relationships ─────────────────────────────────────────────── -->
   <section>
-    <h2>Knowledge graph</h2>
+    <h2>Relationships</h2>
     <p>
-      Resources aren't isolated — frontmatter references
-      (<code>relates_to</code>, <code>depends_on</code>, etc.) form a graph.
-      Two commands populate it:
+      Resources aren't isolated — typed edges connect them, and search can
+      expand along those edges to surface neighbors. Edges are first-class:
+      asserted explicitly, then re-typed, re-weighted, or folded as the
+      understanding changes. Source and target are <strong>refs</strong>; an
+      edge is addressed by its own handle (a UUID).
     </p>
     <table>
       <tbody>
-        <tr><td><code>temper graph build</code></td><td>Scan markdown bodies for references and seed the frontmatter relationships. Additive — doesn't overwrite existing edges.</td></tr>
-        <tr><td><code>temper graph build --dry-run</code></td><td>Preview edges without writing.</td></tr>
-        <tr><td><code>temper graph index</code></td><td>Discover concepts via LLM judgment over the local HNSW index. Requires <code>temper index</code> to have been run first.</td></tr>
-        <tr><td><code>temper index</code></td><td>Build the HNSW vector index over the vault. Needed for semantic search and the graph concept-discovery pass.</td></tr>
-        <tr><td><code>temper index --full</code></td><td>Force a full rebuild.</td></tr>
+        <tr><td><code>temper edge assert &lt;source&gt; &lt;target&gt; --kind &lt;k&gt; --polarity &lt;p&gt; --label &lt;text&gt;</code></td><td>Assert a typed edge. Kinds: <code>express</code>, <code>contains</code>, <code>leads-to</code>, <code>near</code>. Polarity: <code>forward</code> or <code>inverse</code>. Optional <code>--weight</code> (default 1.0). Idempotent.</td></tr>
+        <tr><td><code>temper edge retype &lt;edge-handle&gt; --kind &lt;k&gt; --polarity &lt;p&gt;</code></td><td>Change an edge's kind and polarity.</td></tr>
+        <tr><td><code>temper edge reweight &lt;edge-handle&gt; --weight &lt;n&gt;</code></td><td>Change an edge's weight.</td></tr>
+        <tr><td><code>temper edge fold &lt;edge-handle&gt; [--reason &lt;text&gt;]</code></td><td>Fold (supersede) an edge — it stops contributing to projections, with the reason recorded.</td></tr>
       </tbody>
     </table>
   </section>
 
-  <!-- ── Cloud sync ────────────────────────────────────────────────── -->
-  <section>
-    <h2>Cloud sync</h2>
+  <!-- ── Cloud ─────────────────────────────────────────────────────── -->
+  <section id="cloud">
+    <h2>Cloud</h2>
     <p>
-      Temper Cloud is a Postgres-native source of truth for your vault with
-      pgvector-powered semantic search. Your local markdown files remain
-      canonical — the cloud is a searchable, syncable lens on them.
+      Temper Cloud is the Postgres-native <strong>source of truth</strong>, with
+      pgvector-powered semantic search. The local vault is the inverse of the
+      old model: a <strong>read-only projection cache</strong>, not the canonical
+      copy. Writes (<code>resource create</code>/<code>update</code>/<code>delete</code>,
+      <code>edge</code>) route straight to the API and take effect immediately;
+      <code>temper pull &lt;ctx&gt;</code> re-materialises the local markdown from
+      server state. Removing a projected file with <code>rm</code> is just a local
+      cache miss — it has no server effect.
     </p>
 
     <h3>Auth</h3>
@@ -169,32 +188,14 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
         <tr><td><code>temper auth status</code></td><td>Show current auth state.</td></tr>
         <tr><td><code>temper auth logout</code></td><td>Clear cached credentials.</td></tr>
         <tr><td><code>temper auth token</code></td><td>Store a JWT directly (for API-only clients or manual auth).</td></tr>
-      </tbody>
-    </table>
-
-    <h3>Sync</h3>
-    <p>
-      Sync uses a manifest-based three-way compare between your local file,
-      a manifest record, and the server. Non-conflicting changes auto-merge at
-      the paragraph level; genuine conflicts are written to
-      <code>.conflict.md</code> for human resolution.
-    </p>
-    <table>
-      <tbody>
-        <tr><td><code>temper sync run</code></td><td>Run a full sync cycle — push local changes, pull remote ones.</td></tr>
-        <tr><td><code>temper sync run --context &lt;ctx&gt;</code></td><td>Sync only one or more contexts.</td></tr>
-        <tr><td><code>temper sync status</code></td><td>Show what would change, without making changes.</td></tr>
-        <tr><td><code>temper sync refresh</code></td><td>Refresh manifest from server — non-destructive interleave.</td></tr>
-        <tr><td><code>temper sync reset</code></td><td>Reset manifest from scratch (backs up first, then full rebuild).</td></tr>
-        <tr><td><code>temper pull &lt;resource-id&gt;</code></td><td>Pull a single resource by UUID.</td></tr>
-        <tr><td><code>temper resource delete &lt;slug&gt; --type &lt;doctype&gt; [--force]</code></td><td>Delete a resource: cloud-first soft-delete, then local cleanup tail in local mode.</td></tr>
+        <tr><td><code>temper auth export-token</code></td><td>Print the cached JWT to stdout — pipe into a cloud session's secret manager as <code>TEMPER_TOKEN</code>.</td></tr>
       </tbody>
     </table>
 
     <h3>Teams</h3>
     <table>
       <tbody>
-        <tr><td><code>temper team join</code></td><td>Request to join a team — defaults to system access.</td></tr>
+        <tr><td><code>temper team join</code></td><td>Request to join a team — <code>--team</code> to name it, <code>--message</code> to attach a note.</td></tr>
         <tr><td><code>temper team status</code></td><td>Check request or membership status.</td></tr>
         <tr><td><code>temper team leave</code></td><td>Withdraw a pending request or leave a team.</td></tr>
       </tbody>
@@ -268,12 +269,18 @@ cargo install --path crates/temper-cli --features embed,extract,hnsw</code></pre
         <tr><td><code>get_resource</code></td><td>Get a resource by ID or slug, optionally with full markdown content.</td></tr>
         <tr><td><code>create_resource</code></td><td>Create a resource with optional markdown content. Name-based context and doc type.</td></tr>
         <tr><td><code>update_resource</code></td><td>Update a resource's title, slug, or content. New content triggers re-indexing.</td></tr>
+        <tr><td><code>update_resource_meta</code></td><td>Update a resource's managed/open frontmatter without touching the body.</td></tr>
         <tr><td><code>delete_resource</code></td><td>Soft-delete a resource by ID.</td></tr>
+        <tr><td><code>assert_relationship</code></td><td>Assert a typed edge between two resources. Idempotent.</td></tr>
+        <tr><td><code>retype_relationship</code></td><td>Change an edge's kind and polarity.</td></tr>
+        <tr><td><code>reweight_relationship</code></td><td>Change an edge's weight.</td></tr>
+        <tr><td><code>fold_relationship</code></td><td>Fold (supersede) an edge so it stops contributing to projections.</td></tr>
         <tr><td><code>search</code></td><td>Full-text and semantic search across the knowledge base.</td></tr>
         <tr><td><code>list_contexts</code></td><td>List available contexts (workspaces).</td></tr>
         <tr><td><code>get_context</code></td><td>Get details of a specific context.</td></tr>
         <tr><td><code>create_context</code></td><td>Create a new context (workspace).</td></tr>
         <tr><td><code>list_doc_types</code></td><td>List available document types.</td></tr>
+        <tr><td><code>describe_doc_type</code></td><td>Describe a doc type's schema — required and optional frontmatter fields.</td></tr>
         <tr><td><code>list_events</code></td><td>List events, optionally filtered by resource or type.</td></tr>
         <tr><td><code>get_profile</code></td><td>Get the authenticated user's profile.</td></tr>
       </tbody>

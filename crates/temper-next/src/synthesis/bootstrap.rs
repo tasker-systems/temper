@@ -177,7 +177,8 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
             other => anyhow::bail!("context {old} has unsupported owner_table {other:?}"),
         };
         let slug = slugify(&ctx.name);
-        let new_id = insert_context(&mut tx, &ctx.owner_table, owner_id, &slug, &ctx.name).await?;
+        let new_id =
+            insert_context(&mut tx, old, &ctx.owner_table, owner_id, &slug, &ctx.name).await?;
         // Team-owned context → the §2-amended auto-share. Owner stays purely namespace-scoping;
         // reachability is the explicit `kb_team_contexts(context_id, owning_team_id)` row.
         if ctx.owner_table == "kb_teams" {
@@ -257,17 +258,25 @@ async fn insert_entity(
 
 /// Insert one owner-scoped `temper_next.kb_contexts` row (§2 amendment), returning its new id. Owner is
 /// namespace-scoping only; `slug` is unique per owner.
+///
+/// Preserves the production context id verbatim (`old_id` — PR#124 identity-as-input, the same
+/// mechanism `insert_profile` + resource synthesis use). The explicit `id` overrides the column's
+/// `DEFAULT uuid_generate_v7()`. Re-minting would dangle API-internal id-keyed surfaces
+/// (`/api/contexts/{id}`, the per-context event-sync cursor) and projected `kb_context_id` frontmatter
+/// at the hard cutover; UUIDv7 lets the id carry through with no read-time bimap.
 async fn insert_context(
     conn: &mut sqlx::PgConnection,
+    old_id: Uuid,
     owner_table: &str,
     owner_id: Uuid,
     slug: &str,
     name: &str,
 ) -> Result<ContextId> {
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO temper_next.kb_contexts (owner_table, owner_id, slug, name) \
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO temper_next.kb_contexts (id, owner_table, owner_id, slug, name) \
+         VALUES ($1, $2, $3, $4, $5) RETURNING id",
     )
+    .bind(old_id)
     .bind(owner_table)
     .bind(owner_id)
     .bind(slug)

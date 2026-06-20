@@ -10,11 +10,11 @@ export interface CogMapPage {
   href: string;
   title: string;
   genre: Genre;
-  /** Present on the four children that nest under the operating-temper hub. */
-  parent?: string;
 }
 
-/** Reading order — flattened, hub before its children. Drives prev/next. */
+/** Reading order — flattened. Drives prev/next. The operating set has been
+    promoted to the top-level /operating tier; movement 7 ("Operating Temper")
+    remains here as the bridge that hands the journeyer across to it. */
 export const PAGES: CogMapPage[] = [
   { href: '/cognitive-maps/what-a-cognitive-map-is', title: 'What a cognitive map is', genre: 'show' },
   { href: '/cognitive-maps/the-substrate-beneath-it', title: 'The substrate beneath it', genre: 'show' },
@@ -23,30 +23,6 @@ export const PAGES: CogMapPage[] = [
   { href: '/cognitive-maps/how-maps-relate', title: 'How maps relate', genre: 'show' },
   { href: '/cognitive-maps/whats-visible-from-here', title: "What's visible from here", genre: 'show' },
   { href: '/cognitive-maps/operating-temper', title: 'Operating Temper', genre: 'invite' },
-  {
-    href: '/cognitive-maps/operating-temper/deployment',
-    title: 'Deployment',
-    genre: 'invite',
-    parent: '/cognitive-maps/operating-temper',
-  },
-  {
-    href: '/cognitive-maps/operating-temper/governance-and-administration',
-    title: 'Governance & administration',
-    genre: 'invite',
-    parent: '/cognitive-maps/operating-temper',
-  },
-  {
-    href: '/cognitive-maps/operating-temper/observability-and-audit',
-    title: 'Observability & audit',
-    genre: 'invite',
-    parent: '/cognitive-maps/operating-temper',
-  },
-  {
-    href: '/cognitive-maps/operating-temper/insights',
-    title: 'Insights',
-    genre: 'invite',
-    parent: '/cognitive-maps/operating-temper',
-  },
 ];
 
 /** The tier index, the start of the reading order. */

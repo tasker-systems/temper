@@ -149,7 +149,7 @@
     event volume? a cadence? salience crossing a floor? — is genuinely open. We
     mark it as a seam and return to it in
     <a href="/cognitive-maps/how-a-map-grows">how a map grows</a> and the
-    <a href="/cognitive-maps/operating-temper/deployment">deployment</a> forks.
+    <a href="/operating/deployment">deployment</a> forks.
     Naming a seam <em>as</em> a seam, instead of papering over it, is the
     discipline the system applies to superseded thinking — and the one these
     pages try to keep.

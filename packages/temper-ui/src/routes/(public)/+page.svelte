@@ -1,137 +1,91 @@
 <script>
   import Hero from '$lib/components/landing/Hero.svelte';
   import Section from '$lib/components/landing/Section.svelte';
-  import CliBlock from '$lib/components/landing/CliBlock.svelte';
-  import AgentTranscript from '$lib/components/landing/AgentTranscript.svelte';
   import Footer from '$lib/components/landing/Footer.svelte';
+  import LedgerProjectionSpiral from '$lib/components/cognitive-maps/diagrams/LedgerProjectionSpiral.svelte';
 </script>
 
 <Hero />
 
-<!-- The Premise -->
-<Section label="The premise">
-  <h2>Knowledge work deserves <em>structure</em></h2>
-  <p>
-    Code is an expression of intent. So are specifications, plans, and decisions.
-    But the context behind them — the <strong>why</strong>, the alternatives considered,
-    the constraints that shaped the choice — scatters across conversations, documents,
-    and memory.
-  </p>
-  <p>
-    Temper gives that context a home. Every goal, task, session, research thread,
-    and decision lives as <strong>markdown with frontmatter</strong> in your vault.
-    The frontmatter carries the throughline. The content carries the thinking.
+<!-- What Temper is — shown first, then named -->
+<Section label="What Temper is">
+  <LedgerProjectionSpiral id="landing-ledger" />
+  <p class="figure-frame">
+    An append-only event ledger is the source of truth. Everything above it —
+    the graph, the regions, the personal-knowledge view — is a projection
+    materialized at read time. A <strong>cognitive map</strong> is a
+    telos-seeded region of that substrate where people and agents grow a shared,
+    situated understanding together. Press <em>Replay</em> to watch one rise as
+    its ledger grows.
   </p>
 </Section>
 
-<!-- How It Works -->
-<Section label="How it works">
-  <h2>Write markdown. Let temper do the <em>rest</em>.</h2>
-  <div class="workflow">
-    <div class="workflow-step">
-      <span class="workflow-cmd">temper init</span>
-      <span class="workflow-desc">Create a vault and tell temper how you work — your tools, your conventions, your rhythm.</span>
+<!-- Start here — three doors mirroring the nav spine -->
+<Section label="Start here">
+  <div class="doors">
+    <div class="door">
+      <span class="door-role">What it is</span>
+      <a class="door-title" href="/cognitive-maps">
+        Cognitive maps<span class="arrow" aria-hidden="true">→</span>
+      </a>
+      <span class="door-desc">
+        The concrete on-ramp — telos-seeded regions where a shared
+        understanding grows, shown proven in the schema. Begin the graph-walk
+        here.
+      </span>
+      <div class="door-links">
+        <a href="/manifesto">Attention manifesto <span aria-hidden="true">→</span></a>
+        <a href="/theory">Theory <span aria-hidden="true">→</span></a>
+      </div>
     </div>
-    <div class="workflow-step">
-      <span class="workflow-cmd">temper add</span>
-      <span class="workflow-desc">Bring in your docs. Temper extracts markdown, adds frontmatter, and makes everything searchable.</span>
-    </div>
-    <div class="workflow-step">
-      <span class="workflow-cmd">temper search</span>
-      <span class="workflow-desc">Semantic search across your vault. Find decisions by meaning, not just keywords.</span>
-    </div>
-    <div class="workflow-step">
-      <span class="workflow-cmd">temper sync</span>
-      <span class="workflow-desc">Push to the cloud. Pull to another machine. Your vault follows you.</span>
-    </div>
-  </div>
-</Section>
 
-<!-- What Temper Tracks -->
-<Section label="What temper tracks">
-  <h2>The vocabulary of <em>structured</em> knowledge work</h2>
-  <p>
-    Every file in your vault has a doc type that temper understands.
-    These aren't arbitrary tags — they're the building blocks of how
-    work actually progresses.
-  </p>
-  <div class="concepts">
-    <div class="concept">
-      <div class="concept-name">Goals</div>
-      <p>The outcome you're working toward. Tasks and sessions roll up to goals.</p>
+    <div class="door">
+      <span class="door-role">How to use it</span>
+      <span class="door-title door-title--static">Using Temper</span>
+      <span class="door-desc">
+        Put the substrate to work — as a builder, an agent, or an operator.
+      </span>
+      <div class="door-links">
+        <a href="/builders">Builders <span aria-hidden="true">→</span></a>
+        <a href="/agents">Agents <span aria-hidden="true">→</span></a>
+        <a href="/operating">Operating <span aria-hidden="true">→</span></a>
+        <a href="/using-temper">Reference <span aria-hidden="true">→</span></a>
+      </div>
     </div>
-    <div class="concept">
-      <div class="concept-name">Tasks</div>
-      <p>Discrete units of work with mode (plan/build) and effort (small/medium/large).</p>
-    </div>
-    <div class="concept">
-      <div class="concept-name">Sessions</div>
-      <p>What happened in a working session — decisions made, context discovered, next steps.</p>
-    </div>
-    <div class="concept">
-      <div class="concept-name">Research</div>
-      <p>Investigation and analysis. Design explorations, comparisons, architectural options.</p>
-    </div>
-    <div class="concept">
-      <div class="concept-name">Decisions</div>
-      <p>The choice, the alternatives, the constraints. Captured so you never re-litigate.</p>
-    </div>
-    <div class="concept">
-      <div class="concept-name">Concepts</div>
-      <p>Domain knowledge. The vocabulary of your project that humans and agents share.</p>
-    </div>
-  </div>
-</Section>
 
-<!-- For Humans and Agents -->
-<Section label="For humans and agents">
-  <h2>Context that's always <em>ready to hand</em></h2>
-  <p>
-    Agentic tools like Claude Code and Cursor are powerful — but only when
-    they have context. Temper gives agents the same throughline that humans
-    carry in their heads: what we're building, why, what we've decided, and
-    what's deferred.
-  </p>
-  <AgentTranscript />
-  <p class="after-transcript">
-    Subscribe to contexts across projects. Everything arrives as markdown
-    in your vault — no special tooling, no vendor lock-in. If it can read
-    files, it can use temper.
-  </p>
-</Section>
-
-<!-- Temper Cloud -->
-<Section label="Temper Cloud">
-  <h2>Your vault, <em>everywhere</em></h2>
-  <p>
-    Work on your laptop. Pick up on your desktop. Let a cloud agent
-    contribute while you sleep. Temper Cloud syncs your vault across
-    machines and team members with semantic search built in.
-  </p>
-  <div class="cloud-features">
-    <div class="cloud-feature"><div class="dot"></div><span>Cross-machine sync with conflict resolution</span></div>
-    <div class="cloud-feature"><div class="dot"></div><span>Semantic search powered by pgvector embeddings</span></div>
-    <div class="cloud-feature"><div class="dot"></div><span>Team contexts with granular access control</span></div>
-    <div class="cloud-feature"><div class="dot"></div><span>Knowledge graph connecting your resources</span></div>
-    <div class="cloud-feature"><div class="dot"></div><span>Self-host or use temperkb.io — same protocol, your choice</span></div>
+    <div class="door">
+      <span class="door-role">Get started</span>
+      <a class="door-title" href="/auth/login">
+        Start using it<span class="arrow" aria-hidden="true">→</span>
+      </a>
+      <span class="door-desc">
+        Sign up, or read the code.
+      </span>
+      <div class="door-links">
+        <a href="/auth/login">Get Started <span aria-hidden="true">→</span></a>
+        <a href="https://github.com/tasker-systems/temper" target="_blank" rel="noopener">GitHub <span aria-hidden="true">→</span></a>
+      </div>
+    </div>
   </div>
 </Section>
 
 <Footer />
 
 <style>
-  .workflow { display: flex; flex-direction: column; gap: 1.2rem; margin-top: 1.5rem; }
-  .workflow-step { display: flex; align-items: flex-start; gap: 1.2rem; }
-  .workflow-cmd { font-family: var(--font-mono); font-size: 0.75rem; padding: 0.4rem 0.8rem; border: 1px solid rgba(255, 255, 255, 0.1); color: var(--temper-blue); white-space: nowrap; min-width: 140px; }
-  .workflow-desc { font-family: var(--font-serif); font-size: 0.9rem; color: var(--graphite); padding-top: 0.3rem; line-height: 1.7; }
-  .concepts { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; margin-top: 1.5rem; }
-  .concept { border: 1px solid rgba(255, 255, 255, 0.06); padding: 1.2rem; transition: border-color 0.2s; }
-  .concept:hover { border-color: var(--temper-blue-border-dim); }
-  .concept-name { font-family: var(--font-mono); font-size: 0.7rem; color: var(--temper-blue); letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 0.5rem; }
-  .concept :global(p) { font-size: 0.85rem; color: var(--graphite); line-height: 1.6; margin-bottom: 0; }
-  .after-transcript { margin-top: 1.5rem; }
-  .cloud-features { display: flex; flex-direction: column; gap: 0.8rem; margin-top: 1.5rem; }
-  .cloud-feature { display: flex; gap: 1rem; align-items: baseline; }
-  .dot { width: 4px; height: 4px; background: var(--temper-blue); border-radius: 50%; flex-shrink: 0; margin-top: 0.5rem; }
-  .cloud-feature span { font-family: var(--font-serif); font-size: 0.95rem; color: var(--chalk); }
+  .figure-frame { font-family: var(--font-serif); font-size: 0.95rem; color: var(--chalk); line-height: 1.8; margin-top: 1.5rem; max-width: 42em; }
+  .figure-frame strong { color: var(--parchment); font-weight: 400; }
+  .figure-frame em { color: var(--temper-blue); font-style: normal; }
+  .doors { display: flex; flex-direction: column; gap: 1.25rem; margin-top: 1.5rem; }
+  .door { border: 1px solid rgba(255, 255, 255, 0.08); padding: 1.5rem; transition: border-color 0.2s; }
+  .door:hover { border-color: var(--temper-blue-border-dim); }
+  .door-role { display: block; font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.2em; text-transform: uppercase; color: var(--graphite); margin-bottom: 0.7rem; }
+  .door-title { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-serif); font-size: 1.3rem; font-weight: 300; color: var(--parchment); text-decoration: none; transition: color 0.2s; }
+  a.door-title:hover { color: var(--temper-blue); }
+  .door-title--static { color: var(--parchment); }
+  .door-title .arrow { font-family: var(--font-mono); font-size: 0.9rem; color: var(--temper-blue); transition: transform 0.2s; }
+  .door:hover .arrow { transform: translateX(3px); }
+  .door-desc { display: block; font-family: var(--font-serif); font-size: 0.95rem; color: var(--chalk); line-height: 1.7; margin-top: 0.6rem; }
+  .door-links { display: flex; flex-wrap: wrap; gap: 1.5rem; margin-top: 1rem; }
+  .door-links a { font-family: var(--font-mono); font-size: 0.72rem; color: var(--temper-blue); text-decoration: none; letter-spacing: 0.03em; transition: color 0.2s; }
+  .door-links a:hover { color: var(--parchment); }
 </style>

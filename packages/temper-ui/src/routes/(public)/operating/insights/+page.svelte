@@ -13,14 +13,14 @@
 </svelte:head>
 
 <section class="hero">
-  <div class="hero-label t-label">/cognitive-maps/operating-temper/insights</div>
+  <div class="hero-label t-label">/operating/insights</div>
   <h1 class="t-hero-title">Insights</h1>
   <p class="tagline t-tagline">
     The exhaust from running it is one of the more interesting things it makes.
   </p>
 </section>
 
-<div class="cognitive-maps-page">
+<div class="operating-page">
 
 <blockquote class="epigraph">
   A PR merged on team-a. Minutes later, the onboarding map had a new piece of
@@ -84,7 +84,7 @@
     understanding formed. The record of who was granted what access lives on the
     same ledger but in a separate, firewalled stream (that separation is drawn
     in
-    <a href="/cognitive-maps/operating-temper/governance-and-administration"
+    <a href="/operating/governance-and-administration"
       >governance &amp; administration</a
     >). The insight here is about thought, not administration; the two don't
     bleed into each other.
@@ -169,7 +169,7 @@
     margin: 0 auto 1rem;
     padding: 0.5rem 2.5rem 0.5rem 3.75rem;
   }
-  :global(.cognitive-maps-page .epigraph) {
+  :global(.operating-page .epigraph) {
     border-left: 2px solid var(--temper-blue-border);
     font-family: var(--font-serif);
     font-style: italic;

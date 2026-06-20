@@ -42,7 +42,7 @@
 </div>
 
 <div class="graph-region">
-  <p class="graph-lead t-strip">Eleven pages, one running example — held together like this</p>
+  <p class="graph-lead t-strip">One running example, shown from the schema — and where it leads: up to theory, out to operating</p>
   <ConceptGraph />
 </div>
 
