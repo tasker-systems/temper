@@ -17,8 +17,8 @@ use uuid::Uuid;
 use crate::affinity::EdgeKind;
 use crate::content::prepare_block;
 use crate::events::{fire, EdgeHome, SeedAction};
-use crate::ids::{ContextId, EdgeId, EntityId, ProfileId, ResourceId};
-use crate::payloads::{AnchorRef, EdgePolarity};
+use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId};
+use crate::payloads::{self, AnchorRef, EdgePolarity};
 use crate::synthesis::bootstrap::slugify;
 
 // ── identity resolution (natural-key) ───────────────────────────────────────────
@@ -334,6 +334,69 @@ pub async fn fold_relationship(
         SeedAction::RelationshipFold {
             edge,
             reason,
+            emitter,
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+// ── invocation envelope ──────────────────────────────────────────────────────────
+
+/// Parameters for opening an invocation. The invocation id is minted here and
+/// returned (server-mint v1; caller-supplied ids for byte-exact durable-resume
+/// re-issue are a deferred runtime concern).
+#[derive(Debug)]
+pub struct OpenParams {
+    pub trigger_kind: String,
+    pub originating: CogmapId,
+    pub parent: Option<CogmapId>,
+    pub scoped_entity: EntityId,
+    pub emitter: EntityId,
+}
+
+/// Open an invocation envelope, returning the minted invocation id.
+pub async fn open_invocation(pool: &PgPool, p: OpenParams) -> Result<InvocationId> {
+    let invocation = InvocationId::from(Uuid::now_v7());
+    let mut tx = begin_scoped(pool).await?;
+    let opened = fire(
+        &mut tx,
+        SeedAction::InvocationOpen {
+            invocation,
+            trigger_kind: &p.trigger_kind,
+            originating: p.originating,
+            parent: p.parent,
+            scoped_entity: p.scoped_entity,
+            emitter: p.emitter,
+        },
+    )
+    .await?
+    .invocation()?;
+    tx.commit().await?;
+    Ok(opened)
+}
+
+/// Close an invocation with a terminal disposition + opaque outcome. The
+/// originating cogmap is supplied by the caller (it knows it from the open /
+/// from an auth lookup) so the `SeedAction` is constructed truthfully; the
+/// substrate ignores it on close but the typed action requires it.
+pub async fn close_invocation(
+    pool: &PgPool,
+    invocation: InvocationId,
+    originating: CogmapId,
+    disposition: payloads::Disposition,
+    outcome: serde_json::Value,
+    emitter: EntityId,
+) -> Result<()> {
+    let mut tx = begin_scoped(pool).await?;
+    fire(
+        &mut tx,
+        SeedAction::InvocationClose {
+            invocation,
+            disposition,
+            outcome,
+            originating,
             emitter,
         },
     )

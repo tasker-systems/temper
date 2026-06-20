@@ -155,6 +155,26 @@ pub struct FoldRelationship {
     pub origin: Surface,
 }
 
+/// Open an invocation envelope — the trace primitive. `originating_cogmap` /
+/// `parent_cogmap` are temper_next cogmap ids (not resource refs). The
+/// invocation id is minted by the backend and returned.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OpenInvocation {
+    pub trigger_kind: String,
+    pub originating_cogmap: uuid::Uuid,
+    pub parent_cogmap: Option<uuid::Uuid>,
+    pub origin: Surface,
+}
+
+/// Close an invocation with a terminal disposition + opaque outcome.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CloseInvocation {
+    pub invocation: uuid::Uuid,
+    pub disposition: crate::types::invocation::Disposition,
+    pub outcome: serde_json::Value,
+    pub origin: Surface,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +262,18 @@ mod tests {
             origin: Surface::Mcp,
         };
         assert_ne!(uuid::Uuid::from(cmd.target), uuid::Uuid::nil());
+    }
+
+    #[test]
+    fn open_invocation_round_trips() {
+        let cmd = OpenInvocation {
+            trigger_kind: "manual".to_string(),
+            originating_cogmap: uuid::Uuid::now_v7(),
+            parent_cogmap: None,
+            origin: Surface::Mcp,
+        };
+        let v = serde_json::to_value(&cmd).unwrap();
+        let back: OpenInvocation = serde_json::from_value(v).unwrap();
+        assert_eq!(back, cmd);
     }
 }
