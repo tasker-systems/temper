@@ -13,14 +13,14 @@
 </svelte:head>
 
 <section class="hero">
-  <div class="hero-label t-label">/cognitive-maps/operating-temper/deployment</div>
+  <div class="hero-label t-label">/operating/deployment</div>
   <h1 class="t-hero-title">Deployment</h1>
   <p class="tagline t-tagline">
     The seed doesn't vary; everything after is yours to shape.
   </p>
 </section>
 
-<div class="cognitive-maps-page">
+<div class="operating-page">
 
 <blockquote class="epigraph">
   The very first thing that exists is the seed file — <code>temper-system</code> and a
@@ -50,7 +50,10 @@
     What's <em>already</em> a choice is the substrate it loads into. The public deployment runs
     "Postgres + Temper serving its surfaces" as Vercel functions over a Neon database; a private
     deployment might run it as containers over a database it operates. The seed is the same; the
-    ground it lands on is yours to pick.
+    ground it lands on is yours to pick. If that ground is the same one temperkb.io stands on, the
+    <a href="https://github.com/tasker-systems/temper/blob/main/docs/guides/self-hosting.md">self-hosting
+    runbook</a> is the concrete floor beneath this page — the exact Vercel project, Neon database, and
+    Auth0 tenant a near-minimal deployment needs.
   </p>
 </Section>
 
@@ -190,6 +193,33 @@
   </p>
 </Section>
 
+<Section label="The runtime seam, stated as a seam">
+  <p>
+    Of those axes, <em>where the agents run</em> earns its own honest paragraph, because it's the
+    one most tempting to overclaim. The architecture localizes the runtime choice to a thin
+    contract — the <code>temper-agents</code> crate — that depends on the substrate and never the
+    reverse. The kernel does not branch on which runtime woke an agent; the deployment profile that
+    says <em>where</em> and <em>how</em> a binding runs is carried at that contract layer and
+    <strong>never read by the substrate</strong>. That's what lets the map look identical whether an
+    agent ran on one platform or another.
+  </p>
+  <p>
+    And the <em>shape</em> of the delegation problem has held across the platforms modeled so far:
+    Vercel's Eve durable agents and Claude Managed Agents are both first-class runtime bindings, and
+    runtime (which platform) and residency (whose infrastructure tool execution runs on) come apart
+    as orthogonal axes rather than tangling together. So the claim here is <strong>extensible shape
+    with partial neutrality</strong> — not a flat "runtime-neutral."
+  </p>
+  <p>
+    The seam, named plainly: those runtimes are enum variants in the contract, so adding a new one
+    today is a <em>patch to the contract crate</em>, not a line of configuration — a deliberate
+    refusal to abstract too early, before real deployments have shown where the abstraction belongs.
+    What becomes pure configuration versus what the substrate must model is still being settled by
+    running on real runtimes, and that line is expected to move as we learn. A live research front,
+    not a permanent limitation — and naming it as a seam is the point.
+  </p>
+</Section>
+
 <Section label="What's invariant, what's yours">
   <p>
     The 0→1 path is invariant and solid — it's the seed, loadable today, identical everywhere.
@@ -221,7 +251,7 @@
     margin: 0 auto 1rem;
     padding: 0.5rem 2.5rem 0.5rem 3.75rem;
   }
-  :global(.cognitive-maps-page .epigraph) {
+  :global(.operating-page .epigraph) {
     border-left: 2px solid var(--temper-blue-border);
     font-family: var(--font-serif);
     font-style: italic;

@@ -70,22 +70,22 @@
   const INVITE: Plate[] = [
     {
       id: 'bootstrap', component: BootstrapRangeDiagram,
-      href: '/cognitive-maps/operating-temper/deployment', page: 'Deployment',
+      href: '/operating/deployment', page: 'Deployment',
       line: '0→1 is the invariant seed; topology, tenancy, and agents are the org-shaped range.',
     },
     {
       id: 'admin', component: AdminFirewallDiagram,
-      href: '/cognitive-maps/operating-temper/governance-and-administration', page: 'Governance & administration',
+      href: '/operating/governance-and-administration', page: 'Governance & administration',
       line: 'Administration is event-sourced — and firewalled from cognition.',
     },
     {
       id: 'audit', component: AuditHomesDiagram,
-      href: '/cognitive-maps/operating-temper/observability-and-audit', page: 'Observability & audit',
+      href: '/operating/observability-and-audit', page: 'Observability & audit',
       line: 'Two audits, two homes — operational outside, epistemic in the ledger.',
     },
     {
       id: 'provenance', component: ProvenanceChainDiagram,
-      href: '/cognitive-maps/operating-temper/insights', page: 'Insights',
+      href: '/operating/insights', page: 'Insights',
       line: 'A causal chain from a merge to a shift in a map’s understanding.',
     },
   ];

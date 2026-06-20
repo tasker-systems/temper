@@ -14,8 +14,9 @@
   <div class="hero-label t-label">/theory</div>
   <h1 class="t-hero-title">What Temper is building <em>toward</em></h1>
   <p class="tagline t-tagline">
-    Attention is our most precious resource. I am building Temper as a
-    commitment to respecting it.
+    Attention is the teleological anchor. These pages are the semantic
+    model that commitment requires — what the manifold is, how forgetting
+    works, how perspectives are characterized.
   </p>
 </section>
 
@@ -24,40 +25,17 @@
 <Section label="The anchor">
   <h2>Attention is the <em>teleological anchor</em></h2>
   <p>
-    Attention is how I experience myself, time, and the world. It is how
-    I am present to my own life, how I direct my agency, how I make any
-    of the choices I think of as mine. It is the medium of intention —
-    what I do with my attention is what I do at all. When I direct it
-    well, I am the agent of my own work; when it is fractured or
-    hijacked or spent without my consent, I lose ground in the most
-    fundamental sense.
+    Everything here follows from a single commitment: attention is our
+    most precious resource, and a system that touches it owes it an
+    ethic. What attention is, why wasting it is not merely inefficient,
+    and the principles that fall out — that is the
+    <a href="/manifesto">attention manifesto</a>.
   </p>
   <p>
-    This is true of every perspective capable of attention, not just
-    mine. When I demand attention from a colleague, a friend, or an
-    agent working on my behalf, I am asking for their capacity to be
-    present and to act. Every interrupt is a demand on that capacity.
-    Every poorly-justified ping, every system that requires
-    re-discovering what it could have made present, every interface
-    that demands construction-from-scratch when reasonable defaults
-    exist, is a demand on something irreplaceable. The cost compounds,
-    because every low-leverage demand on attention is attention not
-    available for what actually matters — and attention, unlike most
-    resources, does not regenerate. When it is spent, it is spent.
-  </p>
-  <p>
-    I believe this gives the design of information systems an ethical
-    character it usually lacks. If attention is the medium of agency,
-    then a system that wastes attention isn't just inefficient — it is
-    treating something precious as fungible. Efficiency is not, in this
-    frame, a productivity virtue. It is an obligation —
-    <em>efficiency-as-ethic</em> — that follows from taking attention
-    seriously as the thing it actually is.
-  </p>
-  <p>
-    Temper is built around what falls out of that obligation. Building
-    it in this frame of reference, I am committed to a few key
-    principles.
+    The pages under <code>/theory</code> are the other half: the semantic
+    model that commitment requires. Temper is built around what falls out
+    of taking attention seriously, and in that frame I am committed to a
+    few key principles.
   </p>
 </Section>
 
@@ -247,14 +225,10 @@
 
 <Section label="Closing">
   <p>
-    This document is not an academic argument or some kind of declaration of
-    principles that are meant to cast aspersions on existing systems. I
-    am writing this so that when I am six months into implementation,
-    I remember what *matters* - this document itself is a form of respecting
-    my own limited attention. I am publishing it because the commitment is more
-    honest if it is shared, and because whether this project is successful or not,
-    the principles and commitments are, I believe, worth engaging with for others
-    who are likewise working in an information management space.
+    These pages are the model. What it is ultimately <em>for</em> — and
+    why attention deserves an ethic rather than an optimization — is the
+    <a href="/manifesto">attention manifesto</a>. The model is held
+    lightly; the commitment underneath it is not.
   </p>
 </Section>
 

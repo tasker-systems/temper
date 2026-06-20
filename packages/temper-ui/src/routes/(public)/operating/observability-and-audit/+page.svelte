@@ -13,14 +13,14 @@
 </svelte:head>
 
 <section class="hero">
-  <div class="hero-label t-label">/cognitive-maps/operating-temper/observability-and-audit</div>
+  <div class="hero-label t-label">/operating/observability-and-audit</div>
   <h1 class="t-hero-title">Observability &amp; <em>audit</em></h1>
   <p class="tagline t-tagline">
     Is it healthy? What did it know, and why did it change?
   </p>
 </section>
 
-<div class="cognitive-maps-page">
+<div class="operating-page">
 
 <blockquote class="epigraph">
   The onboarding agent woke, read a charter, and wrote a regulation. Two fair
@@ -74,7 +74,7 @@
     Administrative acts are events too, but they're compliance records,
     firewalled by design from the cognitive stream (the reasoning behind that
     separation is in
-    <a href="/cognitive-maps/operating-temper/governance-and-administration"
+    <a href="/operating/governance-and-administration"
       >governance &amp; administration</a
     >). So the inside-the-substrate audit is really two streams that don't mix:
     <em>how understanding formed</em>, and <em>who was allowed to do what</em>.
@@ -149,7 +149,7 @@
     margin: 0 auto 1rem;
     padding: 0.5rem 2.5rem 0.5rem 3.75rem;
   }
-  :global(.cognitive-maps-page .epigraph) {
+  :global(.operating-page .epigraph) {
     border-left: 2px solid var(--temper-blue-border);
     font-family: var(--font-serif);
     font-style: italic;

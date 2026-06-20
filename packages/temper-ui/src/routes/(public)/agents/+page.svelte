@@ -41,6 +41,17 @@
   </div>
 </section>
 
+<div class="projection-frame">
+  <p>
+    You're looking at the <strong>agent's view</strong> of Temper — one projection
+    over the coordination substrate, the way agents reach into it through the CLI,
+    the MCP server, and a generated skill. A true and useful view, but not the
+    whole story: the substrate is the trunk, and this is one branch of it. For what
+    it's a view <em>of</em>, see <a href="/cognitive-maps">cognitive maps</a> or
+    <a href="/">what Temper is</a>.
+  </p>
+</div>
+
 <Section label="The problem">
   <h2>Powerful but <em>forgetful</em></h2>
   <p>Claude Code, Cursor, Windsurf, Copilot — these tools can write code, analyze architecture, and plan implementations. But they carry nothing between sessions. No memory of yesterday's decision. No awareness of the constraint that shaped today's approach. No sense of where the project is headed or what's already been tried.</p>
@@ -55,7 +66,7 @@
     <div class="pathway">
       <div class="pathway-icon">$</div>
       <div class="pathway-name">CLI</div>
-      <div class="pathway-desc"><span class="cmd-inline">temper warmup</span>, <span class="cmd-inline">temper search</span>, <span class="cmd-inline">temper session save</span> — agents that can run shell commands get full vault access. Claude Code hooks call <span class="cmd-inline">temper warmup</span> automatically at session start.</div>
+      <div class="pathway-desc"><span class="cmd-inline">temper warmup</span>, <span class="cmd-inline">temper search</span>, <span class="cmd-inline">temper resource create</span> — agents that can run shell commands get full vault access. Claude Code hooks call <span class="cmd-inline">temper warmup</span> automatically at session start.</div>
     </div>
     <div class="pathway">
       <div class="pathway-icon">⟡</div>
@@ -102,32 +113,32 @@
 <Section label="MCP server">
   <h2>Direct agent <em>integration</em></h2>
   <p>The MCP server exposes the vault as a set of structured tools that any MCP-compatible agent can call. No file system access needed — the agent queries the vault through the protocol and gets structured results back.</p>
+  <p class="mcp-ref">The full tool list and the connection config live in <a href="/using-temper">Using Temper</a>.</p>
   <div class="mcp-demo">
     <div class="transcript">
       <div class="message">
         <div class="role">agent <span class="role-via">via mcp</span></div>
-        <div class="content agent-code">temper.warmup({'{'} context: "myapp" {'}'})</div>
+        <div class="content agent-code">list_resources({'{'} context: "myapp", doc_type: "session", limit: 4 {'}'})</div>
       </div>
       <div class="message">
         <div class="role">vault</div>
         <div class="content">
           <div class="context-block">
-            <div class="context-line"><span class="context-key">goal</span> api-v2-migration <span class="dim">(3 tasks, 2 complete)</span></div>
-            <div class="context-line"><span class="context-key">active</span> client-sdk-update <span class="tag-sm tag-mode-sm">build</span> <span class="tag-sm tag-effort-sm">medium</span></div>
-            <div class="context-line"><span class="context-key">prior</span> 4 sessions <span class="dim">(last: auth middleware, Mar 28)</span></div>
-            <div class="context-line"><span class="context-key">decided</span> REST over GraphQL, JWT rotation</div>
-            <div class="context-line"><span class="context-key">deferred</span> rate limiting, webhook signatures</div>
+            <div class="context-line"><span class="context-key">session</span> auth-middleware <span class="dim">(Mar 28 — chose JWT rotation)</span></div>
+            <div class="context-line"><span class="context-key">session</span> api-v2-planning <span class="dim">(Mar 26 — REST over GraphQL)</span></div>
+            <div class="context-line"><span class="context-key">session</span> client-sdk-update <span class="dim">(Mar 25 — in progress)</span></div>
+            <div class="context-line"><span class="context-key">session</span> rate-limit-spike <span class="dim">(Mar 22 — deferred)</span></div>
           </div>
         </div>
       </div>
       <div class="message">
         <div class="role">agent <span class="role-via">via mcp</span></div>
-        <div class="content agent-code">temper.session_save({'{'} title: "Client SDK v2 migration", decisions: ["Kept backward compat for v1 clients"], next: "Integration tests for v1 → v2 upgrade path" {'}'})</div>
+        <div class="content agent-code">create_resource({'{'} doc_type: "session", context: "myapp", title: "Client SDK v2 migration", content: "## Decisions\nKept backward compat for v1 clients\n## Next\nIntegration tests for the v1 → v2 upgrade path" {'}'})</div>
       </div>
       <div class="message">
         <div class="role">vault</div>
         <div class="content">
-          <div class="mcp-confirm">Session saved. Vault updated. Next warmup will include this context.</div>
+          <div class="mcp-confirm">Resource created. Indexed and searchable — the next session's recall will include it.</div>
         </div>
       </div>
     </div>
@@ -157,7 +168,7 @@
 </Section>
 
 <div class="cross-sell">
-  <p>Agents work best when <a href="/builders">humans temper the context</a>. Temper's session-over-session workflow gives builders and agents the same throughline — what we're building, why, what's decided, and what comes next.</p>
+  <p>This page is one view over the substrate. To see what it's a view of — telos-seeded regions where humans and agents grow a shared understanding together — start with <a href="/cognitive-maps">cognitive maps</a>, or read the trunk in <a href="/theory">theory</a>.</p>
 </div>
 
 <Footer />
@@ -193,9 +204,6 @@
   .context-block { font-size: 0.65rem; line-height: 1.8; }
   .context-line { color: rgba(255, 255, 255, 0.45); }
   .context-key { color: var(--temper-blue-dim); display: inline-block; min-width: 64px; }
-  .tag-sm { font-size: 0.55rem; padding: 0 0.3rem; border: 1px solid; letter-spacing: 0.03em; }
-  .tag-mode-sm { border-color: rgba(126, 184, 218, 0.3); color: var(--temper-blue); }
-  .tag-effort-sm { border-color: rgba(255, 255, 255, 0.12); color: var(--graphite); }
   .dim { color: rgba(255, 255, 255, 0.25); }
   .pathways { display: flex; flex-direction: column; gap: 1.5rem; margin-top: 1.5rem; }
   .pathway { display: grid; grid-template-columns: 32px 1fr; grid-template-rows: auto auto; gap: 0 1rem; align-items: start; }
@@ -213,9 +221,18 @@
   .inject-item { display: flex; align-items: baseline; gap: 0.8rem; font-family: var(--font-serif); font-size: 0.88rem; color: var(--chalk); }
   .inject-dot { width: 4px; height: 4px; background: var(--temper-blue); border-radius: 50%; flex-shrink: 0; margin-top: 0.45rem; }
   .mcp-demo { margin-top: 1.5rem; }
+  .mcp-ref { font-family: var(--font-serif); font-size: 0.85rem !important; font-style: italic; color: var(--graphite); margin-top: -0.3rem; }
+  .mcp-ref a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }
+  .mcp-ref a:hover { color: var(--parchment); }
   .cli-output { margin-top: 0.5rem; }
   .skill-line { font-size: 0.7rem; color: rgba(255, 255, 255, 0.5); line-height: 1.8; }
   .skill-line.dim { color: rgba(255, 255, 255, 0.25); }
+  .projection-frame { max-width: 800px; margin: 0 auto; padding: 2.5rem 2.5rem 0; }
+  .projection-frame p { font-family: var(--font-serif); font-size: 0.9rem; color: var(--graphite); line-height: 1.8; border-left: 2px solid var(--temper-blue-border); padding-left: 1.25rem; font-style: italic; }
+  .projection-frame strong { color: var(--parchment); font-weight: 400; font-style: normal; }
+  .projection-frame em { color: var(--temper-blue); }
+  .projection-frame a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }
+  .projection-frame a:hover { color: var(--parchment); }
   .cross-sell { max-width: 800px; margin: 0 auto; padding: 3rem 2.5rem; border-top: 1px solid var(--rule); }
   .cross-sell p { font-family: var(--font-serif); font-size: 0.95rem; color: var(--graphite); font-style: italic; text-align: center; line-height: 1.8; }
   .cross-sell a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }

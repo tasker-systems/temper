@@ -239,8 +239,8 @@ POC; the POC is evidence for it.
   that *are* the story can't currently be reached.
 - **`/builders`, `/agents`** — wholly in the old frame; to be reframed as the PKM projection
   (see below).
-- **`/docs`** — mostly accurate as CLI reference, but teaches `temper skill install` as the
-  agent path, which the roadmap replaces with `temper plugin install`. Predates the substrate
+- **`/docs`** — mostly accurate as CLI reference; teaches `temper skill install` as the agent
+  path, which **stays** (see the plugin-vs-skill scar below). Predates the substrate
   vocabulary entirely.
 
 ### The reframes
@@ -250,10 +250,10 @@ POC; the POC is evidence for it.
   view" and linking up to the trunk. The bodies (warmup/save loop, doc types, MCP pathways)
   stay largely intact — as a *description of the PKM projection* they remain true; what
   changes is the claim of primacy. The cross-sell footers get rewritten to point at the
-  substrate, not at each other. **Coupling to flag:** `/agents` teaches `temper skill
-  install`; the roadmap moves to `temper plugin install`. The reframe is the natural moment
-  to fix this, but it couples to the plugin-system work — decide fix-now vs. scar-and-defer at
-  drafting time.
+  substrate, not at each other. **Scar (2026-06-19):** an earlier draft of this spec assumed
+  the roadmap would replace `temper skill install` with `temper plugin install`. That task was
+  **cancelled** — skills + tools are the de facto way of working now — so `temper skill install`
+  **stays as-is**, on `/agents` and `/docs` alike. The reframe makes no CLI change.
 
 - **`/docs` → `/using-temper`** — the specced-but-never-done rename, plus a `/docs` →
   `/using-temper` redirect (single canonical URL), internal-link updates, and a minimal title/
@@ -284,8 +284,9 @@ they are where a careless change degrades something already good.
    **★ seam-sensitive.**
 5. **Cognitive-maps movement 7 → bridge** (+ index "start here" graph-walk update to reflect
    the new IA and include the theory cluster). **★ seam-sensitive.**
-6. **Reframe `/builders` + `/agents`** as the PKM projection. Most copy; couples to the
-   plugin-vs-skill question.
+6. **Reframe `/builders` + `/agents`** as the PKM projection. Most copy. (The plugin-vs-skill
+   coupling is resolved: the plugin task was cancelled; `temper skill install` stays — see the
+   scar above.)
 7. **README** — rewrite substrate-first; resolve the intra-frame `temper add` vs. `temper
    pull` drift while doing so.
 

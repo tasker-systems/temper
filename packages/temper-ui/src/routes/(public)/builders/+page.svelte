@@ -51,6 +51,17 @@
   </div>
 </section>
 
+<div class="projection-frame">
+  <p>
+    You're looking at the <strong>personal-knowledge view</strong> of Temper — one
+    projection over the coordination substrate, the way a solo builder or a small
+    team works in it. A true and useful view, but not the whole story: the
+    substrate is the trunk, and this is one branch of it. For what it's a view
+    <em>of</em>, see <a href="/cognitive-maps">cognitive maps</a> or
+    <a href="/">what Temper is</a>.
+  </p>
+</div>
+
 <Section label="The problem">
   <h2>The <em>blank</em> session</h2>
   <p>You're three sessions into a feature. On Tuesday you chose JWT rotation over session tokens. Wednesday you explored two caching approaches and picked the one with simpler invalidation. Now it's Friday, and the agent has no idea any of that happened.</p>
@@ -83,7 +94,7 @@
 
 <Section label="The throughline">
   <h2>Context that <em>compounds</em></h2>
-  <p>Temper is a local-first knowledge base that embeds <strong>throughline</strong> directly into how you work. Not a task tracker competing with Linear. Not a doc tool competing with Notion. A structured vault of markdown files where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.</p>
+  <p>Temper embeds <strong>throughline</strong> directly into how you work. Not a task tracker competing with Linear. Not a doc tool competing with Notion. A cloud-backed knowledge base that projects to markdown, where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.</p>
   <p>The vault grows richer with each session. Decisions persist. Research accumulates. The agent that starts your next session reads what you decided, what you deferred, and what comes next — not because you re-explained it, but because the vault holds the thread.</p>
 </Section>
 
@@ -95,7 +106,7 @@
     <div class="cycle-arrow">↓</div>
     <div class="cycle-step"><div class="cycle-num">2</div><div class="cycle-content"><span class="cycle-cmd">Work</span><span class="cycle-desc">Build or plan within a task. The mode and effort shape how the session unfolds — temper doesn't prescribe process, it carries context.</span></div></div>
     <div class="cycle-arrow">↓</div>
-    <div class="cycle-step"><div class="cycle-num">3</div><div class="cycle-content"><span class="cycle-cmd">temper session save</span><span class="cycle-desc">Captures what happened, what changed, what decisions were made, and what the next session should pick up.</span></div></div>
+    <div class="cycle-step"><div class="cycle-num">3</div><div class="cycle-content"><span class="cycle-cmd">temper resource create --type session</span><span class="cycle-desc">Captures what happened, what changed, what decisions were made, and what the next session should pick up.</span></div></div>
     <div class="cycle-return"><span class="cycle-return-label">feeds back into warmup →</span></div>
   </div>
 </Section>
@@ -166,28 +177,22 @@
 <Section label="Get started">
   <h2>Five minutes to your first <em>session</em></h2>
   <CliBlock>
-    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Install temper</span></div>
-    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">cargo install</span> temper-cli</div>
+    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Install — macOS / Linux (see the reference for all platforms)</span></div>
+    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">curl -fsSL https://raw.githubusercontent.com/tasker-systems/temper/main/scripts/install/install.sh | sh</span></div>
     <div class="cli-spacer"></div>
-    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Initialize a vault — temper asks how you work</span></div>
+    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Initialise a vault, then subscribe to a project context</span></div>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper init</span></div>
-    <div class="cli-spacer"></div>
-    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Add a context for your project</span></div>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper context</span> add myapp</div>
     <div class="cli-spacer"></div>
-    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Import your docs — temper extracts markdown and indexes it</span></div>
-    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper add</span> <span class="flag">--context</span> myapp <span class="flag">--dir</span> ~/projects/myapp/docs</div>
-    <div class="cli-spacer"></div>
-    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Generate the Claude Code skill — teaches the agent your vault</span></div>
+    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Teach your agent the vault, then warm up each session</span></div>
     <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper skill install</span></div>
-    <div class="cli-spacer"></div>
-    <div class="cli-prompt"><span class="flag">#</span> <span class="dim">Start working. Save when you're done.</span></div>
-    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper session save</span> "Set up auth middleware, chose JWT rotation"</div>
+    <div class="cli-prompt"><span class="flag">$</span> <span class="cmd">temper warmup</span> <span class="flag">--context</span> myapp</div>
   </CliBlock>
+  <p class="getstarted-ref">The full command reference — create, search, relationships, cloud, MCP — lives in <a href="/using-temper">Using Temper</a>.</p>
 </Section>
 
 <div class="cross-sell">
-  <p>Temper also works as a <a href="/agents">direct context layer for agents</a> — through the CLI, MCP server, and generated skill files. If your agent can read files, it can use temper.</p>
+  <p>This page is one view over the substrate. To see what it's a view of — telos-seeded regions where humans and agents grow a shared understanding together — start with <a href="/cognitive-maps">cognitive maps</a>, or read the trunk in <a href="/theory">theory</a>.</p>
 </div>
 
 <Footer />
@@ -267,6 +272,15 @@
   .vault-h2 { color: rgba(255, 255, 255, 0.65); font-weight: 500; }
   .vault-note { margin-top: 0.8rem; font-size: 0.85rem !important; font-style: italic; }
   :global(.cli-spacer) { height: 0.5rem; }
+  .getstarted-ref { margin-top: 1rem; font-family: var(--font-serif); font-size: 0.85rem; font-style: italic; color: var(--graphite); }
+  .getstarted-ref a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }
+  .getstarted-ref a:hover { color: var(--parchment); }
+  .projection-frame { max-width: 800px; margin: 0 auto; padding: 2.5rem 2.5rem 0; }
+  .projection-frame p { font-family: var(--font-serif); font-size: 0.9rem; color: var(--graphite); line-height: 1.8; border-left: 2px solid var(--temper-blue-border); padding-left: 1.25rem; font-style: italic; }
+  .projection-frame strong { color: var(--parchment); font-weight: 400; font-style: normal; }
+  .projection-frame em { color: var(--temper-blue); }
+  .projection-frame a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }
+  .projection-frame a:hover { color: var(--parchment); }
   .cross-sell { max-width: 800px; margin: 0 auto; padding: 3rem 2.5rem; border-top: 1px solid var(--rule); }
   .cross-sell p { font-family: var(--font-serif); font-size: 0.95rem; color: var(--graphite); font-style: italic; text-align: center; line-height: 1.8; }
   .cross-sell a { color: var(--temper-blue); text-decoration: none; transition: color 0.2s; }

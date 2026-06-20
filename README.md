@@ -6,13 +6,24 @@
   <strong>/ˈtempər/</strong> — <em>to make stronger and more resilient through a deliberate process</em>
 </p>
 
-A knowledge base for builders. Temper gives your work a throughline — the connective thread across sessions, decisions, and evolving understanding that turns scattered context into a navigable history. Everything resolves to markdown. The system gets out of the way.
+Temper is an **event-sourced coordination substrate** whose organizing purpose is to be economical with attention. A **cognitive map** is a telos-seeded region of that substrate where humans and agents grow a shared, situated understanding together — and everything else, personal knowledge management included, is a projection over it. Everything resolves to markdown; the system gets out of the way.
 
 <p align="center">
-  <a href="https://temperkb.io">temperkb.io</a> · <a href="https://temperkb.io/builders">For builders</a> · <a href="https://temperkb.io/agents">For agents</a>
+  <a href="https://temperkb.io">temperkb.io</a> · <a href="https://temperkb.io/cognitive-maps">Cognitive maps</a> · <a href="https://temperkb.io/operating">Operating</a> · <a href="https://temperkb.io/theory">Theory</a>
 </p>
 
-## The Problem
+<p align="center">
+  <img src="docs/diagrams/ledger-projection.svg" alt="An append-only kb_events ledger at the base; events rise off it into a materialized graph of resource-nodes, typed edges, and regions — the cognitive map as a projection of the ledger" width="760" />
+</p>
+<p align="center"><sub>The ledger is the source of truth. Every higher surface — the graph, the regions, the personal-knowledge view — is a projection materialized at read time.</sub></p>
+
+## Substrate, and one projection over it
+
+Temper is a coordination substrate first. The conceptual frame — what a cognitive map is, what the architecture fixes versus what a deployment shapes, and the commitments underneath — lives on the site: start with [cognitive maps](https://temperkb.io/cognitive-maps) (the concrete on-ramp), [operating](https://temperkb.io/operating) (running it, for the evaluator), and [theory](https://temperkb.io/theory) (the why).
+
+The rest of this README is the **personal-knowledge projection** — the view a solo builder or small team uses to keep an agent's context coherent across sessions. A true and useful view, not the whole story.
+
+## The problem it solves
 
 AI coding agents are powerful but forgetful. Every session starts blank — no memory of yesterday's decisions, no awareness of in-flight work, no sense of what matters next. The industry calls this [context rot](https://www.understandingai.org/p/context-rot-the-emerging-challenge): the progressive degradation of an agent's understanding as work spans sessions.
 
@@ -20,13 +31,11 @@ AI coding agents are powerful but forgetful. Every session starts blank — no m
   <img src="docs/diagrams/context-rot.svg" alt="Context rot: without a knowledge base, understanding degrades; with one, it compounds" width="720" />
 </p>
 
-Developers compensate by re-explaining context, pasting old chat logs, and manually steering agents through decisions the agent should already know about. This tax grows with every session.
-
-The deeper issue isn't memory — it's **throughline**. Knowing what's been done, what's up next, what decisions have been made and which are still open. This is the connective tissue that turns a pile of documents into a navigable development history. Without it, each session reinvents context from scratch. With it, sessions build on each other.
+Developers compensate by re-explaining context, pasting old chat logs, and manually steering agents through decisions the agent should already know about. This tax grows with every session. The fix is **throughline** — knowing what's been done, what's up next, what's decided and what's still open.
 
 ## Throughline
 
-Temper embeds throughline directly into how you work. Goals hold the vision. Tasks carry the work. Sessions record what happened. Each layer provides context for the layer below, and each session's conclusions feed back up — refining the goals, sharpening the path forward.
+In the personal-knowledge projection, goals hold the vision, tasks carry the work, and sessions record what happened. Each layer provides context for the layer below, and each session's conclusions feed back up — refining the goals, sharpening the path forward. (Underneath, each of those is an event on the substrate; the projection is one honest view of the ledger.)
 
 <p align="center">
   <img src="docs/diagrams/throughline-layers.svg" alt="Throughline: from goals through tasks down to sessions" width="700" />
@@ -34,17 +43,17 @@ Temper embeds throughline directly into how you work. Goals hold the vision. Tas
 
 This isn't a ticketing system competing with Linear. It's a structured vault of markdown files where every goal, task, session, decision, and research thread has a home — and where the connections between them are always visible.
 
-## Session Continuity
+## Session continuity
 
 Every new session starts with `temper warmup`, which injects active tasks, recent session summaries, and the last session's full content. The agent resumes where you left off instead of starting from scratch.
 
-At the end of each session, `temper session save` captures what happened — decisions made, tasks updated, next steps identified — and writes it back to the vault. The next session reads it. Context compounds instead of decaying.
+At the end of each session, a session note (`temper resource create --type session`) captures what happened — decisions made, tasks updated, next steps identified — written straight through the cloud to the substrate. The next session reads it. Context compounds instead of decaying.
 
 <p align="center">
   <img src="docs/diagrams/session-continuity-cycle.svg" alt="Session continuity cycle: warmup, work, save — each session feeds back into the vault" width="700" />
 </p>
 
-## Goals and Tasks
+## Goals and tasks
 
 Temper gives you two building blocks:
 
@@ -52,11 +61,11 @@ Temper gives you two building blocks:
 
 **Tasks** are units of work toward a goal. Every task has a **mode** — `build` or `plan` — and an expected **effort** — `small`, `medium`, or `large`. Your workflow preferences (set during `temper init`) shape how these translate into process — temper carries the throughline regardless of what tools and ceremonies you prefer.
 
-## For Humans and Agents
+## For humans and agents
 
 Temper gives agents the same throughline that humans carry in their heads: what we're building, why, what we've decided, and what's deferred. Agents reach the vault three ways:
 
-- **CLI** — `temper warmup`, `temper search`, `temper session save`. Claude Code hooks call `temper warmup` automatically at session start.
+- **CLI** — `temper warmup`, `temper search`, `temper resource create`. Claude Code hooks call `temper warmup` automatically at session start.
 - **MCP Server** — vault operations exposed as structured tools. Agents query, read, and write through the Model Context Protocol.
 - **Skill File** — `temper skill install` generates a Claude Code skill that teaches the agent your vault's structure and workflow conventions.
 
@@ -104,8 +113,8 @@ temper search "authentication decisions"
 # Generate and install the Claude Code skill
 temper skill install
 
-# Save a session
-temper session save "Implemented auth flow, chose JWT rotation"
+# Write a session note (body via --body @file or piped stdin)
+temper resource create --type session --context myapp --title "Implemented auth flow, chose JWT rotation"
 ```
 
 ## The Vault
@@ -126,26 +135,24 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper init` | Initialize a new vault |
 | `temper check` | Verify vault integrity and tool health |
 | `temper status` | Vault overview |
-| `temper events` | Show recent vault events |
-| `temper warmup` | Context primer for new sessions |
-| `temper normalize` | Repair vault structure drift |
+| `temper warmup [--context <ctx>]` | Context primer for new sessions |
+| `temper pull <ctx>` | Materialize a context's projection from the cloud |
 
 ### Search
 
 | Command | Description |
 |---------|-------------|
-| `temper search <query>` | Semantic search across the knowledge base |
-| `temper context <n>` | Show topic with related context |
+| `temper search <query>` | Hybrid full-text + semantic search |
+| `temper search <query> --edge-type <k> --depth <n>` | Search with graph expansion along typed edges |
 
 ### Content
 
 | Command | Description |
 |---------|-------------|
-| `temper note create <type> <title>` | Create note from template |
-| `temper session save [title]` | Create/update session note |
-| `temper session list` | List recent sessions |
-| `temper research save <title>` | Create research note |
-| `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, and store via cloud pipeline) |
+| `temper resource create --type <t> --title <t>` | Create a resource (goal, task, session, research, decision, concept) |
+| `temper resource create --from <path\|url>` | Ingest a file or URL (extract, embed, store via the cloud pipeline) |
+| `temper resource list --type <t>` | List resources of a type |
+| `temper resource show <ref>` | Show a resource by ref |
 
 ### Goals and Tasks
 
@@ -154,9 +161,17 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 | `temper resource create --type task --title <t> --context <ctx>` | Create a task |
 | `temper resource create --type goal --title <t> --context <ctx>` | Create a goal |
 | `temper resource list --type task [--context <ctx>]` | List tasks (or any doc type) |
-| `temper resource update <slug> --type task --context <ctx> --stage done` | Mark a task done |
+| `temper resource update <ref> --stage done` | Mark a task done |
 
-> `temper resource create` and `temper resource update` require `--context`.
+> `temper resource create` writes *into* a context (`--context`). `temper resource update`, `show`, and `delete` take a single **ref** — a UUID or the decorated `slug-<uuid>` form — and need no `--type`/`--context`.
+
+### Relationships
+
+| Command | Description |
+|---------|-------------|
+| `temper edge assert <source> <target> --kind <k> --polarity <p> --label <l>` | Assert a typed edge (kinds: express, contains, leads-to, near; polarity forward/inverse) |
+| `temper edge reweight <edge-handle> --weight <n>` | Change an edge's weight |
+| `temper edge fold <edge-handle>` | Fold (supersede) an edge |
 
 ### Contexts and Skills
 
@@ -173,7 +188,7 @@ The vault is a directory of markdown files with YAML frontmatter. This is delibe
 |---------|-------------|
 | `temper auth` | Authenticate with temper cloud |
 | `temper pull <context>` | Materialize a local projection of a context |
-| `temper resource delete <slug>` | Delete a resource from the cloud (soft-delete) |
+| `temper resource delete <ref>` | Delete a resource from the cloud (soft-delete) |
 
 ## Semantic Search
 
@@ -233,9 +248,21 @@ The remote MCP server exposes vault operations as structured tools over [Streama
 | `list_resources` | List resources, optionally filtered by context |
 | `get_resource` | Get a resource by ID, optionally with full content |
 | `create_resource` | Create a new resource in a context |
-| `search` | Semantic vector search across the knowledge base |
+| `update_resource` | Update a resource's title, slug, or content |
+| `update_resource_meta` | Update frontmatter without touching the body |
+| `delete_resource` | Soft-delete a resource by ID |
+| `assert_relationship` | Assert a typed edge between two resources |
+| `retype_relationship` | Change an edge's kind and polarity |
+| `reweight_relationship` | Change an edge's weight |
+| `fold_relationship` | Fold (supersede) an edge |
+| `search` | Full-text + semantic search across the knowledge base |
 | `list_contexts` | List available contexts (workspaces) |
 | `get_context` | Get details of a specific context |
+| `create_context` | Create a new context |
+| `list_doc_types` | List available document types |
+| `describe_doc_type` | Describe a doc type's schema |
+| `list_events` | List events, optionally filtered by resource or type |
+| `get_profile` | Get the authenticated user's profile |
 
 **Connect from Claude Desktop or Claude Code:**
 
