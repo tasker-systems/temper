@@ -260,36 +260,35 @@ mod next_impl {
 
     /// `show` over `temper_next`: reconstruct the full production-shaped `ResourceRow` (§9 invariant
     /// floor) via the shared `reconstruct_resource_row` — the same path `NextBackend::show_resource` and
-    /// the full-row `list` arm use. `resolve_new_id` bridges the parity-test prod id → new id (under
-    /// `flag=next` callers pass next-minted ids directly, consistent with `get_content`/`get_meta`).
-    /// Visibility is gated inside `reconstruct_resource_row` (WS2); the typed `ReadbackError` is split by
-    /// `map_readback_err` (not-visible → NotFound/404, genuine fault → Api/500) before reaching here.
+    /// the full-row `list` arm use. The inbound id IS the `temper_next` id (synthesis preserves resource
+    /// ids verbatim), so it is used directly — no origin_uri remap. Visibility is gated inside
+    /// `reconstruct_resource_row` (WS2); the typed `ReadbackError` is split by `map_readback_err`
+    /// (not-visible → NotFound/404, genuine fault → Api/500) before reaching here.
     pub(super) async fn show(
         pool: &PgPool,
         principal: Uuid,
-        prod_id: Uuid,
+        resource_id: Uuid,
     ) -> ApiResult<ResourceRow> {
-        let new_id = resolve_new_id(pool, prod_id).await?;
-        reconstruct_resource_row(pool, principal, new_id)
+        reconstruct_resource_row(pool, principal, resource_id)
             .await
             .map_err(ApiError::from)
     }
 
     /// `get_content` over `temper_next`: reconstruct the markdown body (§9 body floor). `managed_meta`
-    /// / `open_meta` are left `None` — the body markdown is the floor; the meta tier is `get_meta`.
+    /// / `open_meta` are left `None` — the body markdown is the floor; the meta tier is `get_meta`. The
+    /// inbound id is the preserved `temper_next` id (used directly, no remap).
     pub(super) async fn get_content(
         pool: &PgPool,
         principal: Uuid,
-        prod_id: Uuid,
+        resource_id: Uuid,
     ) -> ApiResult<ContentResponse> {
-        let new_id = resolve_new_id(pool, prod_id).await?;
         // `readback::body` gates visibility (WS2) and returns a typed `ReadbackError`; `map_readback_err`
         // splits not-visible → NotFound (404, leak-safe deny, never 403) from a genuine fault → Api (500).
-        let markdown = readback::body(pool, principal, new_id)
+        let markdown = readback::body(pool, principal, resource_id)
             .await
             .map_err(|e| ApiError::from(map_readback_err(e)))?;
         Ok(ContentResponse {
-            resource_id: ResourceId::from(new_id),
+            resource_id: ResourceId::from(resource_id),
             markdown,
             managed_meta: None,
             open_meta: None,
@@ -298,13 +297,14 @@ mod next_impl {
 
     /// `get_meta` over `temper_next`: reconstruct the managed/open split (`readback::meta`, the §7
     /// inverse fate). `managed_hash`/`open_hash` are §7-dissolved (no manifest in `temper_next`) — they
-    /// are emitted empty (non-invariant; the §9 floor does not assert them).
+    /// are emitted empty (non-invariant; the §9 floor does not assert them). The inbound id is the
+    /// preserved `temper_next` id (used directly, no remap).
     pub(super) async fn get_meta(
         pool: &PgPool,
         principal: Uuid,
-        prod_id: Uuid,
+        resource_id: Uuid,
     ) -> ApiResult<ResourceMetaResponse> {
-        let new_id = resolve_new_id(pool, prod_id).await?;
+        let new_id = resource_id;
         // `readback::meta` gates visibility (WS2) and returns a typed `ReadbackError`; `map_readback_err`
         // splits not-visible → NotFound (404, leak-safe deny, never 403) from a genuine fault → Api (500).
         let rb = readback::meta(pool, principal, new_id)
@@ -332,7 +332,7 @@ mod next_impl {
     ) -> ApiResult<Vec<UnifiedSearchResultRow>> {
         // WS2: the search readbacks JOIN `resources_visible_to(principal)`, so the result set is
         // already visibility-scoped (a not-visible match never surfaces).
-        let (origin_uris, origin) = if let Some(embedding) = params.embedding.as_ref() {
+        let (ids, origin) = if let Some(embedding) = params.embedding.as_ref() {
             (
                 readback::vector_search(pool, principal, embedding)
                     .await
@@ -350,21 +350,18 @@ mod next_impl {
             (Vec::new(), "fts")
         };
 
-        let mut hits = Vec::with_capacity(origin_uris.len());
-        for origin_uri in origin_uris {
-            let Some(new_id) = readback::resource_id_by_origin_uri(pool, &origin_uri)
-                .await
-                .map_err(api_err)?
-            else {
-                continue;
-            };
+        // Each readback returns the preserved resource id directly — `origin_uri` is non-unique (empty
+        // for CLI/agent-created resources), so the prior origin_uri→id remap collapsed every empty match
+        // onto one arbitrary resource. The id-keyed reconstruction supplies the row's origin_uri verbatim.
+        let mut hits = Vec::with_capacity(ids.len());
+        for new_id in ids {
             let row = reconstruct_resource_row(pool, principal, new_id).await?;
             hits.push(UnifiedSearchResultRow {
                 resource_id: new_id,
                 title: row.title,
                 slug: String::new(),
-                kb_uri: origin_uri.clone(),
-                origin_uri,
+                kb_uri: row.origin_uri.clone(),
+                origin_uri: row.origin_uri,
                 context: Some(row.context_name),
                 doc_type: row.doc_type_name,
                 fts_score: 0.0,
@@ -428,15 +425,5 @@ mod next_impl {
             out.push((row, managed, open));
         }
         Ok(out)
-    }
-
-    /// Map a production resource id to its synthesized counterpart (by `origin_uri`, via the bimap).
-    async fn resolve_new_id(pool: &PgPool, prod_id: Uuid) -> ApiResult<Uuid> {
-        let ids = readback::ResolvedIds::load(pool).await.map_err(api_err)?;
-        ids.to_new(prod_id).ok_or_else(|| {
-            ApiError::from(TemperError::NotFound(format!(
-                "resource {prod_id} not in temper_next"
-            )))
-        })
     }
 }

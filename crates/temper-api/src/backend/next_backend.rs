@@ -172,16 +172,6 @@ impl NextBackend {
         Self { pool, profile_id }
     }
 
-    /// Resolve the new-substrate resource id for a `ResourceId`. The production
-    /// id is mapped to the synthesized id by `origin_uri`.
-    async fn resolve_new_id(&self, id: ResourceId) -> Result<uuid::Uuid, TemperError> {
-        let ids = readback::ResolvedIds::load(&self.pool)
-            .await
-            .map_err(|e| TemperError::Api(e.to_string()))?;
-        ids.to_new(uuid::Uuid::from(id))
-            .ok_or_else(|| TemperError::NotFound(format!("resource {id} not in temper_next")))
-    }
-
     /// Auth-before-writes gate (WS2): the caller (`self.profile_id`, a production profile id that
     /// synthesis preserves verbatim into `temper_next`, so it resolves directly as the principal) must
     /// be able to modify the target `temper_next` resource. Returns `Forbidden` otherwise. CONFORMs to
@@ -281,7 +271,9 @@ impl Backend for NextBackend {
         &self,
         cmd: ShowResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        let new_id = self.resolve_new_id(cmd.resource).await?;
+        // The inbound id IS the `temper_next` id — synthesis preserves resource ids verbatim, so there
+        // is no origin_uri remap (the prior bimap collapsed empty-origin_uri resources onto one id).
+        let new_id = uuid::Uuid::from(cmd.resource);
         // `reconstruct_resource_row` gates visibility (WS2) and maps the typed `ReadbackError` via
         // `map_readback_err`: not-visible → NotFound (404, the leak-safe deny — never 403, no
         // existence-leak oracle), a genuine fault → Api (500). The earlier blanket `|_| NotFound`
@@ -294,9 +286,9 @@ impl Backend for NextBackend {
         &self,
         cmd: UpdateResource,
     ) -> Result<CommandOutput<ResourceRow>, TemperError> {
-        // Address the target by its public id via ResolvedIds (the transitional parity model 4b reads
-        // use; native-id addressing without a legacy twin is a chunk-5 flip concern).
-        let new_id = self.resolve_new_id(cmd.resource).await?;
+        // The inbound id IS the preserved `temper_next` id (native-id addressing — synthesis carries
+        // resource ids verbatim, so no origin_uri remap).
+        let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2): the caller must be able to modify this resource.
         self.check_can_modify_next(new_id).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
@@ -356,7 +348,8 @@ impl Backend for NextBackend {
     }
 
     async fn delete_resource(&self, cmd: DeleteResource) -> Result<CommandOutput<()>, TemperError> {
-        let new_id = self.resolve_new_id(cmd.resource).await?;
+        // The inbound id IS the preserved `temper_next` id (no origin_uri remap).
+        let new_id = uuid::Uuid::from(cmd.resource);
         // Auth before any write (WS2).
         self.check_can_modify_next(new_id).await?;
         let owner = writes::resolve_profile(&self.pool, *self.profile_id)
@@ -402,22 +395,27 @@ impl Backend for NextBackend {
     ) -> Result<CommandOutput<Vec<SearchHit>>, TemperError> {
         // 4b: FTS only (the text query). Vector search needs a query embedding this layer does not
         // carry; the HTTP search selector handles vector mode directly (read selector, Task 6/8).
-        let uris = readback::fts_search(&self.pool, *self.profile_id, &cmd.query.query)
+        // `fts_search` returns the preserved resource ids (origin_uri is non-unique — empty for
+        // CLI/agent-created resources, so it cannot identify a match). Each id reconstructs to its
+        // summary (origin_uri verbatim as the stable handle, like `list_resources`).
+        let ids = readback::fts_search(&self.pool, *self.profile_id, &cmd.query.query)
             .await
             .map_err(|e| TemperError::Api(e.to_string()))?;
-        let hits = uris
-            .into_iter()
-            .map(|uri| SearchHit {
+        let mut hits = Vec::with_capacity(ids.len());
+        for new_id in ids {
+            let row = reconstruct_resource_row(&self.pool, *self.profile_id, new_id).await?;
+            hits.push(SearchHit {
                 summary: ResourceSummary {
-                    slug: uri,
-                    doctype: String::new(),
-                    context: String::new(),
-                    title: String::new(),
+                    // slug is §7-dissolved; the summary uses origin_uri as the stable handle.
+                    slug: row.origin_uri,
+                    doctype: row.doc_type_name,
+                    context: row.context_name,
+                    title: row.title,
                 },
                 // §9 floor asserts the matching SET, not the score.
                 score: 0.0,
-            })
-            .collect();
+            });
+        }
         Ok(CommandOutput::new(hits))
     }
 
@@ -425,23 +423,15 @@ impl Backend for NextBackend {
         &self,
         cmd: AssertRelationship,
     ) -> Result<CommandOutput<uuid::Uuid>, TemperError> {
-        // Source is pre-resolved.
-        let source_pub = uuid::Uuid::from(cmd.source);
-        let ids = readback::ResolvedIds::load(&self.pool)
-            .await
-            .map_err(api_err)?;
-        let src_next = ids.to_new(source_pub).ok_or_else(|| {
-            TemperError::NotFound(format!("source {source_pub} not in temper_next"))
-        })?;
+        // Source and target ids ARE the preserved `temper_next` ids (synthesis carries resource ids
+        // verbatim) — used directly, no origin_uri remap (the prior bimap collapsed empty-origin_uri
+        // resources onto one arbitrary id).
+        let src_next = uuid::Uuid::from(cmd.source);
         // Auth before any write (WS2): edge mutations gate on the SOURCE resource (production's
         // "Cannot modify source resource"). Gate before resolving the target / writing the edge.
         self.check_can_modify_next(src_next).await?;
 
-        // The target is pre-resolved — map its public id to its temper_next id.
-        let target_pub = uuid::Uuid::from(cmd.target);
-        let tgt_next = ids.to_new(target_pub).ok_or_else(|| {
-            TemperError::NotFound(format!("target {target_pub} not in temper_next"))
-        })?;
+        let tgt_next = uuid::Uuid::from(cmd.target);
 
         // The edge homes in the source's temper_next context (its home anchor).
         let home_next: uuid::Uuid = sqlx::query_scalar(

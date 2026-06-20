@@ -106,7 +106,9 @@ async fn create_update_delete_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
     assert_eq!(row_n.stage.as_deref(), Some("backlog"), "next create stage");
     assert_eq!(row_n.doc_type_name, "research", "next create doc_type");
 
-    // ── update (title + stage), addressed by the public id (ResolvedIds maps to the next row) ──
+    // ── update (title + stage): each backend addresses its OWN resource by that resource's id. The
+    // legacy and next creates are independent twins (sharing only an origin_uri), so next addresses
+    // row_n directly — there is no origin_uri bimap bridging row_l.id → the next twin anymore. ──
     let upd = |id: temper_core::types::ids::ResourceId| UpdateResource {
         resource: id,
         body: None,
@@ -125,7 +127,7 @@ async fn create_update_delete_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
         .expect("legacy update")
         .value;
     let upd_n = next
-        .update_resource(upd(row_l.id))
+        .update_resource(upd(row_n.id))
         .await
         .expect("next update")
         .value;
@@ -143,10 +145,10 @@ async fn create_update_delete_roundtrip_next_equals_legacy(pool: sqlx::PgPool) {
         force: false,
         origin: Surface::CliCloud,
     };
-    // next first: it addresses the target by the public id via ResolvedIds, which filters is_active —
-    // so resolve BEFORE legacy soft-deletes the public row. (Moot in the real gated world: one backend
-    // is active at a time, so both deletes never run against one DB.)
-    next.delete_resource(del(row_l.id))
+    // Each backend deletes its OWN resource by that resource's id (no origin_uri bimap bridge). next
+    // addresses row_n directly against temper_next and never reads the public row. (Moot in the real
+    // gated world anyway: one backend is active at a time, so both deletes never run against one DB.)
+    next.delete_resource(del(row_n.id))
         .await
         .expect("next delete");
     legacy
@@ -360,8 +362,8 @@ async fn next_resource_writes_forbidden_for_non_owner(pool: sqlx::PgPool) {
     .await
     .expect("own temper context");
 
-    // A resource owned by SYSTEM, created in public then synthesized — so it carries a public twin the
-    // next-backend update addresses through (ResolvedIds), and a temper_next home owned by the
+    // A resource owned by SYSTEM, created in public then synthesized — so it carries a temper_next row
+    // under its PRESERVED id (the next-backend update addresses that id directly), homed under the
     // synthesized SYSTEM profile (preserved id, WS2 Task 1).
     let legacy = DbBackend::new(app.pool.clone(), owner, "dev".into(), Surface::CliCloud);
     let row = legacy
