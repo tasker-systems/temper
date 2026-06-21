@@ -175,7 +175,8 @@ if [ -x "$PG17BIN/pg_dump" ]; then PGDUMP="$PG17BIN/pg_dump"; PGRESTORE="$PG17BI
 ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
 [ "$ver" = "17" ] || { echo "ERROR: need PG17 client tools (got $ver from $PGDUMP). Install postgresql@17 or set FLIP_PG17_BIN to a PG17 bin dir."; exit 1; }
 
-DUMP="$(mktemp -t flip_public_XXXX).dump"
+_TMP="$(mktemp -t flip_public_XXXX)"; DUMP="${_TMP}.dump"
+trap 'rm -f "$_TMP" "$DUMP"' EXIT
 echo "dumping public from source → $DUMP"
 "$PGDUMP" "$FLIP_SOURCE_URL" --schema=public --no-owner --no-privileges -Fc -f "$DUMP"
 
@@ -313,7 +314,8 @@ ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
 # Full dump (schema + data) of ONLY temper_next. pg_dump emits CREATE TRIGGER AFTER
 # the COPY data, so triggers never fire during the load — no double-apply, no
 # session_replication_role needed.
-DUMP="$(mktemp -t flip_next_XXXX).sql"
+_TMP="$(mktemp -t flip_next_XXXX)"; DUMP="${_TMP}.sql"
+trap 'rm -f "$_TMP" "$DUMP"' EXIT
 echo "dumping temper_next (schema+data) → $DUMP"
 "$PGDUMP" "$LOCAL" --schema=temper_next --no-owner --no-privileges -f "$DUMP"
 
