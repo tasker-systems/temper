@@ -124,11 +124,17 @@ docker compose -f docker-compose.flip.yml down -v
 Run:
 ```bash
 cargo make flip-db-up
-psql postgresql://temper:temper@localhost:5438/temper_development -tAc "SHOW server_version;"
-psql postgresql://temper:temper@localhost:5438/temper_development -tAc "SELECT extname FROM pg_extension WHERE extname='vector';"
-psql postgresql://temper:temper@localhost:5438/temper_development -tAc "SELECT uuid_generate_v7() < uuid_generate_v7();"
+U=postgresql://temper:temper@localhost:5438/temper_development
+psql "$U" -tAc "SHOW server_version;"
+psql "$U" -tAc "SELECT extname FROM pg_extension WHERE extname='vector';"
+# version nibble must be 7 for every sample (do NOT use `uuid_generate_v7() < uuid_generate_v7()`
+# inline — within one millisecond the timestamp prefix is identical and random bits decide order,
+# so it flakes ~50/50). Check the version nibble + a deterministic cross-ms compare instead:
+psql "$U" -tAc "SELECT string_agg(substring(uuid_generate_v7()::text from 15 for 1),'') FROM generate_series(1,5);"
+A=$(psql "$U" -tAc "SELECT uuid_generate_v7();"); psql "$U" -tAc "SELECT pg_sleep(0.005);" >/dev/null
+B=$(psql "$U" -tAc "SELECT uuid_generate_v7();"); psql "$U" -tAc "SELECT '$A'::uuid < '$B'::uuid;"
 ```
-Expected: `server_version` starts `17`; `vector`; and `t` (the second uuid sorts after the first — confirms time-ordering).
+Expected: `server_version` starts `17`; `vector`; `77777` (every sample is UUID version 7); `t` (the earlier uuid sorts first across a millisecond boundary).
 
 > If `pgvector/pgvector:0.8.2-pg17-trixie` 404s on pull, fall back to `pgvector/pgvector:pg17` in the compose file and re-run.
 
