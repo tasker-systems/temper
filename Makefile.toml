@@ -169,3 +169,25 @@ echo "restoring public into $LOCAL"
 psql "$LOCAL" -v ON_ERROR_STOP=1 -f tools/flip/uuid_portable.sql
 echo "public restored. rows: $(psql "$LOCAL" -tAc 'SELECT count(*) FROM public.kb_resources WHERE is_active')"
 '''
+
+[tasks.flip-synthesize-local]
+description = "Load a clean temper_next artifact into the flip container and synthesize from its public state"
+script = '''
+set -euo pipefail
+LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
+
+# Clean temper_next: 00 resets the namespace (DROP/CREATE temper_next only — public
+# untouched), 01/02 install schema+functions, 03 seeds system rows. This is the
+# SAME source the synthesis tests load, so the local temper_next schema is known and
+# deterministic regardless of the source's temper_next state.
+for f in 00_namespace_reset 01_schema 02_functions 03_seed; do
+  echo "loading schema-artifact/$f.sql"
+  psql "$LOCAL" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null
+done
+
+# Synthesize from the restored public state. The binary sets search_path=temper_next,
+# public per connection and runs resource/property/edge passes + the §8 body-parity
+# gate, which bails (nonzero exit) on any mismatch — so a clean exit IS the proof.
+echo "synthesizing (all rows)…"
+DATABASE_URL="$LOCAL" cargo run -p temper-next --bin temper-next -- synthesize
+'''
