@@ -167,20 +167,23 @@ set -euo pipefail
 : "${FLIP_SOURCE_URL:?set FLIP_SOURCE_URL to the prod/branch connection string to dump public from}"
 LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
 
-# Guard: pg client tools must be v17 (matches the PG17 source + PG17 container;
-# avoids a newer-server dump that can't restore into PG17).
-ver="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
-[ "$ver" = "17" ] || { echo "ERROR: pg_dump must be v17 (got $ver). Put PG17 client tools on PATH."; exit 1; }
+# Resolve PG17 client tools. PATH often defaults to PG18 on a dev machine, but a
+# PG18 pg_dump can't restore into a PG17 server. Prefer FLIP_PG17_BIN, else the
+# Homebrew postgresql@17 keg, else fall back to PATH and let the guard catch it.
+PG17BIN="${FLIP_PG17_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
+if [ -x "$PG17BIN/pg_dump" ]; then PGDUMP="$PG17BIN/pg_dump"; PGRESTORE="$PG17BIN/pg_restore"; else PGDUMP=pg_dump; PGRESTORE=pg_restore; fi
+ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
+[ "$ver" = "17" ] || { echo "ERROR: need PG17 client tools (got $ver from $PGDUMP). Install postgresql@17 or set FLIP_PG17_BIN to a PG17 bin dir."; exit 1; }
 
 DUMP="$(mktemp -t flip_public_XXXX).dump"
 echo "dumping public from source → $DUMP"
-pg_dump "$FLIP_SOURCE_URL" --schema=public --no-owner --no-privileges -Fc -f "$DUMP"
+"$PGDUMP" "$FLIP_SOURCE_URL" --schema=public --no-owner --no-privileges -Fc -f "$DUMP"
 
 echo "restoring public into $LOCAL"
 # pg_restore continues past non-fatal errors by default (e.g. CREATE EXTENSION
 # pg_uuidv7, which the container can't satisfy — uuid_generate_v7 is already
 # provided by the Task-1 shim). --clean --if-exists makes re-runs idempotent.
-pg_restore -d "$LOCAL" --no-owner --no-privileges --clean --if-exists "$DUMP" || true
+"$PGRESTORE" -d "$LOCAL" --no-owner --no-privileges --clean --if-exists "$DUMP" || true
 
 # Re-assert the portable uuid shim AFTER restore in case --clean dropped a same-named
 # object from the dump, so synthesis always has a working generator.
@@ -301,15 +304,18 @@ set -euo pipefail
 : "${FLIP_TARGET_URL:?set FLIP_TARGET_URL to the prod/branch connection string to load temper_next into}"
 LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
 
-ver="$(pg_dump --version | grep -oE '[0-9]+' | head -1)"
-[ "$ver" = "17" ] || { echo "ERROR: pg_dump must be v17 (got $ver)."; exit 1; }
+# Resolve PG17 pg_dump (see flip-dump-public for the rationale).
+PG17BIN="${FLIP_PG17_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
+if [ -x "$PG17BIN/pg_dump" ]; then PGDUMP="$PG17BIN/pg_dump"; else PGDUMP=pg_dump; fi
+ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
+[ "$ver" = "17" ] || { echo "ERROR: need PG17 pg_dump (got $ver from $PGDUMP). Install postgresql@17 or set FLIP_PG17_BIN."; exit 1; }
 
 # Full dump (schema + data) of ONLY temper_next. pg_dump emits CREATE TRIGGER AFTER
 # the COPY data, so triggers never fire during the load — no double-apply, no
 # session_replication_role needed.
 DUMP="$(mktemp -t flip_next_XXXX).sql"
 echo "dumping temper_next (schema+data) → $DUMP"
-pg_dump "$LOCAL" --schema=temper_next --no-owner --no-privileges -f "$DUMP"
+"$PGDUMP" "$LOCAL" --schema=temper_next --no-owner --no-privileges -f "$DUMP"
 
 # Replace the target's dormant temper_next wholesale, in one transaction. Safe because
 # the flag is still 'legacy' (temper_next unread) and the operator has taken a Neon
