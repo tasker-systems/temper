@@ -138,3 +138,34 @@ description = "Tear down the throwaway PG17 flip container and its volume"
 script = '''
 docker compose -f docker-compose.flip.yml down -v
 '''
+
+[tasks.flip-dump-public]
+description = "Dump the source's public schema and restore it into the :5438 flip container (synthesis input)"
+script = '''
+set -euo pipefail
+: "${FLIP_SOURCE_URL:?set FLIP_SOURCE_URL to the prod/branch connection string to dump public from}"
+LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
+
+# Resolve PG17 client tools. PATH often defaults to PG18 on a dev machine, but a
+# PG18 pg_dump can't restore into a PG17 server. Prefer FLIP_PG17_BIN, else the
+# Homebrew postgresql@17 keg, else fall back to PATH and let the guard catch it.
+PG17BIN="${FLIP_PG17_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
+if [ -x "$PG17BIN/pg_dump" ]; then PGDUMP="$PG17BIN/pg_dump"; PGRESTORE="$PG17BIN/pg_restore"; else PGDUMP=pg_dump; PGRESTORE=pg_restore; fi
+ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
+[ "$ver" = "17" ] || { echo "ERROR: need PG17 client tools (got $ver from $PGDUMP). Install postgresql@17 or set FLIP_PG17_BIN to a PG17 bin dir."; exit 1; }
+
+DUMP="$(mktemp -t flip_public_XXXX).dump"
+echo "dumping public from source → $DUMP"
+"$PGDUMP" "$FLIP_SOURCE_URL" --schema=public --no-owner --no-privileges -Fc -f "$DUMP"
+
+echo "restoring public into $LOCAL"
+# pg_restore continues past non-fatal errors by default (e.g. CREATE EXTENSION
+# pg_uuidv7, which the container can't satisfy — uuid_generate_v7 is already
+# provided by the Task-1 shim). --clean --if-exists makes re-runs idempotent.
+"$PGRESTORE" -d "$LOCAL" --no-owner --no-privileges --clean --if-exists "$DUMP" || true
+
+# Re-assert the portable uuid shim AFTER restore in case --clean dropped a same-named
+# object from the dump, so synthesis always has a working generator.
+psql "$LOCAL" -v ON_ERROR_STOP=1 -f tools/flip/uuid_portable.sql
+echo "public restored. rows: $(psql "$LOCAL" -tAc 'SELECT count(*) FROM public.kb_resources WHERE is_active')"
+'''
