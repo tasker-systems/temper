@@ -93,8 +93,9 @@ Rehearse on a branch until boring, then run the identical steps against main.
   container* below): `docker compose -f docker-compose.flip.yml up -d`. It runs a
   PG17 pgvector image on a **distinct port (5438)** so it never touches the PG18
   dev DB on :5437 — both can coexist, and nothing else competes locally.
-- `pg_dump` / `pg_restore` / `psql` **client version 17** on PATH (matches the
-  PG17 servers on both ends).
+- PostgreSQL 17 client tools available — the scripts auto-resolve them via
+  `FLIP_PG17_BIN` (default the Homebrew `postgresql@17` keg); no manual PATH
+  change needed.
 - Disk headroom for the `public` dump + local restore.
 
 ### 1. (informational) Confirm scope
@@ -115,7 +116,9 @@ is the belt to the flag-flip's suspenders.)
 ### 4. Dump `public` → local (synthesis input)
 
 - `pg_dump` prod **`public`** schema (data + schema) → local file.
-- Create the fresh local PG17 DB; install `vector` + `pg_uuidv7` extensions.
+- Create the fresh local PG17 DB; install the `vector` extension and load the
+  portable `uuid_generate_v7()` shim (`tools/flip/uuid_portable.sql`);
+  `pg_uuidv7` is intentionally not installed locally.
 - `pg_restore` / `psql` the `public` dump into the local DB.
 
 ### 5. Build `temper_next` locally
@@ -204,7 +207,7 @@ keystroke.
 | Task | Wraps | Guards against |
 |---|---|---|
 | `flip-dump-public` | `pg_dump` prod `public` → restore into the running :5438 PG17 container (extensions first) | wrong schema scope, missing extensions, wrong search_path |
-| `flip-synthesize-local` | load `temper_next` schema/functions/seed locally → `temper-next synthesize` → assert §8 parity clean | forgetting the parity gate; running against the wrong DB |
+| `flip-synthesize-local` | load `temper_next` clean schema/functions (00/01/02, no 03_seed) locally → `temper-next synthesize` → assert §8 parity clean | forgetting the parity gate; running against the wrong DB |
 | `flip-load-next` | `pg_dump --schema=temper_next` (full) local → prod `DROP SCHEMA temper_next CASCADE` + restore, in one txn | schema drift vs prod; partial load leaving a half-replaced schema |
 
 Each task takes the source/target connection strings as parameters (env or

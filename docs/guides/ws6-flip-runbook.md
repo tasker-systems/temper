@@ -28,6 +28,11 @@ export FLIP_TARGET_URL="<rehearsal-branch-conn-string>"
 # Then run: Pre-flight, Dump public → local, Synthesize locally,
 # Load temper_next → prod, and Verify sections.
 # Skip: Freeze, Snapshot, Cutover, Unfreeze, and Cleanup.
+#
+# Before the Verify step, flip the branch's flag once — it's a throwaway branch,
+# so this is safe:
+#   psql "$FLIP_SOURCE_URL" -c "UPDATE kb_backend_selection SET backend='next' WHERE id=true;"
+# This proves the temper_next read path; without it, Verify would still read from public.
 
 # Delete the branch when done
 neonctl branches delete <branch-id>
@@ -152,9 +157,10 @@ for the real flip.
     cargo make flip-synthesize-local
     ```
 
-    The task: loads `temper_next` schema + functions + seed into the local DB,
-    runs `temper-next synthesize` with `search_path = temper_next, public`
-    against localhost, then asserts the §8 parity gate.
+    The task: loads `temper_next` schema + functions (the clean artifact — NOT
+    the `03_seed` demo fixture) into the local DB, runs `temper-next synthesize`
+    with `search_path = temper_next, public` against localhost, then asserts the
+    §8 parity gate.
 
     **The task must exit 0.** A non-zero exit means the parity gate failed.
     Do not proceed to the load step with a failed synthesis. Diagnose, fix,
