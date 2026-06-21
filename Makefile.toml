@@ -191,3 +191,32 @@ done
 echo "synthesizing (all rows)…"
 DATABASE_URL="$LOCAL" cargo run -p temper-next --bin temper-next -- synthesize
 '''
+
+[tasks.flip-load-next]
+description = "Dump the local temper_next (schema+data) and DROP/recreate it on the target, in one transaction"
+script = '''
+set -euo pipefail
+: "${FLIP_TARGET_URL:?set FLIP_TARGET_URL to the prod/branch connection string to load temper_next into}"
+LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
+
+# Resolve PG17 pg_dump (see flip-dump-public for the rationale).
+PG17BIN="${FLIP_PG17_BIN:-/opt/homebrew/opt/postgresql@17/bin}"
+if [ -x "$PG17BIN/pg_dump" ]; then PGDUMP="$PG17BIN/pg_dump"; else PGDUMP=pg_dump; fi
+ver="$("$PGDUMP" --version | grep -oE '[0-9]+' | head -1)"
+[ "$ver" = "17" ] || { echo "ERROR: need PG17 pg_dump (got $ver from $PGDUMP). Install postgresql@17 or set FLIP_PG17_BIN."; exit 1; }
+
+# Full dump (schema + data) of ONLY temper_next. pg_dump emits CREATE TRIGGER AFTER
+# the COPY data, so triggers never fire during the load — no double-apply, no
+# session_replication_role needed.
+DUMP="$(mktemp -t flip_next_XXXX).sql"
+echo "dumping temper_next (schema+data) → $DUMP"
+"$PGDUMP" "$LOCAL" --schema=temper_next --no-owner --no-privileges -f "$DUMP"
+
+# Replace the target's dormant temper_next wholesale, in one transaction. Safe because
+# the flag is still 'legacy' (temper_next unread) and the operator has taken a Neon
+# snapshot. --single-transaction => all-or-nothing; a failure leaves temper_next as-was.
+echo "DROP+restore temper_next on target (single transaction)…"
+{ echo "DROP SCHEMA IF EXISTS temper_next CASCADE;"; cat "$DUMP"; } \
+  | psql "$FLIP_TARGET_URL" -v ON_ERROR_STOP=1 --single-transaction
+echo "target temper_next replaced. rows: $(psql "$FLIP_TARGET_URL" -tAc 'SELECT count(*) FROM temper_next.kb_resources')"
+'''
