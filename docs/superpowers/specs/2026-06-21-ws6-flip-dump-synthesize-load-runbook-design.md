@@ -120,9 +120,14 @@ is the belt to the flag-flip's suspenders.)
 
 ### 5. Build `temper_next` locally
 
-- Ensure `temper_next` schema + functions + seed exist locally, matching prod
-  (load `schema-artifact/00_namespace_reset.sql`, `01_schema.sql`, `02_functions.sql`,
-  `03_seed.sql`, or run the install migrations — whichever the script standardizes on).
+- Ensure a **clean** `temper_next` schema + functions exist locally (load
+  `schema-artifact/00_namespace_reset.sql`, `01_schema.sql`, `02_functions.sql` — the
+  same set the synthesis tests' `reset_artifact()` loads). **Do NOT load `03_seed.sql`:**
+  it is a demo scenario fixture (the alice/bob onboarding-cogmap for `04_scenarios.sql`),
+  not system seed — its 20 demo resources have no `public` counterpart, so loading it
+  makes the §8 body-parity gate flag all of them (caught in the 2026-06-21 Neon
+  rehearsal: 15 spurious divergers, all `03_seed` demo rows). Synthesis seeds the system
+  actors it needs itself via `bootstrap::run`.
 - Run synthesis against localhost:
 
   ```bash

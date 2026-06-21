@@ -178,10 +178,13 @@ set -euo pipefail
 LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
 
 # Clean temper_next: 00 resets the namespace (DROP/CREATE temper_next only — public
-# untouched), 01/02 install schema+functions, 03 seeds system rows. This is the
-# SAME source the synthesis tests load, so the local temper_next schema is known and
-# deterministic regardless of the source's temper_next state.
-for f in 00_namespace_reset 01_schema 02_functions 03_seed; do
+# untouched), 01/02 install schema+functions. This is the SAME set the synthesis
+# tests' reset_artifact() loads (tests/common/mod.rs) — deliberately WITHOUT 03_seed.
+# 03_seed.sql is a demo scenario fixture (the alice/bob onboarding-cogmap for
+# 04_scenarios.sql), NOT system seed; its 20 demo resources have no public counterpart,
+# so loading it makes the §8 body-parity gate flag all of them. Synthesis seeds the
+# system actors it needs itself (bootstrap::run).
+for f in 00_namespace_reset 01_schema 02_functions; do
   echo "loading schema-artifact/$f.sql"
   psql "$LOCAL" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null
 done
