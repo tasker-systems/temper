@@ -89,10 +89,12 @@ Rehearse on a branch until boring, then run the identical steps against main.
 - A **green branch-rehearsal** of this runbook exists (synthesis §8 parity clean
   + §9 read-floor parity clean on the real corpus — the latter is step D's harness).
 - `neonctl` authenticated (`neonctl projects list` works); version ≥ 2.26.
-- Local **PostgreSQL 17** container up and empty (a fresh DB, *not* the PG18
-  `temper_rehearsal` DB on :5437 — see PG-version note below). `vector` and
-  `pg_uuidv7` extensions installable.
-- `pg_dump` / `pg_restore` / `psql` **client version 17** on PATH.
+- The **throwaway PG17 flip container** is up and empty (see *PG-version & the flip
+  container* below): `docker compose -f docker-compose.flip.yml up -d`. It runs a
+  PG17 pgvector image on a **distinct port (5438)** so it never touches the PG18
+  dev DB on :5437 — both can coexist, and nothing else competes locally.
+- `pg_dump` / `pg_restore` / `psql` **client version 17** on PATH (matches the
+  PG17 servers on both ends).
 - Disk headroom for the `public` dump + local restore.
 
 ### 1. (informational) Confirm scope
@@ -124,7 +126,7 @@ is the belt to the flag-flip's suspenders.)
 - Run synthesis against localhost:
 
   ```bash
-  DATABASE_URL=postgresql://temper:temper@localhost:<port>/<db> \
+  DATABASE_URL=postgresql://temper:temper@localhost:5438/temper_development \
     cargo run -p temper-next --bin temper-next -- synthesize   # --limit 0 = all rows
   ```
 
@@ -182,7 +184,8 @@ Retain the step-3 Neon snapshot branch for a retention window before deleting.
 
 ## Tooling: three guard-rail scripts
 
-Wrap the footgun-prone bulk steps as `cargo make` tasks (scripts under
+A committed **`docker-compose.flip.yml`** (PG17 pgvector on :5438) plus the
+footgun-prone bulk steps wrapped as `cargo make` tasks (scripts under
 `tools/bin/` or inline in `Makefile.toml`, matching the existing task style).
 Everything else — snapshot, flag `UPDATE`, redeploy, verify — stays an **explicit
 manual step** in the runbook; those are the irreversible ones and must not be one
@@ -190,7 +193,7 @@ keystroke.
 
 | Task | Wraps | Guards against |
 |---|---|---|
-| `flip-dump-public` | `pg_dump` prod `public` → create local PG17 DB + extensions → restore | wrong schema scope, missing extensions, wrong search_path |
+| `flip-dump-public` | `pg_dump` prod `public` → restore into the running :5438 PG17 container (extensions first) | wrong schema scope, missing extensions, wrong search_path |
 | `flip-synthesize-local` | load `temper_next` schema/functions/seed locally → `temper-next synthesize` → assert §8 parity clean | forgetting the parity gate; running against the wrong DB |
 | `flip-load-next` | `pg_dump --schema=temper_next --data-only` local → prod `TRUNCATE temper_next.*` → triggers-disabled load | seed-row PK collision; triggers firing on load (double-apply) |
 
@@ -198,15 +201,30 @@ Each task takes the source/target connection strings as parameters (env or
 arguments) so the **same scripts drive both the branch rehearsal and the real
 flip** — only the target connection string differs.
 
-### PG-version note
+### PG-version & the flip container
 
-Synthesis input is dumped **from** prod PG17 and restored **into** local Postgres;
-the `temper_next` result is then dumped **from** local and restored **into** prod
-PG17. Restoring a PG17 dump into a newer server is well-supported; dumping from a
-newer server and restoring into PG17 is the **risky** direction. Running local on
-**PG17** keeps every restore on the safe side and removes cross-version risk
-entirely. (Neon = PG17; the dev Docker default is PG18 — hence a dedicated PG17
-container for the flip, not the retained `temper_rehearsal` DB on :5437.)
+Synthesis input is dumped **from** prod PG17 and restored **into** the local flip
+container; the `temper_next` result is then dumped **from** local and restored
+**into** prod PG17. Restoring a PG17 dump into a newer server is well-supported;
+dumping from a newer server and restoring into PG17 is the **risky** direction.
+Running local on **PG17** keeps every restore on the safe side and removes
+cross-version risk entirely.
+
+The dev DB (`docker-compose.yml`) is `pgvector/pgvector:0.8.2-pg18-trixie` on
+**:5437** — wrong major version for this. So the flip uses a **dedicated,
+throwaway PG17 container**, committed as **`docker-compose.flip.yml`**:
+
+- Image: a PG17 pgvector tag (e.g. `pgvector/pgvector:0.8.2-pg17-trixie`) — matches
+  Neon's major version and provides the `vector` extension.
+- Port **5438** (not 5437) and a distinct container name, so it coexists with the
+  PG18 dev DB without conflict. Nothing else competes for these ports locally.
+- `uuid_generate_v7()` comes from the same `20260420000012_uuidv7_portability.sql`
+  path the dev DB and prod use (`pg_uuidv7` if the image provides it, else the
+  plpgsql fallback). Synthesis preserves ids explicitly, so the default barely
+  matters during the run regardless.
+- Ephemeral: `docker compose -f docker-compose.flip.yml up -d` for the flip,
+  `down -v` after. It holds only transient prod data, so it is torn down (volume
+  included) once the flip/rehearsal completes.
 
 ## Out of scope
 
