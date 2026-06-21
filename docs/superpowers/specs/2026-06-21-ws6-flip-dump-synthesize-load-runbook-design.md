@@ -62,7 +62,7 @@ cutover (`UPDATE kb_backend_selection SET backend='next'`) applies unchanged.
 | Execution vehicle | **Localhost synthesis** (no in-region runner) | Kills latency; dissolves atomic-run risk |
 | Land-back | **Load `temper_next` into the existing prod DB** | Single DB; smallest transfer; reuses flag-flip cutover |
 | Local PG version | **PostgreSQL 17** (match Neon) | Keeps every restore on the safe newer-reads-older direction |
-| Round-trip scope | **`temper_next` only** (data-only) | `public.*` is synthesis input, dumped out only; stable under freeze |
+| Round-trip scope | **`temper_next` only** (schema + data) | `public.*` is synthesis input, dumped out only; stable under freeze |
 | Write-freeze | **Operator discipline** (single-user) | No autonomous writers; Neon snapshot is the net |
 | Rollback | **Neon snapshot/branch** + flag-flip back | `public.*` is never mutated |
 | `public.*` fate | **Left dormant in place** | Rename-aside / drop deferred to the migration-endgame spec |
@@ -136,20 +136,25 @@ is the belt to the flag-flip's suspenders.)
 
 ### 6. Transfer `temper_next` back into prod
 
-- `pg_dump --schema=temper_next --data-only` from local → file.
-- On prod, in one psql session:
-  - `TRUNCATE` all `temper_next` tables (CASCADE) — clears the pre-existing seed
-    rows so the data-only load (which *includes* seed + synthesized data) can't
-    collide on primary keys. This yields an exact replica of local `temper_next`.
-  - Load the data-only dump with **triggers disabled** —
-    `SET session_replication_role = replica;` for the load session (or `pg_restore
-    --disable-triggers`). The dump carries the already-projected `temper_next`
-    state (events + their projections); letting triggers fire on load would
-    **re-fire projection-building and double-apply**. The load is bulk/throughput,
-    immune to idle-in-transaction reaping.
+- `pg_dump --schema=temper_next` from local (full: **schema + data**) → file.
+- On prod, in one transaction: `DROP SCHEMA temper_next CASCADE;` then restore the
+  dump. This replaces prod's dormant `temper_next` **wholesale** with an exact
+  replica of the local one, so any drift between the migration-installed prod
+  schema and the artifact-built local schema cannot bite.
+- **No trigger gymnastics:** `pg_dump` orders `CREATE TRIGGER` statements *after*
+  the `COPY` data in the dump, so triggers don't exist while the projected rows
+  load — no re-firing, no double-apply, and no `session_replication_role` needed.
+  The load is bulk/throughput, immune to idle-in-transaction reaping.
 - **Safety:** the flag is still `legacy`, so prod's `temper_next` is dormant
-  throughout this step. A failed or partial load is harmless — `TRUNCATE` and
-  retry.
+  throughout this step, and the step-3 Neon snapshot covers the `DROP`. A failed
+  or partial load is harmless — re-run.
+
+> *Why full-schema over data-only:* a `--data-only` load assumes prod's
+> `temper_next` columns are bit-identical to the local one. Prod's schema came
+> from `migrations/20260613000001_install_temper_next.sql` (+ follow-ups); the
+> local one is built from `schema-artifact/01_schema.sql` + `02_functions.sql`.
+> They're *meant* to match, but a full DROP/recreate removes the assumption from
+> the irreversible step rather than trusting it.
 
 ### 7. Cutover
 
@@ -195,7 +200,7 @@ keystroke.
 |---|---|---|
 | `flip-dump-public` | `pg_dump` prod `public` → restore into the running :5438 PG17 container (extensions first) | wrong schema scope, missing extensions, wrong search_path |
 | `flip-synthesize-local` | load `temper_next` schema/functions/seed locally → `temper-next synthesize` → assert §8 parity clean | forgetting the parity gate; running against the wrong DB |
-| `flip-load-next` | `pg_dump --schema=temper_next --data-only` local → prod `TRUNCATE temper_next.*` → triggers-disabled load | seed-row PK collision; triggers firing on load (double-apply) |
+| `flip-load-next` | `pg_dump --schema=temper_next` (full) local → prod `DROP SCHEMA temper_next CASCADE` + restore, in one txn | schema drift vs prod; partial load leaving a half-replaced schema |
 
 Each task takes the source/target connection strings as parameters (env or
 arguments) so the **same scripts drive both the branch rehearsal and the real
@@ -218,10 +223,17 @@ throwaway PG17 container**, committed as **`docker-compose.flip.yml`**:
   Neon's major version and provides the `vector` extension.
 - Port **5438** (not 5437) and a distinct container name, so it coexists with the
   PG18 dev DB without conflict. Nothing else competes for these ports locally.
-- `uuid_generate_v7()` comes from the same `20260420000012_uuidv7_portability.sql`
-  path the dev DB and prod use (`pg_uuidv7` if the image provides it, else the
-  plpgsql fallback). Synthesis preserves ids explicitly, so the default barely
-  matters during the run regardless.
+- **`uuid_generate_v7()` needs a portable shim in the container.** The existing
+  `20260420000012_uuidv7_portability.sql` only covers Neon (`pg_uuidv7` extension)
+  and PG18 (native `uuidv7()`). A bare PG17 pgvector image has *neither*, and
+  prod's `public` dump supplies `uuid_generate_v7()` via the `pg_uuidv7`
+  **extension** — whose `CREATE EXTENSION` won't restore into the container. So
+  the flip setup loads a small self-contained plpgsql `public.uuid_generate_v7()`
+  (`tools/flip/uuid_portable.sql`) before the artifact. Synthesis still preserves
+  every **external** id (resources/profiles/contexts); this shim only backs the
+  **internal** generated ids (chunk/event/revision), which need only be valid,
+  unique, sortable v7 UUIDs — their exact bytes are immaterial. (A custom PG17
+  image bundling `pg_uuidv7` would be more faithful but is unnecessary for that.)
 - Ephemeral: `docker compose -f docker-compose.flip.yml up -d` for the flip,
   `down -v` after. It holds only transient prod data, so it is torn down (volume
   included) once the flip/rehearsal completes.
