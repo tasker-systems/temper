@@ -77,7 +77,7 @@ services:
 -- unique, time-sortable v7 UUIDs — the exact bytes are immaterial.
 --
 -- Build a v7 UUID from current epoch millis (48-bit timestamp) + random bits, with
--- the version (7) and variant (10) nibbles set per RFC 9562.
+-- the version (7) nibble set per RFC 9562 (bits 52 AND 53 of the version byte to 1).
 CREATE OR REPLACE FUNCTION public.uuid_generate_v7() RETURNS uuid
 LANGUAGE sql VOLATILE PARALLEL SAFE AS $$
   SELECT encode(
@@ -88,7 +88,7 @@ LANGUAGE sql VOLATILE PARALLEL SAFE AS $$
           PLACING substring(int8send((extract(epoch FROM clock_timestamp()) * 1000)::bigint) FROM 3)
           FROM 1 FOR 6
         ),
-        52, 0
+        52, 1
       ),
       53, 1
     ),
