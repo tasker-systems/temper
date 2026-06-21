@@ -25,29 +25,46 @@ export FLIP_TARGET_URL="<rehearsal-branch-conn-string>"
 # FLIP_LOCAL_URL overrides the flip container connection (default:
 # postgresql://temper:temper@localhost:5438/temper_development); normally left unset.
 
-# Then run: Pre-flight, Dump public → local, Synthesize locally,
-# Load temper_next → prod, and Verify sections.
+# Then run: Pre-flight, Dump public → local, Synthesize locally, Load temper_next → prod.
 # Skip: Freeze, Snapshot, Cutover, Unfreeze, and Cleanup.
-#
-# Before the Verify step, flip the branch's flag once — it's a throwaway branch,
-# so this is safe:
-#   psql "$FLIP_SOURCE_URL" -c "UPDATE kb_backend_selection SET backend='next' WHERE id=true;"
-# This proves the temper_next read path; without it, Verify would still read from public.
+
+# AUTHORITATIVE §9 read-floor gate (the real step-D proof — PR #160's harness):
+# after flip-load-next has loaded temper_next onto the branch, flip the branch's
+# flag (throwaway branch, so safe) and run the corpus read-floor parity test
+# against the branch. It drives every read as the single corpus owner and compares
+# the production public.* read (Legacy) vs the temper_next readback (Next) across
+# list / show / meta / body / FTS / vector / graph over the FULL corpus — far more
+# than the post-cutover surface smoke-check in the Verify section below.
+psql "$FLIP_TARGET_URL" -c "UPDATE kb_backend_selection SET backend='next' WHERE id=true;"
+REHEARSAL_DATABASE_URL="$FLIP_TARGET_URL" \
+  cargo nextest run -p temper-next --features artifact-tests,next-backend \
+  --run-ignored all corpus_read_floor_parity --no-capture
+# Needs ONNX/embed (the vector battery embeds via bge-768) — see the header of
+# crates/temper-next/tests/corpus_parity_reads.rs. A clean run IS the step-D gate.
 
 # Delete the branch when done
 neonctl branches delete <branch-id>
 ```
 
-Run the rehearsal until it is boring. Then run the identical steps against main
-for the real flip.
+Run the rehearsal until `corpus_read_floor_parity` is boring (green). Then run the
+identical mechanism steps against main for the real flip.
+
+> **Note on `temper_next` schema source.** `flip-synthesize-local` builds `temper_next`
+> from the schema artifact (`00_namespace_reset` + `01_schema` + `02_functions`). This
+> was verified bit-identical (2026-06-21) to the migration install path
+> (`migrations/*temper_next*.sql`, install + the 4c/can_modify/invocation deltas) that
+> prod and PR #160's harness use — the install migration is generated from the artifact
+> and the deltas are folded back in, so the full-schema DROP/recreate installs exactly
+> prod's shape. If that generator/fold-back ever lapses, re-diff before flipping.
 
 ---
 
 ## Pre-flight
 
 1. [ ] Confirm a **green branch rehearsal** of this runbook is on record: synthesis
-   §8 body-parity gate reported zero mismatches, §9 read-floor verify returned
-   expected rows from `temper_next`.
+   §8 body-parity gate reported zero mismatches, and PR #160's `corpus_read_floor_parity`
+   harness (the §9 read-floor gate — list/show/meta/body/FTS/vector/graph) passed over
+   the full corpus on the rehearsal branch.
 
 2. [ ] Confirm `neonctl` is authenticated and version ≥ 2.26:
 
@@ -235,6 +252,11 @@ for the real flip.
 
     Expected: all commands return data consistent with the pre-flip production
     state (ids preserved — synthesis preserves external ids). No 5xx errors.
+
+    > This is a live-surface smoke check on the cut-over production API. The
+    > exhaustive §9 read-floor proof is PR #160's `corpus_read_floor_parity`
+    > harness, run during the branch rehearsal (see *Rehearsal* above) — it is the
+    > gate; this step just confirms the deployed surface is healthy post-flip.
 
 ---
 

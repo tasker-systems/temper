@@ -55,6 +55,14 @@ crosses the WAN on the way back is the **`temper_next` data** — not a full-clu
 dump. Production keeps its single-database shape, and the existing flag-flip
 cutover (`UPDATE kb_backend_selection SET backend='next'`) applies unchanged.
 
+> **Schema-source fidelity (verified 2026-06-21).** `flip-synthesize-local` builds
+> `temper_next` from the schema artifact (`00/01/02`); prod and PR #160's harness build
+> it from `migrations/*temper_next*.sql` (install + the 4c/can_modify/invocation
+> deltas). A schema-only `pg_dump` diff of both build paths is **bit-identical** (the
+> install migration is generated from the artifact, and the deltas are folded back into
+> it) — so the full-schema DROP/recreate installs exactly prod's shape, no drift. Re-diff
+> if `tools/gen-install-migration.sh` or the delta fold-back ever lapses.
+
 ### Locked decisions
 
 | Decision | Choice | Rationale |
@@ -87,7 +95,9 @@ Rehearse on a branch until boring, then run the identical steps against main.
 ### 0. Pre-flight
 
 - A **green branch-rehearsal** of this runbook exists (synthesis §8 parity clean
-  + §9 read-floor parity clean on the real corpus — the latter is step D's harness).
+  + §9 read-floor parity clean on the real corpus — the latter is PR #160's
+  `corpus_read_floor_parity` harness, the authoritative step-D gate, run against the
+  rehearsal branch after `flip-load-next`).
 - `neonctl` authenticated (`neonctl projects list` works); version ≥ 2.26.
 - The **throwaway PG17 flip container** is up and empty (see *PG-version & the flip
   container* below): `docker compose -f docker-compose.flip.yml up -d`. It runs a
