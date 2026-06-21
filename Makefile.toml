@@ -121,3 +121,20 @@ else
   psql "${DATABASE_URL}" -f scripts/seed-dev-data.sql
 fi
 '''
+
+[tasks.flip-db-up]
+description = "Bring up the throwaway PG17 flip container (:5438) + load the portable uuid shim"
+script = '''
+set -euo pipefail
+docker compose -f docker-compose.flip.yml up -d --wait
+LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
+psql "$LOCAL" -v ON_ERROR_STOP=1 -c 'CREATE EXTENSION IF NOT EXISTS vector;'
+psql "$LOCAL" -v ON_ERROR_STOP=1 -f tools/flip/uuid_portable.sql
+echo "flip container up at $LOCAL (vector + uuid_generate_v7 ready)"
+'''
+
+[tasks.flip-db-down]
+description = "Tear down the throwaway PG17 flip container and its volume"
+script = '''
+docker compose -f docker-compose.flip.yml down -v
+'''
