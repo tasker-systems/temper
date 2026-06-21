@@ -22,9 +22,12 @@ neonctl branches create --name ws6-rehearsal-<date>
 
 export FLIP_SOURCE_URL="<rehearsal-branch-conn-string>"
 export FLIP_TARGET_URL="<rehearsal-branch-conn-string>"
+# FLIP_LOCAL_URL overrides the flip container connection (default:
+# postgresql://temper:temper@localhost:5438/temper_development); normally left unset.
 
-# Then run: Pre-flight (step 1), Dump (step 4), Synthesize (step 5),
-# Load (step 6), Verify (step 8). Skip steps 2, 3, 7, 9, 10.
+# Then run: Pre-flight, Dump public → local, Synthesize locally,
+# Load temper_next → prod, and Verify sections.
+# Skip: Freeze, Snapshot, Cutover, Unfreeze, and Cleanup.
 
 # Delete the branch when done
 neonctl branches delete <branch-id>
@@ -96,7 +99,7 @@ for the real flip.
 7. [ ] Create a Neon snapshot branch from main as the rollback target:
 
    ```bash
-   neonctl branches create --name flip-rollback-<date>
+   neonctl branches create --name flip-rollback-<date> --parent main
    ```
 
    **Record the branch name and id.** This is the rollback point. If anything
@@ -126,9 +129,17 @@ for the real flip.
    ```
 
    The task: dumps the `public` schema (schema + data) from `FLIP_SOURCE_URL`,
-   installs `vector` and `pg_uuidv7` extensions in the container (or loads the
-   portable `uuid_generate_v7()` shim for local PG17), then restores into the
-   container on :5438. Expected: exits 0, no errors.
+   then restores into the container on :5438. `flip-db-up` already installed
+   the `vector` extension and the portable uuid shim; `flip-dump-public`
+   re-asserts the portable `uuid_generate_v7()` shim after the restore because
+   `--clean` may drop same-named objects. `pg_uuidv7` is intentionally NOT
+   installed locally — the portable shim replaces it.
+
+   > **Note:** the prod `public` dump contains `CREATE EXTENSION pg_uuidv7`,
+   > which the local PG17 container cannot satisfy. `flip-dump-public` suppresses
+   > that error (`|| true`) and still exits 0. A `pg_uuidv7` extension error line
+   > in the output is **expected** — judge success by the final
+   > `public restored. rows: N` count, not by the absence of error output.
 
 ---
 
