@@ -115,6 +115,20 @@ collapse there is one schema, so this is simply "every surface sees the one trut
 matrix. This test is the durable artifact; it would have caught today's bug and guards the
 collapse.
 
+> **✅ Built (2026-06-22): `tests/e2e/tests/surface_parity_next.rs`** (gated `test-db,next-backend`,
+> shipped `#[ignore]`d as the collapse acceptance gate). It creates a **schema-only-resident**
+> resource — written via `NextBackend` so it lands ONLY in `temper_next` (+ a property + an edge via
+> the live 4c `assert_relationship` path + a minted `resource_created` event), with schema-qualified
+> negative controls proving it's absent from `public` — then drives all nine read surfaces over the
+> real HTTP stack under `BackendSelection::Next`. The assertions encode the **desired post-collapse
+> end-state** (every surface MUST resolve it); they are never inverted to "must NOT see", so the test
+> documents the leak without codifying the bug. **Verified RED today on exactly the four leaking
+> surfaces** (`list --meta-only`, `show --edges`, `graph subgraph`, `events`) and **GREEN on the five
+> flag-aware ones** (`list`, `show`, `show --meta`, `content`, `search`) — no leak-map drift from the
+> investigation above. When the collapse dissolves the split (one schema, every surface resolves to
+> it) this test goes fully green; **un-ignoring it green is the collapse's acceptance criterion.**
+> Run: `cargo nextest run -p temper-e2e --features test-db,next-backend --run-ignored all -E 'test(all_read_surfaces_resolve_next_only_resource)'` (needs `SQLX_OFFLINE=true`).
+
 ---
 
 ## Sequencing (surfaces stay functional throughout)
