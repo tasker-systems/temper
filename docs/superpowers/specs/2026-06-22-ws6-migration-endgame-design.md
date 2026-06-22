@@ -35,9 +35,13 @@ So the endgame is **not** "promote the candidate." It is "**ratify the already-l
 2. **The split never fully hydrated.** A class of read paths still resolves against `public`
    on the raw connection pool (confirmed: `list --meta-only`, `show --edges`; code-confirmed:
    graph aggregator, events feed — see findings task / [[project_ws6_flip_already_executed]]).
-   These serve **stale** data today. This is not a bug to fix in the split — it is the
-   strongest argument *for* collapsing the split, which makes every read correct by
-   construction. It also exposes a validation gap (below).
+   These serve **stale** data today. Collapsing the split makes the *flag-aware* reads correct
+   by construction — but **not** the raw-pool leak paths. The completeness review (below) found
+   `graph_service`/`event_service` query the *legacy table shape* (`kb_resource_edges`; the old
+   direct-FK `kb_events` columns), which the canonical substrate does not have — so they need
+   genuine **rewrites onto the substrate shape**, not search_path inheritance. "Correct by
+   construction" holds only after that rewrite ships (it is in the §Coincident code changes
+   manifest). This also exposes a validation gap (below).
 
 ---
 
@@ -124,26 +128,54 @@ the flip runbook's freeze/snapshot/redeploy discipline. Runs in an operator-cont
 (single-user; arc-1 accepts brief downtime). **Prod is already on `next`**, so reads+writes serve
 from `temper_next` throughout until the rename.
 
+> **⚠️ Two infrastructure blockers (completeness review, 2026-06-22) — resolve BEFORE this is a real
+> migration.** `public` is not just the stale schema; it is also the **home of the `vector` extension,
+> the `pg_uuidv7` extension + `public.uuid_generate_v7()` generator, and the `_sqlx_migrations`
+> ledger** — none owned by `temper_next`, which only *reaches* them via search_path (`schema-artifact/
+> 01_schema.sql:10-12`, `migrations/20260330000001_consolidated_schema.sql:9`,
+> `migrations/20260420000012_uuidv7_portability.sql:28`). A naïve `public → public_legacy` rename
+> strands all of them. The sequence below now handles them explicitly (steps 3 + 5b); the flip runbook
+> *already learned* this (it pre-installs the uuid shim into the target's `public`) — do not regress.
+
 1. **Freeze + snapshot.** Operator stops reading/writing; `neonctl branches create` from `main` →
    the rollback target (record branch id + LSN). This is the real safety net — `public` is stale,
    NOT a rollback target.
 2. **Rename the stale schema aside:** `ALTER SCHEMA public RENAME TO public_legacy;`. Safe under the
    freeze — the only live-path reference to `public.*` is `writes.rs:30`'s prod→next profile bridge,
    which the write-freeze guarantees is unexercised.
-3. **Apply the canonical-layer graft/reconcile/carry-over** (the validated draft, now executable):
+3. **Relocate the shared infrastructure into the surviving schema** (the BLOCKER-1 fix): make `vector`,
+   `pg_uuidv7`/`uuid_generate_v7()` resident in `temper_next` (→ the new `public`) so the canonical
+   schema *owns* them and the legacy drop can't cascade into them. Candidate mechanism: `ALTER
+   EXTENSION vector SET SCHEMA temper_next` for the relocatable `vector`; re-create the uuid generator
+   (the `pg_uuidv7` extension may not be relocatable — re-create `uuid_generate_v7()` in `temper_next`,
+   mirroring `tools/flip/uuid_portable.sql`). **Validate the exact relocatability of each on PG17/Neon
+   before execution** — this is the highest-risk DDL in the collapse.
+4. **Apply the canonical-layer graft/reconcile/carry-over** (the validated draft, now executable):
    reconcile `kb_profiles` (re-add `email`/`preferences`), graft the 7 substrate-absent infra tables
    + enums, `INSERT…SELECT` the identity/auth/seed data from `public_legacy` into `temper_next`. All
-   FKs target substrate-present ids; verified read-only-GREEN vs the live snapshot.
-4. **Promote:** `ALTER SCHEMA temper_next RENAME TO public;`. The canonical schema is now `public` —
-   the connection default. (Atomic; the two renames + graft can run in one transaction.)
-5. **Redeploy the collapsed code coincident with the rename** (the flag is read once at startup —
+   FKs target substrate-present ids (carry-over FK order verified); verified read-only-GREEN vs the
+   live snapshot. (Steps 2–5a are one transaction — `ALTER SCHEMA RENAME` + the graft are DDL,
+   transactional in PG.)
+5. **Promote:** `ALTER SCHEMA temper_next RENAME TO public;`. The canonical schema is now `public` —
+   the connection default, now owning its extensions + uuid generator (step 3).
+   - **5b. Reconcile the `_sqlx_migrations` ledger (the BLOCKER-2 fix).** `temper-api/src/main.rs:27`
+     runs `sqlx::migrate!("../../migrations")` **unconditionally at startup** against the ledger in the
+     connection-default schema. The new `public` (ex-`temper_next`) has no ledger → `migrate!` would
+     replay all ~44 legacy migrations, collide with the substrate objects, and panic at boot
+     (`main.rs:30` `.expect`). **So the migration source-of-truth reconciliation the §sqlx-implications
+     bullet "defers to bootstrap-export" is in fact a HARD PREREQUISITE of this redeploy** — at
+     minimum: carry `_sqlx_migrations` into the new `public` and point `migrate!` at a reconciled
+     single migration set (or make the startup run conditional). Resolve before step 6.
+6. **Redeploy the collapsed code coincident with the rename** (the flag is read once at startup —
    `main.rs:34` — so the running split-code process cannot survive the rename; its
    `temper_next.`-qualified SQL would 42P01). The deploy must ship the §"coincident code changes"
    manifest below. Verify the surface-parity gate (`surface_parity_next.rs`, now un-ignorable green)
    over the live schema.
-6. **Unfreeze.** Reads+writes resume against the one `public` schema, no flag, no search_path hooks.
-7. **Drop `public_legacy`** after the retention window (gated on the held snapshot + the 2 Flag-2
-   content-hash spot-checks from the schema-diff). This is the point of no return.
+7. **Unfreeze.** Reads+writes resume against the one `public` schema, no flag, no search_path hooks.
+8. **Drop `public_legacy`** after the retention window (gated on: the held snapshot + the 2 Flag-2
+   content-hash spot-checks + a confirmation that **no new-`public` object still depends on an
+   extension resident in `public_legacy`** — step 3 must have moved them all). This is the point of
+   no return.
 
 ### Coincident code changes (must ship in the step-5 redeploy)
 
@@ -165,16 +197,39 @@ names that the rename changes:
 - **Re-home the synthesis survivors** so `synthesis/` deletes cleanly (audit §B): `key_fate.rs`
   (whole module → canonical write layer), `bootstrap::slugify`. `synthesis/` + the binary
   `Synthesize` subcommand are deleted in this release (the one-shot migration is spent).
+- **Rewrite the raw-pool leak services onto the substrate shape** (completeness-review BLOCKER-3 —
+  NOT fixed by the rename): `services/graph_service.rs` queries `kb_resource_edges` (DIES →
+  `kb_edges`) and `services/event_service.rs` queries the old direct-FK `kb_events` columns
+  (`profile_id`/`resource_id`/`kb_context_id`/`device_id`, moved to the entity/anchor/invocation
+  model). Both run on the raw pool, so the rename makes them resolve to canonical and **break on
+  missing tables/columns** — they need real rewrites, which the surface-parity gate's RED on
+  `graph`/`events` already proves. This is the largest code work-item the first draft missed.
+- **temper-mcp tool surface** dispatches through the same `AppState.backend_selection` /
+  `select_backend` / `read_selector` being deleted (`temper-mcp/src/tools/{relationships,resources,
+  search}.rs`). Deleting the field breaks temper-mcp compilation — update its tool handlers to call
+  the single backend in the same release.
+- **e2e split tests + the `next-backend` feature gate** (`tests/e2e/tests/{backend_read_path_next,
+  backend_write_path_next,backend_selection_gate}.rs`, the `mcp_round_trip_test`, and the
+  `next-backend` Cargo feature on `temper-api`/`tests/e2e`) test the split itself and stop compiling
+  when `selection` is deleted — retire/rewrite them alongside; keep `surface_parity_next.rs` (the
+  green acceptance gate).
+- **temper-events `kb_scopes`/`porosity` retirement** — `temper-events/src/types/scope.rs` (`enum
+  Porosity`, `#[sqlx(type_name="porosity")]`) + `ledger.rs:50`'s `FROM kb_scopes`. `kb_scopes` is
+  dropped (schema-diff Flag-1 correction), so this scaffolding must retire in the same disentanglement
+  (the audit scoped itself to `temper-next`; this is its temper-events sibling).
 
 **sqlx implications (must be in the executable plan):**
 - The temper-next per-crate `.sqlx` cache targets the `temper_next` namespace; the workspace
   caches target `public`. After collapse, *all* macros resolve against one schema — regenerate
-  every cache (`prepare-*` tasks) and re-unify the search-path assumptions baked into CI
-  (`SQLX_OFFLINE=true`).
+  every cache (`prepare-*` tasks, including repointing `prepare-next`'s hardcoded
+  `search_path=temper_next` in `Makefile.toml`) and re-unify the search-path assumptions baked into
+  CI (`SQLX_OFFLINE=true`).
 - The artifact-schema (`schema-artifact/01_schema.sql` + `02_functions.sql`) and the sqlx
   `migrations/` must reconcile to one source of truth (today they are two: the artifact builds
-  `temper_next`, migrations build `public`). This reconciliation IS the bootstrap-export spec's
-  seam — call it out, don't solve it here.
+  `temper_next`, migrations build `public`). The bootstrap-export spec *owns* this seam — **but per
+  step 5b the boot-time `migrate!` makes the minimal ledger/migration reconciliation a hard
+  prerequisite of the collapse redeploy, not a pure follow-on.** Draw the line explicitly when the
+  collapse is authored for execution.
 
 ---
 
@@ -187,9 +242,9 @@ was not, no test exercised "a schema-only-resident resource through each HTTP su
 
 **Requirement:** the endgame ships with an **end-to-end surface-parity test** — create a resource,
 update content + properties, assert an edge, then assert *every* read surface (list, list
-`--meta-only`, show, show `--meta-only`, show `--edges`, search, graph, events) returns it. Post
-collapse there is one schema, so this is simply "every surface sees the one truth" — no flag
-matrix. This test is the durable artifact; it would have caught today's bug and guards the
+`--meta-only`, show, show `--meta-only`, show `--edges`, content, search, graph, events — **nine**)
+returns it. Post collapse there is one schema, so this is simply "every surface sees the one truth"
+— no flag matrix. This test is the durable artifact; it would have caught today's bug and guards the
 collapse.
 
 > **✅ Built (2026-06-22): `tests/e2e/tests/surface_parity_next.rs`** (gated `test-db,next-backend`,
@@ -205,6 +260,30 @@ collapse.
 > investigation above. When the collapse dissolves the split (one schema, every surface resolves to
 > it) this test goes fully green; **un-ignoring it green is the collapse's acceptance criterion.**
 > Run: `cargo nextest run -p temper-e2e --features test-db,next-backend --run-ignored all -E 'test(all_read_surfaces_resolve_next_only_resource)'` (needs `SQLX_OFFLINE=true`).
+
+### Completeness review (2026-06-22) — what it changed
+
+A three-way adversarial review (cross-artifact consistency · DDL-sequence soundness · classification
+coverage) verified every load-bearing `file:line` claim true (flag-read-once, bare-pool default, the
+two search_path hooks, `key_fate` live-path use, the 53-ref readback count, all 7 grafted-table +
+3-enum DDLs vs the cited migrations — several exact to the digit) and confirmed the disentanglement +
+table classification **complete**. It surfaced **three execution blockers the design altitude hid**,
+now folded in above:
+
+1. **Extension/uuid homing** — `vector` + `pg_uuidv7`/`uuid_generate_v7()` live in `public`; the naïve
+   rename strands them and the legacy drop would cascade into the extension the live columns need.
+   *(Two reviewers found this independently — high confidence.)* → sequence step 3 + step 8 gate.
+2. **Boot-time `migrate!`** replays the legacy set against a ledger-less renamed schema and panics →
+   the "deferred" migration reconciliation is a hard prerequisite. → step 5b.
+3. **Raw-pool leak services** (`graph_service`/`event_service`) query the legacy table shape and need
+   real rewrites, not search_path inheritance. → §Coincident code changes.
+
+Plus coverage gaps (temper-mcp, e2e split tests + feature gate, temper-events `kb_scopes`/`porosity`)
+— all now in the manifest. **Unverifiable from repo (flagged for human at execution):** the canonical
+draft's "GREEN vs the live `flip-rollback-2026-06-22` snapshot" claim and the row-count facts (5
+profiles / 5 auth_links / revision + event counts) reference a Neon snapshot unreachable from the
+repo; the draft's *DDL* half was verified byte-faithful to its cited migrations, the *live-diff* half
+must be re-confirmed against the snapshot when the collapse is staged.
 
 ---
 

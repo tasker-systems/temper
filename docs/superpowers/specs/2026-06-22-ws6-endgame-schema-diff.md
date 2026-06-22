@@ -22,7 +22,7 @@ Classification confidence: ✅ high · 🟡 needs verification · ❓ open desig
 | `kb_scopes` | 🟡 SURVIVES (infra) | RBAC scopes — confirm still used |
 | `kb_blob_files` | 🟡 SURVIVES (infra) | blob/upload refs — confirm vs temper_next content_blocks |
 | `kb_ingestion_records` | 🟡 SURVIVES (infra) | ingest idempotency — confirm |
-| `kb_doc_types` | ❓ OPEN | §7 dissolved the typed id (doc_type as property); PR #159 dropped the cross-namespace lookup. But the *system still needs the doc-type schema set somewhere*. Property-only? Or a surviving registry table? **Decide.** |
+| `kb_doc_types` | ✅ DIES → Rust-interiority | *(Resolved — see findings #1 below.)* §7 dissolved the typed id (doc_type as property); PR #159 dropped the cross-namespace lookup. The doc-type *set* becomes Rust-side (`temper-core/types/schemas`); the table dies. |
 | `kb_device_sync_state` | ❓ OPEN | sync state — cloud-only demoted the vault to a read-only projection; does sync state still exist or shrink? |
 | `kb_resource_manifests` | ❓ OPEN | per-device manifest ledger — same cloud-only question |
 | `kb_resource_revisions` | 🟡 SUPERSEDED | likely → `kb_block_revisions` / event ledger; confirm no unique data |

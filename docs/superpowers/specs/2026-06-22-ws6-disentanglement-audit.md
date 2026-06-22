@@ -61,7 +61,7 @@ This is the audit's load-bearing deliverable. A blanket module deletion drops th
 |---|---|---|---|
 | `key_fate`, `KeyFate` | `synthesis/key_fate.rs` | live write path `next_backend.rs:27,91` (`properties_from_meta`) | **re-home (permanent)** |
 | `is_managed_property_key`, `MANAGED_PROPERTY_KEYS` | `synthesis/key_fate.rs` | `readback/mod.rs:351,442` + internal `key_fate.rs:74` | **re-home (whole module travels together)** |
-| `slugify` | `synthesis/bootstrap.rs:353` | live `writes.rs:64` (home-context resolution) + `scenario/access/loader.rs:136` (KEEP) | **re-home (permanent)** |
+| `slugify` | `synthesis/bootstrap.rs:355` | live `writes.rs:64` (home-context resolution) + `scenario/access/loader.rs:136` (KEEP) | **re-home (permanent)** |
 | `reconstruct_body`, `new_substrate_chunks`, `ReadChunk` | `synthesis/parity.rs` | live `readback::body` (`readback/mod.rs:608–609`) | **carry until shim-exit** (retire with readback) |
 | `system_event_type_names()` | `scenario/bootseed.rs:22` | sole caller `synthesis/bootstrap.rs:105` (a DELETE target) | **delete-with-scaffolding** (becomes dead when synthesis goes) |
 
