@@ -251,6 +251,14 @@ names that the rename changes:
   model). Both run on the raw pool, so the rename makes them resolve to canonical and **break on
   missing tables/columns** — they need real rewrites, which the surface-parity gate's RED on
   `graph`/`events` already proves. This is the largest code work-item the first draft missed.
+  `graph_service` is a mechanical port (rename `kb_resource_edges`→`kb_edges`; port
+  `graph_subgraph_nodes`/`graph_traverse` into `02_functions.sql`; derive `slug` via the re-homed
+  `slugify`; `stage` property key = `temper-stage`). `event_service` hid a design fork (substrate
+  `kb_events` dropped `resource_id`/`device_id`/`profile_id`/`kb_context_id`) — **resolved in
+  `2026-06-22-ws6-event-service-collapse-port-design.md`**: port the context **cursor** only,
+  **deprecate** the unused `/api/events?` list query + its consumer chain, defer the intentional
+  event-model rethink to a future arc. Consequence: the surface-parity gate drops surface (9) →
+  **eight surfaces** + a separate cursor test.
 - **temper-mcp tool surface** dispatches through the same `AppState.backend_selection` /
   `select_backend` / `read_selector` being deleted (`temper-mcp/src/tools/{relationships,resources,
   search}.rs`). Deleting the field breaks temper-mcp compilation — update its tool handlers to call
@@ -291,10 +299,18 @@ was not, no test exercised "a schema-only-resident resource through each HTTP su
 
 **Requirement:** the endgame ships with an **end-to-end surface-parity test** — create a resource,
 update content + properties, assert an edge, then assert *every* read surface (list, list
-`--meta-only`, show, show `--meta-only`, show `--edges`, content, search, graph, events — **nine**)
+`--meta-only`, show, show `--meta-only`, show `--edges`, content, search, graph — **eight**)
 returns it. Post collapse there is one schema, so this is simply "every surface sees the one truth"
 — no flag matrix. This test is the durable artifact; it would have caught today's bug and guards the
 collapse.
+
+> **Amendment (2026-06-22, event-service spec).** The test was *built* with **nine** surfaces; the
+> ninth — the resource-scoped `GET /api/events?resource_id=` feed — is being **deprecated, not
+> fixed** (substrate `kb_events` has no `resource_id`; the feed is unused). Per
+> `2026-06-22-ws6-event-service-collapse-port-design.md` the gate **reduces to eight surfaces**, and
+> the kept context **cursor** gets a **separate** small test (a context-owned write bumps
+> `latest_event_id`; an un-owned context → `None`). The historical "RED on events" observation
+> below stands as the *reason* events is deprecated rather than ported.
 
 > **✅ Built (2026-06-22): `tests/e2e/tests/surface_parity_next.rs`** (gated `test-db,next-backend`,
 > shipped `#[ignore]`d as the collapse acceptance gate). It creates a **schema-only-resident**
