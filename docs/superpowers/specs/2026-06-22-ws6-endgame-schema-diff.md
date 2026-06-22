@@ -65,11 +65,61 @@ carrying data that must migrate.
 
 ---
 
+## Investigation findings (2026-06-22) — dispositions confirmed + two new flags
+
+**Row counts (public-only tables):** `kb_backend_selection`=1 (DIES), `kb_resource_edges`=563
+(SUPERSEDED→`kb_edges`), `_sqlx_migrations`=45 (infra), `kb_profile_auth_links`=5 (SURVIVES),
+`kb_system_settings`=1 (SURVIVES), `kb_scopes`=1 (SURVIVES), `kb_doc_types`=6 (→ Rust-interiority,
+table dies), `kb_device_sync_state`=3 (DIES), `kb_resource_manifests`=1239 (DIES),
+`kb_resource_revisions`=3342 (see flag), `kb_resource_search_index`=1239 (SUPERSEDED, see #3),
+empty (0): `kb_blob_files`, `kb_ingestion_records`, `kb_join_requests` (schema survives),
+`kb_team_invitations`, `kb_team_resources`, `kb_transfers`.
+
+**Column diff (11 shared):** `temper_next` is a more-normalized model, not public-plus-extras.
+`kb_resources` shed `kb_context_id`/`kb_doc_type_id`/profile-FKs/`slug` (→ homes/properties/
+access) + added `body_hash`; `kb_events` moved direct-FKs → entity/anchor/invocation model;
+`kb_resource_audits` dropped the hash columns. Canonical = the temper_next shape for these.
+
+**#1 doc types — CONFIRMED table dies → Rust-interiority.** 6 rows; read by
+`doc_type_service`, `ingest_service`, `resource_service`, and `sync_service` (the last dies).
+Per decision: the doc-type *set* becomes Rust-side (temper-core/types/schemas already holds the
+schemas); rewire the doc_type_service/ingest id↔name resolution off the table.
+
+**#2 sync/manifest — CONFIRMED die (cloud-only).** `kb_device_sync_state`,
+`kb_resource_manifests`, and `sync_service` all retire; vault is a read-only `pull` projection.
+*Deferred-but-noted:* managed/open meta + the three hashes (`body_hash`/`managed_hash`/
+`open_hash`) were YAML-frontmatter-era change-detection; mostly vestigial now that content lives
+in `kb_properties` and the vault is pull-only. Revisit the meta/hash model in a later pass.
+
+**#3 search — CONFIRMED mechanism.** `temper_next` has **no stored tsvector**; readback builds
+it **at query time** (`setweight(to_tsvector(title),'A') || setweight(to_tsvector(body),'B')`,
+`readback/mod.rs:650`). So `kb_resource_search_index` (stored tsvector) is droppable — but this
+is **unindexed at scale**. Flag for the search followup (which also wants graph-nearness +
+cogmap-region salience): the canonical schema likely wants a stored/generated tsvector.
+Embeddings: `kb_chunks.embedding` (vector) exists in both; `kb_cogmap_regions.centroid` is new.
+
+### 🔴 NEW FLAG 1 — identity/profile layer is NOT in temper_next (reconciliation, not superset)
+
+`temper_next.kb_profiles` has **1 row** (the corpus owner) and dropped
+`email`/`avatar_url`/`preferences`/`vault_config`/`is_active`. `public` has multiple profiles +
+5 `kb_profile_auth_links`. **The canonical schema = temper_next substrate ∪ public's
+identity/auth/infra layer** (full profiles, auth_links, system_settings, scopes, join_requests).
+The §9 harness never validated profile/identity completeness — it proved resource/edge/property/
+content parity for one owner. This is the concrete shape of "union of intended outcomes."
+
+### 🔴 NEW FLAG 2 — revision history is compressed in synthesis (possible data loss)
+
+`public.kb_resource_revisions`=3342 vs `temper_next.kb_block_revisions`=1252 /
+`kb_content_blocks`=1248 (≈ current state, ~1 per resource). The deep historical revision trail
+is **not** carried 1:1. Decide: is full history preserved in the event ledger
+(`resource-lifecycle-event-sourcing`), intentionally compressed to current-state, or at risk of
+loss? Confirm before dropping `kb_resource_revisions`.
+
 ## Next mechanical step
 
-Column-level diff of the 11 shared tables (B vs C shapes), and confirm the 🟡/❓ dispositions in
-A (grep each table's usage in temper-api/cli + check temper_next equivalents). Output: the
-canonical schema as draft bootstrap migrations.
+Draft the canonical schema as bootstrap migrations: temper_next substrate + public identity/auth/
+infra layer; resolve the two 🔴 flags (identity reconciliation; revision-history retention) first
+since they change what tables/data the canonical must hold.
 
 ---
 
