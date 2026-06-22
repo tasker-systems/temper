@@ -178,6 +178,52 @@ Remaining pre-drop verification (gated, execution-phase): the 2 Flag-2 content-h
 
 ---
 
+## Shared-table column reconciliation (§C — RESOLVED, 2026-06-22)
+
+The 11 both-tables are **already in `temper_next`** (synthesized), so canonical = the `temper_next`
+shape by construction. The reconciliation question is not "what to carry" but: do the P-only
+columns and the row-count gaps represent intentional dissolution/supersession, or silent loss?
+Verified read-only vs the live substrate (flip-rollback snapshot). `kb_profiles` resolved in Flag
+1; the other 10:
+
+| Table | rows P→N | P-only columns → disposition | Row gap verdict |
+|---|---|---|---|
+| `kb_resources` | 1239→1237 | `kb_context_id`→homes, `kb_doc_type_id`→property, `owner/originator_profile_id`→homes/access, `slug`→homes (+`body_hash` new) | the 3 absent are all `is_active='f'` (soft-deleted) — correctly excluded. **Benign** |
+| `kb_chunks` / `kb_chunk_content` | 77248→14711 | `first/superseded_revision_id` → block-revisions model (+`block_id` new) | gap = superseded revision trail (Flag 2). **Benign** |
+| `kb_event_types` | 15→27 | `description`, `is_deprecated` dropped (+`payload_schema`,`schema_version` new) | registry re-seeded, richer in next. **Benign** (note: `description` was doc-only) |
+| `kb_resource_audits` | 5916→**0** | `action`/`body_hash`/`managed_hash`/`open_hash`/`profile_id`/`device_id`/`event_id` dropped | **superseded by `kb_events`** — action counts mirror event types (`update_meta`=3124 ↔ `managed_meta_updated`=3124, `create`=574 ↔ `resource_created`). History not carried |
+| `kb_contexts` | 11→6 | `kb_owner_id`/`kb_owner_table`→`owner_id`/`owner_table` (rename), `updated` dropped (+`slug` new) | 5 dropped are all **empty** (`default`×3, a `general` dupe, `writing`); the 6 kept are exactly those with resources. Contexts re-materialize on first use. **Benign** |
+| `kb_topics` | 4→**0** | same shape | 4 taxonomy seeds (`temper.bootstrap`,`declaration`,`deformation`,`judgment`), 0 event refs → **re-seed** the taxonomy in canonical if live; else benign |
+| `kb_teams` | 1→1 | `created_by_profile_id`/`description`/`is_active`/`metadata`/`updated` dropped | the `temper-system` seed team; confirm the 1 row carried at collapse |
+| `kb_team_members` | 0→1 | `id`/`invited_by_profile_id`/`joined_at`→`created` | public empty; next has owner's derived membership. **Benign** |
+| `kb_events` | 8825→5262 | direct-FKs (`profile_id`/`resource_id`/`kb_context_id`/`device_id`/`scope_id`) → entity/anchor/invocation model | **NOT a 1:1 migration** — see below |
+
+### 🟠 Load-bearing finding — pre-flip mutation history is NOT preserved
+
+`kb_events` is **not** a replay of the historical log. The vocabularies are disjoint: public =
+`body_updated`(4478)/`managed_meta_updated`(3124)/… (the mutation trail); next =
+`property_asserted`(3175)/`resource_created`(1237)/`relationship_asserted`(848) — a
+**synthesis-minted genesis stream representing current state**, minted fresh at synthesis.
+
+So **three history tables converge on one disposition** — none of the pre-flip mutation history is
+carried: `kb_resource_revisions` (3342, Flag 2), `kb_resource_audits` (5916, superseded), and the
+historical `kb_events` (8825). The canonical preserves **current state** (resources, properties,
+content, edges — all §9-proven) + a **genesis event stream** + **forward event-sourcing**, but the
+granular pre-flip "who-changed-what-when" trail is gone. This is a legitimate genesis-from-state
+design, and it extends the already-accepted Flag-2 verdict ("drop revisions; history is the event
+ledger's job") — with the clarification that **the event ledger itself starts at genesis, it does
+not backfill the old trail.** Confirm this is the intended endgame posture before the legacy drop.
+
+### Mechanical notes for the bootstrap-export spec
+- Column **renames** to encode (current state already lives under the new names in the substrate;
+  documenting the mapping): `kb_contexts.kb_owner_*` → `owner_*`. No data action.
+- `kb_resource_audits` survives as a (currently empty) substrate table with the hash columns
+  dropped — decide whether it is repurposed forward or retired (0 post-flip rows ⇒ currently
+  unused; the event ledger is the live audit path).
+- `kb_topics` taxonomy seed: include in the canonical system-seed if the topic feature is live.
+
+---
+
 ## References
 
 Endgame: `2026-06-22-ws6-migration-endgame-design.md` · captured from prod main 2026-06-22.
