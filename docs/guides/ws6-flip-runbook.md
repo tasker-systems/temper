@@ -36,11 +36,26 @@ export FLIP_TARGET_URL="<rehearsal-branch-conn-string>"
 # list / show / meta / body / FTS / vector / graph over the FULL corpus — far more
 # than the post-cutover surface smoke-check in the Verify section below.
 psql "$FLIP_TARGET_URL" -c "UPDATE kb_backend_selection SET backend='next' WHERE id=true;"
+SQLX_OFFLINE=true \
 REHEARSAL_DATABASE_URL="$FLIP_TARGET_URL" \
-  cargo nextest run -p temper-next --features artifact-tests,next-backend \
-  --run-ignored all corpus_read_floor_parity --no-capture
+  cargo test -p temper-next --features artifact-tests,next-backend \
+  --test corpus_parity_reads -- --ignored --nocapture corpus_read_floor_parity
 # Needs ONNX/embed (the vector battery embeds via bge-768) — see the header of
-# crates/temper-next/tests/corpus_parity_reads.rs. A clean run IS the step-D gate.
+# crates/temper-next/tests/corpus_parity_reads.rs. If the ONNX runtime is not on a
+# standard library search path, set ORT_DYLIB_PATH (e.g. on macOS/Homebrew:
+# ORT_DYLIB_PATH=/opt/homebrew/lib/libonnxruntime.dylib). A clean run IS the step-D gate.
+#
+# WHY `cargo test` and `SQLX_OFFLINE=true` (both load-bearing — verified 2026-06-22):
+#  - SQLX_OFFLINE=true: temper-next's sqlx::query! macros resolve against the
+#    `temper_next` namespace, which a raw cargo invocation cannot validate live
+#    against the ambient DATABASE_URL. Without it the harness fails to COMPILE
+#    (~73 "cannot infer type" errors in scenario/runner.rs). Every `cargo make`
+#    task sets this; a raw cargo/nextest command does not — so set it explicitly.
+#  - cargo test (not `cargo nextest`): against a REMOTE Neon branch every read is
+#    a network round-trip, so the full-corpus sweep takes ~15-20 min (~1040s in the
+#    2026-06-22 rehearsal). nextest's default `terminate-after` (2 × 60s = 120s in
+#    .config/nextest.toml) KILLS the test mid "list parity". libtest (cargo test)
+#    has no such timeout. nextest only finishes this harness against a fast LOCAL DB.
 
 # Delete the branch when done
 neonctl branches delete <branch-id>
