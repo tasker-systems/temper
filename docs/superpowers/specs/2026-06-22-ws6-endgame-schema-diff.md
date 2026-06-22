@@ -98,14 +98,41 @@ is **unindexed at scale**. Flag for the search followup (which also wants graph-
 cogmap-region salience): the canonical schema likely wants a stored/generated tsvector.
 Embeddings: `kb_chunks.embedding` (vector) exists in both; `kb_cogmap_regions.centroid` is new.
 
-### 🔴 NEW FLAG 1 — identity/profile layer is NOT in temper_next (reconciliation, not superset)
+### ✅ FLAG 1 — RESOLVED: identity union pinned (5 profiles + 5 auth_links); NO resource-data loss
 
-`temper_next.kb_profiles` has **1 row** (the corpus owner) and dropped
-`email`/`avatar_url`/`preferences`/`vault_config`/`is_active`. `public` has multiple profiles +
-5 `kb_profile_auth_links`. **The canonical schema = temper_next substrate ∪ public's
-identity/auth/infra layer** (full profiles, auth_links, system_settings, scopes, join_requests).
-The §9 harness never validated profile/identity completeness — it proved resource/edge/property/
-content parity for one owner. This is the concrete shape of "union of intended outcomes."
+Investigated 2026-06-22 against the held `flip-rollback-2026-06-22` snapshot (read-only). The
+identity layer is a **reconciliation, not a superset** — and both halves are now concrete.
+
+**Data half — no loss.** `public.kb_profiles` has 5 rows: 2 sentinels (`system`, `anonymous`,
+ids `…0004…0001/0002`) + 3 humans (`j-cole-taylor`, `gm-anirudh`, `lohjishan`). **Only
+`j-cole-taylor` owns resources** (1239; 1236 active); every other profile owns **0**. So
+single-owner synthesis (which built `temper_next` for the corpus owner) lost **no** resource
+data. The non-owner humans participate in nothing else either: 0 team_members, 0 join_requests,
+0 invitations, 0 transfers. They are pure identity + `auth_link` rows. `temper_next.kb_profiles`
+confirmed = **1 row** (owner, `system_access='none'` — the schema default, not a real level).
+
+**The identity union to carry into canonical** (substrate has only the owner; these must be
+INSERTed):
+- **5 `kb_profiles`** — the 4 missing rows (`system`, `anonymous`, `gm-anirudh`, `lohjishan`)
+  + the owner. Map `public.slug → handle`. Re-add `email` + `preferences`. **Drop**
+  `avatar_url`, `vault_config` (vestigial under cloud-only), `is_active`, `updated`.
+- **5 `kb_profile_auth_links`** — `neon_auth` for the 3 humans + `system`/`anonymous` sentinel
+  links. Carried verbatim (table is substrate-absent).
+- **`system_access` must be set explicitly** per profile (the synth default `'none'` is wrong for
+  the owner). Recommendation: owner → `admin`; the 2 registered humans → `approved` (preserves
+  their `access_mode='open'` + `is_active=true` status quo); sentinels → `none`. Adjustable.
+
+**Infra half — seed-level, fully enumerated.** Carrying real data: `kb_system_settings`=1
+(`access_mode='open'`, no instance_name/terms), `kb_scopes`=1 (`public`/`access`; substrate has
+**no** `kb_scopes`, so it carries). Empty (schema-only): `kb_ingestion_records`, `kb_blob_files`,
+`kb_join_requests`, `kb_team_invitations`, `kb_transfers`. The lone `public.kb_teams` row is the
+`temper-system` system team (id `…0002`) — a seed row reconciled in the 11-shared set, not an
+identity-layer concern.
+
+The §9 harness never validated identity completeness — it proved resource/edge/property/content
+parity for one owner. This investigation closes that gap: the "union of intended outcomes" is
+**temper_next substrate (resource/content/cogmap, single-owner) ∪ {5 profiles, 5 auth_links, 1
+system_settings, 1 scope}**.
 
 ### ✅ FLAG 2 — RESOLVED: no current-content loss; dropped revisions are mostly noise
 
@@ -124,9 +151,21 @@ likely the chunk-ordering / date-anomaly class; verify they're benign before the
 
 ## Next mechanical step
 
-Draft the canonical schema as bootstrap migrations: temper_next substrate + public identity/auth/
-infra layer; resolve the two 🔴 flags (identity reconciliation; revision-history retention) first
-since they change what tables/data the canonical must hold.
+**Both 🔴 flags now resolved** (Flag 1 identity-union pinned above; Flag 2 revision-history safe to
+drop). Unblocked: draft the canonical schema as bootstrap migrations = **temper_next substrate
+(`01_schema.sql` shape) + the enumerated identity/auth/infra layer**:
+
+- **Shared `kb_profiles`** adopts substrate shape (`handle`, `system_access`) **+** re-added
+  `email`, `preferences`; drops `avatar_url`/`vault_config`/`is_active`/`updated`.
+- **Graft the 8 substrate-absent infra tables** from `migrations/` DDL: `kb_profile_auth_links`,
+  `kb_system_settings`, `kb_scopes`, `kb_join_requests`, `kb_team_invitations`, `kb_transfers`,
+  `kb_ingestion_records`, `kb_blob_files`. All FKs target substrate-present ids
+  (`kb_profiles`/`kb_teams`/`kb_resources`).
+- **Data carry-over migration** inserts the 4 missing profiles + 5 auth_links + the 2 seed rows
+  (system_settings, scope), setting `system_access` explicitly per profile.
+
+Remaining pre-drop verification (gated, execution-phase): the 2 Flag-2 content-hash mismatches
+(0.17%) spot-checked benign before dropping `kb_resource_revisions`.
 
 ---
 
