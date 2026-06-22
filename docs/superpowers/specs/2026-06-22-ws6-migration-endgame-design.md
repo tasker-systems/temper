@@ -109,7 +109,11 @@ mechanics, not preference:
 - The app's bare pool connects with **no search_path set** (`temper-api/src/main.rs:23`), so the
   connection default is `public`. The legacy read path uses unqualified SQL against that default;
   the Next path opts into the substrate per-operation via `SET LOCAL search_path TO temper_next,
-  public` (`next_backend.rs:172`, `read_selector.rs:234`, `writes.rs:83`, `substrate.rs:20`).
+  public` (`next_backend.rs:172`, `read_selector.rs:234`, `writes.rs:83`) — **plus** `substrate`
+  builds its *own* pool that sets the path pool-wide via `.after_connect(… SET search_path =
+  temper_next, public)` (`substrate.rs:18-22`, **not** a per-op `SET LOCAL`). Both styles collapse
+  away once `public` is the default, but the edits differ: delete the per-op lines vs. delete the
+  `after_connect` builder.
 - Renaming `temper_next` → `public` therefore makes the canonical schema the **connection default**
   — every per-op `SET LOCAL search_path` line and every `temper_next.`-qualified query *simplifies
   away to plain unqualified SQL on the default schema* (the §C collapse-rewrite inventory in the
@@ -143,13 +147,24 @@ from `temper_next` throughout until the rename.
 2. **Rename the stale schema aside:** `ALTER SCHEMA public RENAME TO public_legacy;`. Safe under the
    freeze — the only live-path reference to `public.*` is `writes.rs:30`'s prod→next profile bridge,
    which the write-freeze guarantees is unexercised.
-3. **Relocate the shared infrastructure into the surviving schema** (the BLOCKER-1 fix): make `vector`,
-   `pg_uuidv7`/`uuid_generate_v7()` resident in `temper_next` (→ the new `public`) so the canonical
-   schema *owns* them and the legacy drop can't cascade into them. Candidate mechanism: `ALTER
-   EXTENSION vector SET SCHEMA temper_next` for the relocatable `vector`; re-create the uuid generator
-   (the `pg_uuidv7` extension may not be relocatable — re-create `uuid_generate_v7()` in `temper_next`,
-   mirroring `tools/flip/uuid_portable.sql`). **Validate the exact relocatability of each on PG17/Neon
-   before execution** — this is the highest-risk DDL in the collapse.
+3. **Relocate the shared infrastructure into the surviving schema** (the BLOCKER-1 fix): make `vector`
+   and a `uuid_generate_v7()` generator resident in `temper_next` (→ the new `public`) so the canonical
+   schema *owns* them and the legacy drop can't cascade into them. **Committed mechanism (asymmetric —
+   the two have different relocatability):**
+   - **`vector` — relocate the extension.** `ALTER EXTENSION vector SET SCHEMA temper_next;` (pgvector
+     ships `relocatable = true`). After step 5's rename it ends up resident in the canonical `public`.
+   - **`uuid_generate_v7()` — re-create as a plain SQL function; do NOT relocate `pg_uuidv7`.** Re-create
+     the generator *in* `temper_next` mirroring `tools/flip/uuid_portable.sql` (`CREATE OR REPLACE
+     FUNCTION temper_next.uuid_generate_v7() …`). The canonical schema then owns a **self-contained**
+     generator with no extension dependency, so the legacy `pg_uuidv7` extension drops harmlessly with
+     `public_legacy` (step 8). Substrate DDL calls `uuid_generate_v7()` *unqualified* (resolved via
+     search_path today); post-rename it resolves to this function in the canonical `public`. Chosen over
+     `ALTER EXTENSION pg_uuidv7 SET SCHEMA` precisely because the flip already learned `pg_uuidv7` may
+     not be restorable/relocatable on bare PG17 — re-creating the function sidesteps the question.
+   - **Live-validation gate (highest-risk DDL — run on a throwaway Neon PG17 branch BEFORE the step-1
+     window, not as an inline judgment call):** confirm (a) `ALTER EXTENSION vector SET SCHEMA` succeeds
+     and a `::vector` cast + an HNSW/IVF index still resolve afterward; (b) the re-created
+     `uuid_generate_v7()` mints valid, unique, time-sortable v7 UUIDs.
 4. **Apply the canonical-layer graft/reconcile/carry-over** (the validated draft, now executable):
    reconcile `kb_profiles` (re-add `email`/`preferences`), graft the 7 substrate-absent infra tables
    + enums, `INSERT…SELECT` the identity/auth/seed data from `public_legacy` into `temper_next`. All
@@ -158,24 +173,49 @@ from `temper_next` throughout until the rename.
    transactional in PG.)
 5. **Promote:** `ALTER SCHEMA temper_next RENAME TO public;`. The canonical schema is now `public` —
    the connection default, now owning its extensions + uuid generator (step 3).
-   - **5b. Reconcile the `_sqlx_migrations` ledger (the BLOCKER-2 fix).** `temper-api/src/main.rs:27`
-     runs `sqlx::migrate!("../../migrations")` **unconditionally at startup** against the ledger in the
-     connection-default schema. The new `public` (ex-`temper_next`) has no ledger → `migrate!` would
-     replay all ~44 legacy migrations, collide with the substrate objects, and panic at boot
-     (`main.rs:30` `.expect`). **So the migration source-of-truth reconciliation the §sqlx-implications
-     bullet "defers to bootstrap-export" is in fact a HARD PREREQUISITE of this redeploy** — at
-     minimum: carry `_sqlx_migrations` into the new `public` and point `migrate!` at a reconciled
-     single migration set (or make the startup run conditional). Resolve before step 6.
+   - **5b. Remove the boot-time `migrate!` call (the BLOCKER-2 fix) — committed decision.**
+     `temper-api/src/main.rs:27` runs `sqlx::migrate!("../../migrations")` **unconditionally at startup**.
+     The new `public` (ex-`temper_next`) was built by the *artifact* (`schema-artifact/01+02.sql`), not by
+     `migrations/`, and has no matching `_sqlx_migrations` ledger → `migrate!` would replay all ~44 legacy
+     migrations, collide with the substrate objects, and panic at boot (`main.rs:30` `.expect`).
+     **Decision: delete the boot-time `migrate!` call** in the coincident redeploy (§Coincident code
+     changes). Rationale: post-collapse `migrations/` *no longer governs the canonical schema* (the
+     artifact does), so auto-running it is semantically wrong independent of the panic; and prod's schema
+     already exists (the renamed `temper_next`), so nothing needs applying at boot. A *meaningful*
+     boot-time migrate is restored by **bootstrap-export** once it reconciles the artifact + `migrations/`
+     into one source of truth (with a fresh ledger). **Rejected alternative — carry `_sqlx_migrations`
+     forward** (`INSERT…SELECT` the legacy ledger into the new `public`): it no-ops the panic, but (a)
+     preserves a *fictional* ledger (the schema was not built by those 44 files) and (b) actively collides
+     with bootstrap-export — when it rewrites `migrations/` into a clean set, the carried checksums
+     mismatch and `migrate!` panics on checksum drift. Removal leaves bootstrap-export a clean slate.
+     (This is a code change in the redeploy, not a DDL step — listed in §Coincident code changes; resolve
+     coincident with step 6.)
 6. **Redeploy the collapsed code coincident with the rename** (the flag is read once at startup —
    `main.rs:34` — so the running split-code process cannot survive the rename; its
    `temper_next.`-qualified SQL would 42P01). The deploy must ship the §"coincident code changes"
    manifest below. Verify the surface-parity gate (`surface_parity_next.rs`, now un-ignorable green)
    over the live schema.
 7. **Unfreeze.** Reads+writes resume against the one `public` schema, no flag, no search_path hooks.
-8. **Drop `public_legacy`** after the retention window (gated on: the held snapshot + the 2 Flag-2
-   content-hash spot-checks + a confirmation that **no new-`public` object still depends on an
-   extension resident in `public_legacy`** — step 3 must have moved them all). This is the point of
-   no return.
+8. **Drop `public_legacy`** after the retention window. This is the point of no return — gate it on the
+   held snapshot + the 2 Flag-2 content-hash spot-checks + the **dependency guard below returning clean**
+   (step 3 must have moved `vector` out; the re-created `uuid_generate_v7()` must own no `pg_uuidv7`
+   dependency):
+   ```sql
+   -- (a) vector must be resident in the canonical schema, NOT public_legacy:
+   SELECT n.nspname AS vector_schema
+   FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace
+   WHERE e.extname = 'vector';            -- expect: 'public' (post-rename canonical)
+
+   -- (b) no canonical (`public`) object may depend on any object in public_legacy:
+   SELECT c.relname AS canonical_obj, rc.relname AS legacy_dep
+   FROM pg_depend d
+   JOIN pg_class c  ON c.oid  = d.objid    JOIN pg_namespace n  ON n.oid  = c.relnamespace
+   JOIN pg_class rc ON rc.oid = d.refobjid JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+   WHERE n.nspname = 'public' AND rn.nspname = 'public_legacy';   -- expect: zero rows
+   ```
+   Only with (a) = `public` and (b) = zero rows: `DROP SCHEMA public_legacy CASCADE;` (CASCADE clears
+   public_legacy's *internal* objects + the now-orphaned `pg_uuidv7` extension; the guard proves it
+   reaches nothing canonical).
 
 ### Coincident code changes (must ship in the step-5 redeploy)
 
@@ -186,9 +226,16 @@ names that the rename changes:
   `read_selector.rs`, `services/backend_selection_service.rs`, the `select_backend`/flag dispatch in
   handlers, the `kb_backend_selection` startup read (`main.rs:34`). `db_backend.rs` collapses to *the*
   backend; `NextBackend` becomes the backend.
-- **Drop the search_path hooks** — `substrate.rs:20` and `writes.rs:83`'s `SET LOCAL search_path TO
-  temper_next, public` (now redundant: `public` is the default), and **de-qualify** the
-  `temper_next.`-prefixed SQL in `writes.rs` (`:36,:52,:66`) and `next_backend.rs`.
+- **Remove the boot-time `migrate!` call** (`main.rs:27-30`) — per step 5b, post-collapse `migrations/`
+  no longer governs the canonical schema, so the unconditional boot migrate is **deleted** (not gated).
+  Local/CI test-harness schema provisioning shifts from "boot applies `migrations/`" to "apply the
+  artifact (`schema-artifact/01+02.sql`)"; bootstrap-export later restores a single reconciled
+  migrate path + fresh ledger. Audit any other `migrate!`/`migrations/` provisioning site (test
+  harness, `cargo make db-*`) in the same release so a fresh clone/CI still gets a schema.
+- **Drop the search_path hooks** — `writes.rs:83`'s per-op `SET LOCAL search_path TO temper_next,
+  public` *and* `substrate.rs:18-22`'s pool-wide `.after_connect` search_path (distinct mechanisms,
+  both now redundant: `public` is the default), and **de-qualify** the `temper_next.`-prefixed SQL in
+  `writes.rs` (`:36,:52,:66`) and `next_backend.rs`.
 - **readback is de-qualified, NOT deleted at collapse.** Its 53 `temper_next.`-qualified refs +
   search_path lines must resolve to the renamed `public` (else reads 42P01), but the module survives
   until **shim-exit** retires the legacy prod-row shape (sibling spec). Sequencing handoff: collapse
@@ -226,10 +273,12 @@ names that the rename changes:
   CI (`SQLX_OFFLINE=true`).
 - The artifact-schema (`schema-artifact/01_schema.sql` + `02_functions.sql`) and the sqlx
   `migrations/` must reconcile to one source of truth (today they are two: the artifact builds
-  `temper_next`, migrations build `public`). The bootstrap-export spec *owns* this seam — **but per
-  step 5b the boot-time `migrate!` makes the minimal ledger/migration reconciliation a hard
-  prerequisite of the collapse redeploy, not a pure follow-on.** Draw the line explicitly when the
-  collapse is authored for execution.
+  `temper_next`, migrations build `public`). **The line is now drawn** (resolving the original punt):
+  the *collapse* owns only the minimal fix — **delete the boot-time `migrate!`** (step 5b) so boot
+  cannot panic — and the **bootstrap-export spec owns the full reconciliation** to one source of truth
+  + a fresh ledger + restoring a meaningful boot migrate. The collapse does *not* attempt any ledger
+  carry-over or migration rewrite; it simply stops auto-running a migration set that no longer governs
+  the canonical schema.
 
 ---
 
