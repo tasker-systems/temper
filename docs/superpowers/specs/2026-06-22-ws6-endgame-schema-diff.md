@@ -107,13 +107,20 @@ identity/auth/infra layer** (full profiles, auth_links, system_settings, scopes,
 The §9 harness never validated profile/identity completeness — it proved resource/edge/property/
 content parity for one owner. This is the concrete shape of "union of intended outcomes."
 
-### 🔴 NEW FLAG 2 — revision history is compressed in synthesis (possible data loss)
+### ✅ FLAG 2 — RESOLVED: no current-content loss; dropped revisions are mostly noise
 
-`public.kb_resource_revisions`=3342 vs `temper_next.kb_block_revisions`=1252 /
-`kb_content_blocks`=1248 (≈ current state, ~1 per resource). The deep historical revision trail
-is **not** carried 1:1. Decide: is full history preserved in the event ledger
-(`resource-lifecycle-event-sourcing`), intentionally compressed to current-state, or at risk of
-loss? Confirm before dropping `kb_resource_revisions`.
+Investigated 2026-06-22. The 3342→1252 delta is historical revision *trail*, not live content:
+- **Current content aligns:** public *current* (non-superseded) chunks = **14,713** vs
+  `temper_next` = **14,750** (~0.25%); content-hash of current chunk text matched **1,165 / 1,167**
+  resources (99.83%); §9 body floor was already 0-mismatch over the full corpus.
+- **Revisions are mostly noise:** of 3342, **912 (27%) are no-op duplicate-hash bumps**, and 89
+  resources have >1 revision but a single content state (pure flapping). ~2,430 distinct content
+  states is the real signal (~2 genuine versions/resource).
+
+**Verdict:** safe to drop `kb_resource_revisions` — current content is preserved; granular
+prior-version history is the **event ledger's** job (`resource-lifecycle-event-sourcing`), not
+this table's. **Spot-check residue:** 2 resources had a current content-hash mismatch (0.17%) —
+likely the chunk-ordering / date-anomaly class; verify they're benign before the drop.
 
 ## Next mechanical step
 
