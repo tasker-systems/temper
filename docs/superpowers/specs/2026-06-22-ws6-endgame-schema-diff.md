@@ -180,6 +180,18 @@ drop). Unblocked: draft the canonical schema as bootstrap migrations = **temper_
 Remaining pre-drop verification (gated, execution-phase): the 2 Flag-2 content-hash mismatches
 (0.17%) spot-checked benign before dropping `kb_resource_revisions`.
 
+> **✅ Canonical-layer draft VALIDATED (2026-06-22).** The graft/reconcile/carry-over draft
+> (`2026-06-22-ws6-canonical-layer-draft.sql`) was diffed read-only against the live
+> `flip-rollback-2026-06-22` snapshot (pg_dump of both schemas). GREEN, no blockers: all 7 grafted
+> CREATE TABLEs are byte-faithful to `public`'s real DDL; the 3 enums match label sets + order;
+> the `kb_profiles` ADD COLUMNs match and don't collide; all 3 carry-over INSERT…SELECT column
+> lists resolve on both ends, and the `system_access` CASE covers exactly the 5 real slugs.
+> Execution-checklist item satisfied: substrate owner `handle` already equals legacy `slug`
+> (`j-cole-taylor`), so the profiles `ON CONFLICT (id) DO UPDATE` not updating `handle` is
+> drift-free. The two tables the audit flagged as unaddressed (`kb_device_sync_state`,
+> `kb_doc_types`) are decided DROPs (Flags #1/#2) — the additive graft layer is silent on them by
+> design, now cross-referenced in the draft's NOT-GRAFTED note.
+
 ---
 
 ## Shared-table column reconciliation (§C — RESOLVED, 2026-06-22)

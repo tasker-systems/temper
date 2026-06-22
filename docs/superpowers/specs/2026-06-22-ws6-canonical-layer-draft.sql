@@ -215,6 +215,38 @@ FROM LEGACY.kb_system_settings
 ON CONFLICT (id) DO UPDATE SET access_mode = EXCLUDED.access_mode;
 
 -- ============================================================================
+-- NOT GRAFTED — public-only tables that DIE (intentional silence, not omission)
+-- ----------------------------------------------------------------------------
+-- This file is the *additive graft* layer: it creates only tables that SURVIVE
+-- and carry data forward. Public-only tables whose disposition is DROP do not
+-- appear here by design. For a collapse-author reading this draft in isolation,
+-- the decided drops (schema-diff Flags #1/#2 + §A) are:
+--   * kb_device_sync_state (3 rows) → DIES (cloud-only; vault is pull-only)
+--   * kb_doc_types (6 rows)         → DIES → Rust-interiority (temper-core schemas)
+--   * kb_resource_manifests, kb_resource_search_index, kb_resource_edges,
+--     kb_team_resources, kb_resource_revisions, kb_backend_selection → superseded
+--     by the substrate model / the split machinery (schema-diff §A).
+-- The legacy drop step (endgame sequencing step 5) removes these with the
+-- renamed-aside schema.
+--
+-- ============================================================================
+-- VALIDATED (2026-06-22) — read-only audit vs the live `flip-rollback-2026-06-22`
+-- ----------------------------------------------------------------------------
+-- Diffed against pg_dump of the live snapshot (both schemas). GREEN, no blockers:
+--   * All 7 grafted CREATE TABLEs are byte-faithful to public's real DDL
+--     (columns/types/lengths/nullability/defaults/PK/UNIQUE/CHECK/FK actions/indexes).
+--   * The 3 CREATE TYPE enums match public's label sets + order; team_role is
+--     correctly NOT re-created (present in substrate); porosity correctly NOT re-added.
+--   * kb_profiles ADD COLUMNs match public (email VARCHAR(256) nullable; preferences
+--     JSONB NOT NULL DEFAULT '{}'); neither pre-exists in the substrate (no collision).
+--   * All 3 carry-over INSERT…SELECT column lists resolve on both source (public)
+--     and target (post-graft substrate); the system_access CASE covers exactly the
+--     5 real slugs (anonymous/gm-anirudh/j-cole-taylor/lohjishan/system).
+--   * EXECUTION-CHECKLIST item SATISFIED: substrate owner handle already equals the
+--     legacy slug ('j-cole-taylor' == 'j-cole-taylor'), so the profiles ON CONFLICT
+--     (id) DO UPDATE not touching `handle` introduces no handle/slug drift.
+--
+-- ============================================================================
 -- OPEN — deferred to later endgame beats (NOT resolved by this draft):
 --   * 11 shared-table column reconciliation BEYOND kb_profiles (kb_events,
 --     kb_resource_audits, kb_teams, kb_contexts, kb_topics, kb_chunks, ...):
