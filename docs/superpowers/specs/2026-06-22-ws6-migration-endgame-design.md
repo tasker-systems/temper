@@ -63,13 +63,32 @@ So the endgame is **not** "promote the candidate." It is "**ratify the already-l
 `crates/temper-next` is two things wearing one crate. The endgame must separate them; this is
 the spec's central analysis task and the input to crate extraction (shim-exit spec).
 
-| Component (temper-next/src) | Role | Fate |
+> **✅ RESOLVED (2026-06-22) — full per-symbol audit: `2026-06-22-ws6-disentanglement-audit.md`.**
+> The audit (six-way parallel read, every verdict caller-cited, load-bearing claims re-grepped)
+> corrects this table's grain. **The "mixed" band is not mixed — `write`/`writes`/`payloads`/`ids`/
+> `fingerprint`/`content`/`embed` are ALL substrate (KEEP).** The real disentanglement is at the
+> **symbol** grain *inside* the scaffolding: `synthesis/` is confirmed scaffolding but harbours
+> **permanent live-path code** that must be re-homed *before* deletion — a blanket "delete
+> `synthesis/`" would delete the live write path's property-classifier (`key_fate`, used at
+> `next_backend.rs:27,91`) and break compilation (`slugify`, used at `writes.rs:64`). Three buckets,
+> not two: KEEP / DELETE / **RE-HOME**.
+
+| Component (temper-next/src) | Role | Fate (audited) |
 |---|---|---|
-| `synthesis/` | builds `temper_next` *from* `public` frontmatter | **scaffolding** — retire after collapse (one-shot migration) |
-| `readback/` | reconstructs prod-shape rows from `temper_next` | **scaffolding** — retire via shim-exit spec |
-| `affinity`, `cluster`, `drift` | cogmap region/affinity computation | **substrate** — keep, re-home onto canonical schema |
-| `scenario`, `replay`, `events` | event-sourcing + declarative runbooks | **substrate** — keep (verify each) |
-| `write`/`writes`, `payloads`, `ids`, `fingerprint`, `content`, `embed` | mutation + content plumbing | **mixed** — audit per-item |
+| `synthesis/{source,mod,bootstrap,parity}` | builds `temper_next` *from* `public` frontmatter | **scaffolding — DELETE** at collapse, *after* carrying survivors (below) |
+| `synthesis/key_fate` | §7 key→property-tier classification (no SQL) | **RE-HOME (permanent)** — on the live **write** path; mis-filed under `synthesis/`. The standout finding |
+| `readback/` | reconstructs prod-shape rows from `temper_next` | **scaffolding — DELETE-after-shim-exit** (later than collapse; with the legacy shape) |
+| `affinity`, `cluster`, `fingerprint`, `ids` | cogmap math + pure helpers/types (zero schema coupling) | **substrate — KEEP**; extraction-ready (lift wholesale to `temper-cogmap`) |
+| `drift`, `substrate`, `write`, `embed` | cogmap formation/materialize + DB access | **substrate — KEEP**; `substrate.rs:20` carries the load-bearing search_path rewrite |
+| `events`, `replay`, `writes`, `payloads`, `content` | forward event-sourcing + live write composition + content plumbing | **substrate — KEEP**; `replay` is forward-ledger (not legacy-trail); `writes` carries the bulk of the de-qualify work |
+| `scenario/**` | declarative seeds + scenario runbooks + access proofs | **substrate — KEEP** (surviving product feature, *not* on the live request path); 2 carve-outs |
+
+**Survivors to carry out before deleting `synthesis/`** (full table + re-home targets in the audit):
+`key_fate.rs` (whole module → canonical write layer), `bootstrap::slugify` (→ a KEEP util shared by
+`writes`+`scenario`), `parity::{reconstruct_body,new_substrate_chunks,ReadChunk}` (→ move next to
+`readback/`, retire together at shim-exit). `bootseed::system_event_type_names()` goes dead with
+synthesis (sole caller is `bootstrap.rs:105`). **`content.rs` must NOT be deleted with synthesis**
+despite synthesis importing its types — it is live-write substrate.
 
 In temper-api: `backend/read_selector.rs` (429L), `backend/next_backend.rs` (545L),
 `backend/selection.rs` (163L), `services/backend_selection_service.rs`, the
@@ -134,8 +153,11 @@ collapse.
 ## Sequencing (surfaces stay functional throughout)
 
 1. **Snapshot the live (`temper_next`) state** — the rollback target (NOT `public`).
-2. **Disentangle** substrate from scaffolding (the table above), landing substrate so it can run
-   against the canonical schema. (Largest analysis chunk; overlaps shim-exit.)
+2. **Disentangle** substrate from scaffolding (the table above; **audit resolved** in
+   `2026-06-22-ws6-disentanglement-audit.md`), landing substrate so it can run against the canonical
+   schema. Concretely: re-home the survivors (`key_fate.rs`, `slugify`, the `parity` body-helpers)
+   *before* deleting `synthesis/`; rewrite the two search_path hooks (`substrate.rs:20`,
+   `writes.rs:83`) + the qualified `writes.rs`/`next_backend.rs` resolver SQL. (Overlaps shim-exit.)
 3. **Collapse** — rename/promote to one schema in a window where no surface resolves to a
    moved/dropped namespace. Redeploy (flag read once at startup; see runbook).
 4. **Delete the split machinery** + the flag + scaffolding; regenerate sqlx caches.
@@ -189,6 +211,7 @@ reconciled single source of truth from step 4.
   `2026-06-22-ws6-canonical-layer-draft.sql` — feeds collapse step 3. Reconciles `kb_profiles`,
   grafts the 7 substrate-absent infra tables + enums, carries the identity data via INSERT…SELECT.
 - Schema diff + Flag resolutions (identity union; `kb_scopes` superseded): `2026-06-22-ws6-endgame-schema-diff.md`
+- **Disentanglement audit** (per-symbol KEEP/DELETE/RE-HOME; survivor table; collapse-rewrite inventory): `2026-06-22-ws6-disentanglement-audit.md`
 - [[project_ws6_flip_already_executed]] (live-on-`temper_next` timeline; read-path defect)
 - Findings task `019eefbe` (raw-pool reads serve stale `public`)
 - `crates/temper-api/src/backend/{read_selector,next_backend,selection,db_backend}.rs`
