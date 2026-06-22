@@ -171,6 +171,10 @@ reconciled single source of truth from step 4.
 
 ## References
 
+- **Canonical-layer draft** (graft/reconcile/carry-over, verified read-only vs the live substrate):
+  `2026-06-22-ws6-canonical-layer-draft.sql` — feeds collapse step 3. Reconciles `kb_profiles`,
+  grafts the 7 substrate-absent infra tables + enums, carries the identity data via INSERT…SELECT.
+- Schema diff + Flag resolutions (identity union; `kb_scopes` superseded): `2026-06-22-ws6-endgame-schema-diff.md`
 - [[project_ws6_flip_already_executed]] (live-on-`temper_next` timeline; read-path defect)
 - Findings task `019eefbe` (raw-pool reads serve stale `public`)
 - `crates/temper-api/src/backend/{read_selector,next_backend,selection,db_backend}.rs`

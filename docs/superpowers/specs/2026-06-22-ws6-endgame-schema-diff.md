@@ -123,16 +123,25 @@ INSERTed):
   their `access_mode='open'` + `is_active=true` status quo); sentinels → `none`. Adjustable.
 
 **Infra half — seed-level, fully enumerated.** Carrying real data: `kb_system_settings`=1
-(`access_mode='open'`, no instance_name/terms), `kb_scopes`=1 (`public`/`access`; substrate has
-**no** `kb_scopes`, so it carries). Empty (schema-only): `kb_ingestion_records`, `kb_blob_files`,
-`kb_join_requests`, `kb_team_invitations`, `kb_transfers`. The lone `public.kb_teams` row is the
-`temper-system` system team (id `…0002`) — a seed row reconciled in the 11-shared set, not an
-identity-layer concern.
+(`access_mode='open'`, no instance_name/terms). Empty (schema-only): `kb_ingestion_records`,
+`kb_blob_files`, `kb_join_requests`, `kb_team_invitations`, `kb_transfers`. The lone
+`public.kb_teams` row is the `temper-system` system team (id `…0002`) — a seed row reconciled in
+the 11-shared set, not an identity-layer concern.
+
+> **Correction (2026-06-22, while grounding the canonical draft): `kb_scopes` does NOT survive.**
+> The schema-diff first marked it 🟡 SURVIVES; verification against the authoritative substrate
+> install (`install_temper_next.sql`, generated from `01_schema.sql`) shows the substrate
+> **dissolved** scopes: `kb_cogmaps` is *"Was kb_scopes; renamed, porosity dropped"* (01_schema
+> §kb_cogmaps) and `kb_events.scope_id` became the producing-anchor (`[PHASE-2 DECISION]`). The
+> `porosity` enum is explicitly RETIRED ("visibility is teams:RBAC"). So `kb_scopes` (1 row
+> `public`/`access`) is **superseded**, not carried. `temper-events`' `kb_scopes`/`porosity` code
+> (`ledger.rs:50`, `types/scope.rs`) targets the *old* event model — it is **scaffolding to
+> retire** in the substrate/scaffolding disentanglement (endgame step 2), not substrate to keep.
 
 The §9 harness never validated identity completeness — it proved resource/edge/property/content
 parity for one owner. This investigation closes that gap: the "union of intended outcomes" is
 **temper_next substrate (resource/content/cogmap, single-owner) ∪ {5 profiles, 5 auth_links, 1
-system_settings, 1 scope}**.
+system_settings}** (`kb_scopes` superseded — see correction above).
 
 ### ✅ FLAG 2 — RESOLVED: no current-content loss; dropped revisions are mostly noise
 
@@ -157,12 +166,12 @@ drop). Unblocked: draft the canonical schema as bootstrap migrations = **temper_
 
 - **Shared `kb_profiles`** adopts substrate shape (`handle`, `system_access`) **+** re-added
   `email`, `preferences`; drops `avatar_url`/`vault_config`/`is_active`/`updated`.
-- **Graft the 8 substrate-absent infra tables** from `migrations/` DDL: `kb_profile_auth_links`,
-  `kb_system_settings`, `kb_scopes`, `kb_join_requests`, `kb_team_invitations`, `kb_transfers`,
-  `kb_ingestion_records`, `kb_blob_files`. All FKs target substrate-present ids
-  (`kb_profiles`/`kb_teams`/`kb_resources`).
-- **Data carry-over migration** inserts the 4 missing profiles + 5 auth_links + the 2 seed rows
-  (system_settings, scope), setting `system_access` explicitly per profile.
+- **Graft the 7 substrate-absent infra tables** from `migrations/` DDL: `kb_profile_auth_links`,
+  `kb_system_settings`, `kb_join_requests`, `kb_team_invitations`, `kb_transfers`,
+  `kb_ingestion_records`, `kb_blob_files`. (`kb_scopes` is superseded — see Flag-1 correction.)
+  All FKs target substrate-present ids (`kb_profiles`/`kb_teams`/`kb_resources`).
+- **Data carry-over migration** inserts the 4 missing profiles + 5 auth_links + the 1 seed row
+  (system_settings), setting `system_access` explicitly per profile.
 
 Remaining pre-drop verification (gated, execution-phase): the 2 Flag-2 content-hash mismatches
 (0.17%) spot-checked benign before dropping `kb_resource_revisions`.
