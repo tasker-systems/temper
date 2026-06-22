@@ -99,14 +99,72 @@ In temper-api: `backend/read_selector.rs` (429L), `backend/next_backend.rs` (545
 
 ## Mechanics — promotion / collapse
 
-Two candidate mechanisms; the spec recommends evaluating both against the live state, but
-leans **rename**:
+**Decision (committed): rename `temper_next` → `public`.** Grounded in the live connection
+mechanics, not preference:
 
-- **Rename** `temper_next.*` → the canonical name; drop the stale old `public.*`. Pro: the live
-  data does not move; atomic-ish via `ALTER SCHEMA ... RENAME`. Con: name churn; the old
-  `public` must be dropped (after a snapshot).
-- **Search-path / in-place** — keep the schema, repoint everything. Rejected as primary: leaves
-  a `temper_next`-named canonical schema permanently, contradicting "collapse."
+- The app's bare pool connects with **no search_path set** (`temper-api/src/main.rs:23`), so the
+  connection default is `public`. The legacy read path uses unqualified SQL against that default;
+  the Next path opts into the substrate per-operation via `SET LOCAL search_path TO temper_next,
+  public` (`next_backend.rs:172`, `read_selector.rs:234`, `writes.rs:83`, `substrate.rs:20`).
+- Renaming `temper_next` → `public` therefore makes the canonical schema the **connection default**
+  — every per-op `SET LOCAL search_path` line and every `temper_next.`-qualified query *simplifies
+  away to plain unqualified SQL on the default schema* (the §C collapse-rewrite inventory in the
+  disentanglement audit becomes "delete these search_path hooks / de-qualify these refs"). The live
+  data does not move; the rename is atomic via `ALTER SCHEMA ... RENAME`.
+- **Search-path / in-place** (keep the `temper_next` name, repoint the default) is **rejected**: it
+  leaves a `temper_next`-named canonical schema permanently (contradicts "collapse"), AND it would
+  require setting a non-default search_path on *every* connection forever (the bare-pool default
+  would point at the dropped/empty `public`) — strictly more coupling than the rename removes.
+
+### Executable collapse sequence (the DDL run order)
+
+Builds directly on the validated canonical-layer draft (`2026-06-22-ws6-canonical-layer-draft.sql`,
+which grafts infra + carries identity *into* `temper_next` from the renamed-aside legacy) and reuses
+the flip runbook's freeze/snapshot/redeploy discipline. Runs in an operator-controlled window
+(single-user; arc-1 accepts brief downtime). **Prod is already on `next`**, so reads+writes serve
+from `temper_next` throughout until the rename.
+
+1. **Freeze + snapshot.** Operator stops reading/writing; `neonctl branches create` from `main` →
+   the rollback target (record branch id + LSN). This is the real safety net — `public` is stale,
+   NOT a rollback target.
+2. **Rename the stale schema aside:** `ALTER SCHEMA public RENAME TO public_legacy;`. Safe under the
+   freeze — the only live-path reference to `public.*` is `writes.rs:30`'s prod→next profile bridge,
+   which the write-freeze guarantees is unexercised.
+3. **Apply the canonical-layer graft/reconcile/carry-over** (the validated draft, now executable):
+   reconcile `kb_profiles` (re-add `email`/`preferences`), graft the 7 substrate-absent infra tables
+   + enums, `INSERT…SELECT` the identity/auth/seed data from `public_legacy` into `temper_next`. All
+   FKs target substrate-present ids; verified read-only-GREEN vs the live snapshot.
+4. **Promote:** `ALTER SCHEMA temper_next RENAME TO public;`. The canonical schema is now `public` —
+   the connection default. (Atomic; the two renames + graft can run in one transaction.)
+5. **Redeploy the collapsed code coincident with the rename** (the flag is read once at startup —
+   `main.rs:34` — so the running split-code process cannot survive the rename; its
+   `temper_next.`-qualified SQL would 42P01). The deploy must ship the §"coincident code changes"
+   manifest below. Verify the surface-parity gate (`surface_parity_next.rs`, now un-ignorable green)
+   over the live schema.
+6. **Unfreeze.** Reads+writes resume against the one `public` schema, no flag, no search_path hooks.
+7. **Drop `public_legacy`** after the retention window (gated on the held snapshot + the 2 Flag-2
+   content-hash spot-checks from the schema-diff). This is the point of no return.
+
+### Coincident code changes (must ship in the step-5 redeploy)
+
+The schema rename and these edits are **one atomic release** — the running process references schema
+names that the rename changes:
+
+- **Delete the split machinery** (per §"What is scaffolding"): `backend/selection.rs`,
+  `read_selector.rs`, `services/backend_selection_service.rs`, the `select_backend`/flag dispatch in
+  handlers, the `kb_backend_selection` startup read (`main.rs:34`). `db_backend.rs` collapses to *the*
+  backend; `NextBackend` becomes the backend.
+- **Drop the search_path hooks** — `substrate.rs:20` and `writes.rs:83`'s `SET LOCAL search_path TO
+  temper_next, public` (now redundant: `public` is the default), and **de-qualify** the
+  `temper_next.`-prefixed SQL in `writes.rs` (`:36,:52,:66`) and `next_backend.rs`.
+- **readback is de-qualified, NOT deleted at collapse.** Its 53 `temper_next.`-qualified refs +
+  search_path lines must resolve to the renamed `public` (else reads 42P01), but the module survives
+  until **shim-exit** retires the legacy prod-row shape (sibling spec). Sequencing handoff: collapse
+  makes readback resolve to the one schema; shim-exit removes it. (Carry `parity::{reconstruct_body,
+  new_substrate_chunks,ReadChunk}` with it — see audit survivor table.)
+- **Re-home the synthesis survivors** so `synthesis/` deletes cleanly (audit §B): `key_fate.rs`
+  (whole module → canonical write layer), `bootstrap::slugify`. `synthesis/` + the binary
+  `Synthesize` subcommand are deleted in this release (the one-shot migration is spent).
 
 **sqlx implications (must be in the executable plan):**
 - The temper-next per-crate `.sqlx` cache targets the `temper_next` namespace; the workspace
@@ -151,6 +209,9 @@ collapse.
 ---
 
 ## Sequencing (surfaces stay functional throughout)
+
+This is the macro arc across the whole endgame; the **§"Executable collapse sequence"** above details
+the DDL run order *within* step 3, and the **§"Coincident code changes"** the edits that ship with it.
 
 1. **Snapshot the live (`temper_next`) state** — the rollback target (NOT `public`).
 2. **Disentangle** substrate from scaffolding (the table above; **audit resolved** in
