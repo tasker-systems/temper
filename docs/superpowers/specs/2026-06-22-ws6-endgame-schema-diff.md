@@ -137,6 +137,10 @@ the 11-shared set, not an identity-layer concern.
 > `public`/`access`) is **superseded**, not carried. `temper-events`' `kb_scopes`/`porosity` code
 > (`ledger.rs:50`, `types/scope.rs`) targets the *old* event model — it is **scaffolding to
 > retire** in the substrate/scaffolding disentanglement (endgame step 2), not substrate to keep.
+>
+> **✅ AFFIRMED (user, 2026-06-22):** the model moved to cogmaps away from scopes; `kb_scopes` is
+> vestigial and is **dropped** (not grafted). The `temper-events` scope/porosity code is confirmed
+> scaffolding to retire in the disentanglement step.
 
 The §9 harness never validated identity completeness — it proved resource/edge/property/content
 parity for one owner. This investigation closes that gap: the "union of intended outcomes" is
@@ -212,7 +216,12 @@ content, edges — all §9-proven) + a **genesis event stream** + **forward even
 granular pre-flip "who-changed-what-when" trail is gone. This is a legitimate genesis-from-state
 design, and it extends the already-accepted Flag-2 verdict ("drop revisions; history is the event
 ledger's job") — with the clarification that **the event ledger itself starts at genesis, it does
-not backfill the old trail.** Confirm this is the intended endgame posture before the legacy drop.
+not backfill the old trail.**
+
+> **✅ AFFIRMED (user, 2026-06-22):** intended posture. The legacy events were high-noise;
+> synthesis-mint a genesis stream and run forward event-sourcing from there. No backfill of the
+> pre-flip revisions/audits/events trail. This is no longer an open question — the legacy drop may
+> proceed on this basis (subject to the gated execution-phase snapshot + the 2 Flag-2 spot-checks).
 
 ### Mechanical notes for the bootstrap-export spec
 - Column **renames** to encode (current state already lives under the new names in the substrate;
