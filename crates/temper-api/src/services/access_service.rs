@@ -344,6 +344,274 @@ pub async fn review_request(pool: &PgPool, params: ReviewRequestParams) -> ApiRe
 }
 
 // ---------------------------------------------------------------------------
+// Substrate (`temper_next`) dark-launch variants
+// ---------------------------------------------------------------------------
+//
+// These `*_next` variants run the join-request lifecycle against the qualified
+// `temper_next.*` substrate. They mirror the legacy fns above with three
+// substrate deltas: (1) the gating-team lookup drops `AND is_active = true`
+// (substrate `kb_teams` has no `is_active`); (2) the membership INSERT uses the
+// substrate `kb_team_members(team_id, profile_id, role)` shape (no
+// `id`/`joined_at`/`invited_by_profile_id`); (3) NO event emission.
+//
+// Admin/operational events are firewalled from the cognition ledger
+// (`kb_events`): the substrate `kb_events` is cognition-only (entity emitters,
+// context/cogmap anchors), so the join-request lifecycle is NOT ledgered there.
+// The audit trail lives on `kb_join_requests` (status / reviewed_by_profile_id /
+// timestamps) plus the `kb_team_members` row created on approval. A dedicated
+// admin-event sink is a future deliverable.
+//
+// `get_system_settings`/`get_public_settings`/`has_system_access`/
+// `is_system_admin`/`get_entitlements` read unqualified `kb_system_settings` or
+// call the access-gate SQL fns; the graft satisfies both schemas, so they need
+// no `_next` variant and are reused unchanged.
+
+/// Substrate variant of [`create_join_request`]. Emits no cognition event.
+#[cfg(feature = "next-backend")]
+pub async fn create_join_request_next(
+    pool: &PgPool,
+    params: CreateJoinRequestParams,
+) -> ApiResult<JoinRequest> {
+    let settings = get_system_settings(pool).await?;
+
+    if settings.access_mode == "open" {
+        return Err(ApiError::BadRequest(
+            "System is in open mode — no access request needed".to_string(),
+        ));
+    }
+
+    let gating_slug = settings.gating_team_slug.ok_or_else(|| {
+        ApiError::Internal("System is invite_only but no gating team configured".to_string())
+    })?;
+
+    // Resolve team ID from slug (substrate `kb_teams` has no `is_active`).
+    let team_id = sqlx::query_scalar!(
+        "SELECT id FROM temper_next.kb_teams WHERE slug = $1",
+        gating_slug,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| ApiError::Internal(format!("Gating team '{gating_slug}' not found")))?;
+
+    let request_id = Uuid::now_v7();
+    let accepted_terms_at = params
+        .accepted_terms_version
+        .as_ref()
+        .map(|_| chrono::Utc::now());
+
+    let row = sqlx::query_as!(
+        JoinRequest,
+        r#"
+        INSERT INTO temper_next.kb_join_requests
+            (id, team_id, requesting_profile_id, status, message, source,
+             accepted_terms_version, accepted_terms_at, created, updated)
+        VALUES ($1, $2, $3, 'pending', $4, $5, $6, $7, now(), now())
+        RETURNING id, team_id, requesting_profile_id,
+                  status as "status: JoinRequestStatus",
+                  message, source, accepted_terms_version, accepted_terms_at,
+                  reviewed_by_profile_id, reviewed_at, decision_note,
+                  created, updated
+        "#,
+        request_id,
+        team_id,
+        params.profile_id,
+        params.message,
+        params.source,
+        params.accepted_terms_version,
+        accepted_terms_at,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row)
+}
+
+/// Substrate variant of [`get_own_request`].
+#[cfg(feature = "next-backend")]
+pub async fn get_own_request_next(
+    pool: &PgPool,
+    profile_id: Uuid,
+) -> ApiResult<Option<JoinRequest>> {
+    let settings = get_system_settings(pool).await?;
+
+    let Some(gating_slug) = settings.gating_team_slug else {
+        return Ok(None);
+    };
+
+    let row = sqlx::query_as!(
+        JoinRequest,
+        r#"
+        SELECT jr.id, jr.team_id, jr.requesting_profile_id,
+               jr.status as "status: JoinRequestStatus",
+               jr.message, jr.source, jr.accepted_terms_version, jr.accepted_terms_at,
+               jr.reviewed_by_profile_id, jr.reviewed_at, jr.decision_note,
+               jr.created, jr.updated
+          FROM temper_next.kb_join_requests jr
+          JOIN temper_next.kb_teams t ON t.id = jr.team_id
+         WHERE jr.requesting_profile_id = $1
+           AND t.slug = $2
+         ORDER BY jr.created DESC
+         LIMIT 1
+        "#,
+        profile_id,
+        gating_slug,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row)
+}
+
+/// Substrate variant of [`withdraw_request`]. Emits no cognition event.
+#[cfg(feature = "next-backend")]
+pub async fn withdraw_request_next(pool: &PgPool, profile_id: Uuid) -> ApiResult<()> {
+    let settings = get_system_settings(pool).await?;
+
+    let Some(gating_slug) = settings.gating_team_slug else {
+        return Err(ApiError::NotFound);
+    };
+
+    let result = sqlx::query_scalar!(
+        r#"
+        UPDATE temper_next.kb_join_requests jr
+           SET status = 'withdrawn', updated = now()
+          FROM temper_next.kb_teams t
+         WHERE jr.team_id = t.id
+           AND jr.requesting_profile_id = $1
+           AND t.slug = $2
+           AND jr.status = 'pending'
+        RETURNING jr.id
+        "#,
+        profile_id,
+        gating_slug,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    match result {
+        Some(_request_id) => Ok(()),
+        None => Err(ApiError::NotFound),
+    }
+}
+
+/// Substrate variant of [`list_pending_requests`].
+#[cfg(feature = "next-backend")]
+pub async fn list_pending_requests_next(pool: &PgPool) -> ApiResult<Vec<JoinRequestWithProfile>> {
+    let settings = get_system_settings(pool).await?;
+
+    let Some(gating_slug) = settings.gating_team_slug else {
+        return Ok(vec![]);
+    };
+
+    let rows = sqlx::query_as!(
+        JoinRequestWithProfile,
+        r#"
+        SELECT jr.id, jr.team_id, jr.requesting_profile_id,
+               jr.status as "status: JoinRequestStatus",
+               jr.message, jr.source, jr.accepted_terms_version, jr.accepted_terms_at,
+               jr.reviewed_by_profile_id, jr.reviewed_at, jr.decision_note,
+               jr.created, jr.updated,
+               p.display_name, p.email
+          FROM temper_next.kb_join_requests jr
+          JOIN temper_next.kb_teams t ON t.id = jr.team_id
+          JOIN temper_next.kb_profiles p ON p.id = jr.requesting_profile_id
+         WHERE t.slug = $1
+           AND jr.status = 'pending'
+         ORDER BY jr.created DESC
+        "#,
+        gating_slug,
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// Substrate variant of [`review_request`]. On approval, atomically inserts the
+/// substrate-shaped membership row. Emits no cognition event. (Reviewer
+/// attribution survives on `kb_join_requests.reviewed_by_profile_id`; the
+/// substrate `kb_team_members` shape has no `invited_by_profile_id`.)
+#[cfg(feature = "next-backend")]
+pub async fn review_request_next(
+    pool: &PgPool,
+    params: ReviewRequestParams,
+) -> ApiResult<JoinRequest> {
+    if params.decision != JoinRequestStatus::Approved
+        && params.decision != JoinRequestStatus::Rejected
+    {
+        return Err(ApiError::BadRequest(
+            "Decision must be 'approved' or 'rejected'".to_string(),
+        ));
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to begin transaction: {e}")))?;
+
+    // Bind the decision as text and cast to the substrate enum: a bound
+    // `JoinRequestStatus` resolves to `public.join_request_status` (found first
+    // on the default search_path), which Postgres treats as a DISTINCT type from
+    // the column's `temper_next.join_request_status`. The `text` round-trip casts
+    // by label across the two same-named enums. (The legacy variant binds the
+    // enum directly because its column is `public.join_request_status`.)
+    let decision_label = match params.decision {
+        JoinRequestStatus::Pending => "pending",
+        JoinRequestStatus::Approved => "approved",
+        JoinRequestStatus::Rejected => "rejected",
+        JoinRequestStatus::Withdrawn => "withdrawn",
+    };
+
+    let row = sqlx::query_as!(
+        JoinRequest,
+        r#"
+        UPDATE temper_next.kb_join_requests
+           SET status = $2::text::temper_next.join_request_status,
+               reviewed_by_profile_id = $3,
+               reviewed_at = now(),
+               decision_note = $4,
+               updated = now()
+         WHERE id = $1
+           AND status = 'pending'
+        RETURNING id, team_id, requesting_profile_id,
+                  status as "status: JoinRequestStatus",
+                  message, source, accepted_terms_version, accepted_terms_at,
+                  reviewed_by_profile_id, reviewed_at, decision_note,
+                  created, updated
+        "#,
+        params.request_id,
+        decision_label,
+        params.reviewer_profile_id,
+        params.decision_note,
+    )
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    // On approval, insert substrate-shaped team membership
+    // (no id / joined_at / invited_by_profile_id).
+    if params.decision == JoinRequestStatus::Approved {
+        sqlx::query!(
+            r#"
+            INSERT INTO temper_next.kb_team_members (team_id, profile_id, role)
+            VALUES ($1, $2, 'watcher')
+            ON CONFLICT (team_id, profile_id) DO NOTHING
+            "#,
+            row.team_id,
+            row.requesting_profile_id,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(format!("Failed to commit transaction: {e}")))?;
+
+    Ok(row)
+}
+
+// ---------------------------------------------------------------------------
 // Entitlements
 // ---------------------------------------------------------------------------
 

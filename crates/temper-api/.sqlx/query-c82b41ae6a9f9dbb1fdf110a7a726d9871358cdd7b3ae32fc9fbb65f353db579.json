@@ -1,22 +1,22 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT kb_context_id AS \"kb_context_id!: Uuid\" FROM kb_resources WHERE id = $1",
+  "query": "SELECT id FROM temper_next.kb_teams WHERE slug = $1",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
-        "name": "kb_context_id!: Uuid",
+        "name": "id",
         "type_info": "Uuid"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid"
+        "Text"
       ]
     },
     "nullable": [
       false
     ]
   },
-  "hash": "ed7f016c1e13d427095efa0f7c07ef4d0b05bddec909f5ca29b1c5200d9ee0c4"
+  "hash": "c82b41ae6a9f9dbb1fdf110a7a726d9871358cdd7b3ae32fc9fbb65f353db579"
 }

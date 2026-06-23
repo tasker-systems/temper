@@ -3,9 +3,8 @@
 mod common;
 
 use temper_api::backend::DbBackend;
-use temper_api::services::{context_service, event_service, ingest_service, resource_service};
+use temper_api::services::{context_service, ingest_service, resource_service};
 use temper_core::operations::{Backend, BodyUpdate, Surface, UpdateResource};
-use temper_core::types::api::EventListParams;
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::ManagedMeta;
 
@@ -742,114 +741,6 @@ async fn mcp_update_resource_meta_merges_partial_managed_meta(pool: sqlx::PgPool
     assert_eq!(
         managed["temper-effort"], "large",
         "temper-effort omitted from the call must be preserved",
-    );
-}
-
-// ---------------------------------------------------------------------------
-// list_events surfaces changed-key deltas, not just hashes
-// ---------------------------------------------------------------------------
-
-/// `list_events` payloads expose *which* managed/open keys changed in an
-/// update event, not just the rollup hash. Acceptance criterion for
-/// `2026-05-19-mcp-list-events-surface-payload-deltas-beyond-hashes`:
-/// change one managed_meta key, then confirm the `managed_meta_updated`
-/// event identifies that key.
-#[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn list_events_managed_meta_update_surfaces_changed_keys(pool: sqlx::PgPool) {
-    let app = common::setup(pool.clone()).await;
-    app.client
-        .profile()
-        .get()
-        .await
-        .expect("profile pre-flight");
-    let profile_id = resolve_test_profile(&pool).await;
-
-    context_service::create(&pool, profile_id, "list-events-delta")
-        .await
-        .expect("context create");
-    let context = context_service::resolve_by_name(&pool, profile_id, "list-events-delta")
-        .await
-        .expect("context resolve");
-    let doc_type_id = ingest_service::resolve_doc_type(&pool, "task")
-        .await
-        .expect("doc_type");
-
-    let seeded_managed = serde_json::json!({
-        "temper-type": "task",
-        "temper-stage": "in-progress",
-        "temper-mode": "build",
-    });
-    let resource = ingest_service::create_resource_with_manifest(
-        &pool,
-        &ingest_service::CreateResourceParams {
-            id: ResourceId::new(),
-            profile_id,
-            device_id: "mcp-test",
-            context_id: context.id,
-            doc_type_id,
-            doc_type_name: "task",
-            title: "List Events Delta Task",
-            slug: Some("list-events-delta-task"),
-            origin_uri: "mcp://test/list-events-delta",
-            content_hash: "",
-            managed_meta: &seeded_managed,
-            open_meta: &serde_json::json!({}),
-            chunks_packed: None,
-        },
-    )
-    .await
-    .expect("create resource");
-
-    // Change exactly one managed_meta key: temper-stage.
-    let cmd = UpdateResource {
-        resource: ResourceId::from(*resource.id),
-        body: None,
-        managed_meta: Some(ManagedMeta {
-            stage: Some("done".to_string()),
-            ..Default::default()
-        }),
-        open_meta: None,
-        move_to: None,
-        origin: Surface::Mcp,
-    };
-    DbBackend::new(pool.clone(), profile_id, "mcp".to_string(), Surface::Mcp)
-        .update_resource(cmd)
-        .await
-        .expect("update via DbBackend");
-
-    // list_events (the MCP tool delegates to event_service::list_visible).
-    let events = event_service::list_visible(
-        &pool,
-        *profile_id,
-        EventListParams {
-            resource_id: Some(*resource.id),
-            event_type: Some("managed_meta_updated".to_string()),
-            limit: Some(10),
-            offset: None,
-        },
-    )
-    .await
-    .expect("list events");
-
-    let event = events
-        .first()
-        .expect("a managed_meta_updated event was recorded");
-    let changed: Vec<&str> = event
-        .payload
-        .get("managed_keys_changed")
-        .and_then(|v| v.as_array())
-        .expect("payload carries managed_keys_changed")
-        .iter()
-        .filter_map(|v| v.as_str())
-        .collect();
-    assert!(
-        changed.contains(&"temper-stage"),
-        "changed-key set must identify the updated key, got: {changed:?}",
-    );
-    // The base hash rollup is still present alongside the delta.
-    assert!(
-        event.payload.get("managed_hash").is_some(),
-        "base hash rollup must remain in the payload",
     );
 }
 

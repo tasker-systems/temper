@@ -11,12 +11,15 @@ pub mod embed;
 pub mod events;
 pub mod fingerprint;
 pub mod ids;
+pub mod keys;
+pub mod parity;
 pub mod payloads;
 pub mod readback;
 pub mod replay;
 pub mod scenario;
 pub mod substrate;
 pub mod synthesis;
+pub mod text;
 pub mod write;
 pub mod writes;
 

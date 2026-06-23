@@ -5,8 +5,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use uuid::Uuid;
 
+use temper_api::backend::selection::BackendSelection;
 use temper_api::backend::{read_selector, select_backend};
-use temper_api::services::{meta_service, resource_service};
+use temper_api::services::resource_service;
 use temper_core::error::TemperError;
 use temper_core::operations::{BodyUpdate, CreateResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
@@ -223,17 +224,20 @@ fn build_enriched(
 }
 
 /// Enrich a batch of resource rows, each with its `managed_meta` /
-/// `open_meta`. All manifests are fetched in a single
-/// [`meta_service::get_meta_batch`] query, so the list surface is not
-/// N+1 on meta. Rows are pre-scoped to the caller (the rows came from a
-/// visibility-scoped query), so the batch fetch skips a redundant
-/// per-row visibility check.
+/// `open_meta`. The meta tier is fetched through
+/// [`read_selector::get_meta_batch_select`] (flag-gated): the Legacy arm
+/// is a single `get_meta_batch` query, so the list surface is not N+1 on
+/// meta; the Next arm projects the substrate per id. Rows are pre-scoped
+/// to the caller (the rows came from a visibility-scoped query), so the
+/// Legacy batch fetch skips a redundant per-row visibility check.
 pub async fn enrich_resources(
+    selection: BackendSelection,
     pool: &sqlx::PgPool,
+    profile_id: Uuid,
     rows: &[temper_core::types::resource::ResourceRow],
 ) -> Result<Vec<EnrichedResource>, rmcp::ErrorData> {
     let ids: Vec<ResourceId> = rows.iter().map(|row| row.id).collect();
-    let mut meta = meta_service::get_meta_batch(pool, &ids)
+    let mut meta = read_selector::get_meta_batch_select(selection, pool, profile_id, &ids)
         .await
         .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to get meta: {e}"), None))?;
 
@@ -251,13 +255,17 @@ pub async fn enrich_resources(
 /// Enrich a single resource row, including its frontmatter. Thin
 /// single-row wrapper over [`enrich_resources`].
 pub async fn enrich_resource(
+    selection: BackendSelection,
     pool: &sqlx::PgPool,
+    profile_id: Uuid,
     row: &temper_core::types::resource::ResourceRow,
 ) -> Result<EnrichedResource, rmcp::ErrorData> {
-    Ok(enrich_resources(pool, std::slice::from_ref(row))
-        .await?
-        .pop()
-        .expect("enrich_resources returns one row per input row"))
+    Ok(
+        enrich_resources(selection, pool, profile_id, std::slice::from_ref(row))
+            .await?
+            .pop()
+            .expect("enrich_resources returns one row per input row"),
+    )
 }
 
 // ── Helpers ────────────────────────────────────────────────────────
@@ -364,7 +372,8 @@ pub async fn create_resource(
     })?;
     let resource = out.value;
 
-    let enriched = enrich_resource(pool, &resource).await?;
+    let enriched =
+        enrich_resource(svc.api_state.backend_selection, pool, profile.id, &resource).await?;
     let response = CreateResourceResponse {
         resource: enriched,
         status: CreateStatus::Created,
@@ -591,7 +600,7 @@ pub async fn update_resource(
             rmcp::ErrorData::internal_error(format!("Failed to get resource: {e}"), None)
         })?;
 
-    let enriched = enrich_resource(pool, &row).await?;
+    let enriched = enrich_resource(svc.api_state.backend_selection, pool, profile.id, &row).await?;
     Ok(CallToolResult::success(vec![rmcp::model::Content::text(
         to_text(&enriched),
     )]))

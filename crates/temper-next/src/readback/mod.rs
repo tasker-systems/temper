@@ -15,7 +15,7 @@
 //! gate denies.
 //!
 //! All reads are runtime, schema-qualified `sqlx::query` (NEVER the `query!`/`query_as!` macros), same
-//! discipline as [`crate::synthesis::source`] and [`crate::synthesis::parity`]: the temper-next macro
+//! discipline as the synthesis read path (now retired) and [`crate::parity`]: the temper-next macro
 //! cache resolves against the `temper_next` search_path, so a compile-time macro over `public.*` would
 //! conflict. Qualifying every table keeps the reads correct regardless of the connection's search_path.
 
@@ -26,7 +26,7 @@ use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::synthesis::key_fate::is_managed_property_key;
+use crate::keys::is_managed_property_key;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
 /// the surface can map each mode to the right HTTP status. The alternative — string-matching one
@@ -385,7 +385,7 @@ pub async fn enriched_list(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconstructedMeta {
     /// Surviving managed (workflow + provenance) keys — those in
-    /// [`crate::synthesis::key_fate::MANAGED_PROPERTY_KEYS`] — with values verbatim.
+    /// [`crate::keys::MANAGED_PROPERTY_KEYS`] — with values verbatim.
     pub managed: Map<String, Value>,
     /// Open (user-defined) keys, verbatim.
     pub open: Map<String, Value>,
@@ -588,8 +588,8 @@ pub async fn resource_row(
 }
 
 /// Reconstruct a synthesized resource's markdown body from `temper_next` chunks — the §9 body read
-/// floor. Reuses [`crate::synthesis::parity::reconstruct_body`] (the production `get_content` assembly)
-/// over the shared [`crate::synthesis::parity::new_substrate_chunks`] reader, so the read surface and
+/// floor. Reuses [`crate::parity::reconstruct_body`] (the production `get_content` assembly)
+/// over the shared [`crate::parity::new_substrate_chunks`] reader, so the read surface and
 /// the §8 synthesis gate share one algorithm (CONFORM, no second body assembler).
 ///
 /// Keys the shared reader by `new_id` directly — the synthesized resource id (preserved verbatim from
@@ -605,8 +605,45 @@ pub async fn body(
     new_id: Uuid,
 ) -> std::result::Result<String, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
-    let chunks = crate::synthesis::parity::new_substrate_chunks(pool, new_id).await?;
-    Ok(crate::synthesis::parity::reconstruct_body(&chunks))
+    let chunks = crate::parity::new_substrate_chunks(pool, new_id).await?;
+    Ok(crate::parity::reconstruct_body(&chunks))
+}
+
+/// Substrate body-hash dedup for the create path (WS6 collapse Task F). Returns the id of an existing
+/// active, visible resource whose `body_hash` matches `body_hash`, or `None`. Mirrors production's
+/// `ingest_service::find_by_body_hash` but keys on the substrate `kb_resources.body_hash` (the
+/// structural sha256 merkle over chunk content-hashes, `_recompute_resource_body_hash`) instead of the
+/// dead `kb_resource_manifests`. Visibility-gated through `resources_visible_to`, like every other read.
+///
+/// Unlike the rest of this module (runtime, schema-qualified `sqlx::query`), this is a **compile-time
+/// macro** — the one in `readback`. The macro's SQL is therefore UNQUALIFIED (`kb_resources` /
+/// `resources_visible_to`), resolving via the `temper_next` search_path: the per-crate `.sqlx` cache is
+/// prepared with `search_path=temper_next` (`cargo make prepare-next`). At RUNTIME the connection
+/// default is `public`, so the macro MUST run inside a `SET LOCAL search_path TO temper_next, public`
+/// txn — both for the unqualified table and for `resources_visible_to`'s own unqualified internals
+/// (`profile_effective_teams`/`team_ancestors`), exactly the `ensure_visible` search_path discipline.
+pub async fn find_by_body_hash(
+    pool: &PgPool,
+    principal: Uuid,
+    body_hash: &str,
+) -> Result<Option<Uuid>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+    let dup = sqlx::query_scalar!(
+        r#"SELECT r.id
+             FROM kb_resources r
+             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+            WHERE r.body_hash = $2 AND r.is_active
+            LIMIT 1"#,
+        principal,
+        body_hash,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(dup)
 }
 
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
@@ -625,7 +662,7 @@ pub async fn body(
 /// `rebuild_resource_search_vector` (migration 20260405000001), whose A-weight is `title || slug`: §7
 /// dissolved slug, so §9 rebuilds FTS title-only. The body is the RAW current-chunk content
 /// space-joined (`string_agg(content, ' ')`), exactly as production aggregates it — NOT the
-/// heading-prefixed assembled markdown [`crate::synthesis::parity::reconstruct_body`] produces (that's
+/// heading-prefixed assembled markdown [`crate::parity::reconstruct_body`] produces (that's
 /// the `get_content` body, wrong for FTS). Config is `'english'` (production's default).
 ///
 /// Because production ranks slug@A and readback structurally cannot, absolute `ts_rank` and the order

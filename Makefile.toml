@@ -225,3 +225,20 @@ echo "DROP+restore temper_next on target (single transaction)…"
   | psql "$FLIP_TARGET_URL" -v ON_ERROR_STOP=1 --single-transaction
 echo "target temper_next replaced. rows: $(psql "$FLIP_TARGET_URL" -tAc 'SELECT count(*) FROM temper_next.kb_resources')"
 '''
+
+[tasks.db-collapsed]
+description = "Load the substrate artifact into the local DB for collapsed-schema dev (search_path defaulted to temper_next)."
+env = { SQLX_OFFLINE = "false" }
+script = '''
+# Collapsed-schema dev: the substrate (temper_next) IS the schema. Loading the artifact
+# (reset + schema + functions) and pointing the connection default at temper_next makes
+# de-qualified SQL resolve to the substrate — exactly as it will post-rename, when the
+# substrate is renamed to public. Mirrors prepare-next's load preamble.
+DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}"
+for f in 00_namespace_reset 01_schema 02_functions; do
+  psql "$DB" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null
+done
+echo "substrate loaded into temper_next."
+echo "For collapsed-schema dev, export:"
+echo "  export DATABASE_URL=\"${DB}?options=-csearch_path%3Dtemper_next,public\""
+'''

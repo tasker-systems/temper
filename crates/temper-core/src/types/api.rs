@@ -1,6 +1,5 @@
 //! General API types — health, events, search, profile updates.
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use uuid::Uuid;
@@ -13,37 +12,6 @@ use crate::types::vault_config::VaultConfig;
 pub struct HealthResponse {
     pub status: &'static str,
     pub version: &'static str,
-}
-
-/// Row type matching the `kb_events` table.
-#[cfg_attr(feature = "typescript", derive(ts_rs::TS))]
-#[cfg_attr(feature = "typescript", ts(export, export_to = "event.ts"))]
-#[derive(Debug, Clone, Serialize, Deserialize, FromRow)]
-#[cfg_attr(feature = "web-api", derive(utoipa::ToSchema))]
-pub struct EventRow {
-    pub id: Uuid,
-    pub profile_id: Uuid,
-    pub device_id: String,
-    pub kb_context_id: Option<Uuid>,
-    pub resource_id: Option<Uuid>,
-    pub event_type: String,
-    pub payload: serde_json::Value,
-    pub created: DateTime<Utc>,
-}
-
-/// Query parameters for listing events.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "web-api", derive(utoipa::IntoParams))]
-#[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
-pub struct EventListParams {
-    /// Filter by resource ID.
-    pub resource_id: Option<Uuid>,
-    /// Filter by event type.
-    pub event_type: Option<String>,
-    /// Maximum results to return (default 50, max 200).
-    pub limit: Option<i64>,
-    /// Offset for pagination.
-    pub offset: Option<i64>,
 }
 
 /// Response body for the event-cursor endpoint: the most recent event id

@@ -13,6 +13,7 @@ use async_trait::async_trait;
 use chrono::Utc;
 use sqlx::PgPool;
 
+use crate::services::ingest_service;
 use temper_core::error::TemperError;
 use temper_core::operations::{
     AssertRelationship, Backend, CommandOutput, CreateResource, DeleteResource, FoldRelationship,
@@ -23,8 +24,8 @@ use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
 use temper_core::types::resource::ResourceRow;
 
+use temper_next::keys::{key_fate, KeyFate};
 use temper_next::readback;
-use temper_next::synthesis::key_fate::{key_fate, KeyFate};
 use temper_next::writes;
 
 /// Bridge a temper-next (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
@@ -228,8 +229,63 @@ impl Backend for NextBackend {
             .map(|b| b.content.clone())
             .unwrap_or_default();
         let origin_uri = cmd.origin_uri.clone().unwrap_or_default();
-        let managed =
+
+        // Create-time guards (WS6 collapse Task F). The substrate create path applies the same
+        // strip → defaults → identity-keys → validate → body-hash-dedup pipeline the legacy
+        // `ingest_service::ingest` ran (`:433-502`), calling the surviving pure helpers WHERE THEY
+        // LIVE (no helper move — the flip owns relocation). Purely additive over the prior no-guard
+        // create.
+        let mut managed =
             serde_json::to_value(&cmd.managed_meta).map_err(|e| TemperError::Api(e.to_string()))?;
+        // 1. Strip identity / tier-1 system keys a caller may have echoed back from a prior read.
+        managed = ingest_service::strip_system_managed_fields(managed);
+        // 2. Apply doc-type managed-tier defaults (e.g. task → `temper-stage: backlog`).
+        temper_core::operations::apply_defaults_value(&cmd.doctype, &mut managed);
+        // 3. Inject the canonical identity keys (`temper-title`/`temper-slug`) before validation, the
+        //    same send/receive-symmetric discipline ingest uses. An empty slug removes `temper-slug`
+        //    (mirrors ingest's `injected_slug` at `:444-453`).
+        let injected_slug = (!cmd.slug.is_empty()).then_some(cmd.slug.as_str());
+        temper_core::operations::ensure_managed_identity_keys(
+            &mut managed,
+            &cmd.title,
+            injected_slug,
+        );
+        // 4. Validate the assembled managed_meta against the doc-type schema; PROPAGATE the typed
+        //    validation error (never swallow it). A fresh canonical id + `now()` seed the validation
+        //    document exactly as ingest does (`:457-467`); that id is not persisted from here — the
+        //    substrate mints the resource id in `writes::create_resource`.
+        let validate_params = ingest_service::ValidateParams {
+            id: uuid::Uuid::now_v7(),
+            created: Utc::now(),
+            doc_type: &cmd.doctype,
+            managed_meta: Some(&managed),
+            slug: &cmd.slug,
+            title: &cmd.title,
+            context_name: &cmd.context,
+        };
+        ingest_service::validate_managed_meta(&validate_params).map_err(|e| {
+            match crate::error::ApiError::from(e) {
+                crate::error::ApiError::BadRequest(m) => TemperError::BadRequest(m),
+                other => TemperError::Api(other.to_string()),
+            }
+        })?;
+
+        // 5. Body-hash dedup (non-empty body only, matching legacy `:497-502`): if a visible active
+        //    resource already carries the same substrate body_hash merkle, return IT instead of
+        //    creating a twin — reconstructing the same `CommandOutput<ResourceRow>` the create path
+        //    returns for a fresh row (`:254-255`).
+        if !body.is_empty() {
+            let body_hash = temper_next::content::body_hash_for_body(&body);
+            if let Some(existing) =
+                readback::find_by_body_hash(&self.pool, *self.profile_id, &body_hash)
+                    .await
+                    .map_err(api_err)?
+            {
+                let row = reconstruct_resource_row(&self.pool, *self.profile_id, existing).await?;
+                return Ok(CommandOutput::new(row));
+            }
+        }
+
         let properties = properties_from_meta(&managed, cmd.open_meta.as_ref());
 
         let new_id = writes::create_resource(

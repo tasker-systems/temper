@@ -1288,5 +1288,138 @@ END;
 $$;
 
 -- ============================================================================
+-- Graph read functions (UI subgraph). Ported from the legacy public copies in
+-- migrations/20260522100002_edges_as_projection.sql + 20260420000001_graph_subgraph_function.sql,
+-- re-expressed onto the substrate shape:
+--   * context membership via kb_resource_homes (anchor_table='kb_contexts') → kb_contexts
+--   * doc_type / temper-stage via kb_properties (JSONB property_value, NOT is_folded)
+--   * first_chunk via kb_chunks → kb_content_blocks → kb_chunk_content
+--   * edges via kb_edges (source_table/target_table = 'kb_resources')
+--   * resources_visible_to is the 1-arg substrate form
+--   * slug is §7-dissolved in the substrate — derived inline from the title (presentational only)
+-- Additive: nothing references these until the surface ports land; the legacy public copies are
+-- untouched. Output columns match the legacy functions exactly so graph_service's bindings resolve.
+-- ============================================================================
+
+CREATE OR REPLACE FUNCTION graph_traverse(p_profile uuid, p_seed_ids uuid[], p_depth int)
+RETURNS TABLE (resource_id uuid, source_id uuid, target_id uuid,
+               edge_kind edge_kind, polarity edge_polarity, label text, depth int)
+LANGUAGE sql STABLE AS $$
+  WITH RECURSIVE visible AS (SELECT rv.resource_id AS id FROM resources_visible_to(p_profile) rv),
+  walk AS (
+    SELECT e.source_id, e.target_id, e.edge_kind, e.polarity, e.label, 1 AS depth
+      FROM kb_edges e
+     WHERE e.source_table='kb_resources' AND e.target_table='kb_resources'
+       AND e.source_id = ANY(p_seed_ids) AND NOT e.is_folded
+       AND e.source_id IN (SELECT id FROM visible) AND e.target_id IN (SELECT id FROM visible)
+    UNION
+    SELECT e.source_id, e.target_id, e.edge_kind, e.polarity, e.label, w.depth+1
+      FROM kb_edges e JOIN walk w ON e.source_id = w.target_id
+     WHERE e.source_table='kb_resources' AND e.target_table='kb_resources'
+       AND NOT e.is_folded AND w.depth < p_depth
+       AND e.target_id IN (SELECT id FROM visible)
+  )
+  SELECT w.target_id, w.source_id, w.target_id, w.edge_kind, w.polarity, w.label, w.depth FROM walk w;
+$$;
+
+CREATE OR REPLACE FUNCTION graph_subgraph_nodes(
+  p_profile uuid, p_context_name varchar, p_aggregator_types text[], p_depth int)
+RETURNS TABLE (resource_id uuid, slug varchar, title text, doc_type varchar,
+               edge_count int, session_count int, first_chunk text, stage_raw text)
+LANGUAGE sql STABLE AS $$
+  WITH ctx AS (SELECT id FROM kb_contexts WHERE name = p_context_name),
+  doc AS (  -- doc_type property per resource
+    SELECT p.owner_id AS rid, p.property_value #>> '{}' AS dt
+      FROM kb_properties p
+     WHERE p.owner_table='kb_resources' AND p.property_key='doc_type' AND NOT p.is_folded),
+  seeds AS (
+    SELECT r.id
+      FROM kb_resources r
+      JOIN kb_resource_homes h ON h.resource_id=r.id AND h.anchor_table='kb_contexts'
+      JOIN ctx ON ctx.id = h.anchor_id
+      JOIN doc ON doc.rid = r.id
+     WHERE r.is_active AND doc.dt = ANY(p_aggregator_types)),
+  walked AS (
+    SELECT DISTINCT t.resource_id AS id
+      FROM graph_traverse(p_profile, ARRAY(SELECT id FROM seeds), p_depth) t
+    UNION SELECT id FROM seeds),
+  nodes AS (
+    SELECT r.id, doc.dt AS doc_type, r.title FROM kb_resources r
+      JOIN walked w ON w.id=r.id JOIN doc ON doc.rid=r.id
+     WHERE r.is_active AND doc.dt <> 'session')  -- sessions are not nodes
+  SELECT
+    n.id,
+    -- slug retired in substrate (§7-dissolved); derive from title to match Rust text::slugify:
+    -- lowercase, non-alphanumeric runs → single dash, trim leading/trailing dashes. Presentational.
+    lower(regexp_replace(regexp_replace(n.title, '[^a-zA-Z0-9]+', '-', 'g'), '(^-+|-+$)', '', 'g'))::varchar AS slug,
+    n.title,
+    n.doc_type::varchar,
+    (SELECT count(*)::int FROM kb_edges e
+       WHERE NOT e.is_folded AND e.source_table='kb_resources' AND e.target_table='kb_resources'
+         AND (e.source_id=n.id OR e.target_id=n.id)) AS edge_count,
+    -- session adjacency: 0 until re-modelled. The legacy session-count join depended on kb_doc_types
+    -- (dropped in the substrate); re-modelling session adjacency onto properties is a follow-up.
+    -- GraphNode.session_count stays valid (0) so the UI degrades gracefully.
+    0::int AS session_count,
+    (SELECT cc.content FROM kb_chunks ch
+       JOIN kb_content_blocks b ON b.id=ch.block_id
+       JOIN kb_chunk_content cc ON cc.chunk_id=ch.id
+      WHERE ch.resource_id=n.id AND ch.is_current AND NOT b.is_folded
+      ORDER BY b.seq, ch.chunk_index LIMIT 1) AS first_chunk,
+    (SELECT sp.property_value #>> '{}' FROM kb_properties sp
+      WHERE sp.owner_table='kb_resources' AND sp.owner_id=n.id
+        AND sp.property_key='temper-stage' AND NOT sp.is_folded LIMIT 1) AS stage_raw
+  FROM nodes n;
+$$;
+
+-- ============================================================================
+-- SYSTEM ACCESS GATE (WS6 graft) — instance-access predicates over kb_system_settings
+-- ----------------------------------------------------------------------------
+-- Ported from migrations/20260407000001_system_access_gate.sql:50-90 onto the substrate. The legacy
+-- `AND t.is_active = true` predicate on the kb_teams join is DROPPED — the substrate kb_teams is
+-- (id, slug, name, created) with no is_active column. open ⇒ everyone; invite_only ⇒ members of the
+-- gating team; admin ⇒ an 'owner' member of the gating team.
+-- ============================================================================
+
+CREATE FUNCTION has_system_access(p_profile_id UUID) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+    WITH settings AS (
+        SELECT access_mode, gating_team_slug
+          FROM kb_system_settings
+         LIMIT 1
+    )
+    SELECT CASE
+        WHEN settings.access_mode = 'open' THEN true
+        WHEN settings.access_mode = 'invite_only' THEN EXISTS (
+            SELECT 1
+              FROM kb_team_members tm
+              JOIN kb_teams t ON t.id = tm.team_id
+             WHERE tm.profile_id = p_profile_id
+               AND t.slug = settings.gating_team_slug
+        )
+        ELSE false
+    END
+      FROM settings
+$$;
+
+CREATE FUNCTION is_system_admin(p_profile_id UUID) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+    WITH settings AS (
+        SELECT gating_team_slug
+          FROM kb_system_settings
+         LIMIT 1
+    )
+    SELECT EXISTS (
+        SELECT 1
+          FROM kb_team_members tm
+          JOIN kb_teams t ON t.id = tm.team_id
+         WHERE tm.profile_id = p_profile_id
+           AND t.slug = settings.gating_team_slug
+           AND tm.role = 'owner'
+    )
+      FROM settings
+$$;
+
+-- ============================================================================
 -- End of 02_functions.sql. Seed → 03_seed.sql; scenarios → 04_scenarios.sql.
 -- ============================================================================

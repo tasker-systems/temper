@@ -18,17 +18,21 @@
 //! the readbacks gate through `temper_next.resources_visible_to`, CONFORMing to production's scoped
 //! reads; the auth'd profile id is preserved by synthesis, so it is the `temper_next` principal directly).
 
+use std::collections::HashMap;
+
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use temper_core::types::ids::{ProfileId, ResourceId};
 
 use crate::backend::selection::BackendSelection;
-use crate::error::ApiResult;
+use crate::error::{ApiError, ApiResult};
 use crate::services::resource_service::{self, ResourceListParams, ResourceListResponse};
 use crate::services::{context_service, ingest_service, meta_service, search_service};
 use temper_core::types::api::{SearchParams, UnifiedSearchResultRow};
-use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaResponse};
+use temper_core::types::managed_meta::{
+    ManagedMeta, ResourceMetaListResponse, ResourceMetaResponse,
+};
 use temper_core::types::resource::{ContentResponse, ResourceRow};
 
 /// `list` — list visible resources.
@@ -83,6 +87,55 @@ pub async fn get_meta_select(
         BackendSelection::Legacy => meta_service::get_meta(pool, profile_id, resource_id).await,
         BackendSelection::Next => {
             next_impl::get_meta(pool, Uuid::from(profile_id), Uuid::from(resource_id)).await
+        }
+    }
+}
+
+/// `list_meta` — meta-only resource list (the `?meta_only=true` projection). Legacy reuses
+/// `resource_service::list_visible_meta` (list rows + one batched manifest fetch); Next projects
+/// `readback::enriched_list` (the same WS2-scoped visible set the enriched list arm uses) to the
+/// meta-list shape. Pre-flip default `Legacy` keeps the surface byte-identical.
+pub async fn list_meta_select(
+    selection: BackendSelection,
+    pool: &PgPool,
+    profile_id: Uuid,
+    params: ResourceListParams,
+) -> ApiResult<ResourceMetaListResponse> {
+    match selection {
+        BackendSelection::Legacy => {
+            resource_service::list_visible_meta(pool, profile_id, params).await
+        }
+        BackendSelection::Next => next_impl::list_meta(pool, profile_id).await,
+    }
+}
+
+/// `get_meta_batch` — the batched meta tier for many ids (the MCP `enrich_resources` path). Legacy
+/// reuses `meta_service::get_meta_batch` (one query, no per-row visibility recheck — the ids are
+/// pre-scoped to the caller). Next loops `next_impl::get_meta` per id (each WS2-gated); a not-visible
+/// id is OMITTED from the map (parity with the legacy batch's "absent = no meta" semantics), while a
+/// genuine fault propagates.
+pub async fn get_meta_batch_select(
+    selection: BackendSelection,
+    pool: &PgPool,
+    profile_id: Uuid,
+    ids: &[ResourceId],
+) -> ApiResult<HashMap<ResourceId, ResourceMetaResponse>> {
+    match selection {
+        BackendSelection::Legacy => meta_service::get_meta_batch(pool, ids).await,
+        BackendSelection::Next => {
+            let mut map = HashMap::with_capacity(ids.len());
+            for id in ids {
+                match next_impl::get_meta(pool, profile_id, Uuid::from(*id)).await {
+                    Ok(resp) => {
+                        map.insert(*id, resp);
+                    }
+                    // A not-visible id is simply absent from the map (the legacy batch never errors
+                    // on a missing/non-visible row); a genuine fault still propagates.
+                    Err(ApiError::NotFound) => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(map)
         }
     }
 }
@@ -181,6 +234,9 @@ mod next_impl {
         gate()
     }
     pub(super) async fn get_meta(_: &PgPool, _: Uuid, _: Uuid) -> ApiResult<ResourceMetaResponse> {
+        gate()
+    }
+    pub(super) async fn list_meta(_: &PgPool, _: Uuid) -> ApiResult<ResourceMetaListResponse> {
         gate()
     }
     pub(super) async fn search(
@@ -318,6 +374,41 @@ mod next_impl {
             open_meta: Some(serde_json::Value::Object(rb.open)),
             managed_hash: String::new(),
             open_hash: String::new(),
+        })
+    }
+
+    /// `list_meta` over `temper_next`: the `?meta_only=true` projection. Reuses the same WS2-scoped
+    /// `readback::enriched_list(_, _, None, None)` visible set the enriched-list arm consumes (no
+    /// context/doctype filter), mapping each `EnrichedListRow` to a `ResourceMetaResponse`. The managed
+    /// map deserializes into the typed `ManagedMeta` (propagating a genuine deser fault, parity with
+    /// `get_meta`); open is carried verbatim. `managed_hash`/`open_hash` are §7-dissolved (emitted empty,
+    /// §9 non-invariants). `total` = row count; `facets.doc_type` = the doctype histogram over the set.
+    pub(super) async fn list_meta(
+        pool: &PgPool,
+        principal: Uuid,
+    ) -> ApiResult<ResourceMetaListResponse> {
+        let rows = readback::enriched_list(pool, principal, None, None)
+            .await
+            .map_err(api_err)?;
+        let mut doc_type: HashMap<String, i64> = HashMap::new();
+        let mut out = Vec::with_capacity(rows.len());
+        for r in rows {
+            *doc_type.entry(r.doc_type.clone()).or_insert(0) += 1;
+            let managed: ManagedMeta =
+                serde_json::from_value(serde_json::Value::Object(r.managed)).map_err(api_err)?;
+            out.push(ResourceMetaResponse {
+                resource_id: ResourceId::from(r.new_id),
+                managed_meta: Some(managed),
+                open_meta: Some(serde_json::Value::Object(r.open)),
+                managed_hash: String::new(),
+                open_hash: String::new(),
+            });
+        }
+        let total = out.len() as i64;
+        Ok(ResourceMetaListResponse {
+            rows: out,
+            total,
+            facets: ResourceFacets { doc_type },
         })
     }
 

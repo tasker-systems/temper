@@ -29,12 +29,14 @@ pub async fn list_resources(
         ..Default::default()
     };
 
-    let response =
-        temper_api::services::resource_service::list_visible(&state.pool, profile.id, params)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None)
-            })?;
+    let response = temper_api::backend::read_selector::list_select(
+        state.backend_selection,
+        &state.pool,
+        profile.id,
+        params,
+    )
+    .await
+    .map_err(|e| rmcp::ErrorData::internal_error(format!("Failed to list resources: {e}"), None))?;
 
     let resources = response
         .rows
@@ -102,15 +104,16 @@ pub async fn read_resource(
         .and_then(|rest| rest.strip_suffix("/content"))
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let content =
-            temper_api::services::resource_service::get_content(&state.pool, profile.id, id)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to read resource content: {e}"),
-                        None,
-                    )
-                })?;
+        let content = temper_api::backend::read_selector::get_content_select(
+            state.backend_selection,
+            &state.pool,
+            profile.id,
+            id,
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
+        })?;
 
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(
             content.markdown,
@@ -124,21 +127,27 @@ pub async fn read_resource(
         .strip_prefix("temper://resources/")
         .and_then(|id| Uuid::try_parse(id).ok())
     {
-        let row = temper_api::services::resource_service::get_visible(&state.pool, profile.id, id)
-            .await
-            .map_err(|e| {
-                rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
-            })?;
+        let row = temper_api::backend::read_selector::show_select(
+            state.backend_selection,
+            &state.pool,
+            profile.id,
+            id,
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource: {e}"), None)
+        })?;
 
-        let content =
-            temper_api::services::resource_service::get_content(&state.pool, profile.id, id)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to read resource content: {e}"),
-                        None,
-                    )
-                })?;
+        let content = temper_api::backend::read_selector::get_content_select(
+            state.backend_selection,
+            &state.pool,
+            profile.id,
+            id,
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("Failed to read resource content: {e}"), None)
+        })?;
 
         // Return metadata as JSON + content as markdown.
         let meta_json = serde_json::to_string_pretty(&row).unwrap_or_default();
@@ -172,15 +181,19 @@ pub async fn read_resource(
             ..Default::default()
         };
 
-        let response =
-            temper_api::services::resource_service::list_visible(&state.pool, profile.id, params)
-                .await
-                .map_err(|e| {
-                    rmcp::ErrorData::internal_error(
-                        format!("Failed to list resources in context: {e}"),
-                        None,
-                    )
-                })?;
+        let response = temper_api::backend::read_selector::list_select(
+            state.backend_selection,
+            &state.pool,
+            profile.id,
+            params,
+        )
+        .await
+        .map_err(|e| {
+            rmcp::ErrorData::internal_error(
+                format!("Failed to list resources in context: {e}"),
+                None,
+            )
+        })?;
 
         let json = serde_json::to_string_pretty(&response.rows).unwrap_or_default();
         return Ok(ReadResourceResult::new(vec![ResourceContents::text(

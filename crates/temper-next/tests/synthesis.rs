@@ -506,7 +506,7 @@ async fn body_parity_gate_passes_and_detects_corruption(pool: sqlx::PgPool) {
         .expect("synthesis::run (clean fixture → parity holds)");
 
     // The report is non-vacuously clean: it checked every active resource (4) and flagged none.
-    let report = temper_next::synthesis::parity::body_parity_report(&pool)
+    let report = temper_next::parity::body_parity_report(&pool)
         .await
         .expect("body_parity_report");
     assert_eq!(
@@ -534,7 +534,7 @@ async fn body_parity_gate_passes_and_detects_corruption(pool: sqlx::PgPool) {
     .rows_affected();
     assert_eq!(corrupted, 1, "team-doc has exactly one chunk to corrupt");
 
-    let report = temper_next::synthesis::parity::body_parity_report(&pool)
+    let report = temper_next::parity::body_parity_report(&pool)
         .await
         .expect("body_parity_report after corruption");
     assert_eq!(report.checked, 4, "still checks all 4 resources");

@@ -43,9 +43,7 @@ pub use access_gate::{
     Entitlements, JoinRequest, JoinRequestStatus, JoinRequestWithProfile, PublicSystemSettings,
     SystemSettings,
 };
-pub use api::{
-    EventListParams, EventRow, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
-};
+pub use api::{HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow};
 pub use audit::ResourceAuditRow;
 pub use auth::{AuthClaims, AuthProvider, AuthenticatedProfile};
 pub use config::{

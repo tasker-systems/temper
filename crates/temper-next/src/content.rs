@@ -15,6 +15,7 @@
 use crate::ids::{BlockId, ChunkId};
 use anyhow::{Context, Result};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 /// One embedding window of a block's prose, ready to persist. `content_hash` is the chunker's lowercase
@@ -95,6 +96,40 @@ pub fn prepare_block(seq: i32, role: Option<&str>, prose: &str) -> Result<Prepar
         role: role.map(str::to_owned),
         chunks,
     })
+}
+
+/// Lowercase hex sha256 of a string's UTF-8 bytes — the Rust twin of Postgres's
+/// `encode(sha256(convert_to(s, 'UTF8')), 'hex')`.
+fn sha256_hex(s: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(s.as_bytes());
+    format!("{:x}", h.finalize())
+}
+
+/// The resource `body_hash` for the live single-block create path, computed Rust-side so a dedup
+/// pre-check (WS6 collapse Task F) can key on the SAME value the substrate's create projector stores
+/// in `kb_resources.body_hash`. Mirrors `_recompute_resource_body_hash`
+/// (`schema-artifact/02_functions.sql`) for the create case: [`crate::writes::create_resource`]
+/// persists `body` as ONE roleless block at seq 0, so the merkle is `sha256_hex(per_block_hash)`,
+/// where `per_block_hash = sha256_hex(concat of the block's chunk content_hashes in chunk_index
+/// order)`.
+///
+/// An empty/whitespace body chunks to nothing — the SQL coalesces the empty per-block aggregate to
+/// `''` → `sha256_hex("")` — so this returns `sha256_hex("")` for an empty body. The dedup caller
+/// skips empty bodies (matching the legacy `ingest_service::ingest` path, which only deduplicates a
+/// caller-supplied hash for non-empty content), so this branch is not reached in practice; it is
+/// faithful regardless.
+///
+/// ONNX-free: only the chunker's content_hashes are needed (`plan_chunks`), not embeddings.
+pub fn body_hash_for_body(body: &str) -> String {
+    let planned = plan_chunks(body);
+    if planned.is_empty() {
+        return sha256_hex("");
+    }
+    let block_concat: String = planned.iter().map(|(_, hash, _)| hash.as_str()).collect();
+    let block_hash = sha256_hex(&block_concat);
+    // A single block in seq order → the resource merkle is sha256 of that one per-block hash.
+    sha256_hex(&block_hash)
 }
 
 /// Prepare an ordered run of blocks (`seq` = position). Each spec is `(role, prose)`: the charter

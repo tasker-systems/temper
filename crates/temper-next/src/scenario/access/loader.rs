@@ -133,7 +133,7 @@ pub async fn load(pool: &PgPool, world: &AccessWorld) -> Result<LoadedAccess> {
                 c.name
             ),
         };
-        let slug = crate::synthesis::bootstrap::slugify(&c.name);
+        let slug = crate::text::slugify(&c.name);
         let id = sqlx::query_scalar!(
             "INSERT INTO kb_contexts (owner_table, owner_id, slug, name) VALUES ($1,$2,$3,$4) RETURNING id",
             owner_table,
