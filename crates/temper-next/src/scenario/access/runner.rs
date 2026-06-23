@@ -1,6 +1,6 @@
 //! Access-scenario runner: loads the world, then evaluates each `AccessCheck` against one kernel gate
 //! function. Each check is a boolean (or count) compared to its declared expectation, with a failure
-//! message naming the referents — a declarative echo of `schema-artifact/04_scenarios.sql`'s S1-S5.
+//! message naming the referents — a declarative echo of the legacy hand-SQL scenario verdicts S1-S5.
 
 use crate::scenario::access::loader::{self, LoadedAccess};
 use crate::scenario::access::model::*;

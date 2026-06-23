@@ -8,15 +8,15 @@ use temper_next::scenario::model::{Scenario, Seed};
 
 const SCENARIO_SNAPSHOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/scenarios/scenario.schema.json"
+    "/tests/fixtures/scenarios/scenario.schema.json"
 );
 const SEED_SNAPSHOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/seeds/seed.schema.json"
+    "/tests/fixtures/seeds/seed.schema.json"
 );
 const ACCESS_SCENARIO_SNAPSHOT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/access-scenarios/access-scenario.schema.json"
+    "/tests/fixtures/access-scenarios/access-scenario.schema.json"
 );
 
 fn assert_snapshot(rendered: &str, snapshot: &str, kind: &str) {

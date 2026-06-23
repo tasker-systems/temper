@@ -20,11 +20,11 @@ use temper_next::{embed, substrate, write};
 
 const ONBOARDING_SCENARIO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/scenarios/onboarding-cogmap.yaml"
+    "/tests/fixtures/scenarios/onboarding-cogmap.yaml"
 );
 const ONBOARDING_SEED: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/seeds/onboarding-cogmap.yaml"
+    "/tests/fixtures/seeds/onboarding-cogmap.yaml"
 );
 
 fn scenario_base_dir() -> &'static Path {

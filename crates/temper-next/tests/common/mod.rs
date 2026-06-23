@@ -1,114 +1,36 @@
 //! Shared setup for the scenario write-path artifact tests.
 //!
-//! These tests OWN the `temper_next` namespace: each resets it to a clean `01_schema` + `02_functions`
-//! (no `03_seed.sql`), then boot-seeds + loads its own scenario. `01_schema.sql` drops and recreates
-//! the `temper_next` schema, so loading 01+02 is a full reset. The tests are serialized via the
-//! `temper-next-write` nextest test-group so resets never race a sibling's queries.
+//! These tests OWN the `temper_next` namespace: each resets it to a clean canonical baseline (the
+//! `00_namespace_reset` fixture drops+recreates the schema, then the namespace-free baseline body
+//! files from `migrations/` are loaded under a `search_path=temper_next,public` PGOPTIONS wrapper),
+//! then boot-seeds + loads its own scenario. The tests are serialized via the `temper-next-write`
+//! nextest test-group so resets never race a sibling's queries.
 //!
 //! (The legacy read-path tests — materialize/substrate_read/embed_job — instead assume `03_seed.sql`
-//! is loaded externally, so the two suites are run separately. M2 retires the legacy path.)
+//! is loaded, so the two suites are run separately. M2 retires the legacy path.)
 
 #![allow(dead_code)]
 
-/// Drop + reload the artifact schema and functions, leaving a clean (un-seeded) `temper_next`.
-/// `00_namespace_reset.sql` carries the destructive DROP/CREATE preamble (factored out of `01_schema`
-/// so the body is a namespace-resident, no-DROP install source); `01`+`02` are the shared DDL body.
+/// Drop + reload the canonical baseline schema and functions into a clean (un-seeded) `temper_next`.
+/// `00_namespace_reset.sql` (a test-only fixture) carries the destructive DROP/CREATE preamble; the
+/// two baseline body files come from `migrations/` and land in `temper_next` via the PGOPTIONS wrapper.
 pub fn reset_artifact() {
-    load_files(&["00_namespace_reset", "01_schema", "02_functions"]);
+    load_files(&[
+        "00_namespace_reset",
+        "20260624000001_canonical_schema",
+        "20260624000002_canonical_functions",
+    ]);
 }
 
 /// Like [`reset_artifact`] but also loads the hand-written `03_seed.sql` (the legacy SQL-seed path) —
 /// used by the cross-path equivalence test to materialize the SQL-seeded onboarding-cogmap.
 pub fn reset_artifact_with_seed() {
-    load_files(&["00_namespace_reset", "01_schema", "02_functions", "03_seed"]);
-}
-
-/// The committed temper_next migration files, in version (lexical) order: the frozen install
-/// migration then every append-only forward delta (`migrations/*_temper_next*.sql`).
-fn temper_next_migration_paths(root: &str) -> Vec<String> {
-    let dir = format!("{root}/migrations");
-    let mut names: Vec<String> = std::fs::read_dir(&dir)
-        .expect("read migrations dir")
-        .filter_map(|e| e.ok().map(|e| e.file_name().to_string_lossy().into_owned()))
-        .filter(|n| n.contains("temper_next") && n.ends_with(".sql"))
-        .collect();
-    names.sort();
-    assert!(
-        !names.is_empty(),
-        "no temper_next migrations found in {dir}"
-    );
-    names.into_iter().map(|n| format!("{dir}/{n}")).collect()
-}
-
-fn run_psql(url: &str, args: &[&str]) {
-    let mut full = vec![url, "-q", "-v", "ON_ERROR_STOP=1"];
-    full.extend_from_slice(args);
-    let status = std::process::Command::new("psql")
-        .args(&full)
-        .status()
-        .expect("failed to run psql (is it on PATH?)");
-    assert!(status.success(), "psql {args:?} failed");
-}
-
-/// Drop `temper_next` then replay the committed migration lineage (the frozen install migration +
-/// every append-only forward delta) in version order via psql — proving the run-once
-/// `CREATE SCHEMA temper_next;` path plus each delta apply cleanly onto an absent namespace, leaving
-/// `public` untouched. The drift guard additionally asserts the result is schema-equivalent to a
-/// fresh artifact load (see [`namespace_fingerprint`]).
-pub fn apply_temper_next_migrations() {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
-    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
-    // Drop the namespace so CREATE SCHEMA in the install migration runs against an absent namespace.
-    run_psql(&url, &["-c", "DROP SCHEMA IF EXISTS temper_next CASCADE"]);
-    for path in temper_next_migration_paths(root) {
-        run_psql(&url, &["-f", &path]);
-    }
-}
-
-/// Async shim over [`apply_temper_next_migrations`] for the tokio install-migration test; the psql
-/// invocation is blocking.
-pub async fn apply_install_migration(_pool: &sqlx::PgPool) {
-    apply_temper_next_migrations();
-}
-
-/// A normalized, order-independent schema fingerprint of the `temper_next` namespace — the canonical
-/// definitions of its functions, indexes, constraints, and table columns. Two construction paths
-/// (fresh artifact load vs migration-lineage apply) produce the same fingerprint iff they produce the
-/// same schema, so the drift guard can compare them directly.
-pub fn namespace_fingerprint() -> String {
-    let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
-    let query = r"
-        SELECT string_agg(line, E'\n' ORDER BY line) FROM (
-            SELECT 'FN ' || pg_get_functiondef(p.oid) AS line
-              FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-              WHERE n.nspname = 'temper_next'
-            UNION ALL
-            SELECT 'IX ' || pg_get_indexdef(i.indexrelid)
-              FROM pg_index i JOIN pg_class c ON c.oid = i.indrelid
-              JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'temper_next'
-            UNION ALL
-            SELECT 'CON ' || conname || ' ' || pg_get_constraintdef(con.oid)
-              FROM pg_constraint con JOIN pg_namespace n ON n.oid = con.connamespace
-              WHERE n.nspname = 'temper_next'
-            UNION ALL
-            SELECT format('COL %s.%s %s %s', c.relname, a.attname,
-                          format_type(a.atttypid, a.atttypmod),
-                          CASE WHEN a.attnotnull THEN 'NOT NULL' ELSE '' END)
-              FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
-              JOIN pg_namespace n ON n.oid = c.relnamespace
-              WHERE n.nspname = 'temper_next' AND c.relkind = 'r'
-                AND a.attnum > 0 AND NOT a.attisdropped
-        ) t";
-    let out = std::process::Command::new("psql")
-        .args([url.as_str(), "-tAq", "-v", "ON_ERROR_STOP=1", "-c", query])
-        .output()
-        .expect("failed to run psql (is it on PATH?)");
-    assert!(
-        out.status.success(),
-        "psql fingerprint query failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    String::from_utf8(out.stdout).expect("fingerprint is utf8")
+    load_files(&[
+        "00_namespace_reset",
+        "20260624000001_canonical_schema",
+        "20260624000002_canonical_functions",
+        "03_seed",
+    ]);
 }
 
 /// Fire a cogmap genesis + one `resource_create` homed in it, whose single chunk's sidecar entry
@@ -310,9 +232,22 @@ pub async fn seed_and_synthesize(pool: &sqlx::PgPool) -> temper_next::synthesis:
 fn load_files(files: &[&str]) {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set for artifact tests");
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let fixtures = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures");
     for f in files {
-        let path = format!("{root}/schema-artifact/{f}.sql");
-        let status = std::process::Command::new("psql")
+        // The namespace-free canonical baseline body files live in `migrations/` and won't self-set
+        // search_path, so inject it via PGOPTIONS so their unqualified DDL lands in `temper_next`
+        // (not `public`). The reset + legacy-seed fixtures live in `tests/fixtures/`; the reset is
+        // fully qualified (no search_path needed), `03_seed` self-sets but we wrap it anyway.
+        let (path, set_search_path) = match *f {
+            "00_namespace_reset" => (format!("{fixtures}/00_namespace_reset.sql"), false),
+            "03_seed" => (format!("{fixtures}/03_seed.sql"), true),
+            other => (format!("{root}/migrations/{other}.sql"), true),
+        };
+        let mut cmd = std::process::Command::new("psql");
+        if set_search_path {
+            cmd.env("PGOPTIONS", "-csearch_path=temper_next,public");
+        }
+        let status = cmd
             .args([url.as_str(), "-q", "-v", "ON_ERROR_STOP=1", "-f", &path])
             .status()
             .expect("failed to run psql (is it on PATH?)");

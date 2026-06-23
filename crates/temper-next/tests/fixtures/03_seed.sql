@@ -200,7 +200,7 @@ BEGIN
     -- embed_chunks backfills later, same as the concept resources below) from the same rows. Region
     -- membership keys on declared affinity, not chunk hashes/embeddings, so this stays byte-equivalent
     -- to the YAML path's regions (the cross-path proof). Prose is verbatim shared with
-    -- schema-artifact/scenarios/onboarding-cogmap.yaml.
+    -- tests/fixtures/scenarios/onboarding-cogmap.yaml.
     DECLARE v_manifests jsonb; v_content jsonb;
             v_cg uuid := uuid_generate_v7(); v_telos uuid := uuid_generate_v7();
     BEGIN

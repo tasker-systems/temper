@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Seed",
-  "description": "The seed document (`schema-artifact/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap\nis born from. `name` is the cogmap name `cogmap_genesis` registers.",
+  "description": "The seed document (`tests/fixtures/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap\nis born from. `name` is the cogmap name `cogmap_genesis` registers.",
   "type": "object",
   "properties": {
     "name": {

@@ -30,7 +30,7 @@ use anyhow::{Context, Result};
 use uuid::Uuid;
 
 /// The seeding event taxonomy (mirrors the `kb_event_types` seeding names registered in
-/// `schema-artifact/seeds/system.yaml`). Parity-shaped with `temper_events::EventType`'s seeding variants
+/// `tests/fixtures/seeds/system.yaml`). Parity-shaped with `temper_events::EventType`'s seeding variants
 /// so deliverable-6 unification is a rename-free merge. `RelationshipAsserted` is the only one that
 /// overlaps production's existing taxonomy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

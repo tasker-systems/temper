@@ -109,7 +109,7 @@ fn sha256_hex(s: &str) -> String {
 /// The resource `body_hash` for the live single-block create path, computed Rust-side so a dedup
 /// pre-check (WS6 collapse Task F) can key on the SAME value the substrate's create projector stores
 /// in `kb_resources.body_hash`. Mirrors `_recompute_resource_body_hash`
-/// (`schema-artifact/02_functions.sql`) for the create case: [`crate::writes::create_resource`]
+/// (`migrations/20260624000002_canonical_functions.sql`) for the create case: [`crate::writes::create_resource`]
 /// persists `body` as ONE roleless block at seq 0, so the merkle is `sha256_hex(per_block_hash)`,
 /// where `per_block_hash = sha256_hex(concat of the block's chunk content_hashes in chunk_index
 /// order)`.

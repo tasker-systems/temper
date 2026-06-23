@@ -8,7 +8,7 @@ use temper_next::payloads as p;
 
 const DIR: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/payloads"
+    "/tests/fixtures/payloads"
 );
 
 fn check<T: schemars::JsonSchema>(name: &str) {

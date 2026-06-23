@@ -12,13 +12,13 @@ use uuid::Uuid;
 /// Path to the canonical boot-seed, resolved from the crate dir so CWD doesn't matter.
 const SYSTEM_SEED: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/seeds/system.yaml"
+    "/tests/fixtures/seeds/system.yaml"
 );
 
 /// The canonical event-type names from the system boot-seed (the ledger vocabulary), exposed so the
 /// migration's synthesis bootstrap can seed the registry by name without the full [`seed_system`]
 /// (which also writes the system actor + global lenses and needs a `temper_next`-bound pool). One
-/// source of truth for the vocabulary — `schema-artifact/seeds/system.yaml`.
+/// source of truth for the vocabulary — `tests/fixtures/seeds/system.yaml`.
 pub fn system_event_type_names() -> Result<Vec<String>> {
     let boot: BootSeed = serde_yaml::from_str(&std::fs::read_to_string(SYSTEM_SEED)?)?;
     Ok(boot.event_types)
@@ -51,13 +51,13 @@ pub async fn seed_system(pool: &PgPool) -> Result<()> {
     };
 
     // Registry rows + their published contract: stamp payload_schema/schema_version from the
-    // committed schema-artifact/payloads/<name>.v1.schema.json snapshots (payload spec §6 — repo,
+    // committed tests/fixtures/payloads/<name>.v1.schema.json snapshots (payload spec §6 — repo,
     // registry, and Rust types are one chain; the snapshot test pins repo==types, this pins
     // registry==repo). A name with no snapshot (foreign/not-yet-typed) stays NULL = unregistered/
     // permissive.
     let payloads_dir = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../schema-artifact/payloads"
+        "/tests/fixtures/payloads"
     );
     for et in &boot.event_types {
         let schema: Option<serde_json::Value> =

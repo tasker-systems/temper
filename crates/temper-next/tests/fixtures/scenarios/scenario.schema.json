@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Scenario",
-  "description": "The scenario document (`schema-artifact/scenarios/*.yaml`): a seed reference (or embed) plus the\nordered `steps` runbook.",
+  "description": "The scenario document (`tests/fixtures/scenarios/*.yaml`): a seed reference (or embed) plus the\nordered `steps` runbook.",
   "type": "object",
   "properties": {
     "name": {
@@ -35,7 +35,7 @@
       ]
     },
     "Seed": {
-      "description": "The seed document (`schema-artifact/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap\nis born from. `name` is the cogmap name `cogmap_genesis` registers.",
+      "description": "The seed document (`tests/fixtures/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap\nis born from. `name` is the cogmap name `cogmap_genesis` registers.",
       "type": "object",
       "properties": {
         "name": {

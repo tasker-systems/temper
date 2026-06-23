@@ -71,3 +71,24 @@ async fn bootseed_publishes_payload_schemas() {
         "untyped names stay NULL (unregistered/permissive)"
     );
 }
+
+/// Drift guard: the production system seed (`migrations/…_canonical_seed.sql`) and the test
+/// boot-seed vocabulary (`tests/fixtures/seeds/system.yaml`) both encode the event-type registry.
+/// They are separate sources (production SQL vs the test bootseed YAML), so this asserts every
+/// system.yaml event-type name appears in the seed migration's `kb_event_types` INSERT — they can
+/// never silently drift. Replaces the retired schema_drift.rs two-copy guard. No DB needed.
+#[test]
+fn seed_migration_event_types_match_system_yaml() {
+    let yaml_names = bootseed::system_event_type_names().expect("read system.yaml event-type names");
+    let migration = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../migrations/20260624000003_canonical_seed.sql"
+    ))
+    .expect("read canonical seed migration");
+    for name in &yaml_names {
+        assert!(
+            migration.contains(&format!("('{name}',")),
+            "event type `{name}` is in system.yaml but missing from the canonical seed migration"
+        );
+    }
+}

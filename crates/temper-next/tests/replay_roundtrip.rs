@@ -14,7 +14,7 @@ use temper_next::{
 
 const ONBOARDING: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/scenarios/onboarding-cogmap.yaml"
+    "/tests/fixtures/scenarios/onboarding-cogmap.yaml"
 );
 
 #[tokio::test]

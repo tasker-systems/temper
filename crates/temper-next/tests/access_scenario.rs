@@ -11,7 +11,7 @@ use temper_next::substrate;
 
 const ACCESS_SCENARIO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/access-scenarios/epd-bridge-access.yaml"
+    "/tests/fixtures/access-scenarios/epd-bridge-access.yaml"
 );
 
 fn load_access_yaml() -> AccessScenario {
@@ -20,7 +20,7 @@ fn load_access_yaml() -> AccessScenario {
 
 const CONTEXT_SHARE_SCENARIO: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../schema-artifact/access-scenarios/context-share-access.yaml"
+    "/tests/fixtures/access-scenarios/context-share-access.yaml"
 );
 
 fn load_context_share_yaml() -> AccessScenario {

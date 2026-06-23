@@ -82,11 +82,29 @@ script = '''
 # public schema), so prepare needs the artifact loaded + search_path set. Per-crate (run from the
 # crate dir) — NOT `--workspace`, which clobbers per-crate caches.
 DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}"
-# 00_namespace_reset carries the DROP/CREATE preamble (factored out of 01_schema so the body is a
-# no-DROP install source); prepend it so prepare introspects a clean namespace.
-for f in 00_namespace_reset 01_schema 02_functions; do psql "$DB" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null; done
+# Build the temper_next namespace from the canonical baseline, mirroring the test harness'
+# load_files (tests/common/mod.rs): the test-only namespace-reset fixture owns the DROP/CREATE, then
+# the namespace-free baseline body files from migrations/ are loaded under PGOPTIONS so their
+# unqualified DDL lands in temper_next (not public).
+FIX="crates/temper-next/tests/fixtures"
+psql "$DB" -v ON_ERROR_STOP=1 -f "$FIX/00_namespace_reset.sql" >/dev/null
+for f in migrations/20260624000001_canonical_schema.sql migrations/20260624000002_canonical_functions.sql; do
+  PGOPTIONS="-csearch_path=temper_next,public" psql "$DB" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
+done
 cd crates/temper-next
 DATABASE_URL="${DB}?options=-csearch_path%3Dtemper_next,public" cargo sqlx prepare
+'''
+
+[tasks.test-next]
+description = "Run temper-next scenario write-path artifact-tests in an isolated temper_next namespace."
+# The tests load the canonical baseline (migrations/) into a temper_next test namespace and reset it
+# per test. Post-collapse `substrate::connect()` uses the connection-default search_path (public, the
+# production shape), so the test runtime MUST point the pool at temper_next via the search_path option
+# — otherwise the pool resolves against the public substrate and writes collide. SQLX_OFFLINE uses the
+# committed temper_next-bound cache (regenerate with `cargo make prepare-next` after touching SQL).
+env = { SQLX_OFFLINE = "true", DATABASE_URL = "postgresql://temper:temper@localhost:5437/temper_development?options=-csearch_path%3Dtemper_next,public" }
+script = '''
+cargo nextest run -p temper-next --features artifact-tests
 '''
 
 [tasks.prepare-api]
@@ -177,16 +195,19 @@ script = '''
 set -euo pipefail
 LOCAL="${FLIP_LOCAL_URL:-postgresql://temper:temper@localhost:5438/temper_development}"
 
-# Clean temper_next: 00 resets the namespace (DROP/CREATE temper_next only — public
-# untouched), 01/02 install schema+functions. This is the SAME set the synthesis
-# tests' reset_artifact() loads (tests/common/mod.rs) — deliberately WITHOUT 03_seed.
-# 03_seed.sql is a demo scenario fixture (the alice/bob onboarding-cogmap for
-# 04_scenarios.sql), NOT system seed; its 20 demo resources have no public counterpart,
-# so loading it makes the §8 body-parity gate flag all of them. Synthesis seeds the
-# system actors it needs itself (bootstrap::run).
-for f in 00_namespace_reset 01_schema 02_functions; do
-  echo "loading schema-artifact/$f.sql"
-  psql "$LOCAL" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null
+# Clean temper_next: the namespace-reset fixture DROP/CREATEs temper_next only (public
+# untouched), then the canonical baseline body files install schema+functions under PGOPTIONS
+# (search_path=temper_next,public) so their namespace-free DDL lands in temper_next. This mirrors
+# the synthesis tests' reset_artifact() (tests/common/mod.rs) — deliberately WITHOUT 03_seed.
+# 03_seed.sql is a demo scenario fixture (the alice/bob onboarding-cogmap), NOT system seed; its
+# 20 demo resources have no public counterpart, so loading it makes the §8 body-parity gate flag
+# all of them. Synthesis seeds the system actors it needs itself (bootstrap::run).
+FIX="crates/temper-next/tests/fixtures"
+echo "loading $FIX/00_namespace_reset.sql"
+psql "$LOCAL" -v ON_ERROR_STOP=1 -f "$FIX/00_namespace_reset.sql" >/dev/null
+for f in migrations/20260624000001_canonical_schema.sql migrations/20260624000002_canonical_functions.sql; do
+  echo "loading $f (search_path=temper_next)"
+  PGOPTIONS="-csearch_path=temper_next,public" psql "$LOCAL" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
 done
 
 # Synthesize from the restored public state. The binary sets search_path=temper_next,

@@ -22,7 +22,7 @@ fn home_cogmap() -> String {
     "cogmap".into()
 }
 
-/// The seed document (`schema-artifact/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap
+/// The seed document (`tests/fixtures/seeds/*.yaml`): the shape-of-the-seed a foundational cogmap
 /// is born from. `name` is the cogmap name `cogmap_genesis` registers.
 #[derive(Debug, Clone, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -37,7 +37,7 @@ pub struct Seed {
     pub uses_lenses: Vec<String>,
 }
 
-/// The scenario document (`schema-artifact/scenarios/*.yaml`): a seed reference (or embed) plus the
+/// The scenario document (`tests/fixtures/scenarios/*.yaml`): a seed reference (or embed) plus the
 /// ordered `steps` runbook.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -75,7 +75,7 @@ impl Scenario {
     }
 }
 
-/// The system boot-seed (`schema-artifact/seeds/system.yaml`): what any temper system needs, distinct
+/// The system boot-seed (`tests/fixtures/seeds/system.yaml`): what any temper system needs, distinct
 /// from any scenario. Loaded by `bootseed::seed_system`.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]

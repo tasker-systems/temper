@@ -11,7 +11,7 @@ fn one() -> f64 {
     1.0
 }
 
-/// The access-scenario document (`schema-artifact/access-scenarios/*.yaml`): a full access world plus
+/// The access-scenario document (`tests/fixtures/access-scenarios/*.yaml`): a full access world plus
 /// the inline checks that assert it.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "scenario-schema", derive(schemars::JsonSchema))]
@@ -321,7 +321,7 @@ checks:
     fn epd_bridge_fixture_deserializes() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../schema-artifact/access-scenarios/epd-bridge-access.yaml"
+            "/tests/fixtures/access-scenarios/epd-bridge-access.yaml"
         );
         let s: AccessScenario =
             serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();

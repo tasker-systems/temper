@@ -1,5 +1,5 @@
 # The access spec's worked example (epd-team-a / epd-team-b intersection bridge), ported from
-# schema-artifact/03_seed.sql. Makes every leak-safety invariant (S1-S5) a declarative check.
+# tests/fixtures/03_seed.sql. Makes every leak-safety invariant (S1-S5) a declarative check.
 #
 # Teams DAG (child -> parents):          Cogmaps (-> joined teams):
 #   temper-system (root)                   system-default -> {temper-system}          (public floor)

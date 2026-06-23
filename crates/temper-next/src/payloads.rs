@@ -4,7 +4,7 @@
 //! `_project_<type>` halves read ONLY the payload. Authored HERE (not temper-core) for now —
 //! temper-next deliberately carries no temper-core dependency pre-slim; these are parity-shaped for
 //! the temper-core lift at convergence (same pattern as the local `EventKind`). The committed
-//! JSON-Schema snapshots (schema-artifact/payloads/) are the cross-system contract meanwhile.
+//! JSON-Schema snapshots (tests/fixtures/payloads/) are the cross-system contract meanwhile.
 //!
 //! The exclusion rule: DERIVED STATE IS NEVER PAYLOAD. Embeddings (recomputed/copied; model identity
 //! rides event metadata), block_body_hash / resource body_hash (merkles over carried chunk hashes),

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "AccessScenario",
-  "description": "The access-scenario document (`schema-artifact/access-scenarios/*.yaml`): a full access world plus\nthe inline checks that assert it.",
+  "description": "The access-scenario document (`tests/fixtures/access-scenarios/*.yaml`): a full access world plus\nthe inline checks that assert it.",
   "type": "object",
   "properties": {
     "name": {
