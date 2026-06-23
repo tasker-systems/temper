@@ -945,31 +945,37 @@ git commit -m "WS6 collapse (E): dark-launch list_resource_edges over kb_edges"
 **zero** validation/defaults/dedup — the legacy `ingest_service::ingest` (`:420-590`) ran
 `strip_system_managed_fields`→`apply_defaults_value`→`ensure_managed_identity_keys`→
 `validate_managed_meta`→`find_by_body_hash`. Product decision 3: **lift** those guards into the
-substrate create path. The two pure helpers currently in `ingest_service`
-(`strip_system_managed_fields:100`, `validate_managed_meta:692` + its `ValidateParams`) move to
-`temper-core` (alongside `apply_defaults_value`/`ensure_managed_identity_keys` at
-`operations/actions.rs`) so they survive the `ingest_service` retirement; `ingest_service` re-imports
-them (behavior identical — additive refactor). Body-hash dedup gets a substrate form against
-`kb_resources.body_hash` (the legacy `find_by_body_hash:213` joins the dead `kb_resource_manifests`).
+substrate create path.
+
+**Decomposition refinement (2026-06-23, for the dark-launch model):** do NOT move the pure helpers to
+`temper-core` in this chunk. The legacy `strip_system_managed_fields:100` + `validate_managed_meta:692`
+still live in `ingest_service` (which exists until the flip), so `NextBackend::create_resource` simply
+**calls them where they are** (`ingest_service::strip_system_managed_fields`/`validate_managed_meta`) plus
+the temper-core defaults (`apply_defaults_value`/`ensure_managed_identity_keys`, already in
+`operations/actions.rs`) plus a NEW substrate `find_by_body_hash`. This keeps F purely additive (no
+helper relocation, no `IngestError` move, no `ingest_service` behavior change). **The flip (Task 8 Step
+8) owns moving the two surviving pure helpers to a permanent home when it deletes `ingest_service`** —
+see the Step-8 note. Body-hash dedup gets a substrate form (the legacy `find_by_body_hash:213` joins the
+dead `kb_resource_manifests`; the substrate keys on `kb_resources.body_hash`).
 
 **Files:**
-- Modify: `crates/temper-core/src/operations/actions.rs` — receive `strip_system_managed_fields`
-  (pub) + `validate_managed_meta` + `ValidateParams` (or a temper-core-native error); they are pure.
-- Modify: `crates/temper-api/src/services/ingest_service.rs` — re-export/re-point to the moved
-  helpers (no behavior change; legacy path stays green).
-- Add: `crates/temper-next/src/readback/mod.rs` (or `writes.rs`) `find_by_body_hash(pool, principal,
-  body_hash) -> Result<Option<Uuid>>` over `temper_next.kb_resources.body_hash` gated by
-  `resources_visible_to`.
+- Add: `crates/temper-next/src/readback/mod.rs` `find_by_body_hash(pool, principal, body_hash) ->
+  Result<Option<Uuid>>` over `temper_next.kb_resources.body_hash` gated by `resources_visible_to`
+  (mirror the existing readback fns' search_path discipline). NEW temper-next macro → regen
+  `crates/temper-next/.sqlx` (`cargo make prepare-next`, F-exclusive — no sibling touches temper-next).
 - Modify: `crates/temper-api/src/backend/next_backend.rs` — in `create_resource`, between meta
   extraction (`:233`) and `writes::create_resource` (`:235`), run strip→defaults→ensure-keys→validate
-  and the dedup pre-check.
+  (calling the existing `ingest_service` + `temper_core` helpers) and the `find_by_body_hash` dedup
+  pre-check (return the existing row's id on a hit). Keep `cmd.doctype` (the name) as the doc-type key.
 - Test: `crates/temper-api/tests/create_guards_next_test.rs` (new; `next-backend` + `test-db`).
 
 **Interfaces:**
-- Consumes: `temper_core::operations::{strip_system_managed_fields, validate_managed_meta,
-  apply_defaults_value, ensure_managed_identity_keys}`; `temper_next::readback::find_by_body_hash`.
-- Produces: `NextBackend::create_resource` now rejects invalid managed_meta (typed validation error),
-  applies doc-type defaults (e.g. task→`temper-stage: backlog`), and dedups on body_hash.
+- Consumes: `ingest_service::{strip_system_managed_fields, validate_managed_meta}`,
+  `temper_core::operations::{apply_defaults_value, ensure_managed_identity_keys}`,
+  `temper_next::readback::find_by_body_hash`.
+- Produces: `NextBackend::create_resource` now rejects invalid managed_meta (the existing typed
+  validation error), applies doc-type defaults (e.g. task→`temper-stage: backlog`), and dedups on
+  body_hash. (`ingest_service` is untouched — same legacy behavior.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -982,11 +988,15 @@ them (behavior identical — additive refactor). Body-hash dedup gets a substrat
 Run: `cargo nextest run -p temper-api --features test-db,next-backend create_guards_next`
 Expected: FAIL — defaults not applied / invalid meta accepted / duplicate created.
 
-- [ ] **Step 3: Move the pure helpers to temper-core; repoint ingest_service**
+- [ ] **Step 3: Add the substrate dedup; wire the existing guards into `create_resource`**
 
-Move `strip_system_managed_fields` + `validate_managed_meta` (+ `ValidateParams`) into
-`temper-core/src/operations/actions.rs` as `pub` fns; update `ingest_service` to call the new path.
-Run the existing ingest/e2e suite to confirm zero behavior change.
+Add `find_by_body_hash` to `temper-next/readback` (see the plan's substrate dedup SQL in the original
+Task F Step 4). Then in `NextBackend::create_resource`, after extracting managed/open meta, call (in
+order): `ingest_service::strip_system_managed_fields` → `apply_defaults_value(&cmd.doctype, &mut
+managed)` → `ensure_managed_identity_keys(&mut managed, &cmd.title, slug)` →
+`ingest_service::validate_managed_meta(...)` (propagate its typed error) → `find_by_body_hash` (return
+the existing id on hit) → the existing `writes::create_resource`. Do NOT move or modify the
+`ingest_service` helpers.
 
 - [ ] **Step 4: Add the substrate dedup + wire the guards into `create_resource`**
 
@@ -1191,6 +1201,7 @@ its name), then repoint callers:
 
 With every caller repointed (Step 7 + Phase 2.5 G + the backend collapse), delete the services the
 audit dispositioned RETIRE:
+- **Before deleting `ingest_service`:** move the two pure helpers `strip_system_managed_fields` + `validate_managed_meta` (+ `ValidateParams`) to a permanent home — `temper-core/src/operations/actions.rs` (returning a temper-core-native validation error; the schema-validation machinery already lives in temper-core), or a surviving service. Repoint `DbBackend::create_resource` (the calls Task F added) to the new home. This is the helper-move Task F deferred (see Task F's decomposition note).
 - `git rm` `services/{sync_service,doc_type_service,search_service,relationship_service,meta_service,ingest_service}.rs`; drop their `mod` lines in `services/mod.rs`.
 - `resource_service.rs`: delete the write fns (`update`/`delete`/`check_can_modify`) + the legacy read fns now superseded by `readback`/the `*_select` arms; keep only what a surviving caller still needs (grep to confirm none remain — `get_visible`'s 8 sites route through `show_select`).
 - `edge_service.rs`: delete `extract_and_upsert_edges`/`reconcile_edges`/`extract_declarations_from_resource` (decision 1, frontmatter→edge derivation retired) + `relationship_service::reproject_pending_for_resource` (retires with its sole caller `ingest_service`).
