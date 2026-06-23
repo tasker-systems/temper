@@ -31,7 +31,6 @@ pub mod relationship_events;
 pub mod relationship_requests;
 pub mod resource;
 pub mod search;
-pub mod sync;
 pub mod team;
 pub mod transfer;
 pub mod upload;
@@ -70,11 +69,6 @@ pub use resource::{
     ContentChunk, ContentResponse, DeleteResponse, ResourceCreateRequest, ResourceFacets,
     ResourceListParams, ResourceListResponse, ResourceRow, ResourceSortField,
     ResourceUpdateRequest, SortOrder,
-};
-pub use sync::{
-    MergedResource, SyncCompleteRequest, SyncCompleteResponse, SyncConflictItem,
-    SyncContextEntries, SyncManifestEntry, SyncManifestItem, SyncManifestResponse, SyncPullItem,
-    SyncPushItem, SyncRemovedItem, SyncStatusRequest, SyncStatusResponse,
 };
 pub use team::{Team, TeamMember, TeamRole};
 pub use transfer::{BulkReassignRequest, ResourceTransfer, TransferRequest, TransferStatus};

@@ -1,14 +1,13 @@
 //! Typed write composition over the `temper_next` mutation functions (WS6 4c live write path).
 //!
-//! The `NextBackend` (temper-api) calls these. Identity is resolved by **natural key** (handle /
+//! The `DbBackend` (temper-api) calls these. Identity is resolved by **natural key** (handle /
 //! entity-name / context-slug) — the same keys synthesis writes by — so no old→new id-map table is
-//! needed; a freshly-synthesized substrate is immediately writable. Every op opens one transaction with
-//! `SET LOCAL search_path TO temper_next, public` (so the SQL functions + triggers resolve unqualified
-//! references into `temper_next`) and fires through the single [`crate::events::fire`] surface.
+//! needed. Each op opens one transaction and fires through the single [`crate::events::fire`] surface;
+//! the connection carries the schema search_path (dev: `temper_next,public`; live: `public` after the
+//! rename), so the SQL functions + triggers resolve their unqualified references correctly.
 //!
-//! Resolver SQL is runtime `sqlx::query` with explicit `temper_next.`/`public.` qualification (the
-//! [`crate::synthesis::source`] precedent): a compile-time macro over `public.*` would conflict with the
-//! crate's `temper_next`-pinned `.sqlx` cache.
+//! Resolver SQL is runtime `sqlx::query` (not the compile-time macro) so it needs no `.sqlx` cache
+//! entry — the macro cache is reserved for the substrate read/mutation queries.
 
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row};
@@ -23,23 +22,16 @@ use crate::text::slugify;
 
 // ── identity resolution (natural-key) ───────────────────────────────────────────
 
-/// Production profile id → synthesized `temper_next` profile id, by `handle` (= production
-/// `kb_profiles.slug`, the key synthesis bootstraps profiles under). Errors if the substrate was not
-/// synthesized for that profile.
+/// The caller's profile id resolved against the (single) schema. Post-collapse the caller's profile id
+/// IS the substrate profile id — synthesis preserves profile ids verbatim (WS2), and the auth path
+/// (`check_can_modify`) already binds it directly as the substrate principal — so this is an existence
+/// check that returns the same id typed. Errors if no such profile exists.
 pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<ProfileId> {
-    let slug: String = sqlx::query("SELECT slug FROM public.kb_profiles WHERE id = $1")
+    let id: Uuid = sqlx::query("SELECT id FROM kb_profiles WHERE id = $1")
         .bind(prod_profile)
         .fetch_one(pool)
         .await
-        .with_context(|| format!("production profile {prod_profile} not found"))?
-        .get("slug");
-    let id: Uuid = sqlx::query("SELECT id FROM temper_next.kb_profiles WHERE handle = $1")
-        .bind(&slug)
-        .fetch_one(pool)
-        .await
-        .with_context(|| {
-            format!("no temper_next profile for handle {slug:?} (substrate not synthesized?)")
-        })?
+        .with_context(|| format!("profile {prod_profile} not found"))?
         .get("id");
     Ok(ProfileId::from(id))
 }
@@ -48,14 +40,13 @@ pub async fn resolve_profile(pool: &PgPool, prod_profile: Uuid) -> Result<Profil
 /// lowercase surface marker (`cli` / `mcp` / `web`).
 pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -> Result<EntityId> {
     let name = format!("pete@{surface}");
-    let id: Uuid =
-        sqlx::query("SELECT id FROM temper_next.kb_entities WHERE profile_id = $1 AND name = $2")
-            .bind(profile.uuid())
-            .bind(&name)
-            .fetch_one(pool)
-            .await
-            .with_context(|| format!("no emitter entity {name:?} for the resolved profile"))?
-            .get("id");
+    let id: Uuid = sqlx::query("SELECT id FROM kb_entities WHERE profile_id = $1 AND name = $2")
+        .bind(profile.uuid())
+        .bind(&name)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("no emitter entity {name:?} for the resolved profile"))?
+        .get("id");
     Ok(EntityId::from(id))
 }
 
@@ -63,7 +54,7 @@ pub async fn resolve_emitter(pool: &PgPool, profile: ProfileId, surface: &str) -
 pub async fn resolve_context(pool: &PgPool, owner: ProfileId, name: &str) -> Result<ContextId> {
     let slug = slugify(name);
     let id: Uuid = sqlx::query(
-        "SELECT id FROM temper_next.kb_contexts \
+        "SELECT id FROM kb_contexts \
          WHERE owner_table = 'kb_profiles' AND owner_id = $1 AND slug = $2",
     )
     .bind(owner.uuid())
@@ -77,13 +68,11 @@ pub async fn resolve_context(pool: &PgPool, owner: ProfileId, name: &str) -> Res
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/// Begin a `temper_next`-scoped transaction (the search_path discipline every write op shares).
+/// Begin a write transaction. Post-collapse the connection carries the schema search_path (dev:
+/// `temper_next,public`; live: `public` after the rename), so the SQL functions + triggers resolve
+/// their unqualified references correctly with no per-txn `SET LOCAL`.
 async fn begin_scoped(pool: &PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
-    Ok(tx)
+    Ok(pool.begin().await?)
 }
 
 // ── resource writes ────────────────────────────────────────────────────────────

@@ -139,7 +139,9 @@ pub struct ResourceListResponse {
 #[cfg_attr(feature = "mcp", derive(schemars::JsonSchema))]
 pub struct ResourceCreateRequest {
     pub kb_context_id: Uuid,
-    pub kb_doc_type_id: Uuid,
+    /// Doc-type name (the substrate stores doc-type as a property name; the
+    /// backend create path passes it straight through to `CreateResource`).
+    pub doc_type: String,
     pub origin_uri: String,
     pub title: String,
     pub slug: Option<String>,

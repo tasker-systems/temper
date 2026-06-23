@@ -1,14 +1,7 @@
 pub mod access_service;
-pub mod backend_selection_service;
 pub mod context_service;
-pub mod doc_type_service;
 pub mod edge_service;
 pub mod event_service;
 pub mod graph_service;
-pub mod ingest_service;
-pub mod meta_service;
 pub mod profile_service;
-pub mod relationship_service;
 pub mod resource_service;
-pub mod search_service;
-pub mod sync_service;

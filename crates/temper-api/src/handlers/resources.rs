@@ -1,19 +1,18 @@
 use axum::extract::{Path, Query, State};
-use axum::Extension;
 use axum::Json;
 use uuid::Uuid;
 
-use crate::backend::select_backend;
+use crate::backend::DbBackend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
-use crate::middleware::auth::{AuthUser, DeviceId};
+use crate::middleware::auth::AuthUser;
+use crate::services::context_service;
 use crate::services::resource_service::{
     ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
     ResourceUpdateRequest,
 };
-use crate::services::{context_service, ingest_service};
 use crate::state::AppState;
 
-use temper_core::operations::{CreateResource, DeleteResource, Surface};
+use temper_core::operations::{Backend, CreateResource, DeleteResource, Surface};
 use temper_core::types::ids::{ProfileId, ResourceId};
 use temper_core::types::managed_meta::{ManagedMeta, ResourceMetaListResponse};
 use temper_core::types::resource::{ContentResponse, DeleteResponse};
@@ -72,22 +71,14 @@ pub async fn list(
     Query(params): Query<ResourceListParams>,
 ) -> ApiResult<ListResourcesResponse> {
     if params.meta_only.unwrap_or(false) {
-        let response = crate::backend::read_selector::list_meta_select(
-            state.backend_selection,
-            &state.pool,
-            auth.0.profile.id,
-            params,
-        )
-        .await?;
+        let response =
+            crate::backend::read_selector::list_meta_select(&state.pool, auth.0.profile.id, params)
+                .await?;
         Ok(ListResourcesResponse::Meta(response))
     } else {
-        let response = crate::backend::read_selector::list_select(
-            state.backend_selection,
-            &state.pool,
-            auth.0.profile.id,
-            params,
-        )
-        .await?;
+        let response =
+            crate::backend::read_selector::list_select(&state.pool, auth.0.profile.id, params)
+                .await?;
         Ok(ListResourcesResponse::Default(response))
     }
 }
@@ -116,15 +107,7 @@ pub async fn get(
         resource: ResourceId::from(resource_id),
         origin: Surface::ApiHttp,
     };
-    // Reads don't write audit, so device_id is "api" (not threaded through).
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        "api".to_string(),
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.show_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -146,14 +129,9 @@ pub async fn get_content(
     auth: AuthUser,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<ContentResponse>> {
-    crate::backend::read_selector::get_content_select(
-        state.backend_selection,
-        &state.pool,
-        auth.0.profile.id,
-        resource_id,
-    )
-    .await
-    .map(Json)
+    crate::backend::read_selector::get_content_select(&state.pool, auth.0.profile.id, resource_id)
+        .await
+        .map(Json)
 }
 
 #[utoipa::path(
@@ -173,27 +151,21 @@ pub async fn get_content(
 pub async fn create(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Json(req): Json<ResourceCreateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
-
-    // Resolve IDs → names for the operations command.
-    // The visibility gate is enforced downstream by ingest_service::ingest
-    // (via context_service::resolve_by_name which uses contexts_visible_to).
+    // Resolve the context ID → name for the operations command. The visibility
+    // gate is enforced downstream by the backend create path (via
+    // `context_service::resolve_by_name`, which is visibility-gated). The
+    // doc-type arrives as a name on the wire and passes straight through.
     let context_name = context_service::resolve_name_by_id(&state.pool, req.kb_context_id).await?;
-    let doc_type_name =
-        ingest_service::resolve_doc_type_name_by_id(&state.pool, req.kb_doc_type_id).await?;
 
-    // When slug is absent, derive one from the title so the ingest path's
+    // When slug is absent, derive one from the title so the create path's
     // managed_meta validation (pattern ^[a-z0-9][a-z0-9-]*$) passes.
     let slug = req.slug.unwrap_or_else(|| slugify_title(&req.title));
 
     let cmd = CreateResource {
         context: context_name,
-        doctype: doc_type_name,
+        doctype: req.doc_type,
         slug,
         title: req.title,
         body: None,
@@ -206,16 +178,8 @@ pub async fn create(
         content_hash: None,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        auth.0.profile.id.into(),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
-    let out: temper_core::operations::CommandOutput<ResourceRow> =
-        backend.create_resource(cmd).await.map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
+    let out = backend.create_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
 
@@ -237,16 +201,11 @@ pub async fn create(
 pub async fn update(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
     Json(req): Json<ResourceUpdateRequest>,
 ) -> ApiResult<Json<ResourceRow>> {
     use temper_core::operations::{BodyUpdate, UpdateResource};
     use temper_core::types::ids::ResourceId;
-
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
 
     // Wire-supplied content_hash and chunks_packed are intentionally ignored —
     // the server is the single source of truth for body-trio derivation. Clients
@@ -279,14 +238,7 @@ pub async fn update(
         move_to: None,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     let out = backend.update_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(out.value))
 }
@@ -307,26 +259,14 @@ pub async fn update(
 pub async fn delete(
     State(state): State<AppState>,
     auth: AuthUser,
-    device_id: Option<Extension<DeviceId>>,
     Path(resource_id): Path<Uuid>,
 ) -> ApiResult<Json<DeleteResponse>> {
-    let device_id = device_id
-        .map(|d| d.0 .0.clone())
-        .unwrap_or_else(|| "api".to_string());
-
     let cmd = DeleteResource {
         resource: ResourceId::from(resource_id),
         force: false,
         origin: Surface::ApiHttp,
     };
-    let backend = select_backend(
-        state.backend_selection,
-        &state.pool,
-        ProfileId::from(auth.0.profile.id),
-        device_id,
-        Surface::ApiHttp,
-    )
-    .map_err(ApiError::from)?;
+    let backend = DbBackend::new(state.pool.clone(), ProfileId::from(auth.0.profile.id));
     backend.delete_resource(cmd).await.map_err(ApiError::from)?;
     Ok(Json(DeleteResponse { deleted: true }))
 }

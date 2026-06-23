@@ -1,6 +1,6 @@
 use crate::affinity::{Edge, EdgeKind, Facet, Lens};
 use anyhow::Result;
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 pub struct Substrate {
@@ -12,20 +12,11 @@ pub struct Substrate {
 }
 
 pub async fn connect() -> Result<PgPool> {
+    // The connection string carries the schema search_path (dev: `temper_next,public`; live: `public`
+    // after the rename), so no per-connection `SET search_path` is needed.
     let url = std::env::var("DATABASE_URL")
         .unwrap_or_else(|_| "postgresql://temper:temper@localhost:5437/temper_development".into());
-    let pool = PgPoolOptions::new()
-        .after_connect(|c, _| {
-            Box::pin(async move {
-                sqlx::query("SET search_path = temper_next, public")
-                    .execute(c)
-                    .await
-                    .map(|_| ())
-            })
-        })
-        .connect(&url)
-        .await?;
-    Ok(pool)
+    Ok(PgPool::connect(&url).await?)
 }
 
 pub async fn cogmap_by_name(pool: &PgPool, name: &str) -> Result<Uuid> {

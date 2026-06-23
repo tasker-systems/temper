@@ -9,4 +9,3 @@ pub mod meta;
 pub mod profiles;
 pub mod resources;
 pub mod search;
-pub mod sync;

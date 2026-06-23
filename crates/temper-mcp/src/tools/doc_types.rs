@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 use rmcp::model::CallToolResult;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 use crate::service::TemperMcpService;
 
@@ -14,9 +13,11 @@ use crate::service::TemperMcpService;
 // ---------------------------------------------------------------------------
 
 /// Summary of a document type returned by `list_doc_types`.
+///
+/// Doc-types are name-keyed in the substrate (no `kb_doc_types` table), so the
+/// summary carries no UUID — agents address doc-types by name.
 #[derive(Debug, Clone, Serialize)]
 pub struct DocTypeSummary {
-    pub id: Uuid,
     pub name: String,
     pub has_schema: bool,
     pub required_fields: Vec<String>,
@@ -56,15 +57,14 @@ const SYSTEM_FIELDS: &[&str] = &[
     "temper-owner",
 ];
 
-/// Build a [`DocTypeSummary`] from a database row and schema metadata.
-pub fn build_doc_type_summary(id: Uuid, name: &str) -> DocTypeSummary {
+/// Build a [`DocTypeSummary`] from a doc-type name and its schema metadata.
+pub fn build_doc_type_summary(name: &str) -> DocTypeSummary {
     let (has_schema, required_fields) = match temper_core::schema::required_fields(name) {
         Ok(fields) => (true, fields),
         Err(_) => (false, Vec::new()),
     };
 
     DocTypeSummary {
-        id,
         name: name.to_string(),
         has_schema,
         required_fields,
@@ -125,15 +125,11 @@ pub fn describe_doc_type_impl(name: &str) -> Result<DescribeDocTypeResponse, rmc
 pub async fn list_doc_types(svc: &TemperMcpService) -> Result<CallToolResult, rmcp::ErrorData> {
     let _profile = svc.require_profile().await?;
 
-    let rows = temper_api::services::doc_type_service::list_all(&svc.api_state.pool)
-        .await
-        .map_err(|e| {
-            rmcp::ErrorData::internal_error(format!("Failed to list doc types: {e}"), None)
-        })?;
-
-    let summaries: Vec<DocTypeSummary> = rows
+    // Doc-types are name-keyed in the substrate — enumerate the temper-core
+    // schema set (the single source of truth) rather than a DB table.
+    let summaries: Vec<DocTypeSummary> = temper_core::frontmatter::DocType::ALL
         .iter()
-        .map(|row| build_doc_type_summary(row.id, &row.name))
+        .map(|dt| build_doc_type_summary(dt.as_str()))
         .collect();
 
     let text = serde_json::to_string_pretty(&summaries).unwrap_or_else(|_| "[]".to_string());
@@ -166,7 +162,7 @@ mod tests {
 
     #[test]
     fn doc_type_summary_includes_required_fields_for_task() {
-        let summary = build_doc_type_summary(Uuid::nil(), "task");
+        let summary = build_doc_type_summary("task");
         assert!(summary.has_schema);
         assert!(
             summary
@@ -184,7 +180,7 @@ mod tests {
 
     #[test]
     fn doc_type_summary_unknown_type_has_no_schema() {
-        let summary = build_doc_type_summary(Uuid::nil(), "widget");
+        let summary = build_doc_type_summary("widget");
         assert!(!summary.has_schema);
         assert!(summary.required_fields.is_empty());
     }

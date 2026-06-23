@@ -10,9 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 temper-core = { path = "../temper-core", features = ["web-api"] }
-temper-events = { path = "../temper-events" }
 temper-ingest = { path = "../temper-ingest", default-features = false, features = ["embed"], optional = true }
-temper-next = { path = "../temper-next", optional = true }
+temper-next = { path = "../temper-next" }
 async-trait = "0.1"
 axum = { version = "0.8", features = ["json", "query"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "chrono", "json", "uuid", "macros", "migrate"] }
@@ -34,10 +33,6 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 [features]
 test-db = []
 ingest-pipeline = ["dep:temper-ingest"]
-# WS6 4b: routes reads through the temper_next.* substrate (NextBackend + read
-# selector). Pulls temper-next (→ onnx via temper-ingest), same tradeoff as
-# ingest-pipeline; enabled in the deployed adapters so the flip is config-only.
-next-backend = ["dep:temper-next"]
 test-embed = ["ingest-pipeline", "temper-ingest/test-embed"]
 
 [dev-dependencies]

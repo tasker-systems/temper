@@ -5,7 +5,7 @@
 //! query (the parity-read harness in `tests/parity_reads.rs`).
 //!
 //! **Access scoping (WS2).** The single-resource and set reads (`list`/`resource_row`/`meta`/`body`/
-//! `fts_search`/`vector_search`) take a `principal` and gate through `temper_next.resources_visible_to`,
+//! `fts_search`/`vector_search`) take a `principal` and gate through `resources_visible_to`,
 //! CONFORMing to production's `resources_visible_to(profile)` JOIN and its not-visible→404 deny. A
 //! not-visible single-resource read errors (the read selector maps that to NotFound, never 403); the set
 //! reads JOIN-filter to the visible set. `neighbors` is the lone exception — deliberately UNSCOPED, as it
@@ -14,10 +14,12 @@
 //! and production result SETS still coincide; a separate test drives a non-owner principal to prove the
 //! gate denies.
 //!
-//! All reads are runtime, schema-qualified `sqlx::query` (NEVER the `query!`/`query_as!` macros), same
-//! discipline as the synthesis read path (now retired) and [`crate::parity`]: the temper-next macro
-//! cache resolves against the `temper_next` search_path, so a compile-time macro over `public.*` would
-//! conflict. Qualifying every table keeps the reads correct regardless of the connection's search_path.
+//! Most reads are runtime `sqlx::query` (the pgvector `::vector` cast forces runtime; the rest follow
+//! for consistency). The SQL is UNQUALIFIED (`kb_*` / `resources_visible_to`) — post-collapse there is
+//! one schema, and the connection carries its search_path (dev: `temper_next,public`; live: `public`
+//! after the rename), so unqualified names and the visibility function's own unqualified internals all
+//! resolve correctly with no per-txn `SET LOCAL`. The lone compile-time macro ([`find_by_body_hash`])
+//! is likewise unqualified — its `.sqlx` cache is prepared with `search_path=temper_next`.
 
 use std::collections::HashMap;
 
@@ -93,7 +95,7 @@ pub struct ListRow {
     /// The verbatim-carried `origin_uri` (a provenance marker, NOT unique — empty for CLI/agent-created
     /// resources; the resource id is the stable identity).
     pub origin_uri: String,
-    /// The resource title (`temper_next.kb_resources.title`).
+    /// The resource title (`kb_resources.title`).
     pub title: String,
     /// The authoritative doctype, from the `doc_type` property the resource pass stamps.
     pub doc_type: String,
@@ -110,7 +112,7 @@ pub struct ListRow {
 /// active set — synthesis never carries soft-deleted rows, so there is no `is_active` filter to apply
 /// here) with the same projected fields production surfaces.
 ///
-/// The doctype and the three workflow fields all live in `temper_next.kb_properties` (synthesis writes
+/// The doctype and the three workflow fields all live in `kb_properties` (synthesis writes
 /// them via `facet_set`, plus the direct `doc_type` property the resource pass stamps). `doc_type` is an
 /// inner JOIN — every synthesized resource has one; the workflow keys are LEFT JOINs so a resource
 /// without them comes back with `NULL` (not dropped). Property values are JSON scalars, extracted to
@@ -126,7 +128,7 @@ pub struct ListRow {
 ///
 /// Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the module-level note.
 /// WS2 consumer-axis gate for single-resource reads: error unless `new_id` is visible to
-/// `principal` under `temper_next.resources_visible_to`. The set reads (`list`/`fts_search`/
+/// `principal` under `resources_visible_to`. The set reads (`list`/`fts_search`/
 /// `vector_search`/`neighbors`) instead JOIN the function directly (a set can't be pre-checked).
 ///
 /// Returns a TYPED [`ReadbackError`]: [`ReadbackError::NotVisible`] when the principal can't see the
@@ -139,24 +141,16 @@ async fn ensure_visible(
     principal: Uuid,
     new_id: Uuid,
 ) -> std::result::Result<(), ReadbackError> {
-    // `resources_visible_to`'s body calls `profile_effective_teams`/`team_ancestors` UNQUALIFIED,
-    // so they resolve against the connection's search_path — which on a bare pool is `public`,
-    // where the `temper_next` helpers do not exist. Run inside a `SET LOCAL search_path` txn (the
-    // synthesis/bootstrap discipline) so the function and its nested calls all resolve in
-    // `temper_next`. (The other reads qualify every TABLE, but a FUNCTION pulls in its own
-    // unqualified internals — hence the search_path here and in the other gate-calling reads.)
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
+    // `resources_visible_to` and its nested `profile_effective_teams`/`team_ancestors` resolve their
+    // unqualified references against the connection search_path — which post-collapse points at the one
+    // schema (dev: `temper_next,public`; live: `public` after the rename), so no per-txn `SET LOCAL`.
     let visible: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM resources_visible_to($1) v WHERE v.resource_id = $2)",
     )
     .bind(principal)
     .bind(new_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(pool)
     .await?;
-    tx.commit().await?;
     if visible {
         Ok(())
     } else {
@@ -168,12 +162,6 @@ async fn ensure_visible(
 }
 
 pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
-    // SET LOCAL search_path so `resources_visible_to`'s unqualified internals resolve (see
-    // `ensure_visible`). Qualified table names below still work under the widened search_path.
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
     let rows = sqlx::query(
         "SELECT r.origin_uri,
                 r.title,
@@ -181,26 +169,25 @@ pub async fn list(pool: &PgPool, principal: Uuid) -> Result<Vec<ListRow>> {
                 st.property_value #>> '{}' AS stage,
                 md.property_value #>> '{}' AS mode,
                 ef.property_value #>> '{}' AS effort
-           FROM temper_next.kb_resources r
-           JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
-           JOIN temper_next.kb_properties dt
+           FROM kb_resources r
+           JOIN resources_visible_to($1) v ON v.resource_id = r.id
+           JOIN kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN temper_next.kb_properties st
+           LEFT JOIN kb_properties st
              ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
             AND st.property_key = 'temper-stage' AND NOT st.is_folded
-           LEFT JOIN temper_next.kb_properties md
+           LEFT JOIN kb_properties md
              ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
             AND md.property_key = 'temper-mode' AND NOT md.is_folded
-           LEFT JOIN temper_next.kb_properties ef
+           LEFT JOIN kb_properties ef
              ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
             AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
           ORDER BY r.origin_uri, r.id",
     )
     .bind(principal)
-    .fetch_all(&mut *tx)
+    .fetch_all(pool)
     .await?;
-    tx.commit().await?;
 
     Ok(rows
         .iter()
@@ -228,7 +215,7 @@ pub struct EnrichedListRow {
     /// Verbatim-carried `origin_uri` (a provenance marker, NOT unique — empty for CLI/agent-created
     /// resources; the resource id is the stable identity).
     pub origin_uri: String,
-    /// The resource title (`temper_next.kb_resources.title`).
+    /// The resource title (`kb_resources.title`).
     pub title: String,
     /// Active flag — always true here (synthesis carries only active resources).
     pub is_active: bool,
@@ -253,9 +240,8 @@ pub struct EnrichedListRow {
 /// property (an INNER JOIN that also serves the doctype filter) and the three workflow keys as typed
 /// columns; (2) one `owner_id = ANY($ids)` property scan to reconstruct the managed/open split per row
 /// (the §7 inverse fate, reusing [`is_managed_property_key`], exactly as [`meta`] does for a single
-/// resource). Both queries run inside ONE `SET LOCAL search_path TO temper_next, public` txn so
-/// `resources_visible_to`'s unqualified internals (`profile_effective_teams`/`team_ancestors`) resolve
-/// (the same `ensure_visible` search_path discipline the single-resource reads use).
+/// resource). `resources_visible_to`'s unqualified internals (`profile_effective_teams`/
+/// `team_ancestors`) resolve against the connection search_path — the one schema, post-collapse.
 ///
 /// `doc_type` is surfaced as the typed column ONLY, never duplicated into managed/open — parity with
 /// [`meta`], which reconciles it to the authoritative doctype field. The workflow keys
@@ -274,11 +260,6 @@ pub async fn enriched_list(
     context_name: Option<&str>,
     doc_type: Option<&str>,
 ) -> Result<Vec<EnrichedListRow>> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
-
     // Query 1: the visible, filtered set with display fields + doc_type (INNER JOIN) + workflow keys.
     let set_rows = sqlx::query(
         "SELECT r.id AS new_id,
@@ -290,21 +271,21 @@ pub async fn enriched_list(
                 st.property_value #>> '{}' AS stage,
                 md.property_value #>> '{}' AS mode,
                 ef.property_value #>> '{}' AS effort
-           FROM temper_next.kb_resources r
-           JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
-           JOIN temper_next.kb_resource_homes h ON h.resource_id = r.id
-           JOIN temper_next.kb_contexts c
+           FROM kb_resources r
+           JOIN resources_visible_to($1) v ON v.resource_id = r.id
+           JOIN kb_resource_homes h ON h.resource_id = r.id
+           JOIN kb_contexts c
              ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
-           JOIN temper_next.kb_properties dt
+           JOIN kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN temper_next.kb_properties st
+           LEFT JOIN kb_properties st
              ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
             AND st.property_key = 'temper-stage' AND NOT st.is_folded
-           LEFT JOIN temper_next.kb_properties md
+           LEFT JOIN kb_properties md
              ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
             AND md.property_key = 'temper-mode' AND NOT md.is_folded
-           LEFT JOIN temper_next.kb_properties ef
+           LEFT JOIN kb_properties ef
              ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
             AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
           WHERE ($2::text IS NULL OR c.name = $2)
@@ -314,7 +295,7 @@ pub async fn enriched_list(
     .bind(principal)
     .bind(context_name)
     .bind(doc_type)
-    .fetch_all(&mut *tx)
+    .fetch_all(pool)
     .await?;
 
     let ids: Vec<Uuid> = set_rows
@@ -325,15 +306,14 @@ pub async fn enriched_list(
     // Query 2: one batched property scan for the surviving ids → managed/open reconstruction.
     let prop_rows = sqlx::query(
         "SELECT owner_id, property_key, property_value
-           FROM temper_next.kb_properties
+           FROM kb_properties
           WHERE owner_table = 'kb_resources'
             AND owner_id = ANY($1)
             AND NOT is_folded",
     )
     .bind(&ids)
-    .fetch_all(&mut *tx)
+    .fetch_all(pool)
     .await?;
-    tx.commit().await?;
 
     // Group properties by owner; reuse the §7 managed/open inverse fate (same split as `meta`).
     // (managed, open) maps per owner.
@@ -378,7 +358,7 @@ pub async fn enriched_list(
 }
 
 /// Reconstructed frontmatter for one synthesized resource, the inverse of the §7 fate table over
-/// `temper_next.kb_properties`. Mirrors production `get_meta`'s managed/open split, EXCEPT the §7-died
+/// `kb_properties`. Mirrors production `get_meta`'s managed/open split, EXCEPT the §7-died
 /// keys (`temper-title`/`-slug`/`-id`/`-context`) never reappear (their state lives authoritatively in
 /// the column / render-time decoration / row id / home row) and `temper-goal` lives as an edge, not
 /// here. `temper-type` is reconciled to the `doc_type` column.
@@ -419,7 +399,7 @@ pub async fn meta(
     ensure_visible(pool, principal, new_id).await?;
     let rows = sqlx::query(
         "SELECT property_key, property_value
-           FROM temper_next.kb_properties
+           FROM kb_properties
           WHERE owner_table = 'kb_resources' AND owner_id = $1 AND NOT is_folded",
     )
     .bind(new_id)
@@ -534,24 +514,24 @@ pub async fn resource_row(
                 md.property_value #>> '{}' AS mode,
                 ef.property_value #>> '{}' AS effort,
                 sq.property_value #>> '{}' AS seq
-           FROM temper_next.kb_resources r
-           JOIN temper_next.kb_resource_homes h ON h.resource_id = r.id
-           JOIN temper_next.kb_contexts c
+           FROM kb_resources r
+           JOIN kb_resource_homes h ON h.resource_id = r.id
+           JOIN kb_contexts c
              ON c.id = h.anchor_id AND h.anchor_table = 'kb_contexts'
-           JOIN temper_next.kb_profiles p ON p.id = h.owner_profile_id
-           JOIN temper_next.kb_properties dt
+           JOIN kb_profiles p ON p.id = h.owner_profile_id
+           JOIN kb_properties dt
              ON dt.owner_table = 'kb_resources' AND dt.owner_id = r.id
             AND dt.property_key = 'doc_type' AND NOT dt.is_folded
-           LEFT JOIN temper_next.kb_properties st
+           LEFT JOIN kb_properties st
              ON st.owner_table = 'kb_resources' AND st.owner_id = r.id
             AND st.property_key = 'temper-stage' AND NOT st.is_folded
-           LEFT JOIN temper_next.kb_properties md
+           LEFT JOIN kb_properties md
              ON md.owner_table = 'kb_resources' AND md.owner_id = r.id
             AND md.property_key = 'temper-mode' AND NOT md.is_folded
-           LEFT JOIN temper_next.kb_properties ef
+           LEFT JOIN kb_properties ef
              ON ef.owner_table = 'kb_resources' AND ef.owner_id = r.id
             AND ef.property_key = 'temper-effort' AND NOT ef.is_folded
-           LEFT JOIN temper_next.kb_properties sq
+           LEFT JOIN kb_properties sq
              ON sq.owner_table = 'kb_resources' AND sq.owner_id = r.id
             AND sq.property_key = 'temper-seq' AND NOT sq.is_folded
           WHERE r.id = $1",
@@ -616,21 +596,15 @@ pub async fn body(
 /// dead `kb_resource_manifests`. Visibility-gated through `resources_visible_to`, like every other read.
 ///
 /// Unlike the rest of this module (runtime, schema-qualified `sqlx::query`), this is a **compile-time
-/// macro** — the one in `readback`. The macro's SQL is therefore UNQUALIFIED (`kb_resources` /
-/// `resources_visible_to`), resolving via the `temper_next` search_path: the per-crate `.sqlx` cache is
-/// prepared with `search_path=temper_next` (`cargo make prepare-next`). At RUNTIME the connection
-/// default is `public`, so the macro MUST run inside a `SET LOCAL search_path TO temper_next, public`
-/// txn — both for the unqualified table and for `resources_visible_to`'s own unqualified internals
-/// (`profile_effective_teams`/`team_ancestors`), exactly the `ensure_visible` search_path discipline.
+/// macro** — the one in `readback`. The SQL is UNQUALIFIED (`kb_resources` / `resources_visible_to`):
+/// the per-crate `.sqlx` cache is prepared with `search_path=temper_next` (`cargo make prepare-next`),
+/// and at runtime the connection search_path points at the one schema post-collapse — so the unqualified
+/// table and `resources_visible_to`'s own unqualified internals all resolve correctly.
 pub async fn find_by_body_hash(
     pool: &PgPool,
     principal: Uuid,
     body_hash: &str,
 ) -> Result<Option<Uuid>> {
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
     let dup = sqlx::query_scalar!(
         r#"SELECT r.id
              FROM kb_resources r
@@ -640,9 +614,8 @@ pub async fn find_by_body_hash(
         principal,
         body_hash,
     )
-    .fetch_optional(&mut *tx)
+    .fetch_optional(pool)
     .await?;
-    tx.commit().await?;
     Ok(dup)
 }
 
@@ -676,22 +649,17 @@ pub async fn find_by_body_hash(
 /// Read-only; no writes. Runtime, schema-qualified `sqlx::query` (NEVER the `query!` macros) — see the
 /// module-level note.
 pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<Vec<Uuid>> {
-    // search-path txn so `resources_visible_to`'s internals resolve (see `ensure_visible`).
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
     let rows = sqlx::query(
         "WITH doc AS (
            SELECT r.id,
                   setweight(to_tsvector('english', r.title), 'A') ||
                   setweight(to_tsvector('english', COALESCE(string_agg(cc.content, ' '), '')), 'B')
                     AS search_vector
-             FROM temper_next.kb_resources r
-             JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
-             LEFT JOIN temper_next.kb_chunks c
+             FROM kb_resources r
+             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+             LEFT JOIN kb_chunks c
                ON c.resource_id = r.id AND c.is_current
-             LEFT JOIN temper_next.kb_chunk_content cc
+             LEFT JOIN kb_chunk_content cc
                ON cc.chunk_id = c.id
             GROUP BY r.id, r.title
          )
@@ -702,9 +670,8 @@ pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<V
     )
     .bind(principal)
     .bind(query)
-    .fetch_all(&mut *tx)
+    .fetch_all(pool)
     .await?;
-    tx.commit().await?;
 
     Ok(rows.iter().map(|r| r.get::<Uuid, _>("id")).collect())
 }
@@ -749,31 +716,25 @@ pub async fn vector_search(
     query_embedding: &[f32],
 ) -> Result<Vec<Uuid>> {
     let embedding_text = format_pgvector(query_embedding);
-    // search-path txn so `resources_visible_to`'s internals resolve (see `ensure_visible`).
-    let mut tx = pool.begin().await?;
-    sqlx::query("SET LOCAL search_path TO temper_next, public")
-        .execute(&mut *tx)
-        .await?;
     let rows = sqlx::query(
         "SELECT r.id
-           FROM temper_next.kb_resources r
-           JOIN temper_next.resources_visible_to($1) v ON v.resource_id = r.id
-           JOIN temper_next.kb_chunks c
+           FROM kb_resources r
+           JOIN resources_visible_to($1) v ON v.resource_id = r.id
+           JOIN kb_chunks c
              ON c.resource_id = r.id AND c.is_current
           GROUP BY r.id
           ORDER BY MIN(c.embedding <=> $2::vector) ASC",
     )
     .bind(principal)
     .bind(embedding_text)
-    .fetch_all(&mut *tx)
+    .fetch_all(pool)
     .await?;
-    tx.commit().await?;
 
     Ok(rows.iter().map(|r| r.get::<Uuid, _>("id")).collect())
 }
 
 /// One 1-hop graph neighbor of a resource: the OTHER endpoint's origin_uri plus the connecting edge's
-/// kind/polarity/label. The §9 graph-neighbors read floor over `temper_next.kb_edges` (folded edges
+/// kind/polarity/label. The §9 graph-neighbors read floor over `kb_edges` (folded edges
 /// excluded, matching production's `NOT is_folded` gate).
 ///
 /// `label` is `Option<String>`: an empty production label carries as `NULL` through synthesis, so an
@@ -791,7 +752,7 @@ pub struct Neighbor {
 }
 
 /// Port of production's 1-hop graph-neighbor read onto `temper_next.*` — the §9 graph-neighbors read
-/// floor. Returns the resource↔resource neighbors of `new_id` over `temper_next.kb_edges`, in BOTH
+/// floor. Returns the resource↔resource neighbors of `new_id` over `kb_edges`, in BOTH
 /// directions (the seed as `source_id` → the `target` endpoint; the seed as `target_id` → the `source`
 /// endpoint), with folded edges EXCLUDED (`NOT is_folded`, matching production's gate).
 ///
@@ -822,16 +783,16 @@ pub async fn neighbors(pool: &PgPool, new_id: Uuid) -> Result<Vec<Neighbor>> {
     let rows = sqlx::query(
         "SELECT t.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
                 e.polarity::text AS polarity, e.label \
-           FROM temper_next.kb_edges e \
-           JOIN temper_next.kb_resources t ON t.id = e.target_id \
+           FROM kb_edges e \
+           JOIN kb_resources t ON t.id = e.target_id \
           WHERE e.source_id = $1 \
             AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources' \
             AND NOT e.is_folded \
          UNION ALL \
          SELECT s.origin_uri AS origin_uri, e.edge_kind::text AS edge_kind, \
                 e.polarity::text AS polarity, e.label \
-           FROM temper_next.kb_edges e \
-           JOIN temper_next.kb_resources s ON s.id = e.source_id \
+           FROM kb_edges e \
+           JOIN kb_resources s ON s.id = e.source_id \
           WHERE e.target_id = $1 \
             AND e.source_table = 'kb_resources' AND e.target_table = 'kb_resources' \
             AND NOT e.is_folded",
