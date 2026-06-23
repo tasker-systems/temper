@@ -231,9 +231,9 @@ echo "substrate built in public. export DATABASE_URL=\"$DB\" (no search_path opt
 '''
 ```
 
-- [ ] **Step 2: Drop the search_path option from the prepare tasks**
+- [ ] **Step 2: Confirm the prepare tasks need no change**
 
-In `Makefile.toml`, find the `prepare-api` and `prepare-e2e` tasks and remove `?options=-csearch_path%3Dtemper_next,public` from their `DATABASE_URL` (line ~89 is the pattern). They become plain `cargo sqlx prepare` against the public DB. Leave `prepare-next` for Task 6.
+VERIFIED: `prepare-api` and `prepare-e2e` already use plain `cargo sqlx prepare` against the **ambient** `DATABASE_URL` (no `?options=…search_path…` in their bodies) — so once the dev shell's `DATABASE_URL` is plain `public` (Step 1 drops the export hint), they regenerate against `public` with no edit. The only `search_path` occurrences in `Makefile.toml` are line ~89 (`prepare-next` — KEEP, temper-next stays `temper_next`-bound, handled in Task 6) and line ~243 (the `db-collapsed` export hint — removed in Step 1). Make NO change to `prepare-api`/`prepare-e2e`/`prepare-next` in this task.
 
 - [ ] **Step 3: Verify live macro validation against public**
 
