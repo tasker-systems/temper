@@ -8,6 +8,15 @@
 
 **Tech Stack:** Rust (axum, sqlx, tokio), PostgreSQL 17 (Neon prod) / 18 (local Docker, port 5437), pgvector, cargo-make + cargo-nextest, SQLX_OFFLINE caches per crate.
 
+> **Resume anchor (read first).** Full session context that produced this plan:
+> `temper resource show 019ef3e9-f407-7cd1-866a-0ee06448780a` — the decisions, commit
+> history, and the migration-state gotchas. **During the migration `temper resource
+> list`/`search` are broken** (doctype/context filters don't constrain); `resource show
+> <uuid>` works (trailing-UUID resolution). To find other recent docs, query Neon
+> directly: `neonctl psql --project-id crimson-fog-23541670 --org-id
+> org-wild-snow-32921543 --role-name neondb_owner -- -c "..."` against
+> `temper_next.kb_resources` (backend is `next`; prod is live on `temper_next`).
+
 ## Global Constraints
 
 - **Service layer owns SQL.** All SQL lives in `temper-api/src/services/`. Writes route through the backend trait; reads (list/show/meta/search/graph/events) stay service-direct. Never inline `sqlx::query!()` in a handler or MCP tool.
