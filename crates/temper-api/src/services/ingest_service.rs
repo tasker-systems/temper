@@ -97,7 +97,7 @@ impl From<IngestError> for crate::error::ApiError {
 /// `temper-context` or `temper-type` — those remain so the update path can
 /// detect structural-move attempts (see `update()` lines that check for
 /// context/type changes).
-fn strip_system_managed_fields(mut meta: serde_json::Value) -> serde_json::Value {
+pub(crate) fn strip_system_managed_fields(mut meta: serde_json::Value) -> serde_json::Value {
     use temper_core::frontmatter::fields::{IDENTITY_FIELDS, TIER1_SYSTEM_FIELDS};
 
     // temper-context and temper-type are kept for structural-move detection.

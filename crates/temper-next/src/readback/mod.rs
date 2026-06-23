@@ -609,6 +609,43 @@ pub async fn body(
     Ok(crate::parity::reconstruct_body(&chunks))
 }
 
+/// Substrate body-hash dedup for the create path (WS6 collapse Task F). Returns the id of an existing
+/// active, visible resource whose `body_hash` matches `body_hash`, or `None`. Mirrors production's
+/// `ingest_service::find_by_body_hash` but keys on the substrate `kb_resources.body_hash` (the
+/// structural sha256 merkle over chunk content-hashes, `_recompute_resource_body_hash`) instead of the
+/// dead `kb_resource_manifests`. Visibility-gated through `resources_visible_to`, like every other read.
+///
+/// Unlike the rest of this module (runtime, schema-qualified `sqlx::query`), this is a **compile-time
+/// macro** — the one in `readback`. The macro's SQL is therefore UNQUALIFIED (`kb_resources` /
+/// `resources_visible_to`), resolving via the `temper_next` search_path: the per-crate `.sqlx` cache is
+/// prepared with `search_path=temper_next` (`cargo make prepare-next`). At RUNTIME the connection
+/// default is `public`, so the macro MUST run inside a `SET LOCAL search_path TO temper_next, public`
+/// txn — both for the unqualified table and for `resources_visible_to`'s own unqualified internals
+/// (`profile_effective_teams`/`team_ancestors`), exactly the `ensure_visible` search_path discipline.
+pub async fn find_by_body_hash(
+    pool: &PgPool,
+    principal: Uuid,
+    body_hash: &str,
+) -> Result<Option<Uuid>> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+    let dup = sqlx::query_scalar!(
+        r#"SELECT r.id
+             FROM kb_resources r
+             JOIN resources_visible_to($1) v ON v.resource_id = r.id
+            WHERE r.body_hash = $2 AND r.is_active
+            LIMIT 1"#,
+        principal,
+        body_hash,
+    )
+    .fetch_optional(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(dup)
+}
+
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
 /// search read floor. Builds, per resource, the §9-REBUILT weighted tsvector and returns the matching
 /// resource **ids** ranked by `ts_rank DESC`.
