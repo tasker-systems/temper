@@ -40,7 +40,7 @@
 
 **Deleted (Phases 1 + 3):**
 - `crates/temper-next/src/synthesis/` (whole dir, after survivors moved).
-- `crates/temper-api/src/backend/{selection.rs, read_selector.rs}` and `services/backend_selection_service.rs`.
+- `crates/temper-api/src/backend/selection.rs` and `services/backend_selection_service.rs`. (`read_selector.rs` is NOT deleted — collapsed in place to the substrate read dispatcher; it wraps the surviving `readback` path. See Task 8 Step 6 correction.)
 
 **Rewritten (Phases 2–3):**
 - `schema-artifact/02_functions.sql` — gains ported `graph_traverse` + `graph_subgraph_nodes`.
@@ -485,7 +485,7 @@ The split machinery deletion, de-qualification, search_path-hook removal, the tw
 
 ### Task 8: Collapse to a single backend + single schema
 
-**Files (delete):** `backend/selection.rs`, `backend/read_selector.rs`, `services/backend_selection_service.rs`
+**Files (delete):** `backend/selection.rs`, `services/backend_selection_service.rs` (NOT `read_selector.rs` — collapsed in place per Step 6 correction; it wraps the surviving `readback` read path)
 **Files (modify):** `backend/mod.rs`, `backend/db_backend.rs`, `backend/next_backend.rs`, `state.rs`, `handlers/{resources,meta,edges,ingest,search}.rs`, `services/{graph_service,event_service}.rs`, `main.rs`, `api/mcp.rs`, `api/axum.rs`, `crates/temper-mcp/src/tools/{resources,relationships,search}.rs`, `crates/temper-next/src/{writes.rs,substrate.rs}`, `Cargo.toml` (drop `next-backend` feature), `crates/temper-api/Cargo.toml`, `tests/e2e/...`
 
 **Interfaces:**
@@ -553,7 +553,7 @@ pub async fn latest_event_id_for_context(
 
 - [ ] **Step 5: Collapse the backend — `NextBackend` becomes `DbBackend`**
 
-- Delete `backend/selection.rs`, `backend/read_selector.rs`, `services/backend_selection_service.rs`.
+- Delete `backend/selection.rs`, `services/backend_selection_service.rs`. **Do NOT delete `backend/read_selector.rs`** — collapse it in place to the substrate read dispatcher (Step 6 correction): drop the `selection` param + `Legacy` arms + the `next-backend` gate on `next_impl`; it keeps wrapping `readback`.
 - In `backend/db_backend.rs`: replace the old legacy `DbBackend` body with `NextBackend`'s impl (the substrate write path is now the only backend). Simplest mechanical route: rename `NextBackend` → `DbBackend` in `next_backend.rs`, delete the old `db_backend.rs`, rename the file. `DbBackend::new(pool, profile_id)` is the constructor.
 - `backend/mod.rs`: drop `pub use selection::*`, `pub use next_backend::NextBackend`, the `read_selector`/`selection` modules; export only `DbBackend`.
 - `state.rs`: delete the `backend_selection` field (line 159) + `with_backend_selection` (line 178).
@@ -562,7 +562,7 @@ pub async fn latest_event_id_for_context(
 
 For each of the 23 call sites (handlers: resources.rs:79,115,204,277,317,144; search.rs:26; meta.rs:33,76; edges.rs:77,125,172,219; ingest.rs:67,133 — MCP: resources.rs:346,413,419,424,467,565,624; relationships.rs:119,155,190,225; search.rs:15):
 - `select_backend(state.backend_selection, &state.pool, pid, device, surface)` → `DbBackend::new(state.pool.clone(), pid)`.
-- `read_selector::list_select(state.backend_selection, &pool, pid, params)` → the direct service call `resource_service::n(&pool, pid, params)` (and likewise `show_select`→`show`, `get_content_select`→content, `get_meta_select`→`n_meta`, `search_select`→search, `list_enriched_select`→the enriched list). The `read_selector` indirection is gone; call the service directly (reads are service-direct per the constraints).
+- `read_selector::list_select(state.backend_selection, &pool, pid, params)` → `read_selector::list_select(&pool, pid, params)` — **drop only the `selection` arg**, keep the call. **CORRECTED (2026-06-23, discovered at execution — AMEND of the design's "delete read_selector.rs"):** the original Step-6 text said "route reads to the legacy service directly (`resource_service::list_visible` etc.)" — that is **WRONG**. Those legacy read services query projections that DO NOT EXIST in the substrate (`vault_resources_browse`, `kb_resource_manifests`, `kb_current_chunks`, `unified_search()`/`graph_search()` — all verified absent from `schema-artifact/`). The substrate read path is the **`readback`** module (the design spec: *"readback is de-qualified, NOT deleted at collapse … collapse makes readback resolve to the one schema; shim-exit removes it"*), which `read_selector`'s `next_impl` already wraps. So **collapse `read_selector.rs` IN PLACE** instead of deleting it: remove the `selection: BackendSelection` param + the `BackendSelection::Legacy` match arms, **un-feature-gate** the `next_impl` (readback) bodies (the `next-backend` feature is being removed), and have handlers/MCP call the now-param-less `*_select` fns (`list_select`/`show_select`/`get_content_select`/`get_meta_select`/`search_select`/`list_enriched_select`). The genuinely-deleted split machinery is the *dual-dispatch + flag*: `selection.rs`, `backend_selection_service.rs`, the `BackendSelection` enum, `state.backend_selection`, `with_backend_selection`, and the `Legacy`-arm dispatch — NOT the readback read path. Rename `read_selector.rs` → an honest name (e.g. `reads.rs`) if cheap, else keep the filename with an updated module doc (it is now the substrate read dispatcher, not a selector). Re-implementing list/show/content/meta/search onto substrate base tables is NOT in scope — that would reinvent `readback`.
 
 - [ ] **Step 7: Remove the boot-time `migrate!` + the 3 startup flag reads**
 
