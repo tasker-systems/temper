@@ -236,6 +236,25 @@ git add -A && git commit -m "WS6 collapse: re-home parity helpers out of synthes
 
 ### Task 5: Delete `synthesis/` + the `Synthesize` subcommand
 
+> **⚠️ RE-SEQUENCED (2026-06-23, discovered at execution): this task runs LAST, after Task 10 — not here in Phase 1.**
+> Deleting `synthesis/` removes `temper_next::synthesis::run`, but the e2e split tests still call it
+> (`surface_parity_next.rs:107`, `backend_{read,write}_path_next.rs`). Because `cargo make check` runs
+> `clippy --workspace --all-targets --all-features` and `tests/e2e` is a workspace member, `--all-features`
+> enables `next-backend` on temper-e2e and **compiles those synthesis callers** — so deleting synthesis here
+> fails the gate. The last caller (`surface_parity_next.rs`) is only de-synthesized in **Task 10** (its
+> `synthesis::run` seed → direct `DbBackend` write). So this deletion is the FINAL code step, after Task 10,
+> when no caller remains (consistent with the line-26 atomicity rule: a change that breaks `tests/e2e`
+> compilation lands coincident with the e2e cleanup). Phase 1 is therefore **Tasks 1–4 only**. See the
+> re-stated step at the end of Phase 3.
+>
+> **Also folded in (execution adjudication):** the plan's step-5 "keep `parity_reads.rs`" is conditional on
+> it exercising readback/parity rather than synthesis — it does NOT (its header: "asserts identical output …
+> over the synthesized prod-shape fixture"; every test calls `common::seed_and_synthesize` → `synthesis::run`).
+> So `parity_reads.rs` **retires with synthesis**; durable read-parity coverage stays in `corpus_parity_reads.rs`
+> (clean, KEEP) + the Task-10 `surface_parity_next.rs` 8-surface gate. `tests/synthesis_source.rs` is a third
+> synthesis-only test file (tests `synthesis::source`) that also retires. Prune now-dead `common/mod.rs`
+> helpers (`seed_and_synthesize`, `seed_prod_shape_fixture`) only if uncalled by surviving tests.
+
 **Files:**
 - Delete: `crates/temper-next/src/synthesis/` (`bootstrap.rs`, `mod.rs`, `source.rs` — `key_fate.rs`/`parity.rs` already moved)
 - Modify: `crates/temper-next/src/lib.rs` (drop `pub mod synthesis;`), `crates/temper-next/src/main.rs` (drop `Synthesize`), delete synthesis-only tests
@@ -627,6 +646,18 @@ Expected: PASS.
 ```bash
 git add -A && git commit -m "WS6 collapse: surface-parity gate green (8 surfaces) + cursor test"
 ```
+
+### Task 11: Delete `synthesis/` + the `Synthesize` subcommand (re-sequenced from Phase 1 Task 5)
+
+Runs here because only now — after Task 10 amended `surface_parity_next.rs` off `synthesis::run`, and Task 8 deleted `backend_{read,write}_path_next.rs` — does **no** caller of `temper_next::synthesis::run` remain, so the `--workspace --all-features` clippy gate stays green when the module is deleted. Execute the original Task 5 steps (lines ~247–282) plus the adjudication folded into the Task 5 callout:
+
+- [ ] **Step 1:** `rg -n "synthesis::|mod synthesis|Synthesize \{|RunOpts|seed_and_synthesize" crates/ tests/` — every hit is now a deletion target (only unrelated prose "Synthesize" comments may remain).
+- [ ] **Step 2:** `git rm -r crates/temper-next/src/synthesis`; drop `pub mod synthesis;` from `lib.rs`.
+- [ ] **Step 3:** remove the `Synthesize { limit }` variant + match arm + `synthesis::{self, RunOpts}` import from `main.rs` (keep `Materialize`).
+- [ ] **Step 4:** delete the now-dead `scenario::bootseed::system_event_type_names` fn (confirm uncalled first); keep the rest of `bootseed`.
+- [ ] **Step 5:** delete synthesis-only test files: `tests/synthesis.rs`, `tests/synthesis_bootstrap.rs`, `tests/synthesis_source.rs`, `tests/parity_reads.rs` (synthesis-output validation — retires with synthesis). KEEP `tests/corpus_parity_reads.rs`. Prune `common/mod.rs` helpers (`seed_and_synthesize`/`seed_prod_shape_fixture`) only if uncalled by surviving tests.
+- [ ] **Step 6:** fix the two intra-doc links that referenced `crate::synthesis::source` (`readback/mod.rs:676`, `writes.rs:10`) — reword (the link target is gone).
+- [ ] **Step 7:** `cargo make check` clean + `cargo nextest run -p temper-next` no failures → commit `WS6 collapse: delete synthesis/ scaffolding + the Synthesize subcommand`.
 
 ---
 
