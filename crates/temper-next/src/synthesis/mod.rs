@@ -12,7 +12,6 @@
 //! the typed `public.*` reads live in [`source`].
 
 pub mod bootstrap;
-pub mod key_fate;
 pub mod parity;
 pub mod source;
 
@@ -193,7 +192,7 @@ pub async fn run(pool: &PgPool, opts: RunOpts) -> Result<SynthReport> {
         // keys become rows — `Die` title/slug/id/context, `Edge` temper-goal, and `ReconcileToDocType`
         // temper-type are skipped); then every `open_meta` key verbatim (no fate consultation).
         let managed = manifest_entries(&r.managed_meta)
-            .filter(|(key, _)| key_fate::key_fate(key) == key_fate::KeyFate::Property);
+            .filter(|(key, _)| crate::keys::key_fate(key) == crate::keys::KeyFate::Property);
         // Dedup identical `(key, value)` pairs across the two sources: `kb_properties`' active grain is
         // `(owner, property_key, property_value)`, so the SAME assertion appearing in both manifests
         // (observed in production: a `date` key carried in both `managed_meta` and `open_meta` with an

@@ -26,7 +26,7 @@ use serde_json::{Map, Value};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::synthesis::key_fate::is_managed_property_key;
+use crate::keys::is_managed_property_key;
 
 /// Why a single-resource readback (`resource_row`/`meta`/`body`, via `ensure_visible`) failed, typed so
 /// the surface can map each mode to the right HTTP status. The alternative — string-matching one
@@ -385,7 +385,7 @@ pub async fn enriched_list(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReconstructedMeta {
     /// Surviving managed (workflow + provenance) keys — those in
-    /// [`crate::synthesis::key_fate::MANAGED_PROPERTY_KEYS`] — with values verbatim.
+    /// [`crate::keys::MANAGED_PROPERTY_KEYS`] — with values verbatim.
     pub managed: Map<String, Value>,
     /// Open (user-defined) keys, verbatim.
     pub open: Map<String, Value>,

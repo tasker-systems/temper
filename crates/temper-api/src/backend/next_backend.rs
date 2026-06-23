@@ -23,8 +23,8 @@ use temper_core::types::graph;
 use temper_core::types::ids::{ContextId, DocTypeId, ProfileId, ResourceId};
 use temper_core::types::resource::ResourceRow;
 
+use temper_next::keys::{key_fate, KeyFate};
 use temper_next::readback;
-use temper_next::synthesis::key_fate::{key_fate, KeyFate};
 use temper_next::writes;
 
 /// Bridge a temper-next (`anyhow`) error into `TemperError` without naming `anyhow` (temper-api does not
