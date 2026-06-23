@@ -253,37 +253,22 @@ git commit --no-verify -m "ws6-flip: db-collapsed builds substrate in public; dr
 
 ---
 
-## Task 4: Regenerate the temper-api + e2e sqlx caches against `public`
+## Task 4: Regenerate the temper-api + e2e sqlx caches against `public` — DEFERRED to after the test surface
 
-**Files:**
-- Modify: `crates/temper-api/.sqlx/` (regenerated), `tests/e2e/.sqlx/` (regenerated)
+> **SEQUENCING CORRECTION (discovered at execution).** `cargo make prepare-api`/`prepare-e2e` run `cargo sqlx prepare -- --all-targets`, which compiles the **test** targets. Those targets still reference deleted services (`edge_ingest_test`, `relationship_write_test`, `meta_test`, `mcp_round_trip_test`, …), so the full cache regen **cannot complete until the test surface is fixed** (Tasks 8–9). The lib itself is already live-green (Task 3) — only the test targets block. Therefore:
+> - **Task 4 moves to run AFTER Task 9** (it becomes the cache-regen step folded into the end-of-branch sequence; see Task 11 Step 1, which already does the full regen).
+> - **Tasks 5–9 verify LIVE**, not offline: run their focused tests/checks with `SQLX_OFFLINE=false` and `DATABASE_URL=postgresql://temper:temper@localhost:5437/temper_development` (the public substrate built by `cargo make db-collapsed`). No offline cache covers the test targets until the surface compiles, so offline verification is impossible mid-surface and live validation is the correct gate.
+> - The first true **`SQLX_OFFLINE` green** checkpoint is therefore **Task 11**, not here.
 
-**Interfaces:**
-- Consumes: live-green temper-api (Task 3).
-- Produces: the first **`SQLX_OFFLINE` green** checkpoint of the branch.
-
-- [ ] **Step 1: Regenerate both caches**
-
+When the test surface compiles (post-Task 9), regenerate and verify offline:
 ```bash
-cargo make prepare-api
-cargo make prepare-e2e
-```
-
-- [ ] **Step 2: Verify offline build is green**
-
-```bash
-SQLX_OFFLINE=true cargo check -p temper-api --all-features 2>&1 | tail -3
-SQLX_OFFLINE=true cargo check -p temper-e2e --all-features 2>&1 | tail -3
-```
-Expected: both `Finished` with 0 errors. This is the first point the offline build (what CI and the pre-commit hook run) is green.
-
-- [ ] **Step 3: Commit**
-
-```bash
+cargo make db-collapsed     # fresh public substrate
+cargo make prepare-api && cargo make prepare-e2e
+SQLX_OFFLINE=true cargo check -p temper-api --all-features 2>&1 | tail -3   # expect Finished, 0 errors
+SQLX_OFFLINE=true cargo check -p temper-e2e --all-features 2>&1 | tail -3   # expect Finished, 0 errors
 git add crates/temper-api/.sqlx tests/e2e/.sqlx
 git commit --no-verify -m "ws6-flip: regenerate temper-api + e2e sqlx caches against public"
 ```
-> Still `--no-verify`: the temper-next suite + the test surface aren't green until Tasks 6 & 8.
 
 ---
 
