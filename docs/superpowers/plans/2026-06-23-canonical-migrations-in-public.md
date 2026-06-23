@@ -140,24 +140,43 @@ ON CONFLICT (name) DO UPDATE
   SET payload_schema = EXCLUDED.payload_schema, schema_version = EXCLUDED.schema_version;
 
 -- 4. The 2 global system lenses, event-sourced via lens_create (cogmap_id NULL), attributed to
---    the system actor. Exact weight vectors from system.yaml.
+--    the system actor. GROUNDED against migrations/20260624000002_canonical_functions.sql:
+--    `lens_create(p_payload jsonb, p_emitter uuid)` — a NESTED jsonb payload + emitter (NOT
+--    positional weight args). `_project_lens_created` reads these exact keys:
+--      lens_id (mint via uuid_generate_v7), cogmap_id (NULL=global), name,
+--      selection_kind ('homed' — bootseed value + the column default),
+--      weights{express,contains,leads_to,near,prop}, salience{telos,ref,central}, resolution.
+--    NOTE the salience key is `ref` (what the projector reads), even though the Rust struct field
+--    is `reference` — use the projector's key in raw JSON. Weight values are the EXACT vectors from
+--    system.yaml. The emitter is the system entity.
 SELECT lens_create(
-  NULL,                              -- cogmap_id (global)
-  'telos-default',
-  (SELECT id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id
-    WHERE p.handle = 'system' AND e.name = 'system'),  -- emitter
-  1.0, 1.0, 0.6, 0.3, 0.4,           -- w_express, w_contains, w_leads_to, w_near, w_prop
-  0.5, 0.3, 0.2, 0.5                 -- s_telos, s_ref, s_central, resolution
+  jsonb_build_object(
+    'lens_id',        uuid_generate_v7(),
+    'cogmap_id',      NULL,
+    'name',           'telos-default',
+    'selection_kind', 'homed',
+    'weights',  jsonb_build_object('express',1.0,'contains',1.0,'leads_to',0.6,'near',0.3,'prop',0.4),
+    'salience', jsonb_build_object('telos',0.5,'ref',0.3,'central',0.2),
+    'resolution',     0.5
+  ),
+  (SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id
+    WHERE p.handle = 'system' AND e.name = 'system')
 );
 SELECT lens_create(
-  NULL, 'telos-default-propheavy',
-  (SELECT id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id
-    WHERE p.handle = 'system' AND e.name = 'system'),
-  1.0, 1.0, 0.1, 0.3, 1.2,
-  0.5, 0.3, 0.2, 0.5
+  jsonb_build_object(
+    'lens_id',        uuid_generate_v7(),
+    'cogmap_id',      NULL,
+    'name',           'telos-default-propheavy',
+    'selection_kind', 'homed',
+    'weights',  jsonb_build_object('express',1.0,'contains',1.0,'leads_to',0.1,'near',0.3,'prop',1.2),
+    'salience', jsonb_build_object('telos',0.5,'ref',0.3,'central',0.2),
+    'resolution',     0.5
+  ),
+  (SELECT e.id FROM kb_entities e JOIN kb_profiles p ON p.id = e.profile_id
+    WHERE p.handle = 'system' AND e.name = 'system')
 );
 ```
-> VERIFY-THEN-ACT: confirm `lens_create`'s exact parameter list and order against `migrations/20260624000002_canonical_functions.sql` (the artifact's `02_functions.sql` definition) before finalizing — the positional args above are from `system.yaml`'s field set and MUST match the function signature. Adjust to named-arg or correct positional order as the signature dictates. Likewise confirm `kb_event_types` columns (`name`, `payload_schema`, `schema_version`) and the `kb_entities` unique constraint for the `ON CONFLICT`.
+> VERIFY-THEN-ACT: confirm `kb_event_types` columns (`name`, `payload_schema`, `schema_version`) and the `kb_entities` constraint backing the `ON CONFLICT` against `migrations/20260624000001_canonical_schema.sql` before finalizing. After loading, assert the 2 lens rows carry the right weights (`SELECT name, w_express, w_leads_to, w_prop, s_ref FROM kb_cogmap_lenses WHERE cogmap_id IS NULL`) — this proves the nested-JSON keys (esp. `salience.ref`) projected correctly.
 
 - [ ] **Step 2: Inline the payload schemas**
 
@@ -584,6 +603,12 @@ Replace the parenthetical *"No `_sqlx_migrations` reconciliation needed… the b
     i.   Structural safety check (HARD GATE):
          `pg_dump --schema-only` of live `public` vs. a fresh DB built from `migrations/`; diff must
          be empty (both derive from the same artifact). Abort the reconciliation if it is not.
+         NOTE (Task 1 finding): the canonical baseline self-provisions the `vector` extension and
+         the `uuid_generate_v7()` generator (the artifact assumed a host `public` already had them).
+         The live promoted `public` gets them via runbook step 7. The `pg_dump` includes extensions,
+         so confirm both sides provision them identically (extension residency + the uuid compat
+         shim) or the diff will be non-empty for a benign reason — reconcile the provisioning, don't
+         hand-wave the diff.
     ii.  Compute the 3 baseline checksums sqlx will expect:
          `sqlx migrate info --source migrations` against a fresh baseline DB (or read the
          `_sqlx_migrations` rows it writes there).
