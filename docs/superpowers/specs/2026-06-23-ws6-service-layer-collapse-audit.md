@@ -58,12 +58,25 @@ So full retirement requires retiring the `read_selector` Legacy arms **and** the
 - **doc-type-by-UUID is dead.** `handlers/resources.rs:183` + `read_selector.rs:129` pass `kb_doc_type_id`; the wire must carry the doc-type **name** (substrate stores it as a property string; `NextBackend` already passes the name through).
 - **Heavy test surface** (`edge_ingest_test`, `relationship_projection_test`, `tests/e2e/mcp_*`, `audit_test`) calls these services directly — rewrite/retire alongside.
 
-## Open product decisions (block the design — see the session for the dispatched question)
-1. **Frontmatter→edge derivation** (`extract_and_upsert_edges` create / `reconcile_edges` update): not in `NextBackend`. Port into the substrate create/update path, or retire the feature?
-2. **Pending-slug forward-reference reprojection** (`reproject_pending_for_resource`): no substrate equivalent (slug §7-dissolved). If frontmatter edges are kept, this semantic is lost unless redesigned (e.g. by origin_uri/id).
-3. **Create-time schema validation + doc-type defaults + system-field strip + body-hash dedup** (`validate_managed_meta`/`apply_*_defaults`/`strip_system_managed_fields`/`find_by_body_hash`): `NextBackend::create_resource` runs none of these today. Lift the pure helpers into the substrate create path, or accept the contract change?
-4. **Search semantics**: accept the substrate's FTS-or-vector path (no blended scoring, no graph-expand, no embedding-dim validation), or re-home `compute_weights`/`validate_params`/graph-expand into `next_impl::search`?
-5. **Context-created event**: drop it (contexts are infra, not cognition), or model it via `_event_append`?
+## Resolved product decisions (2026-06-23, with the user)
+1. **Frontmatter→edge derivation → RETIRE the feature.** Drop `extract_and_upsert_edges`/`reconcile_edges`; edges are asserted explicitly (substrate model). This also **moots decision 2** — pending-slug forward-reference reprojection (`reproject_pending_for_resource`) retires with it (no slug-forward-ref to preserve). `extract_declarations_from_resource` becomes dead.
+2. *(folded into 1 — retired.)*
+3. **Create-time guards → LIFT into the substrate create path.** Re-home `validate_managed_meta` + `apply_*_defaults` + `strip_system_managed_fields` + body-hash dedup (`find_by_body_hash`, rewritten against `kb_resources.body_hash`) into `NextBackend::create_resource`. Preserves the CLAUDE.md "schema-required defaults at create/update" rule + dedup. These pure helpers survive the `ingest_service` retirement.
+4. **Search semantics → ACCEPT the substrate FTS-or-vector path now.** Ship `readback::fts_search`/`vector_search` (the parity floor checks the matching id-set, not scores/order). Blended FTS+vector scoring, graph-expansion, and embedding-dim validation become a **separate search-quality follow-up arc** (named, deferred). `search_service` + `compute_weights`/`validate_params` retire.
+5. **Context-created event → DROP.** Contexts are infra, not cognition; no `_event_append` for context creation. `context_service::create` becomes a plain substrate INSERT.
 
-## Staging implication
-The collapse is not one atomic Task 8. It is: identity-graft-into-artifact + the per-service ports/retires above + the MCP/handler wire-shape changes + the test rewrites, landing so that after de-qualification every temper-api macro resolves against one schema and `prepare-api` regenerates a coherent cache. The atomic-commit constraint still holds for the final flip, but the ports can land as independent additive prep (like T6) ahead of it.
+## Staging / revised task structure (decision 4: additive ports first, then the atomic flip)
+The collapse is NOT one atomic Task 8. Restructure into **additive prep chunks** (each independently reviewable + green, like the T6 graph port — they add substrate-resolving code/ports without removing the legacy path) followed by **the final atomic flip** (de-qualify + retire + remove flag/migrate + cache regen, one commit):
+
+**Additive prep (land independently, ahead of the flip):**
+- **A. Identity graft into the local artifact** — fold the canonical-layer-draft's DDL half into `schema-artifact/01_schema.sql` (re-add `kb_profiles.email`/`preferences`; graft the 7 infra tables + enums; **add the missing `has_system_access`/`is_system_admin` functions**, `kb_teams.is_active` predicate dropped). Data carry-over stays runbook-only. Prereq for access/profile to resolve + `prepare-api` to pass.
+- **B. Port `profile_service`** onto the substrate (slug→handle, reshape `Profile`, kb_contexts auto-insert) — gated/parallel to legacy until the flip.
+- **C. Port `access_service`** (drop `kb_teams.is_active`; fix `kb_team_members` insert; port `emit_join_request_event` → `_event_append`).
+- **D. Port `context_service`** (inline context-visibility predicate; resource-count via `kb_resource_homes`; `owner_table` rename + slug; drop the create event).
+- **E. Port `edge_service::list_resource_edges`** over `kb_edges`+`edges_visible_to`.
+- **F. Lift create-time guards** (validation/defaults/strip/dedup) into the `NextBackend` create path.
+- **G. Repoint the 3 read_selector-bypass surfaces** (MCP resources-protocol, HTTP `?meta_only=true` + new selector arm, MCP `enrich_resources`) to `readback`; wire-shape change doc-type-by-id → by-name (`handlers/resources.rs:183`, `read_selector.rs:129`).
+
+**The atomic flip (one commit, was Task 8):** de-qualify all SQL + drop search_path hooks; collapse `read_selector` in place; rename `NextBackend`→`DbBackend`; **RETIRE** `sync_service`/`doc_type_service`/`search_service`/`relationship_service`/`meta_service` + `resource_service` write fns + `ingest_service` (now that their callers are repointed/ported by the prep chunks); remove boot `migrate!` + flag; temper-events `kb_scopes`/`porosity` retirement; regen all caches. Then the original T9/T10/T11 (caches/parity-gate/synthesis-deletion).
+
+This keeps every prep chunk small and reviewable; the atomic commit shrinks to "de-qualify + retire-the-now-dead + remove-flag," with all the substantive ports already landed and green.
