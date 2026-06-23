@@ -70,13 +70,12 @@ Copy `schema-artifact/02_functions.sql` → `migrations/20260624000002_canonical
 
 ```bash
 cd /Users/petetaylor/projects/tasker-systems/temper
-git rm migrations/2026033*.sql migrations/2026040*.sql migrations/2026041*.sql \
-       migrations/2026042*.sql migrations/2026050*.sql migrations/2026051*.sql \
-       migrations/2026052*.sql migrations/2026061*.sql migrations/2026062*.sql
-# Then re-add the 2 new baseline files (the glob above must NOT match them — verify):
+# Delete every legacy migration EXCEPT the new 20260624 baseline files (legacy ends at 20260623).
+# A naive glob like 2026062*.sql would also match the new 20260624 files — exclude them explicitly.
+ls migrations/2026*.sql | grep -v '/20260624' | xargs git rm
 ls migrations/*.sql
 ```
-Expected: only `20260624000001_canonical_schema.sql` and `20260624000002_canonical_functions.sql` remain. Confirm `migrations/templates/` and `migrations/CLAUDE.md` are untouched. If `tools/gen-install-migration.sh` exists, `git rm` it.
+Expected: only `20260624000001_canonical_schema.sql` and `20260624000002_canonical_functions.sql` remain (the seed lands in Task 2). Confirm `migrations/templates/` and `migrations/CLAUDE.md` are untouched. If `tools/gen-install-migration.sh` exists, `git rm` it.
 
 - [ ] **Step 4: Verify the baseline builds public on a throwaway DB**
 
