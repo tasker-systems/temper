@@ -12,6 +12,7 @@ pub mod events;
 pub mod fingerprint;
 pub mod ids;
 pub mod keys;
+pub mod parity;
 pub mod payloads;
 pub mod readback;
 pub mod replay;

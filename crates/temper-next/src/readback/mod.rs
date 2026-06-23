@@ -15,7 +15,7 @@
 //! gate denies.
 //!
 //! All reads are runtime, schema-qualified `sqlx::query` (NEVER the `query!`/`query_as!` macros), same
-//! discipline as [`crate::synthesis::source`] and [`crate::synthesis::parity`]: the temper-next macro
+//! discipline as the synthesis read path (now retired) and [`crate::parity`]: the temper-next macro
 //! cache resolves against the `temper_next` search_path, so a compile-time macro over `public.*` would
 //! conflict. Qualifying every table keeps the reads correct regardless of the connection's search_path.
 
@@ -588,8 +588,8 @@ pub async fn resource_row(
 }
 
 /// Reconstruct a synthesized resource's markdown body from `temper_next` chunks — the §9 body read
-/// floor. Reuses [`crate::synthesis::parity::reconstruct_body`] (the production `get_content` assembly)
-/// over the shared [`crate::synthesis::parity::new_substrate_chunks`] reader, so the read surface and
+/// floor. Reuses [`crate::parity::reconstruct_body`] (the production `get_content` assembly)
+/// over the shared [`crate::parity::new_substrate_chunks`] reader, so the read surface and
 /// the §8 synthesis gate share one algorithm (CONFORM, no second body assembler).
 ///
 /// Keys the shared reader by `new_id` directly — the synthesized resource id (preserved verbatim from
@@ -605,8 +605,8 @@ pub async fn body(
     new_id: Uuid,
 ) -> std::result::Result<String, ReadbackError> {
     ensure_visible(pool, principal, new_id).await?;
-    let chunks = crate::synthesis::parity::new_substrate_chunks(pool, new_id).await?;
-    Ok(crate::synthesis::parity::reconstruct_body(&chunks))
+    let chunks = crate::parity::new_substrate_chunks(pool, new_id).await?;
+    Ok(crate::parity::reconstruct_body(&chunks))
 }
 
 /// Port of production's FTS read (`search_service::search`, FTS-only) onto `temper_next.*` — the §9
@@ -625,7 +625,7 @@ pub async fn body(
 /// `rebuild_resource_search_vector` (migration 20260405000001), whose A-weight is `title || slug`: §7
 /// dissolved slug, so §9 rebuilds FTS title-only. The body is the RAW current-chunk content
 /// space-joined (`string_agg(content, ' ')`), exactly as production aggregates it — NOT the
-/// heading-prefixed assembled markdown [`crate::synthesis::parity::reconstruct_body`] produces (that's
+/// heading-prefixed assembled markdown [`crate::parity::reconstruct_body`] produces (that's
 /// the `get_content` body, wrong for FTS). Config is `'english'` (production's default).
 ///
 /// Because production ranks slug@A and readback structurally cannot, absolute `ts_rank` and the order
