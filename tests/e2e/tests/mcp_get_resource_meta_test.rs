@@ -12,6 +12,7 @@
 
 mod common;
 
+use temper_api::backend::BackendSelection;
 use temper_api::services::{context_service, ingest_service, resource_service};
 use temper_core::types::ids::{ProfileId, ResourceId};
 
@@ -108,9 +109,14 @@ async fn enrich_resource_round_trips_managed_and_open(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, &row)
-        .await
-        .expect("enrich_resource");
+    let enriched = temper_mcp::tools::resources::enrich_resource(
+        BackendSelection::Legacy,
+        &pool,
+        *profile_id,
+        &row,
+    )
+    .await
+    .expect("enrich_resource");
 
     let managed = enriched
         .managed_meta
@@ -148,9 +154,14 @@ async fn enrich_resource_surfaces_empty_open_meta(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched = temper_mcp::tools::resources::enrich_resource(&pool, &row)
-        .await
-        .expect("enrich_resource");
+    let enriched = temper_mcp::tools::resources::enrich_resource(
+        BackendSelection::Legacy,
+        &pool,
+        *profile_id,
+        &row,
+    )
+    .await
+    .expect("enrich_resource");
 
     assert!(
         enriched.managed_meta.is_some(),
@@ -194,9 +205,14 @@ async fn enrich_resources_includes_meta_for_every_row(pool: sqlx::PgPool) {
     )
     .await;
 
-    let enriched = temper_mcp::tools::resources::enrich_resources(&pool, &[row_a, row_b])
-        .await
-        .expect("enrich_resources");
+    let enriched = temper_mcp::tools::resources::enrich_resources(
+        BackendSelection::Legacy,
+        &pool,
+        *profile_id,
+        &[row_a, row_b],
+    )
+    .await
+    .expect("enrich_resources");
 
     assert_eq!(enriched.len(), 2);
     let stage_of = |slug: &str| -> Option<String> {

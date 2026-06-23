@@ -7,7 +7,7 @@ use crate::backend::select_backend;
 use crate::error::{ApiError, ApiResult, ErrorBody};
 use crate::middleware::auth::{AuthUser, DeviceId};
 use crate::services::resource_service::{
-    self, ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
+    ResourceCreateRequest, ResourceListParams, ResourceListResponse, ResourceRow,
     ResourceUpdateRequest,
 };
 use crate::services::{context_service, ingest_service};
@@ -72,8 +72,13 @@ pub async fn list(
     Query(params): Query<ResourceListParams>,
 ) -> ApiResult<ListResourcesResponse> {
     if params.meta_only.unwrap_or(false) {
-        let response =
-            resource_service::list_visible_meta(&state.pool, auth.0.profile.id, params).await?;
+        let response = crate::backend::read_selector::list_meta_select(
+            state.backend_selection,
+            &state.pool,
+            auth.0.profile.id,
+            params,
+        )
+        .await?;
         Ok(ListResourcesResponse::Meta(response))
     } else {
         let response = crate::backend::read_selector::list_select(
