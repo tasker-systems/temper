@@ -303,13 +303,13 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn generate_handle_from_display_name(pool: PgPool) {
         let handle = generate_profile_handle(&pool, "Pete Taylor").await.unwrap();
         assert_eq!(handle, "pete-taylor");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn generate_handle_handles_special_chars(pool: PgPool) {
         let handle = generate_profile_handle(&pool, "José García-López")
             .await
@@ -317,7 +317,7 @@ mod tests {
         assert_eq!(handle, "jos-garc-a-l-pez");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn generate_handle_handles_collision(pool: PgPool) {
         // Create a profile that will own the "collider" handle
         let claims = AuthClaims {
@@ -336,7 +336,7 @@ mod tests {
         assert_eq!(handle, "collider-2");
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn verified_email_reconciles_to_existing_profile(pool: PgPool) {
         let claims_a = AuthClaims {
             provider: "provider_a".to_string(),
@@ -364,7 +364,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn unverified_email_creates_separate_profile(pool: PgPool) {
         let claims_a = AuthClaims {
             provider: "provider_a".to_string(),
@@ -392,7 +392,7 @@ mod tests {
         );
     }
 
-    #[sqlx::test]
+    #[sqlx::test(migrations = "../../migrations")]
     async fn missing_email_verified_creates_separate_profile(pool: PgPool) {
         let claims_a = AuthClaims {
             provider: "provider_a".to_string(),
