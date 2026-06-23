@@ -19,7 +19,7 @@ use crate::content::prepare_block;
 use crate::events::{fire, EdgeHome, SeedAction};
 use crate::ids::{CogmapId, ContextId, EdgeId, EntityId, InvocationId, ProfileId, ResourceId};
 use crate::payloads::{self, AnchorRef, EdgePolarity};
-use crate::synthesis::bootstrap::slugify;
+use crate::text::slugify;
 
 // ── identity resolution (natural-key) ───────────────────────────────────────────
 

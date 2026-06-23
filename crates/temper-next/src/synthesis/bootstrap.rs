@@ -117,7 +117,7 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
             .slug
             .clone()
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| slugify(&p.display_name));
+            .unwrap_or_else(|| crate::text::slugify(&p.display_name));
         let new_id = insert_profile(&mut tx, p.id, &handle, &p.display_name).await?;
         profile_id_by_old.insert(p.id, new_id);
     }
@@ -176,7 +176,7 @@ pub async fn run(pool: &PgPool, resources: &[SourceResource]) -> Result<Bootstra
             })?,
             other => anyhow::bail!("context {old} has unsupported owner_table {other:?}"),
         };
-        let slug = slugify(&ctx.name);
+        let slug = crate::text::slugify(&ctx.name);
         let new_id =
             insert_context(&mut tx, old, &ctx.owner_table, owner_id, &slug, &ctx.name).await?;
         // Team-owned context → the §2-amended auto-share. Owner stays purely namespace-scoping;
@@ -348,17 +348,4 @@ struct SurfaceMeta<'a> {
 /// metadata at emit time, never here (§1b).
 fn surface_meta(surface: &str) -> Result<serde_json::Value> {
     Ok(serde_json::to_value(SurfaceMeta { surface })?)
-}
-
-/// Lowercase alphanumeric-or-dash slug (mirrors the surfaces' `slugify`); the fallback when a source
-/// profile has no slug. Shared with the access-scenario loader's context-slug derivation.
-pub(crate) fn slugify(s: &str) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c } else { '-' })
-        .collect::<String>()
-        .split('-')
-        .filter(|seg| !seg.is_empty())
-        .collect::<Vec<_>>()
-        .join("-")
 }
