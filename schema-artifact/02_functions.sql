@@ -1373,5 +1373,53 @@ LANGUAGE sql STABLE AS $$
 $$;
 
 -- ============================================================================
+-- SYSTEM ACCESS GATE (WS6 graft) — instance-access predicates over kb_system_settings
+-- ----------------------------------------------------------------------------
+-- Ported from migrations/20260407000001_system_access_gate.sql:50-90 onto the substrate. The legacy
+-- `AND t.is_active = true` predicate on the kb_teams join is DROPPED — the substrate kb_teams is
+-- (id, slug, name, created) with no is_active column. open ⇒ everyone; invite_only ⇒ members of the
+-- gating team; admin ⇒ an 'owner' member of the gating team.
+-- ============================================================================
+
+CREATE FUNCTION has_system_access(p_profile_id UUID) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+    WITH settings AS (
+        SELECT access_mode, gating_team_slug
+          FROM kb_system_settings
+         LIMIT 1
+    )
+    SELECT CASE
+        WHEN settings.access_mode = 'open' THEN true
+        WHEN settings.access_mode = 'invite_only' THEN EXISTS (
+            SELECT 1
+              FROM kb_team_members tm
+              JOIN kb_teams t ON t.id = tm.team_id
+             WHERE tm.profile_id = p_profile_id
+               AND t.slug = settings.gating_team_slug
+        )
+        ELSE false
+    END
+      FROM settings
+$$;
+
+CREATE FUNCTION is_system_admin(p_profile_id UUID) RETURNS BOOLEAN
+LANGUAGE SQL STABLE AS $$
+    WITH settings AS (
+        SELECT gating_team_slug
+          FROM kb_system_settings
+         LIMIT 1
+    )
+    SELECT EXISTS (
+        SELECT 1
+          FROM kb_team_members tm
+          JOIN kb_teams t ON t.id = tm.team_id
+         WHERE tm.profile_id = p_profile_id
+           AND t.slug = settings.gating_team_slug
+           AND tm.role = 'owner'
+    )
+      FROM settings
+$$;
+
+-- ============================================================================
 -- End of 02_functions.sql. Seed → 03_seed.sql; scenarios → 04_scenarios.sql.
 -- ============================================================================

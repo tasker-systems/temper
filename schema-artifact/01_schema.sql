@@ -22,9 +22,12 @@
 -- the ones with DDL consequence are marked [LEAN→DECISION] inline below.
 --
 -- Out of scope for this artifact (operational/sync Domain-A tables not central to
--- evaluating the cognitive-map model): kb_blob_files, kb_ingestion_records,
--- kb_device_sync_state, kb_transfers, kb_team_invitations, kb_join_requests,
--- kb_profile_auth_links, kb_resource_search_index (FTS rebuilt by trigger in prod).
+-- evaluating the cognitive-map model): kb_device_sync_state, kb_resource_search_index
+-- (FTS rebuilt by trigger in prod).
+-- WS6 GRAFT: the operational identity/infra tables (kb_profile_auth_links, kb_system_settings,
+-- kb_join_requests, kb_team_invitations, kb_transfers, kb_blob_files, kb_ingestion_records) are now
+-- folded in below (§"GRAFTED IDENTITY / INFRA LAYER") so the ported access/profile/context services
+-- resolve against a single canonical schema.
 -- ============================================================================
 
 -- Namespace-resident DDL body — NO `DROP SCHEMA`/`CREATE SCHEMA` here. The destructive test-reset
@@ -59,6 +62,13 @@ CREATE TYPE system_access AS ENUM ('none', 'approved', 'admin');
 -- NEW: tags a block-provenance contribution's source (content-block §DDL).
 CREATE TYPE provenance_source_kind AS ENUM ('event', 'resource');
 
+-- WS6 graft: status enums for the grafted operational/identity infra layer (kb_join_requests,
+-- kb_team_invitations, kb_transfers). team_role already exists above; porosity stays RETIRED. Label
+-- sets + order are byte-faithful to the legacy public enums.
+CREATE TYPE join_request_status AS ENUM ('pending', 'approved', 'rejected', 'withdrawn');
+CREATE TYPE invitation_status   AS ENUM ('pending', 'accepted', 'declined', 'expired');
+CREATE TYPE transfer_status     AS ENUM ('pending', 'accepted', 'declined', 'cancelled');
+
 -- RETIRED (intentionally absent): `access_level` (vault|mutable|immutable) →
 -- replaced by four boolean columns on kb_resource_access; `porosity`
 -- (access|attention) → dropped, visibility is teams:RBAC.
@@ -73,6 +83,8 @@ CREATE TABLE kb_profiles (
     handle        TEXT NOT NULL UNIQUE,
     display_name  TEXT NOT NULL,
     system_access system_access NOT NULL DEFAULT 'none',
+    email         VARCHAR(256),                          -- WS6 graft: re-added (was dropped in substrate)
+    preferences   JSONB NOT NULL DEFAULT '{}'::jsonb,    -- WS6 graft: re-added (was dropped in substrate)
     created       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -256,6 +268,130 @@ CREATE TABLE kb_resource_access (
 );
 CREATE INDEX idx_kb_resource_access_anchor   ON kb_resource_access(anchor_table, anchor_id);
 CREATE INDEX idx_kb_resource_access_resource ON kb_resource_access(resource_id);
+
+-- ============================================================================
+-- GRAFTED IDENTITY / INFRA LAYER (WS6) — operational tables the kernel omitted
+-- ----------------------------------------------------------------------------
+-- The substrate kernel deliberately omits the operational/identity tables (see the §"Out of scope"
+-- header). WS6 folds them back in (the live-cutover graft DDL,
+-- docs/superpowers/specs/2026-06-22-ws6-canonical-layer-draft.sql:69-174). Verbatim from the legacy
+-- public DDL — columns/types/lengths/nullability/defaults/PK/UNIQUE/CHECK/FK actions/indexes — with
+-- FKs targeting substrate-present ids (kb_profiles / kb_teams / kb_resources). Data carry-over stays
+-- runbook-only (not in this artifact).
+--
+-- NOTE [harmonization, follow-up]: public PK id-defaults are inconsistent (bare UUID = app-supplied;
+-- kb_blob_files = gen_random_uuid()); the substrate convention is uuid_generate_v7(). Left verbatim
+-- here to stay faithful to the source DDL; unify to uuid_generate_v7() when this becomes a real
+-- migration.
+-- ============================================================================
+
+-- ── Identity / auth ──────────────────────────────────────────────────────────
+CREATE TABLE kb_profile_auth_links (
+    id                    UUID PRIMARY KEY,
+    profile_id            UUID NOT NULL REFERENCES kb_profiles(id) ON DELETE CASCADE,
+    auth_provider         VARCHAR(32) NOT NULL,
+    auth_provider_user_id VARCHAR(128) NOT NULL,
+    email                 VARCHAR(256),
+    is_default            BOOLEAN NOT NULL DEFAULT false,
+    linked_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(auth_provider, auth_provider_user_id)
+);
+CREATE INDEX idx_auth_links_profile ON kb_profile_auth_links(profile_id);
+CREATE INDEX idx_auth_links_email   ON kb_profile_auth_links(email);
+
+-- ── Instance access gate ───────────────────────────────────────────────────────
+CREATE TABLE kb_system_settings (
+    id                  INTEGER PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    access_mode         VARCHAR(16) NOT NULL DEFAULT 'open'
+        CHECK (access_mode IN ('open', 'invite_only')),
+    gating_team_slug    VARCHAR(128),
+    terms_version       VARCHAR(32),
+    terms_resource_uri  TEXT,
+    instance_name       VARCHAR(128),
+    updated             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE kb_join_requests (
+    id                       UUID PRIMARY KEY,
+    team_id                  UUID NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
+    requesting_profile_id    UUID NOT NULL REFERENCES kb_profiles(id) ON DELETE CASCADE,
+    status                   join_request_status NOT NULL DEFAULT 'pending',
+    message                  TEXT,
+    source                   VARCHAR(16) NOT NULL,
+    accepted_terms_version   VARCHAR(32),
+    accepted_terms_at        TIMESTAMPTZ,
+    reviewed_by_profile_id   UUID REFERENCES kb_profiles(id),
+    reviewed_at              TIMESTAMPTZ,
+    decision_note            TEXT,
+    created                  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated                  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_join_requests_one_pending
+    ON kb_join_requests (team_id, requesting_profile_id) WHERE status = 'pending';
+CREATE INDEX idx_join_requests_status_created
+    ON kb_join_requests (status, created DESC);
+
+-- ── Team invitations ───────────────────────────────────────────────────────────
+CREATE TABLE kb_team_invitations (
+    id                    UUID PRIMARY KEY,
+    team_id               UUID NOT NULL REFERENCES kb_teams(id) ON DELETE CASCADE,
+    invited_email         VARCHAR(256) NOT NULL,
+    invited_by_profile_id UUID NOT NULL REFERENCES kb_profiles(id),
+    role                  team_role NOT NULL,
+    token                 VARCHAR(128) NOT NULL UNIQUE,
+    status                invitation_status NOT NULL DEFAULT 'pending',
+    expires_at            TIMESTAMPTZ NOT NULL DEFAULT now() + INTERVAL '7 days',
+    created               TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE(team_id, invited_email)
+);
+CREATE INDEX idx_invitations_token ON kb_team_invitations(token);
+CREATE INDEX idx_invitations_email ON kb_team_invitations(invited_email);
+
+-- ── Ownership transfers ────────────────────────────────────────────────────────
+CREATE TABLE kb_transfers (
+    id              UUID PRIMARY KEY,
+    resource_id     UUID NOT NULL REFERENCES kb_resources(id),
+    from_profile_id UUID NOT NULL REFERENCES kb_profiles(id),
+    to_profile_id   UUID NOT NULL REFERENCES kb_profiles(id),
+    status          transfer_status NOT NULL DEFAULT 'pending',
+    created         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at     TIMESTAMPTZ,
+    UNIQUE(resource_id, from_profile_id, to_profile_id, status)
+);
+CREATE INDEX idx_transfers_to_profile   ON kb_transfers(to_profile_id)   WHERE status = 'pending';
+CREATE INDEX idx_transfers_from_profile ON kb_transfers(from_profile_id) WHERE status = 'pending';
+CREATE INDEX idx_transfers_resource     ON kb_transfers(resource_id);
+
+-- ── Blob/upload refs ──────────────────────────────────────────────────────────
+CREATE TABLE kb_blob_files (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),   -- see harmonization NOTE
+    profile_id      UUID NOT NULL REFERENCES kb_profiles(id),
+    resource_id     UUID REFERENCES kb_resources(id),
+    blob_url        TEXT NOT NULL,
+    pathname        TEXT NOT NULL,
+    content_type    TEXT,
+    file_size_bytes BIGINT,
+    status          TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'processing', 'processed', 'failed')),
+    error_message   TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_kb_blob_files_profile  ON kb_blob_files(profile_id);
+CREATE INDEX idx_kb_blob_files_resource ON kb_blob_files(resource_id);
+CREATE INDEX idx_kb_blob_files_status   ON kb_blob_files(status);
+
+-- ── Ingestion idempotency ─────────────────────────────────────────────────────
+CREATE TABLE kb_ingestion_records (
+    resource_id        UUID PRIMARY KEY REFERENCES kb_resources(id) ON DELETE CASCADE,
+    source_uri         TEXT NOT NULL,
+    source_mimetype    VARCHAR(128),
+    conversion_tool    VARCHAR(64) NOT NULL,
+    conversion_version VARCHAR(32) NOT NULL,
+    fetched_at         TIMESTAMPTZ NOT NULL,
+    converted_at       TIMESTAMPTZ NOT NULL,
+    source_hash        VARCHAR(64)
+);
 
 -- ============================================================================
 -- EVENT LEDGER — the append-only spine everything projects from
