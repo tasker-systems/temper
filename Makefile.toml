@@ -227,18 +227,19 @@ echo "target temper_next replaced. rows: $(psql "$FLIP_TARGET_URL" -tAc 'SELECT 
 '''
 
 [tasks.db-collapsed]
-description = "Load the substrate artifact into the local DB for collapsed-schema dev (search_path defaulted to temper_next)."
+description = "Build the canonical substrate in public for collapsed-schema dev."
 env = { SQLX_OFFLINE = "false" }
 script = '''
-# Collapsed-schema dev: the substrate (temper_next) IS the schema. Loading the artifact
-# (reset + schema + functions) and pointing the connection default at temper_next makes
-# de-qualified SQL resolve to the substrate — exactly as it will post-rename, when the
-# substrate is renamed to public. Mirrors prepare-next's load preamble.
+# Collapsed-schema dev: the substrate IS public. Build it from the 3-file canonical
+# baseline under the connection-default search_path, so de-qualified SQL resolves to
+# public — exactly the production shape. The baseline self-provisions the vector
+# extension and the uuid generator (no CREATE EXTENSION needed here).
 DB="${DATABASE_URL:-postgresql://temper:temper@localhost:5437/temper_development}"
-for f in 00_namespace_reset 01_schema 02_functions; do
-  psql "$DB" -v ON_ERROR_STOP=1 -f "schema-artifact/$f.sql" >/dev/null
+psql "$DB" -v ON_ERROR_STOP=1 -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"
+for f in migrations/20260624000001_canonical_schema.sql \
+         migrations/20260624000002_canonical_functions.sql \
+         migrations/20260624000003_canonical_seed.sql; do
+  psql "$DB" -v ON_ERROR_STOP=1 -f "$f" >/dev/null
 done
-echo "substrate loaded into temper_next."
-echo "For collapsed-schema dev, export:"
-echo "  export DATABASE_URL=\"${DB}?options=-csearch_path%3Dtemper_next,public\""
+echo "substrate built in public. export DATABASE_URL=\"$DB\" (no search_path option needed)."
 '''
