@@ -4,7 +4,7 @@ use reqwest::Method;
 
 use crate::error::Result;
 use crate::http::HttpClient;
-use temper_core::types::api::{EventCursorResponse, EventListParams, EventRow};
+use temper_core::types::api::EventCursorResponse;
 use uuid::Uuid;
 
 /// Sub-client for event listing.
@@ -21,15 +21,6 @@ impl std::fmt::Debug for EventClient<'_> {
 impl<'a> EventClient<'a> {
     pub(crate) fn new(http: &'a HttpClient) -> Self {
         Self { http }
-    }
-
-    /// List events, optionally filtered by resource or event type.
-    pub async fn list(&self, params: &EventListParams) -> Result<Vec<EventRow>> {
-        let token = self.http.resolve_token()?;
-        let req = self.http.get("/api/events").query(params);
-        self.http
-            .send_json(&Method::GET, "/api/events", req, Some(&token))
-            .await
     }
 
     /// GET /api/events/{kb_context_id}/cursor — the most recent event id for

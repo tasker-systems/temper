@@ -310,18 +310,6 @@ impl TemperMcpService {
     }
 
     #[tool(
-        description = "List events in the knowledge base. Useful for auditing and debugging. Optionally filter by resource ID or event type."
-    )]
-    async fn list_events(
-        &self,
-        Parameters(input): Parameters<temper_core::types::api::EventListParams>,
-        Extension(parts): Extension<http::request::Parts>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        self.ensure_profile_from_parts(&parts).await?;
-        tools::events::list_events(self, input).await
-    }
-
-    #[tool(
         description = "Get the authenticated user's profile, including display name, email, and preferences."
     )]
     async fn get_profile(

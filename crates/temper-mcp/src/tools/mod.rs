@@ -1,6 +1,5 @@
 pub mod contexts;
 pub mod doc_types;
-pub mod events;
 pub mod profiles;
 pub mod relationships;
 pub mod resources;

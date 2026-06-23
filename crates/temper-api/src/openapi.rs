@@ -4,8 +4,8 @@ use utoipa::{Modify, OpenApi};
 use crate::error::{ErrorBody, ErrorDetail};
 use crate::handlers::resources::ListResourcesResponse;
 use temper_core::types::api::{
-    EventCursorResponse, EventRow, HealthResponse, ProfileUpdateRequest, SearchParams,
-    SearchResultRow, UnifiedSearchResultRow,
+    EventCursorResponse, HealthResponse, ProfileUpdateRequest, SearchParams, SearchResultRow,
+    UnifiedSearchResultRow,
 };
 use temper_core::types::context::ContextRowWithCounts;
 use temper_core::types::managed_meta::ResourceMetaListResponse;
@@ -27,7 +27,6 @@ use temper_core::types::resource::{
         crate::handlers::profiles::get,
         crate::handlers::profiles::update,
         crate::handlers::profiles::list_auth_links,
-        crate::handlers::events::list,
         crate::handlers::events::cursor,
         crate::handlers::search::search,
         crate::handlers::meta::get_meta,
@@ -52,7 +51,6 @@ use temper_core::types::resource::{
         DeleteResponse,
         ContextRowWithCounts,
         ProfileUpdateRequest,
-        EventRow,
         EventCursorResponse,
         SearchParams,
         SearchResultRow,
