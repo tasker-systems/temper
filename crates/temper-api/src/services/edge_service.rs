@@ -656,6 +656,94 @@ pub async fn list_resource_edges(
     Ok(edges)
 }
 
+/// Dark-launch (`next-backend`) port of [`list_resource_edges`] onto the
+/// substrate `temper_next.kb_edges` + `edges_visible_to`. Returns the unchanged
+/// [`GraphEdgeRow`](temper_core::types::graph::GraphEdgeRow) so the `/edges`
+/// handler is unaffected when the flip swaps the call site.
+///
+/// Differences from the legacy path, all §9-non-invariant:
+/// - `peer_slug` is §7-dissolved in the substrate, so it is derived from the
+///   peer title (the same lowercase/non-alphanumeric-dash derivation the
+///   substrate's `graph_nodes` uses — matches Rust `text::slugify`). There is no
+///   `temper_next.sluggify` SQL helper; the derivation is inlined.
+/// - `direction` keeps the legacy vocabulary (`'outgoing'`/`'incoming'`),
+///   derived from which endpoint is the queried resource.
+///
+/// `resources_visible_to` / `edges_visible_to` are SQL functions whose bodies
+/// reference helpers UNQUALIFIED, so they only resolve under `temper_next` on the
+/// connection search_path. We therefore run inside a
+/// `SET LOCAL search_path TO temper_next, public` transaction — the same
+/// discipline as `read_selector` / `next_backend`.
+///
+/// These calls use RUNTIME queries (not `query!` macros): sqlx's compile-time
+/// describe inlines the SQL-function bodies at plan time, which resolves their
+/// unqualified names against the default-`public` build connection and fails
+/// (`relation "kb_edges" does not exist`). The result row decodes into the
+/// `sqlx::FromRow`-deriving `GraphEdgeRow` by field name; `COALESCE(label, '')`
+/// fills the §-nullable label so the non-`Option<String>` field decodes.
+#[cfg(feature = "next-backend")]
+pub async fn list_resource_edges_next(
+    pool: &PgPool,
+    profile_id: Uuid,
+    resource_id: Uuid,
+) -> ApiResult<Vec<temper_core::types::graph::GraphEdgeRow>> {
+    use crate::error::ApiError;
+    use temper_core::types::graph::GraphEdgeRow;
+
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+
+    // 404 parity with the legacy path: an invisible/absent resource is NotFound
+    // (the gate runs before listing, so a visible resource with no edges still
+    // returns Ok(empty)).
+    let visible: bool = sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM temper_next.resources_visible_to($1) rv
+             WHERE rv.resource_id = $2
+        )",
+    )
+    .bind(profile_id)
+    .bind(resource_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    if !visible {
+        return Err(ApiError::NotFound);
+    }
+
+    let edges = sqlx::query_as::<_, GraphEdgeRow>(
+        "SELECT
+            e.id AS edge_id,
+            (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END) AS peer_resource_id,
+            peer.title AS peer_title,
+            lower(regexp_replace(
+                regexp_replace(peer.title, '[^a-zA-Z0-9]+', '-', 'g'),
+                '(^-+|-+$)', '', 'g')) AS peer_slug,
+            e.edge_kind AS edge_kind,
+            e.polarity AS polarity,
+            COALESCE(e.label, '') AS label,
+            (CASE WHEN e.source_id = $2 THEN 'outgoing' ELSE 'incoming' END) AS direction,
+            e.weight AS weight,
+            e.created AS created
+          FROM temper_next.kb_edges e
+          JOIN temper_next.edges_visible_to($1) v ON v.edge_id = e.id
+          JOIN temper_next.kb_resources peer
+            ON peer.id = (CASE WHEN e.source_id = $2 THEN e.target_id ELSE e.source_id END)
+         WHERE e.source_table = 'kb_resources' AND e.target_table = 'kb_resources'
+           AND (e.source_id = $2 OR e.target_id = $2)",
+    )
+    .bind(profile_id)
+    .bind(resource_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(edges)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
