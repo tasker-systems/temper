@@ -154,6 +154,16 @@ structurally artifact-faithful (built from the same artifact the baseline derive
 `_sqlx_migrations` table still lists the 46 legacy rows. Reconcile by **mark-as-applied, not
 replay**:
 
+0. **Persistent backup gate (operator hard-stop, before ANY destructive change).** Before the
+   schema rename or the `_sqlx_migrations` truncate, cut a **persistent, historically-preserved
+   point-in-time backup** of the live Neon database — an explicitly retained snapshot/branch that
+   is **not** subject to Neon's default branch/PITR expiry window. This is the durable rollback
+   target (distinct from the ephemeral pre-cutover Neon branch the runbook already names). The
+   plan models this as a runbook checkbox that **blocks** the destructive steps until confirmed;
+   it is executed manually by the operator (or by the agent once `neonctl` is authenticated). The
+   step must record the backup's identifier/restore command inline so rollback is one lookup, not
+   a search.
+
 1. **One-time structural safety check** — `pg_dump --schema-only` of live `public` vs. a fresh
    DB built from the new baseline; confirm equivalent. (By construction they match — both derive
    from `schema-artifact/01+02`; this is the verification, not a migration.)
