@@ -1,0 +1,55 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO temper_next.kb_contexts (id, owner_table, owner_id, slug, name)\n        VALUES ($1, 'kb_profiles', $2, $3, $4)\n        RETURNING id, name,\n                  owner_table AS \"kb_owner_table!\",\n                  owner_id AS \"kb_owner_id!\",\n                  created,\n                  created AS \"updated!\"\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "name",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "kb_owner_table!",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 3,
+        "name": "kb_owner_id!",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "created",
+        "type_info": "Timestamptz"
+      },
+      {
+        "ordinal": 5,
+        "name": "updated!",
+        "type_info": "Timestamptz"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "89d42484d71088ee0ba0f707bc9e28aa48358ec84905e273b351478a6a23e141"
+}

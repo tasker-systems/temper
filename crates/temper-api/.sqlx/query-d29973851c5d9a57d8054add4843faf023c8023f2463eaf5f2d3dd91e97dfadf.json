@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO temper_next.kb_contexts (id, owner_table, owner_id, slug, name)\n        VALUES ($1, 'kb_profiles', $2, 'default', 'default')\n        ON CONFLICT (owner_table, owner_id, slug) DO NOTHING\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d29973851c5d9a57d8054add4843faf023c8023f2463eaf5f2d3dd91e97dfadf"
+}

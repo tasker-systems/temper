@@ -278,6 +278,276 @@ pub async fn list_auth_links(pool: &PgPool, profile_id: Uuid) -> ApiResult<Vec<P
     Ok(links)
 }
 
+// ---------------------------------------------------------------------------
+// Substrate (`temper_next`) dark-launch — WS6 Phase 2.5 chunk B.
+//
+// These `_next` fns mirror the legacy path above but query QUALIFIED
+// `temper_next.*` and return the EXISTING `temper_core::Profile` shape with the
+// soon-to-be-dropped fields SYNTHESIZED from substrate data (the same
+// §9-non-invariant discipline `read_selector`'s next arms use):
+//   slug = handle, avatar_url = None, vault_config = {}, is_active = true,
+//   updated = created.
+// The legacy fns + all call sites stay UNTOUCHED — the flip swaps call sites
+// and de-qualifies these later, dropping the synthesis with the `Profile`
+// reshape. Feature-gated `next-backend`; dark until the flip.
+// ---------------------------------------------------------------------------
+
+/// Generate a unique substrate profile handle from a display name.
+///
+/// Mirrors [`generate_profile_slug`] but checks uniqueness against
+/// `temper_next.kb_profiles.handle` (the substrate addressing key; `slug` is
+/// §7-dissolved).
+#[cfg(feature = "next-backend")]
+pub async fn generate_profile_handle(pool: &PgPool, display_name: &str) -> ApiResult<String> {
+    let base: String = display_name
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    // Collapse consecutive dashes (matches SQL backfill regex [^a-zA-Z0-9]+)
+    let base: String = base
+        .split('-')
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let base = if base.is_empty() {
+        "user".to_string()
+    } else {
+        base
+    };
+
+    let exists = sqlx::query_scalar!(
+        "SELECT EXISTS(SELECT 1 FROM temper_next.kb_profiles WHERE handle = $1) as \"exists!: bool\"",
+        &base,
+    )
+    .fetch_one(pool)
+    .await?;
+
+    if !exists {
+        return Ok(base);
+    }
+
+    let mut suffix = 2u32;
+    loop {
+        let candidate = format!("{base}-{suffix}");
+        let exists = sqlx::query_scalar!(
+            "SELECT EXISTS(SELECT 1 FROM temper_next.kb_profiles WHERE handle = $1) as \"exists!: bool\"",
+            &candidate,
+        )
+        .fetch_one(pool)
+        .await?;
+
+        if !exists {
+            return Ok(candidate);
+        }
+        suffix += 1;
+    }
+}
+
+/// Resolve a profile from JWT claims over the substrate (`temper_next`).
+///
+/// Same lookup order as [`resolve_from_claims`]; the `kb_profile_auth_links`
+/// table is grafted, so its lookup/insert SQL is identical bar the
+/// `temper_next.` qualifier. The new-profile INSERT drops the substrate-absent
+/// columns (`avatar_url`/`vault_config`/`is_active`/`updated`) and writes
+/// `handle` (via [`generate_profile_handle`]) + `email`/`preferences`. The
+/// auto-provisioned `default` context uses the substrate
+/// `(owner_table, owner_id, slug, name)` shape.
+#[cfg(feature = "next-backend")]
+pub async fn resolve_from_claims_next(pool: &PgPool, claims: &AuthClaims) -> ApiResult<Profile> {
+    // 1 & 2: direct lookup by provider + external user id
+    let existing_link = sqlx::query_as!(
+        ProfileAuthLink,
+        r#"
+        SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+          FROM temper_next.kb_profile_auth_links
+         WHERE auth_provider = $1
+           AND auth_provider_user_id = $2
+        "#,
+        &claims.provider,
+        &claims.external_user_id,
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(link) = existing_link {
+        return get_by_id_next(pool, link.profile_id).await;
+    }
+
+    // 3: email reconciliation — only if the new identity's email is verified
+    if claims.email_verified == Some(true) {
+        let reconciled_link = sqlx::query_as!(
+            ProfileAuthLink,
+            r#"
+            SELECT id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at
+              FROM temper_next.kb_profile_auth_links
+             WHERE email = $1
+             LIMIT 1
+            "#,
+            &claims.email,
+        )
+        .fetch_optional(pool)
+        .await?;
+
+        if let Some(existing) = reconciled_link {
+            // 4: create new auth link for this provider pointing to the existing profile
+            let new_link_id = Uuid::now_v7();
+            sqlx::query!(
+                r#"
+                INSERT INTO temper_next.kb_profile_auth_links
+                    (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
+                VALUES ($1, $2, $3, $4, $5, false, now())
+                "#,
+                new_link_id,
+                existing.profile_id,
+                &claims.provider,
+                &claims.external_user_id,
+                &claims.email as &str,
+            )
+            .execute(pool)
+            .await?;
+
+            return get_by_id_next(pool, existing.profile_id).await;
+        }
+    } else {
+        tracing::warn!(
+            provider = %claims.provider,
+            external_user_id = %claims.external_user_id,
+            "Skipping email reconciliation: email_verified is not true"
+        );
+    }
+
+    // 5: brand new profile + auth link
+    let display_name = claims.email.split('@').next().unwrap_or("user").to_string();
+    let handle = generate_profile_handle(pool, &display_name).await?;
+
+    let profile_id = Uuid::now_v7();
+
+    // The `kb_profiles` INSERT fires the substrate `trg_sync_personal_team` trigger, whose body
+    // (`sync_personal_team`) references `kb_teams`/`kb_team_members`/`kb_teams_parents` UNQUALIFIED —
+    // so they resolve against the connection `search_path` (bare-pool default `public`), not
+    // `temper_next`. Run the writes inside a `SET LOCAL search_path TO temper_next, public` txn (the
+    // same readback/synthesis discipline `read_selector::next_impl::list` uses) so the trigger's
+    // unqualified inserts land in the substrate.
+    let mut tx = pool.begin().await?;
+    sqlx::query("SET LOCAL search_path TO temper_next, public")
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query!(
+        r#"
+        INSERT INTO temper_next.kb_profiles
+            (id, handle, display_name, email, preferences)
+        VALUES ($1, $2, $3, $4, '{}')
+        "#,
+        profile_id,
+        &handle,
+        &display_name,
+        &claims.email as &str,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    let auth_link_id = Uuid::now_v7();
+    sqlx::query!(
+        r#"
+        INSERT INTO temper_next.kb_profile_auth_links
+            (id, profile_id, auth_provider, auth_provider_user_id, email, is_default, linked_at)
+        VALUES ($1, $2, $3, $4, $5, true, now())
+        "#,
+        auth_link_id,
+        profile_id,
+        &claims.provider,
+        &claims.external_user_id,
+        &claims.email as &str,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    // Auto-provision a "default" context for the new profile.
+    // Ignore conflict — if the profile somehow already has one, that's fine.
+    sqlx::query!(
+        r#"
+        INSERT INTO temper_next.kb_contexts (id, owner_table, owner_id, slug, name)
+        VALUES ($1, 'kb_profiles', $2, 'default', 'default')
+        ON CONFLICT (owner_table, owner_id, slug) DO NOTHING
+        "#,
+        Uuid::now_v7(),
+        profile_id,
+    )
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    get_by_id_next(pool, profile_id).await
+}
+
+/// Load a substrate profile by ID, synthesizing the dropped `Profile` fields.
+///
+/// The substrate `kb_profiles` has no `is_active`, so there is no soft-delete
+/// predicate (mirrors `read_selector`'s next arms — visibility lives elsewhere).
+#[cfg(feature = "next-backend")]
+pub async fn get_by_id_next(pool: &PgPool, id: Uuid) -> ApiResult<Profile> {
+    let profile = sqlx::query_as!(
+        Profile,
+        r#"
+        SELECT id,
+               display_name,
+               handle AS "slug!",
+               email,
+               NULL::text AS avatar_url,
+               preferences as "preferences: serde_json::Value",
+               '{}'::jsonb AS "vault_config!: serde_json::Value",
+               true AS "is_active!",
+               created,
+               created AS "updated!"
+          FROM temper_next.kb_profiles
+         WHERE id = $1
+        "#,
+        id,
+    )
+    .fetch_optional(pool)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    Ok(profile)
+}
+
+/// Update mutable substrate profile fields. Only provided (`Some`) values are
+/// written. `vault_config` is accepted for call-site/signature parity but is
+/// substrate-dropped (synthesized on read) — it cannot be persisted, so it is
+/// ignored here.
+#[cfg(feature = "next-backend")]
+pub async fn update_next(
+    pool: &PgPool,
+    id: Uuid,
+    display_name: Option<&str>,
+    preferences: Option<&Value>,
+    _vault_config: Option<&Value>,
+) -> ApiResult<Profile> {
+    let current = get_by_id_next(pool, id).await?;
+
+    let new_display_name = display_name.unwrap_or(&current.display_name);
+    let new_preferences = preferences.unwrap_or(&current.preferences);
+
+    sqlx::query!(
+        r#"
+        UPDATE temper_next.kb_profiles
+           SET display_name = $1,
+               preferences  = $2
+         WHERE id = $3
+        "#,
+        new_display_name,
+        new_preferences as &Value,
+        id,
+    )
+    .execute(pool)
+    .await?;
+
+    get_by_id_next(pool, id).await
+}
+
 #[cfg(all(test, feature = "test-db"))]
 mod tests {
     use super::*;

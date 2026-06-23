@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        INSERT INTO temper_next.kb_profiles\n            (id, handle, display_name, email, preferences)\n        VALUES ($1, $2, $3, $4, '{}')\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Varchar"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c4b1ab7c1b0ace260928a903bff2a2b367b2f8e24349c0b93e5f470705b5c0e6"
+}
