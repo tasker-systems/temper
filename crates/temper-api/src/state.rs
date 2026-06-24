@@ -153,6 +153,10 @@ pub struct AppState {
     pub pool: PgPool,
     pub jwks_store: Arc<JwksKeyStore>,
     pub config: Arc<ApiConfig>,
+    /// OIDC userinfo endpoint, resolved once per process via discovery on the
+    /// first email-fallback. Lazy (not boot-time) so there is no startup
+    /// coupling to the IdP; shared across `AppState` clones via `Arc`.
+    pub userinfo_endpoint: Arc<tokio::sync::OnceCell<String>>,
 }
 
 impl AppState {
@@ -161,6 +165,7 @@ impl AppState {
             pool,
             jwks_store: Arc::new(jwks_store),
             config: Arc::new(config),
+            userinfo_endpoint: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 }

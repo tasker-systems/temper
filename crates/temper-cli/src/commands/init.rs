@@ -29,17 +29,29 @@ const HOSTED_AUTH_DOMAIN: &str = "temperkb.us.auth0.com";
 const HOSTED_CLIENT_ID: &str = "mWp8znLw2MUJNCiZNl8wwBv6SPJI2mfF";
 const HOSTED_AUDIENCE: &str = "https://temperkb.io/api";
 
+/// Which IdP's OAuth endpoint shapes `temper init` should emit. The written
+/// provider *label* stays "auth0" regardless — this only selects URL templating.
+#[derive(Debug, Clone)]
+pub enum Idp {
+    /// Auth0 tenant: `https://{domain}/authorize`, `/oauth/token`.
+    Auth0,
+    /// Okta custom authorization server: `https://{domain}/oauth2/{id}/v1/*`.
+    Okta { auth_server_id: String },
+}
+
 /// Per-instance OAuth inputs for a self-hosted deployment.
 #[derive(Debug, Clone)]
 pub struct SelfHostConfig {
     /// Instance base URL, e.g. `https://temper.acme.com`.
     pub instance_url: String,
-    /// Auth0 tenant domain, e.g. `acme.us.auth0.com`.
+    /// OAuth provider domain — e.g. `acme.us.auth0.com` (Auth0) or `acme.okta.com` (Okta).
     pub auth_domain: String,
     /// Auth0 native-app client_id for the CLI.
     pub client_id: String,
     /// API audience / resource identifier, e.g. `https://temper.acme.com/api`.
     pub audience: String,
+    /// Identity-provider URL shape to emit (Auth0 vs Okta authz server).
+    pub idp: Idp,
 }
 
 /// User selection for instance + auth provider.
@@ -142,6 +154,45 @@ fn prompt_err(e: dialoguer::Error) -> TemperError {
     TemperError::Config(format!("prompt error: {e}"))
 }
 
+/// Assemble a `SelfHostConfig` from `--no-interactive` flags. Returns
+/// `Ok(None)` when the instance quad is absent (local-only init). Errors when
+/// `--idp okta` is missing `--auth-server-id`, or `--idp` is unrecognized.
+pub fn self_host_from_flags(
+    instance_url: Option<String>,
+    auth_domain: Option<String>,
+    client_id: Option<String>,
+    audience: Option<String>,
+    idp: Option<String>,
+    auth_server_id: Option<String>,
+) -> Result<Option<SelfHostConfig>> {
+    let (instance_url, auth_domain, client_id, audience) =
+        match (instance_url, auth_domain, client_id, audience) {
+            (Some(i), Some(d), Some(c), Some(a)) => (i, d, c, a),
+            _ => return Ok(None),
+        };
+    let idp = match idp.as_deref() {
+        None | Some("auth0") => Idp::Auth0,
+        Some("okta") => {
+            let id = auth_server_id.filter(|s| !s.is_empty()).ok_or_else(|| {
+                TemperError::Config("--auth-server-id is required when --idp okta".to_string())
+            })?;
+            Idp::Okta { auth_server_id: id }
+        }
+        Some(other) => {
+            return Err(TemperError::Config(format!(
+                "unknown --idp '{other}' (expected 'auth0' or 'okta')"
+            )))
+        }
+    };
+    Ok(Some(SelfHostConfig {
+        instance_url: instance_url.trim_end_matches('/').to_string(),
+        auth_domain,
+        client_id,
+        audience,
+        idp,
+    }))
+}
+
 /// CLI entry point dispatched from `main.rs`.
 pub fn run(
     path: &Path,
@@ -193,7 +244,10 @@ pub fn run_non_interactive(
     contexts.extend(answers.extra_contexts.iter().cloned());
     let auth = match &answers.auth_choice {
         AuthChoice::Hosted => "auth0".to_string(),
-        AuthChoice::SelfHosted(_) => "auth0 (self-hosted)".to_string(),
+        AuthChoice::SelfHosted(sh) => match sh.idp {
+            Idp::Auth0 => "auth0 (self-hosted)".to_string(),
+            Idp::Okta { .. } => "okta (self-hosted)".to_string(),
+        },
         AuthChoice::None => "none".to_string(),
     };
     let summary = InitSummary {
@@ -249,12 +303,40 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
                 .with_prompt("Instance base URL (e.g. https://temper.acme.com)")
                 .interact_text()
                 .map_err(prompt_err)?;
+            let idp_idx = Select::with_theme(&theme)
+                .with_prompt("Identity provider")
+                .default(0)
+                .items(["Auth0", "Okta"])
+                .interact()
+                .map_err(prompt_err)?;
             let auth_domain: String = Input::with_theme(&theme)
-                .with_prompt("Auth0 tenant domain (e.g. acme.us.auth0.com)")
+                .with_prompt(if idp_idx == 1 {
+                    "Okta org domain (e.g. acme.okta.com)"
+                } else {
+                    "Auth0 tenant domain (e.g. acme.us.auth0.com)"
+                })
                 .interact_text()
                 .map_err(prompt_err)?;
+            let idp = if idp_idx == 1 {
+                let auth_server_id: String = Input::with_theme(&theme)
+                    .with_prompt("Okta authorization server ID (e.g. aus1a2b3c)")
+                    .validate_with(|input: &String| -> std::result::Result<(), &str> {
+                        if input.trim().is_empty() {
+                            Err("Okta authorization server ID cannot be empty")
+                        } else {
+                            Ok(())
+                        }
+                    })
+                    .interact_text()
+                    .map_err(prompt_err)?;
+                Idp::Okta {
+                    auth_server_id: auth_server_id.trim().to_string(),
+                }
+            } else {
+                Idp::Auth0
+            };
             let client_id: String = Input::with_theme(&theme)
-                .with_prompt("Auth0 CLI application client_id")
+                .with_prompt("CLI application client_id")
                 .interact_text()
                 .map_err(prompt_err)?;
             let audience: String = Input::with_theme(&theme)
@@ -266,6 +348,7 @@ fn gather_answers(initial_vault: &str) -> Result<WizardAnswers> {
                 auth_domain: auth_domain.trim().to_string(),
                 client_id: client_id.trim().to_string(),
                 audience: audience.trim().to_string(),
+                idp,
             })
         }
         _ => AuthChoice::None,
@@ -287,7 +370,10 @@ fn print_summary(answers: &WizardAnswers, register_global: bool) {
     output::label("Contexts", ctxs.join(", "));
     let auth_label = match &answers.auth_choice {
         AuthChoice::Hosted => "auth0",
-        AuthChoice::SelfHosted(_) => "auth0 (self-hosted)",
+        AuthChoice::SelfHosted(sh) => match &sh.idp {
+            Idp::Auth0 => "auth0 (self-hosted)",
+            Idp::Okta { .. } => "okta (self-hosted)",
+        },
         AuthChoice::None => "none",
     };
     output::label("Auth", auth_label);
@@ -405,6 +491,20 @@ fn ensure_server_contexts(
     Ok(())
 }
 
+/// Map an `Idp` + domain to its (authorize_url, token_url) pair.
+fn provider_urls(idp: &Idp, domain: &str) -> (String, String) {
+    match idp {
+        Idp::Auth0 => (
+            format!("https://{domain}/authorize"),
+            format!("https://{domain}/oauth/token"),
+        ),
+        Idp::Okta { auth_server_id } => (
+            format!("https://{domain}/oauth2/{auth_server_id}/v1/authorize"),
+            format!("https://{domain}/oauth2/{auth_server_id}/v1/token"),
+        ),
+    }
+}
+
 /// Build the `[auth]` + `[[auth.providers]]` block and the `[cloud]` api_url
 /// line for a configured instance (hosted or self-hosted).
 fn provider_and_cloud_sections(
@@ -412,13 +512,15 @@ fn provider_and_cloud_sections(
     auth_domain: &str,
     client_id: &str,
     audience: &str,
+    idp: &Idp,
 ) -> (String, String) {
     // Route every interpolated value through `toml::Value::String` (the same
     // escaping the vault path gets) so any character requiring escaping
     // round-trips, rather than relying on these always being metacharacter-free.
     let tv = |s: String| toml::Value::String(s).to_string();
-    let authorize_url = tv(format!("https://{auth_domain}/authorize"));
-    let token_url = tv(format!("https://{auth_domain}/oauth/token"));
+    let (authorize, token) = provider_urls(idp, auth_domain);
+    let authorize_url = tv(authorize);
+    let token_url = tv(token);
     let callback_url = tv(format!("{api_url}/api/auth/cli-callback"));
     let client_id_toml = tv(client_id.to_string());
     let audience_toml = tv(audience.to_string());
@@ -462,12 +564,14 @@ pub fn render_config_toml(answers: &WizardAnswers) -> String {
             HOSTED_AUTH_DOMAIN,
             HOSTED_CLIENT_ID,
             HOSTED_AUDIENCE,
+            &Idp::Auth0,
         ),
         AuthChoice::SelfHosted(sh) => provider_and_cloud_sections(
             &sh.instance_url,
             &sh.auth_domain,
             &sh.client_id,
             &sh.audience,
+            &sh.idp,
         ),
         AuthChoice::None => ("[auth]\nprovider = \"none\"\n".to_string(), String::new()),
     };
@@ -558,6 +662,7 @@ mod tests {
                 auth_domain: "acme.us.auth0.com".into(),
                 client_id: "AcMeClientId123".into(),
                 audience: "https://temper.acme.com/api".into(),
+                idp: Idp::Auth0,
             }),
         };
         let toml = render_config_toml(&answers);
@@ -699,6 +804,41 @@ mod tests {
     }
 
     #[test]
+    fn self_hosted_okta_emits_v1_urls_and_keeps_auth0_label() {
+        let answers = WizardAnswers {
+            vault_path: "/tmp/v".into(),
+            extra_contexts: vec![],
+            auth_choice: AuthChoice::SelfHosted(SelfHostConfig {
+                instance_url: "https://temper.acme.com".into(),
+                auth_domain: "acme.okta.com".into(),
+                client_id: "OktaCli123".into(),
+                audience: "https://temper.acme.com/api".into(),
+                idp: Idp::Okta {
+                    auth_server_id: "aus1a2b3c".into(),
+                },
+            }),
+        };
+        let toml = render_config_toml(&answers);
+        let cfg: TemperConfig = toml::from_str(&toml).expect("okta toml parses");
+        cfg.validate().expect("okta config validates");
+        assert_eq!(cfg.auth.provider, "auth0");
+        let p = &cfg.auth.providers[0];
+        assert_eq!(p.name, "auth0");
+        assert_eq!(
+            p.authorize_url,
+            "https://acme.okta.com/oauth2/aus1a2b3c/v1/authorize"
+        );
+        assert_eq!(
+            p.token_url,
+            "https://acme.okta.com/oauth2/aus1a2b3c/v1/token"
+        );
+        assert_eq!(
+            p.callback_url,
+            "https://temper.acme.com/api/auth/cli-callback"
+        );
+    }
+
+    #[test]
     fn auth0_writes_array_of_tables_format() {
         let answers = WizardAnswers {
             vault_path: "/tmp/v".into(),
@@ -829,9 +969,92 @@ mod tests {
             auth_domain: "acme.us.auth0.com".into(),
             client_id: "AcMeClientId123".into(),
             audience: "https://temper.acme.com/api".into(),
+            idp: Idp::Auth0,
         };
         run_non_interactive(&vault, false, OutputFormat::Json, Some(sh))
             .expect("self-host non-interactive run should succeed");
         assert!(vault.join(".temper").is_dir());
+    }
+
+    #[test]
+    fn flags_auth0_builds_auth0_idp_and_trims_slash() {
+        let sh = self_host_from_flags(
+            Some("https://x.com/".into()),
+            Some("d.auth0.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("auth0".into()),
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(sh.idp, Idp::Auth0));
+        assert_eq!(sh.instance_url, "https://x.com");
+    }
+
+    #[test]
+    fn flags_okta_without_server_id_errors() {
+        let res = self_host_from_flags(
+            Some("https://x.com".into()),
+            Some("o.okta.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("okta".into()),
+            None,
+        );
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn flags_okta_with_server_id_builds_okta_idp() {
+        let sh = self_host_from_flags(
+            Some("https://x.com".into()),
+            Some("o.okta.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("okta".into()),
+            Some("aus9".into()),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(matches!(sh.idp, Idp::Okta { .. }));
+    }
+
+    #[test]
+    fn flags_none_when_instance_missing() {
+        let res = self_host_from_flags(None, None, None, None, Some("auth0".into()), None).unwrap();
+        assert!(res.is_none());
+    }
+
+    #[test]
+    fn flags_unknown_idp_errors() {
+        assert!(self_host_from_flags(
+            Some("https://x.com".into()),
+            Some("d.auth0.com".into()),
+            Some("cid".into()),
+            Some("https://x.com/api".into()),
+            Some("saml".into()),
+            None,
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn provider_urls_auth0_and_okta_shapes() {
+        let (authorize, token) = provider_urls(&Idp::Auth0, "acme.us.auth0.com");
+        assert_eq!(authorize, "https://acme.us.auth0.com/authorize");
+        assert_eq!(token, "https://acme.us.auth0.com/oauth/token");
+
+        let (authorize, token) = provider_urls(
+            &Idp::Okta {
+                auth_server_id: "aus1a2b3c".into(),
+            },
+            "acme.okta.com",
+        );
+        assert_eq!(
+            authorize,
+            "https://acme.okta.com/oauth2/aus1a2b3c/v1/authorize"
+        );
+        assert_eq!(token, "https://acme.okta.com/oauth2/aus1a2b3c/v1/token");
     }
 }

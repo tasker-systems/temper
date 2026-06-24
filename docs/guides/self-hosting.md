@@ -78,6 +78,12 @@ If you connect your Neon project to Vercel via the Neon integration, Neon automa
 
 ## Provision Auth0
 
+> **Using Okta instead?** This section is Auth0-specific. For standing up the same instance against
+> an Okta tenant in an enterprise context, see [Self-Hosting with Okta](./self-hosting-okta.md) —
+> it covers the custom authorization server, API Access Management requirement, and the
+> Okta-specific environment and CLI configuration. The rest of this guide (Neon, Vercel, verify)
+> applies unchanged.
+
 The contract is **one API resource server and two native applications** (the web app is out of scope):
 
 ### 1. API resource server
@@ -142,6 +148,7 @@ Import the repository into a new Vercel project. Set `framework` override to **O
 | `API_BASE_URL` | ui | No | Consumed only by the `temper-ui` web app (out of scope); not required for API + MCP + CLI |
 | `BLOB_READ_WRITE_TOKEN` | api | Yes | Vercel Blob token — used by the upload/extract/embed pipeline |
 | `ENABLE_SWAGGER` | api | No | Set `true` to expose `/swagger-ui` in non-production deployments |
+| `PORT` | api | No | Platform-injected by Vercel; defaults to `3000`. Only relevant for local or non-Vercel runs |
 | `SQLX_OFFLINE` | build | Yes | Must be `true` — compile-time SQL checks run against the committed `.sqlx/` cache |
 | `CORS_ORIGINS` | api | Situational | See note below |
 
@@ -224,7 +231,7 @@ These variables take precedence over `config.toml` and are suitable for CI/CD an
 | Variable | Purpose |
 | -------- | ------- |
 | `TEMPER_API_URL` | Override the API base URL |
-| `TEMPER_PROVIDER_ENV` | Override the auth provider name |
+| `TEMPER_PROVIDER` | Override the auth provider name |
 | `TEMPER_TOKEN` | Inject a JWT directly — no OAuth flow, no disk state |
 
 For a fully headless agent session, export `TEMPER_TOKEN` alongside `TEMPER_API_URL` and no other configuration is needed. The token is used in-memory; `~/.config/temper/auth.json` is not read or written.
@@ -271,7 +278,7 @@ A healthy response is HTTP 200 with a JSON body. A 500 or connection error typic
 temper login
 ```
 
-This opens a browser to complete the Auth0 device authorization flow. On success the CLI prints a confirmation and caches the token locally.
+This runs the OAuth 2.0 Authorization Code + PKCE flow: it opens a browser to the provider's `/authorize` endpoint, the provider redirects the authorization code to `/api/auth/cli-callback` (a stateless relay), and that relay forwards the code to a short-lived listener on `localhost`. The CLI then exchanges the code for tokens, prints a confirmation, and caches the token locally. (There is no device-code polling — `temper login` always uses a browser redirect.)
 
 ### End-to-end resource round-trip
 
