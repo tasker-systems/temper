@@ -64,9 +64,15 @@ async fn context_get_by_id(pool: sqlx::PgPool) {
     assert_eq!(fetched.name, "e2e-context-get-by-id");
 }
 
-/// Create a context, try creating same name again, expect a Conflict error.
+/// Create a context, then create another with the SAME name. The substrate
+/// is slug-keyed, not name-keyed: `context_service::create` calls
+/// `next_unique_context_slug`, which auto-suffixes the generated slug on
+/// collision so two contexts sharing a name coexist under distinct slugs
+/// rather than 409ing (intentional D-task delta; see context_service.rs
+/// `next_unique_context_slug` / `create` doc-comments). Both creates succeed,
+/// keep the requested name, and mint distinct ids.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
-async fn context_duplicate_name_errors(pool: sqlx::PgPool) {
+async fn context_duplicate_name_auto_suffixes_slug(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
     app.client
@@ -75,23 +81,26 @@ async fn context_duplicate_name_errors(pool: sqlx::PgPool) {
         .await
         .expect("profile pre-flight failed");
 
-    app.client
+    let first = app
+        .client
         .contexts()
         .create("e2e-context-duplicate")
         .await
         .expect("first context create failed");
 
-    let result = app.client.contexts().create("e2e-context-duplicate").await;
+    let second = app
+        .client
+        .contexts()
+        .create("e2e-context-duplicate")
+        .await
+        .expect("second create with duplicate name should succeed (slug auto-suffixed)");
 
-    assert!(
-        result.is_err(),
-        "duplicate context name should return an error"
-    );
-
-    let err = result.unwrap_err();
-    let err_str = err.to_string();
-    assert!(
-        err_str.contains("conflict") || err_str.contains("Conflict") || err_str.contains("409"),
-        "expected conflict error, got: {err_str}"
+    // Name is preserved on both; the substrate disambiguates by slug, not name.
+    assert_eq!(first.name, "e2e-context-duplicate");
+    assert_eq!(second.name, "e2e-context-duplicate");
+    // Distinct rows: each create mints a fresh context id.
+    assert_ne!(
+        first.id, second.id,
+        "duplicate-name creates must be distinct context rows"
     );
 }

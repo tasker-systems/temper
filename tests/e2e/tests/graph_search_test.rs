@@ -42,6 +42,7 @@ fn test_payload(
 
 /// Ingest linked documents, verify graph expansion surfaces connected docs.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[ignore = "deferred: frontmatter->edge auto-projection retired (depends_on not projected; temper-goal Edge-fate unprocessed in create_resource). Edges now via the relationship API; edge assert+read covered by temper-api relationship_handler_test. e2e edge-read + graph-expansion rewrite to the relationship API tracked (F7)"]
 async fn graph_search_e2e_expands_connected_documents(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
@@ -144,6 +145,7 @@ async fn graph_search_e2e_expands_connected_documents(pool: sqlx::PgPool) {
 
 /// Verify the edges endpoint returns correct edges after ingest.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[ignore = "deferred: frontmatter->edge auto-projection retired (depends_on not projected; temper-goal Edge-fate unprocessed in create_resource). Edges now via the relationship API; edge assert+read covered by temper-api relationship_handler_test. e2e edge-read + graph-expansion rewrite to the relationship API tracked (F7)"]
 async fn edges_endpoint_returns_resource_edges(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 
@@ -208,6 +210,7 @@ async fn edges_endpoint_returns_resource_edges(pool: sqlx::PgPool) {
 
 /// Verify search_with_params respects graph flags end-to-end.
 #[sqlx::test(migrator = "temper_api::MIGRATOR")]
+#[ignore = "deferred: frontmatter->edge auto-projection retired (depends_on not projected; temper-goal Edge-fate unprocessed in create_resource). Edges now via the relationship API; edge assert+read covered by temper-api relationship_handler_test. e2e edge-read + graph-expansion rewrite to the relationship API tracked (F7)"]
 async fn search_no_graph_flag_disables_expansion(pool: sqlx::PgPool) {
     let app = common::setup(pool).await;
 

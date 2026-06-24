@@ -625,30 +625,37 @@ async fn audit_events_written_for_lifecycle(pool: sqlx::PgPool) {
         .expect("request failed");
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // Check audit events
-    let submitted_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM kb_events WHERE profile_id = $1 AND event_type_id = (SELECT id FROM kb_event_types WHERE name = 'join_request.submitted')",
+    // Check the audit trail. Post-WS6-collapse, admin/operational events are
+    // firewalled OUT of the cognition ledger `kb_events` (which is now
+    // cognition-only: entity emitters, no `profile_id` column, and carries no
+    // `join_request.*` event types). The durable audit for the join-request
+    // lifecycle lives on the `kb_join_requests` row itself — status plus
+    // reviewer attribution (`reviewed_by_profile_id` / `reviewed_at`). See
+    // `crates/temper-api/src/services/access_service.rs:4-9` (a dedicated
+    // admin-event sink is a future deliverable). The query repoints there: the
+    // submit→approve lifecycle is recorded as the request reaching `approved`
+    // with the reviewing admin attributed and a decision timestamp stamped.
+    let (status, reviewer, reviewed): (String, Option<uuid::Uuid>, bool) = sqlx::query_as(
+        "SELECT status::text, reviewed_by_profile_id, (reviewed_at IS NOT NULL) \
+         FROM kb_join_requests \
+         WHERE requesting_profile_id = $1 ORDER BY created DESC LIMIT 1",
     )
     .bind(second_id)
     .fetch_one(&pool)
     .await
-    .expect("query submitted events");
+    .expect("join-request audit row must exist for the lifecycle");
 
-    assert!(
-        submitted_count >= 1,
-        "should have join_request.submitted event"
+    assert_eq!(
+        status, "approved",
+        "the submit→approve lifecycle must be recorded on the request row"
     );
-
-    let approved_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM kb_events WHERE profile_id = $1 AND event_type_id = (SELECT id FROM kb_event_types WHERE name = 'join_request.approved')",
-    )
-    .bind(second_id)
-    .fetch_one(&pool)
-    .await
-    .expect("query approved events");
-
+    assert_eq!(
+        reviewer,
+        Some(admin_id),
+        "approval must attribute the reviewing admin (audit trail)"
+    );
     assert!(
-        approved_count >= 1,
-        "should have join_request.approved event"
+        reviewed,
+        "approval must stamp reviewed_at (audit trail)"
     );
 }

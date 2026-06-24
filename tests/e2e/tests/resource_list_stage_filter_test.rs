@@ -115,10 +115,13 @@ async fn resource_list_filters_by_stage(pool: sqlx::PgPool) {
         .await
         .expect("list --stage in-progress failed");
 
+    // `ResourceRow.slug` is `None` in the substrate (`temper-slug` is a §7-Die key,
+    // not persisted); the seed encodes the slug as the last `origin_uri` segment
+    // (`kb://<ctx>/task/<slug>`), so derive it from there.
     let mut in_progress_slugs: Vec<&str> = in_progress
         .rows
         .iter()
-        .filter_map(|r| r.slug.as_deref())
+        .filter_map(|r| r.origin_uri.rsplit('/').next())
         .collect();
     in_progress_slugs.sort_unstable();
     assert_eq!(
@@ -141,7 +144,11 @@ async fn resource_list_filters_by_stage(pool: sqlx::PgPool) {
         .await
         .expect("list --stage done failed");
 
-    let mut done_slugs: Vec<&str> = done.rows.iter().filter_map(|r| r.slug.as_deref()).collect();
+    let mut done_slugs: Vec<&str> = done
+        .rows
+        .iter()
+        .filter_map(|r| r.origin_uri.rsplit('/').next())
+        .collect();
     done_slugs.sort_unstable();
     assert_eq!(
         done_slugs,
