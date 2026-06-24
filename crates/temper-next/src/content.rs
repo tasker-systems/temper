@@ -162,9 +162,95 @@ pub fn prepare_blocks(specs: &[(Option<&str>, &str)]) -> Result<Vec<PreparedBloc
         .collect()
 }
 
+// ── Body read assembly (the live GET /content reconstruction) ────────────────
+// Moved here from the retired `parity` module: `readback::body` reconstructs a resource's markdown
+// from its substrate chunks using `ReadChunk` + `reconstruct_body`. This is the chunk model's home.
+
+/// One chunk as the body reconstruction sees it: ordering index, heading breadcrumb, heading level, and
+/// prose. The read-side counterpart of [`PreparedChunk`].
+#[derive(Debug, Clone)]
+pub struct ReadChunk {
+    pub chunk_index: i32,
+    pub header_path: String,
+    pub heading_depth: i16,
+    pub content: String,
+}
+
+/// Production `get_content`'s markdown assembly: per chunk (ordered by `chunk_index`),
+/// `heading_depth == 0` ⇒ content as-is; else the innermost breadcrumb segment becomes a markdown
+/// heading (`{hashes} {title}\n\n{content}`, depth capped at 6, empty breadcrumb ⇒ `"Untitled"`). Pieces
+/// join with `"\n\n"`. The live `readback::body` read path's single body assembler.
+pub fn reconstruct_body(chunks: &[ReadChunk]) -> String {
+    chunks
+        .iter()
+        .map(|c| {
+            if c.heading_depth == 0 {
+                // Preamble or unheaded content — emit body only.
+                c.content.clone()
+            } else {
+                // Extract the innermost heading title from the breadcrumb.
+                // rsplit always yields at least one element on non-empty input.
+                let title = if c.header_path.is_empty() {
+                    "Untitled"
+                } else {
+                    c.header_path.rsplit(" > ").next().unwrap_or(&c.header_path)
+                };
+                let depth = (c.heading_depth as usize).min(6);
+                let hashes = "#".repeat(depth);
+                format!("{hashes} {title}\n\n{}", c.content)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn read_chunk(idx: i32, header_path: &str, depth: i16, content: &str) -> ReadChunk {
+        ReadChunk {
+            chunk_index: idx,
+            header_path: header_path.to_owned(),
+            heading_depth: depth,
+            content: content.to_owned(),
+        }
+    }
+
+    #[test]
+    fn unheaded_chunk_emits_content_only() {
+        assert_eq!(
+            reconstruct_body(&[read_chunk(0, "", 0, "Just prose.")]),
+            "Just prose."
+        );
+    }
+
+    #[test]
+    fn headed_chunk_uses_innermost_breadcrumb_segment() {
+        assert_eq!(
+            reconstruct_body(&[read_chunk(0, "Intro > Goals", 2, "Body.")]),
+            "## Goals\n\nBody."
+        );
+    }
+
+    #[test]
+    fn mixed_chunks_join_with_blank_line() {
+        assert_eq!(
+            reconstruct_body(&[
+                read_chunk(0, "", 0, "Task intro paragraph."),
+                read_chunk(1, "Intro > Goals", 2, "Task goals section body."),
+            ]),
+            "Task intro paragraph.\n\n## Goals\n\nTask goals section body."
+        );
+    }
+
+    #[test]
+    fn empty_breadcrumb_with_depth_falls_back_to_untitled_and_caps_at_six() {
+        assert_eq!(
+            reconstruct_body(&[read_chunk(0, "", 9, "x")]),
+            "###### Untitled\n\nx"
+        );
+    }
 
     // A short, single-paragraph block stays one chunk; its hash is the chunker's sha256 (64 hex chars).
     #[test]

@@ -116,7 +116,7 @@ pub struct ListRow {
 /// them via `facet_set`, plus the direct `doc_type` property the resource pass stamps). `doc_type` is an
 /// inner JOIN — every synthesized resource has one; the workflow keys are LEFT JOINs so a resource
 /// without them comes back with `NULL` (not dropped). Property values are JSON scalars, extracted to
-/// text with `#>> '{}'` (the same extraction `synthesis::run`'s property test uses).
+/// text with `#>> '{}'` (the doc-type-as-property extraction).
 ///
 /// Ordered by `(origin_uri, id)` so the result is deterministic — `origin_uri` alone is NOT unique
 /// (empty for CLI/agent-created resources), so the resource id is the tiebreaker. It is deliberately NOT
@@ -568,13 +568,11 @@ pub async fn resource_row(
 }
 
 /// Reconstruct a resource's markdown body from its substrate chunks — the §9 body read floor.
-/// Reuses [`crate::parity::reconstruct_body`] (the production `get_content` assembly) so the read
-/// surface and the §8 synthesis gate share one algorithm (CONFORM, no second body assembler).
+/// Reuses [`crate::content::reconstruct_body`] (the production `get_content` assembly) — the one body
+/// assembler (CONFORM, no second).
 ///
 /// Reads the chunk tables UNQUALIFIED (like every sibling readback) so they resolve against the
-/// connection's search_path / the single post-collapse schema — the `parity::new_substrate_chunks`
-/// reader this used is hard-qualified to `temper_next` (the dark-launch dual-schema comparator) and
-/// would not resolve once the substrate is the lone `public` schema.
+/// connection's search_path / the single post-collapse `public` schema.
 ///
 /// Keys by `new_id` directly — the resource id (preserved verbatim from production).
 ///
@@ -598,16 +596,16 @@ pub async fn body(
     .bind(new_id)
     .fetch_all(pool)
     .await?;
-    let chunks: Vec<crate::parity::ReadChunk> = rows
+    let chunks: Vec<crate::content::ReadChunk> = rows
         .iter()
-        .map(|row| crate::parity::ReadChunk {
+        .map(|row| crate::content::ReadChunk {
             chunk_index: row.get("chunk_index"),
             header_path: row.get("header_path"),
             heading_depth: row.get("heading_depth"),
             content: row.get("content"),
         })
         .collect();
-    Ok(crate::parity::reconstruct_body(&chunks))
+    Ok(crate::content::reconstruct_body(&chunks))
 }
 
 /// Substrate body-hash dedup for the create path (WS6 collapse Task F). Returns the id of an existing
@@ -656,7 +654,7 @@ pub async fn find_by_body_hash(
 /// `rebuild_resource_search_vector` (migration 20260405000001), whose A-weight is `title || slug`: §7
 /// dissolved slug, so §9 rebuilds FTS title-only. The body is the RAW current-chunk content
 /// space-joined (`string_agg(content, ' ')`), exactly as production aggregates it — NOT the
-/// heading-prefixed assembled markdown [`crate::parity::reconstruct_body`] produces (that's
+/// heading-prefixed assembled markdown [`crate::content::reconstruct_body`] produces (that's
 /// the `get_content` body, wrong for FTS). Config is `'english'` (production's default).
 ///
 /// Because production ranks slug@A and readback structurally cannot, absolute `ts_rank` and the order
@@ -697,8 +695,8 @@ pub async fn fts_search(pool: &PgPool, principal: Uuid, query: &str) -> Result<V
     Ok(rows.iter().map(|r| r.get::<Uuid, _>("id")).collect())
 }
 
-/// Format a `Vec<f32>` as a pgvector text literal (`[a,b,c]`) for binding into a `::vector` cast — the
-/// inverse of [`crate::synthesis::source`]'s `parse_pgvector`. Inlined here (a tiny helper) rather than
+/// Format a `Vec<f32>` as a pgvector text literal (`[a,b,c]`) for binding into a `::vector` cast.
+/// Inlined here (a tiny helper) rather than
 /// reusing production's `temper_core::types::ingest::format_embedding`: temper-core is only a DEV-dep of
 /// temper-next, not a lib dep, and pulling it into the lib just to format five floats would be
 /// over-coupling. Uses `{}` (not `{:?}`) so each float renders without a debug wrapper.
