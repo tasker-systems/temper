@@ -10,12 +10,22 @@ on:
         description: 'Tag to release (e.g. v0.1.0)'
         required: true
         type: string
+      migrations_applied:
+        description: 'Override the migration gate: set true ONLY after the prod schema migration/cutover has been applied to Neon for this release.'
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
       tag:
         description: 'Tag to release (e.g. v0.1.0)'
         required: true
         type: string
+      migrations_applied:
+        description: 'Override the migration gate (see workflow_dispatch input of the same name).'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release
@@ -103,3 +113,98 @@ jobs:
         run: |
           echo "::error::build-cli-binaries result: ${{ needs.build-cli-binaries.result }} — release not published."
           exit 1
+
+  # Production deploy of the temper-cloud Vercel project (the repo-root vercel.json
+  # that ships the Rust serverless functions: /api/axum + /api/mcp). This replaces
+  # Vercel's git auto-deploy from `main` as the path to production — prod now ships
+  # only when a release tag is cut, after the migration-aware gate below clears.
+  #
+  # `needs: [determine-version, build-cli-binaries]` so we deploy only once the
+  # release build is green (a failed/skipped build cascades to skip this job).
+  deploy-production:
+    name: Deploy temper-cloud to Production
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    needs: [determine-version, build-cli-binaries]
+    permissions:
+      contents: read
+    env:
+      # Vercel CI convention: org/project pinned via env so the CLI runs
+      # non-interactively against the right project. Operator must add these
+      # repo secrets (see RELEASING.md).
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    steps:
+      - name: Checkout tagged commit
+        uses: actions/checkout@v6
+        with:
+          # The tag being released is the deploy ref. fetch-depth: 0 pulls full
+          # history + tags so the migration gate can diff against the prior tag.
+          ref: ${{ inputs.tag || github.ref_name }}
+          fetch-depth: 0
+
+      # ----------------------------------------------------------------------
+      # Migration-aware gate (the load-bearing safety).
+      #
+      # Prod migrations are OPERATOR-RUN on Neon (boot-time migrate! was removed).
+      # So if this release changes anything under migrations/ relative to the
+      # previous v* tag, the operator must have applied the prod migration/cutover
+      # FIRST — otherwise schema-incompatible code would 500 against an un-migrated
+      # DB (exactly the WS6 incident this gate exists to prevent).
+      #
+      # The gate HALTS the deploy when migrations changed, UNLESS the release was
+      # (re-)triggered with migrations_applied=true to assert the schema is ready.
+      # A pure tag-push can't set that input, so it correctly fails closed.
+      # ----------------------------------------------------------------------
+      - name: Migration gate
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag || github.ref_name }}"
+
+          # Nearest v* tag reachable from this tag's parent = the previous release.
+          if PREV_TAG="$(git describe --tags --abbrev=0 --match 'v*' "${TAG}^" 2>/dev/null)"; then
+            echo "Previous release tag: ${PREV_TAG}"
+          else
+            PREV_TAG=""
+            echo "No previous v* tag found — this looks like the first release."
+          fi
+
+          if [[ -z "${PREV_TAG}" ]]; then
+            # First release: no prior deployed schema to diff against. Fail closed
+            # (treat as schema-bearing) so the inaugural deploy can't silently ship
+            # against an un-provisioned DB — the operator acknowledges with the
+            # migrations_applied=true override once Neon is set up.
+            MIGRATIONS_CHANGED=true
+            echo "First-release fail-closed: requiring the migrations_applied override."
+          elif git diff --quiet "${PREV_TAG}" "${TAG}" -- migrations/; then
+            MIGRATIONS_CHANGED=false
+            echo "No migration changes between ${PREV_TAG} and ${TAG} — code-only release, safe to deploy."
+          else
+            MIGRATIONS_CHANGED=true
+            echo "Migration changes detected between ${PREV_TAG} and ${TAG}."
+          fi
+
+          if [[ "${MIGRATIONS_CHANGED}" == "true" && "${{ inputs.migrations_applied }}" != "true" ]]; then
+            echo "::error title=Migration gate::Schema migration detected between ${PREV_TAG:-<first release>} and ${TAG}. Prod migrations are operator-run on Neon (additive → \`sqlx migrate run\` with the canonical search_path; big-bang → the cutover runbook docs/guides/ws6-endgame-collapse-runbook.md). Apply the prod migration, then re-run this release with migrations_applied=true."
+            exit 1
+          fi
+
+          echo "Migration gate cleared — proceeding to deploy."
+
+      # ----------------------------------------------------------------------
+      # Deploy. We use a REMOTE build (`vercel deploy --prod`, NOT `--prebuilt`):
+      # temper-cloud is a Rust-serverless-function project, so the build runs on
+      # Vercel's infrastructure with its Rust runtime (install + SQLX_OFFLINE build
+      # per the repo-root vercel.json). `vercel build --prebuilt` would require the
+      # Vercel Rust builder + toolchain on this runner, which is brittle; letting
+      # Vercel build server-side is the correct, no-local-toolchain path.
+      # ----------------------------------------------------------------------
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel production environment
+        run: vercel pull --yes --environment=production --token="$VERCEL_TOKEN"
+
+      - name: Deploy to Vercel production
+        run: vercel deploy --prod --token="$VERCEL_TOKEN"
